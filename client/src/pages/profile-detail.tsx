@@ -5792,7 +5792,10 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
   // ── state ──────────────────────────────────────────────────
   const [expandedTrackers, setExpandedTrackers] = useState<Set<string>>(new Set());
   const [logOpen, setLogOpen] = useState<string | null>(null);
-  const [logValue, setLogValue] = useState("");
+  // Per-field values for the inline Log Entry form. Keyed by field name so
+  // we can support multi-field trackers (e.g. Blood Pressure needs both
+  // systolic and diastolic; Running needs distance + duration).
+  const [logFieldVals, setLogFieldVals] = useState<Record<string, string>>({});
   const [logNotes, setLogNotes] = useState("");
   const [notLoggedOpen, setNotLoggedOpen] = useState(false);
 
@@ -5823,9 +5826,92 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
     const pf = getPrimaryField(tracker);
     const sorted = [...(tracker.entries || [])].sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     const v = sorted[0]?.values?.[pf];
-    if (v == null) return null;
+    if (v == null || v === "") return null;
     const num = Number(v);
     return isNaN(num) ? String(v) : num;
+  }
+
+  // ── Entry value formatting ────────────────────────────────
+  // A tracker entry stores arbitrary fields in `values`. The bare value of
+  // the primary field is rarely informative on its own (e.g. a "Running"
+  // tracker that just records the literal string "running", or a Hydration
+  // tracker whose primary field is named "value" with no unit attached).
+  // This helper renders a single human-readable line per entry that:
+  //   • formats blood-pressure as "125/80 mmHg"
+  //   • formats numeric values with the appropriate unit (field.unit or
+  //     tracker.unit)
+  //   • drops values that just repeat the tracker name ("running", "guitar")
+  //     in favour of secondary fields and notes
+  //   • joins all useful secondary fields (duration, distance, calories, …)
+  //     so a Running entry shows e.g. "3.2 mi · 28 min · 320 cal"
+  function formatEntryDisplay(tracker: any, entry: any): { primary: string; secondary: string } {
+    const fields: any[] = Array.isArray(tracker.fields) ? tracker.fields : [];
+    const vals: Record<string, any> = entry?.values || {};
+    const trackerNameLower = String(tracker.name || "").toLowerCase().trim();
+
+    // Blood pressure: render systolic/diastolic
+    const sys = vals["systolic"] ?? vals["systolic_pressure"] ?? vals["sbp"];
+    const dia = vals["diastolic"] ?? vals["diastolic_pressure"] ?? vals["dbp"];
+    if (sys != null && dia != null && !isNaN(Number(sys)) && !isNaN(Number(dia))) {
+      return { primary: `${Number(sys)}/${Number(dia)} mmHg`, secondary: "" };
+    }
+
+    const primaryFieldName = getPrimaryField(tracker);
+    // Helper: format a single field value with its unit (or the tracker's
+    // unit when the field has none). Numbers get locale-formatted; durations
+    // are nudged toward "min" if no unit is set.
+    const fmtField = (f: any): string | null => {
+      const v = vals[f.name];
+      if (v == null || v === "") return null;
+      const num = Number(v);
+      // Field-level unit wins. Fall back to the tracker-level unit only for
+      // the primary field (so Hydration whose tracker.unit is "oz" renders
+      // "90 oz" instead of bare "90"). Duration fields default to "min".
+      const fallbackUnit = f.name === primaryFieldName ? (tracker.unit || "") : "";
+      const unit = (f.unit || fallbackUnit || (f.type === "duration" ? "min" : "") || "").trim();
+      if (!isNaN(num) && typeof v !== "boolean") {
+        const formatted = num.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        return unit ? `${formatted} ${unit}` : formatted;
+      }
+      if (typeof v === "boolean") return v ? "yes" : "no";
+      const s = String(v).trim();
+      if (!s) return null;
+      // Drop literal repeats of the tracker name ("running", "guitar")
+      if (s.toLowerCase() === trackerNameLower) return null;
+      return s;
+    };
+
+    // Collect useful fields, primary first. Skip internal notes field.
+    const ordered = [
+      ...fields.filter((f: any) => f.name === primaryFieldName),
+      ...fields.filter((f: any) => f.name !== primaryFieldName && f.name !== "_notes"),
+    ];
+    const parts: string[] = [];
+    for (const f of ordered) {
+      const piece = fmtField(f);
+      if (piece) parts.push(piece);
+    }
+
+    // Fallback: include any free-form values from `values` not declared as
+    // fields (e.g. ad-hoc keys saved from chat).
+    if (parts.length === 0) {
+      for (const [k, v] of Object.entries(vals)) {
+        if (k === "_notes" || v == null || v === "") continue;
+        if (fields.some((f: any) => f.name === k)) continue;
+        const s = typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(v).trim();
+        if (!s) continue;
+        if (s.toLowerCase() === trackerNameLower) continue;
+        parts.push(`${k}: ${s}`);
+      }
+    }
+
+    // Notes get appended as secondary detail (or become the primary when no
+    // value could be derived — better to show "30 min practice" than "—").
+    const notes = (vals["_notes"] as string | undefined) || entry?.notes || "";
+    if (parts.length === 0) {
+      return notes ? { primary: notes, secondary: "" } : { primary: "\u2014", secondary: "" };
+    }
+    return { primary: parts.join(" \u00b7 "), secondary: notes };
   }
 
   function getPrevValue(tracker: any): number | null {
@@ -5878,20 +5964,60 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
   }
 
   // ── log entry mutation ────────────────────────────────────
-  const logMutation = useMutation({
-    mutationFn: async ({ trackerId, values, notes }: { trackerId: string; values: Record<string, number>; notes: string }) => {
+  // Optimistic so the new entry appears in the expanded list and the
+  // header value the instant the user clicks Save — the server round-trip
+  // and cache invalidation just confirm what we already drew.
+  const logMutation = useMutation<
+    unknown,
+    Error,
+    { trackerId: string; values: Record<string, any>; notes: string },
+    { prevDetail: any; tempId: string }
+  >({
+    mutationFn: async ({ trackerId, values, notes }) => {
       await apiRequest("POST", `/api/trackers/${trackerId}/entries`, { values, notes });
+    },
+    onMutate: async ({ trackerId, values, notes }) => {
+      const detailKey = ["/api/profiles", profileId, "detail"];
+      await queryClient.cancelQueries({ queryKey: detailKey });
+      const prevDetail = queryClient.getQueryData<any>(detailKey);
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const optimisticEntry = {
+        id: tempId,
+        trackerId,
+        values,
+        notes,
+        timestamp: new Date().toISOString(),
+      };
+      queryClient.setQueryData<any>(detailKey, (old: any) => {
+        if (!old || !Array.isArray(old.relatedTrackers)) return old;
+        return {
+          ...old,
+          relatedTrackers: old.relatedTrackers.map((t: any) =>
+            t.id === trackerId
+              ? { ...t, entries: [...(t.entries || []), optimisticEntry] }
+              : t,
+          ),
+        };
+      });
+      return { prevDetail, tempId };
     },
     onSuccess: () => {
       toast({ title: "Entry logged" });
-      setLogOpen(null); setLogValue(""); setLogNotes("");
+      setLogOpen(null); setLogFieldVals({}); setLogNotes("");
+    },
+    onError: (err: Error, _vars, ctx) => {
+      if (ctx?.prevDetail) {
+        queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
+      }
+      toast({ title: "Failed", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   // ── empty state ───────────────────────────────────────────
@@ -5931,10 +6057,23 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
   }).filter((v: any) => typeof v.latest === 'number' && !isNaN(v.latest)).sort((a: any, b: any) => (a.tracker.name || '').localeCompare(b.tracker.name || ''));
 
   // ── Section 2: Top 3 trend charts ──
+  // Only trackers whose primary field actually produces ≥2 numeric data
+  // points qualify — otherwise the area chart was rendering with “NaN”
+  // as the latest value (e.g. a Calories tracker that only stored the
+  // literal string “calories”).
   const topChartTrackers = [...healthTrackers]
-    .sort((a: any, b: any) => (b.entries?.length || 0) - (a.entries?.length || 0))
+    .map((t: any) => {
+      const pf = getPrimaryField(t);
+      const numericCount = (t.entries || []).filter((e: any) => {
+        const v = e.values?.[pf];
+        return v != null && v !== "" && !isNaN(Number(v));
+      }).length;
+      return { t, numericCount };
+    })
+    .filter((x) => x.numericCount >= 2)
+    .sort((a, b) => b.numericCount - a.numericCount)
     .slice(0, 3)
-    .filter((t: any) => (t.entries?.length || 0) >= 2);
+    .map((x) => x.t);
 
   // ── Section 5: Insights ──
   const insights: { key: string; text: string; level: "warn" | "info" | "good" }[] = [];
@@ -5971,7 +6110,15 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
             </span>
             At a Glance
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
+          {/*
+            Auto-fit grid so cards stretch to fill any leftover space
+            instead of leaving a stranded card on its own row. Each card
+            wants ≥ 200px; the grid will pack as many as fit per row.
+          */}
+          <div
+            className="grid gap-2.5"
+            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}
+          >
             {vitalCards.map(({ tracker, latest, avg7, trend, sparkData, daysSince, accent }: any) => {
               const trendColor = trend === "up" ? "text-emerald-500" : trend === "down" ? "text-rose-500" : "text-muted-foreground";
               const lineColor = `hsl(${accent.hsl})`;
@@ -6055,14 +6202,23 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
               const lineColor = `hsl(${accent.hsl})`;
               const fillId = `trend-fill-${t.id}`;
               // Oldest to newest so the time axis reads left-to-right.
+              // Drop entries whose primary field isn’t numeric (e.g. a
+              // “Running” tracker that only stored the literal text
+              // “running”) so Number() doesn’t produce NaN and surface
+              // “NaN” as the latest value or break the area chart.
               const chartData = [...(t.entries || [])]
                 .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
                 .slice(-30)
-                .map((e: any) => ({
-                  date: new Date(e.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-                  value: Number(e.values?.[pf] ?? 0),
-                }));
-              const latest = chartData.length ? chartData[chartData.length - 1].value : null;
+                .map((e: any) => {
+                  const raw = e.values?.[pf];
+                  const num = raw == null || raw === "" ? NaN : Number(raw);
+                  return {
+                    date: new Date(e.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+                    value: isNaN(num) ? null : num,
+                  };
+                })
+                .filter((d: any) => d.value !== null);
+              const latest: number | null = chartData.length ? (chartData[chartData.length - 1].value as number) : null;
               return (
                 <Card
                   key={t.id}
@@ -6080,7 +6236,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                         </span>
                         <p className="text-xs font-semibold">{t.name}</p>
                       </div>
-                      {latest != null && (
+                      {latest != null && !isNaN(latest) && (
                         <span className="text-sm font-bold tabular-nums" style={{ color: lineColor }}>
                           {latest.toLocaleString(undefined, { maximumFractionDigits: 1 })}{t.unit ? <span className="text-[10px] text-muted-foreground ml-0.5 font-medium">{t.unit}</span> : null}
                         </span>
@@ -6159,10 +6315,15 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
             const accent = categoryAccent(t);
             const lineColor = `hsl(${accent.hsl})`;
             const Icon = accent.icon;
-            const isStringValue = latest != null && typeof latest !== "number";
-            const displayVal = latest != null
-              ? (typeof latest === "number" ? Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 }) : String(latest))
+            // Render the latest entry through formatEntryDisplay so the
+            // collapsed header shows e.g. "125/80 mmHg" for BP, "3.2 mi
+            // · 28 min" for a Run, or "30 min practice" for a Guitar
+            // entry — never just the tracker name or a bare number.
+            const latestFormatted = lastEntry ? formatEntryDisplay(t, lastEntry) : null;
+            const headerValue = latestFormatted?.primary && latestFormatted.primary !== "\u2014"
+              ? latestFormatted.primary
               : null;
+            const isNumericHeader = typeof latest === "number";
 
             return (
               <Card
@@ -6201,18 +6362,17 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                         {lastDate && <span className="text-[11px] text-muted-foreground">· last {lastDate}</span>}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {displayVal != null && (
-                        isStringValue ? (
-                          <span className="text-xs italic text-muted-foreground max-w-[140px] truncate" title={displayVal}>
-                            {displayVal}
-                          </span>
-                        ) : (
-                          <span className="text-base font-bold tabular-nums" style={{ color: lineColor }}>
-                            {displayVal}
-                            {t.unit && <span className="text-[10px] text-muted-foreground ml-0.5 font-medium">{t.unit}</span>}
-                          </span>
-                        )
+                    <div className="flex items-center gap-1.5 shrink-0 min-w-0">
+                      {headerValue && (
+                        <span
+                          className={isNumericHeader
+                            ? "text-base font-bold tabular-nums whitespace-nowrap"
+                            : "text-xs text-muted-foreground max-w-[180px] truncate"}
+                          style={{ color: isNumericHeader ? lineColor : undefined }}
+                          title={headerValue}
+                        >
+                          {headerValue}
+                        </span>
                       )}
                       {isExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
                     </div>
@@ -6222,70 +6382,119 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                     <div className="px-3 pb-3 pt-1 border-t border-border/30 space-y-3">
                       {sortedEntries.length > 0 ? (
                         <div className="space-y-0">
-                          {sortedEntries.slice(0, 10).map((entry: any) => (
-                            <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border/40 last:border-0 text-xs">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="font-mono font-semibold tabular-nums" style={{ color: lineColor }}>
-                                  {entry.values?.[pf] != null
-                                    ? (typeof entry.values[pf] === "number" || !isNaN(Number(entry.values[pf]))
-                                        ? `${Number(entry.values[pf]).toLocaleString(undefined, { maximumFractionDigits: 1 })}${t.unit ? ` ${t.unit}` : ""}`
-                                        : String(entry.values[pf]))
-                                    : Object.values(entry.values || {}).filter(Boolean).join(", ") || "\u2014"}
+                          {sortedEntries.slice(0, 10).map((entry: any) => {
+                            const formatted = formatEntryDisplay(t, entry);
+                            return (
+                              <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border/40 last:border-0 text-xs gap-2">
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  <span className="font-mono font-semibold tabular-nums truncate" style={{ color: lineColor }} title={formatted.primary}>
+                                    {formatted.primary}
+                                  </span>
+                                  {formatted.secondary && (
+                                    <span className="text-muted-foreground truncate" title={formatted.secondary}>
+                                      {formatted.secondary}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-xs text-muted-foreground shrink-0">
+                                  {new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                                 </span>
-                                {entry.notes && <span className="text-muted-foreground truncate max-w-[120px]" title={entry.notes}>{entry.notes}</span>}
                               </div>
-                              <span className="text-xs text-muted-foreground shrink-0 ml-2">
-                                {new Date(entry.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                              </span>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       ) : (
                         <p className="text-xs text-muted-foreground text-center py-2">No entries yet — tap “Log Entry” to start.</p>
                       )}
 
-                      {isLogging ? (
-                        <div className="flex flex-col gap-2 p-2.5 rounded-lg border bg-muted/30" style={{ borderColor: `hsl(${accent.hsl} / 0.35)` }}>
-                          <p className="text-xs font-medium">Log Entry — {t.name}</p>
-                          <div className="flex items-center gap-2">
-                            <Input
-                              type="number"
-                              className="h-7 text-xs flex-1"
-                              placeholder={`Value${t.unit ? ` (${t.unit})` : ""}`}
-                              value={logValue}
-                              onChange={e => setLogValue(e.target.value)}
-                              autoFocus
-                            />
-                            <Input
-                              type="text"
-                              className="h-7 text-xs flex-1"
-                              placeholder="Notes (optional)"
-                              value={logNotes}
-                              onChange={e => setLogNotes(e.target.value)}
-                            />
+                      {isLogging ? (() => {
+                        // One input per declared field so multi-field
+                        // trackers (BP → systolic + diastolic, Running →
+                        // distance + duration) can be logged in one shot.
+                        // Fall back to a single "value" field for legacy
+                        // trackers with no fields declared.
+                        const formFields: any[] = Array.isArray(t.fields) && t.fields.length > 0
+                          ? t.fields.filter((f: any) => f.name !== "_notes")
+                          : [{ name: pf, type: "number", unit: t.unit || "" }];
+                        const canSave = !logMutation.isPending && (
+                          formFields.some((f: any) => {
+                            const raw = logFieldVals[f.name];
+                            return raw !== undefined && raw !== "";
+                          }) || !!logNotes.trim()
+                        );
+                        const submit = () => {
+                          if (!canSave) return;
+                          const values: Record<string, any> = {};
+                          for (const f of formFields) {
+                            const raw = logFieldVals[f.name];
+                            if (raw === undefined || raw === "") continue;
+                            if (f.type === "number" || f.type === "duration") {
+                              const num = Number(raw);
+                              if (!isNaN(num)) values[f.name] = num;
+                            } else if (f.type === "boolean") {
+                              values[f.name] = raw === "true" || raw === "yes";
+                            } else {
+                              values[f.name] = raw;
+                            }
+                          }
+                          logMutation.mutate({ trackerId: t.id, values, notes: logNotes });
+                        };
+                        return (
+                          <div
+                            className="flex flex-col gap-2 p-2.5 rounded-lg border bg-muted/30"
+                            style={{ borderColor: `hsl(${accent.hsl} / 0.35)` }}
+                            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(); }}
+                          >
+                            <p className="text-xs font-medium">Log Entry — {t.name}</p>
+                            <div className="grid grid-cols-2 gap-2">
+                              {formFields.map((f: any, idx: number) => {
+                                const fieldUnit = f.unit || (f.name === pf ? (t.unit || "") : "") || (f.type === "duration" ? "min" : "");
+                                const isNumeric = f.type === "number" || f.type === "duration";
+                                return (
+                                  <Input
+                                    key={f.name}
+                                    type={isNumeric ? "number" : "text"}
+                                    inputMode={isNumeric ? "decimal" : undefined}
+                                    className="h-7 text-xs"
+                                    placeholder={`${f.name}${fieldUnit ? ` (${fieldUnit})` : ""}`}
+                                    value={logFieldVals[f.name] ?? ""}
+                                    onChange={(e) => setLogFieldVals(prev => ({ ...prev, [f.name]: e.target.value }))}
+                                    autoFocus={idx === 0}
+                                  />
+                                );
+                              })}
+                              <Input
+                                type="text"
+                                className="h-7 text-xs col-span-2"
+                                placeholder="Notes (optional)"
+                                value={logNotes}
+                                onChange={e => setLogNotes(e.target.value)}
+                              />
+                            </div>
+                            <div className="flex gap-1.5">
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs flex-1"
+                                style={{ background: lineColor, color: "white" }}
+                                disabled={!canSave}
+                                onClick={submit}
+                                data-testid={`button-save-log-${t.id}`}
+                              >
+                                {logMutation.isPending ? "Saving..." : "Save"}
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setLogOpen(null); setLogFieldVals({}); setLogNotes(""); }}>
+                                Cancel
+                              </Button>
+                            </div>
                           </div>
-                          <div className="flex gap-1.5">
-                            <Button
-                              size="sm"
-                              className="h-7 text-xs flex-1"
-                              style={{ background: lineColor, color: "white" }}
-                              disabled={!logValue || logMutation.isPending}
-                              onClick={() => logMutation.mutate({ trackerId: t.id, values: { [pf]: Number(logValue) }, notes: logNotes })}
-                            >
-                              {logMutation.isPending ? "Saving..." : "Save"}
-                            </Button>
-                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { setLogOpen(null); setLogValue(""); setLogNotes(""); }}>
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
+                        );
+                      })() : (
                         <Button
                           variant="outline"
                           size="sm"
                           className="h-7 text-xs w-full gap-1"
                           style={{ borderColor: `hsl(${accent.hsl} / 0.4)`, color: lineColor }}
-                          onClick={() => { setLogOpen(t.id); setLogValue(""); setLogNotes(""); }}
+                          onClick={() => { setLogOpen(t.id); setLogFieldVals({}); setLogNotes(""); }}
                           data-testid={`button-log-entry-${t.id}`}
                         >
                           <Plus className="h-3.5 w-3.5" /> Log Entry
