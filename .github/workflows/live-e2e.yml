@@ -7,6 +7,14 @@ name: Live E2E (deployed app)
 # Trigger manually (workflow_dispatch) — typically right after a deploy.
 on:
   workflow_dispatch:
+  # The MCP integration can't dispatch workflows (403), so also run when the
+  # suite itself changes — pushing a suite update both ships and executes it.
+  push:
+    branches: [main]
+    paths:
+      - "tests/live-scenarios.test.ts"
+      - "vitest.live.config.ts"
+      - ".github/workflows/live-e2e.yml"
 
 jobs:
   live-e2e:
