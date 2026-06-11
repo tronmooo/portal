@@ -3467,6 +3467,341 @@ function InfoTab({
 // focused on "what habits does this profile have + how are they doing".
 // Memoised: pure presentation of the linked-habits list; props are a stable
 // react-query array + a string, with no callback props to invalidate the memo.
+// ── PR E (2026-06-11): per-profile Productivity Hub ──
+// Replaces the bare Habits tab on person/self profiles with a unified
+// productivity hub: Today summary, Habits, Tasks, Schedule, Reminders,
+// Routines, Notes, Journal. Every section is collapsed by default per
+// the universal collapse-by-default rule.
+function ProductivityHubTab({
+  profile, profileId, onChanged,
+}: {
+  profile: any;
+  profileId: string;
+  onChanged: () => void;
+}) {
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const habits = (profile.relatedHabits || []) as any[];
+  const tasks = (profile.relatedTasks || []) as any[];
+  const events = (profile.relatedEvents || []) as any[];
+
+  // Filter helpers — strict ownership rule (per user spec).
+  const isOwnedTask = (t: any) => Array.isArray(t.linkedProfiles) && t.linkedProfiles.includes(profileId);
+  const isOwnedEvent = (e: any) => Array.isArray(e.linkedProfiles) && e.linkedProfiles.includes(profileId);
+
+  const openTasks = useMemo(() => tasks.filter(t => {
+    const s = (t.status || "").toLowerCase();
+    return s !== "done" && s !== "completed";
+  }), [tasks]);
+  const doneTasks = useMemo(() => tasks.filter(t => {
+    const s = (t.status || "").toLowerCase();
+    return s === "done" || s === "completed";
+  }), [tasks]);
+  const reminders = useMemo(() => openTasks.filter(t => t.dueDate || t.dueAt || t.due_at), [openTasks]);
+  const upcomingEvents = useMemo(() => {
+    const now = Date.now();
+    return events
+      .filter(e => {
+        const t = e.startTime || e.start_time || e.start || e.date;
+        if (!t) return false;
+        const ms = new Date(t).getTime();
+        return Number.isFinite(ms) && ms >= now - 60_000; // 1-min grace window
+      })
+      .sort((a, b) => new Date(a.startTime || a.start_time || a.start || a.date).getTime() - new Date(b.startTime || b.start_time || b.start || b.date).getTime());
+  }, [events]);
+  const habitsDoneToday = useMemo(() => habits.filter(h => {
+    const checkins = Array.isArray(h.checkins) ? h.checkins : [];
+    return checkins.some((c: any) => c.date === todayISO);
+  }).length, [habits, todayISO]);
+  const tasksDueToday = useMemo(() => openTasks.filter(t => {
+    const due = t.dueDate || t.dueAt || t.due_at;
+    if (!due) return false;
+    return String(due).slice(0, 10) === todayISO;
+  }), [openTasks, todayISO]);
+  const eventsToday = useMemo(() => upcomingEvents.filter(e => {
+    const t = e.startTime || e.start_time || e.start || e.date;
+    return String(t).slice(0, 10) === todayISO;
+  }), [upcomingEvents, todayISO]);
+
+  // Journal: query by linkedProfiles ∋ profileId.
+  const { data: allJournals = [] } = useQuery<any[]>({
+    queryKey: ["/api/journal"],
+    queryFn: async () => {
+      try { return await apiRequest("GET", "/api/journal").then(r => r.json()); }
+      catch { return []; }
+    },
+  });
+  const profileJournals = useMemo(() => (allJournals || []).filter((j: any) =>
+    Array.isArray(j.linkedProfiles) && j.linkedProfiles.includes(profileId)
+  ), [allJournals, profileId]);
+
+  // Collapsible state per section. Always collapsed by default.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const toggle = (k: string) => setOpen(s => ({ ...s, [k]: !s[k] }));
+
+  // Section header renderer — keeps every section visually identical.
+  const SectionHeader = ({ id, icon: Icon, color, label, count, action }: {
+    id: string; icon: any; color: { bg: string; text: string }; label: string; count?: number;
+    action?: React.ReactNode;
+  }) => (
+    <div className="flex items-center justify-between mb-2 px-0.5">
+      <button
+        className="flex items-center gap-2 flex-1 text-left"
+        onClick={() => toggle(id)}
+        data-testid={`button-toggle-hub-${id}`}
+        aria-expanded={!!open[id]}
+      >
+        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${open[id] ? "rotate-180" : "-rotate-90"}`} />
+        <span className={`flex items-center justify-center h-6 w-6 rounded-full ${color.bg}`}>
+          <Icon className={`h-3.5 w-3.5 ${color.text}`} />
+        </span>
+        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+          {label}{typeof count === "number" ? <span className="font-normal normal-case text-muted-foreground/70"> ({count})</span> : null}
+        </span>
+      </button>
+      {action}
+    </div>
+  );
+
+  // Section color palette — keeps each section visually distinct.
+  const C = {
+    today:        { bg: "bg-primary/10",       text: "text-primary" },
+    habits:       { bg: "bg-orange-500/10",    text: "text-orange-500" },
+    tasks:        { bg: "bg-blue-500/10",      text: "text-blue-500" },
+    schedule:     { bg: "bg-indigo-500/10",    text: "text-indigo-500" },
+    reminders:    { bg: "bg-yellow-500/10",    text: "text-yellow-500" },
+    routines:     { bg: "bg-purple-500/10",    text: "text-purple-500" },
+    notes:        { bg: "bg-slate-500/10",     text: "text-slate-500" },
+    journal:      { bg: "bg-emerald-500/10",   text: "text-emerald-500" },
+  };
+
+  const formatEventTime = (e: any) => {
+    const t = e.startTime || e.start_time || e.start || e.date;
+    if (!t) return "";
+    const d = new Date(t);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* ── Today (always-visible summary, no toggle) ── */}
+      <Card data-testid="hub-today-summary">
+        <CardContent className="p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <span className={`flex items-center justify-center h-6 w-6 rounded-full ${C.today.bg}`}>
+              <Calendar className={`h-3.5 w-3.5 ${C.today.text}`} />
+            </span>
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Today</p>
+            <span className="text-[10px] text-muted-foreground/70 ml-auto">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            <div className="text-center py-2 rounded-lg bg-muted/40">
+              <p className="text-lg font-bold tabular-nums">{habitsDoneToday}<span className="text-xs font-normal text-muted-foreground">/{habits.length}</span></p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Habits</p>
+            </div>
+            <div className="text-center py-2 rounded-lg bg-muted/40">
+              <p className="text-lg font-bold tabular-nums">{tasksDueToday.length}</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Tasks Due</p>
+            </div>
+            <div className="text-center py-2 rounded-lg bg-muted/40">
+              <p className="text-lg font-bold tabular-nums">{eventsToday.length}</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Events</p>
+            </div>
+            <div className="text-center py-2 rounded-lg bg-muted/40">
+              <p className="text-lg font-bold tabular-nums">{openTasks.length}</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Open</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Habits ── */}
+      <section data-testid="hub-section-habits">
+        <SectionHeader id="habits" icon={Flame} color={C.habits} label="Habits" count={habits.length}
+          action={<Link href="/habits" className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="link-hub-habits"><ExternalLink className="h-3 w-3 inline" /></Link>}
+        />
+        {open.habits && (
+          habits.length === 0 ? (
+            <Card><CardContent className="py-6 text-center text-xs text-muted-foreground">No habits linked. Open the Habits page to create one.</CardContent></Card>
+          ) : (
+            <div className="space-y-2">
+              {habits.map((h: any) => {
+                const checkins = Array.isArray(h.checkins) ? h.checkins : [];
+                const doneToday = checkins.some((c: any) => c.date === todayISO);
+                const streak = Number(h.currentStreak) || 0;
+                return (
+                  <Card key={h.id} data-testid={`hub-habit-${h.id}`}>
+                    <CardContent className="py-2.5 px-3 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${doneToday ? "bg-emerald-500/15 text-emerald-500" : "bg-muted text-muted-foreground"}`}>
+                          {doneToday ? <Check className="h-3.5 w-3.5" /> : <Flame className="h-3.5 w-3.5" />}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold truncate">{h.name}</p>
+                          <p className="text-[10px] text-muted-foreground capitalize">
+                            {(h.frequency || "daily")}{Number(h.targetPerDay) > 1 ? ` · ${h.targetPerDay}×/day` : ""}{doneToday ? " · done today" : ""}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="flex items-center gap-1 justify-end text-sm font-bold tabular-nums">
+                          <Flame className={`h-3 w-3 ${streak > 0 ? "text-orange-500" : "text-muted-foreground/40"}`} />
+                          {streak}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )
+        )}
+      </section>
+
+      {/* ── Tasks ── */}
+      <section data-testid="hub-section-tasks">
+        <SectionHeader id="tasks" icon={CheckCircle2} color={C.tasks} label="Tasks" count={openTasks.length}
+          action={<Link href="/tasks" className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="link-hub-tasks"><ExternalLink className="h-3 w-3 inline" /></Link>}
+        />
+        {open.tasks && (
+          openTasks.length === 0 ? (
+            <Card><CardContent className="py-6 text-center text-xs text-muted-foreground">No open tasks for this profile.{doneTasks.length > 0 ? ` ${doneTasks.length} completed.` : ""}</CardContent></Card>
+          ) : (
+            <div className="space-y-1.5">
+              {openTasks.slice(0, 50).map((t: any) => {
+                const due = t.dueDate || t.dueAt || t.due_at;
+                return (
+                  <Card key={t.id} data-testid={`hub-task-${t.id}`}>
+                    <CardContent className="py-2 px-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Circle className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                        <p className="text-xs font-medium truncate">{t.title || t.name || "Untitled task"}</p>
+                      </div>
+                      {due && (
+                        <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">
+                          {new Date(due).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                        </span>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )
+        )}
+      </section>
+
+      {/* ── Schedule (upcoming events only — PR F preview) ── */}
+      <section data-testid="hub-section-schedule">
+        <SectionHeader id="schedule" icon={Calendar} color={C.schedule} label="Schedule" count={upcomingEvents.length}
+          action={<Link href="/" className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="link-hub-schedule"><ExternalLink className="h-3 w-3 inline" /></Link>}
+        />
+        {open.schedule && (
+          upcomingEvents.length === 0 ? (
+            <Card><CardContent className="py-6 text-center text-xs text-muted-foreground">No upcoming events for this profile.</CardContent></Card>
+          ) : (
+            <div className="space-y-1.5">
+              {upcomingEvents.slice(0, 50).map((e: any) => (
+                <Card key={e.id} data-testid={`hub-event-${e.id}`}>
+                  <CardContent className="py-2 px-3 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Calendar className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
+                      <p className="text-xs font-medium truncate">{e.title || e.name || "Untitled event"}</p>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">{formatEventTime(e)}</span>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )
+        )}
+      </section>
+
+      {/* ── Reminders (subset of tasks with due dates) ── */}
+      <section data-testid="hub-section-reminders">
+        <SectionHeader id="reminders" icon={AlertCircle} color={C.reminders} label="Reminders" count={reminders.length} />
+        {open.reminders && (
+          reminders.length === 0 ? (
+            <Card><CardContent className="py-6 text-center text-xs text-muted-foreground">No reminders. Tasks with due dates appear here.</CardContent></Card>
+          ) : (
+            <div className="space-y-1.5">
+              {reminders.slice(0, 30).map((t: any) => {
+                const due = t.dueDate || t.dueAt || t.due_at;
+                const overdue = due && new Date(due).getTime() < Date.now();
+                return (
+                  <Card key={t.id} data-testid={`hub-reminder-${t.id}`}>
+                    <CardContent className="py-2 px-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <AlertCircle className={`h-3.5 w-3.5 shrink-0 ${overdue ? "text-red-500" : "text-yellow-500"}`} />
+                        <p className="text-xs font-medium truncate">{t.title || t.name || "Untitled"}</p>
+                      </div>
+                      <span className={`text-[10px] shrink-0 tabular-nums ${overdue ? "text-red-500 font-semibold" : "text-muted-foreground"}`}>
+                        {new Date(due).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      </span>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )
+        )}
+      </section>
+
+      {/* ── Routines ── */}
+      <section data-testid="hub-section-routines">
+        <SectionHeader id="routines" icon={RefreshCw} color={C.routines} label="Routines" />
+        {open.routines && (
+          <Card>
+            <CardContent className="py-6 text-center">
+              <RefreshCw className="h-6 w-6 text-muted-foreground/30 mx-auto mb-2" />
+              <p className="text-xs text-muted-foreground">Multi-step routines tied to this profile will appear here.</p>
+              <p className="text-[10px] text-muted-foreground/70 mt-1">Ask Portol in chat to create one.</p>
+            </CardContent>
+          </Card>
+        )}
+      </section>
+
+      {/* ── Notes ── */}
+      <section data-testid="hub-section-notes">
+        <SectionHeader id="notes" icon={FileText} color={C.notes} label="Notes" />
+        {open.notes && (
+          <NotesTab profileId={profileId} currentNotes={profile.notes || ""} updatedAt={profile.updatedAt} onChanged={onChanged} />
+        )}
+      </section>
+
+      {/* ── Journal ── */}
+      <section data-testid="hub-section-journal">
+        <SectionHeader id="journal" icon={BookOpen} color={C.journal} label="Journal" count={profileJournals.length}
+          action={<Link href="/journal" className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="link-hub-journal"><ExternalLink className="h-3 w-3 inline" /></Link>}
+        />
+        {open.journal && (
+          profileJournals.length === 0 ? (
+            <Card><CardContent className="py-6 text-center text-xs text-muted-foreground">No journal entries linked to this profile.</CardContent></Card>
+          ) : (
+            <div className="space-y-1.5">
+              {profileJournals.slice(0, 30).map((j: any) => (
+                <Card key={j.id} data-testid={`hub-journal-${j.id}`}>
+                  <CardContent className="py-2 px-3">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <BookOpen className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                        <p className="text-xs font-medium capitalize">{j.mood || "entry"}</p>
+                      </div>
+                      <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">
+                        {new Date(j.date || j.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      </span>
+                    </div>
+                    {j.content && <p className="text-xs text-muted-foreground line-clamp-2">{j.content}</p>}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )
+        )}
+      </section>
+    </div>
+  );
+}
+
 const ProfileHabitsTab = memo(function ProfileHabitsTab({ habits, profileName }: { habits: any[]; profileName: string }) {
   const today = new Date().toISOString().slice(0, 10);
   if (!habits || habits.length === 0) {
@@ -7343,7 +7678,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "finance", label: "Finance", testId: "tab-finance" },
     { value: "person-trackers", label: "Trackers", testId: "tab-person-trackers" },
     { value: "person-documents", label: "Documents", testId: "tab-person-documents" },
-    { value: "habits", label: "Habits", testId: "tab-habits" },
+    { value: "habits", label: "Productivity", testId: "tab-habits" },
     { value: "person-history", label: "History", testId: "tab-person-history" },
   ],
   self: [
@@ -7351,7 +7686,7 @@ const ENTITY_TABS: Record<string, TabDef[]> = {
     { value: "finance", label: "Finance", testId: "tab-finance" },
     { value: "person-trackers", label: "Trackers", testId: "tab-person-trackers" },
     { value: "person-documents", label: "Documents", testId: "tab-person-documents" },
-    { value: "habits", label: "Habits", testId: "tab-habits" },
+    { value: "habits", label: "Productivity", testId: "tab-habits" },
     { value: "person-history", label: "History", testId: "tab-person-history" },
   ],
   // Pet — care focused. "Health & Vet" tab removed 2026-05-21: it contained
@@ -12669,7 +13004,15 @@ export default function ProfileDetailPage() {
 
               {tabValues.has("habits") && (
                 <TabsContent value="habits" className="mt-4 px-1 sm:px-0">
-                  <ProfileHabitsTab habits={profile.relatedHabits || []} profileName={profile.name} />
+                  {/* PR E (2026-06-11): person/self profiles see the full
+                      Productivity Hub (Today, Habits, Tasks, Schedule,
+                      Reminders, Routines, Notes, Journal). Other profile
+                      types keep the bare habits list. */}
+                  {["person", "self"].includes(profile.type) ? (
+                    <ProductivityHubTab profile={profile} profileId={id} onChanged={handleSaved} />
+                  ) : (
+                    <ProfileHabitsTab habits={profile.relatedHabits || []} profileName={profile.name} />
+                  )}
                 </TabsContent>
               )}
 
