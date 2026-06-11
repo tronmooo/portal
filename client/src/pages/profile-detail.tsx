@@ -10946,9 +10946,11 @@ export default function ProfileDetailPage() {
   const [linkedFilter, setLinkedFilter] = useState<"all" | "profiles" | "trackers" | "documents">("all");
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
+  // Upload to Supabase Storage via /api/profiles/:id/photo so the avatar column
+  // stores a small public URL (not a multi-MB base64 blob).
   const avatarMutation = useMutation({
-    mutationFn: async (base64: string) => {
-      await apiRequest("PATCH", `/api/profiles/${id}`, { avatar: base64 });
+    mutationFn: async (payload: { fileData: string; mimeType: string }) => {
+      await apiRequest("POST", `/api/profiles/${id}/photo`, payload);
     },
     onSuccess: () => {
       toast({ title: "Profile picture updated" });
@@ -10963,14 +10965,17 @@ export default function ProfileDetailPage() {
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      toast({ title: "Image too large", description: "Please choose an image under 2MB", variant: "destructive" });
+    if (file.size > 5 * 1024 * 1024) {
+      toast({ title: "Image too large", description: "Please choose an image under 5MB", variant: "destructive" });
       return;
     }
     const reader = new FileReader();
     reader.onloadend = () => {
       const result = reader.result as string;
-      avatarMutation.mutate(result);
+      // result is a data URI like "data:image/jpeg;base64,..." — split it.
+      const mimeType = file.type || "image/jpeg";
+      const fileData = result.includes(",") ? result.split(",")[1] : result;
+      avatarMutation.mutate({ fileData, mimeType });
     };
     reader.readAsDataURL(file);
   };

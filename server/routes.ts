@@ -2769,6 +2769,68 @@ If unsure, return "profile_fact".`,
     res.json({ ok: true });
   }));
 
+  // ---- Profile photo upload ----
+  // Accepts a base64 image, writes it to the public 'profile-photos' bucket,
+  // and stores the resulting public URL on profiles.avatar. Returns the URL
+  // so the client can render immediately. Replacing a photo overwrites the
+  // same storage path so URLs stay stable per profile.
+  app.post("/api/profiles/:id/photo", asyncHandler(async (req, res) => {
+    const photoUserId = (req as AuthenticatedRequest).userId;
+    if (!photoUserId) return res.status(401).json({ error: "Unauthorized" });
+    const { fileData, mimeType } = req.body as { fileData?: string; mimeType?: string };
+    if (!fileData) return res.status(400).json({ error: "fileData (base64) required" });
+    const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"];
+    const mt = (mimeType || "image/jpeg").toLowerCase();
+    if (!ALLOWED.includes(mt)) return res.status(415).json({ error: `Unsupported image type: ${mt}` });
+    // Limit to 5MB (base64 ~= 4/3 of binary size)
+    const sizeBytes = Math.ceil((fileData.length * 3) / 4);
+    if (sizeBytes > 5 * 1024 * 1024) return res.status(413).json({ error: "Photo too large (max 5MB)" });
+
+    const profile = await storage.getProfile(req.params.id);
+    if (!profile) return res.status(404).json({ error: "Profile not found" });
+
+    // Strip data URI prefix if present
+    let clean = fileData;
+    if (clean.includes(",")) clean = clean.split(",").pop() || clean;
+    clean = clean.replace(/\s/g, "");
+    const buffer = Buffer.from(clean, "base64");
+
+    const ext = mt === "image/png" ? "png" : mt === "image/webp" ? "webp" : mt === "image/gif" ? "gif" : mt.includes("heic") || mt.includes("heif") ? "heic" : "jpg";
+    const storagePath = `${photoUserId}/${req.params.id}.${ext}`;
+
+    const url = process.env.VITE_SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) return res.status(500).json({ error: "Storage not configured" });
+    const admin = createClient(url, key);
+
+    const { error: upErr } = await admin.storage.from("profile-photos").upload(storagePath, buffer, {
+      contentType: mt,
+      upsert: true,
+      cacheControl: "3600",
+    });
+    if (upErr) {
+      log.error("[ProfilePhoto] upload", upErr.message);
+      return res.status(500).json({ error: "Photo upload failed" });
+    }
+    const { data: pub } = admin.storage.from("profile-photos").getPublicUrl(storagePath);
+    // Add a cache-buster so an immediate replace shows the new image right away.
+    const avatarUrl = `${pub.publicUrl}?t=${Date.now()}`;
+    const updated = await storage.updateProfile(req.params.id, { avatar: avatarUrl });
+    const uid_pp = photoUserId;
+    bustCache(`profiles:${uid_pp}`); bustCache(`profile-detail:${uid_pp}:`);
+    res.json({ avatar: avatarUrl, profile: updated });
+  }));
+
+  // Remove a profile photo (clears the avatar URL; storage object is left in
+  // place so undo/restore is possible from the dashboard later).
+  app.delete("/api/profiles/:id/photo", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId;
+    if (!uid) return res.status(401).json({ error: "Unauthorized" });
+    const updated = await storage.updateProfile(req.params.id, { avatar: null as any });
+    bustCache(`profiles:${uid}`); bustCache(`profile-detail:${uid}:`);
+    res.json({ ok: true, profile: updated });
+  }));
+
   // ---- Profile AI Summary ----
   // ── Find current market value via web search ──────────────────────────────────
   app.get("/api/profiles/:id/find-value", asyncHandler(async (req, res) => {

@@ -1014,7 +1014,17 @@ export function CreateProfileDialog({
 
 // ─── Profile Card ────────────────────────────────────────────────────────────
 
-const HIDDEN_FIELDS = ["class", "donor", "provider", "patientId", "property", "_parentProfileId", "ownerProfileId", "ownerName"];
+const HIDDEN_FIELDS = [
+  "class", "donor", "provider", "patientId", "property",
+  "_parentProfileId", "ownerProfileId", "ownerName",
+  // Asset-valuation keys should NEVER appear on person/pet/self cards.
+  // These can leak in if the AI's valuation code ever writes to a person
+  // profile (root-caused upstream by isValuableType guard, but defended
+  // here too so historical or future bugs can't pollute the UI).
+  "currentValue", "valuationDate", "valuationRange", "valuationMethod",
+  "valuationConfidence", "quarantinedAt", "quarantinedReason",
+  "_quarantinedAutoValuation",
+];
 
 // BUG-P05/MISC01: Pretty labels for profile field group keys and common abbreviations.
 const FIELD_LABELS: Record<string, string> = {
@@ -1044,8 +1054,13 @@ const flattenProfileFields = (fields: Record<string, any>): Array<[string, any]>
   const out: Array<[string, any]> = [];
   const seen = new Set<string>();
   // Promote top-level primitives first so they win over nested duplicates.
+  // CRITICAL: skip any key starting with "_" — those are internal markers
+  // (e.g. _quarantinedAutoValuation, _parentProfileId) and must never be
+  // unwrapped onto the card. Without this, the quarantine blob's children
+  // (currentValue, valuationMethod, ...) leak into the visible field list.
   for (const [k, v] of Object.entries(fields || {})) {
     if (v === null || v === undefined || v === "") continue;
+    if (k.startsWith("_")) continue;
     if (typeof v === "object" && !Array.isArray(v)) continue;
     const key = k.toLowerCase();
     if (seen.has(key)) continue;
@@ -1056,15 +1071,76 @@ const flattenProfileFields = (fields: Record<string, any>): Array<[string, any]>
   // This prevents duplicate rows like "pets.breed: Husky" + "breed: Husky".
   for (const [k, v] of Object.entries(fields || {})) {
     if (v === null || v === undefined || v === "") continue;
+    if (k.startsWith("_")) continue;
     if (typeof v !== "object" || Array.isArray(v)) continue;
     const innerEntries = Object.entries(v).filter(([_, iv]) => iv !== null && iv !== undefined && iv !== "");
     for (const [ik, iv] of innerEntries) {
       if (typeof iv === "object") continue;
+      if (ik.startsWith("_")) continue;
       const key = ik.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
       out.push([ik, iv]);
     }
+  }
+  return out;
+};
+
+// Person/pet cards should only ever display identity-relevant fields. Anything
+// else (license plates, mortgage rates, valuations, etc.) shouldn't be there.
+// We compute display fields from a whitelist so the card stays clean even if
+// the AI writes odd keys into a person's profile.fields.
+const PERSON_PRIMARY_FIELDS = [
+  "relationship", "birthday", "dateOfBirth", "dob",
+  "phone", "email", "address", "city", "state", "zipCode", "zip",
+  "emergencyContact", "notes",
+];
+const PET_PRIMARY_FIELDS = [
+  "species", "breed", "color", "birthday", "dateOfBirth",
+  "microchipId", "vet", "weight",
+];
+
+const computeAge = (birthday: any): string | null => {
+  if (!birthday || typeof birthday !== "string") return null;
+  const d = new Date(birthday);
+  if (isNaN(d.getTime())) return null;
+  const diff = Date.now() - d.getTime();
+  const years = diff / (365.25 * 24 * 60 * 60 * 1000);
+  if (years < 0 || years > 130) return null;
+  if (years < 2) {
+    const months = Math.floor(years * 12);
+    return `${months} mo`;
+  }
+  return `${Math.floor(years)} yr`;
+};
+
+const getPersonDisplayFields = (
+  profile: Profile,
+  flat: Array<[string, any]>,
+): Array<[string, string]> => {
+  const isPet = profile.type === "pet";
+  const whitelist = isPet ? PET_PRIMARY_FIELDS : PERSON_PRIMARY_FIELDS;
+  const byKey = new Map<string, any>();
+  for (const [k, v] of flat) byKey.set(k.toLowerCase(), v);
+
+  const out: Array<[string, string]> = [];
+
+  // 1. Computed Age line (people + pets) when a birthday is on file.
+  const birthday = byKey.get("birthday") || byKey.get("dateofbirth") || byKey.get("dob");
+  const age = computeAge(birthday);
+  if (age) out.push(["Age", age]);
+
+  // 2. Whitelisted fields in declared order. Skip ones we already used.
+  const used = new Set<string>(["birthday", "dateofbirth", "dob"]);
+  for (const key of whitelist) {
+    if (used.has(key.toLowerCase())) continue;
+    const v = byKey.get(key.toLowerCase());
+    if (v === undefined || v === null || v === "") continue;
+    const sv = stringifyFieldValue(v);
+    if (!sv) continue;
+    out.push([prettyFieldLabel(key), sv]);
+    used.add(key.toLowerCase());
+    if (out.length >= 5) break;
   }
   return out;
 };
@@ -1148,11 +1224,17 @@ function getProfileBanner(type: string): string {
 function ProfileCard({ profile, onDelete }: { profile: Profile; onDelete: (id: string) => void }) {
   const isPersonType = ["self", "person", "pet"].includes(profile.type);
   // BUG-P05/MISC01: flatten nested groups so the card shows real field names, not group keys.
-  const fields = flattenProfileFields(profile.fields || {}).filter(
+  const flat = flattenProfileFields(profile.fields || {}).filter(
     ([key, v]) => v !== null && v !== undefined && v !== "" &&
       !HIDDEN_FIELDS.includes(key) &&
       !(isPersonType && VEHICLE_SPECIFIC_FIELDS.includes(key))
   );
+  // For people/pets, show identity-first fields (Age, Relationship, Phone, etc.)
+  // For everything else, fall back to the legacy generic field list.
+  const personFields = isPersonType ? getPersonDisplayFields(profile, flat) : null;
+  const fields = personFields
+    ? personFields.map(([label, val]) => [label, val] as [string, any])
+    : flat;
   const initials = profile.name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
   const accentHsl = PROFILE_ACCENT[profile.type] || '188 65% 48%';
   const ac = `hsl(${accentHsl})`;
@@ -1178,9 +1260,24 @@ function ProfileCard({ profile, onDelete }: { profile: Profile; onDelete: (id: s
       >
         {/* Header: avatar + name + type */}
         <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-white text-[10px] font-bold" style={{ background: `linear-gradient(135deg, hsl(${accentHsl}), hsl(${accentHsl} / 0.7))` }}>
-            {initials}
-          </div>
+          {profile.avatar ? (
+            <img
+              src={profile.avatar}
+              alt={profile.name}
+              className="w-9 h-9 rounded-full object-cover shrink-0 border"
+              style={{ borderColor: `hsl(${accentHsl} / 0.4)` }}
+              loading="lazy"
+              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+              data-testid={`img-profile-avatar-${profile.id}`}
+            />
+          ) : (
+            <div
+              className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-white text-[11px] font-bold"
+              style={{ background: `linear-gradient(135deg, hsl(${accentHsl}), hsl(${accentHsl} / 0.7))` }}
+            >
+              {initials}
+            </div>
+          )}
           <div className="min-w-0 flex-1">
             <p className="text-[11px] font-bold text-foreground truncate" data-testid={`text-profile-name-${profile.id}`}>{profile.name}</p>
             <span className="text-[8px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.15)`, color: ac }}>{profile.type}</span>
