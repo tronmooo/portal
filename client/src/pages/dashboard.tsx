@@ -5,6 +5,7 @@ import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
 import { categoryTheme } from "@/lib/category-theme";
+import { AccentCard } from "@/components/ui/accent-card";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { goalsQueryKey } from "@shared/query-keys";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
@@ -203,13 +204,19 @@ function CollapsibleSection({
   const iconColor = accent ? `hsl(${accent})` : undefined;
   const iconBg = accent ? `hsl(${accent} / 0.14)` : undefined;
   return (
-    <div data-testid={testId} className="rounded-xl border border-border/40 bg-card overflow-hidden transition-shadow hover:shadow-sm">
+    <div
+      data-testid={testId}
+      className="rounded-xl border overflow-hidden transition-shadow hover:shadow-md"
+      style={accent ? {
+        borderColor: `hsl(${accent} / 0.30)`,
+        background: `linear-gradient(135deg, hsl(${accent} / 0.08) 0%, hsl(var(--card)) 75%)`,
+      } : { borderColor: 'hsl(var(--border) / 0.5)', background: 'hsl(var(--card))' }}
+    >
       <button
-        className="w-full flex items-center gap-2.5 px-3 py-3 text-left transition-colors hover:bg-muted/30"
+        className="w-full flex items-center gap-2.5 px-3 py-3 text-left transition-colors hover:bg-muted/20"
         onClick={() => setOpen(v => !v)}
         aria-expanded={open}
         data-testid={`btn-toggle-${label.toLowerCase().replace(/\s+/g, "-")}`}
-        style={accent ? { background: `linear-gradient(135deg, hsl(${accent} / 0.06) 0%, transparent 50%)` } : {}}
       >
         <div className="icon-badge" style={iconBg ? { background: iconBg } : { background: 'hsl(var(--muted))' }}>
           <Icon className="h-3.5 w-3.5" style={iconColor ? { color: iconColor } : { color: 'hsl(var(--primary))' }} />
@@ -235,15 +242,18 @@ function MiniStat({
   const accentColor = accent ? `hsl(${accent})` : color;
   return (
     <div
-      className={`relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[72px] overflow-hidden card-lift ${
-        onClick ? "cursor-pointer active:scale-[0.97] transition-all" : ""
+      className={`relative flex flex-col p-2.5 rounded-xl border min-h-[72px] overflow-hidden card-lift ${
+        onClick ? "cursor-pointer active:scale-[0.97] transition-all hover:-translate-y-0.5 hover:shadow-md" : ""
       }`}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
       onKeyDown={onClick ? onEnterOrSpace(onClick) : undefined}
       data-testid={`stat-card-${label.toLowerCase().replace(/\s+/g, "-")}`}
-      style={accent ? { background: `linear-gradient(135deg, hsl(${accent} / 0.10) 0%, transparent 60%)` } : {}}
+      style={accent ? {
+        borderColor: `hsl(${accent} / 0.30)`,
+        background: `linear-gradient(135deg, hsl(${accent} / 0.14) 0%, hsl(var(--card)) 75%)`,
+      } : { borderColor: 'hsl(var(--border) / 0.5)' }}
     >
       {/* Top accent strip */}
       {accent && <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />}
@@ -2057,34 +2067,52 @@ function HealthSection({ data }: { data: any[] }) {
             const sparkMin = Math.min(...spark, 0);
             const sparkRange = sparkMax - sparkMin || 1;
 
+            const displayVal = item.dailyTotal != null ? item.dailyTotal : item.latestValue;
+            const isNumeric = typeof displayVal === "number" && !isNaN(displayVal);
+            const lastEntryMs = item.lastEntry ? new Date(item.lastEntry).getTime() : null;
+            const daysAgo = lastEntryMs != null ? Math.floor((Date.now() - lastEntryMs) / 86400000) : null;
+            const lastLogLabel = daysAgo == null ? null : daysAgo === 0 ? "today" : daysAgo === 1 ? "1d ago" : daysAgo < 30 ? `${daysAgo}d ago` : `${Math.floor(daysAgo/30)}mo ago`;
             return (
-              <div key={item.trackerId}
+              <AccentCard
+                key={item.trackerId}
+                hsl={theme.hsl}
+                icon={ItemIcon}
+                label={item.name}
+                interactive
                 onClick={() => setSelectedTracker(item)}
-                role="button" tabIndex={0} aria-label={`View tracker: ${item.name}`}
+                role="button"
+                tabIndex={0}
+                aria-label={`View tracker: ${item.name}`}
                 onKeyDown={onEnterOrSpace(() => setSelectedTracker(item))}
-                className="flex items-start gap-0 p-2 rounded-lg bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors overflow-hidden relative">
-                {/* Status color band on left */}
-                <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{ background: statusColor }} />
-                <div className="flex-1 min-w-0 pl-2">
-                  <div className="flex items-center gap-1 min-w-0">
-                    <ItemIcon className="h-3 w-3 shrink-0" style={{ color: themeColor }} />
-                    <p className="text-[10px] text-muted-foreground truncate font-medium" title={item.name}>{item.name}</p>
-                  </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-sm font-bold tabular-nums">{item.dailyTotal != null ? item.dailyTotal : item.latestValue}</span>
-                    {item.unit && <span className="text-[10px] text-muted-foreground">{item.unit}</span>}
-                    <TrendIcon trend={item.trend} />
-                  </div>
-                  {/* Mini sparkline */}
-                  {spark.length > 1 && (
-                    <svg width="100%" height="12" viewBox={`0 0 ${spark.length * 8} 12`} preserveAspectRatio="none" className="mt-0.5 opacity-60">
-                      <polyline
-                        points={spark.map((v,i) => `${i*8},${12 - ((v-sparkMin)/sparkRange)*10}`).join(' ')}
-                        fill="none" stroke={statusColor} strokeWidth="1.5" />
-                    </svg>
-                  )}
+                headerRight={<TrendIcon trend={item.trend} />}
+                footer={<>
+                  <span className="font-medium">{item.average != null && isNumeric ? `7d avg ${item.average}` : ""}</span>
+                  {lastLogLabel && <span>{lastLogLabel}</span>}
+                </>}
+              >
+                <div className="flex items-baseline gap-1">
+                  <span
+                    className={isNumeric ? "text-2xl font-bold tabular-nums leading-none" : "text-sm italic text-muted-foreground/90 truncate"}
+                    style={isNumeric ? { color: statusColor } : undefined}
+                    title={!isNumeric ? String(displayVal) : undefined}
+                  >
+                    {isNumeric ? Number(displayVal).toLocaleString(undefined, { maximumFractionDigits: 1 }) : displayVal}
+                  </span>
+                  {isNumeric && item.unit && <span className="text-[10px] text-muted-foreground font-medium">{item.unit}</span>}
                 </div>
-              </div>
+                {spark.length > 1 && isNumeric && (
+                  <svg width="100%" height="18" viewBox={`0 0 ${spark.length * 8} 18`} preserveAspectRatio="none" className="mt-0.5 opacity-80">
+                    <polyline
+                      points={spark.map((v,i) => `${i*8},${18 - ((v-sparkMin)/sparkRange)*16}`).join(' ')}
+                      fill="none" stroke={statusColor} strokeWidth="1.75" />
+                  </svg>
+                )}
+                {(spark.length <= 1 || !isNumeric) && (
+                  <div className="h-[18px] flex items-center">
+                    <div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/30 to-transparent" />
+                  </div>
+                )}
+              </AccentCard>
             );
           })}
         </div>
