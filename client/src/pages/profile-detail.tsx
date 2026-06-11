@@ -4096,7 +4096,22 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const [amortTableOpen, setAmortTableOpen] = useState(false);
   const [extraPayment, setExtraPayment] = useState(0);
 
-  const expenses = profile.relatedExpenses;
+  // STRICT OWNERSHIP FILTER (2026-06-11): expenses surface on a profile's
+  // Finance tab ONLY when this profile is the owner — defined as the FIRST
+  // entry in expense.linkedProfiles, which is the profile the expense was
+  // created under (see server/routes.ts POST /api/expenses: linkedProfiles
+  // is set to [profileId] at creation). Co-linked profiles (e.g. someone
+  // tagged as a witness/participant) no longer see other people's expenses.
+  // This fixes the bug where the Test profile showed "Jane Doe's House
+  // purchase $650,000" because Test was co-linked.
+  // NOTE: orphan expenses (empty linkedProfiles) are not shown on any
+  // person's Finance tab. They're still visible on the global /finance page.
+  const expenses = useMemo(
+    () => (profile.relatedExpenses || []).filter((e: any) =>
+      Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profileId
+    ),
+    [profile.relatedExpenses, profileId],
+  );
   const obligations = profile.relatedObligations;
 
   // ── type flags ─────────────────────────────────────────────────
@@ -11887,7 +11902,7 @@ export default function ProfileDetailPage() {
           if (tabSet.has("health"))    stats.push({ label: "Health",  value: profile.relatedTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c))).length });
           if (tabSet.has("all-trackers")) stats.push({ label: "Trackers", value: profile.relatedTrackers.length });
           if (tabSet.has("trackers"))  stats.push({ label: "Docs", value: profile.relatedDocuments.length });
-          if (tabSet.has("finances"))  stats.push({ label: ptype === 'subscription' ? "Billing" : "Expenses", value: profile.relatedExpenses.length });
+          if (tabSet.has("finances"))  stats.push({ label: ptype === 'subscription' ? "Billing" : "Expenses", value: (profile.relatedExpenses || []).filter((e: any) => Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profile.id).length });
           if (tabSet.has("tasks"))     stats.push({ label: "Tasks",    value: profile.relatedTasks.length });
           const gridCls = stats.length <= 3 ? "grid-cols-3" : stats.length <= 4 ? "grid-cols-4" : "grid-cols-5";
           return (
