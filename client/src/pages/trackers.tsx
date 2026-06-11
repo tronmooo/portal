@@ -107,6 +107,12 @@ import {
   Loader2,
   Pill,
   TreePine,
+  Footprints,
+  Droplet,
+  BookOpen,
+  Gamepad2,
+  Music,
+  Bike,
 } from "lucide-react";
 import { useState, useRef, useEffect, useMemo } from "react";
 
@@ -1675,63 +1681,677 @@ function getTrackerStatus(
   return { label: 'Stale', ...RED };
 }
 
-function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; onDelete: (id: string) => void; onOpenDetail?: (id: string) => void }) {
+
+// ── Insight-driven tracker display ────────────────────────────────────────────
+// Turns a raw tracker + its latest entry into the structured pieces a card
+// needs so we *never* render bare/ambiguous numbers like "90" or "Running 2".
+//
+// Returns:
+//   hasData      – false when the tracker has no entries (caller hides the card
+//                  behind the "No Data" collapsible pile)
+//   importance   – "large" | "normal" | "compact"; controls grid column span
+//   bigPrimary   – the big front-of-card value, already unit-formatted
+//                  (e.g. "125/80", "3.2", "7,000", "30")
+//   bigUnit      – the unit string shown next to bigPrimary (e.g. "mmHg",
+//                  "miles", "steps", "minutes"). Empty string when no unit
+//                  could be inferred (rare).
+//   subline      – contextual second line, e.g. "32 min · 9:42 pace" for a
+//                  Run, "Goal 10,000 · 70%" for Walking, "5-day streak" for
+//                  Guitar, "Previous: 122/78" for BP. Empty for trackers that
+//                  don't have a meaningful second line.
+//   insight      – the human-readable sentence we surface in the card body,
+//                  e.g. "Ran 3.2 mi today in 32 min. Up 12% vs last week."
+//   progressPct  – 0-100 when a daily/weekly goal exists (Walking/Hydration),
+//                  otherwise null. Drives the progress bar.
+//   statusBadge  – {label, fg, bg} pill ("In range", "Elevated", "Today",
+//                  etc.). null when no status applies.
+//   sparkValues  – numeric series for the sparkline (empty array when not
+//                  enough data points or non-numeric primary).
+//   trendPct     – % change vs previous comparable period (null when N/A).
+//   trendDir     – "up" | "down" | "flat" derived from trendPct.
+//
+type InsightKind =
+  | "bloodpressure"
+  | "weight"
+  | "sleep"
+  | "running"
+  | "walking"
+  | "hydration"
+  | "calories"
+  | "guitar"
+  | "reading"
+  | "gaming"
+  | "meditation"
+  | "bench"
+  | "duration"
+  | "habit"
+  | "generic";
+
+interface TrackerInsight {
+  hasData: boolean;
+  kind: InsightKind;
+  importance: "large" | "normal" | "compact";
+  bigPrimary: string;
+  bigUnit: string;
+  subline: string;
+  insight: string;
+  progressPct: number | null;
+  statusBadge: { label: string; fg: string; bg: string } | null;
+  sparkValues: number[];
+  trendPct: number | null;
+  trendDir: "up" | "down" | "flat";
+  iconKind: "bp" | "weight" | "sleep" | "run" | "walk" | "drop" | "flame"
+          | "music" | "book" | "game" | "brain" | "dumbbell" | "activity"
+          | "bike";
+}
+
+// Common unit dictionaries — used to *infer* what an undeclared number means
+// when the tracker.unit field is empty (which it often is for user-typed
+// trackers). The inference is intentionally conservative: a unit is only
+// surfaced when the field name, tracker name, or value range gives us
+// reasonable certainty. Otherwise we render the raw number with a generic
+// noun like "logged" or no unit at all rather than guess wrong.
+const UNIT_BY_FIELD: Record<string, string> = {
+  steps: "steps", step_count: "steps",
+  distance: "mi", miles: "mi", km: "km", kilometers: "km",
+  duration: "min", minutes: "min", mins: "min", time: "min",
+  hours: "hr", hr: "hr", hours_slept: "hr",
+  reps: "reps", sets: "sets", rep: "reps",
+  weight: "lbs", lbs: "lbs", kg: "kg",
+  cups: "cups", oz: "oz", ml: "ml", liters: "L", litres: "L", l: "L",
+  calories: "cal", kcal: "kcal", cal: "cal",
+  pace: "min/mi",
+  bpm: "bpm", heart_rate: "bpm",
+  pages: "pages",
+};
+
+function inferUnit(tracker: Tracker, fieldName: string, fieldUnit: string | undefined): string {
+  if (fieldUnit && fieldUnit.trim()) return fieldUnit.trim();
+  const t = (tracker.unit || "").trim();
+  if (t) return t;
+  const f = (fieldName || "").toLowerCase().replace(/\s+/g, "_");
+  return UNIT_BY_FIELD[f] || "";
+}
+
+function pickNum(values: Record<string, any> | undefined, ...keys: string[]): number | null {
+  if (!values) return null;
+  for (const k of keys) {
+    const v = values[k];
+    if (v == null || v === "") continue;
+    const n = typeof v === "number" ? v : Number(v);
+    if (!isNaN(n) && isFinite(n)) return n;
+  }
+  return null;
+}
+
+function pickStr(values: Record<string, any> | undefined, ...keys: string[]): string | null {
+  if (!values) return null;
+  for (const k of keys) {
+    const v = values[k];
+    if (v == null || v === "") continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return null;
+}
+
+function fmtNum(n: number, max = 1): string {
+  if (n >= 1000) return Math.round(n).toLocaleString();
+  if (Math.abs(n - Math.round(n)) < 0.05) return Math.round(n).toLocaleString();
+  return n.toLocaleString(undefined, { maximumFractionDigits: max });
+}
+
+function isSameDay(a: Date, b: Date) {
+  return a.toDateString() === b.toDateString();
+}
+
+// Classify a tracker by name + category. The kind drives which insight
+// template we render.
+function classifyTracker(tracker: Tracker): InsightKind {
+  const name = (tracker.name || "").toLowerCase();
+  const cat = (tracker.category || "").toLowerCase();
+  if (name.includes("blood pressure") || name.includes(" bp ") || name === "bp") return "bloodpressure";
+  if (name.includes("weight")) return "weight";
+  if (name.includes("sleep")) return "sleep";
+  if (name.includes("run")) return "running";
+  if (name.includes("walk") || name.includes("step")) return "walking";
+  if (name.includes("hydrat") || name.includes("water") || name.includes("drink")) return "hydration";
+  if (name.includes("calorie")) return "calories";
+  if (name.includes("guitar") || name.includes("piano") || name.includes("instrument")) return "guitar";
+  if (name.includes("read") || name.includes("book")) return "reading";
+  if (name.includes("gam")) return "gaming";
+  if (name.includes("meditat") || name.includes("mindful") || name.includes("yoga")) return "meditation";
+  if (name.includes("bench") || name.includes("press") || name.includes("squat") || name.includes("deadlift")) return "bench";
+  if (name.includes("bike") || name.includes("cycl")) return "running"; // distance/duration shape
+  // Generic categorical fallbacks
+  if (cat === "habit" || cat === "routine") return "habit";
+  return "generic";
+}
+
+function iconKindFor(kind: InsightKind): TrackerInsight["iconKind"] {
+  switch (kind) {
+    case "bloodpressure": return "bp";
+    case "weight": return "weight";
+    case "sleep": return "sleep";
+    case "running": return "run";
+    case "walking": return "walk";
+    case "hydration": return "drop";
+    case "calories": return "flame";
+    case "guitar": return "music";
+    case "reading": return "book";
+    case "gaming": return "game";
+    case "meditation": return "brain";
+    case "bench": return "dumbbell";
+    default: return "activity";
+  }
+}
+
+function importanceFor(kind: InsightKind): "large" | "normal" | "compact" {
+  if (kind === "weight" || kind === "bloodpressure" || kind === "sleep" || kind === "running" || kind === "walking") return "large";
+  if (kind === "hydration" || kind === "calories" || kind === "bench") return "normal";
+  return "compact";
+}
+
+function statusColors() {
+  return {
+    GREEN: { bg: "rgba(34,197,94,0.15)", fg: "#16a34a" },
+    YELLOW: { bg: "rgba(234,179,8,0.18)", fg: "#ca8a04" },
+    RED: { bg: "rgba(239,68,68,0.15)", fg: "#dc2626" },
+    BLUE: { bg: "rgba(59,130,246,0.15)", fg: "#2563eb" },
+    MUTED: { bg: "rgba(120,120,120,0.18)", fg: "hsl(var(--muted-foreground))" },
+  };
+}
+
+function buildTrackerInsight(tracker: Tracker): TrackerInsight {
+  const C = statusColors();
+  const kind = classifyTracker(tracker);
+  const iconKind = iconKindFor(kind);
+  const importance = importanceFor(kind);
+  const entries = (tracker.entries || []).slice().sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+  const last = entries[0];
+
+  // ── No-data short-circuit ─────────────────────────────────────────────
+  if (!last) {
+    return {
+      hasData: false, kind, importance, iconKind,
+      bigPrimary: "—", bigUnit: "", subline: "",
+      insight: "No entries yet — tap to log your first one.",
+      progressPct: null, statusBadge: null, sparkValues: [], trendPct: null, trendDir: "flat",
+    };
+  }
+
+  const lastDate = new Date(last.timestamp);
+  const todayLogged = isSameDay(lastDate, new Date());
+  const sevenAgo = Date.now() - 7 * 86400000;
+  const fourteenAgo = Date.now() - 14 * 86400000;
+  const todayKey = new Date().toLocaleDateString("en-CA");
+
+  // Helpers scoped to this tracker
+  const primaryField =
+    tracker.fields.find(f => f.isPrimary)?.name ||
+    tracker.fields.find(f => f.type === "number")?.name ||
+    tracker.fields[0]?.name || "value";
+  const primaryUnit = inferUnit(tracker,
+    primaryField,
+    tracker.fields.find(f => f.name === primaryField)?.unit);
+  const numericValues = entries.map(e => Number(e.values?.[primaryField]))
+    .filter(v => !isNaN(v) && isFinite(v));
+  const sparkValues = numericValues.slice(0, 14).reverse(); // oldest→newest
+  const last7 = entries.filter(e => new Date(e.timestamp).getTime() >= sevenAgo);
+  const prev7 = entries.filter(e => {
+    const t = new Date(e.timestamp).getTime();
+    return t < sevenAgo && t >= fourteenAgo;
+  });
+  const sum7 = last7.reduce((a, e) => a + (Number(e.values?.[primaryField]) || 0), 0);
+  const sumPrev7 = prev7.reduce((a, e) => a + (Number(e.values?.[primaryField]) || 0), 0);
+  let trendPct: number | null = null;
+  if (sumPrev7 > 0) trendPct = ((sum7 - sumPrev7) / sumPrev7) * 100;
+  const trendDir: "up" | "down" | "flat" = trendPct == null || Math.abs(trendPct) < 2 ? "flat" : (trendPct > 0 ? "up" : "down");
+
+  // Last-N-readings status for freshness (used when a kind has no clinical
+  // status of its own).
+  const ageMs = Date.now() - lastDate.getTime();
+  const ageDays = ageMs / 86400000;
+  const freshness = ageDays <= 1 ? { label: "Today", ...C.GREEN }
+                  : ageDays <= 7 ? { label: "This week", ...C.BLUE }
+                  : ageDays <= 30 ? { label: "This month", ...C.YELLOW }
+                  : { label: "Stale", ...C.MUTED };
+
+  // ── Per-kind formatting ───────────────────────────────────────────────
+  if (kind === "bloodpressure") {
+    const sys = pickNum(last.values, "systolic", "systolic_pressure", "sbp");
+    const dia = pickNum(last.values, "diastolic", "diastolic_pressure", "dbp");
+    if (sys == null || dia == null) {
+      // Incomplete reading — refuse to display half a number.
+      return {
+        hasData: true, kind, importance, iconKind, sparkValues,
+        bigPrimary: "—", bigUnit: "mmHg", subline: "Incomplete reading",
+        insight: "Last entry is missing one of the systolic/diastolic values. Log a complete reading.",
+        progressPct: null, statusBadge: { label: "Incomplete", ...C.YELLOW },
+        trendPct: null, trendDir: "flat",
+      };
+    }
+    let status = { label: "In range", ...C.GREEN };
+    if (sys >= 180 || dia >= 120) status = { label: "Crisis", ...C.RED };
+    else if (sys >= 140 || dia >= 90) status = { label: "High", ...C.RED };
+    else if (sys >= 130 || dia >= 80) status = { label: "Elevated", ...C.YELLOW };
+    else if (sys < 90 || dia < 60) status = { label: "Low", ...C.YELLOW };
+    const prev = entries[1];
+    const prevSys = prev ? pickNum(prev.values, "systolic", "systolic_pressure", "sbp") : null;
+    const prevDia = prev ? pickNum(prev.values, "diastolic", "diastolic_pressure", "dbp") : null;
+    const prevStr = (prevSys != null && prevDia != null) ? `Previous: ${prevSys}/${prevDia}` : "";
+    const insight = status.label === "In range"
+      ? `Blood pressure is ${sys}/${dia} — within a normal range.`
+      : status.label === "Elevated"
+        ? `Slightly elevated at ${sys}/${dia}. Worth keeping an eye on.`
+        : status.label === "High" || status.label === "Crisis"
+          ? `${sys}/${dia} is elevated — consider talking to your doctor.`
+          : `${sys}/${dia} is on the low side.`;
+    return {
+      hasData: true, kind, importance, iconKind,
+      bigPrimary: `${sys}/${dia}`, bigUnit: "mmHg",
+      subline: prevStr, insight, progressPct: null, statusBadge: status,
+      sparkValues: entries.map(e => pickNum(e.values, "systolic", "systolic_pressure", "sbp"))
+        .filter((v): v is number => v != null).slice(0, 14).reverse(),
+      trendPct, trendDir,
+    };
+  }
+
+  if (kind === "weight") {
+    const w = pickNum(last.values, primaryField, "weight", "value");
+    if (w == null) {
+      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: primaryUnit || "lbs",
+        subline: "", insight: "No weight logged.", progressPct: null, statusBadge: null,
+        sparkValues, trendPct: null, trendDir: "flat" };
+    }
+    const monthAgo = Date.now() - 30 * 86400000;
+    const monthEntries = entries.filter(e => new Date(e.timestamp).getTime() >= monthAgo);
+    const oldest = monthEntries[monthEntries.length - 1];
+    const oldestW = oldest ? pickNum(oldest.values, primaryField, "weight", "value") : null;
+    const delta = oldestW != null ? w - oldestW : null;
+    const unit = primaryUnit || "lbs";
+    const subline = delta != null
+      ? (Math.abs(delta) < 0.5 ? "Holding steady this month"
+         : `${delta > 0 ? "+" : ""}${fmtNum(delta, 1)} ${unit} this month`)
+      : "";
+    const insight = delta != null
+      ? (Math.abs(delta) < 0.5
+          ? `Weight is steady around ${fmtNum(w, 1)} ${unit}.`
+          : `Weight is ${fmtNum(w, 1)} ${unit}, ${delta > 0 ? "up" : "down"} ${fmtNum(Math.abs(delta), 1)} ${unit} over the past month.`)
+      : `Logged ${fmtNum(w, 1)} ${unit}.`;
+    return {
+      hasData: true, kind, importance, iconKind,
+      bigPrimary: fmtNum(w, 1), bigUnit: unit,
+      subline, insight, progressPct: null, statusBadge: freshness,
+      sparkValues, trendPct, trendDir,
+    };
+  }
+
+  if (kind === "sleep") {
+    const h = pickNum(last.values, primaryField, "hours", "hours_slept", "duration", "value");
+    if (h == null) {
+      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "hr",
+        subline: "", insight: "No sleep logged.", progressPct: null, statusBadge: null,
+        sparkValues, trendPct: null, trendDir: "flat" };
+    }
+    let status = h >= 7 && h <= 9 ? { label: "In range", ...C.GREEN }
+              : h >= 6 ? { label: "Moderate", ...C.YELLOW }
+              : { label: "Low", ...C.RED };
+    const avg = numericValues.length ? numericValues.reduce((a, b) => a + b, 0) / numericValues.length : null;
+    const subline = avg != null ? `Avg ${fmtNum(avg, 1)} hr / night` : "";
+    const insight = h >= 7
+      ? `Slept ${fmtNum(h, 1)} hours — meeting the 7+ hour target.`
+      : `Slept ${fmtNum(h, 1)} hours. Try to get to 7+ tonight.`;
+    return {
+      hasData: true, kind, importance, iconKind,
+      bigPrimary: fmtNum(h, 1), bigUnit: "hr",
+      subline, insight, progressPct: Math.min(100, (h / 8) * 100),
+      statusBadge: status, sparkValues, trendPct, trendDir,
+    };
+  }
+
+  if (kind === "running") {
+    // Prefer explicit distance/duration fields; fall back to primary
+    const dist = pickNum(last.values, "distance", "miles", "mi", "km") ?? pickNum(last.values, primaryField);
+    const mins = pickNum(last.values, "duration", "minutes", "mins", "time");
+    const distUnit = (() => {
+      const f = tracker.fields.find(f => ["distance", "miles", "mi", "km"].includes(f.name));
+      if (f?.unit) return f.unit;
+      if (primaryUnit && /mi|km/.test(primaryUnit)) return primaryUnit;
+      return "mi";
+    })();
+    if (dist == null && mins == null) {
+      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "miles",
+        subline: "", insight: "Log a distance or duration to see your run.",
+        progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
+    }
+    const big = dist != null ? fmtNum(dist, 2) : fmtNum(mins!, 0);
+    const bigUnit = dist != null ? distUnit : "min";
+    const paceStr = (dist != null && mins != null && dist > 0)
+      ? (() => {
+          const pace = mins / dist; // min/mi or min/km
+          const m = Math.floor(pace); const s = Math.round((pace - m) * 60);
+          return `${m}:${String(s).padStart(2, "0")} pace`;
+        })()
+      : "";
+    const sublineParts: string[] = [];
+    if (mins != null && dist != null) sublineParts.push(`${fmtNum(mins, 0)} min`);
+    if (paceStr) sublineParts.push(paceStr);
+    const subline = sublineParts.join(" · ");
+    const weekTotal = last7.reduce((a, e) => a + (Number(e.values?.distance) || Number(e.values?.miles) || Number(e.values?.[primaryField]) || 0), 0);
+    const trendNote = trendPct != null && Math.abs(trendPct) >= 5
+      ? ` ${trendPct > 0 ? "Up" : "Down"} ${Math.abs(Math.round(trendPct))}% vs last week.`
+      : "";
+    const insight = dist != null
+      ? `Ran ${fmtNum(dist, 2)} ${distUnit}${mins != null ? ` in ${fmtNum(mins, 0)} min` : ""}.${trendNote}${weekTotal > 0 ? ` ${fmtNum(weekTotal, 1)} ${distUnit} this week.` : ""}`
+      : `Ran for ${fmtNum(mins!, 0)} minutes.${trendNote}`;
+    return {
+      hasData: true, kind, importance, iconKind,
+      bigPrimary: big, bigUnit, subline,
+      insight, progressPct: null, statusBadge: freshness,
+      sparkValues: entries.map(e => Number(e.values?.distance) || Number(e.values?.miles) || Number(e.values?.[primaryField])).filter(v => !isNaN(v) && isFinite(v)).slice(0, 14).reverse(),
+      trendPct, trendDir,
+    };
+  }
+
+  if (kind === "walking") {
+    const steps = pickNum(last.values, "steps", "step_count", primaryField, "value");
+    if (steps == null) {
+      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "steps",
+        subline: "", insight: "Log steps to track your walking.",
+        progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
+    }
+    const goal = 10000;
+    const pct = Math.min(100, (steps / goal) * 100);
+    const subline = `Goal ${goal.toLocaleString()} · ${Math.round(pct)}%`;
+    const insight = pct >= 100
+      ? `Hit ${steps.toLocaleString()} steps — past the ${goal.toLocaleString()} goal.`
+      : `${steps.toLocaleString()} steps so far — ${(goal - steps).toLocaleString()} to go.`;
+    return {
+      hasData: true, kind, importance, iconKind,
+      bigPrimary: steps.toLocaleString(), bigUnit: "steps",
+      subline, insight, progressPct: pct,
+      statusBadge: pct >= 100 ? { label: "Goal met", ...C.GREEN } : freshness,
+      sparkValues, trendPct, trendDir,
+    };
+  }
+
+  if (kind === "hydration") {
+    // Sum all of today's entries so a tracker logged in 8-oz cups still shows
+    // the total intake. Detect the unit from the primary field name.
+    const todayEntries = entries.filter(e => new Date(e.timestamp).toLocaleDateString("en-CA") === todayKey);
+    const todayTotal = todayEntries.reduce((s, e) => s + (Number(e.values?.[primaryField]) || 0), 0);
+    if (todayTotal === 0 && numericValues.length === 0) {
+      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: primaryUnit || "oz",
+        subline: "", insight: "Log your first drink to start tracking hydration.",
+        progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
+    }
+    const unit = primaryUnit || "oz";
+    // Reasonable defaults: 64 oz, 8 cups, 2000 ml, 2 L
+    const goal = unit === "oz" ? 64 : unit === "cups" ? 8 : unit === "ml" ? 2000 : unit === "L" ? 2 : 64;
+    const big = todayTotal > 0 ? fmtNum(todayTotal, 1) : fmtNum(Number(last.values?.[primaryField]) || 0, 1);
+    const pct = Math.min(100, (todayTotal / goal) * 100);
+    const subline = `Goal ${goal} ${unit} · ${Math.round(pct)}%`;
+    const insight = pct >= 100
+      ? `Hit hydration goal — ${big} ${unit} today.`
+      : todayTotal > 0
+        ? `${big} ${unit} today — ${fmtNum(goal - todayTotal, 1)} ${unit} to go.`
+        : `Last logged ${big} ${unit}.`;
+    return {
+      hasData: true, kind, importance, iconKind,
+      bigPrimary: big, bigUnit: unit,
+      subline, insight, progressPct: pct,
+      statusBadge: pct >= 100 ? { label: "Goal met", ...C.GREEN } : freshness,
+      sparkValues, trendPct, trendDir,
+    };
+  }
+
+  if (kind === "calories") {
+    const cals = pickNum(last.values, primaryField, "calories", "kcal", "value");
+    if (cals == null) {
+      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "cal",
+        subline: "", insight: "Log a meal or workout to start tracking calories.",
+        progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
+    }
+    const avg = numericValues.length ? numericValues.reduce((a, b) => a + b, 0) / numericValues.length : null;
+    const subline = avg != null ? `Avg ${fmtNum(avg, 0)} cal` : "";
+    const insight = `${fmtNum(cals, 0)} cal logged.${avg != null ? ` Average is ${fmtNum(avg, 0)}.` : ""}`;
+    return {
+      hasData: true, kind, importance, iconKind,
+      bigPrimary: fmtNum(cals, 0), bigUnit: "cal",
+      subline, insight, progressPct: null, statusBadge: freshness,
+      sparkValues, trendPct, trendDir,
+    };
+  }
+
+  if (kind === "guitar" || kind === "reading" || kind === "meditation" || kind === "gaming") {
+    // Duration-style trackers — the primary value is minutes.
+    const mins = pickNum(last.values, primaryField, "duration", "minutes", "mins", "time", "value");
+    const noteStr = pickStr(last.values, "_notes", "notes") || (last as any).notes || "";
+    if (mins == null && !noteStr) {
+      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "min",
+        subline: "", insight: "Log a session to start a streak.",
+        progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
+    }
+    const verb = kind === "guitar" ? "of practice"
+              : kind === "reading" ? "reading"
+              : kind === "meditation" ? "meditation"
+              : "gaming";
+    const subline = mins != null && mins > 0
+      ? `${fmtNum(mins, 0)} min ${verb}`
+      : (noteStr ? noteStr.slice(0, 40) : "");
+    // Streak: count consecutive days back from today with at least one entry.
+    const daySet = new Set(entries.map(e => new Date(e.timestamp).toLocaleDateString("en-CA")));
+    let streak = 0;
+    for (let i = 0; i < 365; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      if (daySet.has(d.toLocaleDateString("en-CA"))) streak++;
+      else if (i > 0) break;
+    }
+    const insight = mins != null && mins > 0
+      ? `${fmtNum(mins, 0)} minutes ${verb} on ${lastDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}.${streak >= 2 ? ` ${streak}-day streak.` : ""}`
+      : (noteStr || `Logged on ${lastDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}.`);
+    return {
+      hasData: true, kind, importance, iconKind,
+      bigPrimary: mins != null && mins > 0 ? fmtNum(mins, 0) : (noteStr ? noteStr.slice(0, 8) : "—"),
+      bigUnit: mins != null && mins > 0 ? "min" : "",
+      subline, insight, progressPct: null,
+      statusBadge: streak >= 3 ? { label: `${streak}-day streak`, ...C.GREEN } : freshness,
+      sparkValues, trendPct, trendDir,
+    };
+  }
+
+  if (kind === "bench") {
+    const w = pickNum(last.values, "weight", "lbs", primaryField, "value");
+    const reps = pickNum(last.values, "reps", "rep_count");
+    const sets = pickNum(last.values, "sets", "set_count");
+    if (w == null && reps == null && sets == null) {
+      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "lbs",
+        subline: "", insight: "Log a set to start tracking.",
+        progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
+    }
+    const subParts: string[] = [];
+    if (reps != null) subParts.push(`${reps} reps`);
+    if (sets != null) subParts.push(`${sets} sets`);
+    const subline = subParts.join(" · ");
+    const unit = (tracker.fields.find(f => f.name === "weight")?.unit) || tracker.unit || "lbs";
+    const big = w != null ? fmtNum(w, 0) : (reps != null ? `${reps}` : "—");
+    const bigUnit = w != null ? unit : (reps != null ? "reps" : "");
+    const insight = w != null
+      ? `Lifted ${fmtNum(w, 0)} ${unit}${reps != null ? ` × ${reps}` : ""}${sets != null ? ` × ${sets} sets` : ""}.`
+      : (reps != null ? `${reps} reps logged.` : "Session logged.");
+    return {
+      hasData: true, kind, importance, iconKind,
+      bigPrimary: big, bigUnit, subline,
+      insight, progressPct: null, statusBadge: freshness,
+      sparkValues, trendPct, trendDir,
+    };
+  }
+
+  // ── Generic fallback ──────────────────────────────────────────────────
+  // Last-ditch path: still try to format something useful instead of bare
+  // text. Strings that just repeat the tracker name ("running", "guitar")
+  // are suppressed in favour of a note.
+  const rawPrim = last.values?.[primaryField];
+  const trackerNameLower = (tracker.name || "").toLowerCase().trim();
+  const isRepeatedLabel = typeof rawPrim === "string" && rawPrim.trim().toLowerCase() === trackerNameLower;
+  if (rawPrim == null || rawPrim === "" || isRepeatedLabel) {
+    // Fall back to notes or any other declared field.
+    const note = pickStr(last.values, "_notes", "notes") || (last as any).notes || "";
+    const fallbackPiece = (() => {
+      for (const f of tracker.fields) {
+        if (f.name === primaryField || f.name === "_notes") continue;
+        const v = last.values?.[f.name];
+        if (v == null || v === "") continue;
+        const u = inferUnit(tracker, f.name, f.unit);
+        return typeof v === "number" || !isNaN(Number(v))
+          ? { primary: fmtNum(Number(v), 1), unit: u || f.name }
+          : { primary: String(v).slice(0, 12), unit: "" };
+      }
+      return null;
+    })();
+    if (fallbackPiece) {
+      return {
+        hasData: true, kind, importance, iconKind,
+        bigPrimary: fallbackPiece.primary, bigUnit: fallbackPiece.unit,
+        subline: note ? note.slice(0, 60) : "",
+        insight: `Logged on ${lastDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}.`,
+        progressPct: null, statusBadge: freshness, sparkValues, trendPct, trendDir,
+      };
+    }
+    return {
+      hasData: !!note, kind, importance, iconKind,
+      bigPrimary: note ? note.slice(0, 18) : "—",
+      bigUnit: "",
+      subline: note ? "" : "",
+      insight: note || "Entry logged with no measurable value.",
+      progressPct: null, statusBadge: freshness, sparkValues: [], trendPct: null, trendDir: "flat",
+    };
+  }
+  const isNum = typeof rawPrim === "number" || !isNaN(Number(rawPrim));
+  const big = isNum ? fmtNum(Number(rawPrim), 1) : String(rawPrim).slice(0, 14);
+  const unit = isNum ? primaryUnit : "";
+  const avg = numericValues.length >= 2 ? numericValues.reduce((a, b) => a + b, 0) / numericValues.length : null;
+  const subline = avg != null ? `Avg ${fmtNum(avg, 1)}${unit ? " " + unit : ""}` : "";
+  const insight = isNum
+    ? `Latest reading is ${big}${unit ? " " + unit : ""}.${avg != null ? ` Average is ${fmtNum(avg, 1)}${unit ? " " + unit : ""}.` : ""}`
+    : `Latest entry: ${big}.`;
+  return {
+    hasData: true, kind, importance, iconKind,
+    bigPrimary: big, bigUnit: unit, subline,
+    insight, progressPct: null, statusBadge: freshness,
+    sparkValues, trendPct, trendDir,
+  };
+}
+
+// Map an iconKind to its lucide component (TrackerCard renders it).
+function iconForKind(k: TrackerInsight["iconKind"]) {
+  switch (k) {
+    case "bp": return Heart;
+    case "weight": return Activity;
+    case "sleep": return Moon;
+    case "run": return Zap;
+    case "walk": return Footprints;
+    case "drop": return Droplet;
+    case "flame": return Flame;
+    case "music": return Music;
+    case "book": return BookOpen;
+    case "game": return Gamepad2;
+    case "brain": return Brain;
+    case "dumbbell": return Dumbbell;
+    case "bike": return Bike;
+    default: return Activity;
+  }
+}
+
+
+// ── NoDataPile ────────────────────────────────────────────────────────────────
+// Collapses empty trackers behind a single pill so they don't clutter the
+// dashboard. Tapping expands an inline list of names that link into the
+// tracker detail — exactly what the user asked for ("8 Trackers With No Data,
+// click to expand").
+function NoDataPile({ trackers, onOpenDetail }: { trackers: any[]; onOpenDetail: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  if (trackers.length === 0) return null;
+  return (
+    <div className="mb-2.5 mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg border border-border/40 bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+        data-testid="no-data-pile-toggle"
+      >
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block w-2 h-2 rounded-full bg-muted-foreground/40" />
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">No Data</span>
+          <span className="text-[10px] text-muted-foreground font-normal normal-case tracking-normal">
+            ({trackers.length} {trackers.length === 1 ? 'tracker' : 'trackers'} without entries)
+          </span>
+        </span>
+        {open ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+      </button>
+      {open && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5 mt-1.5">
+          {trackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((t: any) => {
+            const catAccent = getCategoryAccent(t.category);
+            const Icon = iconForKind(buildTrackerInsight(t).iconKind);
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => onOpenDetail(t.id)}
+                className="flex items-center gap-1.5 px-2 py-1.5 rounded-md border border-border/40 hover:bg-muted/40 transition-colors text-left"
+                style={{ borderColor: `hsl(${catAccent} / 0.25)` }}
+              >
+                <span
+                  className="w-4 h-4 rounded flex items-center justify-center shrink-0"
+                  style={{ backgroundColor: `hsl(${catAccent} / 0.18)`, color: `hsl(${catAccent})` }}
+                >
+                  <Icon className="h-2.5 w-2.5" />
+                </span>
+                <span className="text-[11px] font-medium text-foreground truncate flex-1">{t.name}</span>
+                <span className="text-[9px] text-muted-foreground shrink-0">log</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride }: {
+  tracker: Tracker;
+  onDelete: (id: string) => void;
+  onOpenDetail?: (id: string) => void;
+  // When the parent grid already partitioned by importance, it can force
+  // every card to render at the same "compact" height so a row of mixed
+  // kinds (Guitar + Reading + Gaming) doesn't ladder.
+  sizeOverride?: "large" | "normal" | "compact";
+}) {
   const { data: allProfiles } = useQuery<Profile[]>({ queryKey: ["/api/profiles"], queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()) });
   const linkedNames = (tracker.linkedProfiles || []).map(pid => (allProfiles || []).find(p => p.id === pid)?.name).filter(Boolean);
   const profileLabel = linkedNames.length > 0 ? linkedNames[0] : '';
 
-  const entries = tracker.entries || [];
-  const lastEntry = entries[entries.length - 1];
-  const primaryField = tracker.fields.find(f => f.isPrimary)?.name || tracker.fields.find(f => f.type === 'number')?.name || tracker.fields[0]?.name || 'value';
-  const spec = detectSpecialization(tracker);
+  const insight = buildTrackerInsight(tracker);
   const catAccent = getCategoryAccent(tracker.category);
   const ac = `hsl(${catAccent})`;
-  const isBP = spec === 'bloodpressure';
-
-  const recentVals = entries.slice(-14).map(e => {
-    if (isBP) return (e.values['systolic'] ?? e.values['systolic_pressure']) as number;
-    return e.values[primaryField] as number;
-  }).filter((v): v is number => typeof v === 'number');
-
+  const Icon = iconForKind(insight.iconKind);
+  const entries = tracker.entries || [];
+  const lastEntry = entries.length ? [...entries].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] : undefined;
   const timeAgo = lastEntry ? timeAgoShort(lastEntry.timestamp) : null;
-  const status = getTrackerStatus(tracker, spec, lastEntry, primaryField);
 
-  const specIcon = spec === 'medication' ? <Pill className="h-3.5 w-3.5" />
-    : spec === 'bloodpressure' ? <Heart className="h-3.5 w-3.5" />
-    : spec === 'sleep' ? <Moon className="h-3.5 w-3.5" />
-    : spec === 'running' ? <Zap className="h-3.5 w-3.5" />
-    : spec === 'weight' ? <Activity className="h-3.5 w-3.5" />
-    : tracker.category?.toLowerCase() === 'nutrition' ? <Flame className="h-3.5 w-3.5" />
-    : tracker.category?.toLowerCase() === 'fitness' ? <Dumbbell className="h-3.5 w-3.5" />
-    : <Activity className="h-3.5 w-3.5" />;
-
-  // ── Compute big metric value + unit (uniform across categories) ──
-  let bigValue: string = '—';
-  let bigUnit: string = '';
-
-  if (isBP) {
-    const sys = lastEntry?.values['systolic'] ?? lastEntry?.values['systolic_pressure'];
-    const dia = lastEntry?.values['diastolic'] ?? lastEntry?.values['diastolic_pressure'];
-    bigValue = `${sys ?? '—'}/${dia ?? '—'}`;
-    bigUnit = 'mmHg';
-  } else {
-    const v = lastEntry?.values[primaryField];
-    if (typeof v === 'number') {
-      // Format: 1 decimal for small numbers, none for large
-      bigValue = v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(v % 1 === 0 ? 0 : 1);
-    } else if (v != null) {
-      bigValue = String(v).slice(0, 12);
-    }
-    const f = tracker.fields.find(ff => ff.name === primaryField);
-    bigUnit = f?.unit || tracker.unit || '';
-  }
+  const importance = sizeOverride || insight.importance;
+  const cardHeight = importance === "large" ? 196 : importance === "normal" ? 180 : 156;
 
   return (
     <div
       data-testid={`card-tracker-${tracker.id}`}
       className="rounded-2xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col relative"
       style={{
-        height: 180,
+        height: cardHeight,
         background: `linear-gradient(160deg, hsl(${catAccent} / 0.14) 0%, hsl(var(--card)) 45%)`,
         border: `1px solid hsl(${catAccent} / 0.2)`,
         boxShadow: `0 2px 16px hsl(${catAccent} / 0.07), inset 0 1px 0 hsl(${catAccent} / 0.1)`,
@@ -1745,44 +2365,69 @@ function TrackerCard({ tracker, onDelete, onOpenDetail }: { tracker: Tracker; on
       {/* Header: icon + title */}
       <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
         <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: ac }}>
-          {specIcon}
+          <Icon className="h-3.5 w-3.5" />
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-foreground truncate leading-tight">
             {profileLabel ? `${profileLabel}: ` : ''}{tracker.name}
           </p>
+          {insight.subline && (
+            <p className="text-[10px] text-muted-foreground truncate leading-tight mt-0.5">
+              {insight.subline}
+            </p>
+          )}
         </div>
       </div>
 
       {/* Big metric */}
       <div className="px-3 pt-1 pb-0">
         <div className="flex items-baseline gap-1">
-          <span className="text-[28px] leading-none font-black tabular-nums text-foreground" style={{ color: ac }}>
-            {bigValue}
+          <span
+            className={`leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`}
+            style={{ color: ac }}
+          >
+            {insight.bigPrimary}
           </span>
-          {bigUnit && <span className="text-[11px] font-medium text-muted-foreground">{bigUnit}</span>}
+          {insight.bigUnit && (
+            <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>
+          )}
+          {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
+            <span
+              className="ml-auto text-[10px] font-semibold flex items-center gap-0.5"
+              style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}
+            >
+              {insight.trendDir === "up" ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+              {Math.abs(Math.round(insight.trendPct))}%
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Dominant sparkline filling remaining space */}
-      <div className="flex-1 px-2 pt-1 min-h-0 flex items-end">
-        {recentVals.length >= 2 ? (
-          <Sparkline values={recentVals} color={ac} h={56} />
-        ) : entries.length > 0 ? (
-          <div className="w-full opacity-50"><Sparkline values={[1, 1]} color={ac} h={56} /></div>
-        ) : (
-          <div className="w-full text-center text-[10px] text-muted-foreground/60 italic pb-2">No data yet</div>
+      {/* Body: progress bar OR sparkline (whichever fits) */}
+      <div className="flex-1 px-3 pt-1 min-h-0 flex flex-col justify-end gap-1.5">
+        {insight.progressPct != null ? (
+          <ProgressBar pct={insight.progressPct} color={ac} />
+        ) : insight.sparkValues.length >= 2 ? (
+          <div className="opacity-90"><Sparkline values={insight.sparkValues} color={ac} h={importance === "large" ? 48 : importance === "compact" ? 28 : 40} /></div>
+        ) : insight.hasData ? (
+          <div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/20 to-transparent" />
+        ) : null}
+        {/* Insight sentence — only when there's room (large/normal) */}
+        {importance !== "compact" && insight.hasData && (
+          <p className="text-[10px] text-muted-foreground leading-snug line-clamp-2">
+            {insight.insight}
+          </p>
         )}
       </div>
 
       {/* Footer: status pill (left) + time-ago (right) */}
       <div className="px-3 pb-2.5 pt-1 flex items-center justify-between">
-        {status ? (
+        {insight.statusBadge ? (
           <span
             className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-            style={{ backgroundColor: status.bg, color: status.fg }}
+            style={{ backgroundColor: insight.statusBadge.bg, color: insight.statusBadge.fg }}
           >
-            {status.label}
+            {insight.statusBadge.label}
           </span>
         ) : (
           <span
@@ -5641,18 +6286,58 @@ export default function TrackersPage() {
               {sortedKeys.map(pk => {
                 const g = personGroups[pk];
                 const icon = g.type === 'self' ? '👤' : g.type === 'pet' ? '🐾' : '👥';
-                // Group trackers by canonical category within each person
-                const trackersByCategory: Record<string, typeof g.trackers> = {};
+                // ── Bucket by activity ────────────────────────────────────
+                // Previously trackers were sliced into Health/Fitness/Lifestyle/
+                // Other regardless of whether they had data. Empty trackers
+                // filled the dashboard with placeholder cards. We now sort
+                // every tracker into one of four piles based on its last
+                // entry timestamp and whether it has a clinical concern. The
+                // "No Data" pile collapses behind a single pill.
+                type Bucket = "active" | "recent" | "attention" | "empty";
+                const buckets: Record<Bucket, typeof g.trackers> = { active: [], recent: [], attention: [], empty: [] };
+                const todayKey = new Date().toLocaleDateString('en-CA');
+                const SEVEN_DAYS = 7 * 86400000;
                 for (const t of g.trackers) {
-                  const cat = getCanonicalGroup(t.category);
-                  (trackersByCategory[cat] = trackersByCategory[cat] || []).push(t);
+                  const ins = buildTrackerInsight(t);
+                  if (!ins.hasData) { buckets.empty.push(t); continue; }
+                  // Attention: any tracker whose insight produced a red/yellow
+                  // status badge OR an incomplete BP reading.
+                  const sb = ins.statusBadge;
+                  const isAttention = sb && (
+                    sb.label === 'High' || sb.label === 'Crisis' ||
+                    sb.label === 'Elevated' || sb.label === 'Low' ||
+                    sb.label === 'Incomplete' || sb.label === 'Stale'
+                  );
+                  if (isAttention) { buckets.attention.push(t); continue; }
+                  const entries = (t.entries || []);
+                  const last = entries.length
+                    ? [...entries].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
+                    : null;
+                  const lastTs = last ? new Date(last.timestamp).getTime() : 0;
+                  const lastDay = last ? new Date(last.timestamp).toLocaleDateString('en-CA') : '';
+                  if (lastDay === todayKey) buckets.active.push(t);
+                  else if (Date.now() - lastTs <= SEVEN_DAYS) buckets.recent.push(t);
+                  else buckets.attention.push(t); // stale → also "needs attention"
                 }
-                // Sort category groups by CANONICAL_GROUPS.order
-                const sortedCatKeys = Object.keys(trackersByCategory).sort((a, b) => {
-                  const oa = CANONICAL_GROUPS[a]?.order ?? 99;
-                  const ob = CANONICAL_GROUPS[b]?.order ?? 99;
-                  return oa - ob || a.localeCompare(b);
-                });
+                // Sort within each bucket: by importance first (large→compact),
+                // then by name. Pushes Weight / Sleep / BP to the top of their
+                // row so high-value metrics anchor each section.
+                const importanceWeight: Record<string, number> = { large: 0, normal: 1, compact: 2 };
+                const sortByImportance = (a: any, b: any) => {
+                  const ai = importanceWeight[buildTrackerInsight(a).importance];
+                  const bi = importanceWeight[buildTrackerInsight(b).importance];
+                  return (ai - bi) || (a.name || '').localeCompare(b.name || '');
+                };
+                (Object.keys(buckets) as Bucket[]).forEach(k => buckets[k].sort(sortByImportance));
+
+                // Bucket metadata (label + dot color).
+                const BUCKET_DEFS: { key: Bucket; label: string; dot: string }[] = [
+                  { key: 'active', label: 'Active Today', dot: '#16a34a' },
+                  { key: 'attention', label: 'Needs Attention', dot: '#dc2626' },
+                  { key: 'recent', label: 'Recently Logged', dot: '#2563eb' },
+                ];
+                const visibleBuckets = BUCKET_DEFS.filter(b => buckets[b.key].length > 0);
+
                 return (
                   <div key={pk}>
                     <div className="flex items-center gap-2 mb-2 px-0.5">
@@ -5660,23 +6345,40 @@ export default function TrackersPage() {
                       <span className="text-xs font-bold text-foreground">{g.type === 'self' ? 'Me' : g.name}</span>
                       <span className="text-[10px] text-muted-foreground">({g.trackers.length})</span>
                     </div>
-                    {sortedCatKeys.map(catName => {
-                      const catTrackers = trackersByCategory[catName];
-                      const gDef = CANONICAL_GROUPS[catName];
-                      const gAccent = gDef?.accent || "240 20% 60%";
+                    {visibleBuckets.map(b => {
+                      const bt = buckets[b.key];
                       return (
-                        <div key={catName} className="mb-2.5">
-                          <h4 className="text-xs font-semibold uppercase tracking-wider mt-3 mb-1.5 flex items-center gap-1.5" style={{ color: `hsl(${gAccent})` }}>
-                            <span>{categoryGroupEmoji(catName)}</span> {catName} <span className="text-muted-foreground font-normal">({catTrackers.length})</span>
+                        <div key={b.key} className="mb-3">
+                          <h4 className="text-xs font-semibold uppercase tracking-wider mt-3 mb-1.5 flex items-center gap-1.5">
+                            <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: b.dot }} />
+                            <span style={{ color: b.dot }}>{b.label}</span>
+                            <span className="text-muted-foreground font-normal">({bt.length})</span>
                           </h4>
                           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                            {catTrackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(tracker => (
-                              <TrackerCard key={tracker.id} tracker={tracker} onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />
-                            ))}
+                            {bt.map(tracker => {
+                              const imp = buildTrackerInsight(tracker).importance;
+                              // Large trackers (Weight/Sleep/BP/Run/Walk) take
+                              // 2 columns on md+ so they read like the hero
+                              // metrics they are. Compact trackers stay
+                              // single-column. "col-span-1" is the default —
+                              // we only need to override for large.
+                              const span = imp === 'large' ? 'sm:col-span-2 md:col-span-2' : '';
+                              return (
+                                <div key={tracker.id} className={span}>
+                                  <TrackerCard tracker={tracker} onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       );
                     })}
+                    {buckets.empty.length > 0 && (
+                      <NoDataPile
+                        trackers={buckets.empty}
+                        onOpenDetail={(id) => setSelectedTrackerId(id)}
+                      />
+                    )}
                   </div>
                 );
               })}
