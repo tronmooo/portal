@@ -5862,6 +5862,65 @@ export class SupabaseStorage implements IStorage {
     return this.getAssetPartyLinks(assetProfileId);
   }
 
+  /**
+   * Atomic, validated owner-set replacement for a LIABILITY — the liability
+   * analogue of `setAssetOwners`. Same semantics: the application writes the
+   * full desired owner set, this method validates the total via
+   * `validateOwnership`, then reconciles existing OWNER-role links by deleting
+   * removed parties first, lowering shrinking shares, then raising/inserting
+   * new shares. That two-phase write keeps the running sum monotonic so the
+   * DB-side >100 guard trigger (20260605_ownership_no_autoequalize.sql) never
+   * trips during the transition. Non-owner roles (co_signer, guarantor,
+   * responsible_party, authorized_user) are left untouched — this method
+   * manages the OWNERSHIP set only.
+   */
+  async setLiabilityOwners(
+    liabilityProfileId: string,
+    owners: Array<{ partyProfileId: string; ownershipPercentage: number }>,
+  ): Promise<LiabilityProfileLink[]> {
+    const desired = (owners || [])
+      .filter((o) => o && o.partyProfileId)
+      .map((o) => ({ partyProfileId: o.partyProfileId, ownershipPercentage: roundPct(Number(o.ownershipPercentage)), role: "owner" }));
+    const v = validateOwnership(desired);
+    if (!v.valid) {
+      throw new Error(v.errors[0] || "Invalid ownership configuration");
+    }
+
+    const existingAll = await this.getLiabilityProfileLinks(liabilityProfileId);
+    const existing = existingAll.filter((l) => {
+      const r = (l.role || "owner").toLowerCase();
+      return r === "owner" || r === "co_owner" || r === "co-owner";
+    });
+    const existingByParty = new Map(existing.map((l) => [l.partyProfileId, l]));
+    const desiredByParty = new Map(desired.map((o) => [o.partyProfileId, o]));
+
+    // Phase A — lower the running sum first.
+    for (const l of existing) {
+      if (!desiredByParty.has(l.partyProfileId)) {
+        await this.deleteLiabilityProfileLink(l.id);
+      }
+    }
+    for (const o of desired) {
+      const cur = existingByParty.get(o.partyProfileId);
+      if (cur && o.ownershipPercentage < Number(cur.ownershipPercentage)) {
+        await this.updateLiabilityProfileLink(cur.id, { ownershipPercentage: o.ownershipPercentage });
+      }
+    }
+    // Phase B — raise the running sum.
+    for (const o of desired) {
+      const cur = existingByParty.get(o.partyProfileId);
+      if (cur && o.ownershipPercentage > Number(cur.ownershipPercentage)) {
+        await this.updateLiabilityProfileLink(cur.id, { ownershipPercentage: o.ownershipPercentage });
+      }
+    }
+    for (const o of desired) {
+      if (!existingByParty.has(o.partyProfileId)) {
+        await this.createLiabilityProfileLink({ liabilityProfileId, partyProfileId: o.partyProfileId, ownershipPercentage: o.ownershipPercentage, role: "owner" } as InsertLiabilityProfileLink);
+      }
+    }
+    return this.getLiabilityProfileLinks(liabilityProfileId);
+  }
+
   async getOwnershipHistory(opts?: { subjectId?: string; counterpartyId?: string; limit?: number }): Promise<OwnershipHistoryEntry[]> {
     let q = this.supabase.from("ownership_history").select("*").eq("user_id", this.userId)
       .order("changed_at", { ascending: false });

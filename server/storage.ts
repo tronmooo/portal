@@ -251,6 +251,7 @@ export interface IStorage {
    *  Validates the full set totals 100% (or is empty), then applies the minimal
    *  safe diff. Pass [] to clear ownership (asset reverts to Self-100%). */
   setAssetOwners(assetProfileId: string, owners: Array<{ partyProfileId: string; ownershipPercentage: number }>): Promise<import("@shared/schema").AssetPartyLink[]>;
+  setLiabilityOwners(liabilityProfileId: string, owners: Array<{ partyProfileId: string; ownershipPercentage: number }>): Promise<import("@shared/schema").LiabilityProfileLink[]>;
 
   // Ownership history (audit log)
   getOwnershipHistory(opts?: { subjectId?: string; counterpartyId?: string; limit?: number }): Promise<import("@shared/schema").OwnershipHistoryEntry[]>;
@@ -2196,6 +2197,7 @@ export class MemStorage implements IStorage {
   async updateAssetPartyLink(_id: string, _patch: any) { return undefined; }
   async deleteAssetPartyLink(_id: string) { return false; }
   async setAssetOwners(_assetProfileId: string, _owners: any[]): Promise<any[]> { return []; }
+  async setLiabilityOwners(_liabilityProfileId: string, _owners: any[]): Promise<any[]> { return []; }
   async getOwnershipHistory(_opts?: any) { return []; }
   async recordOwnershipHistory(_entry: any): Promise<any> { return { id: "mem", changedAt: new Date().toISOString(), ..._entry }; }
   async deleteOwnershipHistoryEntry(_id: string) { return false; }
