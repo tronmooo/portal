@@ -6,6 +6,10 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
+import {
+  type TrackerMetricDefinition,
+  getDefaultMetricDefinition,
+} from "@shared/tracker-metric-definition";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { CreateProfileDialog } from "@/pages/profiles";
@@ -2708,11 +2712,21 @@ function CreateTrackerDialog({
         builtFields = [{ name: "value", type: "number", unit: unit.trim() || undefined, isPrimary: true, options: undefined }];
       }
 
+      // PR H: attach canonical metric definition derived from category, with
+      // user-supplied name and unit applied as surface overrides.
+      const baseDef = getDefaultMetricDefinition(category);
+      const metricDefinition: TrackerMetricDefinition = {
+        ...baseDef,
+        metric: name.trim() || baseDef.metric,
+        unit: unit.trim() || baseDef.unit,
+        unitDisplay: unit.trim() || baseDef.unitDisplay,
+      };
       const res = await apiRequest("POST", "/api/trackers", {
         name: name.trim(),
         category,
         unit: unit.trim() || undefined,
         fields: builtFields,
+        metricDefinition,
       });
       return res.json();
     },

@@ -19,6 +19,15 @@ import {
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { isPast, parseDate, relativeDayLabel, daysFromToday } from "@/lib/dates";
+import {
+  type TrackerMetricDefinition,
+  classifyMetricValue,
+  computeTrend,
+  formatMetricValue,
+  getDefaultMetricDefinition,
+  isMetricStale,
+  ZONE_COLORS,
+} from "@shared/tracker-metric-definition";
 
 /**
  * PR F: Auto-hide past events on active schedule views.
@@ -5635,16 +5644,40 @@ function TrackerCard_Profile({
   const latestEntry = last10[last10.length - 1];
   const latestVal = latestEntry && fieldName != null ? latestEntry?.values?.[fieldName] ?? null : null;
 
-  let trend: "up" | "down" | "flat" = "flat";
-  if (chartData.length >= 2) {
-    const first = chartData[0].val as number;
-    const last = chartData[chartData.length - 1].val as number;
-    if (last > first * 1.01) trend = "up";
-    else if (last < first * 0.99) trend = "down";
-  }
+  // PR H: Resolve the metric definition (own or category default) and compute
+  // a metadata-aware trend + zone + staleness signal. Falls back gracefully
+  // when entries are sparse or non-numeric.
+  const metricDef: TrackerMetricDefinition =
+    (tracker as any).metricDefinition || getDefaultMetricDefinition(tracker.category);
+
+  const trendPoints = allEntries
+    .map((e: any) => {
+      const raw = fieldName != null ? e?.values?.[fieldName] : undefined;
+      const num = typeof raw === "number" ? raw : Number(raw);
+      return { date: e?.timestamp || new Date().toISOString(), value: Number.isFinite(num) ? num : Number.NaN };
+    })
+    .filter((p) => Number.isFinite(p.value));
+
+  const trendResult = computeTrend(trendPoints, metricDef);
+  const trend: "up" | "down" | "flat" =
+    trendResult.arrow === 1 ? "up" : trendResult.arrow === -1 ? "down" : "flat";
+  const trendFavorable = trendResult.favorable;
 
   const TrendIcon = trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
-  const trendColor = trend === "up" ? "text-green-500" : trend === "down" ? "text-red-500" : "text-muted-foreground";
+  // Favorability (not raw direction) drives the trend color so a downward
+  // resting heart rate or daily spend reads as green.
+  const trendColor =
+    trend === "flat"
+      ? "text-muted-foreground"
+      : trendFavorable === true
+        ? "text-green-500"
+        : trendFavorable === false
+          ? "text-red-500"
+          : "text-muted-foreground";
+
+  const metricZone =
+    typeof latestVal === "number" ? classifyMetricValue(latestVal, metricDef) : "unknown";
+  const metricStale = isMetricStale(latestEntry?.timestamp, metricDef.cadence);
 
   const sortedEntries = [...allEntries].reverse();
 
@@ -5701,13 +5734,32 @@ function TrackerCard_Profile({
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
+            {metricStale && (
+              <Badge
+                variant="outline"
+                className="h-4 px-1 text-[9px] bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30"
+                title={`No recent entry — expected cadence: ${metricDef.cadence}`}
+                data-testid={`badge-tracker-stale-${tracker.id}`}
+              >
+                Stale
+              </Badge>
+            )}
             {latestVal != null && (
-              <span className="text-base font-semibold tabular-nums">
-                {typeof latestVal === "number" ? latestVal.toLocaleString(undefined, { maximumFractionDigits: 1 }) : String(latestVal)}
-                {tracker.unit && <span className="text-xs text-muted-foreground ml-0.5">{tracker.unit}</span>}
+              <span
+                className={`text-base font-semibold tabular-nums px-1.5 rounded ${
+                  metricZone !== "unknown" ? `${ZONE_COLORS[metricZone].bg} ${ZONE_COLORS[metricZone].text}` : ""
+                }`}
+                title={metricZone !== "unknown" ? `Zone: ${metricZone}` : undefined}
+              >
+                {typeof latestVal === "number"
+                  ? formatMetricValue(latestVal, metricDef)
+                  : String(latestVal)}
               </span>
             )}
-            <TrendIcon className={`h-4 w-4 ${trendColor}`} />
+            <TrendIcon
+              className={`h-4 w-4 ${trendColor}`}
+              aria-label={trendFavorable === null ? undefined : trendFavorable ? "Favorable trend" : "Unfavorable trend"}
+            />
           </div>
         </div>
 
@@ -5891,6 +5943,20 @@ function TrackersTab({
   const linkedIds = new Set(trackers.map(t => t.id));
   const unlinkableTrackers = (allTrackers || []).filter(t => !linkedIds.has(t.id));
 
+  // PR H: every new tracker carries a metric definition. We start from the
+  // canonical category default (unit, dataType, aggregation, cadence,
+  // direction, targets, trendWindow) and let the user-supplied name/unit
+  // override the surface fields without losing the standardized semantics.
+  const previewMetricDefinition: TrackerMetricDefinition = useMemo(() => {
+    const base = getDefaultMetricDefinition(newTrackerCategory);
+    return {
+      ...base,
+      metric: newTrackerName.trim() || base.metric,
+      unit: newTrackerUnit.trim() || base.unit,
+      unitDisplay: newTrackerUnit.trim() || base.unitDisplay,
+    };
+  }, [newTrackerCategory, newTrackerName, newTrackerUnit]);
+
   const createTrackerMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/trackers", {
@@ -5898,6 +5964,7 @@ function TrackersTab({
         unit: newTrackerUnit || undefined,
         category: newTrackerCategory,
         fields: [{ name: newFieldName || "value", type: newFieldType, isPrimary: true }],
+        metricDefinition: previewMetricDefinition,
       });
       const tracker = await res.json();
       await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "tracker", entityId: tracker.id });
@@ -6135,6 +6202,34 @@ function TrackersTab({
                   <SelectItem value="text">Text</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            {/* PR H: Metric Definition Preview — surfaces the standardized
+                semantics (definition, aggregation, cadence, direction,
+                targets) so users can see exactly what will be measured and
+                how it will be compared across the app. */}
+            <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5 text-[11px] space-y-1" data-testid="metric-definition-preview">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold uppercase tracking-wider text-muted-foreground text-[10px]">Metric Definition</span>
+                <Badge variant="outline" className="h-4 px-1 text-[9px] capitalize">{previewMetricDefinition.dataType}</Badge>
+              </div>
+              <p className="text-muted-foreground leading-snug">{previewMetricDefinition.definition}</p>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-1">
+                <div><span className="text-muted-foreground">Unit:</span> <span className="font-medium">{previewMetricDefinition.unitDisplay || previewMetricDefinition.unit}</span></div>
+                <div><span className="text-muted-foreground">Cadence:</span> <span className="font-medium capitalize">{previewMetricDefinition.cadence}</span></div>
+                <div><span className="text-muted-foreground">Aggregation:</span> <span className="font-medium capitalize">{previewMetricDefinition.aggregation}</span></div>
+                <div><span className="text-muted-foreground">Direction:</span> <span className="font-medium">{previewMetricDefinition.direction.replace(/_/g, " ")}</span></div>
+                <div><span className="text-muted-foreground">Trend:</span> <span className="font-medium">{previewMetricDefinition.trendWindow}</span></div>
+                {previewMetricDefinition.targets && (
+                  <div className="col-span-2">
+                    <span className="text-muted-foreground">Targets:</span>{" "}
+                    <span className="font-medium">
+                      {previewMetricDefinition.targets.band
+                        ? `${previewMetricDefinition.targets.band[0]}–${previewMetricDefinition.targets.band[1]} ${previewMetricDefinition.unitDisplay}`
+                        : `${previewMetricDefinition.direction === "lower_better" ? "≤" : "≥"} ${previewMetricDefinition.targets.good ?? previewMetricDefinition.targets.warn} ${previewMetricDefinition.unitDisplay}`}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           <DialogFooter>
