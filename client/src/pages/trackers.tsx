@@ -130,7 +130,7 @@ const onEnterOrSpace = (fn: () => void) => (e: React.KeyboardEvent) => {
 };
 import { Link, useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile, Document } from "@shared/schema";
+import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile, Document, Goal } from "@shared/schema";
 import { ShareButton, DocumentViewerDialog } from "@/components/DocumentViewer";
 import {
   LineChart,
@@ -1906,7 +1906,14 @@ function statusColors() {
   };
 }
 
-function buildTrackerInsight(tracker: Tracker): TrackerInsight {
+function buildTrackerInsight(tracker: Tracker, goals: Goal[] = []): TrackerInsight {
+  // PR J: Resolve a *real* user-created goal for this tracker. We only show
+  // goal-based UI (progress bar, 'Goal X · Y%' subline, 'to go' insight,
+  // 'Goal met' badge) when this is non-null. Otherwise the card shows the
+  // value + freshness/trend without fabricating targets.
+  const realGoal: Goal | undefined = goals.find(
+    g => g && g.trackerId === tracker.id && g.status === "active" && typeof g.target === "number"
+  );
   const C = statusColors();
   const kind = classifyTracker(tracker);
   const iconKind = iconKindFor(kind);
@@ -2045,14 +2052,23 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
               : { label: "Low", ...C.RED };
     const avg = numericValues.length ? numericValues.reduce((a, b) => a + b, 0) / numericValues.length : null;
     const subline = avg != null ? `Avg ${fmtNum(avg, 1)} hr / night` : "";
+    // PR J: don't fabricate an 8h goal progress bar. Sleep range badges
+    // (Low / Moderate / In range) reflect the CDC 7-9h adult norm, not a
+    // user-set goal. progressPct is only set when a real Goal exists.
     const insight = h >= 7
-      ? `Slept ${fmtNum(h, 1)} hours — meeting the 7+ hour target.`
-      : `Slept ${fmtNum(h, 1)} hours. Try to get to 7+ tonight.`;
+      ? `Slept ${fmtNum(h, 1)} hours.`
+      : `Slept ${fmtNum(h, 1)} hours.`;
+    const goalPct = realGoal ? Math.min(100, (h / realGoal.target) * 100) : null;
+    const goalSubline = realGoal
+      ? `Goal ${realGoal.target} ${realGoal.unit || "hr"} · ${Math.round(goalPct!)}%`
+      : subline;
     return {
       hasData: true, kind, importance, iconKind,
       bigPrimary: fmtNum(h, 1), bigUnit: "hr",
-      subline, insight, progressPct: Math.min(100, (h / 8) * 100),
-      statusBadge: status, sparkValues, trendPct, trendDir,
+      subline: goalSubline, insight,
+      progressPct: goalPct,
+      statusBadge: realGoal && goalPct! >= 100 ? { label: "Goal met", ...C.GREEN } : status,
+      sparkValues, trendPct, trendDir,
     };
   }
 
@@ -2107,17 +2123,34 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
         subline: "", insight: "Log steps to track your walking.",
         progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
     }
-    const goal = 10000;
-    const pct = Math.min(100, (steps / goal) * 100);
-    const subline = `Goal ${goal.toLocaleString()} · ${Math.round(pct)}%`;
-    const insight = pct >= 100
-      ? `Hit ${steps.toLocaleString()} steps — past the ${goal.toLocaleString()} goal.`
-      : `${steps.toLocaleString()} steps so far — ${(goal - steps).toLocaleString()} to go.`;
+    // PR J: only render a goal if the user actually created one for this tracker.
+    if (realGoal) {
+      const goalTarget = realGoal.target;
+      const goalUnit = realGoal.unit || "steps";
+      const pct = Math.min(100, (steps / goalTarget) * 100);
+      const subline = `Goal ${goalTarget.toLocaleString()} · ${Math.round(pct)}%`;
+      const insight = pct >= 100
+        ? `Hit ${steps.toLocaleString()} ${goalUnit} — past the ${goalTarget.toLocaleString()} goal.`
+        : `${steps.toLocaleString()} ${goalUnit} so far — ${(goalTarget - steps).toLocaleString()} to go.`;
+      return {
+        hasData: true, kind, importance, iconKind,
+        bigPrimary: steps.toLocaleString(), bigUnit: goalUnit,
+        subline, insight, progressPct: pct,
+        statusBadge: pct >= 100 ? { label: "Goal met", ...C.GREEN } : freshness,
+        sparkValues, trendPct, trendDir,
+      };
+    }
+    // No goal set — show just the value + trend, no fabricated target.
+    const trendNote = trendPct != null && Math.abs(trendPct) >= 5
+      ? ` ${trendPct > 0 ? "Up" : "Down"} ${Math.abs(Math.round(trendPct))}% vs last week.`
+      : "";
     return {
       hasData: true, kind, importance, iconKind,
       bigPrimary: steps.toLocaleString(), bigUnit: "steps",
-      subline, insight, progressPct: pct,
-      statusBadge: pct >= 100 ? { label: "Goal met", ...C.GREEN } : freshness,
+      subline: "",
+      insight: `Logged ${steps.toLocaleString()} steps.${trendNote}`,
+      progressPct: null,
+      statusBadge: freshness,
       sparkValues, trendPct, trendDir,
     };
   }
@@ -2133,21 +2166,35 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
         progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
     }
     const unit = primaryUnit || "oz";
-    // Reasonable defaults: 64 oz, 8 cups, 2000 ml, 2 L
-    const goal = unit === "oz" ? 64 : unit === "cups" ? 8 : unit === "ml" ? 2000 : unit === "L" ? 2 : 64;
     const big = todayTotal > 0 ? fmtNum(todayTotal, 1) : fmtNum(Number(last.values?.[primaryField]) || 0, 1);
-    const pct = Math.min(100, (todayTotal / goal) * 100);
-    const subline = `Goal ${goal} ${unit} · ${Math.round(pct)}%`;
-    const insight = pct >= 100
-      ? `Hit hydration goal — ${big} ${unit} today.`
-      : todayTotal > 0
-        ? `${big} ${unit} today — ${fmtNum(goal - todayTotal, 1)} ${unit} to go.`
-        : `Last logged ${big} ${unit}.`;
+    // PR J: only show goal UI when the user created a real Goal.
+    if (realGoal) {
+      const goalTarget = realGoal.target;
+      const goalUnit = realGoal.unit || unit;
+      const pct = Math.min(100, (todayTotal / goalTarget) * 100);
+      const subline = `Goal ${goalTarget} ${goalUnit} · ${Math.round(pct)}%`;
+      const insight = pct >= 100
+        ? `Hit hydration goal — ${big} ${goalUnit} today.`
+        : todayTotal > 0
+          ? `${big} ${goalUnit} today — ${fmtNum(goalTarget - todayTotal, 1)} ${goalUnit} to go.`
+          : `Last logged ${big} ${goalUnit}.`;
+      return {
+        hasData: true, kind, importance, iconKind,
+        bigPrimary: big, bigUnit: goalUnit,
+        subline, insight, progressPct: pct,
+        statusBadge: pct >= 100 ? { label: "Goal met", ...C.GREEN } : freshness,
+        sparkValues, trendPct, trendDir,
+      };
+    }
+    // No goal — descriptive only.
+    const insight = todayTotal > 0
+      ? `${big} ${unit} today.`
+      : `Last logged ${big} ${unit}.`;
     return {
       hasData: true, kind, importance, iconKind,
       bigPrimary: big, bigUnit: unit,
-      subline, insight, progressPct: pct,
-      statusBadge: pct >= 100 ? { label: "Goal met", ...C.GREEN } : freshness,
+      subline: "", insight, progressPct: null,
+      statusBadge: freshness,
       sparkValues, trendPct, trendDir,
     };
   }
@@ -2394,8 +2441,11 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride }: {
   const { data: allProfiles } = useQuery<Profile[]>({ queryKey: ["/api/profiles"], queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()) });
   const linkedNames = (tracker.linkedProfiles || []).map(pid => (allProfiles || []).find(p => p.id === pid)?.name).filter(Boolean);
   const profileLabel = linkedNames.length > 0 ? linkedNames[0] : '';
+  // PR J: fetch the user's goals so insight builder only shows targets the
+  // user actually set — no more fabricated 10k step / 64oz / 8h defaults.
+  const { data: allGoals = [] } = useQuery<Goal[]>({ queryKey: goalsQueryKey([]) });
 
-  const insight = buildTrackerInsight(tracker);
+  const insight = buildTrackerInsight(tracker, allGoals);
   const catAccent = getCategoryAccent(tracker.category);
   const ac = `hsl(${catAccent})`;
   const Icon = iconForKind(insight.iconKind);
