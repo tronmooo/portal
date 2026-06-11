@@ -4093,6 +4093,10 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const [expVendor, setExpVendor] = useState("");
   const [expDate, setExpDate] = useState(new Date().toISOString().slice(0, 10));
   const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(null);
+  // 2026-06-11 redesign: the full expense list is collapsed by default.
+  // Summary stat cards + by-category breakdown render unconditionally;
+  // "View All Expenses" must be clicked to reveal the transaction list.
+  const [expensesListOpen, setExpensesListOpen] = useState(false);
   const [amortTableOpen, setAmortTableOpen] = useState(false);
   const [extraPayment, setExtraPayment] = useState(0);
 
@@ -4168,6 +4172,24 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const outstanding =
     Number(profile.fields.remainingBalance || profile.fields.loanBalance || profile.fields.balance || 0) ||
     obligations.reduce((sum, ob) => sum + (ob.amount || 0), 0);
+
+  // ── category breakdown (top 5 by total spend) ─────────────────────
+  // Powers the "By Category" summary card that replaces the wall-of-
+  // transactions default view (2026-06-11 redesign).
+  const categoryBreakdown = useMemo(() => {
+    const byCat: Record<string, { total: number; count: number }> = {};
+    for (const e of expenses) {
+      const cat = (e.category || "general").toLowerCase();
+      if (!byCat[cat]) byCat[cat] = { total: 0, count: 0 };
+      byCat[cat].total += (e.amount || 0);
+      byCat[cat].count += 1;
+    }
+    return Object.entries(byCat)
+      .map(([cat, v]) => ({ category: cat, total: v.total, count: v.count }))
+      .sort((a, b) => b.total - a.total);
+  }, [expenses]);
+  const topCategories = categoryBreakdown.slice(0, 5);
+  const topCategoryMax = topCategories[0]?.total || 1;
 
   // ── loan / amortization ────────────────────────────────────────
   type AmortRow = { month: number; payment: number; principal: number; interest: number; balance: number; cumPrincipal: number; cumInterest: number };
@@ -4445,85 +4467,148 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       </div>
 
       {/* ═══════════════════════════════════════════════════════ */}
-      {/* SECTION 2 — Expenses list                              */}
+      {/* SECTION 2a — By Category                                */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {sortedExpenses.length > 0 && topCategories.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <BarChart2 className="h-4 w-4 text-muted-foreground" /> By Category
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-2.5">
+            {topCategories.map((cat, idx) => {
+              const pct = topCategoryMax > 0 ? (cat.total / topCategoryMax) * 100 : 0;
+              const color = CHART_COLORS[idx % CHART_COLORS.length];
+              return (
+                <div key={cat.category} data-testid={`row-category-${cat.category}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className="text-xs font-medium truncate">{cat.category}</span>
+                      <span className="text-[10px] text-muted-foreground shrink-0">({cat.count})</span>
+                    </div>
+                    <span className="text-xs font-bold tabular-nums shrink-0 ml-2">{formatCurrency(cat.total)}</span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${pct}%`, backgroundColor: color }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 2b — View All Expenses (collapsed by default)   */}
       {/* ═══════════════════════════════════════════════════════ */}
       <Card>
-        <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <DollarSign className="h-4 w-4 text-muted-foreground" /> Expenses
-            </CardTitle>
-            <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={openAdd} data-testid="button-add-expense">
-              <Plus className="h-3.5 w-3.5" /> Add Expense
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="pt-0">
-          {sortedExpenses.length === 0 ? (
-            <div className="py-8 text-center">
-              <DollarSign className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">No expenses yet. Add one or tell the AI.</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border">
-              {sortedExpenses.map(expense => (
-                <div key={expense.id} data-testid={`row-expense-${expense.id}`}>
-                  <button
-                    className="w-full text-left py-2.5 group"
-                    onClick={() => setExpandedExpenseId(expandedExpenseId === expense.id ? null : expense.id)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{expense.description}</p>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-xs text-muted-foreground">
-                            {new Date(expense.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-                          </span>
-                          {expense.category && (
-                            <Badge variant="secondary" className="text-xs px-1.5 py-0">{expense.category}</Badge>
-                          )}
+        {sortedExpenses.length === 0 ? (
+          <>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <DollarSign className="h-4 w-4 text-muted-foreground" /> Expenses
+                </CardTitle>
+                <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={openAdd} data-testid="button-add-expense">
+                  <Plus className="h-3.5 w-3.5" /> Add Expense
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="py-8 text-center">
+                <DollarSign className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+                <p className="text-sm text-muted-foreground">No expenses yet. Add one or tell the AI.</p>
+              </div>
+            </CardContent>
+          </>
+        ) : (
+          <>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  className="flex items-center gap-2 flex-1 text-left group"
+                  onClick={() => setExpensesListOpen(o => !o)}
+                  data-testid="button-toggle-expenses-list"
+                  aria-expanded={expensesListOpen}
+                >
+                  <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${expensesListOpen ? "rotate-180" : "-rotate-90"}`} />
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                    <DollarSign className="h-4 w-4 text-muted-foreground" /> View All Expenses
+                    <span className="text-xs font-normal text-muted-foreground">({sortedExpenses.length})</span>
+                  </CardTitle>
+                </button>
+                <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={openAdd} data-testid="button-add-expense">
+                  <Plus className="h-3.5 w-3.5" /> Add Expense
+                </Button>
+              </div>
+            </CardHeader>
+            {expensesListOpen && (
+              <CardContent className="pt-0">
+                <div className="divide-y divide-border">
+                  {sortedExpenses.map(expense => (
+                    <div key={expense.id} data-testid={`row-expense-${expense.id}`}>
+                      <button
+                        className="w-full text-left py-2.5 group"
+                        onClick={() => setExpandedExpenseId(expandedExpenseId === expense.id ? null : expense.id)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{expense.description}</p>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <span className="text-xs text-muted-foreground">
+                                {new Date(expense.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                              </span>
+                              {expense.category && (
+                                <Badge variant="secondary" className="text-xs px-1.5 py-0">{expense.category}</Badge>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0 ml-3">
+                            <span className="text-sm font-bold tabular-nums">{formatCurrency(expense.amount)}</span>
+                            <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${expandedExpenseId === expense.id ? "rotate-180" : ""}`} />
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0 ml-3">
-                        <span className="text-sm font-bold tabular-nums">{formatCurrency(expense.amount)}</span>
-                        <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${expandedExpenseId === expense.id ? "rotate-180" : ""}`} />
-                      </div>
-                    </div>
-                  </button>
-                  {expandedExpenseId === expense.id && (
-                    <div className="pb-3 pl-1 space-y-2">
-                      {expense.vendor && (
-                        <p className="text-xs text-muted-foreground">Vendor: <span className="text-foreground">{expense.vendor}</span></p>
+                      </button>
+                      {expandedExpenseId === expense.id && (
+                        <div className="pb-3 pl-1 space-y-2">
+                          {expense.vendor && (
+                            <p className="text-xs text-muted-foreground">Vendor: <span className="text-foreground">{expense.vendor}</span></p>
+                          )}
+                          <p className="text-xs text-muted-foreground">Date: <span className="text-foreground">{expense.date}</span></p>
+                          <p className="text-xs text-muted-foreground">Category: <span className="text-foreground">{expense.category || "general"}</span></p>
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 text-xs gap-1"
+                              onClick={() => openEdit(expense)}
+                              data-testid={`button-edit-expense-${expense.id}`}
+                            >
+                              <Edit className="h-3 w-3" /> Edit
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 text-xs gap-1 text-destructive border-destructive/40 hover:bg-destructive/10"
+                              onClick={() => setDeleteExpenseId(expense.id)}
+                              data-testid={`button-delete-expense-${expense.id}`}
+                            >
+                              <Trash2 className="h-3 w-3" /> Delete
+                            </Button>
+                          </div>
+                        </div>
                       )}
-                      <p className="text-xs text-muted-foreground">Date: <span className="text-foreground">{expense.date}</span></p>
-                      <p className="text-xs text-muted-foreground">Category: <span className="text-foreground">{expense.category || "general"}</span></p>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 text-xs gap-1"
-                          onClick={() => openEdit(expense)}
-                          data-testid={`button-edit-expense-${expense.id}`}
-                        >
-                          <Edit className="h-3 w-3" /> Edit
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 text-xs gap-1 text-destructive border-destructive/40 hover:bg-destructive/10"
-                          onClick={() => setDeleteExpenseId(expense.id)}
-                          data-testid={`button-delete-expense-${expense.id}`}
-                        >
-                          <Trash2 className="h-3 w-3" /> Delete
-                        </Button>
-                      </div>
                     </div>
-                  )}
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
+              </CardContent>
+            )}
+          </>
+        )}
       </Card>
 
       {/* ═══════════════════════════════════════════════════════ */}
