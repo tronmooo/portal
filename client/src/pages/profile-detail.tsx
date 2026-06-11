@@ -1696,11 +1696,14 @@ function NestedAssetSections({
   if (!isAssetType) return null;
 
   if (mode === "location-only") {
+    // Asset Overview shows ONLY the physical-location editor here.
+    // The parent-in-tree picker ("Located in: <parent>") moved to the
+    // Contained tab where the Ownership Tree already displays the same
+    // information — keeping both was redundant and confusing.
     return (
       <Card data-testid="card-location">
         <CardContent className="p-3 space-y-1.5">
           <LocationEditor profile={profile} onSaved={onSaved} />
-          <BelongsToEditor profile={profile} allProfiles={allProfiles} onSaved={onSaved} />
         </CardContent>
       </Card>
     );
@@ -1717,15 +1720,14 @@ function NestedAssetSections({
 
   return (
     <div className="space-y-3" data-testid="nested-asset-sections">
-      {/* Section 1: Location + Belongs-to parent picker.
-          Belongs-to is back (2026-05-25) because the user explicitly needs
-          a way to nest a standalone Furniture asset under a Home, etc.
-          Ownership still flows automatically up the parent chain via the
-          resolveOwnerFromProfile walk — you don't need to re-tag people. */}
+      {/* Section 1: Physical location only.
+          Belongs-to (parent-in-tree picker) moved to the Contained tab
+          alongside the Ownership Tree which already shows the same
+          relationship — keeping both was redundant. Asset nesting is
+          still fully supported via the Contained tab. */}
       <Card data-testid="card-location">
         <CardContent className="p-3 space-y-1.5">
           <LocationEditor profile={profile} onSaved={onSaved} />
-          <BelongsToEditor profile={profile} allProfiles={allProfiles} onSaved={onSaved} />
         </CardContent>
       </Card>
 
@@ -9044,12 +9046,14 @@ function AssetLiabilityRow({ link, liability, allProfiles: _allProfiles, refetch
   return (
     <div className="py-2" data-testid={`row-asset-liability-${liability.id}`}>
       <div className="flex items-center justify-between gap-2 -mx-3 px-3 py-1 rounded">
+        {/* Primary tap target — navigates to the liability's detail page.
+            The user expects "tap a liability row" to open the liability,
+            not to expand an inline editor (the small chevron handles that). */}
         <button
           className="flex-1 min-w-0 flex items-center gap-2 hover:bg-muted/30 rounded px-1 -mx-1 py-1 text-left"
-          onClick={() => setExpanded(v => !v)}
-          data-testid={`button-expand-asset-liability-${liability.id}`}
+          onClick={onOpenLiability}
+          data-testid={`button-open-asset-liability-${liability.id}`}
         >
-          <Pencil className="h-3 w-3 text-muted-foreground shrink-0" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s" }} />
           <div className="min-w-0 flex-1">
             <p className="text-xs font-medium truncate">{liability.name}</p>
             <p className="text-xs text-muted-foreground">
@@ -9058,8 +9062,17 @@ function AssetLiabilityRow({ link, liability, allProfiles: _allProfiles, refetch
             </p>
           </div>
         </button>
-        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onOpenLiability} data-testid={`button-open-asset-liability-${liability.id}`}>
-          Open
+        {/* Secondary affordance — expand inline quick-edit (lender / APR /
+            monthly / unlink) without leaving the asset page. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          onClick={() => setExpanded(v => !v)}
+          data-testid={`button-expand-asset-liability-${liability.id}`}
+          aria-label={expanded ? "Hide details" : "Show details"}
+        >
+          <Pencil className="h-3 w-3" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.15s" }} />
         </Button>
       </div>
 
@@ -11898,16 +11911,11 @@ export default function ProfileDetailPage() {
                     onSaved={handleSaved}
                     mode="children"
                   />
-                  {/* Linked Liabilities lives here (and on Financials) so the
-                      user can attach a mortgage/loan/credit-line to the asset.
-                      Uses AssetLinkedLiabilitiesTab which has the "+ Link
-                      Liability" affordance and posts to /api/liability-asset-links. */}
-                  {["asset","vehicle","property","investment","account"].includes(profile.type) && (
-                    <section>
-                      <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
-                      <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
-                    </section>
-                  )}
+                  {/* Linked Liabilities used to live here too — removed
+                      (2026-06-11) because the same section also renders on
+                      the Financials tab and showing it twice was confusing.
+                      A liability is a financial obligation, so Financials
+                      is the more natural home. */}
                 </TabsContent>
               )}
               {tabValues.has("financials") && (

@@ -2106,6 +2106,7 @@ function LinkedAssetsCard({ liabilityId }: { liabilityId: string }) {
                 <AssetLinkRow
                   key={link.id}
                   link={link}
+                  assetId={link.assetProfileId}
                   assetName={asset?.name || "Unknown asset"}
                   assetType={asset?.type || ""}
                   onChange={(patch) => updateLink.mutate({ id: link.id, patch })}
@@ -2122,25 +2123,36 @@ function LinkedAssetsCard({ liabilityId }: { liabilityId: string }) {
 
 function AssetLinkRow({
   link,
+  assetId,
   assetName,
   assetType,
   onChange,
   onDelete,
 }: {
   link: LiabilityAssetLinkRow;
+  assetId: string;
   assetName: string;
   assetType: string;
   onChange: (patch: Partial<LiabilityAssetLinkRow>) => void;
   onDelete: () => void;
 }) {
+  const [, navigate] = useLocation();
   const [pct, setPct] = useState<number>(link.ownershipPercentage ?? 100);
   return (
     <div className="rounded-md border p-3 space-y-2" data-testid={`asset-link-row-${link.id}`}>
       <div className="flex items-center justify-between gap-2">
-        <div className="flex-1 min-w-0">
+        {/* Name/type is the primary tap target — navigates to the linked
+            asset's detail page. The role select, ownership slider, and
+            unlink button remain interactive on the same row. */}
+        <button
+          type="button"
+          className="flex-1 min-w-0 text-left hover:bg-muted/40 rounded -mx-1 px-1 py-0.5"
+          onClick={() => navigate(`/profiles/${assetId}`)}
+          data-testid={`button-open-asset-${assetId}`}
+        >
           <div className="font-medium truncate">{assetName}</div>
           <div className="text-xs text-muted-foreground">{assetType}</div>
-        </div>
+        </button>
         <Select value={link.role} onValueChange={(v) => onChange({ role: v })}>
           <SelectTrigger className="w-36" data-testid="asset-link-role">
             <SelectValue />
@@ -2151,7 +2163,7 @@ function AssetLinkRow({
             ))}
           </SelectContent>
         </Select>
-        <Button size="icon" variant="ghost" onClick={onDelete} data-testid="asset-link-delete">
+        <Button size="icon" variant="ghost" onClick={onDelete} data-testid="asset-link-delete" aria-label="Unlink asset">
           <Trash2 className="w-4 h-4 text-rose-500" />
         </Button>
       </div>
