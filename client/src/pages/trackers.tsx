@@ -1770,7 +1770,47 @@ function inferUnit(tracker: Tracker, fieldName: string, fieldUnit: string | unde
   const t = (tracker.unit || "").trim();
   if (t) return t;
   const f = (fieldName || "").toLowerCase().replace(/\s+/g, "_");
-  return UNIT_BY_FIELD[f] || "";
+  if (UNIT_BY_FIELD[f]) return UNIT_BY_FIELD[f];
+  // Last resort: infer from tracker name itself so "Guitar" → min,
+  // "Walking" → steps, even when the field is named generically (e.g.
+  // "activity" or "value"). This is what lets a Guitar entry with values
+  // { activity: 30 } render as "30 min" instead of "activity: 30".
+  const n = (tracker.name || "").toLowerCase();
+  if (n.includes("guitar") || n.includes("piano") || n.includes("instrument")
+      || n.includes("meditat") || n.includes("yoga") || n.includes("mindful")
+      || n.includes("gam") || n.includes("practice")) return "min";
+  if (n.includes("read") || n.includes("book")) return "min";
+  if (n.includes("walk") || n.includes("step")) return "steps";
+  if (n.includes("hydrat") || n.includes("water") || n.includes("drink")) return "oz";
+  if (n.includes("run") || n.includes("bike") || n.includes("cycl")) return "mi";
+  if (n.includes("calorie")) return "cal";
+  if (n.includes("sleep")) return "hr";
+  if (n.includes("weight") || n.includes("bench") || n.includes("press")
+      || n.includes("squat") || n.includes("deadlift")) return "lbs";
+  return "";
+}
+
+// Find the most likely numeric measurement in an entry, even when the
+// field name is generic ("activity", "value") or doesn't match the
+// tracker.fields schema. Returns null if no usable number exists.
+// Reserved/structured keys (BP components, item names, notes) are
+// skipped — those are handled by callers.
+function findAnyNumericValue(
+  values: Record<string, any> | undefined,
+): { key: string; num: number } | null {
+  if (!values) return null;
+  const skip = new Set([
+    "_notes", "notes", "item",
+    "systolic", "diastolic", "systolic_pressure", "diastolic_pressure",
+    "sbp", "dbp",
+  ]);
+  for (const [k, v] of Object.entries(values)) {
+    if (skip.has(k)) continue;
+    if (v == null || v === "") continue;
+    const n = typeof v === "number" ? v : Number(v);
+    if (!isNaN(n) && isFinite(n)) return { key: k, num: n };
+  }
+  return null;
 }
 
 function pickNum(values: Record<string, any> | undefined, ...keys: string[]): number | null {
@@ -1960,7 +2000,7 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
   }
 
   if (kind === "weight") {
-    const w = pickNum(last.values, primaryField, "weight", "value");
+    const w = pickNum(last.values, primaryField, "weight", "value") ?? (findAnyNumericValue(last.values)?.num ?? null);
     if (w == null) {
       return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: primaryUnit || "lbs",
         subline: "", insight: "No weight logged.", progressPct: null, statusBadge: null,
@@ -1990,7 +2030,7 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
   }
 
   if (kind === "sleep") {
-    const h = pickNum(last.values, primaryField, "hours", "hours_slept", "duration", "value");
+    const h = pickNum(last.values, primaryField, "hours", "hours_slept", "duration", "value") ?? (findAnyNumericValue(last.values)?.num ?? null);
     if (h == null) {
       return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "hr",
         subline: "", insight: "No sleep logged.", progressPct: null, statusBadge: null,
@@ -2014,7 +2054,7 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
 
   if (kind === "running") {
     // Prefer explicit distance/duration fields; fall back to primary
-    const dist = pickNum(last.values, "distance", "miles", "mi", "km") ?? pickNum(last.values, primaryField);
+    const dist = pickNum(last.values, "distance", "miles", "mi", "km") ?? pickNum(last.values, primaryField) ?? (findAnyNumericValue(last.values)?.num ?? null);
     const mins = pickNum(last.values, "duration", "minutes", "mins", "time");
     const distUnit = (() => {
       const f = tracker.fields.find(f => ["distance", "miles", "mi", "km"].includes(f.name));
@@ -2057,7 +2097,7 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
   }
 
   if (kind === "walking") {
-    const steps = pickNum(last.values, "steps", "step_count", primaryField, "value");
+    const steps = pickNum(last.values, "steps", "step_count", primaryField, "value") ?? (findAnyNumericValue(last.values)?.num ?? null);
     if (steps == null) {
       return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "steps",
         subline: "", insight: "Log steps to track your walking.",
@@ -2109,7 +2149,7 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
   }
 
   if (kind === "calories") {
-    const cals = pickNum(last.values, primaryField, "calories", "kcal", "value");
+    const cals = pickNum(last.values, primaryField, "calories", "kcal", "value") ?? (findAnyNumericValue(last.values)?.num ?? null);
     if (cals == null) {
       return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "cal",
         subline: "", insight: "Log a meal or workout to start tracking calories.",
@@ -2127,8 +2167,11 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
   }
 
   if (kind === "guitar" || kind === "reading" || kind === "meditation" || kind === "gaming") {
-    // Duration-style trackers — the primary value is minutes.
-    const mins = pickNum(last.values, primaryField, "duration", "minutes", "mins", "time", "value");
+    // Duration-style trackers — the primary value is minutes. Fall back to
+    // any numeric field in the entry so generically-named fields like
+    // "activity" still surface as a real value.
+    const mins = pickNum(last.values, primaryField, "duration", "minutes", "mins", "time", "value")
+      ?? (findAnyNumericValue(last.values)?.num ?? null);
     const noteStr = pickStr(last.values, "_notes", "notes") || (last as any).notes || "";
     if (mins == null && !noteStr) {
       return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "min",
@@ -2164,7 +2207,7 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
   }
 
   if (kind === "bench") {
-    const w = pickNum(last.values, "weight", "lbs", primaryField, "value");
+    const w = pickNum(last.values, "weight", "lbs", primaryField, "value") ?? (findAnyNumericValue(last.values)?.num ?? null);
     const reps = pickNum(last.values, "reps", "rep_count");
     const sets = pickNum(last.values, "sets", "set_count");
     if (w == null && reps == null && sets == null) {
@@ -2194,7 +2237,15 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
   // Last-ditch path: still try to format something useful instead of bare
   // text. Strings that just repeat the tracker name ("running", "guitar")
   // are suppressed in favour of a note.
-  const rawPrim = last.values?.[primaryField];
+  // Prefer the declared primary field, but if it has no value, scan the
+  // entry for ANY numeric measurement before giving up. This is what
+  // catches custom trackers whose fields are named generically.
+  let rawPrim: any = last.values?.[primaryField];
+  let rawPrimKey = primaryField;
+  if (rawPrim == null || rawPrim === "") {
+    const any = findAnyNumericValue(last.values);
+    if (any) { rawPrim = any.num; rawPrimKey = any.key; }
+  }
   const trackerNameLower = (tracker.name || "").toLowerCase().trim();
   const isRepeatedLabel = typeof rawPrim === "string" && rawPrim.trim().toLowerCase() === trackerNameLower;
   if (rawPrim == null || rawPrim === "" || isRepeatedLabel) {
@@ -2232,7 +2283,12 @@ function buildTrackerInsight(tracker: Tracker): TrackerInsight {
   }
   const isNum = typeof rawPrim === "number" || !isNaN(Number(rawPrim));
   const big = isNum ? fmtNum(Number(rawPrim), 1) : String(rawPrim).slice(0, 14);
-  const unit = isNum ? primaryUnit : "";
+  // Use the inferred unit for whichever key actually held the number, so
+  // generic field names like "activity" still get a real unit from the
+  // tracker name (Guitar → min, Walking → steps, etc.).
+  const unit = isNum
+    ? inferUnit(tracker, rawPrimKey, tracker.fields.find(f => f.name === rawPrimKey)?.unit)
+    : "";
   const avg = numericValues.length >= 2 ? numericValues.reduce((a, b) => a + b, 0) / numericValues.length : null;
   const subline = avg != null ? `Avg ${fmtNum(avg, 1)}${unit ? " " + unit : ""}` : "";
   const insight = isNum
@@ -3842,22 +3898,52 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
             <p className="text-sm text-muted-foreground">{search ? "No matching entries" : "No entries yet"}</p>
           </div>
         ) : filtered.map((entry, idx) => {
-          const val = entry.values[primaryField];
-          const allVals = Object.entries(entry.values).filter(([k, v]) => v != null && v !== "" && k !== "_notes" && k !== "item");
           const notes = entry.values["_notes"] as string | undefined;
           const itemName = entry.values["item"] as string | undefined;
           const bpS = entry.values["systolic"] ?? entry.values["systolic_pressure"];
           const bpD = entry.values["diastolic"] ?? entry.values["diastolic_pressure"];
           const isBPEntry = typeof bpS === "number" && typeof bpD === "number";
           const isNutrition = tracker.category === "nutrition" || tracker.name.toLowerCase().includes("nutrition") || tracker.name.toLowerCase().includes("calorie");
+          // Resolve the primary value robustly: prefer the declared
+          // primary field, but if it has no number, scan the entry for
+          // any numeric measurement. This is what stops history rows
+          // from rendering "activity: 30" — the field key is just
+          // metadata, not a label users should see.
+          const declaredPrim = entry.values[primaryField];
+          const anyNum = (declaredPrim == null || declaredPrim === "")
+            ? findAnyNumericValue(entry.values)
+            : null;
+          const effectivePrimKey = anyNum ? anyNum.key : primaryField;
+          const val = anyNum ? anyNum.num : declaredPrim;
+          const effectiveUnit = inferUnit(
+            tracker,
+            effectivePrimKey,
+            tracker.fields.find(f => f.name === effectivePrimKey)?.unit,
+          );
+          // Secondary fields: skip the primary, notes, item, BP
+          // components, AND any string field whose value just repeats
+          // the tracker name ("activity: guitar" on a Guitar tracker).
+          const trackerNameLower = (tracker.name || "").toLowerCase().trim();
+          const secondaryVals = Object.entries(entry.values).filter(([k, v]) => {
+            if (v == null || v === "") return false;
+            if (k === "_notes" || k === "notes" || k === "item") return false;
+            if (k === effectivePrimKey) return false;
+            if (k === "systolic" || k === "diastolic"
+                || k === "systolic_pressure" || k === "diastolic_pressure") return false;
+            if (typeof v === "string" && v.trim().toLowerCase() === trackerNameLower) return false;
+            return true;
+          });
           const displayVal = isBPEntry ? `${bpS}/${bpD} mmHg`
             : isNutrition && itemName ? `${itemName} — ${val ?? "?"} ${tracker.unit || "cal"}`
-            : val != null ? `${val} ${tracker.unit || ""}`
-            : allVals.length > 0 ? allVals.map(([k, v]) => `${k}: ${v}`).join(", ")
+            : val != null && val !== "" ? `${val}${effectiveUnit ? " " + effectiveUnit : (tracker.unit ? " " + tracker.unit : "")}`
+            : (notes || entry.notes) ? (notes || entry.notes!)
             : "(empty)";
           const nextEntry = filtered[idx + 1];
-          const nextVal = nextEntry?.values[primaryField];
-          const delta = typeof val === "number" && typeof nextVal === "number" ? val - nextVal : null;
+          const nextDeclared = nextEntry?.values[primaryField];
+          const nextAny = (nextDeclared == null || nextDeclared === "") && nextEntry
+            ? findAnyNumericValue(nextEntry.values)?.num ?? null
+            : (typeof nextDeclared === "number" ? nextDeclared : null);
+          const delta = typeof val === "number" && typeof nextAny === "number" ? val - nextAny : null;
 
           return (
             <div key={entry.id} className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm gap-2" data-testid={`entry-row-${entry.id}`}>
@@ -3868,9 +3954,9 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
                     {delta > 0 ? "+" : ""}{delta.toFixed(1)}
                   </span>
                 )}
-                {!isBPEntry && allVals.filter(([k]) => k !== primaryField).length > 0 && (
+                {!isBPEntry && secondaryVals.length > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    {allVals.filter(([k]) => k !== primaryField).map(([k, v]) => `${k}: ${v}`).join(", ")}
+                    {secondaryVals.map(([k, v]) => `${k}: ${v}`).join(", ")}
                   </span>
                 )}
                 {(notes || entry.notes) && (
