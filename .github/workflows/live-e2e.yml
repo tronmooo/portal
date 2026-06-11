@@ -1,0 +1,23 @@
+name: Live E2E (deployed app)
+
+# On-demand end-to-end scenario suite against the DEPLOYED app (portol.me)
+# using the repo's smoke account. Creates real Bob/Jane/Mike test data,
+# exercises every CRUD flow + ownership + AI chat, asserts instant
+# read-your-writes and latency budgets, and cleans up after itself.
+# Trigger manually (workflow_dispatch) — typically right after a deploy.
+on:
+  workflow_dispatch:
+
+jobs:
+  live-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Run live scenario suite against portol.me
+        run: npx vitest run --config vitest.live.config.ts --reporter=verbose
