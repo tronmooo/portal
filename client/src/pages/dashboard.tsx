@@ -2280,14 +2280,22 @@ function KeyFindingsSection({
     queryFn: () => apiRequest("GET", "/api/net-worth/history?lookbackDays=120").then(r => r.json()).catch(() => []),
   });
 
+  // PR M — When scoped to specific profile(s), the cross-profile aggregates
+  // (financeSnapshot totals, net-worth history, obligations list, habits list)
+  // are not filtered server-side and would leak another profile's signals
+  // (e.g. "Spending decreased 100% — $705,251 → $250" where $705,251 is the
+  // everyone-aggregate). Until each of those endpoints exposes per-profile
+  // filtering, hide them from the findings computation when scoped. Trackers
+  // already have linkedProfiles-based filtering inside computeKeyFindings.
+  const scoped = filterIds.length > 0;
   const findings = useMemo(() => computeKeyFindings({
     trackers,
-    obligations,
-    habits,
-    financeSnapshot: enhancedData?.financeSnapshot,
-    netWorthHistory: networthHistory,
-    scopedProfileIds: filterIds.length > 0 ? filterIds : undefined,
-  }), [trackers, obligations, habits, enhancedData, networthHistory, filterIds]);
+    obligations: scoped ? [] : obligations,
+    habits: scoped ? [] : habits,
+    financeSnapshot: scoped ? undefined : enhancedData?.financeSnapshot,
+    netWorthHistory: scoped ? [] : networthHistory,
+    scopedProfileIds: scoped ? filterIds : undefined,
+  }), [trackers, obligations, habits, enhancedData, networthHistory, filterIds, scoped]);
 
   const TOP_N = 8;
   const top = findings.slice(0, TOP_N);
@@ -4342,13 +4350,34 @@ function UpcomingDateRow({
   );
 }
 
-function UpcomingSection() {
+function UpcomingSection({ filterIds = [], filterMode = "everyone" }: { filterIds?: string[]; filterMode?: string }) {
+  // PR M — Scope upcoming dates to the selected profile(s). When filterMode is
+  // "selected" we pass ?profileIds=... to every list endpoint and split the
+  // react-query cache by filterMode + filterIds so switching profiles doesn't
+  // show another profile's reminders.
+  const scoped = filterMode === "selected" && filterIds.length > 0;
+  const profileParam = scoped ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: profiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
-  const { data: documents = [] } = useQuery<any[]>({ queryKey: ["/api/documents"] });
-  const { data: tasks = [] } = useQuery<any[]>({ queryKey: ["/api/tasks"] });
-  const { data: events = [] } = useQuery<any[]>({ queryKey: ["/api/events"] });
-  const { data: obligations = [] } = useQuery<any[]>({ queryKey: ["/api/obligations"] });
-  const { data: goals = [] } = useQuery<any[]>({ queryKey: ["/api/goals"] });
+  const { data: documents = [] } = useQuery<any[]>({
+    queryKey: ["/api/documents", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/documents${profileParam}`).then(r => r.json()),
+  });
+  const { data: tasks = [] } = useQuery<any[]>({
+    queryKey: ["/api/tasks", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
+  });
+  const { data: events = [] } = useQuery<any[]>({
+    queryKey: ["/api/events", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()),
+  });
+  const { data: obligations = [] } = useQuery<any[]>({
+    queryKey: ["/api/obligations", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
+  });
+  const { data: goals = [] } = useQuery<any[]>({
+    queryKey: ["/api/goals", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
+  });
 
   const [entityFilter, setEntityFilter] = useState<"all" | UpcomingEntityKind>("all");
   const [pins, setPins] = useState<Set<string>>(() => loadUpcomingPins());
@@ -4368,6 +4397,14 @@ function UpcomingSection() {
 
   const filtered = useMemo(() => {
     let items = all;
+    // PR M — Safety net: if the user has selected specific profiles, drop any
+    // upcoming-date whose relatedProfileId isn't in scope. The server query
+    // param already does this for the originating module, but cross-cutting
+    // entries (e.g. a holiday with no profile owner) should still be excluded.
+    if (scoped) {
+      const allow = new Set(filterIds);
+      items = items.filter(u => u.relatedProfileId && allow.has(u.relatedProfileId));
+    }
     if (entityFilter !== "all") {
       items = items.filter(u => {
         if (u.entityKind === entityFilter) return true;
@@ -4391,7 +4428,7 @@ function UpcomingSection() {
         if (a._pinned !== b._pinned) return a._pinned ? -1 : 1;
         return a.daysUntil - b.daysUntil || a.title.localeCompare(b.title);
       });
-  }, [all, entityFilter, pins, profiles]);
+  }, [all, entityFilter, pins, profiles, scoped, filterIds]);
 
   const grouped = useMemo(() => groupByTimeframe(filtered), [filtered]);
   const actionSoonCount = useMemo(() => filtered.filter(u => u.needsActionSoon).length, [filtered]);
@@ -5180,7 +5217,7 @@ export default function DashboardPage() {
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
         break;
       case "upcoming-dates":
-        content = <UpcomingSection />;
+        content = <UpcomingSection filterIds={filterIds} filterMode={filterMode} />;
         break;
       default:
         content = null;
