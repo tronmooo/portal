@@ -703,6 +703,9 @@ export function BudgetPopup({
     setNewCategory(""); setNewAmount(""); setShowAdd(false);
   };
 
+  // PR R: suppress all 0%/$0 framing when no budget exists; the empty state below
+  // is the only thing the user should see.
+  const hasBudget = totalBudget > 0;
   return (
     <MetricPopupShell
       open={open}
@@ -710,27 +713,29 @@ export function BudgetPopup({
       icon={PieChartIcon}
       iconColor={overallPct > 100 ? "hsl(0 72% 52%)" : "hsl(43 85% 52%)"}
       title="Monthly Budget"
-      description={`$${fmt(totalSpent)} of $${fmt(totalBudget)} spent`}
-      total={`${overallPct}%`}
+      description={hasBudget ? `$${fmt(totalSpent)} of $${fmt(totalBudget)} spent` : "No budget set for this scope"}
+      total={hasBudget ? `${overallPct}%` : ""}
       testId="popup-budget"
     >
       <div className="p-3 space-y-2">
-        {/* Overall progress */}
-        <div className="rounded-lg border border-border bg-muted/20 px-3 py-2">
-          <div className="flex items-center justify-between mb-1.5">
-            <p className="text-[11px] text-muted-foreground">Overall</p>
-            <p className="text-[11px] tabular-nums">{overallPct}% of ${fmt(totalBudget)}</p>
+        {/* Overall progress — only when a budget exists */}
+        {hasBudget && (
+          <div className="rounded-lg border border-border bg-muted/20 px-3 py-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-[11px] text-muted-foreground">Overall</p>
+              <p className="text-[11px] tabular-nums">{overallPct}% of ${fmt(totalBudget)}</p>
+            </div>
+            <div className="h-2 rounded-full overflow-hidden bg-muted">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${Math.min(100, overallPct)}%`,
+                  background: overallPct > 100 ? "hsl(0 72% 52%)" : overallPct >= 80 ? "hsl(43 85% 52%)" : "hsl(155 60% 44%)",
+                }}
+              />
+            </div>
           </div>
-          <div className="h-2 rounded-full overflow-hidden bg-muted">
-            <div
-              className="h-full rounded-full transition-all duration-500"
-              style={{
-                width: `${Math.min(100, overallPct)}%`,
-                background: overallPct > 100 ? "hsl(0 72% 52%)" : overallPct >= 80 ? "hsl(43 85% 52%)" : "hsl(155 60% 44%)",
-              }}
-            />
-          </div>
-        </div>
+        )}
 
         {/* Categories */}
         {budgets.length === 0 ? (
