@@ -28,6 +28,7 @@ import {
   isMetricStale,
   ZONE_COLORS,
 } from "@shared/tracker-metric-definition";
+import { effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 
 /**
  * PR F: Auto-hide past events on active schedule views.
@@ -5620,6 +5621,13 @@ function TrackerCard_Profile({
   const allEntries: any[] = Array.isArray(tracker.entries) ? tracker.entries : [];
   const last10 = allEntries.slice(-10);
 
+  // PR P — Auto-heal tracker shape from its name when fields are missing
+  // or obviously wrong (e.g. Bench Press tracker with only a 'value' field
+  // in 'min'). Original tracker.fields/unit stay in the DB; this overlay
+  // only affects what the user sees.
+  const healedFields = effectiveTrackerFields(tracker.name, tracker.category, tracker.fields as any, tracker.unit);
+  const healedUnit = effectiveTrackerUnit(healedFields, tracker.unit);
+
   // PR O — Resolve the field used for the headline + chart + trend in ONE
   // pass and reuse it in the entries renderer below. Previously the headline
   // and the row renderer disagreed (header used first-numeric-field in last10,
@@ -5630,15 +5638,15 @@ function TrackerCard_Profile({
   //   3) first tracker.fields entry (for label) — values may be non-numeric
   //   4) fall back to the first key of the most recent entry
   const isNum = (v: any) => v != null && v !== "" && !isNaN(Number(v));
-  const primaryField = tracker.fields?.find(
+  const primaryField = healedFields?.find(
     (f: any) => f.isPrimary && last10.some(e => isNum(e?.values?.[f.name]))
   );
-  const numericField = primaryField || tracker.fields?.find(
+  const numericField = primaryField || healedFields?.find(
     (f: any) => last10.some(e => isNum(e?.values?.[f.name]))
-  );
+  ) || healedFields?.find((f: any) => f.isPrimary) || healedFields?.[0];
   const firstEntryVals = last10[last10.length - 1]?.values;
   const fieldName = numericField?.name
-    || tracker.fields?.[0]?.name
+    || healedFields?.[0]?.name
     || (firstEntryVals && typeof firstEntryVals === "object" ? Object.keys(firstEntryVals)[0] : null)
     || null;
 
@@ -5832,14 +5840,15 @@ function TrackerCard_Profile({
                       const primaryVal = fieldName ? vals[fieldName] : undefined;
                       const primaryUnit =
                         (numericField as any)?.unit ||
-                        (tracker.fields?.find((f: any) => f.name === fieldName) as any)?.unit ||
-                        tracker.unit ||
+                        (healedFields?.find((f: any) => f.name === fieldName) as any)?.unit ||
+                        healedUnit ||
                         "";
 
-                      // Every other field with a meaningful value, in tracker
-                      // field order so the user sees them the way they were
-                      // defined. _notes is rendered separately below.
-                      const otherFields = (tracker.fields || []).filter((f: any) => {
+                      // Every other field with a meaningful value, in healed
+                      // field order so the user sees the proper labels (e.g.
+                      // weight/reps/sets on a Bench Press tracker) even when
+                      // the original tracker had only a generic 'value' field.
+                      const otherFields = (healedFields || []).filter((f: any) => {
                         if (f.name === fieldName) return false;
                         if (f.name === "_notes") return false;
                         return isMeaningful(vals[f.name]);
@@ -5982,6 +5991,9 @@ function TrackersTab({
 
   // Log entry form
   const [entryValue, setEntryValue] = useState("");
+  // PR P — Per-field values for the multi-input Log Entry dialog. Keyed by
+  // field name so a Bench Press log can carry { weight, reps, sets, rpe }.
+  const [entryFieldValues, setEntryFieldValues] = useState<Record<string, string>>({});
   const [entryNotes, setEntryNotes] = useState("");
 
   // All trackers for linking — always refetch to include newly created trackers
@@ -6098,9 +6110,32 @@ function TrackersTab({
   const logEntryMutation = useMutation({
     mutationFn: async (trackerId: string) => {
       const tracker = trackers.find(t => t.id === trackerId);
-      const primaryField = tracker?.fields?.find((f: any) => f.isPrimary)?.name || tracker?.fields?.[0]?.name || "value";
-      const numVal = Number(entryValue);
-      const values: Record<string, any> = { [primaryField]: isNaN(numVal) ? entryValue : numVal };
+      // PR P — Use the healed shape so a Bench Press log persists
+      // weight/reps/sets/rpe, not a single 'value' in 'min'.
+      const fields = effectiveTrackerFields(
+        tracker?.name || "",
+        tracker?.category,
+        tracker?.fields as any,
+        tracker?.unit,
+      );
+      const primaryField = fields.find((f: any) => f.isPrimary)?.name || fields[0]?.name || "value";
+      const values: Record<string, any> = {};
+      // Multi-field values from the keyed state.
+      for (const f of fields) {
+        const raw = entryFieldValues[f.name];
+        if (raw == null || raw === "") continue;
+        if (f.type === "number" || f.type === "duration") {
+          const num = Number(raw);
+          if (!Number.isNaN(num)) values[f.name] = num;
+        } else {
+          values[f.name] = raw;
+        }
+      }
+      // Single-value fallback for legacy callers (e.g. dashboard quick-log).
+      if (Object.keys(values).length === 0 && entryValue !== "") {
+        const num = Number(entryValue);
+        values[primaryField] = Number.isNaN(num) ? entryValue : num;
+      }
       await apiRequest("POST", `/api/trackers/${trackerId}/entries`, {
         trackerId, values, notes: entryNotes || undefined,
       });
@@ -6109,7 +6144,7 @@ function TrackersTab({
       const tracker = trackers.find(t => t.id === trackerId);
       toast({ title: `Entry logged to "${tracker?.name || "tracker"}"`, description: entryValue ? `Value: ${entryValue}` : undefined });
       setShowLogEntry(null);
-      setEntryValue(""); setEntryNotes("");
+      setEntryValue(""); setEntryNotes(""); setEntryFieldValues({});
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
@@ -6199,7 +6234,7 @@ function TrackersTab({
                       tracker={tracker}
                       profileId={profileId}
                       onChanged={onChanged}
-                      onLogEntry={(id) => { setEntryValue(""); setEntryNotes(""); setShowLogEntry(id); }}
+                      onLogEntry={(id) => { setEntryValue(""); setEntryNotes(""); setEntryFieldValues({}); setShowLogEntry(id); }}
                       onUnlink={(id) => setUnlinkTrackerId(id)}
                       onDeleteTracker={(id) => setDeleteTrackerId(id)}
                     />
@@ -6326,12 +6361,60 @@ function TrackersTab({
             <DialogDescription>Add a new entry to {trackers.find(t => t.id === showLogEntry)?.name || "this tracker"}.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">
-                Value {trackers.find(t => t.id === showLogEntry)?.unit ? `(${trackers.find(t => t.id === showLogEntry)?.unit})` : ""}
-              </label>
-              <Input className="mt-1" value={entryValue} onChange={e => setEntryValue(e.target.value)} placeholder="Enter value" data-testid="input-entry-value" />
-            </div>
+            {(() => {
+              // PR P — Render one input per healed field so a Bench Press
+              // log asks for weight + reps + sets + rpe instead of a single
+              // mystery 'Value'. Falls back to a single input when the
+              // tracker only has one effective field.
+              const tr = trackers.find(t => t.id === showLogEntry);
+              if (!tr) return null;
+              const fields = effectiveTrackerFields(tr.name || "", tr.category, tr.fields as any, tr.unit);
+              const setFV = (name: string, v: string) =>
+                setEntryFieldValues(prev => ({ ...prev, [name]: v }));
+              return fields
+                .filter((f: any) => f.name !== "_notes")
+                .map((f: any) => {
+                  const id = `input-field-${f.name}`;
+                  const inputType = (f.type === "number" || f.type === "duration") ? "number" : "text";
+                  // shadcn Select for enums when options are provided.
+                  if (f.type === "select" && Array.isArray(f.options) && f.options.length > 0) {
+                    return (
+                      <div key={f.name}>
+                        <label className="text-xs font-medium text-muted-foreground capitalize">
+                          {f.name.replace(/_/g, " ")}{f.isPrimary ? " \u2605" : ""}
+                        </label>
+                        <select
+                          className="mt-1 w-full bg-background border border-input rounded-md h-9 px-2 text-sm"
+                          value={entryFieldValues[f.name] || ""}
+                          onChange={(e) => setFV(f.name, e.target.value)}
+                          data-testid={id}
+                        >
+                          <option value="">—</option>
+                          {f.options.map((opt: string) => (
+                            <option key={opt} value={opt}>{opt}</option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={f.name}>
+                      <label className="text-xs font-medium text-muted-foreground capitalize">
+                        {f.name.replace(/_/g, " ")}{f.unit ? ` (${f.unit})` : ""}{f.isPrimary ? " \u2605" : ""}
+                      </label>
+                      <Input
+                        type={inputType}
+                        inputMode={inputType === "number" ? "decimal" : undefined}
+                        className="mt-1"
+                        value={entryFieldValues[f.name] || ""}
+                        onChange={(e) => setFV(f.name, e.target.value)}
+                        placeholder={f.unit ? `e.g. value ${f.unit}` : `Enter ${f.name.replace(/_/g, " ")}`}
+                        data-testid={id}
+                      />
+                    </div>
+                  );
+                });
+            })()}
             <div>
               <label className="text-xs font-medium text-muted-foreground">Notes (optional)</label>
               <Input className="mt-1" value={entryNotes} onChange={e => setEntryNotes(e.target.value)} placeholder="Any notes" data-testid="input-entry-notes" />
@@ -6339,7 +6422,7 @@ function TrackersTab({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowLogEntry(null)}>Cancel</Button>
-            <Button onClick={() => showLogEntry && logEntryMutation.mutate(showLogEntry)} disabled={logEntryMutation.isPending || !entryValue} data-testid="button-save-entry">
+            <Button onClick={() => showLogEntry && logEntryMutation.mutate(showLogEntry)} disabled={logEntryMutation.isPending || (!entryValue && Object.values(entryFieldValues).every(v => !v))} data-testid="button-save-entry">
               {logEntryMutation.isPending ? "Logging..." : "Log Entry"}
             </Button>
           </DialogFooter>
