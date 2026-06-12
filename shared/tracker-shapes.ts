@@ -197,6 +197,36 @@ const CATALOG: ShapeEntry[] = [
   { id: "mood",         fields: MOOD_SHAPE, patterns: ["mood", "feeling"] },
   // --- Finance -------------------------------------------------------------
   { id: "expense",      fields: EXPENSE_SHAPE, patterns: ["expense", "spending", "purchase"] },
+  // --- Vehicle / asset (PR S) ---------------------------------------------
+  // Tire pressure: per-tire PSI. Primary is pressure (PSI), with optional
+  // position label (FL/FR/RL/RR) and notes.
+  { id: "tire_pressure", fields: [
+    { name: "pressure", type: "number", unit: "PSI", isPrimary: true },
+    { name: "position", type: "text", options: ["FL", "FR", "RL", "RR", "All"] },
+  ], patterns: ["tire pressure", "tyre pressure"] },
+  { id: "fuel",       fields: [
+    { name: "gallons", type: "number", unit: "gal", isPrimary: true },
+    { name: "cost",    type: "number", unit: "$" },
+    { name: "odometer", type: "number", unit: "mi" },
+  ], patterns: ["fuel", "gas fill", "gas mileage", "mpg"] },
+  { id: "odometer",   fields: [
+    { name: "odometer", type: "number", unit: "mi", isPrimary: true },
+  ], patterns: ["odometer", "odo "] },
+  { id: "oil_change", fields: [
+    { name: "quarts",   type: "number", unit: "qt", isPrimary: true },
+    { name: "odometer", type: "number", unit: "mi" },
+    { name: "oil_type", type: "text" },
+  ], patterns: ["oil change", "oil"] },
+  { id: "ev_charge",  fields: [
+    { name: "battery",  type: "number", unit: "%", isPrimary: true },
+    { name: "kwh",      type: "number", unit: "kWh" },
+    { name: "range",    type: "number", unit: "mi" },
+  ], patterns: ["charge", "battery level", "state of charge"] },
+  { id: "vehicle_service", fields: [
+    { name: "odometer", type: "number", unit: "mi", isPrimary: true },
+    { name: "service",  type: "text" },
+    { name: "cost",     type: "number", unit: "$" },
+  ], patterns: ["vehicle maintenance", "vehicle service", "car maintenance", "car service", "service"] },
 ];
 
 /**

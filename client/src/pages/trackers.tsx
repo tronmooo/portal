@@ -1789,8 +1789,22 @@ function inferUnit(tracker: Tracker, fieldName: string, fieldUnit: string | unde
   if (n.includes("run") || n.includes("bike") || n.includes("cycl")) return "mi";
   if (n.includes("calorie")) return "cal";
   if (n.includes("sleep")) return "hr";
-  if (n.includes("weight") || n.includes("bench") || n.includes("press")
-      || n.includes("squat") || n.includes("deadlift")) return "lbs";
+  // Lifting words ONLY — do NOT bare-match "press" (would match "Tire Pressure",
+  // "Blood Pressure", "Espresso", etc. and wrongly return lbs). Pair "press"
+  // with bench/shoulder/leg/overhead/chest qualifiers.
+  if (n.includes("bench press") || n.includes("shoulder press") || n.includes("leg press")
+      || n.includes("chest press") || n.includes("overhead press")
+      || n.includes("squat") || n.includes("deadlift")
+      || n.includes("body weight") || n.includes("bodyweight") || n.includes("scale weight")
+      || n === "weight") return "lbs";
+  // Pressure trackers — PSI is the right default unless tracker.unit overrides.
+  if (n.includes("tire pressure") || n.includes("psi")) return "PSI";
+  if (n.includes("blood pressure")) return "mmHg";
+  // Fuel / charge
+  if (n.includes("fuel") || n.includes("gas mileage") || n.includes("mpg")) return "mpg";
+  if (n.includes("charge") || n.includes("battery")) return "%";
+  if (n.includes("odometer") || n.includes("mileage")) return "mi";
+  if (n.includes("oil")) return "qt";
   return "";
 }
 
@@ -3994,6 +4008,8 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
             if (k === effectivePrimKey) return false;
             if (k === "systolic" || k === "diastolic"
                 || k === "systolic_pressure" || k === "diastolic_pressure") return false;
+            // PR S: "unit" was wrongly stored as a value key on legacy entries; never echo it as a secondary label.
+            if (k === "unit" || k === "_unit") return false;
             if (typeof v === "string" && v.trim().toLowerCase() === trackerNameLower) return false;
             return true;
           });
