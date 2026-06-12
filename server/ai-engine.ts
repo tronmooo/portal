@@ -22,6 +22,7 @@ import {
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 
@@ -3274,6 +3275,34 @@ NEVER ask clarifying questions for CRUD operations. Just execute. If it fails, r
 
 ━━━ TRACKER CRUD ━━━
 - create tracker: create_tracker(name, category, fields, forProfile?)
+
+CREATE_TRACKER — UNITS, FIELDS, AND SCOPE (CRITICAL):
+You are responsible for choosing the right units and field shape when you create a tracker. The user trusts you to understand the domain. Do NOT default to a bare {value, number} field with no unit — always think about what the user is actually measuring and pass real fields and unit.
+
+How to decide:
+1. **Units** — pick the canonical real-world unit for what's being measured:
+   - Tire pressure → PSI (or kPa if user is metric)
+   - Blood pressure → mmHg (with systolic/diastolic fields)
+   - Body weight / lifting weight → lbs (or kg)
+   - Running/cycling distance → mi (or km)
+   - Duration: workouts → min, sleep → hr, plank → sec
+   - Calories → kcal; protein/carbs/fat → g
+   - Hydration → oz; temperature → °F (or °C)
+   - Fuel → gal + mpg; EV charge → %; odometer → mi
+   - Money → $ (or user's currency)
+   When in doubt, ASK the user which unit before creating.
+2. **Fields** — a real measurement usually has more than one number. Examples:
+   - Bench Press: weight (lbs, primary), reps, sets, rpe (/10)
+   - Running: distance (mi, primary), duration (min), pace (min/mi), heart_rate (bpm)
+   - Tire Pressure: pressure (PSI, primary), position (text: FL/FR/RL/RR)
+   - Sleep: duration (hr, primary), quality (1-10), bedtime, wake_time
+   - Blood Pressure: systolic (mmHg, primary), diastolic (mmHg), pulse (bpm)
+   - Calories/Nutrition: calories (kcal, primary), protein (g), carbs (g), fat (g), meal (text)
+   Mark the most important number as isPrimary:true. Trackers with a primary field render correctly everywhere; single-value trackers render as bare numbers.
+3. **Asset scope** — if the user mentions a tracker that belongs to a SPECIFIC asset (a vehicle, property, account, instrument, pet, etc.) instead of a person:
+   - Set forProfile to the ASSET's profile name (e.g. "Ford F150 2025"), NOT to the asset's owner.
+   - This keeps asset trackers (tire pressure, oil changes, mileage, fuel, charge) on the asset's page, not the owner's. The UI hides asset trackers from the parent profile so the owner's Trackers tab stays clean.
+   - If the asset profile doesn't exist yet, create it first via create_profile(type:"asset", parentProfileId: <owners id>) and THEN create_tracker(forProfile: <asset name>).
 - log entry: log_tracker_entry(trackerName, values, forProfile?, at?). When the user names a specific date the entry happened ("log weight 185 on June 3 2025", "I ran 5k yesterday"), pass that date in the at field (ISO or natural language). Backdating IS supported — never tell the user it is not. Omit at for "now".
 
 WEIGHT / MEASURABLE READING RULE — CRITICAL:
@@ -5014,12 +5043,27 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       });
       if (dupTracker) return dupTracker;
 
+      // PR S: AI-driven shape inference at create time. When the AI didn't
+      // supply fields (or supplied only the placeholder single-value), apply
+      // the canonical shape from the catalog so the tracker is persisted
+      // with correct fields + units. The AI is in charge of overriding when
+      // it has better context (e.g. user said "track torque in Nm").
+      const aiFields = Array.isArray(input.fields) ? input.fields.filter(Boolean) : [];
+      const aiSuppliedReal = aiFields.length > 1 || (aiFields.length === 1 && (aiFields[0].name !== "value" || aiFields[0].unit));
+      const resolvedFields = aiSuppliedReal
+        ? aiFields
+        : effectiveTrackerFields(input.name, input.category, aiFields.length ? aiFields : undefined, input.unit);
+      // Resolve unit: prefer AI-supplied unit, then the primary field's unit,
+      // then the inferred unit. This means the AI can override the catalog
+      // by simply passing `unit:"Nm"`; otherwise we pick a sensible default.
+      const resolvedUnit = input.unit || effectiveTrackerUnit(resolvedFields, input.unit);
+
       // P0.3a: validate with the shared insert schema before writing.
       const trackerPayload = validateAiPayload(insertTrackerSchema, {
         name: input.name,
         category: input.category || "custom",
-        unit: input.unit,
-        fields: input.fields || [{ name: "value", type: "number" }],
+        unit: resolvedUnit,
+        fields: resolvedFields,
       }, "tracker");
       if (!trackerPayload.ok) return { error: trackerPayload.error };
       // P0.3b: pass ownership inline at create time (createTracker supports

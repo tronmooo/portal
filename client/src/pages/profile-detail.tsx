@@ -12650,6 +12650,29 @@ export default function ProfileDetailPage() {
   const assetTypes = ["vehicle","asset","subscription","loan","investment","property","insurance","medical","account"];
   const isAssetProfile = !!profile && assetTypes.includes(profile.type);
 
+  // PR S: derive "own" trackers — trackers whose true home is THIS profile,
+  // not one of its child asset/liability profiles. The server links a tracker
+  // like "Tire Pressure - Ford F150" to both the truck asset AND the truck's
+  // owner (via co-ownership/parent relations), so without this filter the
+  // tracker would also appear on the owner's profile page. Asset-scoped
+  // trackers should live on the asset's page only.
+  const childAssetIds = useMemo(() => new Set(
+    ((profile as any)?.childProfiles || [])
+      .filter((c: any) => c.type === "asset" || c.type === "liability")
+      .map((c: any) => c.id)
+  ), [profile]);
+  const ownTrackers = useMemo(() => {
+    if (!profile) return [] as any[];
+    const list = (profile as any).relatedTrackers || [];
+    if (childAssetIds.size === 0) return list;
+    return list.filter((t: any) => {
+      const linked = Array.isArray(t.linkedProfiles) ? t.linkedProfiles : [];
+      const linksThisProfile = linked.includes(profile.id);
+      const linksChildAsset = linked.some((id: string) => childAssetIds.has(id));
+      return linksThisProfile && !linksChildAsset;
+    });
+  }, [profile, childAssetIds]);
+
   const { data: ownerCandidates } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
@@ -12935,8 +12958,8 @@ export default function ProfileDetailPage() {
           const ptype = profile.type;
           const stats: { label: string; value: number }[] = [];
           const tabSet = new Set(getTabsForType(ptype, profile).map(t => t.value));
-          if (tabSet.has("health"))    stats.push({ label: "Health",  value: profile.relatedTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c))).length });
-          if (tabSet.has("all-trackers")) stats.push({ label: "Trackers", value: profile.relatedTrackers.length });
+          if (tabSet.has("health"))    stats.push({ label: "Health",  value: ownTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c))).length });
+          if (tabSet.has("all-trackers")) stats.push({ label: "Trackers", value: ownTrackers.length });
           if (tabSet.has("trackers"))  stats.push({ label: "Docs", value: profile.relatedDocuments.length });
           if (tabSet.has("finances"))  stats.push({ label: ptype === 'subscription' ? "Billing" : "Expenses", value: (profile.relatedExpenses || []).filter((e: any) => Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profile.id).length });
           if (tabSet.has("tasks"))     stats.push({ label: "Tasks",    value: profile.relatedTasks.length });
@@ -13017,12 +13040,12 @@ export default function ProfileDetailPage() {
                       itself (mileage, weight, value-over-time, etc.). */}
                   {!(["person", "self"].includes(profile.type)) && ["asset","vehicle","property","investment","account"].includes(profile.type) && (
                     <div className="mt-4 space-y-3" data-testid="asset-overview-identity-only">
-                      {profile.relatedTrackers.length > 0 && (
+                      {ownTrackers.length > 0 && (
                         <Card>
                           <CardContent className="p-3">
-                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Trackers ({profile.relatedTrackers.length})</p>
+                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Trackers ({ownTrackers.length})</p>
                             <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
-                              {profile.relatedTrackers.map((t: any) => {
+                              {ownTrackers.map((t: any) => {
                                 const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
                                 const latest = t.entries?.length > 0 ? t.entries[t.entries.length - 1]?.values?.[pf] : null;
                                 const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 })) : "—";
@@ -13048,11 +13071,11 @@ export default function ProfileDetailPage() {
                       been redesigned yet — future phase. */}
                   {!(["person", "self","asset","vehicle","property","investment","account"].includes(profile.type)) && (
                     <>
-                      {profile.relatedTrackers.length > 0 && (
+                      {ownTrackers.length > 0 && (
                         <div className="mt-4">
-                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Trackers ({profile.relatedTrackers.length})</p>
+                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Trackers ({ownTrackers.length})</p>
                           <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
-                            {profile.relatedTrackers.map((t: any) => {
+                            {ownTrackers.map((t: any) => {
                               const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
                               const latest = t.entries?.length > 0 ? t.entries[t.entries.length - 1]?.values?.[pf] : null;
                               const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 })) : "—";
@@ -13150,8 +13173,8 @@ export default function ProfileDetailPage() {
                   which was a value/label mismatch bug. */}
               {tabValues.has("person-trackers") && (
                 <TabsContent value="person-trackers" className="mt-4 px-1 sm:px-0">
-                  {profile.relatedTrackers.length > 0 ? (
-                    <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                  {ownTrackers.length > 0 ? (
+                    <TrackersTab trackers={ownTrackers} profileId={profile.id} onChanged={handleSaved} />
                   ) : (
                     <Card>
                       <CardContent className="py-8 text-center">
@@ -13307,8 +13330,8 @@ export default function ProfileDetailPage() {
 
               {tabValues.has("all-trackers") && (
                 <TabsContent value="all-trackers" className="mt-4 px-1 sm:px-0">
-                  {profile.relatedTrackers.length > 0 ? (
-                    <TrackersTab trackers={profile.relatedTrackers} profileId={profile.id} onChanged={handleSaved} />
+                  {ownTrackers.length > 0 ? (
+                    <TrackersTab trackers={ownTrackers} profileId={profile.id} onChanged={handleSaved} />
                   ) : (
                     <Card>
                       <CardContent className="py-8 text-center">
