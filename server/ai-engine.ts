@@ -3080,6 +3080,9 @@ function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: str
 EXISTING DATA (this is fresh from the database — use it for every answer):
 ${context}
 
+*** PROFILE EXISTENCE — READ THE NAME INDEX FIRST ***
+The "Profile Name Index" at the top of EXISTING DATA is the COMPLETE list of every profile the user owns (no truncation). Before you ever say "I don't have a profile for X", "I don't see X in your data", "there's no profile named X", or any similar denial, you MUST scan the Profile Name Index for case-insensitive name matches, nickname matches, and partial matches. If the name appears in the index, that profile EXISTS — answer from its row in "Profile Details" (if present) or call get_profile_data by name. If a field (hair color, eye color, breed, etc.) isn't shown in Profile Details because it was truncated, say "I see Craig but don't have that specific field loaded — let me check" and call a profile read tool rather than denying the profile's existence. NEVER deny a profile that appears in the Name Index.
+
 *** TOP-PRIORITY ROUTING RULE — LIABILITIES ***
 Whenever the user mentions ANY actual debt, loan, credit card, mortgage, auto loan, student loan, personal loan, HELOC, business loan, medical debt, IRS/tax debt, BNPL (Affirm/Klarna/Afterpay), or money they owe, you MUST use the dedicated liability tools — never create_profile(type:"loan") and never create_obligation:
 - New debt mentioned → create_liability (with the correct subtype: credit_card | mortgage | auto_loan | student_loan | personal_loan | heloc | business_loan | medical_debt | tax_debt | bnpl | other)
@@ -9127,10 +9130,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   }
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
+  // PR Q: Always emit a COMPLETE profile-name index (every profile, no slice cap) so the LLM
+  // cannot falsely deny the existence of a profile that's past the rich-snapshot cap.
+  // The rich snapshot below stays bounded to keep tokens reasonable.
+  const profileNameIndex = `Profile Name Index (${profiles.length}, complete list — every profile owned by user):\n${profiles.map((p: any) => `- ${p.name} (${p.type}, id:${p.id.slice(0,8)})`).join("\n") || "  (none)"}`;
   const context = (await Promise.all([
-    `Profiles (${profiles.length}): ${profiles.slice(0, 30).map(p => {
+    profileNameIndex,
+    `Profile Details (showing up to 60 of ${profiles.length}): ${profiles.slice(0, 60).map(p => {
       const fields = p.fields || {};
-      const keyFields = Object.entries(fields).filter(([k, v]) => v && !k.startsWith('_') && k !== 'notes').slice(0, 10).map(([k, v]) => `${k}: ${isSensitiveKey(k) ? REDACTED : String(v).slice(0, 50)}`).join(', ');
+      const keyFields = Object.entries(fields).filter(([k, v]) => v && !k.startsWith('_') && k !== 'notes').slice(0, 20).map(([k, v]) => `${k}: ${isSensitiveKey(k) ? REDACTED : String(v).slice(0, 80)}`).join(', ');
       const childCount = profiles.filter((c: any) => c.parentProfileId === p.id).length;
       return `${p.name} (${p.type}, id:${p.id.slice(0,8)}${keyFields ? `, ${keyFields}` : ''}${childCount > 0 ? `, ${childCount} sub-profiles` : ''})`;
     }).join("; ") || "none"}`,
