@@ -660,6 +660,11 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
   const totalSpent = budgetSummary?.totalSpent ?? 0;
   const budgetPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
   const budgetBreached = budgetPct > 100;
+  // PR R: if the (scoped) user has no budget defined, hide the BUDGET tile entirely.
+  // The previous behavior rendered "0% of $0" which read as a real metric and made
+  // people think every profile had a budget. The tile can still be re-enabled the
+  // moment a budget exists by setting one in BudgetPopup.
+  const effectiveHideBudget = hideBudget || totalBudget <= 0;
 
   // BUG (2026-06-10, user report): Math.max(0, ...) clamped NEGATIVE net worth
   // to a permanent "$0" while the sub-label showed the real assets/liabilities.
@@ -684,7 +689,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
           Updating filter…
         </div>
       )}
-      <div className={`grid grid-cols-1 ${hideBudget ? "sm:grid-cols-2" : "sm:grid-cols-3"} gap-2.5 mb-2 transition-opacity duration-200 ${refetching ? "opacity-60" : "opacity-100"}`}>
+      <div className={`grid grid-cols-1 ${effectiveHideBudget ? "sm:grid-cols-2" : "sm:grid-cols-3"} gap-2.5 mb-2 transition-opacity duration-200 ${refetching ? "opacity-60" : "opacity-100"}`}>
       {/* NET WORTH */}
       <button
         type="button"
@@ -713,7 +718,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
       </button>
 
       {/* BUDGET */}
-      {!hideBudget && (
+      {!effectiveHideBudget && (
       <button
         type="button"
         onClick={() => setHeroPopup("budget")}
