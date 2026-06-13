@@ -2443,7 +2443,7 @@ function NoDataPile({ trackers, onOpenDetail }: { trackers: any[]; onOpenDetail:
   );
 }
 
-function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride }: {
+function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfilePrefix }: {
   tracker: Tracker;
   onDelete: (id: string) => void;
   onOpenDetail?: (id: string) => void;
@@ -2451,6 +2451,10 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride }: {
   // every card to render at the same "compact" height so a row of mixed
   // kinds (Guitar + Reading + Gaming) doesn't ladder.
   sizeOverride?: "large" | "normal" | "compact";
+  // When the parent already shows a profile header (e.g. the Linked page
+  // groups by "Me" / each person), the per-card "<name>: <tracker>" prefix
+  // is redundant noise. Set true to render the tracker name on its own.
+  hideProfilePrefix?: boolean;
 }) {
   const { data: allProfiles } = useQuery<Profile[]>({ queryKey: ["/api/profiles"], queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()) });
   const linkedNames = (tracker.linkedProfiles || []).map(pid => (allProfiles || []).find(p => p.id === pid)?.name).filter(Boolean);
@@ -2493,7 +2497,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride }: {
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-foreground truncate leading-tight">
-            {profileLabel ? `${profileLabel}: ` : ''}{tracker.name}
+            {(!hideProfilePrefix && profileLabel) ? `${profileLabel}: ` : ''}{tracker.name}
           </p>
           {insight.subline && (
             <p className="text-[10px] text-muted-foreground truncate leading-tight mt-0.5">
@@ -6531,7 +6535,7 @@ export default function TrackersPage() {
                               const span = imp === 'large' ? 'sm:col-span-2 md:col-span-2' : '';
                               return (
                                 <div key={tracker.id} className={span}>
-                                  <TrackerCard tracker={tracker} onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />
+                                  <TrackerCard tracker={tracker} hideProfilePrefix onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />
                                 </div>
                               );
                             })}

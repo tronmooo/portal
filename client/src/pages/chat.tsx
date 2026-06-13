@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, lazy, Suspense } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -691,6 +691,49 @@ function ExtractionConfirmation({
     setFields((prev) => prev.map((f, i) => i === idx ? { ...f, selected: !f.selected } : f));
   };
 
+  // Bulk toggle for the review-table header. If every row is currently
+  // selected we treat the next click as a Deselect All; otherwise we Select
+  // All. This is the same affordance spreadsheets give you — one click to
+  // flip the entire column.
+  const allSelected = fields.length > 0 && fields.every((f) => f.selected);
+  const toggleAllFields = () => {
+    const next = !allSelected;
+    setFields((prev) => prev.map((f) => ({ ...f, selected: next })));
+    // Mirror the bulk action onto the tracker entry checkboxes so the user's
+    // single click clears (or restores) the whole review pane at once.
+    setSelectedTrackers((prev) => prev.map(() => next));
+  };
+
+  // Heuristic: when the upstream classifier did NOT route this document as an
+  // expense, but the user can still see a money-shaped "Total" / "Amount"
+  // field in the extracted table, we want a one-click way to push that
+  // number into Finance. We scan for a numeric value on a field whose
+  // key/label sounds like a charge — only used when
+  // extraction.pendingFinancial.expense is absent. This is the missing
+  // "Add to Finance" button the user asked for.
+  const moneyFieldCandidate = useMemo(() => {
+    if (extraction.pendingFinancial?.expense) return null;
+    const moneyKeyRe = /(total|amount|price|charge|fee|cost|payment|balance|due|paid|subtotal|grand_?total)/i;
+    let best: { amount: number; label: string; key: string; __rank: number } | null = null;
+    for (const f of fields) {
+      const keyStr = String(f.key || '');
+      const labelStr = String(f.label || '');
+      if (!moneyKeyRe.test(keyStr) && !moneyKeyRe.test(labelStr)) continue;
+      const raw = String(f.value ?? '').replace(/[$,€£¥₹₩]/g, '').trim();
+      const num = parseFloat(raw);
+      if (!isNaN(num) && num > 0) {
+        // Prefer "total" > "amount/paid" > anything else when multiple match.
+        const rank = /total|grand/i.test(keyStr + labelStr) ? 0 : /amount|paid/i.test(keyStr + labelStr) ? 1 : 2;
+        if (!best || rank < best.__rank) {
+          best = { amount: num, label: labelStr || keyStr, key: keyStr, __rank: rank };
+        }
+      }
+    }
+    return best;
+  }, [fields, extraction.pendingFinancial]);
+  // "Add to Finance" toggle state — only meaningful when moneyFieldCandidate exists.
+  const [addManualExpense, setAddManualExpense] = useState(false);
+
   const handleConfirm = async () => {
     setConfirming(true);
     // Include ALL selected fields (date fields now save to profile AND optionally create calendar events)
@@ -757,6 +800,25 @@ function ExtractionConfirmation({
       })
       .filter((e): e is NonNullable<typeof e> => e !== null);
 
+    // Build the expense payload. Prefer the classifier-produced one. If the
+    // classifier didn't produce a pendingFinancial.expense but the user opted
+    // in via the manual "Add to Finance" toggle, synthesize one from the
+    // money-shaped field we detected.
+    let expensePayload: any = createExpense ? extraction.pendingFinancial?.expense : undefined;
+    if (!expensePayload && addManualExpense && moneyFieldCandidate) {
+      const vendorField = fields.find((f) => /vendor|merchant|company|provider|payee/i.test(String(f.key || '')));
+      const dateField = fields.find((f) => /transaction.?date|date$|paid/i.test(String(f.key || '')));
+      expensePayload = {
+        description: `${vendorField?.value || extraction.label || extraction.fileName} - ${moneyFieldCandidate.label}`,
+        amount: moneyFieldCandidate.amount,
+        category: 'general',
+        vendor: vendorField?.value ? String(vendorField.value) : undefined,
+        date: dateField?.value
+          ? String(dateField.value)
+          : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+      };
+    }
+
     const success = await onConfirm({
       extractionId: extraction.extractionId,
       confirmedFields,
@@ -766,7 +828,7 @@ function ExtractionConfirmation({
         ...(extraction.trackerEntries || []).filter((_: any, i: number) => selectedTrackers[i]),
         ...syntheticTrackerEntries,
       ],
-      createExpense: createExpense ? extraction.pendingFinancial?.expense : undefined,
+      createExpense: expensePayload,
       createObligation: createObligation ? extraction.pendingFinancial?.obligation : undefined,
     });
     if (success) {
@@ -800,10 +862,19 @@ function ExtractionConfirmation({
   return (
     <div className="mt-3 rounded-lg bg-muted/40 border border-border overflow-hidden text-foreground">
       {/* Header bar */}
-      <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-border bg-muted/60">
+      <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-border bg-muted/60 flex-wrap">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           Review extracted data · {fields.length}
         </span>
+        <button
+          type="button"
+          onClick={toggleAllFields}
+          className="text-[11px] px-1.5 py-0.5 rounded border border-border bg-background hover:bg-muted text-foreground transition-colors"
+          data-testid="button-toggle-all-fields"
+          title={allSelected ? 'Deselect every row' : 'Select every row'}
+        >
+          {allSelected ? 'Deselect all' : 'Select all'}
+        </button>
         <div className="ml-auto flex items-center gap-1.5">
           <CopyButton value={buildTsv} label="Copy" />
           <select
@@ -956,6 +1027,24 @@ function ExtractionConfirmation({
               </span>
             </label>
           )}
+        </div>
+      )}
+
+      {/* Manual “Add to Finance” affordance — only when the classifier did NOT
+          already produce a pendingFinancial.expense AND we detect a money-
+          shaped field (Total / Amount / Price…) in the extracted table. This
+          is the missing button the user asked for: a parking receipt with a
+          $130.29 Total Amount should always have a one-click path to Finance,
+          even if the classifier missed it. */}
+      {!extraction.pendingFinancial?.expense && moneyFieldCandidate && (
+        <div className="pt-1.5 border-t border-border/50">
+          <span className="text-xs text-muted-foreground font-medium">💰 Add to Finance</span>
+          <label className="flex items-center gap-2 cursor-pointer ml-1 py-1" data-testid="manual-add-expense">
+            <Checkbox checked={addManualExpense} onCheckedChange={() => setAddManualExpense(!addManualExpense)} className="h-3.5 w-3.5" />
+            <span className={`text-xs ${addManualExpense ? 'text-foreground' : 'text-muted-foreground'}`}>
+              Save ${moneyFieldCandidate.amount.toFixed(2)} as an expense ({moneyFieldCandidate.label})
+            </span>
+          </label>
         </div>
       )}
 
