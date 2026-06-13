@@ -2497,7 +2497,15 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-foreground truncate leading-tight">
-            {(!hideProfilePrefix && profileLabel) ? `${profileLabel}: ` : ''}{tracker.name}
+            {/* Strip the " - <ProfileName>" suffix that some trackers have
+                baked into their stored name (e.g. "Blood Pressure - Joe",
+                "Running - Rex"). When the parent already groups by profile,
+                the suffix is redundant noise. cleanTrackerName is a no-op
+                when the tracker has no matching suffix. */}
+            {(!hideProfilePrefix && profileLabel) ? `${profileLabel}: ` : ''}
+            {hideProfilePrefix
+              ? cleanTrackerName(tracker.name, allProfiles, tracker.linkedProfiles)
+              : tracker.name}
           </p>
           {insight.subline && (
             <p className="text-[10px] text-muted-foreground truncate leading-tight mt-0.5">
