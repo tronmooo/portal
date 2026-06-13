@@ -947,6 +947,160 @@ export async function processFileUpload(
   const actions: ParsedAction[] = [];
   const results: any[] = [];
 
+  // ============================================================================
+  // STEP 0 — AI CLASSIFICATION (pre-extraction routing)
+  // ============================================================================
+  // Before we try to extract anything, a small dedicated AI pass *classifies*
+  // the document. It returns the document class + a routing plan that lists
+  // which destinations this document should populate (expense, obligation,
+  // calendar event, tracker, profile fact, asset, etc.) and a free-form
+  // `domainHint` string that gets injected into the main extraction prompt.
+  //
+  // Why this matters: the previous one-shot extractor had to identify the
+  // document AND decide where everything goes AND extract every field in a
+  // single call. That conflated routing with extraction — e.g. a parking
+  // receipt got tracker entries for "Parking Cost" instead of an expense.
+  // Splitting routing out lets the extractor focus on accuracy, and lets us
+  // gate the output server-side (a receipt cannot emit trackerEntries even
+  // if the extractor tries).
+  const isImage0 = mimeType.startsWith("image/");
+  const isPdf0 = mimeType === "application/pdf";
+  const mediaType0 = isImage0 ? (mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp") : "image/jpeg";
+  let cleanBase640 = base64Data;
+  if (cleanBase640.includes(",")) cleanBase640 = cleanBase640.split(",").pop() || cleanBase640;
+  cleanBase640 = cleanBase640.replace(/\s/g, "");
+
+  const classifierContent: any[] = [];
+  if (isImage0 || isPdf0) {
+    classifierContent.push({
+      type: isPdf0 ? "document" : "image",
+      source: { type: "base64", media_type: isPdf0 ? "application/pdf" : mediaType0, data: cleanBase640 },
+    });
+  } else {
+    try {
+      const textContent = Buffer.from(base64Data, "base64").toString("utf-8").slice(0, 10000);
+      classifierContent.push({ type: "text", text: `File content of ${fileName}:\n\n${textContent}` });
+    } catch {
+      classifierContent.push({ type: "text", text: `File: ${fileName} (${mimeType})` });
+    }
+  }
+
+  const classifierPrompt = `You are the routing brain for a personal finance + life-management app. You will look at a document and decide:
+  (a) what KIND of document it is, and
+  (b) which destinations in the app it should populate.
+
+Return ONE valid JSON object — nothing else — with EXACTLY this shape:
+{
+  "documentClass": "<one of: receipt | invoice | bill | subscription_invoice | parking_receipt | fuel_receipt | restaurant_check | transit_ticket | event_ticket | lab_results | medical_report | medical_bill | prescription | vaccination_record | insurance_card | insurance_policy | id_document | drivers_license | passport | vehicle_registration | vehicle_title | vehicle_service | fitness_log | nutrition_label | bank_statement | brokerage_statement | tax_form | pay_stub | warranty | manual | lease_agreement | contract | legal_notice | utility_bill | rent_statement | mortgage_statement | loan_statement | property_record | school_record | report_card | letter | screenshot | other>",
+  "label": "<short human title, max 6 words>",
+  "confidence": <number 0..1>,
+  "summary": "<one short sentence about what the doc is>",
+  "destinations": {
+    "profileFacts":   <true|false>,
+    "expense":        <true|false>,
+    "obligation":     <true|false>,
+    "calendarEvent":  <true|false>,
+    "trackerEntries": <true|false>,
+    "asset":          <true|false>
+  },
+  "domainHint": "<2-4 sentences. Tell the next AI pass exactly what fields to extract and where each belongs. Be specific to the class.>"
+}
+
+ROUTING RULES (use these to fill destinations):
+- profileFacts: true if the document carries stable facts about a person/entity (name, DOB, license #, blood type, insurance member ID, vehicle VIN, pet species, etc.).
+- expense: true if the document records a one-time charge or purchase already paid OR currently owed (receipt, invoice, restaurant check, parking, fuel, ticket, medical bill, one-off utility bill). NEVER true for ID docs, lab results, vaccination records, insurance cards, warranties, manuals.
+- obligation: true ONLY for recurring/scheduled payments where a NEXT DUE DATE is visible (subscription invoice, utility bill with due date, rent/mortgage/loan statement, insurance premium notice).
+- calendarEvent: true if the doc carries a meaningful future date the user should be reminded of (insurance expiration, license expiration, vaccination booster due, lease end, warranty expiration, appointment, bill due date). false for pure history (a paid receipt with no future action).
+- trackerEntries: true ONLY for documents whose value is a measurement over time — lab results, medical readings (BP/glucose/A1C/cholesterol), fitness logs, vital signs, body composition, vehicle odometer/tire pressure/fuel-economy snapshots, nutrition macros. NEVER true for money documents (receipts/invoices/bills/tickets) — money is finance, not a tracker. NEVER true for ID documents, contracts, or letters.
+- asset: true if the document IS / proves ownership of a tangible asset (vehicle title, property deed, vehicle registration card, brokerage statement showing holdings). Not for routine bills.
+
+DOMAIN HINT EXAMPLES (write something in the same spirit, tuned to the actual document):
+- parking_receipt → "Parking receipt from <vendor>. Extract totalAmount (final paid, after tax/fees), transactionDate (YYYY-MM-DD), vendorName, ticketNumber, parkingDurationDays/Hours as a NUMBER in extractedData. Do NOT emit any trackerEntries — the cost belongs in the expense ledger."
+- lab_results → "Lab report. Emit one trackerEntry per numeric test result with the exact unit printed (mg/dL, mmol/L, %, etc.). Also put patientName, providerName, collectionDate in extractedData. Do NOT create an expense — there is no charge here."
+- insurance_card → "Health/auto insurance card. Extract memberID, groupNumber, planName, carrier, effectiveDate, expirationDate in extractedData. If expirationDate is in the future, the calendar event should be a renewal reminder. No expense, no tracker."
+- vehicle_registration → "Vehicle registration. Extract vehicleMake, vehicleModel, vehicleYear, vin, plateNumber, registrationExpiration in extractedData. The expiration is a calendarEvent. The vehicle itself is an asset."
+- subscription_invoice → "Subscription invoice. Extract totalAmount, vendorName, billingFrequency (monthly/annual), nextDueDate. Emit BOTH expense (this charge) AND obligation (the recurring bill)."
+- utility_bill → "Utility bill. Extract totalAmount, utilityCompany as vendorName, serviceAddress, billingPeriodStart, billingPeriodEnd, dueDate. Emit expense (this bill) AND obligation if recurring with future dueDate."
+- pay_stub → "Pay stub. Extract grossPay, netPay, employerName, payPeriodStart, payPeriodEnd, payDate. This is INCOME — not an expense. Do not emit expense or obligation."
+- restaurant_check → "Restaurant receipt. Extract totalAmount, subtotal, tax, tip, vendorName, transactionDate. No tracker entries even if the user logs calories elsewhere — this document is the payment, not the meal log."
+
+If the document genuinely defies all known classes, use "other", set confidence ≤ 0.4, and write a brief domainHint about what fields you can see.
+
+Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nThe user attached this with the message: "${userMessage}"` : ""}`;
+
+  let classification: {
+    documentClass: string;
+    label: string;
+    confidence: number;
+    summary: string;
+    destinations: {
+      profileFacts: boolean;
+      expense: boolean;
+      obligation: boolean;
+      calendarEvent: boolean;
+      trackerEntries: boolean;
+      asset: boolean;
+    };
+    domainHint: string;
+  } = {
+    documentClass: "other",
+    label: fileName,
+    confidence: 0.0,
+    summary: "",
+    destinations: { profileFacts: true, expense: false, obligation: false, calendarEvent: true, trackerEntries: false, asset: false },
+    domainHint: "",
+  };
+
+  try {
+    const classifierResp = await getClient().messages.create({
+      // Haiku is fast and cheap; we just need a 1-class decision + short hint.
+      model: process.env.ANTHROPIC_CLASSIFIER_MODEL || "claude-haiku-4-5-20251001",
+      max_tokens: 600,
+      messages: [{
+        role: "user",
+        content: [
+          ...classifierContent,
+          { type: "text", text: classifierPrompt },
+        ],
+      }],
+    });
+    const cText = (classifierResp.content[0]?.type === "text") ? (classifierResp.content[0] as any).text : "{}";
+    const cMatch = cText.match(/\{[\s\S]*\}/);
+    if (cMatch) {
+      const parsedCls = JSON.parse(cMatch[0]);
+      if (parsedCls && typeof parsedCls === "object") {
+        classification = {
+          documentClass: String(parsedCls.documentClass || "other").toLowerCase().replace(/[^a-z_]/g, ""),
+          label: String(parsedCls.label || fileName).slice(0, 80),
+          confidence: typeof parsedCls.confidence === "number" ? Math.max(0, Math.min(1, parsedCls.confidence)) : 0.5,
+          summary: String(parsedCls.summary || "").slice(0, 240),
+          destinations: {
+            profileFacts:   !!parsedCls?.destinations?.profileFacts,
+            expense:        !!parsedCls?.destinations?.expense,
+            obligation:     !!parsedCls?.destinations?.obligation,
+            calendarEvent:  !!parsedCls?.destinations?.calendarEvent,
+            trackerEntries: !!parsedCls?.destinations?.trackerEntries,
+            asset:          !!parsedCls?.destinations?.asset,
+          },
+          domainHint: String(parsedCls.domainHint || "").slice(0, 1200),
+        };
+      }
+    }
+    console.log(`[classifier] class=${classification.documentClass} conf=${classification.confidence} dest=${JSON.stringify(classification.destinations)} hint="${classification.domainHint.slice(0, 140)}"`);
+  } catch (e: any) {
+    console.error(`[classifier] failed silently — falling back to legacy one-shot extraction: ${e?.message || e}`);
+  }
+
+  // ============================================================================
+  // STEP 1 — EXTRACTION (informed by classification)
+  // ============================================================================
+  // The extraction prompt now receives the classification's domainHint, which
+  // tailors what to look for and how to route it. Document-agnostic accuracy
+  // rules still apply; only the routing guidance is class-specific.
+  const classifierContext = (classification.documentClass !== "other" || classification.domainHint)
+    ? `\n\n=== DOCUMENT ALREADY CLASSIFIED ===\nA prior pass identified this as: ${classification.documentClass} (confidence ${classification.confidence.toFixed(2)}).\nLabel: ${classification.label}\nSummary: ${classification.summary}\n\nClass-specific guidance (FOLLOW THIS):\n${classification.domainHint}\n\nAllowed destinations for this class:\n- profileFacts:   ${classification.destinations.profileFacts}\n- expense:        ${classification.destinations.expense}\n- obligation:     ${classification.destinations.obligation}\n- calendarEvent:  ${classification.destinations.calendarEvent}\n- trackerEntries: ${classification.destinations.trackerEntries}   <-- if false, return trackerEntries: []\n- asset:          ${classification.destinations.asset}\n=== END CLASSIFIED ===\n`
+    : "";
+
   // Use Claude vision to analyze the image/document.
   // The instructions are deliberately DOCUMENT-AGNOSTIC: the model identifies
   // what the document is and decides what matters. We do not hardcode document
@@ -972,13 +1126,21 @@ EXTRACTION RULES:
 - Identify the document yourself — do not pick from a fixed list. Keep documentType to a short 1-3 word category (not a sentence); put any longer title in "label".
 - Put EACH real date in its OWN field with a descriptive camelCase key (e.g. "rabiesDueDate"). One date = one field. Never combine multiple dates into one value.
 - Also extract people, organizations, identifiers, amounts, and notes that are actually present.
-- trackerEntries[]: any numeric measurement worth trending over time (lab value, weight, balance, etc.) — only if actually printed.
+- trackerEntries[]: any numeric measurement worth trending over time (lab value, weight, BP, body temperature, blood glucose, etc.) — only if actually printed AND only if it is a health/body/biometric measurement. Money, prices, costs, totals, fees, taxes, durations, quantities of goods, or anything printed on a receipt/invoice/bill/ticket is NEVER a tracker entry — never emit trackerEntries for those. Output them in extractedData as money/quantity fields instead.
 - Dates: prefer YYYY-MM-DD, otherwise copy them exactly as printed.
+
+MONEY / RECEIPTS / INVOICES / TICKETS / BILLS (CRITICAL — money is finance, not a tracker):
+- For ANY document that records a charge, payment, purchase, or amount owed (receipt, invoice, bill, ticket, parking stub, fuel receipt, restaurant check, etc.), set documentType to one of: receipt, invoice, bill, ticket, parking_receipt, fuel_receipt, subscription_invoice. Do NOT use a generic "other" or a tracker-flavored type for money documents.
+- ALWAYS emit a top-level "totalAmount" key in extractedData as a number with the FINAL amount the customer paid or owes (after tax/fees). Examples: "totalAmount": 130.29. If multiple totals exist, use the grand total / amount paid / amount due.
+- Also emit when printed: "subtotal", "tax", "tip", "currency" (3-letter code if shown), "vendorName", "merchantName", "transactionDate" (YYYY-MM-DD), "paymentMethod", "last4", "ticketNumber", "orderNumber", "description".
+- For parking/fuel/transit: also emit "parkingDurationDays" or "parkingDurationHours" (number, e.g. 8) — but as a plain number in extractedData, NOT a tracker entry. Same for "gallons", "litersOfFuel", "odometerAtFill".
+- For recurring services (utilities, subscriptions, rent, insurance, loan payments): additionally emit "dueDate" (YYYY-MM-DD) and "billingFrequency" (monthly / quarterly / annual) when visible.
+- Do NOT create trackerEntries for any of the fields above. The cost on a receipt becomes an expense in the user's finance ledger; it is not a chart-over-time metric.
 
 For pet vaccination / preventive care records: in extractedData, output one key per upcoming due date using the pattern "<vaccineName>Due" in camelCase with ISO YYYY-MM-DD value. Examples: "rabiesDue":"2029-06-04", "dappDue":"2029-06-04", "bordetellaDue":"2027-06-04", "fecalDue":"2026-12-16", "heartwormTestDue":"...", "leptospirosisDue":"...". Also include "petName", "species", "breed", "dateOfVisit", "weight" (numeric pounds), "providerName" (hospital), "facilityAddress" when present. Every preventive-care row in the document MUST appear as its own "<name>Due" key — never lump them into one field.
 
 ${userMessage ? `User said: "${userMessage}"` : ""}
-
+${classifierContext}
 Return only what you actually read. When in doubt, leave it out.`;
 
   try {
@@ -1510,8 +1672,16 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       if (f.key && f.value != null) fieldLookup[f.key.toLowerCase()] = String(f.value);
     }
 
-    // Look for amount fields (check both camelCase and lowercase)
-    const amountKeys = ['totalamountdue', 'amountdue', 'total', 'totalamount', 'amount', 'balancedue', 'currentcharges', 'totalcharges', 'totaldueamount', 'grandtotal'];
+    // Look for amount fields (check both camelCase and lowercase). Order matters
+    // — the most authoritative "final amount paid/due" comes first; generic
+    // "price"/"cost" only get used if no real total is found.
+    const amountKeys = [
+      'totalamount', 'totalamountdue', 'grandtotal', 'amountdue', 'amountpaid',
+      'amountcharged', 'amount', 'balancedue', 'currentcharges', 'totalcharges',
+      'totaldueamount', 'paymenttotal', 'chargetotal', 'feetotal', 'total',
+      'subtotal', 'parkingcost', 'parkingfee', 'parkingtotal', 'ticketprice',
+      'fareamount', 'totalfare', 'cost', 'price',
+    ];
     let amount: number | null = null;
     for (const key of amountKeys) {
       const val = fieldLookup[key];
@@ -1521,27 +1691,75 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       }
     }
 
-    if (amount && amount > 0) {
+    // CLASSIFIER GATE — if the upstream AI classifier said this document class
+    // should NOT emit tracker entries (e.g. receipt/invoice/bill/ID), hard-drop
+    // them now. This is the single source of truth on "does this doc produce a
+    // tracker". The legacy heuristic safety-net below still runs as a secondary
+    // backstop for borderline cases.
+    if (classification.destinations.trackerEntries === false && Array.isArray(parsed.trackerEntries) && parsed.trackerEntries.length > 0) {
+      console.log(`[classifier-gate] Class "${classification.documentClass}" is not allowed to emit trackerEntries — dropped ${parsed.trackerEntries.length}.`);
+      parsed.trackerEntries = [];
+    }
+
+    // SAFETY NET — strip money-shaped tracker entries even if the model emitted
+    // them anyway. A tracker called "Parking Cost" with unit "USD" is an expense,
+    // not a chart-over-time metric. Without this, a parking receipt becomes a
+    // useless tracker AND fails the persist step because currency units don't
+    // belong on a tracker. We keep medical/biometric/quantity entries that look
+    // like real measurements.
+    if (Array.isArray(parsed.trackerEntries) && parsed.trackerEntries.length > 0) {
+      const moneyUnitRe = /^(usd|eur|gbp|cad|aud|jpy|cny|inr|mxn|chf|sek|nok|dkk|nzd|krw|brl|zar|\$|€|£|¥|₹|₩|currency|dollars?|euros?|pounds?|cents?)$/i;
+      const moneyNameRe = /(cost|price|total|amount|fee|charge|tax|tip|fare|payment|balance|spend|expense|bill|subscription|toll|deposit|refund)/i;
+      const before = parsed.trackerEntries.length;
+      parsed.trackerEntries = parsed.trackerEntries.filter((t: any) => {
+        const name = String(t?.trackerName || '');
+        const unit = String(t?.unit || '');
+        if (moneyUnitRe.test(unit.trim())) return false;
+        if (moneyNameRe.test(name)) return false;
+        return true;
+      });
+      const dropped = before - parsed.trackerEntries.length;
+      if (dropped > 0) {
+        console.log(`[extraction] Dropped ${dropped} money-shaped tracker entries (routed to finance instead)`);
+      }
+    }
+
+    // CLASSIFIER GATE — only build pendingFinancial if the classifier said this
+    // doc class actually produces an expense and/or obligation. This prevents
+    // an extracted "amount" key on a lab report or insurance card from
+    // accidentally proposing an expense.
+    const allowExpense = classification.destinations.expense === true;
+    const allowObligation = classification.destinations.obligation === true;
+    if (amount && amount > 0 && allowExpense) {
+      // Category map keyed off BOTH the classifier's documentClass (precise)
+      // and the extractor's docType (legacy fallback). Classifier wins.
       const categoryMap: Record<string, string> = {
-        'utility': 'utilities', 'utility_bill': 'utilities', 'electric': 'utilities', 'gas': 'utilities', 'water': 'utilities',
-        'medical': 'medical', 'medical_bill': 'medical', 'health': 'medical',
-        'insurance': 'insurance', 'auto_insurance': 'insurance',
-        'invoice': 'general', 'receipt': 'general',
-        'rent': 'housing', 'mortgage': 'housing',
-        'subscription': 'subscription',
+        'utility_bill': 'utilities', 'rent_statement': 'housing', 'mortgage_statement': 'housing',
+        'loan_statement': 'debt', 'medical_bill': 'medical', 'prescription': 'medical',
+        'insurance_policy': 'insurance', 'subscription_invoice': 'subscription',
+        'parking_receipt': 'transportation', 'fuel_receipt': 'transportation', 'transit_ticket': 'transportation',
+        'restaurant_check': 'dining', 'event_ticket': 'entertainment',
+        'receipt': 'general', 'invoice': 'general', 'bill': 'general',
+        // legacy docType keys (kept for back-compat with one-shot fallback)
+        'utility': 'utilities', 'electric': 'utilities', 'gas': 'utilities', 'water': 'utilities',
+        'medical': 'medical', 'health': 'medical', 'auto_insurance': 'insurance',
+        'rent': 'housing', 'mortgage': 'housing', 'subscription': 'subscription',
       };
-      const category = categoryMap[docType] || 'general';
-      const vendor = fieldLookup['vendorname'] || fieldLookup['companyname'] || fieldLookup['providername'] || fieldLookup['utilitycompany'] || fieldLookup['title'] || parsed.label || '';
-      const dueDate = fieldLookup['duedate'] || fieldLookup['paymentduedate'] || '';
-      const isRecurring = ['utility', 'utility_bill', 'rent', 'mortgage', 'subscription', 'insurance'].some(t => docType.includes(t));
+      const category = categoryMap[classification.documentClass] || categoryMap[docType] || 'general';
+      const vendor = fieldLookup['vendorname'] || fieldLookup['merchantname'] || fieldLookup['companyname'] || fieldLookup['providername'] || fieldLookup['utilitycompany'] || fieldLookup['title'] || classification.label || parsed.label || '';
+      const dueDate = fieldLookup['duedate'] || fieldLookup['paymentduedate'] || fieldLookup['nextduedate'] || '';
+      // Recurring decision: classifier obligation flag first, then legacy sniff.
+      const recurringClasses = new Set(['subscription_invoice', 'utility_bill', 'rent_statement', 'mortgage_statement', 'loan_statement', 'insurance_policy']);
+      const isRecurring = allowObligation && (recurringClasses.has(classification.documentClass) || ['utility', 'utility_bill', 'rent', 'mortgage', 'subscription', 'insurance'].some(t => docType.includes(t)));
+      const billingFrequency = String(fieldLookup['billingfrequency'] || 'monthly').toLowerCase();
 
       pendingFinancial = {
         expense: {
-          description: `${vendor || parsed.label || fileName} - ${category}`,
+          description: `${vendor || classification.label || parsed.label || fileName} - ${category}`,
           amount,
           category,
           vendor: vendor || undefined,
-          date: fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          date: fieldLookup['transactiondate'] || fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
         },
       };
 
@@ -1549,7 +1767,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         pendingFinancial.obligation = {
           name: vendor || `${category} bill`,
           amount,
-          frequency: 'monthly',
+          frequency: ['weekly','monthly','quarterly','annual','yearly'].includes(billingFrequency) ? billingFrequency : 'monthly',
           category,
           nextDueDate: dueDate,
         };
@@ -1559,13 +1777,28 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     const pendingExtraction = {
       extractionId: document.id,
       fileName,
-      documentType: parsed.documentType || "other",
-      label: parsed.label || fileName,
+      // Prefer the classifier's class when available — it's more precise than
+      // the extractor's freeform documentType, and gives the UI a stable key
+      // to route on (e.g. "parking_receipt" vs. a one-off phrase).
+      documentType: classification.documentClass && classification.documentClass !== "other"
+        ? classification.documentClass
+        : (parsed.documentType || "other"),
+      label: classification.label || parsed.label || fileName,
       extractedFields,
       targetProfile: resolvedTargetProfile,
       trackerEntries: parsed.trackerEntries || [],
       documentPreview: { id: document.id, name: document.name, mimeType: document.mimeType },
       pendingFinancial,
+      // Surface the classification so the UI can show "I think this is a Parking
+      // Receipt; here's what I'll do." The destinations object tells the UI
+      // which sub-panels (expense, obligation, tracker, calendar) are even
+      // relevant for this doc.
+      classification: {
+        documentClass: classification.documentClass,
+        confidence: classification.confidence,
+        summary: classification.summary,
+        destinations: classification.destinations,
+      },
     };
 
     let reply = parsed.summary || `Processed "${fileName}"`;
