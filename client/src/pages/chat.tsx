@@ -2038,9 +2038,22 @@ export default function ChatPage() {
     try {
       const res = await apiRequest("POST", "/api/chat/confirm-extraction", data);
       const result = await res.json();
-      if (result.success) {
+      // Partial success: server returns success=false when ANY step failed, but
+      // saved[] may still contain things that DID save (e.g. document fields
+      // saved, only the tracker write failed). Treat any non-empty saved[] as
+      // a successful confirmation — we still show a warning toast so the user
+      // knows something fell off.
+      const savedSomething = Array.isArray(result.saved) && result.saved.length > 0;
+      if (result.success || savedSomething) {
         invalidateAll();
-        toast({ title: "Extraction confirmed", description: "Data has been saved." });
+        if (result.success) {
+          toast({ title: "Extraction confirmed", description: "Data has been saved." });
+        } else {
+          toast({
+            title: "Saved with warnings",
+            description: `Some pieces didn't save: ${Array.isArray(result.failures) ? result.failures.join("; ") : "see logs"}`,
+          });
+        }
         // Remove pendingExtraction from the message
         setMessages((prev) =>
           prev.map((m) =>
@@ -2051,7 +2064,11 @@ export default function ChatPage() {
         );
         return true;
       }
-      toast({ title: "Extraction failed", description: "The server could not save the data.", variant: "destructive" });
+      // Truly nothing saved — surface the actual reason from the server.
+      const reason = (result.failures && result.failures.length > 0)
+        ? result.failures.join("; ")
+        : (result.message || result.error || "The server could not save the data.");
+      toast({ title: "Extraction failed", description: reason, variant: "destructive" });
       return false;
     } catch (err) {
       console.error("Confirm extraction failed:", err);
