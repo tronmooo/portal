@@ -742,6 +742,57 @@ export async function registerRoutes(
       // unknown extra args until then, so this is forward/backward safe).
       const result = await (processMessage as any)(sanitize(message), Array.isArray(history) ? history : undefined, userId, { profileFilterIds });
       if (idem) setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
+
+      // ─── Universal Capture (PR Y) ──────────────────────────────────
+      // Record this message as a Capture so we never lose user input,
+      // even when the AI doesn't route it anywhere or when confidence
+      // was too low to act. Projections (actions the AI actually took)
+      // are attached so each capture has an audit trail to the typed
+      // rows it produced. Never throw — capture is best-effort.
+      try {
+        if (storage.createCapture) {
+          const actions: any[] = Array.isArray((result as any)?.actions) ? (result as any).actions : [];
+          const projections = actions
+            .filter(a => a && a.type)
+            .map(a => ({
+              kind: String(a.type),
+              id: String(a?.data?.id || a?.id || a?.data?.trackerName || a?.data?.name || ""),
+              at: new Date().toISOString(),
+            }))
+            .filter(p => p.id);
+          // Best-effort inference of capture type from the first action.
+          const firstKind = (actions[0]?.type || "").toLowerCase();
+          const typeMap: Record<string, string> = {
+            log_entry: "tracker_entry",
+            create_expense: "expense",
+            log_income: "income",
+            create_obligation: "obligation",
+            create_task: "task",
+            create_event: "event",
+            create_habit: "habit",
+            create_profile: "profile_create",
+            create_tracker: "tracker_create",
+            create_goal: "note",
+          };
+          const inferredType = typeMap[firstKind] || (projections.length > 0 ? "note" : "unknown");
+          const self = await storage.getSelfProfile?.();
+          await storage.createCapture({
+            type: inferredType,
+            ownerProfileId: self?.id || null,
+            title: message.slice(0, 120),
+            rawInput: message,
+            structuredData: {},
+            metadata: { hasReply: !!(result as any)?.reply, actionCount: actions.length },
+            relationships: [],
+            source: "chat",
+            confidence: projections.length > 0 ? 0.9 : 0.4,
+            status: projections.length > 0 ? "projected" : "pending",
+            projections,
+          });
+        }
+      } catch (err) {
+        console.error("[capture] failed to record chat capture:", (err as Error).message);
+      }
       // Bug fix: chat may have created/updated profiles, trackers, expenses etc. via
       // internal AI tool calls. Bust the response cache BEFORE sending the response so
       // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale cache.
@@ -7436,6 +7487,54 @@ No emojis. No prose outside the JSON.`,
       seen.add(k); return true;
     });
     res.json({ rootId: id, nodes, edges: uniqEdges });
+  }));
+
+  // ============================================================
+  // Universal Captures (PR Y) — inbox for any data type
+  // ============================================================
+  app.get("/api/captures", asyncHandler(async (req, res) => {
+    if (!storage.getCaptures) return res.json([]);
+    const status = req.query.status ? String(req.query.status) : undefined;
+    const ownerProfileId = req.query.ownerProfileId ? String(req.query.ownerProfileId) : undefined;
+    const limit = req.query.limit ? Math.min(500, Number(req.query.limit)) : 100;
+    const captures = await storage.getCaptures({ status, ownerProfileId, limit });
+    res.json(captures);
+  }));
+
+  app.post("/api/captures", asyncHandler(async (req, res) => {
+    if (!storage.createCapture) return res.status(501).json({ error: "Captures not supported by this storage backend" });
+    const { insertCaptureSchema } = await import("@shared/schema");
+    const parsed = insertCaptureSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: "Invalid capture", details: parsed.error.flatten() });
+    // Default ownerProfileId to self when missing/null.
+    let ownerProfileId = parsed.data.ownerProfileId ?? null;
+    if (!ownerProfileId) {
+      const self = await storage.getSelfProfile?.();
+      if (self) ownerProfileId = self.id;
+    }
+    const capture = await storage.createCapture({ ...parsed.data, ownerProfileId });
+    res.json(capture);
+  }));
+
+  app.get("/api/captures/:id", asyncHandler(async (req, res) => {
+    if (!storage.getCapture) return res.status(404).json({ error: "Not found" });
+    const c = await storage.getCapture(req.params.id);
+    if (!c) return res.status(404).json({ error: "Not found" });
+    res.json(c);
+  }));
+
+  app.patch("/api/captures/:id", asyncHandler(async (req, res) => {
+    if (!storage.updateCapture) return res.status(501).json({ error: "Captures not supported" });
+    const updated = await storage.updateCapture(req.params.id, req.body || {});
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    res.json(updated);
+  }));
+
+  app.delete("/api/captures/:id", asyncHandler(async (req, res) => {
+    if (!storage.deleteCapture) return res.status(501).json({ error: "Captures not supported" });
+    const ok = await storage.deleteCapture(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Not found" });
+    res.json({ deleted: true });
   }));
 
   // Global async error handler — catches unhandled promise rejections from route handlers

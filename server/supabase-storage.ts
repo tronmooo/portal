@@ -5983,4 +5983,53 @@ export class SupabaseStorage implements IStorage {
   private async seedData(): Promise<void> {
     // Removed — no demo data in production
   }
+
+  // ============================================================
+  // Universal Captures (PR Y)
+  // ============================================================
+  // Stored in-memory for now — the captures table doesn't exist in
+  // Supabase yet. When the table is created, swap these for real
+  // .from("captures") calls. The IStorage interface stays the same
+  // so callers don't need to change.
+  private _captures: Map<string, import("@shared/schema").Capture> = new Map();
+
+  async getCaptures(opts?: { status?: string; ownerProfileId?: string; limit?: number }) {
+    let list = Array.from(this._captures.values());
+    if (opts?.status) list = list.filter(c => c.status === opts.status);
+    if (opts?.ownerProfileId) list = list.filter(c => c.ownerProfileId === opts.ownerProfileId);
+    list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    if (opts?.limit) list = list.slice(0, opts.limit);
+    return list;
+  }
+  async getCapture(id: string) { return this._captures.get(id); }
+  async createCapture(data: import("@shared/schema").InsertCapture): Promise<import("@shared/schema").Capture> {
+    const { randomUUID } = await import("crypto");
+    const now = new Date().toISOString();
+    const capture: import("@shared/schema").Capture = {
+      id: randomUUID(),
+      type: (data.type as any) || "unknown",
+      ownerProfileId: data.ownerProfileId ?? null,
+      title: data.title || "",
+      rawInput: data.rawInput,
+      structuredData: data.structuredData || {},
+      metadata: data.metadata || {},
+      relationships: data.relationships || [],
+      source: data.source || "chat",
+      confidence: data.confidence ?? 0.5,
+      status: (data.status as any) || "pending",
+      projections: data.projections || [],
+      clarifyingQuestion: data.clarifyingQuestion ?? null,
+      createdAt: now, updatedAt: now,
+    };
+    this._captures.set(capture.id, capture);
+    return capture;
+  }
+  async updateCapture(id: string, patch: Partial<import("@shared/schema").Capture>) {
+    const existing = this._captures.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...patch, id: existing.id, updatedAt: new Date().toISOString() };
+    this._captures.set(id, updated);
+    return updated;
+  }
+  async deleteCapture(id: string) { return this._captures.delete(id); }
 }

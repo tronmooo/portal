@@ -276,6 +276,13 @@ export interface IStorage {
   getDataVersion?(): Promise<number>;
   bumpDataVersion?(): Promise<number>;
   repairOwnershipConsistency?(): Promise<{ scanned: number; repaired: number; details: string[] }>;
+
+  // Universal Captures (PR Y) ---------------------------------------------
+  getCaptures?(opts?: { status?: string; ownerProfileId?: string; limit?: number }): Promise<import("@shared/schema").Capture[]>;
+  getCapture?(id: string): Promise<import("@shared/schema").Capture | undefined>;
+  createCapture?(data: import("@shared/schema").InsertCapture): Promise<import("@shared/schema").Capture>;
+  updateCapture?(id: string, patch: Partial<import("@shared/schema").Capture>): Promise<import("@shared/schema").Capture | undefined>;
+  deleteCapture?(id: string): Promise<boolean>;
 }
 
 // ---- Human-readable tracker value formatting ----
@@ -2205,6 +2212,47 @@ export class MemStorage implements IStorage {
   async createLiabilityPayment(_data: any): Promise<any> { throw new Error("MemStorage: liability payments not implemented"); }
   async updateLiabilityPayment(_id: string, _data: any): Promise<any> { return undefined; }
   async deleteLiabilityPayment(_id: string) { return false; }
+
+  // Universal Captures (PR Y) ---------------------------------------------
+  private captures: Map<string, import("@shared/schema").Capture> = new Map();
+  async getCaptures(opts?: { status?: string; ownerProfileId?: string; limit?: number }) {
+    let list = Array.from(this.captures.values());
+    if (opts?.status) list = list.filter(c => c.status === opts.status);
+    if (opts?.ownerProfileId) list = list.filter(c => c.ownerProfileId === opts.ownerProfileId);
+    list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    if (opts?.limit) list = list.slice(0, opts.limit);
+    return list;
+  }
+  async getCapture(id: string) { return this.captures.get(id); }
+  async createCapture(data: import("@shared/schema").InsertCapture): Promise<import("@shared/schema").Capture> {
+    const now = new Date().toISOString();
+    const capture: import("@shared/schema").Capture = {
+      id: randomUUID(),
+      type: (data.type as any) || "unknown",
+      ownerProfileId: data.ownerProfileId ?? null,
+      title: data.title || "",
+      rawInput: data.rawInput,
+      structuredData: data.structuredData || {},
+      metadata: data.metadata || {},
+      relationships: data.relationships || [],
+      source: data.source || "chat",
+      confidence: data.confidence ?? 0.5,
+      status: (data.status as any) || "pending",
+      projections: data.projections || [],
+      clarifyingQuestion: data.clarifyingQuestion ?? null,
+      createdAt: now, updatedAt: now,
+    };
+    this.captures.set(capture.id, capture);
+    return capture;
+  }
+  async updateCapture(id: string, patch: Partial<import("@shared/schema").Capture>) {
+    const existing = this.captures.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...patch, id: existing.id, updatedAt: new Date().toISOString() };
+    this.captures.set(id, updated);
+    return updated;
+  }
+  async deleteCapture(id: string) { return this.captures.delete(id); }
 }
 
 // Storage factory — uses Supabase if env vars are set, otherwise falls back to SQLite
