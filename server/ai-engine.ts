@@ -5174,6 +5174,51 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           if (knownFieldNames.has(k.toLowerCase())) continue;
           unknownFields.push(k);
         }
+
+        // AUTO-EXTEND tracker schema (2026-06-15, user request):
+        // "There is no scheme, AI should be able to handle every data type."
+        // If the AI logged fields that aren't on the tracker yet (e.g. "sugar"
+        // on a Nutrition tracker), add them to tracker.fields so the chart
+        // renders them going forward. Only extend with NUMERIC fields — text
+        // notes don't need their own column. Infer a sensible unit from the
+        // field name (g, mg, kcal, oz, etc.) so the headline reads right.
+        if (unknownFields.length > 0) {
+          const newFieldDefs: any[] = [];
+          for (const fname of unknownFields) {
+            const v = (normalizedValues as any)[fname];
+            if (typeof v !== "number" || !isFinite(v)) continue;
+            const lc = fname.toLowerCase();
+            // Heuristic unit inference — pick the most common physical unit
+            // for the field name. No match → leave unit empty.
+            let unit: string | undefined;
+            if (/(sugar|fiber|protein|carb|fat|sodium|cholesterol|caffeine)/.test(lc)) unit = "g";
+            else if (/(potassium|calcium|iron|magnesium|zinc|vitamin)/.test(lc)) unit = "mg";
+            else if (/calorie|kcal/.test(lc)) unit = "kcal";
+            else if (/water|hydration|fluid|oz/.test(lc)) unit = "oz";
+            else if (/duration|minutes|time/.test(lc)) unit = "min";
+            else if (/distance|miles/.test(lc)) unit = "mi";
+            else if (/steps/.test(lc)) unit = "steps";
+            else if (/reps/.test(lc)) unit = "reps";
+            else if (/sets/.test(lc)) unit = "sets";
+            else if (/weight|lbs|pounds/.test(lc)) unit = "lbs";
+            else if (/bpm|pulse|heart/.test(lc)) unit = "bpm";
+            else if (/percent|%/.test(lc)) unit = "%";
+            newFieldDefs.push({ name: fname, type: "number", unit });
+          }
+          if (newFieldDefs.length > 0) {
+            const extendedFields = [...(tracker.fields || []), ...newFieldDefs];
+            try {
+              const updated = await storage.updateTracker(tracker.id, { fields: extendedFields });
+              if (updated) {
+                tracker = updated;
+                logger.info("ai", `Auto-extended ${tracker.name} with fields: ${newFieldDefs.map(f => f.name).join(", ")}`);
+              }
+            } catch (err) {
+              logger.info("ai", `Failed to auto-extend ${tracker.name} fields: ${(err as Error).message}`);
+            }
+          }
+        }
+
         const entry = await storage.logEntry({ trackerId: tracker.id, values: normalizedValues, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
