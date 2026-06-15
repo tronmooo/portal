@@ -129,7 +129,7 @@ async function syncLiabilityObligation(profileId: string): Promise<void> {
     console.warn("[syncLiabilityObligation] hook error:", err?.message || err);
   }
 }
-import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue } from "./ai-engine";
+import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue, classifyCapture } from "./ai-engine";
 import { analyzeSmartFill, renderFilledPdf, type SmartFillSource, type FillFieldInput } from "./smart-fill";
 import { aiDecide, aiPickIndex } from "./ai-decide";
 
@@ -740,15 +740,43 @@ export async function registerRoutes(
       // [P4.5] 4th arg is the engine options object; cast keeps this compiling
       // while ai-engine.ts gains `profileFilterIds` support (the engine ignores
       // unknown extra args until then, so this is forward/backward safe).
-      const result = await (processMessage as any)(sanitize(message), Array.isArray(history) ? history : undefined, userId, { profileFilterIds });
+      //
+      // PR Z: classifier runs in parallel with processMessage. Cheap Haiku call
+      // adds ~200-400ms but parallelism hides it. Failures fall back to a
+      // heuristic — chat never breaks because of a classifier error.
+      const classifierContextPromise = (async () => {
+        try {
+          const profiles = await storage.getProfiles().catch(() => [] as any[]);
+          const self = await (storage.getSelfProfile?.() ?? Promise.resolve(undefined));
+          return {
+            profiles: (profiles || []).map((p: any) => ({ id: p.id, name: p.name, type: p.type })),
+            selfProfileId: (self as any)?.id || null,
+          };
+        } catch {
+          return { profiles: [], selfProfileId: null };
+        }
+      })();
+      const cleanMessage = sanitize(message);
+      const [result, classification] = await Promise.all([
+        (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, { profileFilterIds }),
+        classifierContextPromise.then(ctx => classifyCapture(cleanMessage, ctx).catch(err => {
+          console.warn("[classifyCapture] swallowed error:", (err as Error).message);
+          return null;
+        })),
+      ]);
       if (idem) setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
 
-      // ─── Universal Capture (PR Y) ──────────────────────────────────
+      // ─── Universal Capture (PR Y + Z) ──────────────────────────────
       // Record this message as a Capture so we never lose user input,
       // even when the AI doesn't route it anywhere or when confidence
       // was too low to act. Projections (actions the AI actually took)
       // are attached so each capture has an audit trail to the typed
       // rows it produced. Never throw — capture is best-effort.
+      //
+      // PR Z: uses real classifier output (type, owner, structuredData,
+      // confidence) instead of the PR Y heuristic. When confidence < 0.7
+      // and no projections, the clarifyingQuestion is appended to the
+      // chat reply so the user can disambiguate in the next turn.
       try {
         if (storage.createCapture) {
           const actions: any[] = Array.isArray((result as any)?.actions) ? (result as any).actions : [];
@@ -760,8 +788,8 @@ export async function registerRoutes(
               at: new Date().toISOString(),
             }))
             .filter(p => p.id);
-          // Best-effort inference of capture type from the first action.
-          const firstKind = (actions[0]?.type || "").toLowerCase();
+
+          // Prefer classifier output; fall back to action-derived heuristic.
           const typeMap: Record<string, string> = {
             log_entry: "tracker_entry",
             create_expense: "expense",
@@ -774,21 +802,57 @@ export async function registerRoutes(
             create_tracker: "tracker_create",
             create_goal: "note",
           };
-          const inferredType = typeMap[firstKind] || (projections.length > 0 ? "note" : "unknown");
+          const firstKind = (actions[0]?.type || "").toLowerCase();
+          const heuristicType = typeMap[firstKind] || (projections.length > 0 ? "note" : "unknown");
           const self = await storage.getSelfProfile?.();
+          const captureType = classification?.type || heuristicType;
+          const captureOwner = classification?.ownerProfileId ?? (self?.id || null);
+          const captureTitle = (classification?.title && classification.title.trim())
+            ? classification.title.trim().slice(0, 120)
+            : message.slice(0, 120);
+          // Confidence: prefer classifier; bump to 0.9+ if projections
+          // succeeded (we KNOW it routed somewhere). Never lower the
+          // classifier's confidence below what it returned.
+          const baseConf = typeof classification?.confidence === "number" ? classification.confidence : (projections.length > 0 ? 0.9 : 0.4);
+          const captureConf = projections.length > 0 ? Math.max(baseConf, 0.9) : baseConf;
+
           await storage.createCapture({
-            type: inferredType,
-            ownerProfileId: self?.id || null,
-            title: message.slice(0, 120),
+            type: captureType,
+            ownerProfileId: captureOwner,
+            title: captureTitle,
             rawInput: message,
-            structuredData: {},
-            metadata: { hasReply: !!(result as any)?.reply, actionCount: actions.length },
-            relationships: [],
+            structuredData: classification?.structuredData || {},
+            metadata: {
+              ...(classification?.metadata || {}),
+              hasReply: !!(result as any)?.reply,
+              actionCount: actions.length,
+              ownerName: classification?.ownerName || null,
+            },
+            relationships: classification?.relationships || [],
             source: "chat",
-            confidence: projections.length > 0 ? 0.9 : 0.4,
+            confidence: captureConf,
             status: projections.length > 0 ? "projected" : "pending",
             projections,
+            clarifyingQuestion: classification?.clarifyingQuestion || null,
           });
+
+          // Surface the clarifying question in the chat reply when the
+          // classifier is unsure AND nothing was routed. We only append
+          // (never replace) so the AI's own response stays intact.
+          if (
+            classification?.clarifyingQuestion &&
+            captureConf < 0.7 &&
+            projections.length === 0 &&
+            (result as any) &&
+            typeof (result as any).reply === "string"
+          ) {
+            const existing = (result as any).reply.trim();
+            const q = classification.clarifyingQuestion.trim();
+            // Avoid duplicating the question if the AI already asked it.
+            if (!existing.toLowerCase().includes(q.toLowerCase().slice(0, 40))) {
+              (result as any).reply = existing ? `${existing}\n\n${q}` : q;
+            }
+          }
         }
       } catch (err) {
         console.error("[capture] failed to record chat capture:", (err as Error).message);

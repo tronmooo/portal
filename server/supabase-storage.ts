@@ -5985,15 +5985,59 @@ export class SupabaseStorage implements IStorage {
   }
 
   // ============================================================
-  // Universal Captures (PR Y)
+  // Universal Captures (PR Y/Z)
   // ============================================================
-  // Stored in-memory for now — the captures table doesn't exist in
-  // Supabase yet. When the table is created, swap these for real
-  // .from("captures") calls. The IStorage interface stays the same
-  // so callers don't need to change.
+  // Primary backend is the `captures` table (migration 20260615).
+  // If the table doesn't exist yet (e.g. migration not run on this
+  // instance) we transparently fall back to an in-memory Map so the
+  // API still works — capture data is the safety net for the user,
+  // so we never want to refuse a write because the table is missing.
   private _captures: Map<string, import("@shared/schema").Capture> = new Map();
+  private _capturesTableMissing = false;
+
+  private _rowToCapture(row: any): import("@shared/schema").Capture {
+    return {
+      id: row.id,
+      type: row.type || "unknown",
+      ownerProfileId: row.owner_profile_id ?? null,
+      title: row.title || "",
+      rawInput: row.raw_input || "",
+      structuredData: row.structured_data || {},
+      metadata: row.metadata || {},
+      relationships: row.relationships || [],
+      source: row.source || "chat",
+      confidence: typeof row.confidence === "number" ? row.confidence : Number(row.confidence ?? 0.5),
+      status: row.status || "pending",
+      projections: row.projections || [],
+      clarifyingQuestion: row.clarifying_question ?? null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private _isMissingTable(err: any): boolean {
+    const code = err?.code || err?.error?.code || "";
+    const msg = String(err?.message || err?.error?.message || "").toLowerCase();
+    return code === "42P01" || code === "PGRST205" || msg.includes("could not find the table") || msg.includes("does not exist");
+  }
 
   async getCaptures(opts?: { status?: string; ownerProfileId?: string; limit?: number }) {
+    if (!this._capturesTableMissing) {
+      let q = this.supabase.from("captures").select("*").eq("user_id", this.userId).order("created_at", { ascending: false });
+      if (opts?.status) q = q.eq("status", opts.status);
+      if (opts?.ownerProfileId) q = q.eq("owner_profile_id", opts.ownerProfileId);
+      if (opts?.limit) q = q.limit(opts.limit);
+      const { data, error } = await q;
+      if (error) {
+        if (this._isMissingTable(error)) {
+          this._capturesTableMissing = true;
+        } else {
+          throw error;
+        }
+      } else {
+        return (data || []).map((r: any) => this._rowToCapture(r));
+      }
+    }
     let list = Array.from(this._captures.values());
     if (opts?.status) list = list.filter(c => c.status === opts.status);
     if (opts?.ownerProfileId) list = list.filter(c => c.ownerProfileId === opts.ownerProfileId);
@@ -6001,35 +6045,95 @@ export class SupabaseStorage implements IStorage {
     if (opts?.limit) list = list.slice(0, opts.limit);
     return list;
   }
-  async getCapture(id: string) { return this._captures.get(id); }
+
+  async getCapture(id: string) {
+    if (!this._capturesTableMissing) {
+      const { data, error } = await this.supabase.from("captures").select("*").eq("id", id).eq("user_id", this.userId).maybeSingle();
+      if (error) {
+        if (this._isMissingTable(error)) { this._capturesTableMissing = true; }
+        else { throw error; }
+      } else {
+        return data ? this._rowToCapture(data) : undefined;
+      }
+    }
+    return this._captures.get(id);
+  }
+
   async createCapture(data: import("@shared/schema").InsertCapture): Promise<import("@shared/schema").Capture> {
     const { randomUUID } = await import("crypto");
+    const id = randomUUID();
     const now = new Date().toISOString();
-    const capture: import("@shared/schema").Capture = {
-      id: randomUUID(),
-      type: (data.type as any) || "unknown",
-      ownerProfileId: data.ownerProfileId ?? null,
+    const row = {
+      id,
+      user_id: this.userId,
+      owner_profile_id: data.ownerProfileId ?? null,
+      type: data.type || "unknown",
       title: data.title || "",
-      rawInput: data.rawInput,
-      structuredData: data.structuredData || {},
+      raw_input: data.rawInput,
+      structured_data: data.structuredData || {},
       metadata: data.metadata || {},
       relationships: data.relationships || [],
       source: data.source || "chat",
       confidence: data.confidence ?? 0.5,
-      status: (data.status as any) || "pending",
+      status: data.status || "pending",
       projections: data.projections || [],
-      clarifyingQuestion: data.clarifyingQuestion ?? null,
-      createdAt: now, updatedAt: now,
+      clarifying_question: data.clarifyingQuestion ?? null,
+      created_at: now,
+      updated_at: now,
     };
+    if (!this._capturesTableMissing) {
+      const { data: inserted, error } = await this.supabase.from("captures").insert(row).select().single();
+      if (error) {
+        if (this._isMissingTable(error)) { this._capturesTableMissing = true; }
+        else { throw error; }
+      } else {
+        return this._rowToCapture(inserted);
+      }
+    }
+    const capture = this._rowToCapture(row);
     this._captures.set(capture.id, capture);
     return capture;
   }
+
   async updateCapture(id: string, patch: Partial<import("@shared/schema").Capture>) {
+    if (!this._capturesTableMissing) {
+      const update: any = { updated_at: new Date().toISOString() };
+      if (patch.type !== undefined) update.type = patch.type;
+      if (patch.ownerProfileId !== undefined) update.owner_profile_id = patch.ownerProfileId;
+      if (patch.title !== undefined) update.title = patch.title;
+      if (patch.structuredData !== undefined) update.structured_data = patch.structuredData;
+      if (patch.metadata !== undefined) update.metadata = patch.metadata;
+      if (patch.relationships !== undefined) update.relationships = patch.relationships;
+      if (patch.source !== undefined) update.source = patch.source;
+      if (patch.confidence !== undefined) update.confidence = patch.confidence;
+      if (patch.status !== undefined) update.status = patch.status;
+      if (patch.projections !== undefined) update.projections = patch.projections;
+      if (patch.clarifyingQuestion !== undefined) update.clarifying_question = patch.clarifyingQuestion;
+      const { data, error } = await this.supabase.from("captures").update(update).eq("id", id).eq("user_id", this.userId).select().maybeSingle();
+      if (error) {
+        if (this._isMissingTable(error)) { this._capturesTableMissing = true; }
+        else { throw error; }
+      } else {
+        return data ? this._rowToCapture(data) : undefined;
+      }
+    }
     const existing = this._captures.get(id);
     if (!existing) return undefined;
     const updated = { ...existing, ...patch, id: existing.id, updatedAt: new Date().toISOString() };
     this._captures.set(id, updated);
     return updated;
   }
-  async deleteCapture(id: string) { return this._captures.delete(id); }
+
+  async deleteCapture(id: string) {
+    if (!this._capturesTableMissing) {
+      const { error } = await this.supabase.from("captures").delete().eq("id", id).eq("user_id", this.userId);
+      if (error) {
+        if (this._isMissingTable(error)) { this._capturesTableMissing = true; }
+        else { throw error; }
+      } else {
+        return true;
+      }
+    }
+    return this._captures.delete(id);
+  }
 }

@@ -365,6 +365,206 @@ export async function estimateAssetValue(profile: { type: string; name: string; 
 }
 
 // ============================================================
+// UNIVERSAL CAPTURE CLASSIFIER (PR Z)
+// ============================================================
+// Free-form classifier for any user input. Returns a structured guess
+// at what the data is, who it belongs to, and how confident we are.
+// Used by /api/chat to pre-classify messages before recording captures.
+//
+// CRITICAL: `type` is a free-form string, NOT a fixed enum. The spec
+// says: "no hardcoded field limits, support any data type". Common
+// values include "expense", "tracker_entry", "task", etc., but the
+// classifier may also emit "recipe", "workout", "trip", "idea" — any
+// label that fits the input. Downstream handlers must tolerate this.
+
+export interface CaptureClassification {
+  type: string;
+  ownerProfileId: string | null;
+  ownerName?: string | null;
+  title: string;
+  structuredData: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  relationships: Array<{ kind: string; id: string; label?: string }>;
+  confidence: number;
+  clarifyingQuestion?: string | null;
+}
+
+export interface ClassifyCaptureContext {
+  /** Known profiles available for owner resolution. */
+  profiles?: Array<{ id: string; name: string; type?: string }>;
+  /** The "Self" profile id — used as the default owner when unclear. */
+  selfProfileId?: string | null;
+  /** Recent capture/chat snippets for disambiguation (optional). */
+  recentContext?: string;
+}
+
+function heuristicClassify(rawInput: string, ctx?: ClassifyCaptureContext): CaptureClassification {
+  // Very light heuristic fallback when the LLM call fails. Never throws.
+  const text = (rawInput || "").trim();
+  const lower = text.toLowerCase();
+
+  let type = "unknown";
+  if (/\$\s?\d|\bpaid\b|\bbought\b|\bspent\b|\bcost\b/.test(lower)) type = "expense";
+  else if (/\bweight\b|\bbp\b|\bblood pressure\b|\bsteps\b|\bsugar\b|\bcalories\b|\bwater\b|\bsleep\b|\bmiles?\b|\bkm\b|\bworkout\b|\bgym\b|\brun\b|\bate\b|\bdrank\b/.test(lower)) type = "tracker_entry";
+  else if (/\btodo\b|\btask\b|\bremind me\b|\bneed to\b|\bhave to\b/.test(lower)) type = "task";
+  else if (/\bappointment\b|\bmeeting\b|\bcalendar\b|\bschedule\b/.test(lower)) type = "event";
+  else if (/\bnote\b|\bthought\b|\bidea\b/.test(lower)) type = "note";
+
+  // Owner heuristic: scan first 80 chars for a profile name (other than self).
+  let ownerProfileId: string | null = ctx?.selfProfileId ?? null;
+  let ownerName: string | null = null;
+  if (ctx?.profiles?.length) {
+    const head = text.slice(0, 80).toLowerCase();
+    for (const p of ctx.profiles) {
+      if (!p?.name) continue;
+      const n = p.name.toLowerCase();
+      // Word-boundary match, skip very short names (<3 chars) to avoid false hits.
+      if (n.length >= 3 && new RegExp(`\\b${n.replace(/[.*+?^${}()|[\\\]\\\\]/g, "\\\\$&")}\\b`).test(head)) {
+        ownerProfileId = p.id;
+        ownerName = p.name;
+        break;
+      }
+    }
+  }
+
+  const title = text.length > 80 ? text.slice(0, 77) + "…" : text;
+  return {
+    type,
+    ownerProfileId,
+    ownerName,
+    title,
+    structuredData: {},
+    metadata: { classifier: "heuristic-fallback" },
+    relationships: [],
+    confidence: 0.3,
+    clarifyingQuestion: type === "unknown" ? "What is this about?" : null,
+  };
+}
+
+/**
+ * Classify a piece of raw user input into the universal Capture model.
+ * Uses Claude Haiku (cheap, fast) for structured extraction. Falls back
+ * to a tiny heuristic if the API call fails so the chat path never breaks.
+ */
+export async function classifyCapture(
+  rawInput: string,
+  ctx?: ClassifyCaptureContext
+): Promise<CaptureClassification> {
+  const text = (rawInput || "").trim();
+  if (!text) {
+    return {
+      type: "unknown",
+      ownerProfileId: ctx?.selfProfileId ?? null,
+      ownerName: null,
+      title: "",
+      structuredData: {},
+      metadata: { classifier: "empty-input" },
+      relationships: [],
+      confidence: 0,
+      clarifyingQuestion: null,
+    };
+  }
+
+  const profileList = (ctx?.profiles || [])
+    .slice(0, 60) // hard cap to keep prompt small
+    .map(p => `- ${p.name}${p.type ? ` (${p.type})` : ""} [id:${p.id}]`)
+    .join("\n");
+
+  const prompt = `You are a universal data classifier for a personal life-management app. The user sends free-form text; you decide what it represents, who it belongs to, and extract the important values.
+
+USER INPUT:
+"""
+${text}
+"""
+
+${profileList ? `KNOWN PROFILES (people, pets, vehicles, assets, etc.):\n${profileList}\n` : ""}${ctx?.selfProfileId ? `SELF PROFILE ID: ${ctx.selfProfileId}\n` : ""}${ctx?.recentContext ? `\nRECENT CONTEXT:\n${ctx.recentContext}\n` : ""}
+Return ONLY a JSON object with this shape (no markdown, no commentary):
+{
+  "type": "<short snake_case label describing what this is — e.g. expense, tracker_entry, task, event, note, recipe, workout, trip, medical_record, idea — pick whatever fits best, NOT limited to a fixed list>",
+  "ownerProfileId": "<id of the profile this belongs to, or null if unclear/self>",
+  "ownerName": "<human-readable owner name, or null>",
+  "title": "<short label, max 60 chars>",
+  "structuredData": { /* extracted fields — amounts, dates, units, names, etc. Use natural keys. */ },
+  "metadata": { /* hints like {unit:'g'}, {currency:'USD'}, {category:'gym'}, source-specific notes */ },
+  "relationships": [ /* {kind, id, label} for any profile/asset/etc this links to */ ],
+  "confidence": <0..1 — how certain you are about type+owner+structuredData>,
+  "clarifyingQuestion": "<one short question to ask the user, or null if confidence is high>"
+}
+
+RULES (CRITICAL):
+- NEVER hallucinate. If a value isn't in the input, leave it out of structuredData.
+- Preserve the user's units verbatim in metadata (e.g. {unit:'g'}, {unit:'lbs'}).
+- If the input mentions a known profile by name, set ownerProfileId to that profile's id.
+- If the input is clearly about the user themselves (first person, no other name), set ownerProfileId to SELF PROFILE ID.
+- If owner is genuinely unclear, set ownerProfileId to null and ask a clarifyingQuestion.
+- confidence < 0.7 → MUST include a clarifyingQuestion.
+- confidence >= 0.7 → clarifyingQuestion should be null.
+- type is free-form: pick the most natural label. Do NOT force into a small enum.`;
+
+  try {
+    const model = process.env.ANTHROPIC_CLASSIFIER_MODEL || "claude-haiku-4-5-20251001";
+    const response = await getClient().messages.create({
+      model,
+      max_tokens: 800,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const out = response.content[0]?.type === "text" ? response.content[0].text : "";
+    const jsonMatch = out.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("classifier returned no JSON");
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    // Normalize / defensively validate.
+    const type = typeof parsed.type === "string" && parsed.type.trim() ? parsed.type.trim() : "unknown";
+    let ownerProfileId: string | null = null;
+    if (typeof parsed.ownerProfileId === "string" && parsed.ownerProfileId.trim() && parsed.ownerProfileId !== "null") {
+      ownerProfileId = parsed.ownerProfileId.trim();
+    } else if (ctx?.selfProfileId) {
+      // Default to Self when unclear (per user's design decision).
+      ownerProfileId = ctx.selfProfileId;
+    }
+    const ownerName = typeof parsed.ownerName === "string" ? parsed.ownerName : null;
+    const title = typeof parsed.title === "string" && parsed.title.trim()
+      ? parsed.title.trim().slice(0, 120)
+      : (text.length > 80 ? text.slice(0, 77) + "…" : text);
+    const structuredData = parsed.structuredData && typeof parsed.structuredData === "object" && !Array.isArray(parsed.structuredData)
+      ? parsed.structuredData as Record<string, unknown>
+      : {};
+    const metadata = parsed.metadata && typeof parsed.metadata === "object" && !Array.isArray(parsed.metadata)
+      ? parsed.metadata as Record<string, unknown>
+      : {};
+    const relationships = Array.isArray(parsed.relationships)
+      ? parsed.relationships.filter((r: any) => r && typeof r.kind === "string" && typeof r.id === "string")
+      : [];
+    let confidence = Number(parsed.confidence);
+    if (!Number.isFinite(confidence)) confidence = 0.5;
+    confidence = Math.max(0, Math.min(1, confidence));
+    let clarifyingQuestion: string | null = null;
+    if (typeof parsed.clarifyingQuestion === "string" && parsed.clarifyingQuestion.trim()) {
+      clarifyingQuestion = parsed.clarifyingQuestion.trim();
+    }
+    // Enforce: low confidence MUST have a question.
+    if (confidence < 0.7 && !clarifyingQuestion) {
+      clarifyingQuestion = "Can you clarify what this is about?";
+    }
+
+    return {
+      type,
+      ownerProfileId,
+      ownerName,
+      title,
+      structuredData,
+      metadata: { ...metadata, classifier: "haiku", model },
+      relationships,
+      confidence,
+      clarifyingQuestion,
+    };
+  } catch (e) {
+    console.warn("[classifyCapture] LLM call failed, using heuristic fallback:", e);
+    return heuristicClassify(text, ctx);
+  }
+}
+
+// ============================================================
 // CONTEXT CACHE — short-lived cache for AI context data (avoids repeated DB queries)
 // ============================================================
 
