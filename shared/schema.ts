@@ -1179,3 +1179,95 @@ export type InsertLiabilityPayment = z.input<typeof insertLiabilityPaymentSchema
 export function isLiabilityType(t: string | null | undefined): boolean {
   return t === "liability" || t === "loan";
 }
+
+// =============================================================================
+// Universal Capture Layer (PR Y)
+// =============================================================================
+// A Capture is the universal envelope for ANY piece of information the user
+// gives the app — a text message, a document, a spoken note, a sensor reading.
+// Every chat input lands as a Capture first; downstream handlers (expense
+// creator, tracker logger, etc.) read from it and produce "projections" —
+// concrete rows in the existing typed tables (expenses, trackers, etc.).
+//
+// This lets the app accept data even when its type is unknown, low-confidence,
+// or doesn't fit any existing schema. The raw input is never lost.
+// =============================================================================
+
+export type CaptureType =
+  | "expense" | "income" | "obligation"
+  | "tracker_entry" | "tracker_create"
+  | "task" | "event" | "reminder" | "habit"
+  | "profile_fact" | "profile_create"
+  | "asset" | "liability"
+  | "document" | "medical_record"
+  | "note" | "unknown";
+
+export type CaptureStatus =
+  | "pending"           // saved, waiting on user confirmation (low confidence)
+  | "projected"         // successfully routed to a typed row
+  | "dismissed"         // user discarded
+  | "failed";           // routing attempted and errored
+
+export interface CaptureProjection {
+  /** Which typed table the capture became (e.g. "expense", "tracker_entry"). */
+  kind: string;
+  /** The id of the row that was created. */
+  id: string;
+  /** When the projection was made. */
+  at: string;
+}
+
+export interface Capture {
+  id: string;
+  /** Best guess at the entity type. "unknown" until classified. */
+  type: CaptureType;
+  /** Profile this capture belongs to. Defaults to self when unclear. */
+  ownerProfileId: string | null;
+  /** Short human-readable label. */
+  title: string;
+  /** The raw input as received — NEVER mutated. */
+  rawInput: string;
+  /** Best-effort extraction into named fields. May contain anything. */
+  structuredData: Record<string, unknown>;
+  /** Anything that doesn't fit structuredData (units, hints, source-specific). */
+  metadata: Record<string, unknown>;
+  /** Other entity ids this capture relates to (assets, vehicles, people, etc.). */
+  relationships: Array<{ kind: string; id: string; label?: string }>;
+  /** Where it came from: "chat" | "document" | "api" | "voice" | etc. */
+  source: string;
+  /** Classifier confidence 0–1. */
+  confidence: number;
+  /** State of this capture. */
+  status: CaptureStatus;
+  /** Typed rows produced from this capture (one capture can produce many). */
+  projections: CaptureProjection[];
+  /** Optional follow-up question the AI wants to ask the user. */
+  clarifyingQuestion?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const insertCaptureSchema = z.object({
+  type: z.string().default("unknown"),
+  ownerProfileId: z.string().uuid().nullable().optional(),
+  title: z.string().default(""),
+  rawInput: z.string(),
+  structuredData: z.record(z.unknown()).default({}),
+  metadata: z.record(z.unknown()).default({}),
+  relationships: z.array(z.object({
+    kind: z.string(),
+    id: z.string(),
+    label: z.string().optional(),
+  })).default([]),
+  source: z.string().default("chat"),
+  confidence: z.number().min(0).max(1).default(0.5),
+  status: z.enum(["pending", "projected", "dismissed", "failed"]).default("pending"),
+  projections: z.array(z.object({
+    kind: z.string(),
+    id: z.string(),
+    at: z.string(),
+  })).default([]),
+  clarifyingQuestion: z.string().nullable().optional(),
+});
+export type InsertCapture = z.input<typeof insertCaptureSchema>;
+
