@@ -653,13 +653,26 @@ function ObligationOccurrencePanel() {
 // pattern: shows everything about the time-based commitment + all the actions
 // the user might take on it, with deep-links back to the source object
 // (asset/document/profile) that created it.
+// Wrapper that mounts the actual drawer body only when `ob` is non-null. This
+// keeps a stable hook order regardless of whether the drawer is open: the
+// wrapper has zero hooks, and `ObligationDrawerInner` only mounts/unmounts
+// (never re-renders with a different hook count). Previously this was a single
+// component with an `if (!ob) return null` AFTER several `useState` calls and
+// BEFORE four `useMutation` calls -- which caused React error #310 (rendered
+// more hooks than the previous render) the moment a user clicked an obligation
+// row to open the drawer (e.g. on `/calendar?tab=obligations`).
 function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () => void }) {
+  if (!ob) return null;
+  // `key={ob.id}` forces a fresh mount per obligation so internal state
+  // (rescheduleDate, etc.) is seeded from the right obligation each time.
+  return <ObligationDrawerInner key={ob.id} ob={ob} onClose={onClose} />;
+}
+
+function ObligationDrawerInner({ ob, onClose }: { ob: Obligation; onClose: () => void }) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-
-  if (!ob) return null;
 
   const kind = (ob.kind as ObligationKind) || "bill";
   const meta = OBLIGATION_KIND_META[kind];
@@ -672,6 +685,29 @@ function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () 
   const linked = linkedSourceRoute(ob);
   const nextThree = nextOccurrencesFrom(ob.nextDueDate, ob.frequency, 3);
   const seriesSummary = occurrenceSeries(ob.nextDueDate, (ob as any).recurrenceEnd || null, ob.frequency);
+
+  // Per-obligation calendar: pull this obligation's materialized occurrences so
+  // the drawer can show a focused timeline. Falls back to nextThree (above)
+  // when the materialized table is empty (one-time bills, fresh obligations).
+  const { data: occurrencesData } = useQuery<any>({
+    queryKey: ["/api/obligation-occurrences", ob.id],
+  });
+  const myOccurrences = useMemo(() => {
+    const list = Array.isArray(occurrencesData)
+      ? occurrencesData
+      : Array.isArray((occurrencesData as any)?.occurrences)
+        ? (occurrencesData as any).occurrences
+        : [];
+    const todayIso = new Date().toISOString().slice(0, 10);
+    return list
+      .filter((o: any) => (o?.obligation_id || o?.obligationId || o?.obligation?.id) === ob.id)
+      .filter((o: any) => {
+        const d = String(o?.due_at || o?.dueAt || "").slice(0, 10);
+        return d >= todayIso; // future-and-today only for the mini calendar
+      })
+      .sort((a: any, b: any) => String(a?.due_at || a?.dueAt || "").localeCompare(String(b?.due_at || b?.dueAt || "")))
+      .slice(0, 12);
+  }, [occurrencesData, ob.id]);
 
   const payMut = useMutation<unknown, Error, void, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: () => apiRequest("POST", `/api/obligations/${ob.id}/pay`, { amount: ob.amount }),
@@ -797,11 +833,11 @@ function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () 
           )}
         </div>
 
-        {/* Schedule summary + next 3 occurrences */}
+        {/* Schedule summary + this obligation's upcoming calendar */}
         {ob.frequency !== "once" && (
           <div className="border-t border-border/40 pt-3 space-y-2">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Schedule</p>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">This obligation's calendar</p>
               {seriesSummary && (
                 <span className="text-[11px] tabular-nums text-muted-foreground">
                   {seriesSummary.count} occurrence{seriesSummary.count === 1 ? "" : "s"}
@@ -814,7 +850,30 @@ function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () 
                 {seriesSummary.first} → {seriesSummary.last}
               </p>
             )}
-            {nextThree.length > 0 && (
+            {myOccurrences.length > 0 ? (
+              <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                {myOccurrences.map((o: any) => {
+                  const iso = String(o?.due_at || o?.dueAt || "").slice(0, 10);
+                  const d = iso ? new Date(iso + "T00:00:00") : null;
+                  const status = String(o?.status || "pending");
+                  const isDone = status === "done" || status === "completed";
+                  const isSkipped = status === "skipped";
+                  return (
+                    <div key={String(o?.id ?? iso)} className="flex items-center justify-between gap-2 text-xs px-2 py-1 rounded border border-border/40 bg-muted/30" data-testid={`drawer-occurrence-${o?.id ?? iso}`}>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <CalIcon className="h-3 w-3 shrink-0 opacity-60" />
+                        <span className="tabular-nums truncate">
+                          {d ? d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : iso}
+                        </span>
+                      </div>
+                      <span className={`text-[10px] uppercase tracking-wide ${isDone ? "text-green-600" : isSkipped ? "text-muted-foreground line-through" : ob.amount > 0 ? "tabular-nums" : "text-muted-foreground"}`}>
+                        {isDone ? "Paid" : isSkipped ? "Skipped" : ob.amount > 0 ? `$${Number(ob.amount).toFixed(2)}` : "Pending"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : nextThree.length > 0 ? (
               <div className="flex gap-1.5 flex-wrap">
                 {nextThree.map((d, i) => (
                   <Badge key={i} variant="outline" className="text-[10px] h-5">
@@ -822,6 +881,8 @@ function ObligationDrawer({ ob, onClose }: { ob: Obligation | null; onClose: () 
                   </Badge>
                 ))}
               </div>
+            ) : (
+              <p className="text-[11px] text-muted-foreground italic">No upcoming occurrences.</p>
             )}
           </div>
         )}
