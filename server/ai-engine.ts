@@ -2755,8 +2755,9 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         name: { type: "string", description: "Obligation name" },
         amount: { type: "number", description: "Amount" },
         frequency: { type: "string", enum: ["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"], description: "Payment frequency" },
-        nextDueDate: { type: "string", description: "Next due date (YYYY-MM-DD)" },
-        category: { type: "string", description: "Category (rent, utilities, insurance, subscription, loan, etc.)" },
+        nextDueDate: { type: "string", description: "Next due date as an ISO date string (YYYY-MM-DD). Convert natural language like 'the 30th', 'on the 15th of each month', 'next Friday', 'June 30' into an exact YYYY-MM-DD. Example: 'due on the 30th of each month' when today is 2026-06-16 → nextDueDate: '2026-06-30'. If the named day already passed this month, use NEXT month (e.g. today is the 20th and user says 'the 5th' → use NEXT month's 5th)." },
+        recurrenceEnd: { type: "string", description: "Optional ISO date (YYYY-MM-DD) when the recurrence ENDS. Pass this when the user gives a time-bounded duration like 'for the next year' (→ today + 12 months), 'for 6 months', 'until December', 'through 2027'. If omitted, the obligation recurs indefinitely. Example: today is 2026-06-16, user says 'for the next year' → recurrenceEnd: '2027-06-16'." },
+        category: { type: "string", description: "Category (rent, utilities, insurance, subscription, loan, phone, internet, etc.)" },
         autopay: { type: "boolean", description: "Whether this is on autopay" },
         forProfile: { type: "string", description: "Name of the person/pet this obligation belongs to (e.g. 'Max', 'Mom', 'Luna'). The auto-created subscription profile will be nested under this person/pet. ALWAYS set this when the user mentions a specific person or pet." },
       },
@@ -7044,20 +7045,39 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
 
-      // NW-13: dedupe by (name + owning profile), not name alone. Jim can have
-      // his own Netflix even if Self (or anyone else) already has one. A match
-      // only counts when the existing obligation is linked to the SAME profile
-      // we are creating for (or both are unscoped / Self-default).
+      // NW-13 / PR AB: dedupe by (name + owning profile + amount + frequency).
+      // Name-only dedup silently dropped legitimate user actions like
+      // "add a recurring phone bill of $80/month due on the 30th" when an
+      // OLDER 'Phone Bill' obligation already existed at $60. The user got
+      // a fake confirmation but no new obligation, no new calendar entries,
+      // and no updated due date. A match now requires AMOUNT and FREQUENCY
+      // to align too — otherwise the user clearly means a different bill.
       const existingObs = await storage.getObligations();
       const nameLC = (input.name || "").toLowerCase();
+      const newAmount = parseFloat(input.amount) || 0;
+      // Normalize frequency for dedup (mirrors BUG-A normalization below).
+      const _DUP_FREQ_ALIASES: Record<string, string> = { "one-time": "once", "onetime": "once", "one time": "once", "annual": "yearly", "annually": "yearly", "bi-weekly": "biweekly", "bimonthly": "monthly" };
+      const _rawFreqForDup = String(input.frequency || "monthly").toLowerCase().trim();
+      const newFrequency = _DUP_FREQ_ALIASES[_rawFreqForDup] || _rawFreqForDup;
       const dupOb = existingObs.find(o => {
         if (o.name.toLowerCase() !== nameLC) return false;
-        if (!preResolvedTargetProfileId) return true; // unscoped create → name-only
-        const lp = (o as any).linkedProfiles || (o as any).linked_profiles || [];
-        return Array.isArray(lp) && lp.includes(preResolvedTargetProfileId);
+        // Profile scope check: when we resolved a target profile, the
+        // existing obligation must be linked to it. Unscoped creates fall
+        // through (we compare amount + frequency below).
+        if (preResolvedTargetProfileId) {
+          const lp = (o as any).linkedProfiles || (o as any).linked_profiles || [];
+          if (!Array.isArray(lp) || !lp.includes(preResolvedTargetProfileId)) return false;
+        }
+        // Amount + frequency must also match. A $60 monthly bill and a
+        // $80 monthly bill share a name but are different obligations.
+        const existingAmount = Number((o as any).amount) || 0;
+        const existingFreq = String((o as any).frequency || "").toLowerCase();
+        if (Math.abs(existingAmount - newAmount) > 0.01) return false;
+        if (existingFreq !== newFrequency) return false;
+        return true;
       });
       if (dupOb) {
-        logger.info("ai", `Skipped duplicate obligation: ${dupOb.name} (scoped to ${preResolvedTargetProfileId || "self/unscoped"})`);
+        logger.info("ai", `Skipped duplicate obligation: ${dupOb.name} ($${newAmount}/${newFrequency}, scoped to ${preResolvedTargetProfileId || "self/unscoped"})`);
         return dupOb;
       }
 
@@ -7094,6 +7114,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // P0.3a: validate with the shared insert schema before writing.
       // linkedProfiles stays seeded here so Supabase storage doesn't
       // auto-prepend Self when a target profile was resolved.
+      // PR AB: recurrenceEnd is forwarded when the AI passes it (e.g. user
+      // said "for the next year" → today + 12 months). materializeOccurrences
+      // honors recurrence_end and stops expanding past that date.
       const obligationPayload = validateAiPayload(insertObligationSchema, {
         name: input.name,
         amount: parseFloat(input.amount) || 0,
@@ -7101,6 +7124,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         category: input.category || "general",
         nextDueDate: input.nextDueDate || inferredDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
         autopay: input.autopay ?? false,
+        recurrenceEnd: input.recurrenceEnd || undefined,
         linkedProfiles: preResolvedTargetProfileId ? [preResolvedTargetProfileId] : [],
       }, "obligation");
       if (!obligationPayload.ok) return { error: obligationPayload.error };
