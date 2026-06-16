@@ -40,7 +40,7 @@ import type {
   CalendarTimelineItem, CalendarEvent, EventCategory, Profile,
 } from "@shared/schema";
 import { EVENT_CATEGORY_COLORS } from "@shared/schema";
-import { passesProfileFilter } from "@shared/profile-filter";
+import { isInScope, selfIdsFrom } from "@shared/scope";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1062,15 +1062,18 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     const map: Record<string, CalendarTimelineItem[]> = {};
     for (const item of timelineItems) {
       if (filterType !== "all" && normalizeFilter(item.type) !== normalizeFilter(filterType)) continue;
-      // BUG-20260528-profile-filter-leakage: previously inline orphan rule
-      // here used `effectiveHasSelf` which only checked `selfProfile.id`,
-      // missing other self-type profiles. Now uses canonical
-      // passesProfileFilter from shared/profile-filter.ts.
+      // PR AC — calendar isolation: when a profile filter is active, an item
+      // must be EXPLICITLY linked to one of the selected profiles. Unlike
+      // other surfaces (finance / dashboard) where orphans fall through to
+      // Self, the calendar uses the strict "out_of_scope" orphan policy so
+      // unowned items never leak into individual profile calendars. Matches
+      // the server's getCalendarTimeline rule one-for-one.
       if (effectiveFilterMode === "selected" && effectiveFilterIds.length > 0) {
-        if (!passesProfileFilter(item.linkedProfiles, {
-          selectedIds: effectiveFilterIds,
-          allProfiles: filterProfiles,
-        })) continue;
+        if (!isInScope(
+          item.linkedProfiles,
+          { selectedIds: effectiveFilterIds, selfIds: selfIdsFrom(filterProfiles) },
+          "out_of_scope",
+        )) continue;
       }
       // Normalize date key to YYYY-MM-DD to handle any timestamp suffixes
       const dateKey = item.date?.slice(0, 10);
