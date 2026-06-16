@@ -20,7 +20,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 }
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
 import { passesProfileFilter } from "../shared/profile-filter";
-import { selfIdsFrom } from "../shared/scope";
+import { selfIdsFrom, isInScope } from "../shared/scope";
 import {
   parseMoney as _sharedParseMoney,
   resolveAssetValue as _sharedResolveAssetValue,
@@ -2587,22 +2587,39 @@ export class SupabaseStorage implements IStorage {
     const [allEvents, allTasks, allObligations, profiles] = await Promise.all([
       this.getEvents(), this.getTasks(), this.getObligations(), this.getProfiles(),
     ]);
-    // Profile filtering: use the same rule the client uses so the calendar
-    // doesn't silently drop legacy/orphan items when the user filters to
-    // only their own self-profile. Without this, a brand-new user who
-    // hasn't tagged anything yet sees an empty calendar the moment they
-    // touch the filter.
+    // Profile filtering (PR AC — calendar isolation):
+    // When a profile filter is active, an item must be EXPLICITLY linked to
+    // one of the selected profiles. Orphan items (linkedProfiles = []) are
+    // hidden from every individual-profile calendar, including Self — per the
+    // explicit user rule "If an event is not assigned to a profile, it should
+    // not appear in individual profile calendars." This is stricter than the
+    // shared `passesProfileFilter` default (which falls orphans through to
+    // Self) because the calendar is the one surface where leaked, untargeted
+    // items dominate the visual layout and erase any sense of per-profile
+    // ownership. Other surfaces (finance / dashboard) keep the soft rule.
     const filterActive = !!(profileIds && profileIds.length > 0);
-    const selfMatch = filterActive && profileIds!.some(id =>
-      profiles.find(p => p.id === id)?.type === "self",
-    );
-    const matchesProfile = (linked: string[]) => {
+    const _selfIds = selfIdsFrom(profiles);
+    const matchesProfile = (linked: string[] | null | undefined) => {
       if (!filterActive) return true;
-      const arr = Array.isArray(linked) ? linked : [];
-      if (arr.length === 0) return selfMatch;
-      return arr.some(id => profileIds!.includes(id));
+      return isInScope(
+        Array.isArray(linked) ? linked : [],
+        { selectedIds: profileIds!, selfIds: _selfIds },
+        "out_of_scope",
+      );
     };
-    const events = allEvents.filter(e => matchesProfile(e.linkedProfiles));
+    // PR AC: reminders do NOT belong on the calendar. They have their own
+    // surface (the reminders table + the productivity hub). Strip events whose
+    // title indicates they are a reminder so the calendar shows only real
+    // events. Match "Daily Reminder", "Rent Payment Reminder", "🔔 Reminder:
+    // ...", etc. without nuking legitimate event titles that merely contain
+    // the substring (we anchor on a word boundary).
+    const REMINDER_TITLE_RE = /\breminder\b/i;
+    const isReminderEvent = (e: { title?: string | null }) =>
+      typeof e.title === "string" && REMINDER_TITLE_RE.test(e.title);
+
+    const events = allEvents
+      .filter(e => !isReminderEvent(e))
+      .filter(e => matchesProfile(e.linkedProfiles));
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
     for (const ev of events) {
@@ -2782,7 +2799,7 @@ export class SupabaseStorage implements IStorage {
         } else {
           expDate = expField.slice(0, 10);
         }
-        if (expDate >= startDate && expDate <= endDate) {
+        if (expDate >= startDate && expDate <= endDate && matchesProfile(doc.linkedProfiles)) {
           items.push({
             id: `doc-expiry-${doc.id}`, type: "event", title: `📄 ${doc.title || doc.name} expires`,
             date: expDate, allDay: true, color: "#A13544", category: "document",
@@ -2970,6 +2987,7 @@ export class SupabaseStorage implements IStorage {
         if (!dateMatch) continue;
         const d = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
         if (d < startDate || d > endDate) continue;
+        if (!matchesProfile(doc.linkedProfiles)) continue;
         const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
         const emoji = /expir/i.test(key) ? "⚠️" : /renew/i.test(key) ? "🔄" : /due/i.test(key) ? "📅" : "📄";
         items.push({
