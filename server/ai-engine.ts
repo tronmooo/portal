@@ -10060,10 +10060,21 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         break;
       }
 
-      // Track creates within this response to deduplicate
-      const seenCreates = new Set<string>();
-
-      // Execute each tool call and collect results
+      // Execute each tool call and collect results.
+      //
+      // NOTE: The loop-level dedup gate that used to live here was removed
+      // intentionally. The user's directive is explicit: duplicates ARE
+      // allowed (two cups of coffee, two snacks, two of the same expense in a
+      // batch, etc.). The old gate keyed on `name|title|description|trackerName`
+      // which collapses to a single key for batch nutrition logs like
+      // [Steak, Blueberries, Mac & Cheese] -> all become `log_tracker_entry::nutrition`
+      // because none of those fields capture the per-entry food item. That
+      // caused legitimate distinct entries (and legitimate true duplicates) to
+      // be silently dropped with "flagged as duplicate by the server".
+      //
+      // Per-tool handlers still have their own narrowly-scoped guards (e.g.
+      // create_obligation keys on name+amount+frequency+profile) — those are
+      // fine and stay. The loop-level gate was the over-eager one and is gone.
       const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
       for (const toolUse of toolUses) {
         // Safety limit: stop executing tools if we've hit the per-message cap
@@ -10073,36 +10084,6 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         }
         totalToolCalls++;
 
-        // Dedup: skip duplicate create calls for the same entity within this response
-        const inp = toolUse.input as Record<string, any>;
-        const createToolNames = ["create_obligation", "create_expense", "create_event", "create_task", "create_profile", "create_habit", "create_tracker", "create_goal", "log_tracker_entry", "log_income"];
-        if (createToolNames.includes(toolUse.name)) {
-          // A9 fix: include forProfile in per-response dedup key so the same
-          // task/expense title across two profiles isn't suppressed.
-          const key = `${toolUse.name}:${String(inp.forProfile || "").toLowerCase().trim()}:${(inp.name || inp.title || inp.description || inp.trackerName || "").toLowerCase().trim()}`;
-          if (seenCreates.has(key)) {
-            logger.info("ai", `Deduped tool call: ${key}`);
-            toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify({ skipped: true, reason: "duplicate call" }) });
-            continue;
-          }
-          seenCreates.add(key);
-
-          // BUG-20260528-ai-history-replay: belt-and-suspenders. Reject any
-          // create whose key matches an entity created within the last 60s
-          // for this user — catches AI replays of prior-turn actions even if
-          // the history-stripping above is bypassed somehow.
-          try {
-            const uid = userId || "_anon";
-            if (isDuplicateCreation(uid, key, 60_000)) {
-              logger.warn("ai", `Blocked recent-duplicate create: ${key}`);
-              toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify({ skipped: true, reason: "duplicate of recent action" }) });
-              continue;
-            }
-            markCreation(uid, key);
-          } catch {
-            // Defensive: never let the guard itself break the tool loop.
-          }
-        }
         try {
           // Validate input before executing
           const validation = validateToolInput(toolUse.name, toolUse.input as Record<string, any>);
