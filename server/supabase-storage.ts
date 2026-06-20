@@ -3915,13 +3915,152 @@ export class SupabaseStorage implements IStorage {
   }
 
   async recallMemory(query: string): Promise<MemoryItem[]> {
-    const q = query.toLowerCase();
-    const memories = await this.getMemories();
-    return memories.filter(m =>
-      (m.key || "").toLowerCase().includes(q) ||
-      m.value.toLowerCase().includes(q) ||
-      m.category.toLowerCase().includes(q)
-    );
+    // Unified recall: the AI's only "what do you know about me" tool. It must
+    // search EVERY store of structured user knowledge, not just the dedicated
+    // `memories` table. Previously this only checked `memories`, so a question
+    // like "What is the VIN of my Honda CRV?" came up empty even though the
+    // VIN was sitting right there on the vehicle profile's `fields.vin` (or
+    // in a registration document's `extracted_data`).
+    //
+    // Strategy: scan memories + profiles (name, notes, tags, fields) +
+    // documents (name, tags, extracted_data) + captures (payload). Any string
+    // value whose substring matches the query (case-insensitive), and any
+    // dotted field whose KEY matches the query (so "what is my VIN" finds
+    // every `*.vin` field even when the query word doesn't appear in the
+    // value itself), gets returned as a synthetic MemoryItem. The AI then
+    // sees a flat list of hits and can answer directly.
+    const raw = String(query || "").trim();
+    const q = raw.toLowerCase();
+    if (!q) return [];
+
+    const now = new Date().toISOString();
+    const hits: MemoryItem[] = [];
+
+    // 1) memories table (original behavior)
+    try {
+      const memories = await this.getMemories();
+      for (const m of memories) {
+        if ((m.key || "").toLowerCase().includes(q) ||
+            String(m.value || "").toLowerCase().includes(q) ||
+            String(m.category || "").toLowerCase().includes(q)) {
+          hits.push(m);
+        }
+      }
+    } catch (e: any) {
+      console.error("[recallMemory] memories scan failed:", e?.message || e);
+    }
+
+    // Deep field walker shared by profiles + documents + captures. Emits one
+    // MemoryItem per leaf whose key path OR string value matches the query.
+    const synth = (id: string, key: string, value: any, category: string) => {
+      if (value === null || value === undefined) return;
+      const strVal = typeof value === "object" ? JSON.stringify(value) : String(value);
+      hits.push({ id, key, value: strVal, category, createdAt: now, updatedAt: now });
+    };
+    const walk = (sourceLabel: string, sourceId: string, category: string, obj: any, pathParts: string[] = []) => {
+      if (obj === null || obj === undefined) return;
+      if (typeof obj === "string" || typeof obj === "number" || typeof obj === "boolean") {
+        const path = pathParts.join(".");
+        const keyMatch = path.toLowerCase().includes(q);
+        const valMatch = String(obj).toLowerCase().includes(q);
+        if (keyMatch || valMatch) {
+          synth(`${sourceId}:${path || "value"}`, `${sourceLabel}.${path || "value"}`, obj, category);
+        }
+        return;
+      }
+      if (Array.isArray(obj)) {
+        obj.forEach((item, i) => walk(sourceLabel, sourceId, category, item, [...pathParts, String(i)]));
+        const path = pathParts.join(".");
+        if (path.toLowerCase().includes(q)) {
+          synth(`${sourceId}:${path}:array`, `${sourceLabel}.${path}`, obj, category);
+        }
+        return;
+      }
+      if (typeof obj === "object") {
+        for (const [k, v] of Object.entries(obj)) {
+          walk(sourceLabel, sourceId, category, v, [...pathParts, k]);
+        }
+      }
+    };
+
+    // 2) profiles: name, notes, tags, fields (deep)
+    try {
+      const profiles = await this.getProfiles();
+      for (const p of profiles) {
+        const label = p.name || "profile";
+        const idStr = String((p as any).id || label);
+        const nameMatch = (p.name || "").toLowerCase().includes(q);
+        const typeMatch = String((p as any).type || "").toLowerCase().includes(q);
+        const notesMatch = String((p as any).notes || "").toLowerCase().includes(q);
+        const tagsArr: string[] = Array.isArray((p as any).tags) ? (p as any).tags : [];
+        const tagsMatch = tagsArr.some(t => String(t).toLowerCase().includes(q));
+        if (nameMatch || typeMatch || notesMatch || tagsMatch) {
+          synth(`profile:${idStr}`, `${label} (${(p as any).type || "profile"})`,
+            (p as any).notes || `${(p as any).type || "profile"} — ${label}`,
+            "profile");
+        }
+        if ((p as any).fields && typeof (p as any).fields === "object") {
+          walk(label, `profile:${idStr}`, "profile_field", (p as any).fields);
+        }
+      }
+    } catch (e: any) {
+      console.error("[recallMemory] profiles scan failed:", e?.message || e);
+    }
+
+    // 3) documents: name, tags, extractedData (deep). We don't read raw file
+    // text -- that's potentially enormous and the OCR/extracted_data already
+    // holds the useful structured fields.
+    try {
+      const docs = await this.getDocuments();
+      for (const d of docs) {
+        const label = (d as any).name || "document";
+        const idStr = String((d as any).id || label);
+        const nameMatch = String((d as any).name || "").toLowerCase().includes(q);
+        const tagsArr: string[] = Array.isArray((d as any).tags) ? (d as any).tags : [];
+        const tagsMatch = tagsArr.some(t => String(t).toLowerCase().includes(q));
+        if (nameMatch || tagsMatch) {
+          synth(`doc:${idStr}`, `${label} (document)`, (d as any).name || "document", "document");
+        }
+        if ((d as any).extractedData && typeof (d as any).extractedData === "object") {
+          walk(label, `doc:${idStr}`, "document_extracted", (d as any).extractedData);
+        }
+      }
+    } catch (e: any) {
+      console.error("[recallMemory] documents scan failed:", e?.message || e);
+    }
+
+    // 4) captures (universal capture layer -- the chat firehose).
+    try {
+      const { data: captures } = await this.supabase
+        .from("captures")
+        .select("id, kind, payload, created_at")
+        .eq("user_id", this.userId)
+        .order("created_at", { ascending: false })
+        .limit(500);
+      for (const c of (captures || [])) {
+        const idStr = String(c.id);
+        const label = `capture/${c.kind || "item"}`;
+        if (c.payload && typeof c.payload === "object") {
+          walk(label, `capture:${idStr}`, "capture", c.payload);
+        }
+      }
+    } catch (e: any) {
+      // captures table may not be present in older deployments -- fail open.
+      console.error("[recallMemory] captures scan failed:", e?.message || e);
+    }
+
+    // De-duplicate by (key, value) so we don't return the same VIN three times
+    // when it's stored in memories + profile + document.
+    const seen = new Set<string>();
+    const deduped: MemoryItem[] = [];
+    for (const h of hits) {
+      const k = `${(h.key || "").toLowerCase()}|${String(h.value || "").toLowerCase()}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      deduped.push(h);
+    }
+    // Cap to keep the prompt manageable when a query is too broad.
+    return deduped.slice(0, 50);
   }
 
   async deleteMemory(id: string): Promise<boolean> {

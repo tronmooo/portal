@@ -2167,7 +2167,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "recall_memory",
-    description: "Recall previously saved facts/memories about the user. Use when user asks 'do you remember...', 'what's my...', or references previously stored info.",
+    description: "Search EVERYTHING the user has ever told the app: saved memories, every profile and every profile field (pet breeds, vehicle VIN/mileage/year, property addresses, account numbers, subscription plans, person phone/email/birthday, etc.), every document's extracted data (registrations, policies, IDs, receipts), and every captured chat data point. ALWAYS call this FIRST whenever the user asks 'what is my X', 'do you have my Y', 'what's the Z of my W', 'find my ...', 'tell me my ...', 'remind me of ...', or any question that references information they previously gave the app -- including obvious profile attributes like VIN, license plate, model, year, mileage, address, square footage, breed, birthday, serial number, account number, etc. Pass a focused query (e.g. 'vin', 'honda crv vin', '123 Main address'). Results include the full path (e.g. 'Honda CRV 2021.vin') so you can cite the source profile or document.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -10420,7 +10420,14 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // reply claims success but this turn ran zero tool calls AND produced zero
     // actions (the hallucination-guard above may have recovered a create), be
     // honest instead of silently lying to the user.
-    if (totalToolCalls === 0 && allActions.length === 0 &&
+    // Only fire when the user message looks like a WRITE request. Read
+    // queries ("what is my VIN", "do you know my address") should never
+    // trigger this rewrite even if the assistant's reply happens to contain
+    // a success-looking word like "set" or "saved".
+    const userMsgForGuard = String(userMessage || "").toLowerCase();
+    const looksLikeRead = /\b(what|which|where|when|who|how much|how many|do you|tell me|show|list|find|remind me of|recall|remember|search|look ?up|status of|info on|details on|my\b.*\?$)/i.test(userMsgForGuard);
+    const looksLikeWrite = /\b(add|log|track|create|make|set|schedule|remind me to|put|save|note that|i (ate|spent|paid|bought|drove|ran|did)|just (ate|spent|paid|bought|drove|ran|did))\b/i.test(userMsgForGuard);
+    if (!looksLikeRead && looksLikeWrite && totalToolCalls === 0 && allActions.length === 0 &&
         /\b(done|added|created|set up|set it up|scheduled|saved|noted|all set)\b/i.test(finalReply || "")) {
       logger.warn("ai", `[false-success-guard] reply claimed success with zero tool calls — rewriting. msg="${(userMessage || "").slice(0, 80)}"`);
       finalReply = "I described what I would do but didn't actually execute a tool call. Can you rephrase or be more specific?";
