@@ -20,6 +20,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 }
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
 import { passesProfileFilter } from "../shared/profile-filter";
+import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
 import { selfIdsFrom, isInScope } from "../shared/scope";
 import {
   parseMoney as _sharedParseMoney,
@@ -3917,63 +3918,51 @@ export class SupabaseStorage implements IStorage {
   async recallMemory(query: string): Promise<MemoryItem[]> {
     // Unified recall: the AI's only "what do you know about me" tool. It must
     // search EVERY store of structured user knowledge, not just the dedicated
-    // `memories` table. Previously this only checked `memories`, so a question
-    // like "What is the VIN of my Honda CRV?" came up empty even though the
-    // VIN was sitting right there on the vehicle profile's `fields.vin` (or
-    // in a registration document's `extracted_data`).
+    // `memories` table — and it must bridge the user's vocabulary to whatever
+    // label the data actually carries.
     //
-    // Strategy: scan memories + profiles (name, notes, tags, fields) +
-    // documents (name, tags, extracted_data) + captures (payload). Any string
-    // value whose substring matches the query (case-insensitive), and any
-    // dotted field whose KEY matches the query (so "what is my VIN" finds
-    // every `*.vin` field even when the query word doesn't appear in the
-    // value itself), gets returned as a synthetic MemoryItem. The AI then
-    // sees a flat list of hits and can answer directly.
-    const raw = String(query || "").trim();
-    const q = raw.toLowerCase();
-    if (!q) return [];
+    // THE BUG THIS FIXES: matching used to require the *entire* query string to
+    // be a literal substring of a field key or value. So "What is the VIN of my
+    // Honda CRV?" — and even the focused query "vin" — came up empty against a
+    // registration document whose extracted field is labeled "Vehicle ID
+    // Number". The VIN was sitting right there; the matcher just couldn't
+    // connect "vin" to "Vehicle ID Number".
+    //
+    // Now we tokenize the query, drop stopwords, expand each token through
+    // bidirectional alias groups (vin ⇄ "vehicle id number", plate ⇄ "license
+    // number", dob ⇄ "date of birth", …), and SCORE every candidate field so
+    // the best matches rise to the top. Sources scanned: memories + profiles
+    // (name, notes, tags, fields) + documents (name, tags, extracted_data) +
+    // captures (payload). See shared/recall-match.ts.
+    const terms = buildRecallTerms(query);
+    if (terms.isEmpty) return [];
 
     const now = new Date().toISOString();
-    const hits: MemoryItem[] = [];
+    type Scored = { item: MemoryItem; score: number };
+    const scored: Scored[] = [];
 
-    // 1) memories table (original behavior)
-    try {
-      const memories = await this.getMemories();
-      for (const m of memories) {
-        if ((m.key || "").toLowerCase().includes(q) ||
-            String(m.value || "").toLowerCase().includes(q) ||
-            String(m.category || "").toLowerCase().includes(q)) {
-          hits.push(m);
-        }
-      }
-    } catch (e: any) {
-      console.error("[recallMemory] memories scan failed:", e?.message || e);
-    }
+    // Score one candidate (key path + value); keep it only if something matched.
+    const consider = (id: string, key: string, value: any, category: string) => {
+      if (value === null || value === undefined) return;
+      const score = recallMatchScore(terms, key, value);
+      if (score <= 0) return;
+      const strVal = typeof value === "object" ? JSON.stringify(value) : String(value);
+      scored.push({ item: { id, key, value: strVal, category, createdAt: now, updatedAt: now }, score });
+    };
 
     // Deep field walker shared by profiles + documents + captures. Emits one
-    // MemoryItem per leaf whose key path OR string value matches the query.
-    const synth = (id: string, key: string, value: any, category: string) => {
-      if (value === null || value === undefined) return;
-      const strVal = typeof value === "object" ? JSON.stringify(value) : String(value);
-      hits.push({ id, key, value: strVal, category, createdAt: now, updatedAt: now });
-    };
+    // candidate per leaf, keyed by its full dotted path (so the source label —
+    // e.g. the document name "Honda Registration" — also contributes to the
+    // key-path match and surfaces every field of the matching document).
     const walk = (sourceLabel: string, sourceId: string, category: string, obj: any, pathParts: string[] = []) => {
       if (obj === null || obj === undefined) return;
       if (typeof obj === "string" || typeof obj === "number" || typeof obj === "boolean") {
         const path = pathParts.join(".");
-        const keyMatch = path.toLowerCase().includes(q);
-        const valMatch = String(obj).toLowerCase().includes(q);
-        if (keyMatch || valMatch) {
-          synth(`${sourceId}:${path || "value"}`, `${sourceLabel}.${path || "value"}`, obj, category);
-        }
+        consider(`${sourceId}:${path || "value"}`, `${sourceLabel}.${path || "value"}`, obj, category);
         return;
       }
       if (Array.isArray(obj)) {
         obj.forEach((item, i) => walk(sourceLabel, sourceId, category, item, [...pathParts, String(i)]));
-        const path = pathParts.join(".");
-        if (path.toLowerCase().includes(q)) {
-          synth(`${sourceId}:${path}:array`, `${sourceLabel}.${path}`, obj, category);
-        }
         return;
       }
       if (typeof obj === "object") {
@@ -3983,46 +3972,52 @@ export class SupabaseStorage implements IStorage {
       }
     };
 
-    // 2) profiles: name, notes, tags, fields (deep)
+    // 1) memories table (key/value/category all searchable)
+    try {
+      const memories = await this.getMemories();
+      for (const m of memories) {
+        consider(m.id, `${m.category || ""} ${m.key || ""}`.trim() || m.key || "memory",
+          m.value, m.category || "general");
+      }
+    } catch (e: any) {
+      console.error("[recallMemory] memories scan failed:", e?.message || e);
+    }
+
+    // 2) profiles: name, type, notes, tags, fields (deep)
     try {
       const profiles = await this.getProfiles();
       for (const p of profiles) {
         const label = p.name || "profile";
         const idStr = String((p as any).id || label);
-        const nameMatch = (p.name || "").toLowerCase().includes(q);
-        const typeMatch = String((p as any).type || "").toLowerCase().includes(q);
-        const notesMatch = String((p as any).notes || "").toLowerCase().includes(q);
+        const type = String((p as any).type || "profile");
+        // The profile itself: name + type + notes + tags all feed the key/value
+        // so a query for the entity ("honda crv") returns it even with no field.
         const tagsArr: string[] = Array.isArray((p as any).tags) ? (p as any).tags : [];
-        const tagsMatch = tagsArr.some(t => String(t).toLowerCase().includes(q));
-        if (nameMatch || typeMatch || notesMatch || tagsMatch) {
-          synth(`profile:${idStr}`, `${label} (${(p as any).type || "profile"})`,
-            (p as any).notes || `${(p as any).type || "profile"} — ${label}`,
-            "profile");
-        }
+        consider(`profile:${idStr}`,
+          `${label} ${type} ${tagsArr.join(" ")}`.trim(),
+          (p as any).notes || `${type} — ${label}`, "profile");
         if ((p as any).fields && typeof (p as any).fields === "object") {
-          walk(label, `profile:${idStr}`, "profile_field", (p as any).fields);
+          walk(`${label} ${type}`, `profile:${idStr}`, "profile_field", (p as any).fields);
         }
       }
     } catch (e: any) {
       console.error("[recallMemory] profiles scan failed:", e?.message || e);
     }
 
-    // 3) documents: name, tags, extractedData (deep). We don't read raw file
-    // text -- that's potentially enormous and the OCR/extracted_data already
-    // holds the useful structured fields.
+    // 3) documents: name, type, tags, extractedData (deep). We don't read raw
+    // file text -- the OCR/extracted_data already holds the structured fields.
     try {
       const docs = await this.getDocuments();
       for (const d of docs) {
         const label = (d as any).name || "document";
         const idStr = String((d as any).id || label);
-        const nameMatch = String((d as any).name || "").toLowerCase().includes(q);
+        const type = String((d as any).type || "document");
         const tagsArr: string[] = Array.isArray((d as any).tags) ? (d as any).tags : [];
-        const tagsMatch = tagsArr.some(t => String(t).toLowerCase().includes(q));
-        if (nameMatch || tagsMatch) {
-          synth(`doc:${idStr}`, `${label} (document)`, (d as any).name || "document", "document");
-        }
+        consider(`doc:${idStr}`,
+          `${label} ${type} ${tagsArr.join(" ")}`.trim(),
+          (d as any).name || "document", "document");
         if ((d as any).extractedData && typeof (d as any).extractedData === "object") {
-          walk(label, `doc:${idStr}`, "document_extracted", (d as any).extractedData);
+          walk(`${label} ${type}`, `doc:${idStr}`, "document_extracted", (d as any).extractedData);
         }
       }
     } catch (e: any) {
@@ -4049,15 +4044,16 @@ export class SupabaseStorage implements IStorage {
       console.error("[recallMemory] captures scan failed:", e?.message || e);
     }
 
-    // De-duplicate by (key, value) so we don't return the same VIN three times
-    // when it's stored in memories + profile + document.
+    // Best matches first, then de-duplicate by (key, value) so we don't return
+    // the same VIN three times when it lives in memories + profile + document.
+    scored.sort((a, b) => b.score - a.score);
     const seen = new Set<string>();
     const deduped: MemoryItem[] = [];
-    for (const h of hits) {
-      const k = `${(h.key || "").toLowerCase()}|${String(h.value || "").toLowerCase()}`;
+    for (const { item } of scored) {
+      const k = `${(item.key || "").toLowerCase()}|${String(item.value || "").toLowerCase()}`;
       if (seen.has(k)) continue;
       seen.add(k);
-      deduped.push(h);
+      deduped.push(item);
     }
     // Cap to keep the prompt manageable when a query is too broad.
     return deduped.slice(0, 50);
