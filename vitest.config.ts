@@ -9,6 +9,7 @@ export default defineConfig({
       'tests/schema.test.ts',
       'tests/utils.test.ts',
       'tests/recall-match.test.ts',
+      'tests/reextract-merge.test.ts',
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
       'tests/expense-shaped.test.ts',

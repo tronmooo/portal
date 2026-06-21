@@ -1130,6 +1130,160 @@ function categorizeField(key: string, explicit: Record<string, string>): string 
   return 'OTHER';
 }
 
+// Static body of the document-extraction prompt, shared by the upload pipeline
+// (processFileUpload) and re-extraction (reextractDocument) so both capture the
+// SAME exhaustive field set. The dynamic tail (user message + classifier
+// context) is appended by each caller.
+//
+// COMPLETENESS over terseness: the earlier prompt told the model "returning
+// fewer, correct fields is far better than filling everything in", which is why
+// a driver license's license number / a registration's secondary IDs were
+// silently dropped even though they were printed in plain sight. The rule now
+// is: never fabricate a blank, but capture EVERY field that IS printed.
+const EXTRACTION_PROMPT_BASE = `You are reading an arbitrary document. First understand what it is, then extract EVERY field that is actually printed on it. Return ONE valid JSON object:
+
+{
+  "documentType": "<a SHORT snake_case category, 1-3 words, e.g. vaccination_record, lab_results, vehicle_registration, insurance_policy>",
+  "label": "<short human title for this document>",
+  "extractedData": { <every field that actually has a value> },
+  "trackerEntries": [ { "trackerName": "<measurement>", "values": {"value": <number>}, "unit": "<unit>", "category": "<area>" } ],
+  "summary": "<one line>"
+}
+
+ACCURACY RULES — never fabricate, but be THOROUGH with what is actually printed:
+- Extract ONLY what is actually printed. NEVER guess, infer, calculate, copy, or reuse a value.
+- If a field or a table cell is empty, blank, or shows a placeholder (— or - or "N/A" or "None"), OMIT just that key. This "leave blanks out" rule is ONLY about empty cells — it does NOT mean skip fields that ARE filled in.
+- A date belongs to an item ONLY if it is printed on the SAME ROW / right next to that item. Do not borrow a date from another row, and never reuse the document's own date (e.g. the exam/print date) as an item's date.
+- It is correct for most rows of a multi-row schedule to have NO date — leave those out. But capture every row/field that DOES have a value.
+
+COMPLETENESS RULES — capture the whole document:
+- BE EXHAUSTIVE about identifiers and labeled fields. Capture EVERY number, code, and labeled value that is actually printed: document / ID / license / registration / plate / sticker / policy / account / routing / member / reference / confirmation / serial / VIN / hull / case / permit numbers; full names (and firstName, middleName, lastName separately when shown); addresses; phone; email; every date (issue, expiration, date of birth, etc.); class / category / status / restrictions; make / model / year; and ANY "Label: value" pair on the page.
+- Give each its OWN descriptive camelCase key — e.g. licenseNumber, documentNumber, registrationNumber, plateNumber, dateOfBirth, expirationDate, issueDate, fullName, address. Do NOT drop a clearly-printed field just to keep the answer short.
+- Photo IDs (driver license, state ID, passport): always capture the ID/license/document number printed on the card, plus full name, dateOfBirth, address, issueDate, expirationDate, and (when shown) sex, height, eyeColor, class, restrictions, issuing state/country.
+
+EXTRACTION RULES:
+- Identify the document yourself — do not pick from a fixed list. Keep documentType to a short 1-3 word category (not a sentence); put any longer title in "label".
+- Put EACH real date in its OWN field with a descriptive camelCase key (e.g. "rabiesDueDate"). One date = one field. Never combine multiple dates into one value.
+- Also extract people, organizations, identifiers, amounts, and notes that are actually present.
+- trackerEntries[]: any numeric measurement worth trending over time (lab value, weight, BP, body temperature, blood glucose, etc.) — only if actually printed AND only if it is a health/body/biometric measurement. Money, prices, costs, totals, fees, taxes, durations, quantities of goods, or anything printed on a receipt/invoice/bill/ticket is NEVER a tracker entry — never emit trackerEntries for those. Output them in extractedData as money/quantity fields instead.
+- Dates: prefer YYYY-MM-DD, otherwise copy them exactly as printed.
+
+MONEY / RECEIPTS / INVOICES / TICKETS / BILLS (CRITICAL — money is finance, not a tracker):
+- For ANY document that records a charge, payment, purchase, or amount owed (receipt, invoice, bill, ticket, parking stub, fuel receipt, restaurant check, etc.), set documentType to one of: receipt, invoice, bill, ticket, parking_receipt, fuel_receipt, subscription_invoice. Do NOT use a generic "other" or a tracker-flavored type for money documents.
+- ALWAYS emit a top-level "totalAmount" key in extractedData as a number with the FINAL amount the customer paid or owes (after tax/fees). Examples: "totalAmount": 130.29. If multiple totals exist, use the grand total / amount paid / amount due.
+- Also emit when printed: "subtotal", "tax", "tip", "currency" (3-letter code if shown), "vendorName", "merchantName", "transactionDate" (YYYY-MM-DD), "paymentMethod", "last4", "ticketNumber", "orderNumber", "description".
+- For parking/fuel/transit: also emit "parkingDurationDays" or "parkingDurationHours" (number, e.g. 8) — but as a plain number in extractedData, NOT a tracker entry. Same for "gallons", "litersOfFuel", "odometerAtFill".
+- For recurring services (utilities, subscriptions, rent, insurance, loan payments): additionally emit "dueDate" (YYYY-MM-DD) and "billingFrequency" (monthly / quarterly / annual) when visible.
+- Do NOT create trackerEntries for any of the fields above. The cost on a receipt becomes an expense in the user's finance ledger; it is not a chart-over-time metric.
+
+For pet vaccination / preventive care records: in extractedData, output one key per upcoming due date using the pattern "<vaccineName>Due" in camelCase with ISO YYYY-MM-DD value. Examples: "rabiesDue":"2029-06-04", "dappDue":"2029-06-04", "bordetellaDue":"2027-06-04", "fecalDue":"2026-12-16", "heartwormTestDue":"...", "leptospirosisDue":"...". Also include "petName", "species", "breed", "dateOfVisit", "weight" (numeric pounds), "providerName" (hospital), "facilityAddress" when present. Every preventive-care row in the document MUST appear as its own "<name>Due" key — never lump them into one field.`;
+
+// Additively merge freshly-extracted fields into a document's existing
+// extractedData. New fields are added; existing non-empty values are KEPT (the
+// user may have manually corrected them), and only get overwritten when the old
+// value was blank/placeholder. Returns the merged object + the keys that were
+// newly filled, so re-extraction can report exactly what it recovered.
+export function mergeExtractedData(
+  existing: Record<string, any> | null | undefined,
+  fresh: Record<string, any> | null | undefined,
+): { merged: Record<string, any>; addedKeys: string[] } {
+  const merged: Record<string, any> = { ...(existing && typeof existing === "object" ? existing : {}) };
+  const addedKeys: string[] = [];
+  for (const [k, v] of Object.entries(fresh || {})) {
+    if (v === null || v === undefined || v === "") continue;
+    const cur = merged[k];
+    const curEmpty = cur === null || cur === undefined || cur === "" || isPlaceholderValue(cur);
+    if (!(k in merged) || curEmpty) {
+      merged[k] = v;
+      addedKeys.push(k);
+    }
+  }
+  return { merged, addedKeys };
+}
+
+// Re-run extraction on an ALREADY-uploaded document using the file bytes we
+// stored at upload time (document.fileData) — no re-upload required. Pulls any
+// fields the original pass missed (e.g. a license number) and merges them in
+// without clobbering values the user may have edited. Returns a summary of what
+// was recovered. Side-effect-free beyond updating the document's extractedData.
+export async function reextractDocument(documentId: string): Promise<{
+  ok: boolean;
+  message: string;
+  addedKeys?: string[];
+  extractedData?: Record<string, any>;
+}> {
+  const doc: any = await storage.getDocument(documentId);
+  if (!doc) return { ok: false, message: "Document not found" };
+  const base64Data: string = doc.fileData || "";
+  const mimeType: string = doc.mimeType || "";
+  if (!base64Data) {
+    return { ok: false, message: `"${doc.name}" has no stored file to re-read. Please re-upload it.` };
+  }
+
+  const isImage = mimeType.startsWith("image/");
+  const isPdf = mimeType === "application/pdf";
+  const mediaType = isImage ? (mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp") : "image/jpeg";
+  let cleanBase64 = base64Data.includes(",") ? (base64Data.split(",").pop() || base64Data) : base64Data;
+  cleanBase64 = cleanBase64.replace(/\s/g, "");
+
+  const messageContent: any[] = [];
+  if (isImage || isPdf) {
+    messageContent.push({
+      type: isPdf ? "document" : "image",
+      source: { type: "base64", media_type: isPdf ? "application/pdf" : mediaType, data: cleanBase64 },
+    });
+  } else {
+    try {
+      const textContent = Buffer.from(base64Data, "base64").toString("utf-8").slice(0, 10000);
+      messageContent.push({ type: "text", text: `File content of ${doc.name}:\n\n${textContent}` });
+    } catch {
+      return { ok: false, message: `"${doc.name}" could not be decoded for re-extraction.` };
+    }
+  }
+
+  const prompt = `${EXTRACTION_PROMPT_BASE}
+
+This document was uploaded earlier and only PARTIAL data was captured. Read it again and return the COMPLETE set of printed fields — especially any identifiers, numbers, names, dates, and addresses that a quick first pass may have skipped.
+Return only what you actually read. When a value is unreadable or blank, leave that field out — but include every field you CAN read.`;
+
+  let parsed: any = {};
+  try {
+    const response = await getClient().messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8000,
+      thinking: { type: "enabled", budget_tokens: 3000 },
+      messages: [{ role: "user", content: [...messageContent, { type: "text", text: prompt }] }],
+    });
+    const text = (response.content.find((b: any) => b.type === "text") as any)?.text ?? "{}";
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+  } catch (e: any) {
+    console.error(`[reextract] vision call failed for ${documentId}: ${e?.message || e}`);
+    return { ok: false, message: `Re-extraction failed: ${e?.message || "vision error"}` };
+  }
+
+  // Flatten nested {value:…} shapes the same way the upload path does, so keys
+  // match what the rest of the app expects.
+  let fresh: Record<string, any> = {};
+  if (parsed.extractedData && typeof parsed.extractedData === "object") {
+    try { fresh = flattenExtractedData(parsed.extractedData); }
+    catch { fresh = parsed.extractedData; }
+  }
+
+  const { merged, addedKeys } = mergeExtractedData(doc.extractedData, fresh);
+  if (addedKeys.length === 0) {
+    return { ok: true, message: `Re-read "${doc.name}" — no new fields found; everything printed was already captured.`, addedKeys: [], extractedData: doc.extractedData || {} };
+  }
+  await storage.updateDocument(documentId, { extractedData: merged } as any);
+  console.log(`[reextract] ${documentId} "${doc.name}" recovered ${addedKeys.length} field(s): ${addedKeys.join(", ")}`);
+  return {
+    ok: true,
+    message: `Re-extracted "${doc.name}" — recovered ${addedKeys.length} new field(s): ${addedKeys.join(", ")}.`,
+    addedKeys,
+    extractedData: merged,
+  };
+}
+
 export async function processFileUpload(
   fileName: string,
   mimeType: string,
@@ -1241,6 +1395,7 @@ DOMAIN HINT — write 2-4 sentences specific to THIS document. Tell the extracto
 - boat registration → "Boat registration certificate. Extract boatName, hullID, registrationNumber, owner, vesselLength, vesselType, registrationExpiration, issuingAgency in extractedData. Expiration is a calendarEvent. The boat itself is an asset. No expense."
 - marriage certificate → "Marriage certificate. Extract spouseOneName, spouseTwoName, marriageDate, officiantName, county, certificateNumber in extractedData. No expense, no tracker, no obligation. profileFacts only."
 - diploma → "Diploma / degree certificate. Extract graduateName, institutionName, degreeType, fieldOfStudy, graduationDate, honors in extractedData. No expense. profileFacts only."
+- driver license / state ID / passport → "Government photo ID. Extract the ID/license/document number printed on the card (licenseNumber or documentNumber), fullName plus firstName/middleName/lastName, dateOfBirth, address, issueDate, expirationDate, and sex/height/eyeColor/class/restrictions/issuingState when shown — capture ALL of them. Expiration is a calendarEvent. profileFacts only — no expense."
 
 Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nThe user attached this with the message: "${userMessage}"` : ""}`;
 
@@ -1336,42 +1491,11 @@ Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nT
   // what the document is and decides what matters. We do not hardcode document
   // types, field names, or domain rules here — a vaccination record, a lease, a
   // warranty, a lab panel and a bank statement all flow through the same prompt.
-  const extractionPrompt = `You are reading an arbitrary document. First understand what it is, then extract ONLY the data that is actually printed on it. Return ONE valid JSON object:
-
-{
-  "documentType": "<a SHORT snake_case category, 1-3 words, e.g. vaccination_record, lab_results, vehicle_registration, insurance_policy>",
-  "label": "<short human title for this document>",
-  "extractedData": { <only fields that actually have a value> },
-  "trackerEntries": [ { "trackerName": "<measurement>", "values": {"value": <number>}, "unit": "<unit>", "category": "<area>" } ],
-  "summary": "<one line>"
-}
-
-ACCURACY RULES — these matter more than completeness:
-- Extract ONLY what is actually printed. NEVER guess, infer, calculate, copy, or reuse a value.
-- If a field or a table cell is empty, blank, or shows a placeholder (— or - or "N/A" or "None"), OMIT it entirely. Do NOT output a key for it. Many rows in a schedule are intentionally blank — that is expected and correct; leave them out.
-- A date belongs to an item ONLY if it is printed on the SAME ROW / right next to that item. Do not borrow a date from another row, and never reuse the document's own date (e.g. the exam/print date) as an item's date.
-- It is correct and expected for most rows to have NO date. Returning fewer, correct fields is far better than filling everything in.
-
-EXTRACTION RULES:
-- Identify the document yourself — do not pick from a fixed list. Keep documentType to a short 1-3 word category (not a sentence); put any longer title in "label".
-- Put EACH real date in its OWN field with a descriptive camelCase key (e.g. "rabiesDueDate"). One date = one field. Never combine multiple dates into one value.
-- Also extract people, organizations, identifiers, amounts, and notes that are actually present.
-- trackerEntries[]: any numeric measurement worth trending over time (lab value, weight, BP, body temperature, blood glucose, etc.) — only if actually printed AND only if it is a health/body/biometric measurement. Money, prices, costs, totals, fees, taxes, durations, quantities of goods, or anything printed on a receipt/invoice/bill/ticket is NEVER a tracker entry — never emit trackerEntries for those. Output them in extractedData as money/quantity fields instead.
-- Dates: prefer YYYY-MM-DD, otherwise copy them exactly as printed.
-
-MONEY / RECEIPTS / INVOICES / TICKETS / BILLS (CRITICAL — money is finance, not a tracker):
-- For ANY document that records a charge, payment, purchase, or amount owed (receipt, invoice, bill, ticket, parking stub, fuel receipt, restaurant check, etc.), set documentType to one of: receipt, invoice, bill, ticket, parking_receipt, fuel_receipt, subscription_invoice. Do NOT use a generic "other" or a tracker-flavored type for money documents.
-- ALWAYS emit a top-level "totalAmount" key in extractedData as a number with the FINAL amount the customer paid or owes (after tax/fees). Examples: "totalAmount": 130.29. If multiple totals exist, use the grand total / amount paid / amount due.
-- Also emit when printed: "subtotal", "tax", "tip", "currency" (3-letter code if shown), "vendorName", "merchantName", "transactionDate" (YYYY-MM-DD), "paymentMethod", "last4", "ticketNumber", "orderNumber", "description".
-- For parking/fuel/transit: also emit "parkingDurationDays" or "parkingDurationHours" (number, e.g. 8) — but as a plain number in extractedData, NOT a tracker entry. Same for "gallons", "litersOfFuel", "odometerAtFill".
-- For recurring services (utilities, subscriptions, rent, insurance, loan payments): additionally emit "dueDate" (YYYY-MM-DD) and "billingFrequency" (monthly / quarterly / annual) when visible.
-- Do NOT create trackerEntries for any of the fields above. The cost on a receipt becomes an expense in the user's finance ledger; it is not a chart-over-time metric.
-
-For pet vaccination / preventive care records: in extractedData, output one key per upcoming due date using the pattern "<vaccineName>Due" in camelCase with ISO YYYY-MM-DD value. Examples: "rabiesDue":"2029-06-04", "dappDue":"2029-06-04", "bordetellaDue":"2027-06-04", "fecalDue":"2026-12-16", "heartwormTestDue":"...", "leptospirosisDue":"...". Also include "petName", "species", "breed", "dateOfVisit", "weight" (numeric pounds), "providerName" (hospital), "facilityAddress" when present. Every preventive-care row in the document MUST appear as its own "<name>Due" key — never lump them into one field.
+  const extractionPrompt = `${EXTRACTION_PROMPT_BASE}
 
 ${userMessage ? `User said: "${userMessage}"` : ""}
 ${classifierContext}
-Return only what you actually read. When in doubt, leave it out.`;
+Return only what you actually read. When a value is unreadable or blank, leave that field out — but include every field you CAN read.`;
 
   try {
     const isImage = mimeType.startsWith("image/");
@@ -3425,7 +3549,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Document management ---
   {
     name: "manage_document",
-    description: "Rename, delete, or re-extract data from a stored document. Use when user says 'rename my document X to Y', 'delete document X', 're-extract my insurance card'.",
+    description: "Rename, delete, or re-extract data from a stored document. 're_extract' re-reads the document's saved file (no re-upload needed) and recovers any fields the first pass missed — e.g. a driver-license number, secondary IDs — merging them into the document without overwriting existing values. Use when user says 'rename my document X to Y', 'delete document X', 're-extract my insurance card', 'pull the license number off my ID', or 'scan my license again'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -8270,11 +8394,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return { success: true, message: "Document deleted" };
         }
         case "re_extract": {
-          const doc = await storage.getDocument(docId);
-          if (!doc) return { error: "Document not found" };
-          // Mark the document for re-extraction by clearing extracted data
-          await storage.updateDocument(docId, { extractedData: null } as any);
-          return { success: true, message: `Document "${doc.name}" queued for re-extraction. Upload it again to re-extract data.` };
+          // Real re-extraction: re-read the file we already stored (no re-upload
+          // needed) and merge any newly-recovered fields into extractedData.
+          const result = await reextractDocument(docId);
+          if (!result.ok) return { error: result.message };
+          return {
+            success: true,
+            message: result.message,
+            addedKeys: result.addedKeys,
+            document: { id: docId, extractedData: result.extractedData },
+          };
         }
         default:
           return { error: `Unknown action: ${input.action}. Use 'rename', 'delete', or 're_extract'.` };

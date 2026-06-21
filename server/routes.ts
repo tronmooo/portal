@@ -129,7 +129,7 @@ async function syncLiabilityObligation(profileId: string): Promise<void> {
     console.warn("[syncLiabilityObligation] hook error:", err?.message || err);
   }
 }
-import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue, classifyCapture } from "./ai-engine";
+import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue, classifyCapture, reextractDocument } from "./ai-engine";
 import { analyzeSmartFill, renderFilledPdf, type SmartFillSource, type FillFieldInput } from "./smart-fill";
 import { aiDecide, aiPickIndex } from "./ai-decide";
 
@@ -4338,6 +4338,40 @@ Rules:
     bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
     res.json({ success: true });
   }));
+  // ---- Re-extract: re-read a stored document and recover missed fields ----
+  // No re-upload needed — we re-read the file bytes saved at upload time and
+  // merge any newly-found fields into extractedData (existing values kept).
+  app.post("/api/documents/:id/reextract", asyncHandler(async (req, res) => {
+    const doc = await storage.getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: "Not found" });
+    const result = await reextractDocument(req.params.id);
+    if (!result.ok) return res.status(422).json({ error: result.message });
+    const uidR = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`documents:${uidR}`); bustCache(`stats:${uidR}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uidR}:`);
+    res.json(result);
+  }));
+
+  // Bulk re-extraction across every stored document. Runs sequentially to stay
+  // within model rate limits; returns a per-document summary of recovered fields.
+  app.post("/api/documents/reextract-all", asyncHandler(async (req, res) => {
+    const docs = await storage.getDocuments();
+    const results: Array<{ id: string; name: string; ok: boolean; addedKeys: string[]; message: string }> = [];
+    let totalNewFields = 0;
+    for (const d of docs) {
+      try {
+        const r = await reextractDocument((d as any).id);
+        const added = r.addedKeys || [];
+        totalNewFields += added.length;
+        results.push({ id: (d as any).id, name: (d as any).name, ok: r.ok, addedKeys: added, message: r.message });
+      } catch (e: any) {
+        results.push({ id: (d as any).id, name: (d as any).name, ok: false, addedKeys: [], message: e?.message || "failed" });
+      }
+    }
+    const uidR = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`documents:${uidR}`); bustCache(`stats:${uidR}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uidR}:`);
+    res.json({ documentsProcessed: docs.length, totalNewFields, results });
+  }));
+
   app.get("/api/profiles/:id/documents", asyncHandler(async (req, res) => {
     // Pre-check: verify the profile belongs to the requester before returning
     // any docs linked to it, otherwise an attacker can enumerate another user's
