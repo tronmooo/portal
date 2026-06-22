@@ -2656,28 +2656,39 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
 }
 // ── EntryRow ───────────────────────────────────────────────────────────────────
 
-function EntryRow({
+// ── EntryEditor ─────────────────────────────────────────────────────────────
+// Shared per-entry editor: edit ANY field's value, delete individual fields,
+// add brand-new fields, and edit the note — for EVERY tracker entry regardless
+// of how its row is displayed (compact row, blood-pressure row, history row).
+// The backend PATCH honors `values` (upsert) + `valuesToDelete` (remove).
+function EntryEditor({
   entry,
   tracker,
-  primaryField,
+  onClose,
 }: {
   entry: TrackerEntry;
   tracker: Tracker;
-  primaryField: string;
+  onClose: () => void;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [editing, setEditing] = useState(false);
-  const [editVals, setEditVals] = useState<Record<string, any>>({});
-  const [editNotes, setEditNotes] = useState("");
+  const seed = () => {
+    const v: Record<string, any> = {};
+    for (const [k, val] of Object.entries(entry.values || {})) {
+      if (k !== "_notes") v[k] = val;
+    }
+    return v;
+  };
+  const [editVals, setEditVals] = useState<Record<string, any>>(seed);
+  const [editNotes, setEditNotes] = useState<string>((entry.values?._notes as string) || (entry as any).notes || "");
   const [newFieldName, setNewFieldName] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
 
   const editMutation = useMutation({
     mutationFn: () => {
       // Keys that existed on the entry but the user removed → explicit delete
-      // signal (the PATCH route honors `valuesToDelete`). Remaining keys in
-      // editVals are upserted, so adding a brand-new field just works.
+      // signal. Remaining keys in editVals are upserted, so adding a brand-new
+      // field just works.
       const orig = Object.keys(entry.values || {}).filter((k) => k !== "_notes");
       const valuesToDelete = orig.filter((k) => !(k in editVals));
       return apiRequest("PATCH", `/api/trackers/${tracker.id}/entries/${entry.id}`, {
@@ -2710,7 +2721,7 @@ function EntryRow({
       return { prev };
     },
     onSuccess: () => {
-      setEditing(false);
+      onClose();
       toast({ title: "Entry updated" });
     },
     onError: (err: Error, _vars, context: any) => {
@@ -2726,32 +2737,6 @@ function EntryRow({
     },
   });
 
-  const startEdit = () => {
-    // Seed from EVERY field actually stored on the entry (not just the
-    // tracker's declared fields) so entry-only fields like bedtime/quality are
-    // editable too. _notes is edited in its own box.
-    const v: Record<string, any> = {};
-    for (const [k, val] of Object.entries(entry.values || {})) {
-      if (k !== "_notes") v[k] = val;
-    }
-    setEditVals(v);
-    setEditNotes((entry.values?._notes as string) || (entry as any).notes || "");
-    setNewFieldName("");
-    setNewFieldValue("");
-    setEditing(true);
-  };
-
-  // Bug #18: re-seed if the entry changes underneath an open editor.
-  useEffect(() => {
-    if (!editing) return;
-    const v: Record<string, any> = {};
-    for (const [k, val] of Object.entries(entry.values || {})) {
-      if (k !== "_notes") v[k] = val;
-    }
-    setEditVals(v);
-  }, [editing, entry.id, JSON.stringify(entry.values)]);
-
-  // Coerce a typed input back to number when the field/value is numeric.
   const fieldIsNumeric = (k: string) => {
     const def = tracker.fields.find((f) => f.name.toLowerCase() === k.toLowerCase());
     if (def) return def.type === "number";
@@ -2772,6 +2757,106 @@ function EntryRow({
     setNewFieldValue("");
   };
 
+  const keys = Object.keys(editVals);
+  return (
+    <div
+      className="flex flex-col gap-2 rounded-md border border-primary/30 px-2.5 py-2 text-xs bg-primary/5"
+      data-testid={`entry-row-edit-${entry.id}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Existing fields — edit value or delete the field */}
+      <div className="flex flex-col gap-1.5">
+        {keys.length === 0 && (
+          <span className="text-muted-foreground italic">No fields — add one below.</span>
+        )}
+        {keys.map((k) => (
+          <div key={k} className="flex items-center gap-1.5">
+            <label className="text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
+            {typeof editVals[k] === "boolean" ? (
+              <Checkbox
+                checked={!!editVals[k]}
+                onCheckedChange={(v) => setEditVals((prev) => ({ ...prev, [k]: !!v }))}
+              />
+            ) : (
+              <Input
+                className="h-6 flex-1 text-xs px-1.5"
+                type={fieldIsNumeric(k) ? "number" : "text"}
+                value={editVals[k] ?? ""}
+                onChange={(e) => setField(k, e.target.value)}
+                data-testid={`entry-field-${k}`}
+              />
+            )}
+            <button
+              type="button"
+              onClick={() => removeField(k)}
+              className="p-0.5 rounded hover:bg-destructive/15 transition-colors"
+              title={`Remove "${k}"`}
+              aria-label={`Remove field ${k}`}
+              data-testid={`entry-field-delete-${k}`}
+            >
+              <X className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Notes */}
+      <div className="flex items-center gap-1.5">
+        <label className="text-muted-foreground w-24 shrink-0">notes</label>
+        <Input
+          className="h-6 flex-1 text-xs px-1.5"
+          value={editNotes}
+          placeholder="Optional note"
+          onChange={(e) => setEditNotes(e.target.value)}
+        />
+      </div>
+
+      {/* Add a new field */}
+      <div className="flex items-center gap-1.5 border-t border-border/50 pt-1.5">
+        <Input
+          className="h-6 w-24 text-xs px-1.5"
+          placeholder="new field"
+          value={newFieldName}
+          onChange={(e) => setNewFieldName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") addField(); }}
+          data-testid="entry-new-field-name"
+        />
+        <Input
+          className="h-6 flex-1 text-xs px-1.5"
+          placeholder="value"
+          value={newFieldValue}
+          onChange={(e) => setNewFieldValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") addField(); }}
+          data-testid="entry-new-field-value"
+        />
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={addField} disabled={!newFieldName.trim()}>
+          <Plus className="h-3 w-3 mr-0.5" />Add
+        </Button>
+      </div>
+
+      <div className="flex items-center gap-1 justify-end">
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={onClose}>Cancel</Button>
+        <Button size="sm" className="h-6 px-2 text-xs" onClick={() => editMutation.mutate()} disabled={editMutation.isPending} data-testid={`entry-save-${entry.id}`}>
+          <Check className="h-3 w-3 mr-1" />Save
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ── EntryRow ───────────────────────────────────────────────────────────────────
+
+function EntryRow({
+  entry,
+  tracker,
+  primaryField,
+}: {
+  entry: TrackerEntry;
+  tracker: Tracker;
+  primaryField: string;
+}) {
+  const [editing, setEditing] = useState(false);
+
   const primaryVal = entry.values[primaryField];
   const otherFields = tracker.fields.filter((f) => f.name !== primaryField);
   const bpS = entry.values["systolic"] ?? entry.values["systolic_pressure"] ?? entry.values["sbp"];
@@ -2780,90 +2865,7 @@ function EntryRow({
   const entryNotes = (entry.values["_notes"] as string | undefined) || (entry as any).notes;
 
   if (editing) {
-    const keys = Object.keys(editVals);
-    return (
-      <div
-        className="flex flex-col gap-2 rounded-md border border-primary/30 px-2.5 py-2 text-xs bg-primary/5"
-        data-testid={`entry-row-edit-${entry.id}`}
-      >
-        {/* Existing fields — edit value or delete the field */}
-        <div className="flex flex-col gap-1.5">
-          {keys.length === 0 && (
-            <span className="text-muted-foreground italic">No fields — add one below.</span>
-          )}
-          {keys.map((k) => (
-            <div key={k} className="flex items-center gap-1.5">
-              <label className="text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
-              {typeof editVals[k] === "boolean" ? (
-                <Checkbox
-                  checked={!!editVals[k]}
-                  onCheckedChange={(v) => setEditVals((prev) => ({ ...prev, [k]: !!v }))}
-                />
-              ) : (
-                <Input
-                  className="h-6 flex-1 text-xs px-1.5"
-                  type={fieldIsNumeric(k) ? "number" : "text"}
-                  value={editVals[k] ?? ""}
-                  onChange={(e) => setField(k, e.target.value)}
-                  data-testid={`entry-field-${k}`}
-                />
-              )}
-              <button
-                type="button"
-                onClick={() => removeField(k)}
-                className="p-0.5 rounded hover:bg-destructive/15 transition-colors"
-                title={`Remove "${k}"`}
-                aria-label={`Remove field ${k}`}
-                data-testid={`entry-field-delete-${k}`}
-              >
-                <X className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
-              </button>
-            </div>
-          ))}
-        </div>
-
-        {/* Notes */}
-        <div className="flex items-center gap-1.5">
-          <label className="text-muted-foreground w-24 shrink-0">notes</label>
-          <Input
-            className="h-6 flex-1 text-xs px-1.5"
-            value={editNotes}
-            placeholder="Optional note"
-            onChange={(e) => setEditNotes(e.target.value)}
-          />
-        </div>
-
-        {/* Add a new field */}
-        <div className="flex items-center gap-1.5 border-t border-border/50 pt-1.5">
-          <Input
-            className="h-6 w-24 text-xs px-1.5"
-            placeholder="new field"
-            value={newFieldName}
-            onChange={(e) => setNewFieldName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") addField(); }}
-            data-testid="entry-new-field-name"
-          />
-          <Input
-            className="h-6 flex-1 text-xs px-1.5"
-            placeholder="value"
-            value={newFieldValue}
-            onChange={(e) => setNewFieldValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") addField(); }}
-            data-testid="entry-new-field-value"
-          />
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={addField} disabled={!newFieldName.trim()}>
-            <Plus className="h-3 w-3 mr-0.5" />Add
-          </Button>
-        </div>
-
-        <div className="flex items-center gap-1 justify-end">
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setEditing(false)}>Cancel</Button>
-          <Button size="sm" className="h-6 px-2 text-xs" onClick={() => editMutation.mutate()} disabled={editMutation.isPending} data-testid={`entry-save-${entry.id}`}>
-            <Check className="h-3 w-3 mr-1" />Save
-          </Button>
-        </div>
-      </div>
-    );
+    return <EntryEditor entry={entry} tracker={tracker} onClose={() => setEditing(false)} />;
   }
 
   return (
@@ -2872,8 +2874,8 @@ function EntryRow({
       data-testid={`entry-row-${entry.id}`}
       role="button"
       tabIndex={0}
-      onClick={startEdit}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startEdit(); } }}
+      onClick={() => setEditing(true)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditing(true); } }}
       title="Tap to edit, add, or remove fields"
     >
       <div className="flex-1 min-w-0">
@@ -2910,7 +2912,7 @@ function EntryRow({
         </span>
       </div>
       <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
-        <button onClick={startEdit} className="p-0.5 rounded hover:bg-muted transition-colors" title="Edit entry">
+        <button onClick={() => setEditing(true)} className="p-0.5 rounded hover:bg-muted transition-colors" title="Edit entry">
           <Pencil className="h-3 w-3 text-muted-foreground hover:text-foreground" />
         </button>
         <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
@@ -4095,6 +4097,72 @@ function CorrelationsTabContent({ tracker }: { tracker: Tracker }) {
   );
 }
 
+// One row in the History list. Shows the polished read-only summary; tapping it
+// (anywhere but the trash) swaps to the shared EntryEditor so the user can edit
+// values, delete fields, or add new fields — full CRUD on every entry.
+function HistoryEntryRow({
+  entry,
+  tracker,
+  displayVal,
+  delta,
+  secondaryText,
+  noteText,
+}: {
+  entry: TrackerEntry;
+  tracker: Tracker;
+  displayVal: string;
+  delta: number | null;
+  secondaryText: string;
+  noteText: string;
+}) {
+  const [editing, setEditing] = useState(false);
+
+  if (editing) {
+    return <EntryEditor entry={entry} tracker={tracker} onClose={() => setEditing(false)} />;
+  }
+
+  return (
+    <div
+      className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm gap-2 cursor-pointer"
+      data-testid={`entry-row-${entry.id}`}
+      role="button"
+      tabIndex={0}
+      onClick={() => setEditing(true)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditing(true); } }}
+      title="Tap to edit, add, or remove fields"
+    >
+      <div className="flex items-center gap-2 min-w-0 flex-wrap flex-1">
+        <span className="font-mono font-semibold tabular-nums text-sm">{displayVal}</span>
+        {delta != null && delta !== 0 && (
+          <span className={`text-xs font-medium tabular-nums ${delta < 0 ? "text-green-600" : "text-orange-500"}`}>
+            {delta > 0 ? "+" : ""}{delta.toFixed(1)}
+          </span>
+        )}
+        {secondaryText && (
+          <span className="text-xs text-muted-foreground">{secondaryText}</span>
+        )}
+        {noteText && (
+          <span className="text-xs text-muted-foreground italic truncate max-w-[140px]">"{noteText}"</span>
+        )}
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <div className="text-right">
+          <span className="text-xs text-muted-foreground tabular-nums block">
+            {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+          </span>
+          <span className="text-xs-tight text-muted-foreground/70 tabular-nums block">
+            {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+        </div>
+        <Pencil className="h-3.5 w-3.5 text-muted-foreground/60 group-hover:text-foreground transition-colors" />
+        <div onClick={(e) => e.stopPropagation()}>
+          <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // -- History Tab
 function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Tracker; primaryField: string; profiles?: { id: string; name: string }[] }) {
   const [search, setSearch] = useState("");
@@ -4222,35 +4290,15 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
           const delta = typeof val === "number" && typeof nextAny === "number" ? val - nextAny : null;
 
           return (
-            <div key={entry.id} className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm gap-2" data-testid={`entry-row-${entry.id}`}>
-              <div className="flex items-center gap-2 min-w-0 flex-wrap flex-1">
-                <span className="font-mono font-semibold tabular-nums text-sm">{displayVal}</span>
-                {delta != null && delta !== 0 && (
-                  <span className={`text-xs font-medium tabular-nums ${delta < 0 ? "text-green-600" : "text-orange-500"}`}>
-                    {delta > 0 ? "+" : ""}{delta.toFixed(1)}
-                  </span>
-                )}
-                {!isBPEntry && secondaryVals.length > 0 && (
-                  <span className="text-xs text-muted-foreground">
-                    {secondaryVals.map(([k, v]) => `${k}: ${v}`).join(", ")}
-                  </span>
-                )}
-                {(notes || entry.notes) && (
-                  <span className="text-xs text-muted-foreground italic truncate max-w-[140px]">"{notes || entry.notes}"</span>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <div className="text-right">
-                  <span className="text-xs text-muted-foreground tabular-nums block">
-                    {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                  </span>
-                  <span className="text-xs-tight text-muted-foreground/70 tabular-nums block">
-                    {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                </div>
-                <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
-              </div>
-            </div>
+            <HistoryEntryRow
+              key={entry.id}
+              entry={entry}
+              tracker={tracker}
+              displayVal={displayVal}
+              delta={delta}
+              secondaryText={!isBPEntry && secondaryVals.length > 0 ? secondaryVals.map(([k, v]) => `${k}: ${v}`).join(", ") : ""}
+              noteText={notes || entry.notes || ""}
+            />
           );
         })}
       </div>
