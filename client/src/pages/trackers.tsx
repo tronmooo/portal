@@ -1935,7 +1935,13 @@ function buildTrackerInsight(tracker: Tracker, goals: Goal[] = []): TrackerInsig
   const entries = (tracker.entries || []).slice().sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
-  const last = entries[0];
+  // Headline reads the latest entry — but if that entry has no usable numeric
+  // value (e.g. a malformed sleep log that stored a clock time instead of
+  // hours), fall back to the most recent entry that DOES, so one bad row can't
+  // make a tracker with real history show up as "No Data".
+  const latestEntry = entries[0];
+  const hasNumericVal = (e: any) => !!e && Object.values(e.values || {}).some(v => typeof v === "number" && isFinite(v as number));
+  const last = (hasNumericVal(latestEntry) ? latestEntry : entries.find(hasNumericVal)) || latestEntry;
 
   // ── No-data short-circuit ─────────────────────────────────────────────
   if (!last) {
@@ -1947,7 +1953,7 @@ function buildTrackerInsight(tracker: Tracker, goals: Goal[] = []): TrackerInsig
     };
   }
 
-  const lastDate = new Date(last.timestamp);
+  const lastDate = new Date(latestEntry.timestamp);
   const todayLogged = isSameDay(lastDate, new Date());
   const sevenAgo = Date.now() - 7 * 86400000;
   const fourteenAgo = Date.now() - 14 * 86400000;

@@ -126,11 +126,13 @@ function findPrimaryFieldName(tracker: Pick<Tracker, "fields" | "category" | "na
 // tracker's actual field name. Strategy:
 //   1. Exact case-insensitive match against tracker fields → use that
 //   2. Alias match (FIELD_ALIASES) → if alias target exists, use it
-//   3. Fallback: if there's exactly one numeric/primary field, map to it
+//   3. Fallback: if there's exactly one numeric/primary field AND the value
+//      is itself numeric, map to it
 //   4. Otherwise: leave the original key untouched (caller may warn)
 function resolveFieldName(
   sourceKey: string,
-  tracker: Pick<Tracker, "fields" | "category" | "name">
+  tracker: Pick<Tracker, "fields" | "category" | "name">,
+  rawValue?: any
 ): string {
   const fields = tracker.fields || [];
   const lc = sourceKey.toLowerCase();
@@ -149,13 +151,54 @@ function resolveFieldName(
   }
 
   // 3. Single-field tracker: if there's only one numeric field, the user
-  // probably meant that one. (Body Temperature tracker has one field
-  // called e.g. "value" — AI says "temperature: 99" → we map to "value".)
+  // probably meant that one (Body Temperature tracker has one field "value";
+  // AI says "temperature: 99" → map to "value"). BUT only when the incoming
+  // value is actually numeric — otherwise a stray field like
+  // wakeTime:"5:30 AM" would clobber a Sleep tracker's "hours" field with a
+  // time string. Non-numeric strays keep their own key (preserved as a
+  // secondary field) instead of corrupting the headline metric.
   const numericFields = fields.filter(f => f.type === "number");
-  if (numericFields.length === 1) return numericFields[0].name;
+  if (numericFields.length === 1 && parseNumericWithUnit(rawValue) !== null) {
+    return numericFields[0].name;
+  }
 
   // 4. Bail out
   return sourceKey;
+}
+
+// Parse a clock time ("11:00 PM", "5:30 AM", "23:00", "5 AM", "7") into
+// minutes-since-midnight, or null if it isn't a time. Used to turn a sleep
+// bedtime/waketime pair into a duration.
+export function parseClockTime(raw: any): number | null {
+  if (raw == null) return null;
+  if (typeof raw === "number" && isFinite(raw)) {
+    // bare hour like 23 or 5 — only meaningful as a 24h hour
+    if (raw >= 0 && raw <= 24) return Math.round(raw * 60) % 1440;
+    return null;
+  }
+  if (typeof raw !== "string") return null;
+  const s = raw.trim().toLowerCase();
+  const m = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = m[2] ? Number(m[2]) : 0;
+  const mer = m[3];
+  if (h > 23 || min > 59) return null;
+  if (mer === "am") { if (h === 12) h = 0; }
+  else if (mer === "pm") { if (h !== 12) h += 12; }
+  return (h * 60 + min) % 1440;
+}
+
+// Field-name candidates for a sleep session's start and end.
+const BEDTIME_KEYS = ["bedtime", "bedtime ", "sleepstart", "start", "starttime", "sleepat", "wentToBed".toLowerCase(), "tobed", "asleep"];
+const WAKETIME_KEYS = ["waketime", "wakeuptime", "wakeup", "wake", "end", "endtime", "awake", "gotup"];
+
+// Is this tracker a sleep tracker whose headline should be hours slept?
+function isSleepTracker(tracker: Pick<Tracker, "fields" | "category" | "name">): boolean {
+  const n = String(tracker.name || "").toLowerCase();
+  const c = String((tracker as any).category || "").toLowerCase();
+  if (n.includes("sleep") || c.includes("sleep")) return true;
+  return false;
 }
 
 // ── Main normalizer ─────────────────────────────────────────────────
@@ -179,8 +222,9 @@ export function normalizeTrackerEntry(
   for (const [k, v] of Object.entries(rawValues || {})) {
     if (k === "_notes") { out._notes = v; continue; }
 
-    // Resolve field name
-    const canonicalKey = resolveFieldName(k, tracker);
+    // Resolve field name (value-aware: a non-numeric stray never gets mapped
+    // onto a lone numeric field)
+    const canonicalKey = resolveFieldName(k, tracker, v);
     if (canonicalKey !== k) {
       warnings.push(`Renamed field "${k}" → "${canonicalKey}"`);
     }
@@ -213,6 +257,41 @@ export function normalizeTrackerEntry(
 
     // Non-numeric: pass through as-is
     out[canonicalKey] = v;
+  }
+
+  // ── Sleep duration synthesis ───────────────────────────────────────
+  // "I slept from 11 PM to 5:30 AM" arrives as bedtime/waketime strings with
+  // NO numeric hours. Compute the duration so the headline reads "6.5 hr"
+  // instead of dumping the wake-time string into the hours field. Also fixes
+  // the case where a non-numeric time leaked into the primary field.
+  if (isSleepTracker(tracker)) {
+    const primaryName = findPrimaryFieldName(tracker);
+    const lcOut: Record<string, { key: string; val: any }> = {};
+    for (const [k, v] of Object.entries(out)) lcOut[k.toLowerCase()] = { key: k, val: v };
+    const findVal = (cands: string[]) => { for (const c of cands) if (lcOut[c]) return lcOut[c].val; return undefined; };
+
+    const primaryVal = primaryName ? out[primaryName] : undefined;
+    const primaryIsNumber = typeof primaryVal === "number" && isFinite(primaryVal);
+
+    if (primaryName && !primaryIsNumber) {
+      const bed = parseClockTime(findVal(BEDTIME_KEYS));
+      const wake = parseClockTime(findVal(WAKETIME_KEYS));
+      if (bed != null && wake != null) {
+        const hrs = Math.round((((wake - bed + 1440) % 1440) / 60) * 100) / 100;
+        if (hrs > 0) {
+          // If a time string had been mis-routed into the primary field, drop it.
+          if (typeof primaryVal === "string" && parseClockTime(primaryVal) != null) delete out[primaryName];
+          out[primaryName] = hrs;
+          warnings.push(`Computed sleep duration ${hrs} hr from bedtime/wake time`);
+        }
+      } else if (typeof primaryVal === "string" && parseClockTime(primaryVal) != null) {
+        // A lone time string sitting in the hours field with no pair to
+        // compute from — move it to wakeTime so the headline isn't a clock.
+        if (out.wakeTime == null && out.waketime == null) out.wakeTime = primaryVal;
+        delete out[primaryName];
+        warnings.push(`Moved stray time "${primaryVal}" out of the ${primaryName} field`);
+      }
+    }
   }
 
   return { values: out, warnings };
