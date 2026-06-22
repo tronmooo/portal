@@ -2165,29 +2165,36 @@ export class SupabaseStorage implements IStorage {
     // Without this, secondary metrics logged in error could never be cleared from
     // a tracker entry (e.g. accidentally logged `diastolic` on a single-value
     // weight tracker).
+    // NB: the live column is `entry_values` (the original `values` name is a SQL
+    // reserved word and was renamed). logEntry + rowToTrackerEntry already use
+    // `entry_values`; this method used to read/write `values`, so EVERY edit
+    // failed with a column error → the route returned "404 Entry not found".
     const mergedValues = mergeAndApplyDeletes(
-      existing.values || {},
+      existing.entry_values || {},
       patch.values,
       patch.valuesToDelete
     );
-    const update: any = { values: mergedValues };
+    const update: any = { entry_values: mergedValues };
     if (patch.notes !== undefined) update.notes = patch.notes;
     if (patch.mood !== undefined) update.mood = patch.mood;
     if (patch.tags !== undefined) update.tags = patch.tags;
     if (patch.timestamp) update.timestamp = patch.timestamp;
+    // Recompute derived/computed data from the new values so badges (BP
+    // category, sleep quality, pace, calories, etc.) stay correct after an edit.
+    try {
+      const tracker = await this.getTracker(trackerId);
+      if (tracker) {
+        update.computed = {
+          ...computeSecondaryData(tracker.name, tracker.category, mergedValues),
+          validated: (existing.computed && existing.computed.validated) ?? true,
+        };
+      }
+    } catch { /* leave computed untouched if recompute fails */ }
     const { data, error } = await this.supabase.from("tracker_entries").update(update)
       .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId)
       .select().maybeSingle();
     if (error || !data) return undefined;
-    return {
-      id: data.id,
-      values: data.values,
-      computed: data.computed,
-      notes: data.notes,
-      mood: data.mood,
-      tags: data.tags,
-      timestamp: data.timestamp,
-    };
+    return this.rowToTrackerEntry(data);
   }
 
   async deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean> {
