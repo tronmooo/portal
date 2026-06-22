@@ -31,6 +31,7 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from "recharts";
 import type { Artifact } from "@shared/schema";
+import ChartCard from "@/components/ChartCard";
 import type { JournalEntry } from "@shared/schema";
 import type { Document } from "@shared/schema";
 import type { Profile } from "@shared/schema";
@@ -231,8 +232,17 @@ function ArtifactRenderer({ artifact, artifactId, isArtifact }: { artifact: any;
     case "mermaid":
       return <MermaidRenderer content={content || ""} />;
 
-    case "chart":
+    case "chart": {
+      // Charts saved from chat embed their full spec (data + KPIs + notes) in
+      // `content` — render them with the SAME polished card as the chat, so the
+      // saved copy looks identical. Legacy charts fall back to the re-querying
+      // ChartRenderer.
+      const savedSpec = (() => {
+        try { const s = JSON.parse(content || ""); return (s && Array.isArray(s.series) && Array.isArray(s.data)) ? s : null; } catch { return null; }
+      })();
+      if (savedSpec) return <ChartCard spec={savedSpec} defaultOpen />;
       return <ChartRenderer content={content || ""} dataBindings={dataBindings} chartType={chartType} />;
+    }
 
     case "checklist": {
       const lines = (content || "").split("\n").filter(Boolean);

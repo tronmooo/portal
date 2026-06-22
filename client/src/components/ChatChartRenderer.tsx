@@ -14,7 +14,8 @@ import {
 // Chart types (inline — schema was reverted)
 export type ChartType2 = "line"|"bar"|"area"|"pie"|"scatter"|"composed"|"radar";
 export interface ChartSeries2 { dataKey:string; name:string; color?:string; type?:"line"|"bar"|"area"; stackId?:string; }
-export interface ChartSpec2 { type:ChartType2; title:string; subtitle?:string; data:Array<Record<string,any>>; series:ChartSeries2[]; xAxisKey:string; xAxisLabel?:string; yAxisLabel?:string; showLegend?:boolean; showGrid?:boolean; height?:number; nameKey?:string; valueKey?:string; unit?:string; notes?:string[]; confidence?:number; showValueLabels?:boolean; }
+export interface ChartKpi2 { label:string; value:string; }
+export interface ChartSpec2 { type:ChartType2; title:string; subtitle?:string; data:Array<Record<string,any>>; series:ChartSeries2[]; xAxisKey:string; xAxisLabel?:string; yAxisLabel?:string; showLegend?:boolean; showGrid?:boolean; height?:number; nameKey?:string; valueKey?:string; unit?:string; notes?:string[]; confidence?:number; showValueLabels?:boolean; kpis?:ChartKpi2[]; }
 
 const CHART_PALETTE = ["hsl(188 55% 50%)","#6366f1","#f59e0b","#10b981","#ef4444","#8b5cf6","#06b6d4","#84cc16"];
 

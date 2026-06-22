@@ -144,7 +144,8 @@ function stripSensitiveDocData(
 // Rich visual output types (inline — shared/schema was reverted)
 type ChartType = "line" | "bar" | "area" | "pie" | "scatter" | "composed" | "radar";
 interface ChartSeries { dataKey: string; name: string; color?: string; type?: "line"|"bar"|"area"; stackId?: string; }
-interface ChartSpec { type: ChartType; title: string; subtitle?: string; data: Array<Record<string, any>>; series: ChartSeries[]; xAxisKey: string; xAxisLabel?: string; yAxisLabel?: string; showLegend?: boolean; showGrid?: boolean; height?: number; nameKey?: string; valueKey?: string; unit?: string; notes?: string[]; confidence?: number; showValueLabels?: boolean; }
+interface ChartKpi { label: string; value: string }
+interface ChartSpec { type: ChartType; title: string; subtitle?: string; data: Array<Record<string, any>>; series: ChartSeries[]; xAxisKey: string; xAxisLabel?: string; yAxisLabel?: string; showLegend?: boolean; showGrid?: boolean; height?: number; nameKey?: string; valueKey?: string; unit?: string; notes?: string[]; confidence?: number; showValueLabels?: boolean; kpis?: ChartKpi[]; }
 interface TableColumn { key: string; label: string; align?: "left"|"center"|"right"; format?: "currency"|"date"|"number"|"percent"|"text"; }
 interface TableSpec { title: string; subtitle?: string; columns: TableColumn[]; rows: Array<Record<string, any>>; summary?: Record<string, any>; }
 interface ReportMetric { label: string; value: string | number; change?: string; changeType?: "positive"|"negative"|"neutral"; }
@@ -4269,6 +4270,13 @@ MANDATORY chart triggers: "show me", "chart", "graph", "visualize", "pie chart",
 - "Table of my expenses" → CALL generate_table(dataSource:"expenses")
 
 If chart data is empty, say so specifically: "You haven't logged any [type] yet."
+
+VISUAL ANSWER PIPELINE (follow IN ORDER for every visual request):
+1. INTENT — decide it's a visual answer and which data source it needs (trackers / expenses / obligations / habits / goals / assets).
+2. PARAMS = real data + scope. Pass the EXACT metric via valueField when a tracker stores several values per entry (e.g. valueField:"carbs"). Pass forProfile when the user names a person/pet ("Bob's expenses" → forProfile:"Bob") so ownership is enforced. Pass dateRange matching the words ("this week" → "week", "last month" → "month").
+3. The tool VALIDATES server-side: it scopes to that profile, clips to the date range, attaches correct units, aggregates correctly (sums carbs/calories/miles/spending per day; takes the latest reading for weight/BP), computes KPIs, and refuses to render when there is no real data.
+4. The chart renders inline with a KPI strip, axis units, a notes/key panel, and a confidence score — and is auto-saved to the Artifacts tab. Do NOT restate the chart's numbers in text; one short sentence is enough.
+NEVER fabricate chart numbers or invent a metric the user didn't ask for. If the right data isn't logged, say exactly that.
 
 CHAT-FIRST PHILOSOPHY:
 You are the universal interface to ALL data in Portol. Every piece of data — documents, events, finances, health, profiles — is accessible through you. When users ask questions about their data, search proactively. When they mention documents, retrieve them. When they mention dates, route them to the calendar. You are the single point of intelligence for the user's entire life data.
@@ -8722,6 +8730,58 @@ function chartConfidence(agg: { usedCount: number; filledBuckets: number; totalB
   return Math.round(Math.min(1, 0.4 + coverage * 0.4 + volume * 0.2) * 100) / 100;
 }
 
+// Format a KPI number with its unit ("$1,240.50", "170 g", "78%").
+function fmtKpi(n: number, unit?: string): string {
+  if (!Number.isFinite(n)) return "—";
+  const r = Math.round(n * 100) / 100;
+  if (unit === "$") return `$${r.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  if (unit === "%") return `${r}%`;
+  return unit ? `${r.toLocaleString()} ${unit}` : `${r.toLocaleString()}`;
+}
+
+// Headline KPIs for a time-series chart — the numbers a user reads first.
+// Sum metrics → Total / Avg-per-active-bucket / Peak / coverage.
+// Measurement metrics → Latest / Average / Min / Max.
+function kpisFromAgg(
+  agg: { points: Array<{ value: number | null }>; usedCount: number; filledBuckets: number; totalBuckets: number },
+  unit: string | undefined, mode: string, granLabel: string,
+): ChartKpi[] {
+  const vals = agg.points.filter(p => p.value != null).map(p => p.value as number);
+  if (vals.length === 0) return [];
+  const sum = vals.reduce((s, v) => s + v, 0);
+  const avg = sum / vals.length;
+  const peak = Math.max(...vals);
+  const low = Math.min(...vals);
+  const latest = vals[vals.length - 1];
+  if (mode === "sum") {
+    return [
+      { label: "Total", value: fmtKpi(sum, unit) },
+      { label: `Avg / ${granLabel}`, value: fmtKpi(avg, unit) },
+      { label: "Peak", value: fmtKpi(peak, unit) },
+      { label: `${granLabel}s logged`, value: `${agg.filledBuckets} of ${agg.totalBuckets}` },
+    ];
+  }
+  return [
+    { label: "Latest", value: fmtKpi(latest, unit) },
+    { label: "Average", value: fmtKpi(avg, unit) },
+    { label: "Low", value: fmtKpi(low, unit) },
+    { label: "High", value: fmtKpi(peak, unit) },
+  ];
+}
+
+// Headline KPIs for a breakdown chart (pie/bar by category).
+function kpisFromBreakdown(data: Array<Record<string, any>>, valueKey: string, nameKey: string, unit?: string): ChartKpi[] {
+  if (data.length === 0) return [];
+  const total = data.reduce((s, d) => s + (Number(d[valueKey]) || 0), 0);
+  const top = data.reduce((m, d) => (Number(d[valueKey]) > Number(m[valueKey]) ? d : m), data[0]);
+  return [
+    { label: "Total", value: fmtKpi(total, unit) },
+    { label: "Categories", value: `${data.length}` },
+    { label: "Largest", value: `${top[nameKey]}` },
+    { label: "Largest amt", value: fmtKpi(Number(top[valueKey]) || 0, unit) },
+  ];
+}
+
 async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
   const { chartType, title, subtitle, dataSource, trackerName, dateRange, forProfile, groupBy, showLegend } = input;
   const since = dateRangeStart(dateRange);
@@ -8752,6 +8812,7 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
           ...(top ? [`Largest: ${top.category} ($${top.amount.toFixed(2)}, ${Math.round(top.amount/total*100)}%).`] : []),
         ],
         confidence: filtered.length >= 3 ? 0.9 : 0.6,
+        kpis: kpisFromBreakdown(data, "amount", "category", "$"),
       };
     }
     // Spending over time \u2014 bucket by day/week/month across the whole window so
@@ -8768,6 +8829,7 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
       showLegend:false, showGrid:true, height:280, showValueLabels: data.length <= 14,
       notes: buildChartNotes("expense ledger", agg, granLabel, "$", `${granLabel}ly total`),
       confidence: chartConfidence(agg),
+      kpis: kpisFromAgg(agg, "$", "sum", granLabel),
     };
   }
 
@@ -8792,6 +8854,12 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
         `Total recurring spend: $${totalMo.toFixed(2)}/month.`,
       ],
       confidence: active.length >= 2 ? 0.85 : 0.6,
+      kpis: [
+        { label: "Total / mo", value: fmtKpi(totalMo, "$") },
+        { label: "Total / yr", value: fmtKpi(totalMo * 12, "$") },
+        { label: "Bills", value: `${active.length}` },
+        { label: "Largest", value: `${data[0]?.category ?? "\u2014"}` },
+      ],
     };
   }
 
@@ -8826,6 +8894,17 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
         showLegend:true, showGrid:true, height:280, showValueLabels: data.length <= 14,
         notes: buildChartNotes(tracker.name, sys, granLabel, tracker.unit || "mmHg"),
         confidence: chartConfidence(sys),
+        kpis: (() => {
+          const sv = sys.points.filter(p=>p.value!=null).map(p=>p.value as number);
+          const dv = dia.points.filter(p=>p.value!=null).map(p=>p.value as number);
+          const last = (a:number[])=>a[a.length-1];
+          return sv.length ? [
+            { label:"Latest", value:`${last(sv)}/${dv.length?last(dv):"—"} mmHg` },
+            { label:"Avg systolic", value: fmtKpi(sv.reduce((s,v)=>s+v,0)/sv.length, "mmHg") },
+            { label:"Avg diastolic", value: dv.length?fmtKpi(dv.reduce((s,v)=>s+v,0)/dv.length, "mmHg"):"—" },
+            { label:"Readings", value:`${sys.usedCount}` },
+          ] : [];
+        })(),
       };
     }
 
@@ -8853,6 +8932,7 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
       showLegend: false, showGrid: true, height: 280, showValueLabels: data.length <= 14,
       notes: buildChartNotes(tracker.name, agg, granLabel, unit, aggWord),
       confidence: chartConfidence(agg),
+      kpis: kpisFromAgg(agg, unit, mode, granLabel),
     };
   }
 
@@ -8876,6 +8956,12 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
         `${totalCheckins} total check-in${totalCheckins===1?"":"s"} this week.`,
       ],
       confidence: habits.length >= 1 ? 0.85 : 0.5,
+      kpis: [
+        { label: "Habits", value: `${habits.length}` },
+        { label: "Check-ins (7d)", value: `${totalCheckins}` },
+        { label: "Best day", value: `${data.reduce((m,d)=>d.completed>m.completed?d:m,data[0]).day}` },
+        { label: "Avg / day", value: `${Math.round(totalCheckins/7*10)/10}` },
+      ],
     };
   }
 
@@ -8892,6 +8978,12 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
         `Each value is progress toward target (current ÷ target).`,
       ],
       confidence: 0.9,
+      kpis: [
+        { label: "Goals", value: `${goals.length}` },
+        { label: "Avg progress", value: `${Math.round(data.reduce((s,d)=>s+d.progress,0)/data.length)}%` },
+        { label: "Completed", value: `${data.filter(d=>d.progress>=100).length}` },
+        { label: "Closest", value: `${[...data].sort((a,b)=>b.progress-a.progress)[0]?.goal ?? "—"}` },
+      ],
     };
   }
 
@@ -8917,6 +9009,7 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
         `Total: $${totalVal.toLocaleString()}.`,
       ],
       confidence: valued.length >= 2 ? 0.85 : 0.6,
+      kpis: kpisFromBreakdown(data, "amount", "category", "$"),
     };
   }
 
@@ -10780,6 +10873,27 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           update_type: artifact.update_type || 'create',
         });
       } catch (e) { console.error('[artifact] Save failed:', e); }
+    }
+
+    // Persist every generated chart to the Artifacts tab so the user can reopen,
+    // copy, and keep it (the full spec — data + KPIs + notes — is stored in
+    // `content` so it re-renders identically without re-querying).
+    if (richCharts.length > 0) {
+      for (const chart of richCharts) {
+        try {
+          const chartTypeForArtifact = (["bar","line","area","pie"] as const).includes(chart.type as any) ? chart.type : "bar";
+          await storage.createArtifact({
+            type: "chart",
+            title: chart.title || "Chart",
+            content: JSON.stringify(chart),
+            chartData: Array.isArray(chart.data) ? chart.data : [],
+            chartType: chartTypeForArtifact as any,
+            tags: ["chat", "chart"],
+            linkedProfiles: selfProfileId ? [selfProfileId] : [],
+            source: "chat",
+          } as any);
+        } catch (e) { console.error('[artifact] chart save failed:', e); }
+      }
     }
 
     return {

@@ -79,6 +79,8 @@ import { useToast } from "@/hooks/use-toast";
 import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
 // Type-only import — erased at compile time, does NOT pull recharts into the bundle.
 import type { ChartSpec2 } from "@/components/ChatChartRenderer";
+// ChartCard lazy-loads the recharts body itself, so importing it here stays light.
+import ChartCard from "@/components/ChartCard";
 
 // Keyboard activation helper for non-<button> clickable elements (a11y):
 // makes Enter/Space behave like a click on role="button" divs.
@@ -162,72 +164,9 @@ function fmtVal(v:any, fmt?:string): string {
 }
 
 function ChatChart({ spec }: { spec: ChartSpec2 }) {
-  const [open, setOpen] = useState(true);
-  const h = spec.height || 260;
-
-  return (
-    <div className="mt-3 rounded-xl border border-border bg-card/60 overflow-hidden">
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-        aria-label={`${open ? "Collapse" : "Expand"} chart: ${spec.title}`}
-        className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted/30"
-        onClick={()=>setOpen(o=>!o)}
-        onKeyDown={onEnterOrSpace(()=>setOpen(o=>!o))}
-      >
-        <div className="flex items-center gap-2">
-          <BarChart2 className="h-3.5 w-3.5 text-primary"/>
-          <span className="text-xs font-semibold">{spec.title}</span>
-          {spec.subtitle&&<span className="text-xs text-muted-foreground hidden sm:inline">\u2014 {spec.subtitle}</span>}
-        </div>
-        {open?<ChevronUp className="h-3.5 w-3.5 text-muted-foreground"/>:<ChevronDown className="h-3.5 w-3.5 text-muted-foreground"/>}
-      </div>
-      {open&&(
-        <div className="px-2 pb-3">
-          {/* recharts is code-split \u2014 show a same-height skeleton while the chunk loads */}
-          <Suspense
-            fallback={
-              <div
-                className="w-full rounded-lg bg-muted/40 animate-pulse flex items-center justify-center"
-                style={{ height: h }}
-                aria-label="Loading chart"
-              >
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground/60" />
-              </div>
-            }
-          >
-            <ChatChartBody spec={spec} />
-          </Suspense>
-          {/* Key / rubric: provenance + coverage notes so the chart is self-explaining */}
-          {((spec.notes && spec.notes.length > 0) || typeof spec.confidence === "number") && (
-            <div className="mt-2 px-2 pt-2 border-t border-border/60">
-              {typeof spec.confidence === "number" && (
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Confidence</span>
-                  <span
-                    className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-                      spec.confidence >= 0.75 ? "bg-emerald-500/15 text-emerald-500"
-                      : spec.confidence >= 0.5 ? "bg-amber-500/15 text-amber-500"
-                      : "bg-red-500/15 text-red-500"
-                    }`}
-                  >
-                    {Math.round(spec.confidence * 100)}%
-                  </span>
-                </div>
-              )}
-              {spec.notes?.map((n, i) => (
-                <div key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground leading-snug">
-                  <span className="text-primary mt-[1px]">•</span>
-                  <span>{n}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  // Shared, polished chart card (KPI strip + chart + notes/key + copy button)
+  // — identical to what the Artifacts tab renders for the saved copy.
+  return <ChartCard spec={spec} />;
 }
 
 function ChatTable({ spec }: { spec: TableSpec2 }) {
