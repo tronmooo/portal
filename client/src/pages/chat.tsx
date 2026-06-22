@@ -2047,36 +2047,24 @@ export default function ChatPage() {
   });
 
   function invalidateAll() {
-    // refetchType: "all" forces react-query to refetch EVERY matching query
-    // (active + inactive), not just the ones currently mounted. Without this,
-    // a tracker entry logged from /chat would not appear on /trackers until
-    // the user manually refreshed — because the trackers page query was
-    // inactive at the moment of the chat write. With "all", the data is
-    // refetched in the background immediately so navigating to /trackers
-    // shows fresh data on the very first render.
-    const refetchType = "all" as const;
-    const keys = [
-      "/api/stats",
-      "/api/dashboard-enhanced",
-      "/api/trackers",
-      "/api/profiles",
-      "/api/tasks",
-      "/api/expenses",
-      "/api/events",
-      "/api/habits",
-      "/api/obligations",
-      "/api/journal",
-      "/api/documents",
-      "/api/insights",
-      "/api/calendar/timeline",
-      "/api/goals",
-      "/api/activity",
-      "/api/ai-digest",
-      "/api/artifacts",
-    ];
-    for (const key of keys) {
-      queryClient.invalidateQueries({ queryKey: [key], refetchType });
-    }
+    // After a chat write the server has already busted its response cache, so
+    // we must refetch EVERY data query — not a hand-maintained subset — or a
+    // logged entry won't appear until the user manually refreshes. A predicate
+    // over all "/api/*" keys (excluding heavy binary file fetches) with
+    // refetchType:"all" refreshes active AND inactive queries, so the data is
+    // fresh whether the user stays on /chat or navigates to /trackers next.
+    const isData = (q: any) => {
+      const k = String(q.queryKey?.[0] || "");
+      return k.startsWith("/api/") && !k.includes("/file");
+    };
+    // Pass 1 — refetch everything (active + inactive) so any page is fresh.
+    queryClient.invalidateQueries({ predicate: isData, refetchType: "all" });
+    // Pass 2 — the chat handler finalizes its cross-instance cache-version bump
+    // right as the response is sent, so an instant refetch can race it and read
+    // pre-write data. A short, light follow-up over only the VISIBLE queries
+    // guarantees the current view settles on fresh data without a manual
+    // refresh — without firing a second full background storm.
+    setTimeout(() => queryClient.invalidateQueries({ predicate: isData, refetchType: "active" }), 1200);
   }
 
   const handleConfirmExtraction = async (data: {
