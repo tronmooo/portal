@@ -1274,6 +1274,23 @@ function AddEntryDialog({
   const { toast } = useToast();
   const [values, setValues] = useState<Record<string, any>>({});
   const [notes, setNotes] = useState("");
+  // Ad-hoc fields the user adds that aren't part of the tracker's schema — same
+  // "add any field" power the per-entry editor has.
+  const [customFields, setCustomFields] = useState<Record<string, any>>({});
+  const [newFieldName, setNewFieldName] = useState("");
+  const [newFieldValue, setNewFieldValue] = useState("");
+  const addCustomField = () => {
+    const name = newFieldName.trim();
+    if (!name) return;
+    const raw = newFieldValue.trim();
+    const num = Number(raw);
+    const val = raw !== "" && !isNaN(num) && String(num) === raw ? num : newFieldValue;
+    setCustomFields((p) => ({ ...p, [name]: val }));
+    setNewFieldName("");
+    setNewFieldValue("");
+  };
+  const removeCustomField = (k: string) =>
+    setCustomFields((p) => { const n = { ...p }; delete n[k]; return n; });
 
   const mutation = useMutation<any,Error,void>({
     mutationFn: async () => {
@@ -1288,6 +1305,8 @@ function AddEntryDialog({
           coerced[f.name] = raw ?? "";
         }
       }
+      // Merge any ad-hoc custom fields the user added.
+      for (const [k, v] of Object.entries(customFields)) coerced[k] = v;
       // Prevent empty entries
       const hasValue = Object.values(coerced).some(v => v !== undefined && v !== "" && v !== null);
       if (!hasValue) throw new Error("Please fill in at least one field");
@@ -1313,6 +1332,7 @@ function AddEntryDialog({
         else if (f.type === "boolean") coerced[f.name] = raw === true || raw === "true";
         else coerced[f.name] = raw ?? "";
       }
+      for (const [k, v] of Object.entries(customFields)) coerced[k] = v;
       const tempEntry = { id: 'temp-' + Date.now(), values: coerced, notes: notes.trim() || undefined, timestamp: new Date().toISOString(), computed: {} };
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
         (old || []).map((t: any) => t.id === tracker.id
@@ -1325,6 +1345,9 @@ function AddEntryDialog({
     onSuccess: () => {
       setValues({});
       setNotes("");
+      setCustomFields({});
+      setNewFieldName("");
+      setNewFieldValue("");
       onOpenChange(false);
       toast({ title: "Entry logged", description: `Added entry to ${tracker.name}` });
     },
@@ -1348,6 +1371,9 @@ function AddEntryDialog({
   const handleClose = () => {
     setValues({});
     setNotes("");
+    setCustomFields({});
+    setNewFieldName("");
+    setNewFieldValue("");
     onOpenChange(false);
   };
 
@@ -1429,6 +1455,50 @@ function AddEntryDialog({
               )}
             </div>
           ))}
+          {/* Ad-hoc custom fields — add anything not in the tracker's schema */}
+          {Object.keys(customFields).length > 0 && (
+            <div className="space-y-1.5">
+              {Object.entries(customFields).map(([k, v]) => (
+                <div key={k} className="flex items-center gap-1.5">
+                  <span className="text-xs text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</span>
+                  <span className="text-sm flex-1 truncate">{String(v)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeCustomField(k)}
+                    className="p-0.5 rounded hover:bg-destructive/15 transition-colors"
+                    title={`Remove "${k}"`}
+                    aria-label={`Remove field ${k}`}
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div>
+            <Label className="text-xs font-medium text-muted-foreground">Add a field</Label>
+            <div className="flex items-center gap-1.5 mt-1">
+              <Input
+                className="w-28 text-sm"
+                placeholder="field"
+                value={newFieldName}
+                onChange={(e) => setNewFieldName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomField(); } }}
+                data-testid="add-custom-field-name"
+              />
+              <Input
+                className="flex-1 text-sm"
+                placeholder="value"
+                value={newFieldValue}
+                onChange={(e) => setNewFieldValue(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomField(); } }}
+                data-testid="add-custom-field-value"
+              />
+              <Button type="button" size="sm" variant="outline" className="h-9 px-2 text-xs" onClick={addCustomField} disabled={!newFieldName.trim()}>
+                <Plus className="h-3.5 w-3.5 mr-0.5" />Add
+              </Button>
+            </div>
+          </div>
           <div>
             <Label className="text-xs font-medium text-muted-foreground">Notes (optional)</Label>
             <Textarea
@@ -1454,7 +1524,7 @@ function AddEntryDialog({
               const hasValue = tracker.fields.some(f => {
                 const v = values[f.name];
                 return v !== undefined && v !== "" && v !== null;
-              });
+              }) || Object.keys(customFields).length > 0;
               if (!hasValue) {
                 mutation.mutate(); // will throw "Please fill in at least one field"
                 return;
@@ -2599,11 +2669,25 @@ function EntryRow({
   const { toast } = useToast();
   const [editing, setEditing] = useState(false);
   const [editVals, setEditVals] = useState<Record<string, any>>({});
+  const [editNotes, setEditNotes] = useState("");
+  const [newFieldName, setNewFieldName] = useState("");
+  const [newFieldValue, setNewFieldValue] = useState("");
 
   const editMutation = useMutation({
-    mutationFn: () => apiRequest("PATCH", `/api/trackers/${tracker.id}/entries/${entry.id}`, { values: editVals }),
-    // Optimistic: patch the entry inside cached trackers immediately so the
-    // edit feels instant. Roll back if the server rejects.
+    mutationFn: () => {
+      // Keys that existed on the entry but the user removed → explicit delete
+      // signal (the PATCH route honors `valuesToDelete`). Remaining keys in
+      // editVals are upserted, so adding a brand-new field just works.
+      const orig = Object.keys(entry.values || {}).filter((k) => k !== "_notes");
+      const valuesToDelete = orig.filter((k) => !(k in editVals));
+      return apiRequest("PATCH", `/api/trackers/${tracker.id}/entries/${entry.id}`, {
+        values: editVals,
+        valuesToDelete,
+        notes: editNotes,
+      });
+    },
+    // Optimistic: rebuild the entry's values from the editor state so adds,
+    // edits AND deletes all reflect instantly. Roll back if the server rejects.
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/trackers"] });
@@ -2612,7 +2696,15 @@ function EntryRow({
         return old.map((t: any) => {
           if (t.id !== tracker.id) return t;
           if (!Array.isArray(t.entries)) return t;
-          return { ...t, entries: t.entries.map((e: any) => e.id === entry.id ? { ...e, values: { ...e.values, ...editVals } } : e) };
+          return {
+            ...t,
+            entries: t.entries.map((e: any) => {
+              if (e.id !== entry.id) return e;
+              const nv: any = { ...editVals };
+              if (editNotes) nv._notes = editNotes;
+              return { ...e, values: nv, notes: editNotes };
+            }),
+          };
         });
       });
       return { prev };
@@ -2635,57 +2727,138 @@ function EntryRow({
   });
 
   const startEdit = () => {
-    setEditVals({ ...entry.values });
+    // Seed from EVERY field actually stored on the entry (not just the
+    // tracker's declared fields) so entry-only fields like bedtime/quality are
+    // editable too. _notes is edited in its own box.
+    const v: Record<string, any> = {};
+    for (const [k, val] of Object.entries(entry.values || {})) {
+      if (k !== "_notes") v[k] = val;
+    }
+    setEditVals(v);
+    setEditNotes((entry.values?._notes as string) || (entry as any).notes || "");
+    setNewFieldName("");
+    setNewFieldValue("");
     setEditing(true);
   };
 
-  // Bug #18: if the source entry refetches (or another tab updates it) while
-  // the row is being edited, re-seed so the form reflects current server
-  // state instead of holding the values captured on the first startEdit.
-  // Watching entry.id covers the (unlikely) case where the same DOM row is
-  // re-keyed to a different entry without unmounting.
+  // Bug #18: re-seed if the entry changes underneath an open editor.
   useEffect(() => {
     if (!editing) return;
-    setEditVals({ ...entry.values });
+    const v: Record<string, any> = {};
+    for (const [k, val] of Object.entries(entry.values || {})) {
+      if (k !== "_notes") v[k] = val;
+    }
+    setEditVals(v);
   }, [editing, entry.id, JSON.stringify(entry.values)]);
+
+  // Coerce a typed input back to number when the field/value is numeric.
+  const fieldIsNumeric = (k: string) => {
+    const def = tracker.fields.find((f) => f.name.toLowerCase() === k.toLowerCase());
+    if (def) return def.type === "number";
+    return typeof entry.values[k] === "number";
+  };
+  const setField = (k: string, raw: string) =>
+    setEditVals((prev) => ({ ...prev, [k]: fieldIsNumeric(k) ? (raw === "" ? "" : parseFloat(raw)) : raw }));
+  const removeField = (k: string) =>
+    setEditVals((prev) => { const n = { ...prev }; delete n[k]; return n; });
+  const addField = () => {
+    const name = newFieldName.trim();
+    if (!name) return;
+    const raw = newFieldValue.trim();
+    const num = Number(raw);
+    const val = raw !== "" && !isNaN(num) && String(num) === raw ? num : newFieldValue;
+    setEditVals((prev) => ({ ...prev, [name]: val }));
+    setNewFieldName("");
+    setNewFieldValue("");
+  };
 
   const primaryVal = entry.values[primaryField];
   const otherFields = tracker.fields.filter((f) => f.name !== primaryField);
-  // BP detection for display
   const bpS = entry.values["systolic"] ?? entry.values["systolic_pressure"] ?? entry.values["sbp"];
   const bpD = entry.values["diastolic"] ?? entry.values["diastolic_pressure"] ?? entry.values["dbp"];
   const isEntryBP = typeof bpS === "number" && typeof bpD === "number";
-  const entryNotes = (entry.values["_notes"] as string | undefined) || entry.notes;
+  const entryNotes = (entry.values["_notes"] as string | undefined) || (entry as any).notes;
 
   if (editing) {
+    const keys = Object.keys(editVals);
     return (
       <div
-        className="flex flex-col gap-1.5 rounded-md border border-primary/30 px-2.5 py-1.5 text-xs bg-primary/5"
+        className="flex flex-col gap-2 rounded-md border border-primary/30 px-2.5 py-2 text-xs bg-primary/5"
         data-testid={`entry-row-edit-${entry.id}`}
       >
-        <div className="flex flex-wrap gap-1.5">
-          {tracker.fields.filter(f => f.name !== "_notes").map(f => (
-            <div key={f.name} className="flex items-center gap-1">
-              <label className="text-muted-foreground text-xs">{f.name}:</label>
-              {f.type === "boolean" ? (
+        {/* Existing fields — edit value or delete the field */}
+        <div className="flex flex-col gap-1.5">
+          {keys.length === 0 && (
+            <span className="text-muted-foreground italic">No fields — add one below.</span>
+          )}
+          {keys.map((k) => (
+            <div key={k} className="flex items-center gap-1.5">
+              <label className="text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
+              {typeof editVals[k] === "boolean" ? (
                 <Checkbox
-                  checked={!!editVals[f.name]}
-                  onCheckedChange={(v) => setEditVals(prev => ({ ...prev, [f.name]: !!v }))}
+                  checked={!!editVals[k]}
+                  onCheckedChange={(v) => setEditVals((prev) => ({ ...prev, [k]: !!v }))}
                 />
               ) : (
                 <Input
-                  className="h-6 w-20 text-xs px-1"
-                  type={f.type === "number" ? "number" : "text"}
-                  value={editVals[f.name] ?? ""}
-                  onChange={e => setEditVals(prev => ({ ...prev, [f.name]: f.type === "number" ? (e.target.value === "" ? "" : parseFloat(e.target.value)) : e.target.value }))}
+                  className="h-6 flex-1 text-xs px-1.5"
+                  type={fieldIsNumeric(k) ? "number" : "text"}
+                  value={editVals[k] ?? ""}
+                  onChange={(e) => setField(k, e.target.value)}
+                  data-testid={`entry-field-${k}`}
                 />
               )}
+              <button
+                type="button"
+                onClick={() => removeField(k)}
+                className="p-0.5 rounded hover:bg-destructive/15 transition-colors"
+                title={`Remove "${k}"`}
+                aria-label={`Remove field ${k}`}
+                data-testid={`entry-field-delete-${k}`}
+              >
+                <X className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+              </button>
             </div>
           ))}
         </div>
+
+        {/* Notes */}
+        <div className="flex items-center gap-1.5">
+          <label className="text-muted-foreground w-24 shrink-0">notes</label>
+          <Input
+            className="h-6 flex-1 text-xs px-1.5"
+            value={editNotes}
+            placeholder="Optional note"
+            onChange={(e) => setEditNotes(e.target.value)}
+          />
+        </div>
+
+        {/* Add a new field */}
+        <div className="flex items-center gap-1.5 border-t border-border/50 pt-1.5">
+          <Input
+            className="h-6 w-24 text-xs px-1.5"
+            placeholder="new field"
+            value={newFieldName}
+            onChange={(e) => setNewFieldName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addField(); }}
+            data-testid="entry-new-field-name"
+          />
+          <Input
+            className="h-6 flex-1 text-xs px-1.5"
+            placeholder="value"
+            value={newFieldValue}
+            onChange={(e) => setNewFieldValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addField(); }}
+            data-testid="entry-new-field-value"
+          />
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={addField} disabled={!newFieldName.trim()}>
+            <Plus className="h-3 w-3 mr-0.5" />Add
+          </Button>
+        </div>
+
         <div className="flex items-center gap-1 justify-end">
-          <Button size="sm" variant="ghost" className="h-5 px-2 text-xs" onClick={() => setEditing(false)}>Cancel</Button>
-          <Button size="sm" className="h-5 px-2 text-xs" onClick={() => editMutation.mutate()} disabled={editMutation.isPending}>
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setEditing(false)}>Cancel</Button>
+          <Button size="sm" className="h-6 px-2 text-xs" onClick={() => editMutation.mutate()} disabled={editMutation.isPending} data-testid={`entry-save-${entry.id}`}>
             <Check className="h-3 w-3 mr-1" />Save
           </Button>
         </div>
@@ -2695,8 +2868,13 @@ function EntryRow({
 
   return (
     <div
-      className="flex items-start justify-between gap-2 rounded-md border px-2.5 py-1.5 text-xs bg-muted/30"
+      className="flex items-start justify-between gap-2 rounded-md border px-2.5 py-1.5 text-xs bg-muted/30 hover:bg-muted/50 transition-colors cursor-pointer"
       data-testid={`entry-row-${entry.id}`}
+      role="button"
+      tabIndex={0}
+      onClick={startEdit}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startEdit(); } }}
+      title="Tap to edit, add, or remove fields"
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1.5 flex-wrap">
@@ -2731,7 +2909,7 @@ function EntryRow({
           })}
         </span>
       </div>
-      <div className="flex items-center gap-0.5">
+      <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
         <button onClick={startEdit} className="p-0.5 rounded hover:bg-muted transition-colors" title="Edit entry">
           <Pencil className="h-3 w-3 text-muted-foreground hover:text-foreground" />
         </button>
