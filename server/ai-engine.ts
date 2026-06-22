@@ -21,6 +21,7 @@ import {
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
+import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
@@ -143,7 +144,7 @@ function stripSensitiveDocData(
 // Rich visual output types (inline — shared/schema was reverted)
 type ChartType = "line" | "bar" | "area" | "pie" | "scatter" | "composed" | "radar";
 interface ChartSeries { dataKey: string; name: string; color?: string; type?: "line"|"bar"|"area"; stackId?: string; }
-interface ChartSpec { type: ChartType; title: string; subtitle?: string; data: Array<Record<string, any>>; series: ChartSeries[]; xAxisKey: string; xAxisLabel?: string; yAxisLabel?: string; showLegend?: boolean; showGrid?: boolean; height?: number; nameKey?: string; valueKey?: string; }
+interface ChartSpec { type: ChartType; title: string; subtitle?: string; data: Array<Record<string, any>>; series: ChartSeries[]; xAxisKey: string; xAxisLabel?: string; yAxisLabel?: string; showLegend?: boolean; showGrid?: boolean; height?: number; nameKey?: string; valueKey?: string; unit?: string; notes?: string[]; confidence?: number; showValueLabels?: boolean; }
 interface TableColumn { key: string; label: string; align?: "left"|"center"|"right"; format?: "currency"|"date"|"number"|"percent"|"text"; }
 interface TableSpec { title: string; subtitle?: string; columns: TableColumn[]; rows: Array<Record<string, any>>; summary?: Record<string, any>; }
 interface ReportMetric { label: string; value: string | number; change?: string; changeType?: "positive"|"negative"|"neutral"; }
@@ -3421,14 +3422,14 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "generate_chart",
-    description: "Generate a REAL VISUAL CHART rendered directly in the chat. USE THIS whenever the user says 'show', 'chart', 'graph', 'visualize', 'plot', 'trend', 'pie chart', 'compare', or asks to SEE data visually. DO NOT describe what a chart would look like \u2014 call this tool and it will render an actual interactive chart inline.\n\nChart types: 'line'=trends over time, 'bar'=categories, 'area'=cumulative, 'pie'=breakdown, 'scatter'=correlation, 'composed'=multi-metric, 'radar'=scores\n\nExamples:\n- 'Show my spending as a pie chart' \u2192 chartType:'pie', dataSource:'expenses'\n- 'Show my weight trend' \u2192 chartType:'line', dataSource:'trackers', trackerName:'weight'\n- 'Compare spending this month vs last' \u2192 chartType:'bar', dataSource:'expenses', dateRange:'3months'",
+    description: "Generate a REAL VISUAL CHART rendered directly in the chat. USE THIS whenever the user says 'show', 'chart', 'graph', 'visualize', 'plot', 'trend', 'pie chart', 'compare', or asks to SEE data visually. DO NOT describe what a chart would look like \u2014 call this tool and it will render an actual interactive chart inline.\n\nChart types: 'line'=trends/measurements over time (weight, blood pressure, glucose), 'bar'=daily/weekly totals (carbs, calories, miles, spending), 'area'=cumulative, 'pie'=breakdown, 'scatter'=correlation, 'composed'=multi-metric, 'radar'=scores.\n\nCRITICAL \u2014 when charting a tracker that stores MULTIPLE values per entry (e.g. a Nutrition tracker logs calories+protein+carbs+fat), you MUST set valueField to the EXACT metric the user named, or it will plot the wrong number. 'Show my carbs this week' \u2192 trackerName:'Nutrition', valueField:'carbs'. The chart engine sums additive metrics (carbs/calories/miles/spending) per day and takes the latest reading for measurements (weight/BP), then fills the whole date range so gaps are visible \u2014 you do NOT aggregate yourself.\n\nExamples:\n- 'Show my carbs this week' \u2192 chartType:'bar', dataSource:'trackers', trackerName:'Nutrition', valueField:'carbs', dateRange:'week'\n- 'Show my spending as a pie chart' \u2192 chartType:'pie', dataSource:'expenses'\n- 'Show my weight trend' \u2192 chartType:'line', dataSource:'trackers', trackerName:'weight'\n- 'Graph my blood pressure last month' \u2192 chartType:'line', dataSource:'trackers', trackerName:'blood pressure', dateRange:'month'",
     input_schema: {
       type: "object" as const,
       properties: {
         chartType: { type: "string", enum: ["line","bar","area","pie","scatter","composed","radar"], description: "Type of chart" },
         title: { type: "string", description: "Chart title" },
         subtitle: { type: "string", description: "Optional subtitle" },
-        dataSource: { type: "string", enum: ["trackers","expenses","tasks","habits","journal","obligations","goals","custom"], description: "Data source" },
+        dataSource: { type: "string", enum: ["trackers","expenses","obligations","habits","goals","assets","profiles","tasks","journal","custom"], description: "Data source: 'trackers'=any logged metric (carbs, weight, BP, miles…), 'expenses'=spending, 'obligations'=recurring bills, 'habits'=check-ins, 'goals'=progress, 'assets'/'profiles'=asset values/net worth." },
         trackerName: { type: "string", description: "For trackers: tracker name(s), comma-separated for multiple" },
         valueField: { type: "string", description: "Field to plot on Y axis" },
         dateRange: { type: "string", enum: ["week","month","3months","6months","year","all"], description: "Time period" },
@@ -8675,6 +8676,52 @@ async function resolveProfileId(name?: string): Promise<string | undefined> {
   return profiles.find(p => p.name.toLowerCase() === lc || (p.type === 'self' && lc === 'me'))?.id;
 }
 
+// Best-guess display unit for a metric when the tracker doesn't declare one.
+function guessUnit(field: string): string {
+  const f = field.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (/(carb|protein|fat|sugar|fiber|sodium)/.test(f)) return "g";
+  if (/(calorie|cal|kcal)/.test(f)) return "kcal";
+  if (/(mile|distance)/.test(f)) return "mi";
+  if (/(step)/.test(f)) return "steps";
+  if (/(weight|bodyweight)/.test(f)) return "lb";
+  if (/(systolic|diastolic|bp)/.test(f)) return "mmHg";
+  if (/(glucose|bloodsugar)/.test(f)) return "mg/dL";
+  if (/(minute|duration)/.test(f)) return "min";
+  if (/(amount|cost|spend|price|total)/.test(f)) return "$";
+  return "";
+}
+
+// The "rubric / key" the user asked for: a short, honest provenance + coverage
+// note set rendered under every chart, so the visual is self-explaining and its
+// limits are visible (how many logs, what each value means, where the gaps are).
+function buildChartNotes(
+  source: string,
+  agg: { usedCount: number; filledBuckets: number; emptyBuckets: number; totalBuckets: number; mode: string; points: Array<{label:string;value:number|null;count:number}> },
+  granLabel: string,
+  unit?: string,
+  aggWord?: string,
+): string[] {
+  const notes: string[] = [];
+  notes.push(`Source: "${source}" logs — based on ${agg.usedCount} entr${agg.usedCount===1?"y":"ies"}.`);
+  const meaning = agg.mode === "sum" ? `Each bar is the ${granLabel}'s TOTAL` : agg.mode === "avg" ? `Each point is the ${granLabel}'s average` : `Each point is that ${granLabel}'s reading`;
+  notes.push(`${meaning}${unit ? ` in ${unit}` : ""}.`);
+  if (agg.emptyBuckets > 0) {
+    const gaps = agg.points.filter(p => p.value === null).map(p => p.label);
+    const shown = gaps.slice(0, 4).join(", ");
+    notes.push(`No data for ${agg.emptyBuckets} ${granLabel}${agg.emptyBuckets===1?"":"s"}${gaps.length ? ` (${shown}${gaps.length>4?"…":""})` : ""} — shown as gaps.`);
+  }
+  return notes;
+}
+
+// Confidence reflects how much of the window is actually backed by data.
+function chartConfidence(agg: { usedCount: number; filledBuckets: number; totalBuckets: number }): number {
+  if (agg.totalBuckets === 0) return 0;
+  const coverage = agg.filledBuckets / agg.totalBuckets;
+  // More entries + more covered buckets ⇒ higher confidence.
+  const volume = Math.min(1, agg.usedCount / Math.max(3, agg.totalBuckets));
+  return Math.round(Math.min(1, 0.4 + coverage * 0.4 + volume * 0.2) * 100) / 100;
+}
+
 async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
   const { chartType, title, subtitle, dataSource, trackerName, dateRange, forProfile, groupBy, showLegend } = input;
   const since = dateRangeStart(dateRange);
@@ -8689,17 +8736,63 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
     });
     if (filtered.length === 0) throw new Error("No expense data found for the selected period.");
 
+    const total = filtered.reduce((s,e)=>s+e.amount,0);
     if (chartType === "pie" || groupBy === "category") {
       const grouped: Record<string, number> = {};
       for (const e of filtered) { const cat = e.category || "general"; grouped[cat] = (grouped[cat]||0) + e.amount; }
       const data = Object.entries(grouped).sort((a,b) => b[1]-a[1]).map(([category, amount], i) => ({ category, amount: Math.round(amount*100)/100, fill: CHART_COLORS[i%CHART_COLORS.length] }));
-      return { type:"pie", title, subtitle: subtitle || `${filtered.length} expenses \u00b7 $${filtered.reduce((s,e)=>s+e.amount,0).toFixed(2)} total`, data, series:[{dataKey:"amount",name:"Amount"}], xAxisKey:"category", nameKey:"category", valueKey:"amount", showLegend: showLegend !== false, height:300 };
+      const top = data[0];
+      return {
+        type:"pie", title, subtitle: subtitle || `${filtered.length} expenses \u00b7 $${total.toFixed(2)} total`,
+        data, series:[{dataKey:"amount",name:"Amount"}], xAxisKey:"category", nameKey:"category", valueKey:"amount",
+        unit:"$", showLegend: showLegend !== false, height:300,
+        notes: [
+          `Source: expense ledger \u2014 ${filtered.length} transaction${filtered.length===1?"":"s"} totaling $${total.toFixed(2)}.`,
+          `Each slice is a category's share of spending.`,
+          ...(top ? [`Largest: ${top.category} ($${top.amount.toFixed(2)}, ${Math.round(top.amount/total*100)}%).`] : []),
+        ],
+        confidence: filtered.length >= 3 ? 0.9 : 0.6,
+      };
     }
-    // Bar by month
+    // Spending over time \u2014 bucket by day/week/month across the whole window so
+    // gaps show, totals are correct, and the same notes/key apply as elsewhere.
+    const gran = pickGranularity(dateRange);
+    const earliest = filtered.reduce((m,e)=>Math.min(m,new Date(e.date||e.createdAt).getTime()), Date.now());
+    const sinceEff = (!dateRange || dateRange === "all") ? new Date(earliest) : since;
+    const granLabel = gran === "day" ? "day" : gran === "week" ? "week" : "month";
+    const agg = aggregateTimeSeries(filtered.map(e=>({date:e.date||e.createdAt, value:e.amount})), { since: sinceEff, until: new Date(), granularity: gran, mode: "sum" });
+    const data = agg.points.map(p => ({ label: p.label, amount: p.value }));
+    return {
+      type:"bar", title, subtitle: subtitle || `$${total.toFixed(2)} over ${agg.usedCount} expense${agg.usedCount===1?"":"s"} \u00b7 ${agg.firstLabel}\u2013${agg.lastLabel}`,
+      data, series:[{dataKey:"amount",name:"Spending ($)",color:CHART_COLORS[0]}], xAxisKey:"label", yAxisLabel:"Spending ($)", unit:"$",
+      showLegend:false, showGrid:true, height:280, showValueLabels: data.length <= 14,
+      notes: buildChartNotes("expense ledger", agg, granLabel, "$", `${granLabel}ly total`),
+      confidence: chartConfidence(agg),
+    };
+  }
+
+  if (dataSource === "obligations") {
+    const obligations = await storage.getObligations();
+    const active = obligations.filter((o:any) => o.status !== "cancelled" && (!profileId || o.linkedProfiles?.includes(profileId)));
+    if (active.length === 0) throw new Error("No active bills/obligations found to chart.");
+    // Normalize each to a monthly amount so a yearly bill doesn't dwarf rent.
+    const monthly = (o:any) => { const a = Number(o.amount||0); const f=(o.frequency||"").toLowerCase(); return f==="weekly"?a*4.33:f==="annual"||f==="yearly"?a/12:f==="quarterly"?a/3:a; };
     const grouped: Record<string, number> = {};
-    for (const e of filtered) { const d = new Date(e.date || e.createdAt); const k = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; grouped[k] = (grouped[k]||0)+e.amount; }
-    const data = Object.entries(grouped).sort((a,b)=>a[0].localeCompare(b[0])).map(([month,amount])=>({month,amount:Math.round(amount*100)/100}));
-    return { type:"bar", title, subtitle, data, series:[{dataKey:"amount",name:"Spending",color:CHART_COLORS[0]}], xAxisKey:"month", yAxisLabel:"Amount ($)", showLegend:false, showGrid:true, height:260 };
+    for (const o of active) { const k = o.category || o.name || "bill"; grouped[k] = (grouped[k]||0) + monthly(o); }
+    const data = Object.entries(grouped).sort((a,b)=>b[1]-a[1]).map(([category,amount],i)=>({ category, amount: Math.round(amount*100)/100, fill: CHART_COLORS[i%CHART_COLORS.length] }));
+    const totalMo = data.reduce((s,d)=>s+d.amount,0);
+    const useType = chartType === "pie" || data.length <= 8;
+    return {
+      type: useType ? "pie" : "bar", title, subtitle: subtitle || `${active.length} bills \u00b7 $${totalMo.toFixed(2)}/mo`,
+      data, series:[{dataKey:"amount",name:"$/mo",color:CHART_COLORS[0]}], xAxisKey:"category", nameKey:"category", valueKey:"amount",
+      unit:"$", yAxisLabel:"$/month", showLegend: useType, showGrid:true, height: useType?300:280, showValueLabels: !useType && data.length<=14,
+      notes: [
+        `Source: recurring bills \u2014 ${active.length} active obligation${active.length===1?"":"s"}.`,
+        `Amounts normalized to $/month (weekly \u00d74.33, annual \u00f712).`,
+        `Total recurring spend: $${totalMo.toFixed(2)}/month.`,
+      ],
+      confidence: active.length >= 2 ? 0.85 : 0.6,
+    };
   }
 
   if (dataSource === "trackers" && trackerName) {
@@ -8709,40 +8802,125 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
     if (trackers.length === 0) throw new Error(`Tracker "${trackerName}" not found.`);
 
     const tracker = trackers[0];
-    const entries = tracker.entries.filter(e => new Date(e.timestamp) >= since).sort((a,b)=>new Date(a.timestamp).getTime()-new Date(b.timestamp).getTime());
-    if (entries.length === 0) throw new Error(`No entries found for "${tracker.name}" in this period.`);
+    const inRange = tracker.entries.filter(e => new Date(e.timestamp) >= since);
+    if (inRange.length === 0) throw new Error(`No "${tracker.name}" entries in this period. Log some first and I'll chart them.`);
 
-    if (/blood.?pressure|bp/i.test(tracker.name) || entries[0]?.values?.systolic !== undefined) {
-      const data = entries.map(e => ({ date: new Date(e.timestamp).toLocaleDateString("en-US",{month:"short",day:"numeric"}), Systolic: e.values.systolic, Diastolic: e.values.diastolic }));
-      return { type:"line", title, subtitle, data, series:[{dataKey:"Systolic",name:"Systolic",color:CHART_COLORS[0]},{dataKey:"Diastolic",name:"Diastolic",color:CHART_COLORS[1]}], xAxisKey:"date", showLegend:true, showGrid:true, height:260 };
+    const now = new Date();
+    const gran = pickGranularity(dateRange);
+    // For "all"/no range, start the window at the earliest real entry so we
+    // don't draw decades of empty buckets.
+    const earliest = tracker.entries.reduce((min, e) => Math.min(min, new Date(e.timestamp).getTime()), Date.now());
+    const sinceEff = (!dateRange || dateRange === "all") ? new Date(earliest) : since;
+    const granLabel = gran === "day" ? "day" : gran === "week" ? "week" : "month";
+
+    // ── Blood pressure: two real series (systolic/diastolic), last reading/day.
+    if (/blood.?pressure|bp/i.test(tracker.name) || inRange[0]?.values?.systolic !== undefined) {
+      const sys = aggregateTimeSeries(tracker.entries.map(e => ({ date: e.timestamp, value: Number(e.values?.systolic) })), { since: sinceEff, until: now, granularity: gran, mode: "last" });
+      const dia = aggregateTimeSeries(tracker.entries.map(e => ({ date: e.timestamp, value: Number(e.values?.diastolic) })), { since: sinceEff, until: now, granularity: gran, mode: "last" });
+      const data = sys.points.map((p, i) => ({ date: p.label, Systolic: p.value, Diastolic: dia.points[i]?.value ?? null }));
+      if (sys.usedCount === 0) throw new Error(`No blood-pressure readings found for "${tracker.name}" in this period.`);
+      return {
+        type: "line", title, subtitle: subtitle || `${sys.usedCount} readings · ${sys.firstLabel}–${sys.lastLabel}`,
+        data, series: [{dataKey:"Systolic",name:"Systolic",color:CHART_COLORS[4]},{dataKey:"Diastolic",name:"Diastolic",color:CHART_COLORS[0]}],
+        xAxisKey:"date", yAxisLabel: tracker.unit || "mmHg", unit: tracker.unit || "mmHg",
+        showLegend:true, showGrid:true, height:280, showValueLabels: data.length <= 14,
+        notes: buildChartNotes(tracker.name, sys, granLabel, tracker.unit || "mmHg"),
+        confidence: chartConfidence(sys),
+      };
     }
-    const primaryField = tracker.fields.find(f=>f.isPrimary)?.name || Object.keys(entries[0].values)[0] || "value";
-    const data = entries.map(e => ({ date: new Date(e.timestamp).toLocaleDateString("en-US",{month:"short",day:"numeric"}), [primaryField]: typeof e.values[primaryField]==="number"?e.values[primaryField]:0 }));
-    // Don't render a chart if all data points are zero (no meaningful data)
-    const hasNonZero = data.some(d => typeof d[primaryField] === "number" && d[primaryField] !== 0);
-    if (!hasNonZero) throw new Error(`No meaningful data found for "${tracker.name}" — all values are zero.`);
-    return { type: chartType||"line", title, subtitle, data, series:[{dataKey:primaryField,name:tracker.name,color:CHART_COLORS[0]}], xAxisKey:"date", yAxisLabel:`${tracker.unit||primaryField}`, showLegend:false, showGrid:true, height:260 };
+
+    // ── Generic metric: plot the field the user actually asked for, aggregated
+    // correctly per bucket (sum for additive macros, last for measurements).
+    const fieldNames = Array.from(new Set(tracker.entries.flatMap(e => Object.keys(e.values || {})).filter(k => inRange.some(en => typeof en.values?.[k] === "number"))));
+    const primaryField = tracker.fields.find(f=>f.isPrimary)?.name;
+    const field = pickChartField(input.valueField, title, fieldNames, primaryField) || primaryField || fieldNames[0];
+    if (!field) throw new Error(`Couldn't find a numeric field to chart on "${tracker.name}".`);
+    const mode: AggMode = classifyMetric(field);
+    const agg = aggregateTimeSeries(
+      tracker.entries.map(e => ({ date: e.timestamp, value: Number(e.values?.[field]) })),
+      { since: sinceEff, until: now, granularity: gran, mode },
+    );
+    if (agg.usedCount === 0) throw new Error(`No numeric "${field}" values found for "${tracker.name}" in this period.`);
+    const unit = tracker.unit || guessUnit(field);
+    const seriesName = `${field.charAt(0).toUpperCase()}${field.slice(1)}${unit ? ` (${unit})` : ""}`;
+    const data = agg.points.map(p => ({ label: p.label, [field]: p.value }));
+    const aggWord = mode === "sum" ? `${granLabel}ly total` : mode === "avg" ? `${granLabel}ly average` : "reading";
+    return {
+      type: chartType || (mode === "sum" ? "bar" : "line"),
+      title, subtitle: subtitle || `${field} per ${granLabel} · ${agg.usedCount} log${agg.usedCount===1?"":"s"} · ${agg.firstLabel}–${agg.lastLabel}`,
+      data, series: [{ dataKey: field, name: seriesName, color: CHART_COLORS[0] }],
+      xAxisKey: "label", yAxisLabel: unit ? `${field} (${unit})` : field, unit,
+      showLegend: false, showGrid: true, height: 280, showValueLabels: data.length <= 14,
+      notes: buildChartNotes(tracker.name, agg, granLabel, unit, aggWord),
+      confidence: chartConfidence(agg),
+    };
   }
 
   if (dataSource === "habits") {
     const habits = await storage.getHabits();
+    if (habits.length === 0) throw new Error("No habits to chart yet — create a habit first.");
     const now = new Date();
     const data = Array.from({length:7},(_,i) => {
       const d = new Date(now.getTime()-(6-i)*86400000);
       const ds = d.toLocaleDateString('en-CA');
-      return { day: d.toLocaleDateString("en-US",{weekday:"short"}), completed: habits.filter(h=>h.checkins?.some(c=>c.date===ds)).length, total: habits.length };
+      return { day: d.toLocaleDateString("en-US",{weekday:"short"}), completed: habits.filter(h=>h.checkins?.some(c=>c.date===ds)).length };
     });
-    return { type:"bar", title, subtitle: subtitle||`${habits.length} habits tracked`, data, series:[{dataKey:"completed",name:"Completed",color:CHART_COLORS[2]}], xAxisKey:"day", showLegend:false, showGrid:true, height:220 };
+    const totalCheckins = data.reduce((s,d)=>s+d.completed,0);
+    return {
+      type:"bar", title, subtitle: subtitle||`${habits.length} habits · ${totalCheckins} check-ins this week`,
+      data, series:[{dataKey:"completed",name:"Completed",color:CHART_COLORS[3]}], xAxisKey:"day", yAxisLabel:"habits done",
+      showLegend:false, showGrid:true, height:240, showValueLabels:true,
+      notes: [
+        `Source: habit check-ins — ${habits.length} habit${habits.length===1?"":"s"} tracked.`,
+        `Each bar is how many habits you completed that day (last 7 days).`,
+        `${totalCheckins} total check-in${totalCheckins===1?"":"s"} this week.`,
+      ],
+      confidence: habits.length >= 1 ? 0.85 : 0.5,
+    };
   }
 
   if (dataSource === "goals") {
     const goals = await storage.getGoals();
     if (goals.length === 0) throw new Error("No goals found.");
     const data = goals.map(g => ({ goal: g.title.slice(0,20), progress: Math.min(100,Math.round((g.current/g.target)*100)) }));
-    return { type:"radar", title, subtitle, data, series:[{dataKey:"progress",name:"Progress %",color:CHART_COLORS[0]}], xAxisKey:"goal", showLegend:false, height:280 };
+    return {
+      type: (chartType === "bar" || goals.length > 6) ? "bar" : "radar", title, subtitle: subtitle || `${goals.length} active goal${goals.length===1?"":"s"}`,
+      data, series:[{dataKey:"progress",name:"Progress %",color:CHART_COLORS[0]}], xAxisKey:"goal", yAxisLabel:"% complete", unit:"%",
+      showLegend:false, showGrid:true, height:280, showValueLabels: goals.length > 6,
+      notes: [
+        `Source: goals — ${goals.length} goal${goals.length===1?"":"s"}.`,
+        `Each value is progress toward target (current ÷ target).`,
+      ],
+      confidence: 0.9,
+    };
   }
 
-  throw new Error(`Cannot build chart: dataSource="${dataSource}", chartType="${chartType}"`);
+  // Assets / net-worth-style: chart profile values (e.g. "what are my assets worth").
+  if (dataSource === "profiles" || dataSource === "assets" || dataSource === "custom") {
+    const profiles = await storage.getProfiles();
+    const assetTypes = new Set(["vehicle","property","investment","asset","account","banking"]);
+    const ownerId = profileId;
+    const assets = profiles.filter((p:any) => assetTypes.has(p.type) && (!ownerId || p.id === ownerId || p.parentProfileId === ownerId));
+    const valued = assets.map((p:any) => ({ name: String(p.name).slice(0,22), value: Number(p.fields?.currentValue || p.fields?.value || p.fields?.balance || p.fields?.purchasePrice || 0) }))
+      .filter(a => a.value > 0).sort((a,b)=>b.value-a.value);
+    if (valued.length === 0) throw new Error("No valued assets found to chart. Add a value to an asset first.");
+    const totalVal = valued.reduce((s,a)=>s+a.value,0);
+    const data = valued.map((a,i)=>({ ...a, category: a.name, amount: a.value, fill: CHART_COLORS[i%CHART_COLORS.length] }));
+    const usePie = chartType === "pie" || valued.length <= 8;
+    return {
+      type: usePie ? "pie" : "bar", title, subtitle: subtitle || `${valued.length} assets · $${totalVal.toLocaleString()} total`,
+      data, series:[{dataKey:"amount",name:"Value",color:CHART_COLORS[0]}], xAxisKey:"category", nameKey:"category", valueKey:"amount",
+      unit:"$", yAxisLabel:"Value ($)", showLegend: usePie, showGrid:true, height: usePie?300:280, showValueLabels: !usePie && valued.length<=14,
+      notes: [
+        `Source: asset profiles — ${valued.length} asset${valued.length===1?"":"s"} with a value.`,
+        `Each ${usePie?"slice":"bar"} is one asset's current value.`,
+        `Total: $${totalVal.toLocaleString()}.`,
+      ],
+      confidence: valued.length >= 2 ? 0.85 : 0.6,
+    };
+  }
+
+  throw new Error(`I can't chart "${dataSource}" yet. I can chart: trackers (any metric), expenses, bills/obligations, habits, goals, and asset values.`);
 }
 
 async function buildTableSpec(input: Record<string, any>): Promise<TableSpec> {
@@ -10372,11 +10550,27 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
       if (wantsChart) {
         try {
+          const range = /\bthis week|last week|weekly\b/.test(msgLower) ? "week"
+            : /\bthis month|last month|monthly\b/.test(msgLower) ? "month"
+            : /\b(3|three) months?\b/.test(msgLower) ? "3months"
+            : /\b(6|six) months?\b/.test(msgLower) ? "6months"
+            : /\byear|annual\b/.test(msgLower) ? "year" : "month";
+          // Nutrition macros stored on one tracker — must pass the exact field.
+          const macroMatch = msgLower.match(/\b(carb(?:s|ohydrates?)?|protein|calorie?s?|cals?|fat|sugar|fiber|sodium)\b/);
           let chartInput: Record<string, any>;
           if (wantsPie || /spend|expense|money|budget|cost|financ/.test(msgLower)) {
-            chartInput = { chartType: "pie", title: "Spending Breakdown", dataSource: "expenses" };
+            chartInput = { chartType: "pie", title: "Spending Breakdown", dataSource: "expenses", dateRange: range };
+          } else if (macroMatch) {
+            const raw = macroMatch[1];
+            const field = /carb/.test(raw) ? "carbs" : /protein/.test(raw) ? "protein" : /cal/.test(raw) ? "calories" : /fat/.test(raw) ? "fat" : /sugar/.test(raw) ? "sugar" : /fiber/.test(raw) ? "fiber" : "sodium";
+            const nice = field.charAt(0).toUpperCase() + field.slice(1);
+            chartInput = { chartType: "bar", title: `${nice} (${range})`, dataSource: "trackers", trackerName: "Nutrition", valueField: field, dateRange: range };
+          } else if (/blood ?pressure|\bbp\b/.test(msgLower)) {
+            chartInput = { chartType: "line", title: "Blood Pressure", dataSource: "trackers", trackerName: "blood pressure", dateRange: range };
           } else if (/weight|mass|body/.test(msgLower)) {
-            chartInput = { chartType: "line", title: "Weight Trend", dataSource: "trackers", trackerName: "weight" };
+            chartInput = { chartType: "line", title: "Weight Trend", dataSource: "trackers", trackerName: "weight", dateRange: range };
+          } else if (/mile|run|running|distance|jog/.test(msgLower)) {
+            chartInput = { chartType: "bar", title: `Running (${range})`, dataSource: "trackers", trackerName: "running", valueField: "miles", dateRange: range };
           } else if (/habit/.test(msgLower)) {
             chartInput = { chartType: "bar", title: "Habit Streaks", dataSource: "habits" };
           } else if (/goal/.test(msgLower)) {

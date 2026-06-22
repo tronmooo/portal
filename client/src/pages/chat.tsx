@@ -199,6 +199,31 @@ function ChatChart({ spec }: { spec: ChartSpec2 }) {
           >
             <ChatChartBody spec={spec} />
           </Suspense>
+          {/* Key / rubric: provenance + coverage notes so the chart is self-explaining */}
+          {((spec.notes && spec.notes.length > 0) || typeof spec.confidence === "number") && (
+            <div className="mt-2 px-2 pt-2 border-t border-border/60">
+              {typeof spec.confidence === "number" && (
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Confidence</span>
+                  <span
+                    className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                      spec.confidence >= 0.75 ? "bg-emerald-500/15 text-emerald-500"
+                      : spec.confidence >= 0.5 ? "bg-amber-500/15 text-amber-500"
+                      : "bg-red-500/15 text-red-500"
+                    }`}
+                  >
+                    {Math.round(spec.confidence * 100)}%
+                  </span>
+                </div>
+              )}
+              {spec.notes?.map((n, i) => (
+                <div key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground leading-snug">
+                  <span className="text-primary mt-[1px]">•</span>
+                  <span>{n}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
