@@ -675,6 +675,29 @@ function StandardDetailChart({
     date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
     value: typeof e.values[primaryField] === "number" ? (e.values[primaryField] as number) : null,
   }));
+
+  // A single data point can't form a trend — drawing a line/area for it renders
+  // as a misleading vertical streak across the whole panel. Show the reading +
+  // a nudge instead, so a brand-new tracker looks intentional, not broken.
+  const realPoints = chartData.filter((d) => typeof d.value === "number");
+  if (realPoints.length < 2) {
+    const v = realPoints[realPoints.length - 1]?.value;
+    return (
+      <div className="h-[200px] flex flex-col items-center justify-center text-center rounded-lg border border-dashed border-border/60 bg-muted/20">
+        {typeof v === "number" ? (
+          <>
+            <p className="text-3xl font-bold tabular-nums">{v}{unit ? <span className="text-base font-normal text-muted-foreground ml-1">{unit}</span> : null}</p>
+            <p className="text-xs text-muted-foreground mt-1">Your first reading{realPoints.length === 1 ? "" : "s"} — log a few more and a trend line appears here.</p>
+          </>
+        ) : (
+          <>
+            <BarChart2 className="h-7 w-7 text-muted-foreground/30 mb-2" />
+            <p className="text-sm text-muted-foreground">No numeric data yet — tap “+ Add” to log one.</p>
+          </>
+        )}
+      </div>
+    );
+  }
   // Append a "today" sentinel point with a null value so the X-axis extends
   // to the current date even when the most recent entry is days/weeks old.
   // Without this the axis terminates at the last entry date and the user is
