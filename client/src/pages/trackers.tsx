@@ -2457,6 +2457,32 @@ function buildTrackerInsight(tracker: Tracker, goals: Goal[] = []): TrackerInsig
       progressPct: null, statusBadge: freshness, sparkValues: [], trendPct: null, trendDir: "flat",
     };
   }
+  // Phase 2: spec-driven generic card. For an ADDITIVE metric (water, calories,
+  // minutes, custom quantities), the headline should be TODAY's running total —
+  // not the last single entry (the "0 oz / wrong number" dashboard bug).
+  const presCard = classifyTrackerPresentation(tracker as any);
+  if (presCard.metricKind === "additive" && (typeof rawPrim === "number" || !isNaN(Number(rawPrim)))) {
+    const fld = presCard.primaryField || rawPrimKey;
+    const unitA = presCard.unit || inferUnit(tracker, fld, tracker.fields.find(f => f.name === fld)?.unit) || "";
+    const todayKey = new Date().toLocaleDateString("en-CA");
+    let todayTotal = 0, anyToday = false;
+    for (const e of tracker.entries) {
+      if (new Date(e.timestamp).toLocaleDateString("en-CA") !== todayKey) continue;
+      const v = Number(e.values?.[fld]);
+      if (isFinite(v)) { todayTotal += v; anyToday = true; }
+    }
+    const headline = anyToday ? todayTotal : Number(rawPrim);
+    return {
+      hasData: true, kind, importance, iconKind,
+      bigPrimary: fmtNum(headline, headline % 1 === 0 ? 0 : 1), bigUnit: unitA,
+      subline: anyToday ? "today" : "last entry",
+      insight: anyToday
+        ? `${fmtNum(todayTotal, todayTotal % 1 === 0 ? 0 : 1)}${unitA ? " " + unitA : ""} logged today.`
+        : `Latest: ${fmtNum(Number(rawPrim), 1)}${unitA ? " " + unitA : ""}.`,
+      progressPct: null, statusBadge: freshness, sparkValues, trendPct, trendDir,
+    };
+  }
+
   const isNum = typeof rawPrim === "number" || !isNaN(Number(rawPrim));
   const big = isNum ? fmtNum(Number(rawPrim), 1) : String(rawPrim).slice(0, 14);
   // Use the inferred unit for whichever key actually held the number, so
@@ -3683,6 +3709,39 @@ function computeDynamicKpis(
   ];
 }
 
+// Phase 3: per-metric-kind accent colour so each tracker reads as its own thing.
+const KIND_ACCENT: Record<string, string> = {
+  additive: "text-cyan-500",
+  measurement: "text-violet-500",
+  dual: "text-rose-500",
+  adherence: "text-red-500",
+  categorical: "text-amber-500",
+  unknown: "text-foreground",
+};
+
+// Phase 4: one-line, kind-aware insight summarising the data.
+function dynamicOverviewInsight(entries: TrackerEntry[], primaryField: string, pres: TrackerPresentation): string {
+  const sorted = [...entries].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  const nums = sorted.map(e => Number(e.values?.[primaryField])).filter(v => !isNaN(v) && isFinite(v));
+  if (nums.length === 0) return "";
+  const u = pres.unit ? ` ${pres.unit}` : "";
+  const round = (n: number) => (n % 1 === 0 ? n : Math.round(n * 10) / 10);
+  if (pres.metricKind === "additive") {
+    const byDay = new Map<string, number>();
+    for (const e of sorted) { const v = Number(e.values?.[primaryField]); if (!isFinite(v)) continue; const k = new Date(e.timestamp).toLocaleDateString("en-CA"); byDay.set(k, (byDay.get(k) || 0) + v); }
+    const total = [...byDay.values()].reduce((a, b) => a + b, 0);
+    const days = byDay.size || 1;
+    return `Averaging ${round(total / days)}${u} per day across ${days} day${days === 1 ? "" : "s"}.`;
+  }
+  if (nums.length < 2) return `First reading: ${round(nums[0])}${u}.`;
+  const q = Math.max(1, Math.floor(nums.length / 4));
+  const recent = nums.slice(-q).reduce((a, b) => a + b, 0) / q;
+  const early = nums.slice(0, q).reduce((a, b) => a + b, 0) / q;
+  const diff = early !== 0 ? ((recent - early) / early) * 100 : 0;
+  const dir = Math.abs(diff) < 2 ? "holding steady" : diff > 0 ? `up ${round(Math.abs(diff))}%` : `down ${round(Math.abs(diff))}%`;
+  return `Latest ${round(nums[nums.length - 1])}${u} · ${dir} vs earlier.`;
+}
+
 // Daily-total bar chart for additive metrics (water/calories/miles/minutes).
 function AdditiveDailyBars({ entries, primaryField, unit }: { entries: TrackerEntry[]; primaryField: string; unit?: string }) {
   const byDay = new Map<string, number>();
@@ -3743,13 +3802,13 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
 
   return (
     <div className="space-y-4">
-      {/* KPI Row — dynamic by metric kind */}
+      {/* KPI Row — dynamic by metric kind (Phase 1), accent-coloured (Phase 3) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {dynamicKpis.length > 0 ? (
           dynamicKpis.map((k, i) => (
             <div key={i} className="bg-muted/50 rounded-lg p-3 text-center">
               <p className="text-xs text-muted-foreground uppercase tracking-wider truncate">{k.label}</p>
-              <p className="text-lg font-bold tabular-nums truncate" title={k.value}>{k.value}</p>
+              <p className={`text-lg font-bold tabular-nums truncate ${i === 0 ? (KIND_ACCENT[pres.metricKind] || "text-foreground") : ""}`} title={k.value}>{k.value}</p>
               <p className="text-xs text-muted-foreground truncate">{k.sub}</p>
             </div>
           ))
@@ -3759,6 +3818,17 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
           </div>
         )}
       </div>
+
+      {/* Phase 4: dynamic, kind-aware insight line */}
+      {dynamicKpis.length > 0 && (() => {
+        const insight = dynamicOverviewInsight(filtered, primaryField, pres);
+        return insight ? (
+          <div className={`text-xs rounded-md px-3 py-2 bg-muted/40 flex items-center gap-1.5`}>
+            <span className={KIND_ACCENT[pres.metricKind] || "text-primary"}>●</span>
+            <span className="text-muted-foreground">{insight}</span>
+          </div>
+        ) : null;
+      })()}
 
       {/* Time range selector */}
       <div className="flex items-center gap-1">
