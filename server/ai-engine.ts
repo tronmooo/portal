@@ -5521,35 +5521,42 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           unknownFields.push(k);
         }
 
-        // AUTO-EXTEND tracker schema (2026-06-15, user request):
-        // "There is no scheme, AI should be able to handle every data type."
-        // If the AI logged fields that aren't on the tracker yet (e.g. "sugar"
-        // on a Nutrition tracker), add them to tracker.fields so the chart
-        // renders them going forward. Only extend with NUMERIC fields — text
-        // notes don't need their own column. Infer a sensible unit from the
-        // field name (g, mg, kcal, oz, etc.) so the headline reads right.
+        // AUTO-EXTEND tracker schema (universal engine):
+        // If the AI logged fields that aren't on the tracker yet (e.g. "sugar",
+        // "mealType", "sport", "location"), add them to tracker.fields so they
+        // show as first-class, editable metadata instead of being silently
+        // dropped. Numeric fields get an inferred unit; short text values
+        // (labels like meal type / sport / intensity) become text fields. Long
+        // free-form text (notes) is left out — it already rides in _notes.
         if (unknownFields.length > 0) {
           const newFieldDefs: any[] = [];
           for (const fname of unknownFields) {
             const v = (normalizedValues as any)[fname];
-            if (typeof v !== "number" || !isFinite(v)) continue;
             const lc = fname.toLowerCase();
-            // Heuristic unit inference — pick the most common physical unit
-            // for the field name. No match → leave unit empty.
-            let unit: string | undefined;
-            if (/(sugar|fiber|protein|carb|fat|sodium|cholesterol|caffeine)/.test(lc)) unit = "g";
-            else if (/(potassium|calcium|iron|magnesium|zinc|vitamin)/.test(lc)) unit = "mg";
-            else if (/calorie|kcal/.test(lc)) unit = "kcal";
-            else if (/water|hydration|fluid|oz/.test(lc)) unit = "oz";
-            else if (/duration|minutes|time/.test(lc)) unit = "min";
-            else if (/distance|miles/.test(lc)) unit = "mi";
-            else if (/steps/.test(lc)) unit = "steps";
-            else if (/reps/.test(lc)) unit = "reps";
-            else if (/sets/.test(lc)) unit = "sets";
-            else if (/weight|lbs|pounds/.test(lc)) unit = "lbs";
-            else if (/bpm|pulse|heart/.test(lc)) unit = "bpm";
-            else if (/percent|%/.test(lc)) unit = "%";
-            newFieldDefs.push({ name: fname, type: "number", unit });
+            if (typeof v === "number" && isFinite(v)) {
+              // Heuristic unit inference — pick the most common physical unit
+              // for the field name. No match → leave unit empty.
+              let unit: string | undefined;
+              if (/(sugar|fiber|protein|carb|fat|sodium|cholesterol|caffeine)/.test(lc)) unit = "g";
+              else if (/(potassium|calcium|iron|magnesium|zinc|vitamin)/.test(lc)) unit = "mg";
+              else if (/calorie|kcal/.test(lc)) unit = "kcal";
+              else if (/water|hydration|fluid|oz/.test(lc)) unit = "oz";
+              else if (/duration|minutes|time/.test(lc)) unit = "min";
+              else if (/distance|miles/.test(lc)) unit = "mi";
+              else if (/steps/.test(lc)) unit = "steps";
+              else if (/reps/.test(lc)) unit = "reps";
+              else if (/sets/.test(lc)) unit = "sets";
+              else if (/weight|lbs|pounds/.test(lc)) unit = "lbs";
+              else if (/bpm|pulse|heart/.test(lc)) unit = "bpm";
+              else if (/percent|%/.test(lc)) unit = "%";
+              newFieldDefs.push({ name: fname, type: "number", unit });
+            } else if (typeof v === "boolean") {
+              newFieldDefs.push({ name: fname, type: "boolean" });
+            } else if (typeof v === "string" && v.trim().length > 0 && v.trim().length <= 50) {
+              // A short label (mealType, sport, intensity, location) — keep it
+              // as editable metadata. Long strings stay out (they're notes).
+              newFieldDefs.push({ name: fname, type: "text" });
+            }
           }
           if (newFieldDefs.length > 0) {
             const extendedFields = [...(tracker.fields || []), ...newFieldDefs];
@@ -5685,16 +5692,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         })),
       }, "tracker");
       if (!autoTrackerPayload.ok) return { error: autoTrackerPayload.error };
-      const newTracker = await storage.createTracker({
-        ...autoTrackerPayload.data,
-        ...(newTrackerLinkedProfiles ? { linkedProfiles: newTrackerLinkedProfiles } : {}),
-      } as any);
-      // Even for brand-new trackers, run values through the normalizer
-      // so unit suffixes get stripped (e.g. "99°F" → 99) before the
-      // first entry is written.
-      const { values: nv } = normalizeTrackerEntry(newTracker as any, entryValues);
-      const entry = await storage.logEntry({ trackerId: newTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
-      return entry;
+      // Wrap create+log so a failure returns a precise, actionable error and
+      // preserves the unsaved item (caller can retry) — never a silent
+      // half-save or an uncaught 500 the user sees as "server schema error".
+      try {
+        const newTracker = await storage.createTracker({
+          ...autoTrackerPayload.data,
+          ...(newTrackerLinkedProfiles ? { linkedProfiles: newTrackerLinkedProfiles } : {}),
+        } as any);
+        // Even for brand-new trackers, run values through the normalizer
+        // so unit suffixes get stripped (e.g. "99°F" → 99) before the
+        // first entry is written.
+        const { values: nv } = normalizeTrackerEntry(newTracker as any, entryValues);
+        const entry = await storage.logEntry({ trackerId: newTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        return entry;
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        logger.warn("ai", `Auto-create tracker "${trackerDisplayName}" failed: ${msg}`);
+        return { error: `Couldn't create the "${trackerDisplayName}" tracker (${msg}). Nothing was lost — say "retry" and I'll try again.`, __unsaved: { trackerName: trackerDisplayName, values: entryValues } };
+      }
     }
 
     case "create_tracker": {

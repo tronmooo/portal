@@ -13,6 +13,7 @@ export default defineConfig({
       'tests/chart-data.test.ts',
       'tests/tracker-normalize.test.ts',
       'tests/tracker-entry-update.test.ts',
+      'tests/create-tracker-universal.test.ts',
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
       'tests/expense-shaped.test.ts',

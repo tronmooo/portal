@@ -2009,14 +2009,44 @@ export class SupabaseStorage implements IStorage {
       const selfProfile = await this.getSelfProfile();
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
-    const { error } = await this.supabase.from("trackers").insert({
+    // UNIVERSAL ENGINE: never reject a tracker over field shape. Coerce every
+    // field to the canonical {name, type} so an AI-supplied field with an odd
+    // type ("time", "string", missing) can't fail the insert. Unknown types
+    // fall back to text; empties are dropped.
+    const VALID_TYPES = new Set(["number", "text", "boolean", "select", "duration"]);
+    const safeFields = (Array.isArray(data.fields) ? data.fields : [])
+      .filter((f: any) => f && typeof f.name === "string" && f.name.trim())
+      .map((f: any) => {
+        const t = String(f.type || "").toLowerCase();
+        const field: any = { name: String(f.name).trim(), type: VALID_TYPES.has(t) ? t : "text" };
+        if (Array.isArray(f.options)) field.options = f.options.map((o: any) => String(o));
+        if (f.unit != null) field.unit = String(f.unit);
+        if (typeof f.isPrimary === "boolean") field.isPrimary = f.isPrimary;
+        return field;
+      });
+
+    // Core columns guaranteed by the base migration. Optional columns
+    // (metric_definition) are added only when actually supplied, so a
+    // deployment that hasn't run that migration never sees a "column does not
+    // exist" schema error on a brand-new tracker.
+    const baseRow: any = {
       id, user_id: this.userId, name: data.name, category: data.category || "custom",
-      unit: data.unit || null, icon: data.icon || null, fields: data.fields || [],
+      unit: data.unit || null, icon: data.icon || null, fields: safeFields,
       linked_profiles: linkedProfiles, created_at: now,
-      // PR H: persist canonical metric metadata when supplied.
-      metric_definition: (data as any).metricDefinition || null,
-    });
-    if (error) throw error;
+    };
+    const fullRow = (data as any).metricDefinition
+      ? { ...baseRow, metric_definition: (data as any).metricDefinition }
+      : baseRow;
+
+    let insertErr = (await this.supabase.from("trackers").insert(fullRow)).error;
+    // Resilience: if an OPTIONAL column is missing on this deployment, retry
+    // with the base columns only rather than failing the whole save.
+    if (insertErr && fullRow !== baseRow &&
+        /metric_definition|column .* does not exist|schema cache|could not find/i.test(insertErr.message || "")) {
+      console.warn(`[createTracker] optional column rejected (${insertErr.message}); retrying with base columns`);
+      insertErr = (await this.supabase.from("trackers").insert(baseRow)).error;
+    }
+    if (insertErr) throw insertErr;
     // Link to profiles via junction table
     for (const pId of linkedProfiles) {
       await this.linkProfileTo(pId, "tracker", id);
