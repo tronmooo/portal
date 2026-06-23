@@ -61,6 +61,34 @@ describe("normalizeTrackerEntry — sleep duration (the reported bug)", () => {
   });
 });
 
+describe("normalizeTrackerEntry — generic value maps to the primary field", () => {
+  const hydration = {
+    name: "Hydration", category: "health", unit: "oz",
+    fields: [
+      { name: "ounces", type: "number", unit: "oz", isPrimary: true },
+      { name: "glasses", type: "number" },
+    ],
+  } as any;
+
+  it("maps a generic 'amount' onto the primary numeric field (the 0 oz bug)", () => {
+    // "drank 24 ounces" → AI logs {amount:24}; must land on ounces, not a stray.
+    const { values } = normalizeTrackerEntry(hydration, { amount: 24 });
+    expect(values.ounces).toBe(24);
+    expect(values.amount).toBeUndefined();
+  });
+
+  it("strips a unit suffix while mapping ('24 oz' → 24 on ounces)", () => {
+    const { values } = normalizeTrackerEntry(hydration, { amount: "24 oz" });
+    expect(values.ounces).toBe(24);
+  });
+
+  it("does not hijack a non-numeric generic value", () => {
+    const { values } = normalizeTrackerEntry(hydration, { amount: "a lot" });
+    expect(values.ounces).toBeUndefined();
+    expect(values.amount).toBe("a lot");
+  });
+});
+
 describe("normalizeTrackerEntry — single-numeric mapping is value-aware", () => {
   it("still maps a numeric stray onto the lone numeric field", () => {
     const { values } = normalizeTrackerEntry(tempTracker, { temperature: "99°F" });

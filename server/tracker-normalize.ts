@@ -150,6 +150,20 @@ function resolveFieldName(
     }
   }
 
+  // 2.5. Generic quantity words (amount, value, total, qty, level, reading…)
+  // map to the tracker's PRIMARY numeric field. This is what makes
+  // "drank 24 ounces" → {amount:24} land on the Hydration tracker's "ounces"
+  // field (its primary) instead of becoming a stray "amount" key the headline
+  // ignores (the reported "Hydration shows 0 oz" bug). Only when the value is
+  // numeric, so a non-numeric stray never clobbers the headline.
+  const GENERIC_VALUE_KEYS = new Set(["amount", "value", "total", "count", "qty", "quantity", "level", "reading", "number", "measurement"]);
+  if (GENERIC_VALUE_KEYS.has(lc) && parseNumericWithUnit(rawValue) !== null) {
+    const primaryNum = fields.find(f => (f as any).isPrimary === true && f.type === "number");
+    if (primaryNum) return primaryNum.name;
+    const firstNum = fields.find(f => f.type === "number");
+    if (firstNum) return firstNum.name;
+  }
+
   // 3. Single-field tracker: if there's only one numeric field, the user
   // probably meant that one (Body Temperature tracker has one field "value";
   // AI says "temperature: 99" → map to "value"). BUT only when the incoming

@@ -2407,7 +2407,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Trackers ---
   {
     name: "log_tracker_entry",
-    description: "Log values to a tracker (health, fitness, habits, metrics — NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries). CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker. If no matching tracker exists, one will be auto-created with the correct name.",
+    description: "Log values to a tracker (health, fitness, habits, metrics — NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries). CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}).\n- Supplements / vitamins / medications (multivitamin, fish oil, vitamin D, creatine, a pill/capsule/softgel, a prescribed drug) → a 'Supplements' tracker (or per-drug like 'Lisinopril' for prescriptions). Use values:{name, dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency}. Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER} (or glasses). Put the numeric amount directly in the ounces field.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -5406,6 +5406,32 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "log_tracker_entry": {
+      // Heart rate (BPM) and Blood Pressure (systolic/diastolic) are different
+      // metrics. If a heart-rate value rode in on a BP-routed log, peel it into
+      // its own "Heart Rate" entry so it isn't crammed into a tracker with no
+      // pulse field (the reported "resting HR confused with blood pressure" bug).
+      try {
+        const vals = (input.values || {}) as Record<string, any>;
+        const hrKey = Object.keys(vals).find(k => /^(pulse|bpm|hr|heart[_ ]?rate|resting[_ ]?heart[_ ]?rate)$/i.test(k.trim()));
+        const tnLC = String(input.trackerName || "").toLowerCase();
+        const isBPTarget = /blood\s*pressure|^bp$/.test(tnLC);
+        const hasBPVals = Object.keys(vals).some(k => /^(systolic|diastolic)$/i.test(k));
+        if (hrKey && isBPTarget && hasBPVals) {
+          const hrRaw = vals[hrKey];
+          const hrNum = typeof hrRaw === "number" ? hrRaw : parseFloat(String(hrRaw));
+          delete (input.values as any)[hrKey];
+          if (isFinite(hrNum)) {
+            await executeTool("log_tracker_entry", {
+              trackerName: "Heart Rate",
+              values: { bpm: hrNum },
+              forProfile: input.forProfile,
+              at: input.at,
+              __userMessage: (input as any).__userMessage,
+            }, userId).catch((e: any) => logger.warn("ai", `HR split-out failed: ${e?.message || e}`));
+          }
+        }
+      } catch { /* never block the primary log on the split guard */ }
+
       const trackers = await storage.getTrackers();
       const trackerName = (input.trackerName || "").toLowerCase();
 
@@ -5664,11 +5690,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // edge case — fall back to a suffixed name to keep the unique index
       // happy. Otherwise use the clean name.
       let trackerDisplayName = input.trackerName || "Custom";
-      const conflictTracker = nameMatches.find(t => t.name.toLowerCase() === trackerDisplayName.toLowerCase());
-      if (conflictTracker) {
-        const targetProfile = profiles.find(p => p.id === targetProfileId);
-        const suffix = targetProfile && targetProfile.type !== "self" ? ` - ${targetProfile.name}` : " (2)";
-        trackerDisplayName = `${trackerDisplayName}${suffix}`;
+      const targetProfileForName = profiles.find(p => p.id === targetProfileId);
+      if (targetProfileForName && targetProfileForName.type !== "self") {
+        // A person/pet tracker is ALWAYS namespaced "<Name> - <Profile>" so it
+        // can never collide with — or steal — the self user's clean tracker
+        // name. This is what prevents the self's tracker from being forced to a
+        // "(2)" suffix (the reported "Hockey (2)/Soccer (2)" bug): without it,
+        // whoever logged first (e.g. Lexi's hockey) grabbed the plain "Hockey"
+        // and the self user got "Hockey (2)". Skip if the name already carries
+        // the profile name so we don't double-suffix.
+        if (!trackerDisplayName.toLowerCase().includes(String(targetProfileForName.name).toLowerCase())) {
+          trackerDisplayName = `${trackerDisplayName} - ${targetProfileForName.name}`;
+        }
+      } else {
+        // Self: keep the clean name. Only fall back to a numeric suffix if a
+        // LEGACY same-name tracker already holds it (pre-namespacing data).
+        const conflictTracker = nameMatches.find(t => t.name.toLowerCase() === trackerDisplayName.toLowerCase());
+        if (conflictTracker) trackerDisplayName = `${trackerDisplayName} (2)`;
       }
 
       // PER-PERSON TRACKERS: each tracker is owned by exactly ONE profile.
