@@ -10686,14 +10686,23 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // Skip the safety net if the AI already indicated there's no data — don't generate an empty/zero chart.
     const replyLower = textReply.toLowerCase();
     const aiSaysNoData = /don't have any|no .* entries|no .* data|no .* found|haven't logged|no .* recorded|no .* tracked|no tracked|not .* any .* data|not .* any .* entries|you haven't/.test(replyLower);
-    if (richCharts.length === 0 && !richReport && !aiSaysNoData) {
+    // CRITICAL: never auto-generate a visual on a turn that WROTE data. Logging
+    // a medication / meal / workout is not a request for an (unrelated) chart —
+    // this is what produced the bogus "Data Overview — $705k expenses" chart
+    // (and, via chart→artifact persistence, an artifact) on a Lisinopril log.
+    // A user asking to SEE data isn't simultaneously creating it.
+    const didWriteActions = allActions.some(a => /^(create_|log_|update_|complete_|uncomplete_|checkin_|pay_|delete_|journal|save_memory|add_|refund_|convert_)/.test(String(a.type || "")));
+    if (richCharts.length === 0 && !richReport && !aiSaysNoData && !didWriteActions) {
       const msgLower = userMessage.toLowerCase();
+      // Require an EXPLICIT visual verb — possessive phrases like "my spending"
+      // alone must NOT trigger a chart. Only "show/graph/chart/plot/visualize…".
+      const explicitVisualVerb = /\b(chart|graph|plot|visuali[sz]e|visualization|pie chart|bar chart|line chart|trend|show me .*(chart|graph|trend|breakdown))\b/.test(msgLower);
       const wantsPie = /pie chart|spending.*chart|chart.*spending|breakdown.*chart|spending breakdown/.test(msgLower);
       const wantsLine = /trend|over time|history|line chart|weight.*chart|chart.*weight/.test(msgLower);
       const wantsBar = /bar chart|compare|comparison|vs\.?\s/.test(msgLower);
-      const wantsChart = wantsPie || wantsLine || wantsBar || /\b(chart|graph|visualize|visualization|plot)\b/.test(msgLower);
-      const wantsReport = /\b(report|scorecard|digest|overview|summary)\b/.test(msgLower);
-      const wantsTable = /\b(table|list all|show all|all my)\b/.test(msgLower);
+      const wantsChart = explicitVisualVerb && (wantsPie || wantsLine || wantsBar || /\b(chart|graph|visualize|visualization|plot)\b/.test(msgLower));
+      const wantsReport = /\b(report|scorecard|digest)\b/.test(msgLower) || /\b(overview|summary)\b.*\b(report|finance|financial|spending|health)\b/.test(msgLower);
+      const wantsTable = /\b(table|list all|show all)\b/.test(msgLower);
 
       if (wantsChart) {
         try {
