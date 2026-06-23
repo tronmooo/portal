@@ -15,6 +15,7 @@ export default defineConfig({
       'tests/tracker-entry-update.test.ts',
       'tests/create-tracker-universal.test.ts',
       'tests/medication-refills.test.ts',
+      'tests/tracker-presentation.test.ts',
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
       'tests/expense-shaped.test.ts',
