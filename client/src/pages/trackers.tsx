@@ -10,6 +10,7 @@ import {
   type TrackerMetricDefinition,
   getDefaultMetricDefinition,
 } from "@shared/tracker-metric-definition";
+import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { CreateProfileDialog } from "@/pages/profiles";
@@ -3636,14 +3637,99 @@ function computeStreak(entries: TrackerEntry[]): number {
 }
 
 // -- Overview Tab
+// Dynamic KPI cards derived from the tracker's metric kind (the presentation
+// engine). Additive metrics (water, calories, miles) summarize as a daily
+// TOTAL; measurements (weight, heart rate, glucose) as latest + range.
+function computeDynamicKpis(
+  entries: TrackerEntry[],
+  primaryField: string,
+  pres: TrackerPresentation,
+  timeRange: TimeRange,
+): { label: string; value: string; sub: string }[] {
+  const unit = pres.unit || "";
+  const fmt = (n: number) => {
+    const r = Math.round(n * 100) / 100;
+    return unit === "$" ? `$${r.toLocaleString()}` : `${r.toLocaleString()}`;
+  };
+  const sorted = [...entries].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  const nums = sorted.map(e => Number(e.values?.[primaryField])).filter(v => !isNaN(v) && isFinite(v));
+  if (nums.length === 0) return [];
+  const rangeSub = timeRange === "all" ? "all time" : timeRange;
+
+  if (pres.metricKind === "additive") {
+    const byDay = new Map<string, number>();
+    for (const e of sorted) {
+      const v = Number(e.values?.[primaryField]);
+      if (!isFinite(v)) continue;
+      const k = new Date(e.timestamp).toLocaleDateString("en-CA");
+      byDay.set(k, (byDay.get(k) || 0) + v);
+    }
+    const totals = [...byDay.values()];
+    const total = totals.reduce((a, b) => a + b, 0);
+    const days = byDay.size || 1;
+    return [
+      { label: "Total", value: fmt(total), sub: unit || rangeSub },
+      { label: "Avg / day", value: fmt(total / days), sub: unit || rangeSub },
+      { label: "Peak", value: fmt(Math.max(...totals)), sub: `${unit || "day"} max` },
+      { label: "Days logged", value: String(byDay.size), sub: rangeSub },
+    ];
+  }
+  // measurement / categorical / dual / unknown → latest reading + range
+  return [
+    { label: "Latest", value: fmt(nums[nums.length - 1]), sub: unit },
+    { label: "Average", value: fmt(nums.reduce((a, b) => a + b, 0) / nums.length), sub: unit || rangeSub },
+    { label: "Low", value: fmt(Math.min(...nums)), sub: unit },
+    { label: "High", value: fmt(Math.max(...nums)), sub: unit },
+  ];
+}
+
+// Daily-total bar chart for additive metrics (water/calories/miles/minutes).
+function AdditiveDailyBars({ entries, primaryField, unit }: { entries: TrackerEntry[]; primaryField: string; unit?: string }) {
+  const byDay = new Map<string, number>();
+  for (const e of entries) {
+    const v = Number(e.values?.[primaryField]);
+    if (!isFinite(v)) continue;
+    byDay.set(new Date(e.timestamp).toLocaleDateString("en-CA"), (byDay.get(new Date(e.timestamp).toLocaleDateString("en-CA")) || 0) + v);
+  }
+  const data = [...byDay.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([k, v]) => ({ date: new Date(k + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }), value: Math.round(v * 100) / 100 }));
+  if (data.length === 0) {
+    return (
+      <div className="h-[200px] flex flex-col items-center justify-center text-center rounded-lg border border-dashed border-border/60 bg-muted/20">
+        <BarChart2 className="h-7 w-7 text-muted-foreground/30 mb-2" />
+        <p className="text-sm text-muted-foreground">No numeric data yet — tap “+ Add” to log one.</p>
+      </div>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height={200}>
+      <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} vertical={false} />
+        <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+        <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={36} tickFormatter={(v) => `${v}${unit ? ` ${unit}` : ""}`} />
+        <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => [`${v}${unit ? ` ${unit}` : ""}`, "Daily total"]} />
+        <Bar dataKey="value" fill={CHART_COLORS.primary} radius={[3, 3, 0, 0] as any} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; primaryField: string }) {
   const [timeRange, setTimeRange] = useState<TimeRange>("30d");
   const specialization = detectSpecialization(tracker);
+  // Dynamic presentation spec — drives KPI cards, chart style, units by metric
+  // kind (additive/measurement/dual/…) instead of one-size-fits-all.
+  const pres = classifyTrackerPresentation(tracker as any);
   const filtered = filterEntriesByRange(tracker.entries, timeRange);
   // Force Recharts to remount when data changes (ResponsiveContainer caching issue)
   const chartKey = `${tracker.id}-${tracker.entries.length}-${timeRange}`;
   const stats = computeFieldStats(filtered, primaryField);
   const streak = computeStreak(tracker.entries);
+  const dynamicKpis = computeDynamicKpis(filtered, primaryField, pres, timeRange);
+  // Additive standard trackers (hydration, calories, steps…) render daily-total
+  // bars; everything else keeps its line/specialized chart.
+  const useAdditiveBars = specialization === "standard" && pres.metricKind === "additive";
 
   const timeRangeBtns: { label: string; value: TimeRange }[] = [
     { label: "7d", value: "7d" },
@@ -3657,36 +3743,20 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
 
   return (
     <div className="space-y-4">
-      {/* KPI Row */}
+      {/* KPI Row — dynamic by metric kind */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        {stats && (
-          <>
-            <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Latest</p>
-              <p className="text-lg font-bold tabular-nums">{typeof stats.latest === "number" ? stats.latest.toFixed(1) : stats.latest}</p>
-              <p className="text-xs text-muted-foreground">{tracker.unit || ""}</p>
+        {dynamicKpis.length > 0 ? (
+          dynamicKpis.map((k, i) => (
+            <div key={i} className="bg-muted/50 rounded-lg p-3 text-center">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider truncate">{k.label}</p>
+              <p className="text-lg font-bold tabular-nums truncate" title={k.value}>{k.value}</p>
+              <p className="text-xs text-muted-foreground truncate">{k.sub}</p>
             </div>
-            <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Average</p>
-              <p className="text-lg font-bold tabular-nums">{stats.avg.toFixed(1)}</p>
-              <p className="text-xs text-muted-foreground">{timeRange === "all" ? "all time" : timeRange}</p>
-            </div>
-            <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Trend</p>
-              <div className="flex items-center justify-center gap-1">
-                {stats.trendPct > 1 ? <ArrowUpRight className="w-4 h-4 text-orange-500" /> :
-                 stats.trendPct < -1 ? <ArrowDownRight className="w-4 h-4 text-green-500" /> :
-                 <MinusIcon className="w-4 h-4 text-muted-foreground" />}
-                <span className="text-lg font-bold tabular-nums">{Math.abs(stats.trendPct).toFixed(1)}%</span>
-              </div>
-              <p className="text-xs text-muted-foreground">{stats.trendPct > 1 ? "up" : stats.trendPct < -1 ? "down" : "stable"}</p>
-            </div>
-            <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Streak</p>
-              <p className="text-lg font-bold tabular-nums">{streak}</p>
-              <p className="text-xs text-muted-foreground">{streak === 1 ? "day" : "days"}</p>
-            </div>
-          </>
+          ))
+        ) : (
+          <div className="col-span-2 sm:col-span-4 bg-muted/30 rounded-lg p-3 text-center text-xs text-muted-foreground">
+            No numeric data yet — log an entry to see summaries.
+          </div>
         )}
       </div>
 
@@ -3709,7 +3779,9 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
           {specialization === "bloodpressure" && <BloodPressureDetailChart entries={filtered} />}
           {specialization === "sleep" && <SleepDetailChart entries={filtered} primaryField={primaryField} />}
           {specialization === "running" && <RunningDetailChart entries={filtered} primaryField={primaryField} />}
-          {specialization === "standard" && <StandardDetailChart entries={filtered} primaryField={primaryField} unit={tracker.unit} />}
+          {specialization === "standard" && (useAdditiveBars
+            ? <AdditiveDailyBars entries={filtered} primaryField={primaryField} unit={pres.unit} />
+            : <StandardDetailChart entries={filtered} primaryField={primaryField} unit={pres.unit || tracker.unit} />)}
         </div>
       ) : (
         <div className="text-center py-8">
