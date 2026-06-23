@@ -22,6 +22,7 @@ import {
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
+import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
@@ -3545,6 +3546,26 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         notes: { type: "string", description: "Optional notes" },
       },
       required: ["amount", "source"],
+    },
+  },
+
+  // --- Medication refill scheduling ---
+  {
+    name: "schedule_medication_refills",
+    description: "Create REAL calendar reminders for a prescription's refills. Call this WHENEVER the user describes a prescription with a quantity and refills (e.g. 'Lisinopril 10mg once daily, 30 pills with 5 refills, started Jan 1 at CVS'). The server computes each refill date deterministically from the supply (pills ÷ doses-per-day) and creates an all-day calendar event a few days before each fill runs out — do NOT claim you scheduled reminders without calling this. Pair it with create_tracker (medication) + log_tracker_entry for the dose.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        medicationName: { type: "string", description: "Drug/supplement name, e.g. 'Lisinopril'." },
+        startDate: { type: "string", description: "YYYY-MM-DD the course/first fill began. Compute from natural language ('started January 1st' → 2026-01-01)." },
+        pillsPerFill: { type: "number", description: "Pills dispensed per fill, e.g. 30." },
+        refills: { type: "number", description: "Number of REFILLS after the initial fill, e.g. 5." },
+        frequency: { type: "string", description: "Dosing frequency: 'once daily', 'twice daily', etc. Drives the supply window." },
+        dosage: { type: "string", description: "Dose per intake, e.g. '10mg'." },
+        pharmacy: { type: "string", description: "Pharmacy name, e.g. 'CVS'." },
+        forProfile: { type: "string", description: "Person the prescription is for. Defaults to self." },
+      },
+      required: ["medicationName", "startDate", "pillsPerFill", "refills"],
     },
   },
 
@@ -8441,6 +8462,50 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     // --- Document management ---
+    case "schedule_medication_refills": {
+      const start = String(input.startDate || "");
+      if (!/^\d{4}-\d{2}-\d{2}/.test(start)) return { error: "startDate (YYYY-MM-DD) is required to schedule refills." };
+      const pills = Number(input.pillsPerFill);
+      if (!isFinite(pills) || pills <= 0) return { error: "pillsPerFill must be a positive number." };
+      const refills = Number(input.refills);
+      const dosesPerDay = parseFrequencyToDosesPerDay(input.frequency);
+      const sched = computeRefillSchedule({
+        startDate: start.slice(0, 10),
+        pillsPerFill: pills,
+        refills: isFinite(refills) ? refills : 0,
+        dosesPerDay,
+      });
+      const med = String(input.medicationName || "medication").trim();
+      const pharm = input.pharmacy ? ` (${String(input.pharmacy).trim()})` : "";
+      const detailBits = [input.dosage, input.frequency].filter(Boolean).join(" ").trim();
+      const created: string[] = [];
+      for (const r of sched.reminders) {
+        // Create a REAL calendar event per refill via the create_event path
+        // (dedup + profile linking included). This is what was missing — the
+        // reply previously claimed a reminder existed but none was persisted.
+        const res = await executeTool("create_event", {
+          title: `Refill ${med}${pharm}`,
+          date: r.date,
+          allDay: true,
+          category: "health",
+          description: `Refill #${r.fillNumber} of ${sched.reminders.length}${detailBits ? ` — ${detailBits}` : ""}. ${sched.supplyDaysPerFill}-day supply.`,
+          forProfile: input.forProfile,
+          __userMessage: (input as any).__userMessage,
+        }, userId);
+        if (res && !(res as any).error) created.push(r.date);
+      }
+      return {
+        success: created.length > 0,
+        scheduled: created.length,
+        reminderDates: created,
+        supplyDaysPerFill: sched.supplyDaysPerFill,
+        courseEndDate: sched.courseEndDate,
+        message: created.length > 0
+          ? `Added ${created.length} refill reminder${created.length === 1 ? "" : "s"} to your calendar for ${med}${pharm}: ${created.join(", ")}. Course runs out ~${sched.courseEndDate}.`
+          : `No refill reminders were created (refills: ${isFinite(refills) ? refills : 0}).`,
+      };
+    }
+
     case "manage_document": {
       const docId = input.documentId;
       if (!docId) return { error: "documentId is required" };
@@ -11023,6 +11088,7 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
     spending_analytics: "retrieve",
     log_income: "log_expense",
     manage_document: "retrieve",
+    schedule_medication_refills: "create_event",
     get_asset_rollup: "retrieve",
     search_documents: "retrieve",
   };
