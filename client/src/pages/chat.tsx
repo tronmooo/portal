@@ -1820,7 +1820,36 @@ export default function ChatPage() {
   const batchIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const queryClient = useQueryClient();
 
-  // Fetch profiles for the selector
+  // Inline editing of a logged tracker-entry directly from its chat result
+  // card (change duration / intensity / calories, add or remove a field).
+  // Keyed by the entry id so only one card is open at a time.
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [entryEditVals, setEntryEditVals] = useState<Record<string, any>>({});
+  const [entryNewField, setEntryNewField] = useState<{ name: string; value: string }>({ name: "", value: "" });
+  const coerceVal = (raw: string): any => {
+    const t = raw.trim();
+    const n = Number(t);
+    return t !== "" && !isNaN(n) && String(n) === t ? n : raw;
+  };
+  const saveEntryEdit = async (action: any, entryId: string) => {
+    const orig = Object.keys(action?.data?.values || {}).filter((k) => k !== "_notes");
+    const valuesToDelete = orig.filter((k) => !(k in entryEditVals));
+    try {
+      await apiRequest("PATCH", `/api/tracker-entries/${entryId}`, { values: entryEditVals, valuesToDelete });
+      // Reflect on the card immediately…
+      action.data = { ...action.data, values: { ...entryEditVals } };
+      setMessages((prev) => prev.map((m) => ({ ...m, actions: m.actions ? [...m.actions] : m.actions })));
+      // …and across the app (trackers list, dashboard, stats).
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "all" });
+      setEditingEntryId(null);
+      toast({ title: "Entry updated" });
+    } catch (e: any) {
+      toast({ title: "Update failed", description: e?.message || "Try again", variant: "destructive" });
+    }
+  };
+
   const { data: profiles = [], isLoading: profilesLoading } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
   });
@@ -2901,6 +2930,26 @@ export default function ChatPage() {
                                 {isUndone && ' · DELETED'}
                               </p>
                             </div>
+                            {/* Edit button — tracker entries only (change duration,
+                                intensity, calories; add/remove fields). Persists via the
+                                lenient PATCH-by-entry-id endpoint and reflects app-wide. */}
+                            {isTrackerEntry && entityId && !isUndone && (
+                              <button
+                                className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-primary/50 text-primary bg-primary/5 hover:bg-primary/15 active:scale-95 transition-all"
+                                title="Edit this entry"
+                                data-testid={`button-edit-entry-${i}`}
+                                onClick={stopProp(() => {
+                                  if (editingEntryId === entityId) { setEditingEntryId(null); return; }
+                                  const v: Record<string, any> = {};
+                                  for (const [k, val] of Object.entries(action.data?.values || {})) { if (k !== "_notes") v[k] = val; }
+                                  setEntryEditVals(v);
+                                  setEntryNewField({ name: "", value: "" });
+                                  setEditingEntryId(entityId);
+                                })}
+                              >
+                                ✎ Edit
+                              </button>
+                            )}
                             {/* Undo button */}
                             {canUndo && (
                               <button
@@ -2994,6 +3043,58 @@ export default function ChatPage() {
                               </button>
                             )}
                           </div>
+                          {/* Inline entry editor — appears under the card when Edit is tapped */}
+                          {isTrackerEntry && editingEntryId === entityId && (
+                            <div className="mt-1 rounded-xl border border-primary/30 bg-primary/5 p-2.5 space-y-1.5" data-testid={`entry-editor-${i}`}>
+                              {Object.keys(entryEditVals).filter((k) => k !== "_notes").map((k) => (
+                                <div key={k} className="flex items-center gap-1.5">
+                                  <label className="text-[10px] text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
+                                  <input
+                                    className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+                                    value={entryEditVals[k] ?? ""}
+                                    onChange={(e) => { const val = coerceVal(e.target.value); setEntryEditVals((p) => ({ ...p, [k]: val })); }}
+                                    data-testid={`entry-edit-field-${k}`}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="p-1 rounded hover:bg-destructive/15"
+                                    title={`Remove "${k}"`}
+                                    onClick={() => setEntryEditVals((p) => { const n = { ...p }; delete n[k]; return n; })}
+                                  >
+                                    <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                                  </button>
+                                </div>
+                              ))}
+                              {/* Add a field */}
+                              <div className="flex items-center gap-1.5 border-t border-border/40 pt-1.5">
+                                <input
+                                  className="w-24 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+                                  placeholder="field"
+                                  value={entryNewField.name}
+                                  onChange={(e) => setEntryNewField((p) => ({ ...p, name: e.target.value }))}
+                                />
+                                <input
+                                  className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+                                  placeholder="value"
+                                  value={entryNewField.value}
+                                  onChange={(e) => setEntryNewField((p) => ({ ...p, value: e.target.value }))}
+                                  onKeyDown={(e) => { if (e.key === "Enter" && entryNewField.name.trim()) { setEntryEditVals((p) => ({ ...p, [entryNewField.name.trim()]: coerceVal(entryNewField.value) })); setEntryNewField({ name: "", value: "" }); } }}
+                                />
+                                <button
+                                  type="button"
+                                  className="shrink-0 h-7 px-2 rounded-lg text-xs font-semibold border border-border hover:bg-muted disabled:opacity-40"
+                                  disabled={!entryNewField.name.trim()}
+                                  onClick={() => { const name = entryNewField.name.trim(); if (!name) return; setEntryEditVals((p) => ({ ...p, [name]: coerceVal(entryNewField.value) })); setEntryNewField({ name: "", value: "" }); }}
+                                >
+                                  + Add
+                                </button>
+                              </div>
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button type="button" className="h-7 px-2.5 rounded-lg text-xs font-semibold text-muted-foreground hover:bg-muted" onClick={() => setEditingEntryId(null)}>Cancel</button>
+                                <button type="button" className="h-7 px-3 rounded-lg text-xs font-bold border border-primary/50 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => saveEntryEdit(action, entityId)} data-testid={`entry-editor-save-${i}`}>Save</button>
+                              </div>
+                            </div>
+                          )}
                           {/* Inline artifact preview */}
                           {isArtifact && (() => {
                             // Find the saved artifact by id (server returns it on the

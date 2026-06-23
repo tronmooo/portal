@@ -3616,6 +3616,41 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
   // by user_id, so iterating it ensures we only delete entries on the caller's
   // trackers — even if a future refactor weakens the storage filter, we won't
   // delete cross-user rows. We also bust caches once we find a hit.
+  // Lenient PATCH-by-entry-id (mirrors the DELETE fallback above): edit a
+  // tracker entry without knowing its tracker id — used by the chat result
+  // cards, which only carry the entry id. Resolves the owning tracker, then
+  // applies the same value/notes/timestamp/valuesToDelete patch as the
+  // tracker-scoped route.
+  app.patch("/api/tracker-entries/:entryId", asyncHandler(async (req, res) => {
+    const { values, notes, mood, tags, timestamp, valuesToDelete } = req.body || {};
+    if (values && typeof values === 'object') {
+      if (Object.values(values).some((v: any) => typeof v === 'number' && isNaN(v))) {
+        return res.status(400).json({ error: "All values must be valid numbers" });
+      }
+    }
+    const patch: any = {};
+    if (values && typeof values === 'object') patch.values = values;
+    if (notes !== undefined) patch.notes = notes;
+    if (mood !== undefined) patch.mood = mood;
+    if (tags !== undefined) patch.tags = tags;
+    if (timestamp && typeof timestamp === 'string') patch.timestamp = timestamp;
+    if (Array.isArray(valuesToDelete)) {
+      const clean = valuesToDelete.filter((k: any) => typeof k === 'string' && k.length > 0);
+      if (clean.length > 0) patch.valuesToDelete = clean;
+    }
+    const trackers = await storage.getTrackers();
+    for (const t of trackers) {
+      const entry = (t.entries || []).find((e: any) => e.id === req.params.entryId);
+      if (entry) {
+        const updated = await storage.updateTrackerEntry(t.id, req.params.entryId, patch);
+        if (!updated) return res.status(404).json({ error: "Entry not found" });
+        const uid_tep2 = cacheUserKey(req as AuthenticatedRequest);
+        bustCache(`trackers:`); bustCache(`stats:${uid_tep2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_tep2}:`);
+        return res.json(updated);
+      }
+    }
+    return res.status(404).json({ error: "Entry not found" });
+  }));
   app.delete("/api/tracker-entries/:entryId", asyncHandler(async (req, res) => {
     const trackers = await storage.getTrackers();
     for (const t of trackers) {
