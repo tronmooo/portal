@@ -991,7 +991,18 @@ type TrackerSpecialization = "weight" | "bloodpressure" | "sleep" | "running" | 
 function detectSpecialization(tracker: Tracker): TrackerSpecialization {
   const name = tracker.name.toLowerCase();
   const cat = tracker.category.toLowerCase();
-  if (cat === "medication" || cat === "prescription" || cat === "supplement") return "medication";
+  const fieldNames = (tracker.fields || []).map(f => String(f.name).toLowerCase());
+  // A tracker is a medication/supplement if its CATEGORY says so, its FIELDS
+  // are dose-shaped (dosage + taken/adherence/drug), or its NAME is a known
+  // supplement/drug. This is what makes "Fish Oil"/"Multivitamin" (logged with
+  // drug/dosage/taken fields but mis-categorized as custom/health) render with
+  // the rich Medication suite instead of a boring empty line chart.
+  const hasDoseFields =
+    (fieldNames.includes("dosage") || fieldNames.includes("dose")) &&
+    (fieldNames.includes("taken") || fieldNames.includes("adherence") ||
+     fieldNames.includes("drug") || fieldNames.includes("drugname"));
+  const SUPPLEMENT_RE = /\b(fish ?oil|omega|multivitamin|vitamin|creatine|magnesium|zinc|melatonin|probiotic|biotin|collagen|glucosamine|turmeric|ashwagandha|calcium|iron supplement|supplement|softgel|capsule|lozenge|gummy)\b/;
+  if (cat === "medication" || cat === "prescription" || cat === "supplement" || hasDoseFields || SUPPLEMENT_RE.test(name)) return "medication";
   if (cat === "health" && name.includes("weight")) return "weight";
   if (name.includes("blood") || name.includes("pressure")) return "bloodpressure";
   if (cat === "sleep") return "sleep";
