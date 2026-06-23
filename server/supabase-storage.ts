@@ -2062,13 +2062,24 @@ export class SupabaseStorage implements IStorage {
     // updated_at column (fetched only when the caller sent expectedUpdatedAt).
     await this.assertNoWriteConflictFor("trackers", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
-    const { error } = await this.supabase.from("trackers").update({
+    const baseUpdate: any = {
       name: merged.name, category: merged.category, unit: merged.unit || null,
       icon: merged.icon || null, fields: merged.fields,
-      // PR H: round-trip metric metadata on updates.
-      metric_definition: (merged as any).metricDefinition ?? null,
-    }).eq("id", id).eq("user_id", this.userId);
-    if (error) throw error;
+    };
+    // Only round-trip metric_definition when it's actually present, and retry
+    // without it if a deployment hasn't migrated that optional column — same
+    // resilience as createTracker, so an auto-extend / edit never fails with a
+    // "column does not exist" schema error.
+    const fullUpdate = (merged as any).metricDefinition
+      ? { ...baseUpdate, metric_definition: (merged as any).metricDefinition }
+      : baseUpdate;
+    let updErr = (await this.supabase.from("trackers").update(fullUpdate).eq("id", id).eq("user_id", this.userId)).error;
+    if (updErr && fullUpdate !== baseUpdate &&
+        /metric_definition|column .* does not exist|schema cache|could not find/i.test(updErr.message || "")) {
+      console.warn(`[updateTracker] optional column rejected (${updErr.message}); retrying with base columns`);
+      updErr = (await this.supabase.from("trackers").update(baseUpdate).eq("id", id).eq("user_id", this.userId)).error;
+    }
+    if (updErr) throw updErr;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a
     // raw linked_profiles write alongside the rest of the patch.
     if (data.linkedProfiles !== undefined) {
