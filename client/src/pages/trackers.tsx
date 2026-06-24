@@ -3821,7 +3821,7 @@ function dynamicOverviewInsight(entries: TrackerEntry[], primaryField: string, p
 }
 
 // Daily-total bar chart for additive metrics (water/calories/miles/minutes).
-function AdditiveDailyBars({ entries, primaryField, unit }: { entries: TrackerEntry[]; primaryField: string; unit?: string }) {
+function AdditiveDailyBars({ entries, primaryField, unit, goalValue }: { entries: TrackerEntry[]; primaryField: string; unit?: string; goalValue?: number }) {
   const byDay = new Map<string, number>();
   for (const e of entries) {
     const v = Number(e.values?.[primaryField]);
@@ -3846,6 +3846,9 @@ function AdditiveDailyBars({ entries, primaryField, unit }: { entries: TrackerEn
         <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
         <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={36} tickFormatter={(v) => `${v}${unit ? ` ${unit}` : ""}`} />
         <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => [`${v}${unit ? ` ${unit}` : ""}`, "Daily total"]} />
+        {typeof goalValue === "number" && goalValue > 0 && (
+          <ReferenceLine y={goalValue} stroke={CHART_COLORS.gold} strokeDasharray="4 4" label={{ value: "Goal", position: "right", fontSize: 10, fill: CHART_COLORS.gold }} />
+        )}
         <Bar dataKey="value" fill={CHART_COLORS.primary} radius={[3, 3, 0, 0] as any} />
       </BarChart>
     </ResponsiveContainer>
@@ -3867,6 +3870,29 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
   // Additive standard trackers (hydration, calories, steps…) render daily-total
   // bars; everything else keeps its line/specialized chart.
   const useAdditiveBars = specialization === "standard" && pres.metricKind === "additive";
+
+  // Goal ring — only when the user actually created a goal for this tracker.
+  const { data: overviewGoals = [] } = useQuery<Goal[]>({ queryKey: goalsQueryKey([]) });
+  const trackerGoal = overviewGoals.find((g) => g && g.trackerId === tracker.id && g.status === "active" && typeof g.target === "number");
+  const goalProgress = (() => {
+    if (!trackerGoal || !pres.primaryField || trackerGoal.target <= 0) return null;
+    const fld = pres.primaryField;
+    let current = 0;
+    let scope = "latest";
+    if (pres.metricKind === "additive") {
+      const todayKey = new Date().toLocaleDateString("en-CA");
+      current = tracker.entries
+        .filter((e) => new Date(e.timestamp).toLocaleDateString("en-CA") === todayKey)
+        .reduce((s, e) => { const v = Number(e.values?.[fld]); return s + (isFinite(v) ? v : 0); }, 0);
+      scope = "today";
+    } else {
+      const sorted = [...filtered].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const nums = sorted.map((e) => Number(e.values?.[fld])).filter((v) => isFinite(v));
+      current = nums.length ? nums[nums.length - 1] : 0;
+    }
+    const pct = Math.max(0, Math.min(100, Math.round((current / trackerGoal.target) * 100)));
+    return { current, target: trackerGoal.target, pct, scope, unit: trackerGoal.unit || pres.unit, met: current >= trackerGoal.target };
+  })();
 
   const timeRangeBtns: { label: string; value: TimeRange }[] = [
     { label: "7d", value: "7d" },
@@ -3908,6 +3934,28 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
         ) : null;
       })()}
 
+      {/* Goal ring/progress — only when a real goal exists for this tracker */}
+      {goalProgress && (
+        <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Goal · {goalProgress.scope}</span>
+            <span className={`text-xs font-bold ${goalProgress.met ? "text-emerald-500" : "text-primary"}`}>
+              {goalProgress.met ? "✓ Goal met" : `${goalProgress.pct}%`}
+            </span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all ${goalProgress.met ? "bg-emerald-500" : "bg-primary"}`}
+              style={{ width: `${goalProgress.pct}%` }}
+            />
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-1.5">
+            {Math.round(goalProgress.current * 10) / 10}{goalProgress.unit ? ` ${goalProgress.unit}` : ""} of {goalProgress.target}{goalProgress.unit ? ` ${goalProgress.unit}` : ""} goal
+            {!goalProgress.met && goalProgress.target > goalProgress.current ? ` · ${Math.round((goalProgress.target - goalProgress.current) * 10) / 10} to go` : ""}
+          </p>
+        </div>
+      )}
+
       {/* Time range selector */}
       <div className="flex items-center gap-1">
         {timeRangeBtns.map(btn => (
@@ -3928,8 +3976,8 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
           {specialization === "sleep" && <SleepDetailChart entries={filtered} primaryField={primaryField} />}
           {specialization === "running" && <RunningDetailChart entries={filtered} primaryField={primaryField} />}
           {specialization === "standard" && (useAdditiveBars
-            ? <AdditiveDailyBars entries={filtered} primaryField={primaryField} unit={pres.unit} />
-            : <StandardDetailChart entries={filtered} primaryField={primaryField} unit={pres.unit || tracker.unit} />)}
+            ? <AdditiveDailyBars entries={filtered} primaryField={primaryField} unit={pres.unit} goalValue={trackerGoal?.target} />
+            : <StandardDetailChart entries={filtered} primaryField={primaryField} unit={pres.unit || tracker.unit} goalValue={trackerGoal?.target} />)}
         </div>
       ) : (
         <div className="text-center py-8">
