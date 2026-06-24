@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, lazy, Suspense } from "react";
 import { DocumentLinkPicker } from "@/components/DocumentLinkPicker";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -27,6 +27,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDocumentBlobUrl, classifyDocument } from "@/lib/document-preview";
+
+// PDF.js renderer is code-split — only loaded when a PDF is actually viewed.
+const PdfCanvas = lazy(() => import("@/components/PdfCanvas"));
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -206,7 +209,7 @@ function PreviewPanel({ doc }: { doc: Document }) {
   // blob: URL. The shared hook resolves a blob: URL — from inline base64 when a
   // freshly-uploaded doc still has it, otherwise via the authenticated /file
   // endpoint.
-  const { url: previewUrl, loading: blobLoading, error: blobError } =
+  const { url: previewUrl, blob, loading: blobLoading, error: blobError } =
     useDocumentBlobUrl(doc.id, doc.mimeType, (doc as any).fileData);
 
   const downloadFromBlob = useCallback(() => {
@@ -295,21 +298,45 @@ function PreviewPanel({ doc }: { doc: Document }) {
             />
           </div>
         ) : isPdf ? (
-          <div ref={containerRef} className="h-full overflow-auto" onWheel={handleWheel} data-testid="preview-pdf">
-            <div
-              className="transition-transform duration-150"
-              style={{
-                transform: `scale(${zoom})`,
-                transformOrigin: "top center",
-                width: zoom > 1 ? `${100 / zoom}%` : "100%",
-              }}
-            >
-              <iframe
-                src={previewUrl}
-                title={doc.name}
-                className="w-full border-0"
-                style={{ height: "calc(100vh - 250px)", minHeight: "400px" }}
-              />
+          <div ref={containerRef} className="h-full flex flex-col" data-testid="preview-pdf">
+            <div className="flex-1 min-h-0 overflow-auto p-2 flex justify-center">
+              <div
+                className="transition-transform duration-150"
+                style={{
+                  transform: zoom !== 1 ? `scale(${zoom})` : undefined,
+                  transformOrigin: "top center",
+                  width: "100%",
+                  maxWidth: 900,
+                }}
+              >
+                {blob ? (
+                  <Suspense
+                    fallback={
+                      <div className="flex items-center justify-center py-10 text-muted-foreground">
+                        <Loader2 className="h-6 w-6 animate-spin" />
+                      </div>
+                    }
+                  >
+                    <PdfCanvas blob={blob} />
+                  </Suspense>
+                ) : (
+                  <div className="flex items-center justify-center py-10 text-muted-foreground">
+                    <Loader2 className="h-6 w-6 animate-spin" />
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="shrink-0 flex items-center justify-center gap-2 border-t border-border/60 bg-background/60 px-2 py-1.5">
+              <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" asChild>
+                <a href={previewUrl} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Open full screen
+                </a>
+              </Button>
+              <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={downloadFromBlob}>
+                <Download className="h-3.5 w-3.5" />
+                Download
+              </Button>
             </div>
           </div>
         ) : (

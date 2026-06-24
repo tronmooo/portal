@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, lazy, Suspense } from "react";
 import EditableTitle from "@/components/EditableTitle";
 import { DocumentLinkPicker } from "@/components/DocumentLinkPicker";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,9 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import { useDocumentBlobUrl, classifyDocument, DOCUMENT_UPLOAD_ACCEPT } from "@/lib/document-preview";
+
+// PDF.js renderer is code-split — only pulled in when a PDF is actually viewed.
+const PdfCanvas = lazy(() => import("@/components/PdfCanvas"));
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -365,7 +368,7 @@ export default function DocumentViewer({
   // <object>/<iframe>), and because native <img>/<object> loads can't carry the
   // bearer token the /file endpoint needs. The hook decodes inline base64
   // locally when available, else fetches the authenticated /file endpoint.
-  const { url: blobUrl, loading: blobLoading, error: blobError } =
+  const { url: blobUrl, blob, loading: blobLoading, error: blobError } =
     useDocumentBlobUrl(id, mimeType, data);
   const dataUrl = blobUrl || "";
 
@@ -469,26 +472,55 @@ export default function DocumentViewer({
   const renderPdf = (maxH: string) => (
     <div
       ref={containerRef}
-      className="relative overflow-hidden rounded-lg bg-muted/30 flex flex-col"
+      className="relative rounded-lg bg-muted/30 flex flex-col"
       style={{ height: maxH }}
-      onWheel={handleWheel}
     >
-      <div
-        className="flex-1 transition-transform duration-150"
-        style={{
-          transform: `scale(${zoom})`,
-          transformOrigin: "top center",
-          width: zoom > 1 ? `${100 / zoom}%` : "100%",
-          height: "100%",
-        }}
-      >
-        <iframe
-          src={dataUrl}
-          title={name}
-          className="w-full h-full border-0"
-          style={{ minHeight: "100%" }}
-        />
+      {/* Scrollable page column — PdfCanvas rasterizes every page so it renders
+          identically on iOS/Android/desktop (native <iframe> PDF is blank on
+          iOS WebKit). Zoom is applied via CSS transform on the inner column. */}
+      <div className="flex-1 min-h-0 overflow-auto p-2 flex justify-center">
+        <div
+          className="transition-transform duration-150"
+          style={{
+            transform: zoom !== 1 ? `scale(${zoom})` : undefined,
+            transformOrigin: "top center",
+            width: "100%",
+            maxWidth: 900,
+          }}
+        >
+          {blob ? (
+            <Suspense
+              fallback={
+                <div className="flex items-center justify-center py-10 text-muted-foreground">
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                </div>
+              }
+            >
+              <PdfCanvas blob={blob} />
+            </Suspense>
+          ) : (
+            <div className="flex items-center justify-center py-10 text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+            </div>
+          )}
+        </div>
       </div>
+      {/* Always-available escape hatch (esp. mobile): open the PDF full-screen
+          in the OS PDF viewer, or download it. */}
+      {dataUrl && (
+        <div className="shrink-0 flex items-center justify-center gap-2 border-t border-border/60 bg-background/60 px-2 py-1.5">
+          <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" asChild>
+            <a href={dataUrl} target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open full screen
+            </a>
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={downloadFromBlob}>
+            <Download className="h-3.5 w-3.5" />
+            Download
+          </Button>
+        </div>
+      )}
     </div>
   );
 

@@ -77,6 +77,9 @@ export function classifyDocument(mime: string): "image" | "pdf" | "text" | "othe
 export interface DocumentBlobState {
   /** Same-origin blob: URL ready to drop into src/data, or null while pending. */
   url: string | null;
+  /** The underlying Blob — pass its bytes to PDF.js via `blob.arrayBuffer()`
+   *  (no fetch / connect-src involved). Null until resolved. */
+  blob: Blob | null;
   loading: boolean;
   error: boolean;
 }
@@ -97,12 +100,14 @@ export function useDocumentBlobUrl(
   enabled: boolean = true,
 ): DocumentBlobState {
   const [url, setUrl] = useState<string | null>(null);
+  const [blob, setBlob] = useState<Blob | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     if (!enabled || !id) {
       setUrl(null);
+      setBlob(null);
       setLoading(false);
       setError(false);
       return;
@@ -117,13 +122,15 @@ export function useDocumentBlobUrl(
     if (hasInline) {
       // Fast path: decode the base64 we already have, no network round-trip.
       try {
-        const blob = base64ToBlob(data as string, mimeType);
-        createdUrl = URL.createObjectURL(blob);
+        const b = base64ToBlob(data as string, mimeType);
+        createdUrl = URL.createObjectURL(b);
+        setBlob(b);
         setUrl(createdUrl);
         setLoading(false);
       } catch (e) {
         console.error("[useDocumentBlobUrl] base64 decode failed:", e);
         setUrl(null);
+        setBlob(null);
         setError(true);
         setLoading(false);
       }
@@ -132,19 +139,21 @@ export function useDocumentBlobUrl(
       setLoading(true);
       apiRequest("GET", `/api/documents/${id}/file`)
         .then((res) => res.blob())
-        .then((blob) => {
+        .then((b) => {
           if (cancelled) return;
           // Honor the server-declared content type when present.
-          const typed = mimeType && blob.type !== mimeType
-            ? new Blob([blob], { type: mimeType })
-            : blob;
+          const typed = mimeType && b.type !== mimeType
+            ? new Blob([b], { type: mimeType })
+            : b;
           createdUrl = URL.createObjectURL(typed);
+          setBlob(typed);
           setUrl(createdUrl);
         })
         .catch((err) => {
           if (cancelled) return;
           console.error("[useDocumentBlobUrl] failed to fetch file blob:", err);
           setUrl(null);
+          setBlob(null);
           setError(true);
         })
         .finally(() => {
@@ -158,5 +167,5 @@ export function useDocumentBlobUrl(
     };
   }, [id, mimeType, data, enabled]);
 
-  return { url, loading, error };
+  return { url, blob, loading, error };
 }
