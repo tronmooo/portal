@@ -2852,6 +2852,30 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
     const avg = sessions > 0 ? Math.round(total / sessions) : 0;
     return { series, total, sessions, unit, avg };
   })();
+  // Effort/intensity chips for sport sessions (avg HR, calories, distance,
+  // intensity, reps) — pulled from the latest entry so a logged soccer/chess
+  // session reads richer, approaching the HR-zone sport cards in the design.
+  const activityChips = (() => {
+    if (visual.type !== "activity" || !lastEntry) return [] as { emoji: string; label: string }[];
+    const v = lastEntry.values as Record<string, any>;
+    const norm = (k: string) => k.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const num = (re: RegExp) => { for (const k of Object.keys(v)) { if (re.test(norm(k)) && typeof v[k] === "number" && isFinite(v[k])) return v[k] as number; } return undefined; };
+    const str = (re: RegExp) => { for (const k of Object.keys(v)) { if (re.test(norm(k)) && typeof v[k] === "string" && v[k].trim()) return v[k] as string; } return undefined; };
+    const chips: { emoji: string; label: string }[] = [];
+    const hr = num(/^(avghr|heartrate|bpm|pulse|hr)$/) ?? num(/(avghr|heartrate|bpm)/);
+    if (hr != null) chips.push({ emoji: "❤️", label: `${Math.round(hr)} bpm` });
+    const cal = num(/(caloriesburned|calories|kcal|^cal$)/);
+    if (cal != null) chips.push({ emoji: "🔥", label: `${Math.round(cal)} cal` });
+    const dist = num(/(distance|miles|^mi$|^km$)/);
+    if (dist != null) chips.push({ emoji: "📏", label: `${dist} mi` });
+    const intensityStr = str(/(intensity|effort|zone|level)/);
+    const intensityNum = num(/(intensity|effort|zone|rpe)/);
+    if (intensityStr) chips.push({ emoji: "⚡", label: intensityStr });
+    else if (intensityNum != null) chips.push({ emoji: "⚡", label: `Zone ${intensityNum}` });
+    const reps = num(/(^reps$|reps)/);
+    if (chips.length < 3 && reps != null) chips.push({ emoji: "🔁", label: `${reps} reps` });
+    return chips.slice(0, 3);
+  })();
 
   return (
     <div
@@ -2957,6 +2981,15 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
             {insight.bigUnit && <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>}
           </div>
           <div className="flex-1 min-h-0 flex flex-col justify-end">
+            {activityChips.length > 0 && (
+              <div className="px-3 flex items-center gap-1.5 flex-wrap mb-1.5">
+                {activityChips.map((c, i) => (
+                  <span key={i} className="inline-flex items-center gap-1 text-[10px] rounded-full px-1.5 py-0.5" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>
+                    <span aria-hidden>{c.emoji}</span><span className="font-medium tabular-nums">{c.label}</span>
+                  </span>
+                ))}
+              </div>
+            )}
             <p className="px-3 text-[10px] text-muted-foreground mb-1.5 truncate">
               This week: <span className="font-semibold text-foreground">{activityData.total} {activityData.unit}</span>
               {" · "}{activityData.sessions} session{activityData.sessions === 1 ? "" : "s"}
@@ -3404,6 +3437,10 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
             {unit && <span className="text-[11px] font-medium text-muted-foreground">{unit}</span>}
           </div>
           <div className="flex-1 min-h-0 flex flex-col justify-end">
+            <div className="px-3 flex items-center gap-1.5 mb-1.5">
+              <span className="inline-flex items-center gap-1 text-[10px] rounded-full px-1.5 py-0.5" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>⚡ <span className="font-medium">Moderate</span></span>
+              <span className="inline-flex items-center gap-1 text-[10px] rounded-full px-1.5 py-0.5" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>❤️ <span className="font-medium">—</span></span>
+            </div>
             <p className="px-3 text-[10px] text-muted-foreground mb-1.5">This week: <span className="font-semibold text-foreground">{sample} {unit || "min"}</span> · 1 session</p>
             <div className="px-3 pb-2"><WeekdayBars data={[0, sample * 0.5, 0, sample * 0.8, sample * 0.4, 0, sample].map((v, i) => ({ label: ["S", "M", "T", "W", "T", "F", "S"][i], value: Math.round(v), today: i === 6 }))} color={ac} height={44} /></div>
           </div>
