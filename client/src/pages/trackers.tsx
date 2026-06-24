@@ -13,7 +13,7 @@ import {
 import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
+import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
 import { CreateProfileDialog } from "@/pages/profiles";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -2701,7 +2701,27 @@ type CardVisual =
   | { type: "radial"; value: number; max: number }
   | { type: "checklist" }
   | { type: "panel"; metrics: PanelMetric[] }
-  | { type: "areaZone"; values: number[]; min: number; max: number; zones: GaugeZone[] };
+  | { type: "areaZone"; values: number[]; min: number; max: number; zones: GaugeZone[] }
+  | { type: "activity" };
+
+const ACTIVITY_KINDS = new Set(["guitar", "reading", "gaming", "meditation", "duration"]);
+
+// Sum the primary numeric field per day over the last 7 days — the data behind
+// the WeekdayBars on activity/duration cards.
+function weeklyByDay(entries: TrackerEntry[], field: string): { label: string; value: number; today?: boolean }[] {
+  const LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
+  const todayKey = new Date().toLocaleDateString("en-CA");
+  const out: { label: string; value: number; today?: boolean }[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - i);
+    const key = d.toLocaleDateString("en-CA");
+    const value = (entries || [])
+      .filter((e) => new Date(e.timestamp).toLocaleDateString("en-CA") === key)
+      .reduce((s, e) => s + (typeof (e.values as any)[field] === "number" ? (e.values as any)[field] : 0), 0);
+    out.push({ label: LETTERS[d.getDay()], value, today: key === todayKey });
+  }
+  return out;
+}
 
 // Collect numeric fields in the latest entry that each have a clinical range —
 // panel-style trackers (lipid HDL/LDL/triglycerides) read best as several bars.
@@ -2750,6 +2770,11 @@ function chooseCardVisual(
     const max = scoreMaxFor(name, field, primary.num);
     if (max) return { type: "radial", value: primary.num, max };
   }
+  // Duration / activity trackers (Chess, Basketball, Meditation, Reading, …):
+  // a weekly-minutes bar chart + session stats reads far richer than a number.
+  const isActivity = ACTIVITY_KINDS.has(insight.kind) ||
+    (!!primary && (insight.bigUnit === "min" || /\b(min|minute|duration|session|game|match|practice)\b/.test(`${name} ${field}`.toLowerCase())));
+  if (isActivity && primary) return { type: "activity" };
   return { type: "spark" };
 }
 
@@ -2815,6 +2840,18 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
         .slice(0, 3)
         .map(([k, v]) => ({ label: k, value: v as number, pct: (v as number) <= 10 ? (v as number) * 10 : (v as number) <= 100 ? (v as number) : 100 }))
     : [];
+  // Weekly bars + session stats for activity/duration cards.
+  const activityData = (() => {
+    if (visual.type !== "activity") return null;
+    const f = primaryNum?.field || tracker.fields?.[0]?.name || "value";
+    const series = weeklyByDay(entries, f);
+    const total = series.reduce((s, d) => s + d.value, 0);
+    const sevenAgo = Date.now() - 7 * 86400000;
+    const sessions = entries.filter((e) => new Date(e.timestamp).getTime() >= sevenAgo).length;
+    const unit = insight.bigUnit || "min";
+    const avg = sessions > 0 ? Math.round(total / sessions) : 0;
+    return { series, total, sessions, unit, avg };
+  })();
 
   return (
     <div
@@ -2910,6 +2947,24 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
         <div className="flex-1 px-3 pt-1.5 min-h-0 flex flex-col justify-center">
           <MultiMetricBars metrics={visual.metrics} />
         </div>
+      ) : visual.type === "activity" && activityData ? (
+        /* Activity/duration: latest value + weekly session bars + week stats. */
+        <>
+          <div className="px-3 pt-1 flex items-baseline gap-1">
+            <span className={`leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`} style={{ color: ac }}>
+              {insight.bigPrimary}
+            </span>
+            {insight.bigUnit && <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>}
+          </div>
+          <div className="flex-1 min-h-0 flex flex-col justify-end">
+            <p className="px-3 text-[10px] text-muted-foreground mb-1.5 truncate">
+              This week: <span className="font-semibold text-foreground">{activityData.total} {activityData.unit}</span>
+              {" · "}{activityData.sessions} session{activityData.sessions === 1 ? "" : "s"}
+              {activityData.sessions > 0 ? ` · ~${activityData.avg}/session` : ""}
+            </p>
+            <div className="px-3 pb-2"><WeekdayBars data={activityData.series} color={ac} height={importance === "large" ? 52 : importance === "compact" ? 34 : 44} /></div>
+          </div>
+        </>
       ) : (
         <>
           {/* Big metric (+ goal ring on the right for goal-based trackers) */}
@@ -3290,6 +3345,9 @@ const TRACKER_TEMPLATES: TrackerTemplate[] = [
   { id: "running", label: "Running", iconKind: "run", category: "fitness", unit: "mi", sample: 3, fields: [{ name: "distance", type: "number", unit: "mi", options: "" }, { name: "duration", type: "duration", unit: "min", options: "" }] },
   { id: "mood", label: "Mood", iconKind: "brain", category: "health", unit: "/ 10", sample: 8, fields: [{ name: "mood", type: "number", unit: "", options: "" }] },
   { id: "strength", label: "Strength", iconKind: "dumbbell", category: "fitness", unit: "lbs", sample: 185, fields: [{ name: "weight", type: "number", unit: "lbs", options: "" }, { name: "reps", type: "number", unit: "reps", options: "" }] },
+  { id: "reading", label: "Reading", iconKind: "book", category: "habit", unit: "min", sample: 30, fields: [{ name: "minutes", type: "number", unit: "min", options: "" }, { name: "pages", type: "number", unit: "pages", options: "" }] },
+  { id: "meditation", label: "Meditation", iconKind: "brain", category: "health", unit: "min", sample: 15, fields: [{ name: "minutes", type: "number", unit: "min", options: "" }] },
+  { id: "activity", label: "Activity / Sport", iconKind: "activity", category: "fitness", unit: "min", sample: 30, fields: [{ name: "minutes", type: "number", unit: "min", options: "" }] },
 ];
 
 // Live, static preview of how the finished tracker card will look — mirrors
@@ -3339,6 +3397,17 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
         <div className="flex-1 px-3 pt-1.5 min-h-0 flex flex-col justify-center">
           <MultiMetricBars metrics={visual.metrics} />
         </div>
+      ) : visual.type === "activity" ? (
+        <>
+          <div className="px-3 pt-1 flex items-baseline gap-1">
+            <span className="leading-none font-black tabular-nums text-[28px]" style={{ color: ac }}>{bigPrimary}</span>
+            {unit && <span className="text-[11px] font-medium text-muted-foreground">{unit}</span>}
+          </div>
+          <div className="flex-1 min-h-0 flex flex-col justify-end">
+            <p className="px-3 text-[10px] text-muted-foreground mb-1.5">This week: <span className="font-semibold text-foreground">{sample} {unit || "min"}</span> · 1 session</p>
+            <div className="px-3 pb-2"><WeekdayBars data={[0, sample * 0.5, 0, sample * 0.8, sample * 0.4, 0, sample].map((v, i) => ({ label: ["S", "M", "T", "W", "T", "F", "S"][i], value: Math.round(v), today: i === 6 }))} color={ac} height={44} /></div>
+          </div>
+        </>
       ) : (
         <>
           <div className="px-3 pt-1 flex items-start justify-between gap-2">

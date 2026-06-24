@@ -129,6 +129,41 @@ export const KIND_EMOJI: Record<string, string> = {
   dumbbell: "🏋️", activity: "❤️", bike: "🚴",
 };
 
+// ── WeekdayBars ───────────────────────────────────────────────────────────────
+// 7-day bar chart (one bar per weekday) for activity/duration trackers — gives
+// even a brand-new tracker depth: the week's shape, not just a single number.
+export function WeekdayBars({
+  data,
+  color,
+  height = 44,
+}: {
+  data: { label: string; value: number; today?: boolean }[];
+  color: string;
+  height?: number;
+}) {
+  const max = Math.max(...data.map((d) => d.value), 1);
+  return (
+    <div className="flex items-end justify-between gap-[3px]" style={{ height }}>
+      {data.map((d, i) => (
+        <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1 h-full">
+          <div className="w-full flex-1 flex items-end">
+            <div
+              className="w-full rounded-[3px] transition-all"
+              style={{
+                height: d.value > 0 ? `${Math.max(14, (d.value / max) * 100)}%` : "4px",
+                background: d.value > 0 ? color : "hsl(var(--muted-foreground) / 0.15)",
+                opacity: d.value > 0 ? (d.today ? 1 : 0.85) : 0.4,
+                boxShadow: d.today && d.value > 0 ? `0 0 0 1.5px ${color}` : undefined,
+              }}
+            />
+          </div>
+          <span className="text-[8px] leading-none text-muted-foreground">{d.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── RadialGauge ───────────────────────────────────────────────────────────────
 // A 270° arc with the score in the center. Used for 0–10 / 0–100 "score" kinds
 // (Wellness Index, Overall Health, Mood, Sleep Score).
