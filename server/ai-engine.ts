@@ -1076,14 +1076,111 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     }
   }
 
-  // ---- Journal shortcut: "mood good", "feeling amazing" ----
-  const moodMatch = lower.match(/^(?:mood|feeling|i\s+feel)\s+(amazing|great|good|okay|neutral|bad|awful|terrible)/);
-  if (moodMatch) {
-    const mood = moodMatch[1] as any;
-    const entry = await storage.createJournalEntry({ mood, content: "", tags: [] });
-    actions.push({ type: "journal_entry", category: "journal", data: { mood } });
-    results.push(entry);
-    return { matched: true, reply: `Logged mood: ${mood}. Add more thoughts whenever you want.`, actions, results };
+  // ---- Mood log: route to the Mood tracker (find-or-create), NOT a journal ----
+  // User-reported bug: "My mood is a seven today out of 10" was saved as a
+  // journal entry even though a "Mood" tracker already existed. Mood expressed
+  // as a rating or a feeling-word is quantitative, trackable data — it belongs
+  // on the user's Mood tracker (match an existing one, else create it). Journal
+  // entries are reserved for free-form reflective text (handled by the journal
+  // fast-path above and the journal_entry tool).
+  {
+    const mentionsMood = /\bmood\b/.test(lower);
+    const feelingLead = /^(?:feeling|i\s+feel|i\s+am\s+feeling|i'?m\s+feeling)\b/.test(lower);
+    // Don't hijack journal requests, tracker management, or questions/queries.
+    const moodBlocked =
+      lower.includes("journal") ||
+      /\b(track|create|delete|remove|rename|chart|graph|trend|history|average|avg|show|list|what|what'?s|whats|how|why|when)\b/.test(lower) ||
+      lower.includes("?");
+
+    if ((mentionsMood || feelingLead) && !moodBlocked) {
+      const NUM_WORDS: Record<string, number> = {
+        one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+      };
+      const toNum = (tok: string): number | undefined =>
+        /^\d{1,2}$/.test(tok) ? parseInt(tok, 10) : NUM_WORDS[tok];
+      const NUM = "(\\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)";
+
+      // Numeric rating: "7/10", "7 out of 10", "seven today out of 10",
+      // "mood is a 7", "feeling like a 6".
+      let rating: number | undefined;
+      const mOutOf = lower.match(new RegExp(`\\b${NUM}\\b(?:\\s+\\w+){0,2}?\\s*(?:\\/\\s*10|out\\s+of\\s+(?:10|ten))`));
+      const mMoodIs = lower.match(new RegExp(`\\bmood\\b(?:\\s+\\w+){0,3}?\\s+(?:a\\s+|an\\s+)?${NUM}\\b`));
+      const mFeel = lower.match(new RegExp(`\\bfeel(?:ing)?\\s+(?:like\\s+)?(?:a\\s+|an\\s+)?${NUM}\\b`));
+      const rTok = (mOutOf || mMoodIs || mFeel)?.[1];
+      if (rTok) {
+        const n = toNum(rTok);
+        if (n !== undefined && n >= 1 && n <= 10) rating = n;
+      }
+
+      // Qualitative label. When "mood" is named, an adjective anywhere counts;
+      // otherwise only trust an adjective that immediately follows the feeling
+      // lead ("feeling great") so "I feel good about my decision" stays narrow.
+      const QUAL = "(amazing|incredible|fantastic|great|wonderful|excellent|awesome|good|fine|nice|happy|pleasant|okay|ok|alright|neutral|meh|indifferent|bad|rough|low|down|sad|stressed|anxious|awful|horrible|dreadful|terrible|miserable)";
+      const qual = mentionsMood
+        ? lower.match(new RegExp(`\\b${QUAL}\\b`))
+        : lower.match(new RegExp(`^(?:feeling|i\\s+feel|i\\s+am\\s+feeling|i'?m\\s+feeling)\\s+(?:really\\s+|very\\s+|so\\s+|pretty\\s+|kinda\\s+|kind\\s+of\\s+)?${QUAL}\\b`));
+      let label: string | undefined;
+      if (qual) {
+        const w = qual[1];
+        if (/amazing|incredible|fantastic|great|wonderful|excellent|awesome/.test(w)) label = "great";
+        else if (/good|fine|nice|happy|pleasant/.test(w)) label = "good";
+        else if (/okay|ok|alright|neutral|meh|indifferent/.test(w)) label = "okay";
+        else if (/bad|rough|low|down|sad|stressed|anxious/.test(w)) label = "bad";
+        else label = "awful";
+      }
+      if (label === undefined && rating !== undefined) {
+        label = rating >= 9 ? "great" : rating >= 7 ? "good" : rating >= 5 ? "okay" : rating >= 3 ? "bad" : "awful";
+      }
+
+      // Only treat as a mood log when we actually parsed a mood signal.
+      if (rating !== undefined || label !== undefined) {
+        const trackers = await storage.getTrackers();
+        const moodTracker =
+          trackers.find(t => t.name.trim().toLowerCase() === "mood") ||
+          trackers.find(t => (t as any).category === "mental" && /\bmood\b/.test(t.name.toLowerCase())) ||
+          trackers.find(t => /\bmood\b/.test(t.name.toLowerCase()));
+        const selfId = (await storage.getProfiles()).find(p => p.type === "self")?.id;
+
+        if (moodTracker) {
+          // Map onto the tracker's actual fields so we extend an existing
+          // "Mood" tracker instead of bolting on duplicate columns.
+          const fields = ((moodTracker as any).fields || []) as Array<{ name: string; type: string }>;
+          const moodField =
+            fields.find(f => f.name.toLowerCase() === "mood") ||
+            fields.find(f => (f.type as string) === "select") ||
+            fields.find(f => f.type === "text" && /mood|feel/.test(f.name.toLowerCase()));
+          const numField =
+            fields.find(f => f.type === "number" && /(rating|score|level|mood|value)/.test(f.name.toLowerCase())) ||
+            fields.find(f => f.type === "number");
+          const values: Record<string, any> = {};
+          if (label && moodField) values[moodField.name] = label;
+          if (rating !== undefined && numField) values[numField.name] = rating;
+          if (Object.keys(values).length === 0) {
+            if (label) values.mood = label;
+            if (rating !== undefined) values.rating = rating;
+          }
+          const entry = await storage.logEntry({ trackerId: moodTracker.id, values, profileId: selfId });
+          if (entry) results.push(entry);
+          actions.push({ type: "log_entry", category: "mental", data: { trackerName: moodTracker.name, ...values } });
+          const human = [rating !== undefined ? `${rating}/10` : null, label].filter(Boolean).join(" · ");
+          return { matched: true, reply: `Logged to your ${moodTracker.name} tracker${human ? `: ${human}` : ""}.`, actions, results };
+        }
+
+        // No Mood tracker yet — create one and log via the robust executor
+        // (handles category inference, field creation, and ownership).
+        const createValues: Record<string, any> = {};
+        if (label) createValues.mood = label;
+        if (rating !== undefined) createValues.rating = rating;
+        const created = await executeTool("log_tracker_entry", { trackerName: "Mood", values: createValues, __userMessage: message });
+        if (created && !(created as any).error) {
+          results.push(created);
+          actions.push({ type: "log_entry", category: "mental", data: { trackerName: "Mood", ...createValues } });
+          const human = [rating !== undefined ? `${rating}/10` : null, label].filter(Boolean).join(" · ");
+          return { matched: true, reply: `Created a Mood tracker and logged${human ? `: ${human}` : ""}.`, actions, results };
+        }
+        // Creation failed — fall through so the AI can take a shot.
+      }
+    }
   }
 
   // (Journal fast-path for profiles moved to top of tryFastPath — before multi-intent guard)
@@ -2911,7 +3008,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Journal ---
   {
     name: "journal_entry",
-    description: "Create a journal/mood entry for the user or for a specific profile. Use when user says 'add a journal entry', 'log that X felt Y', 'write that X happened', 'journal entry for Joe'. mood is optional — infer it from context (sore/tired → 'bad', motivated/energetic → 'great', neutral/normal → 'neutral'). Defaults to 'neutral' if unknown.",
+    description: "Create a journal entry (free-form reflective text) for the user or a specific profile. Use when user says 'add a journal entry', 'write that X happened', 'journal entry for Joe', or shares a multi-sentence reflection. mood is optional — infer it from context (sore/tired → 'bad', motivated/energetic → 'great', neutral/normal → 'neutral'). Defaults to 'neutral' if unknown.\n\nDO NOT use this for a mood RATING or check-in such as 'my mood is 7/10', 'feeling a 6 out of 10', 'mood is good today', or 'I feel great' — that is quantitative mood tracking. Use log_tracker_entry with trackerName 'Mood' instead (it matches the user's existing Mood tracker or creates one). Only use journal_entry for mood when the user is clearly writing a diary-style narrative, not logging a score.",
     input_schema: {
       type: "object" as const,
       properties: {
