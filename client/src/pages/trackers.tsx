@@ -13,7 +13,7 @@ import {
 import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { RadialGauge, RingProgress, LinearZoneGauge, type GaugeZone } from "@/components/tracker-viz";
+import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
 import { CreateProfileDialog } from "@/pages/profiles";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -2692,23 +2692,46 @@ function scoreMaxFor(name: string, field: string, value: number): number | null 
   return null;
 }
 
+const MED_RE = /medication|supplement|vitamin|\bpill\b|prescription|\brx\b|\bdose\b|omega|fish\s*oil|multivitamin|lisinopril|metformin|statin|creatine|probiotic/i;
+
 type CardVisual =
   | { type: "spark" }
   | { type: "ring"; pct: number }
   | { type: "gauge"; value: number; min: number; max: number; zones: GaugeZone[] }
-  | { type: "radial"; value: number; max: number };
+  | { type: "radial"; value: number; max: number }
+  | { type: "checklist" }
+  | { type: "panel"; metrics: PanelMetric[] };
+
+// Collect numeric fields in the latest entry that each have a clinical range —
+// panel-style trackers (lipid HDL/LDL/triglycerides) read best as several bars.
+function rangedMetricsFor(tracker: Tracker, lastEntry: TrackerEntry | undefined): PanelMetric[] {
+  if (!lastEntry) return [];
+  const out: PanelMetric[] = [];
+  for (const f of tracker.fields || []) {
+    const v = (lastEntry.values as any)?.[f.name];
+    if (typeof v !== "number") continue;
+    const range = getMeasurementRange(tracker.name || "", f.name);
+    if (range) out.push({ label: f.name, value: v, min: range.min, max: range.max, zones: range.zones });
+  }
+  return out;
+}
 
 // Pick the most informative visual for a card from data we already have.
-// Order: goal ring → clinical range gauge → wellness radial → sparkline fallback.
+// Order: meds checklist → panel bars → goal ring → range gauge → score radial → spark.
 function chooseCardVisual(
   tracker: Tracker,
   insight: TrackerInsight,
   primary: { field: string; num: number } | null,
+  lastEntry?: TrackerEntry,
 ): CardVisual {
   // Blood pressure keeps its "120/80" + status pill; a single-value gauge can't
   // represent two components.
   if (insight.kind === "bloodpressure") return { type: "spark" };
   const name = tracker.name || "";
+  if (MED_RE.test(`${name} ${tracker.category || ""}`)) return { type: "checklist" };
+  // Multi-metric lab panel: ≥2 reference-ranged numeric fields in the entry.
+  const ranged = rangedMetricsFor(tracker, lastEntry);
+  if (ranged.length >= 2) return { type: "panel", metrics: ranged };
   const field = primary?.field || tracker.fields?.[0]?.name || "";
   if (primary) {
     const range = getMeasurementRange(name, field);
@@ -2761,8 +2784,18 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
     const found = findAnyNumericValue(lastEntry.values);
     return found ? { field: found.key, num: found.num } : null;
   })();
-  const visual = chooseCardVisual(tracker, insight, primaryNum);
+  const visual = chooseCardVisual(tracker, insight, primaryNum, lastEntry);
   const gaugeSize = importance === "large" ? 84 : importance === "compact" ? 58 : 70;
+  // Medication/supplement checklist row (taken vs due today).
+  const medChecklist = (() => {
+    if (visual.type !== "checklist") return null;
+    const today = new Date().toLocaleDateString("en-CA");
+    const takenToday = entries.some((e) => new Date(e.timestamp).toLocaleDateString("en-CA") === today);
+    const doseField = tracker.fields?.find((f) => /dose|dosage|amount|qty|quantity|pill|tablet|capsule/i.test(f.name));
+    const doseVal = doseField && lastEntry ? (lastEntry.values as any)[doseField.name] : undefined;
+    const label = doseVal != null ? `${doseVal}${doseField?.unit ? ` ${doseField.unit}` : ""}` : "Daily dose";
+    return [{ label, done: takenToday }];
+  })();
 
   return (
     <div
@@ -2820,6 +2853,19 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
               <p className="text-[10px] text-muted-foreground leading-snug line-clamp-3 mt-0.5">{insight.insight}</p>
             )}
           </div>
+        </div>
+      ) : visual.type === "checklist" ? (
+        /* Medication / supplement: taken-vs-due rows. */
+        <div className="flex-1 px-3 pt-1 min-h-0 flex flex-col justify-center gap-2">
+          {medChecklist && <ChecklistMini items={medChecklist} color={ac} />}
+          {importance !== "compact" && insight.hasData && (
+            <p className="text-[10px] text-muted-foreground leading-snug line-clamp-2">{insight.insight}</p>
+          )}
+        </div>
+      ) : visual.type === "panel" ? (
+        /* Lab panel: several reference-ranged metrics as labeled zone bars. */
+        <div className="flex-1 px-3 pt-1.5 min-h-0 flex flex-col justify-center">
+          <MultiMetricBars metrics={visual.metrics} />
         </div>
       ) : (
         <>
@@ -3208,9 +3254,11 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
   const ac = `hsl(${catAccent})`;
   const Icon = iconForKind("activity");
   const primaryField = fields.find(f => f.name.trim() && (f.type === "number" || f.type === "duration"))?.name.trim() || fields[0]?.name.trim() || "value";
-  const fakeTracker = { name: name || "New Tracker", category, unit, fields: fields.map(f => ({ name: f.name, type: f.type })) } as any;
+  const fakeTracker = { name: name || "New Tracker", category, unit, fields: fields.map(f => ({ name: f.name, type: f.type, unit: f.unit })) } as any;
   const fakeInsight = { kind: "generic", progressPct: null } as unknown as TrackerInsight;
-  const visual = chooseCardVisual(fakeTracker, fakeInsight, { field: primaryField, num: sample });
+  // Synthetic latest entry so panel/checklist previews can resolve.
+  const fakeEntry = { timestamp: new Date().toISOString(), values: Object.fromEntries(fields.filter(f => f.name.trim() && (f.type === "number" || f.type === "duration")).map(f => [f.name.trim(), sample])) } as any;
+  const visual = chooseCardVisual(fakeTracker, fakeInsight, { field: primaryField, num: sample }, fakeEntry);
   const bigPrimary = Number.isInteger(sample) ? sample.toLocaleString() : sample.toFixed(1);
   const series = [sample * 0.92, sample * 0.97, sample, sample * 1.01, sample * 0.99, sample];
   return (
@@ -3233,6 +3281,15 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
         <div className="flex-1 px-3 pt-1 min-h-0 flex items-center gap-3">
           <RadialGauge value={visual.value} max={visual.max} color={ac} size={70} unit={unit || `/ ${visual.max}`} />
           <p className="text-[10px] text-muted-foreground leading-snug">Looking good — this is how your score will read.</p>
+        </div>
+      ) : visual.type === "checklist" ? (
+        <div className="flex-1 px-3 pt-1 min-h-0 flex flex-col justify-center gap-2">
+          <ChecklistMini items={[{ label: unit ? `Daily dose (${unit})` : "Daily dose", done: true }]} color={ac} />
+          <p className="text-[10px] text-muted-foreground leading-snug">Check off each dose as you take it.</p>
+        </div>
+      ) : visual.type === "panel" ? (
+        <div className="flex-1 px-3 pt-1.5 min-h-0 flex flex-col justify-center">
+          <MultiMetricBars metrics={visual.metrics} />
         </div>
       ) : (
         <>

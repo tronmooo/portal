@@ -153,3 +153,64 @@ export function LinearZoneGauge({
     </div>
   );
 }
+
+// ── ChecklistMini ─────────────────────────────────────────────────────────────
+// Taken / due rows for medication, supplement, and vitamin trackers.
+export function ChecklistMini({
+  items,
+  color,
+}: {
+  items: { label: string; done: boolean }[];
+  color: string;
+}) {
+  return (
+    <div className="w-full space-y-1">
+      {items.slice(0, 3).map((it, i) => (
+        <div key={i} className="flex items-center gap-1.5">
+          <span
+            className="inline-flex items-center justify-center rounded-[4px] shrink-0"
+            style={{
+              width: 14, height: 14,
+              background: it.done ? color : "transparent",
+              border: it.done ? `1px solid ${color}` : "1px solid hsl(var(--muted-foreground) / 0.4)",
+              color: "#fff",
+            }}
+          >
+            {it.done && (
+              <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+            )}
+          </span>
+          <span className={`text-[11px] truncate ${it.done ? "text-foreground" : "text-muted-foreground"}`}>{it.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export interface PanelMetric { label: string; value: number; min: number; max: number; zones: GaugeZone[] }
+
+// ── MultiMetricBars ───────────────────────────────────────────────────────────
+// Compact labeled zone bars for panel-style trackers (lipid HDL/LDL/triglycerides,
+// nutrition macros) where several reference-ranged values matter at once.
+export function MultiMetricBars({ metrics }: { metrics: PanelMetric[] }) {
+  return (
+    <div className="w-full space-y-1.5">
+      {metrics.slice(0, 3).map((m, i) => {
+        const span = m.max - m.min || 1;
+        const pct = Math.max(0, Math.min(100, ((m.value - m.min) / span) * 100));
+        const active = m.zones.find((z) => m.value <= z.to) || m.zones[m.zones.length - 1];
+        return (
+          <div key={i}>
+            <div className="flex items-center justify-between leading-none mb-0.5">
+              <span className="text-[9px] uppercase tracking-wide text-muted-foreground truncate">{m.label}</span>
+              <span className="text-[10px] font-bold tabular-nums" style={{ color: active?.color }}>{Number.isInteger(m.value) ? m.value : m.value.toFixed(1)}</span>
+            </div>
+            <div className="relative h-1.5 rounded-full overflow-hidden bg-muted/30">
+              <div className="absolute inset-y-0 rounded-full" style={{ width: `${pct}%`, background: active?.color, opacity: 0.9 }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
