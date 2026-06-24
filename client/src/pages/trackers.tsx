@@ -13,6 +13,7 @@ import {
 import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { RadialGauge, RingProgress, LinearZoneGauge, type GaugeZone } from "@/components/tracker-viz";
 import { CreateProfileDialog } from "@/pages/profiles";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -2658,6 +2659,69 @@ function NoDataPile({ trackers, onOpenDetail }: { trackers: any[]; onOpenDetail:
   );
 }
 
+// ── Card visual selection ──────────────────────────────────────────────────
+// Reference ranges for common health measurements, so a card can show a banded
+// gauge ("Healthy" / "Elevated") instead of a lone number. Matched by the
+// tracker name OR primary field. Returns null for metrics without a range.
+function getMeasurementRange(name: string, field: string): { min: number; max: number; zones: GaugeZone[] } | null {
+  const s = `${name} ${field}`.toLowerCase();
+  const has = (re: RegExp) => re.test(s);
+  const G = "#16a34a", A = "#f59e0b", R = "#dc2626", B = "#2563eb";
+  if (has(/\bbmi\b/)) return { min: 12, max: 40, zones: [{ to: 18.5, color: A, label: "Underweight" }, { to: 25, color: G, label: "Healthy" }, { to: 30, color: A, label: "Overweight" }, { to: 40, color: R, label: "Obese" }] };
+  if (has(/body\s*fat|bodyfat/)) return { min: 5, max: 40, zones: [{ to: 8, color: B, label: "Low" }, { to: 20, color: G, label: "Healthy" }, { to: 25, color: A, label: "Elevated" }, { to: 40, color: R, label: "High" }] };
+  if (has(/glucose|blood\s*sugar|bloodsugar/)) return { min: 50, max: 200, zones: [{ to: 70, color: A, label: "Low" }, { to: 100, color: G, label: "Normal" }, { to: 125, color: A, label: "Pre-diabetic" }, { to: 200, color: R, label: "High" }] };
+  if (has(/\bhdl\b/)) return { min: 20, max: 100, zones: [{ to: 40, color: R, label: "Low" }, { to: 60, color: A, label: "OK" }, { to: 100, color: G, label: "Optimal" }] };
+  if (has(/\bldl\b/)) return { min: 50, max: 200, zones: [{ to: 100, color: G, label: "Optimal" }, { to: 130, color: A, label: "Near optimal" }, { to: 160, color: A, label: "Borderline" }, { to: 200, color: R, label: "High" }] };
+  if (has(/triglyceride/)) return { min: 50, max: 500, zones: [{ to: 150, color: G, label: "Normal" }, { to: 200, color: A, label: "Borderline" }, { to: 500, color: R, label: "High" }] };
+  if (has(/cholesterol/)) return { min: 120, max: 300, zones: [{ to: 200, color: G, label: "Desirable" }, { to: 240, color: A, label: "Borderline" }, { to: 300, color: R, label: "High" }] };
+  if (has(/\b(alt|sgpt)\b/)) return { min: 0, max: 80, zones: [{ to: 35, color: G, label: "Normal" }, { to: 55, color: A, label: "Elevated" }, { to: 80, color: R, label: "High" }] };
+  if (has(/\b(ast|sgot)\b/)) return { min: 0, max: 80, zones: [{ to: 35, color: G, label: "Normal" }, { to: 55, color: A, label: "Elevated" }, { to: 80, color: R, label: "High" }] };
+  if (has(/spo2|oxygen|o2\s*sat/)) return { min: 85, max: 100, zones: [{ to: 90, color: R, label: "Low" }, { to: 94, color: A, label: "Mild" }, { to: 100, color: G, label: "Normal" }] };
+  if (has(/temperature|\btemp\b/)) return { min: 95, max: 104, zones: [{ to: 97, color: B, label: "Low" }, { to: 99, color: G, label: "Normal" }, { to: 100.4, color: A, label: "Elevated" }, { to: 104, color: R, label: "Fever" }] };
+  if (has(/systolic/)) return { min: 80, max: 200, zones: [{ to: 90, color: A, label: "Low" }, { to: 120, color: G, label: "Normal" }, { to: 130, color: A, label: "Elevated" }, { to: 140, color: A, label: "Stage 1" }, { to: 200, color: R, label: "Stage 2" }] };
+  if (has(/resting\s*(heart|hr)|heart\s*rate|\bpulse\b|\bbpm\b/)) return { min: 40, max: 120, zones: [{ to: 60, color: B, label: "Athletic" }, { to: 100, color: G, label: "Normal" }, { to: 120, color: A, label: "Elevated" }] };
+  return null;
+}
+
+// A 0–10 / 0–100 wellness-style score that reads best as a radial gauge.
+function scoreMaxFor(name: string, field: string, value: number): number | null {
+  const s = `${name} ${field}`.toLowerCase();
+  if (!/\b(wellness|readiness|overall\s*health|health\s*score|mood|sleep\s*score|index|score|rating)\b/.test(s)) return null;
+  if (value <= 10) return 10;
+  if (value <= 100) return 100;
+  return null;
+}
+
+type CardVisual =
+  | { type: "spark" }
+  | { type: "ring"; pct: number }
+  | { type: "gauge"; value: number; min: number; max: number; zones: GaugeZone[] }
+  | { type: "radial"; value: number; max: number };
+
+// Pick the most informative visual for a card from data we already have.
+// Order: goal ring → clinical range gauge → wellness radial → sparkline fallback.
+function chooseCardVisual(
+  tracker: Tracker,
+  insight: TrackerInsight,
+  primary: { field: string; num: number } | null,
+): CardVisual {
+  // Blood pressure keeps its "120/80" + status pill; a single-value gauge can't
+  // represent two components.
+  if (insight.kind === "bloodpressure") return { type: "spark" };
+  const name = tracker.name || "";
+  const field = primary?.field || tracker.fields?.[0]?.name || "";
+  if (primary) {
+    const range = getMeasurementRange(name, field);
+    if (range) return { type: "gauge", value: primary.num, min: range.min, max: range.max, zones: range.zones };
+  }
+  if (insight.progressPct != null) return { type: "ring", pct: insight.progressPct };
+  if (primary) {
+    const max = scoreMaxFor(name, field, primary.num);
+    if (max) return { type: "radial", value: primary.num, max };
+  }
+  return { type: "spark" };
+}
+
 function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfilePrefix }: {
   tracker: Tracker;
   onDelete: (id: string) => void;
@@ -2688,6 +2752,17 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
 
   const importance = sizeOverride || insight.importance;
   const cardHeight = importance === "large" ? 196 : importance === "normal" ? 180 : 156;
+
+  // Pick a kind-appropriate visual (gauge / ring / radial / sparkline).
+  const primaryNum = (() => {
+    if (!lastEntry) return null;
+    const pf = tracker.fields?.[0]?.name;
+    if (pf && typeof (lastEntry.values as any)[pf] === "number") return { field: pf, num: (lastEntry.values as any)[pf] as number };
+    const found = findAnyNumericValue(lastEntry.values);
+    return found ? { field: found.key, num: found.num } : null;
+  })();
+  const visual = chooseCardVisual(tracker, insight, primaryNum);
+  const gaugeSize = importance === "large" ? 84 : importance === "compact" ? 58 : 70;
 
   return (
     <div
@@ -2730,46 +2805,69 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
         </div>
       </div>
 
-      {/* Big metric */}
-      <div className="px-3 pt-1 pb-0">
-        <div className="flex items-baseline gap-1">
-          <span
-            className={`leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`}
-            style={{ color: ac }}
-          >
-            {insight.bigPrimary}
-          </span>
-          {insight.bigUnit && (
-            <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>
-          )}
-          {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
-            <span
-              className="ml-auto text-[10px] font-semibold flex items-center gap-0.5"
-              style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}
-            >
-              {insight.trendDir === "up" ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-              {Math.abs(Math.round(insight.trendPct))}%
-            </span>
-          )}
+      {visual.type === "radial" ? (
+        /* Score hero: radial gauge carries the value; insight sits beside it. */
+        <div className="flex-1 px-3 pt-1 min-h-0 flex items-center gap-3">
+          <RadialGauge value={visual.value} max={visual.max} color={ac} size={gaugeSize} unit={insight.bigUnit || `/ ${visual.max}`} />
+          <div className="min-w-0 flex-1">
+            {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
+              <span className="text-[10px] font-semibold flex items-center gap-0.5" style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}>
+                {insight.trendDir === "up" ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                {Math.abs(Math.round(insight.trendPct))}%
+              </span>
+            )}
+            {insight.hasData && (
+              <p className="text-[10px] text-muted-foreground leading-snug line-clamp-3 mt-0.5">{insight.insight}</p>
+            )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <>
+          {/* Big metric (+ goal ring on the right for goal-based trackers) */}
+          <div className="px-3 pt-1 pb-0 flex items-start justify-between gap-2">
+            <div className="flex items-baseline gap-1 min-w-0">
+              <span
+                className={`leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`}
+                style={{ color: ac }}
+              >
+                {insight.bigPrimary}
+              </span>
+              {insight.bigUnit && (
+                <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>
+              )}
+              {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
+                <span
+                  className="ml-1 text-[10px] font-semibold flex items-center gap-0.5"
+                  style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}
+                >
+                  {insight.trendDir === "up" ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                  {Math.abs(Math.round(insight.trendPct))}%
+                </span>
+              )}
+            </div>
+            {visual.type === "ring" && (
+              <RingProgress pct={visual.pct} color={ac} size={importance === "compact" ? 46 : 54} centerLabel={`${Math.round(visual.pct)}%`} />
+            )}
+          </div>
 
-      {/* Body: progress bar OR sparkline (whichever fits) */}
-      <div className="flex-1 px-3 pt-1 min-h-0 flex flex-col justify-end gap-1.5">
-        {insight.progressPct != null ? (
-          <ProgressBar pct={insight.progressPct} color={ac} />
-        ) : insight.sparkValues.length >= 2 ? (
-          <div className="opacity-90"><Sparkline values={insight.sparkValues} color={ac} h={importance === "large" ? 48 : importance === "compact" ? 28 : 40} /></div>
-        ) : insight.hasData ? (
-          <div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/20 to-transparent" />
-        ) : null}
-        {/* Insight sentence — only when there's room (large/normal) */}
-        {importance !== "compact" && insight.hasData && (
-          <p className="text-[10px] text-muted-foreground leading-snug line-clamp-2">
-            {insight.insight}
-          </p>
-        )}
-      </div>
+          {/* Body: zone gauge / sparkline + insight */}
+          <div className="flex-1 px-3 pt-1.5 min-h-0 flex flex-col justify-end gap-1.5">
+            {visual.type === "gauge" ? (
+              <LinearZoneGauge value={visual.value} min={visual.min} max={visual.max} zones={visual.zones} />
+            ) : visual.type === "spark" && insight.sparkValues.length >= 2 ? (
+              <div className="opacity-90"><Sparkline values={insight.sparkValues} color={ac} h={importance === "large" ? 48 : importance === "compact" ? 28 : 40} /></div>
+            ) : visual.type === "spark" && insight.hasData ? (
+              <div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/20 to-transparent" />
+            ) : null}
+            {/* Insight sentence — only when there's room (large/normal) */}
+            {importance !== "compact" && insight.hasData && (
+              <p className="text-[10px] text-muted-foreground leading-snug line-clamp-2">
+                {insight.insight}
+              </p>
+            )}
+          </div>
+        </>
+      )}
 
       {/* Footer: status pill (left) + time-ago (right) */}
       <div className="px-3 pb-2.5 pt-1 flex items-center justify-between">
