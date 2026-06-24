@@ -27,7 +27,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, Plus, AlertCircle, Trash2, Pencil, Receipt, Pill, Wrench, CalendarClock, Activity, FileWarning, CheckSquare, SkipForward, RotateCcw, Pause, Play, ExternalLink, Link2, X, ChevronRight, Calendar as CalIcon } from "lucide-react";
+import { DollarSign, Calendar, CreditCard, CheckCircle, AlertTriangle, Clock, Repeat, Building2, Plus, AlertCircle, Trash2, Pencil, Receipt, Pill, Wrench, CalendarClock, Activity, FileWarning, CheckSquare, SkipForward, RotateCcw, Pause, Play, ExternalLink, Link2, X, ChevronRight, ChevronDown, User, Calendar as CalIcon } from "lucide-react";
 import { useLocation } from "wouter";
 import type { Obligation } from "@shared/schema";
 import { OBLIGATION_KIND_META, type ObligationKind } from "@shared/schema";
@@ -107,6 +107,36 @@ function linkedSourceRoute(ob: Obligation): { label: string; route: string } | n
   if (ob.linkedDocumentId) return { label: "View document", route: `/documents/${ob.linkedDocumentId}` };
   if (ob.linkedProfiles && ob.linkedProfiles.length > 0) return { label: "View profile", route: `/profiles/${ob.linkedProfiles[0]}` };
   return null;
+}
+
+// Best-effort "where did this come from" label. We don't have a dedicated
+// column, so we read an optional fields.source ("chat" | "document" |
+// "tracker" | "manual" | "ai") when the creator recorded one.
+function obligationSource(ob: Obligation): string | null {
+  const s = (ob as any)?.fields?.source;
+  if (!s || typeof s !== "string") return null;
+  const map: Record<string, string> = {
+    chat: "From chat", document: "From document", tracker: "From tracker",
+    manual: "Added manually", ai: "From assistant", extraction: "From document",
+  };
+  return map[s.toLowerCase()] || null;
+}
+
+// Build the visible description for a card: the user's notes plus any useful
+// structured context the creator stored in fields (vendor, address, service,
+// provider, account). Returns "" when there's nothing meaningful to show.
+function obligationDescription(ob: Obligation): string {
+  const parts: string[] = [];
+  if (ob.notes && ob.notes.trim()) parts.push(ob.notes.trim());
+  const f = (ob as any)?.fields || {};
+  for (const key of ["vendor", "provider", "service", "address", "account", "policyNumber", "location"]) {
+    const v = f[key];
+    if (v != null && String(v).trim() && !parts.some(p => p.toLowerCase().includes(String(v).toLowerCase()))) {
+      const label = key.replace(/([A-Z])/g, " $1").replace(/^\w/, c => c.toUpperCase());
+      parts.push(`${label}: ${v}`);
+    }
+  }
+  return parts.join(" · ");
 }
 
 const KIND_ICON: Record<ObligationKind, any> = {
@@ -237,14 +267,18 @@ function OccurrenceRow({ occ }: { occ: any }) {
   );
 }
 
-function ObligationCard({ ob, onOpen }: { ob: Obligation; onOpen?: () => void }) {
+function ObligationCard({ ob, onOpen, ownerLabel }: { ob: Obligation; onOpen?: () => void; ownerLabel?: string }) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const Icon = CATEGORY_ICONS[ob.category] || DollarSign;
   const dueDate = new Date(ob.nextDueDate);
   const now = new Date();
   const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
   const isOverdue = daysUntilDue < 0;
+  const isDueToday = daysUntilDue === 0;
   const isDueSoon = daysUntilDue >= 0 && daysUntilDue <= 7;
+  const isRecurring = !!ob.frequency && ob.frequency !== "once";
+  const [descExpanded, setDescExpanded] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editAmount, setEditAmount] = useState(String(ob.amount));
@@ -371,22 +405,29 @@ function ObligationCard({ ob, onOpen }: { ob: Obligation; onOpen?: () => void })
 
   return (
     <>
-      <Card className={`${isOverdue ? "border-red-500/50" : isDueSoon ? "border-yellow-500/30" : ""} ${onOpen ? "cursor-pointer hover:bg-muted/30 transition-colors" : ""}`} data-testid={`card-obligation-${ob.id}`}
+      <Card className={`relative overflow-hidden ${onOpen ? "cursor-pointer hover:bg-muted/30 transition-colors" : ""}`} data-testid={`card-obligation-${ob.id}`}
         onClick={(e) => {
-          // Only open the drawer when the user clicks the card body, never an action button.
+          // Only open the detail drawer when the user clicks the card body, never an action control.
           if (!onOpen) return;
           const target = e.target as HTMLElement;
-          if (target.closest('button') || target.closest('input') || target.closest('[role="menuitem"]') || target.closest('[contenteditable="true"]')) return;
+          if (target.closest('button') || target.closest('a') || target.closest('input') || target.closest('[role="menuitem"]') || target.closest('[contenteditable="true"]')) return;
           onOpen();
         }}>
-        <CardContent className="p-4">
-          <div className="flex items-start justify-between">
-            <div className="flex items-start gap-3 min-w-0">
-              <div className="p-2 rounded-lg shrink-0" style={{ background: `${kindMeta.color}1A`, color: kindMeta.color }}>
-                <KindIcon className="h-4 w-4" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-sm font-medium">
+        {/* Left status accent: red=overdue, amber=due soon, purple=recurring upcoming, neutral=normal */}
+        <span
+          aria-hidden
+          className="absolute left-0 top-0 bottom-0 w-1"
+          style={{ background: isOverdue ? "#ef4444" : (isDueToday || isDueSoon) ? "#f59e0b" : isRecurring ? "#7C76D9" : "hsl(var(--border))" }}
+        />
+        <CardContent className="p-3 pl-4">
+          {/* ── Top row: icon + title + type/recurrence/status badges ── */}
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-lg shrink-0" style={{ background: `${kindMeta.color}1A`, color: kindMeta.color }}>
+              <KindIcon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h3 className="text-sm font-semibold min-w-0 mr-1">
                   <EditableTitle
                     value={ob.name}
                     onSave={async (newName) => {
@@ -400,59 +441,96 @@ function ObligationCard({ ob, onOpen }: { ob: Obligation; onOpen?: () => void })
                     }}
                   />
                 </h3>
-                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                  <span className="text-lg font-semibold">${ob.amount.toLocaleString()}</span>
-                  <Badge variant="outline" className="text-xs h-5" style={{ borderColor: kindMeta.color, color: kindMeta.color }}>
-                    {kindMeta.label}
-                  </Badge>
-                  <Badge variant="outline" className="text-xs h-5">
+                <Badge variant="outline" className="text-[10px] h-5" style={{ borderColor: kindMeta.color, color: kindMeta.color }}>
+                  {kindMeta.label}
+                </Badge>
+                {isRecurring && (
+                  <Badge variant="outline" className="text-[10px] h-5 capitalize" style={{ borderColor: "#7C76D955", color: "#8b86e0" }}>
                     <Repeat className="h-2.5 w-2.5 mr-0.5" />{ob.frequency}
                   </Badge>
-                </div>
-                <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
-                  <Calendar className="h-3 w-3" />
-                  <span>Due: {dueDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-                  {isOverdue && <Badge variant="destructive" className="text-xs h-4 ml-1">{Math.abs(daysUntilDue)}d overdue</Badge>}
-                  {isDueSoon && !isOverdue && <Badge className="text-xs h-4 ml-1 bg-yellow-500/20 text-yellow-600 border-yellow-500/30">{daysUntilDue === 0 ? "Today" : `${daysUntilDue}d`}</Badge>}
-                </div>
-                {ob.autopay && (
-                  <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
-                    <CheckCircle className="h-2.5 w-2.5 text-green-500" /> Autopay enabled
-                  </div>
                 )}
-                {ob.notes && <p className="text-xs text-muted-foreground mt-1">{ob.notes}</p>}
+                {isOverdue && <Badge variant="destructive" className="text-[10px] h-5">{Math.abs(daysUntilDue)}d overdue</Badge>}
+                {isDueToday && <Badge className="text-[10px] h-5 bg-amber-500/20 text-amber-600 border-amber-500/30">Due today</Badge>}
+                {isDueSoon && !isDueToday && <Badge className="text-[10px] h-5 bg-amber-500/15 text-amber-600 border-amber-500/30">Due in {daysUntilDue}d</Badge>}
+                {!isOverdue && !isDueSoon && <Badge variant="outline" className="text-[10px] h-5 text-muted-foreground">Upcoming</Badge>}
               </div>
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <Button size="sm" variant="ghost"
-                onClick={() => { setEditAmount(String(ob.amount)); setEditDueDate(ob.nextDueDate?.slice(0, 10) || ""); setEditFrequency(ob.frequency); setEditCategory(ob.category); setEditKind((ob.kind as ObligationKind) || "bill"); setEditOpen(true); }}
-                className="h-7 w-7 p-0" title="Edit" data-testid={`button-edit-${ob.id}`}>
-                <Pencil className="h-3 w-3" />
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowDeleteConfirm(true)}
-                className="h-7 w-7 p-0 text-destructive" title="Delete" data-testid={`button-delete-${ob.id}`}>
-                <Trash2 className="h-3 w-3" />
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => payMutation.mutate()} disabled={payMutation.isPending}
-                className="h-7 text-xs" data-testid={`button-pay-${ob.id}`}>
-                Mark Paid
-              </Button>
+
+              {/* ── Main details: amount · due date · owner · autopay · source ── */}
+              <div className="flex items-center gap-x-3 gap-y-0.5 mt-1.5 flex-wrap text-xs">
+                {ob.amount > 0 && (
+                  <span className="text-base font-semibold tabular-nums leading-none">${ob.amount.toLocaleString()}</span>
+                )}
+                <span className="inline-flex items-center gap-1 text-muted-foreground">
+                  <Calendar className="h-3 w-3" />
+                  Due {dueDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                </span>
+                {ownerLabel && (
+                  <span className="inline-flex items-center gap-1 text-muted-foreground" title="Belongs to">
+                    <User className="h-3 w-3" />{ownerLabel}
+                  </span>
+                )}
+                {ob.autopay && (
+                  <span className="inline-flex items-center gap-1 text-green-600">
+                    <CheckCircle className="h-3 w-3" />Autopay
+                  </span>
+                )}
+                {obligationSource(ob) && (
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{obligationSource(ob)}</span>
+                )}
+              </div>
+
+              {/* ── Description (always visible, with View more for long text) ── */}
+              {(() => {
+                const desc = obligationDescription(ob);
+                if (!desc) return null;
+                const long = desc.length > 140;
+                return (
+                  <div className="mt-1.5">
+                    <p className={`text-xs text-muted-foreground ${long && !descExpanded ? "line-clamp-2" : ""}`}>{desc}</p>
+                    {long && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setDescExpanded(v => !v); }}
+                        className="text-[11px] text-primary mt-0.5 hover:underline"
+                        data-testid={`button-desc-toggle-${ob.id}`}
+                      >
+                        {descExpanded ? "View less" : "View more"}
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* ── Footer actions (no payment actions here — those live in the detail/finance views) ── */}
+              <div className="flex items-center gap-1 mt-2 flex-wrap">
+                <Button size="sm" variant="ghost"
+                  onClick={() => { setEditAmount(String(ob.amount)); setEditDueDate(ob.nextDueDate?.slice(0, 10) || ""); setEditFrequency(ob.frequency); setEditCategory(ob.category); setEditKind((ob.kind as ObligationKind) || "bill"); setEditOpen(true); }}
+                  className="h-7 px-2 text-xs gap-1" title="Edit" data-testid={`button-edit-${ob.id}`}>
+                  <Pencil className="h-3 w-3" /> Edit
+                </Button>
+                {(() => {
+                  const linked = linkedSourceRoute(ob);
+                  if (!linked) return null;
+                  return (
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1"
+                      onClick={() => navigate(linked.route)} data-testid={`button-view-linked-${ob.id}`}>
+                      <Link2 className="h-3 w-3" /> {linked.label}
+                    </Button>
+                  );
+                })()}
+                {onOpen && (
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1"
+                    onClick={onOpen} data-testid={`button-details-${ob.id}`}>
+                    <ExternalLink className="h-3 w-3" /> Details
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={() => setShowDeleteConfirm(true)}
+                  className="h-7 px-2 text-xs gap-1 text-destructive ml-auto" title="Delete" data-testid={`button-delete-${ob.id}`}>
+                  <Trash2 className="h-3 w-3" /> Delete
+                </Button>
+              </div>
             </div>
           </div>
-
-          {ob.payments.length > 0 && (
-            <div className="mt-3 pt-2 border-t border-border">
-              <p className="text-xs text-muted-foreground mb-1">Recent payments</p>
-              <div className="flex gap-2 overflow-x-auto">
-                {ob.payments.slice(-3).map(p => (
-                  <div key={p.id} className="text-xs text-muted-foreground bg-muted rounded px-2 py-0.5 shrink-0">
-                    ${p.amount} — {new Date(p.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                    {p.method && ` (${p.method})`}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -1031,6 +1109,9 @@ export default function ObligationsManager({ showHeader = true, compact = false,
   const [groupBySource, setGroupBySource] = useState(false);
   // Currently open drawer
   const [drawerOb, setDrawerOb] = useState<Obligation | null>(null);
+  // Time-status section collapse state + duplicate banner dismissal.
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const [dupBannerDismissed, setDupBannerDismissed] = useState(false);
 
   useEffect(() => {
     // Only subscribe to the global filter store when the host did not supply
@@ -1236,6 +1317,71 @@ export default function ObligationsManager({ showHeader = true, compact = false,
     return counts;
   }, [obligations]);
 
+  // Owner labelling: when viewing "Everyone" (or several selected profiles),
+  // each card shows who/what it belongs to. A single selected profile needs no
+  // label. Maps a linked-profile id to its display name.
+  const profileNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of profilesList) m.set(p.id, p.name);
+    return m;
+  }, [profilesList]);
+  const showOwner = !(filterMode === "selected" && filterIds.length === 1);
+  const ownerLabelFor = (ob: Obligation): string | undefined => {
+    if (!showOwner) return undefined;
+    const ids = ob.linkedProfiles || [];
+    if (ids.length === 0) return undefined;
+    const names = ids.map(id => profileNameById.get(id)).filter(Boolean) as string[];
+    if (names.length === 0) return undefined;
+    return names.length > 1 ? `${names[0]} +${names.length - 1}` : names[0];
+  };
+
+  // Duplicate detection: same normalized name + amount + frequency + due date.
+  // Surface a banner so the user can remove the extras (we keep the oldest).
+  const duplicateGroups = useMemo(() => {
+    const map = new Map<string, Obligation[]>();
+    for (const o of obligations) {
+      const key = `${(o.name || "").trim().toLowerCase()}|${o.amount}|${o.frequency}|${(o.nextDueDate || "").slice(0, 10)}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(o);
+    }
+    return Array.from(map.values())
+      .filter(g => g.length > 1)
+      .map(g => [...g].sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || ""))));
+  }, [obligations]);
+
+  // Remove the redundant copies in a duplicate group, keeping the first (oldest).
+  const removeDuplicates = async (group: Obligation[]) => {
+    const extras = group.slice(1);
+    try {
+      await Promise.all(extras.map(o => apiRequest("DELETE", `/api/obligations/${o.id}`)));
+      invalidateAll();
+      toast({ title: `Removed ${extras.length} duplicate${extras.length > 1 ? "s" : ""} of "${group[0].name}"` });
+    } catch (err: any) {
+      toast({ title: "Failed to remove duplicates", description: formatApiError(err), variant: "destructive" });
+    }
+  };
+
+  // Time-status sections (collapsible). A single obligation appears in exactly
+  // one bucket based on its next due date, so nothing is shown twice.
+  const timeSections = useMemo(() => {
+    const todayStart = todayMs;
+    const buckets: { key: string; label: string; color: string; items: Obligation[] }[] = [
+      { key: "overdue", label: "Overdue", color: "#ef4444", items: [] },
+      { key: "today", label: "Due today", color: "#f59e0b", items: [] },
+      { key: "week", label: "Due this week", color: "#f59e0b", items: [] },
+      { key: "upcoming", label: "Upcoming", color: "#5591C7", items: [] },
+    ];
+    for (const o of sorted) {
+      const d = new Date(o.nextDueDate); d.setHours(0, 0, 0, 0);
+      const days = Math.round((d.getTime() - todayStart) / 86400000);
+      if (days < 0) buckets[0].items.push(o);
+      else if (days === 0) buckets[1].items.push(o);
+      else if (days <= 7) buckets[2].items.push(o);
+      else buckets[3].items.push(o);
+    }
+    return buckets.filter(b => b.items.length > 0);
+  }, [sorted, todayMs]);
+
   return (
     <div className="space-y-4" data-testid="obligations-manager">
       {showHeader && (
@@ -1432,6 +1578,18 @@ export default function ObligationsManager({ showHeader = true, compact = false,
               <p className="text-xs text-yellow-700 dark:text-yellow-400">The due date is in the past. You can still create this.</p>
             </div>
           )}
+          {/* Warn (don't block) when an identical obligation already exists. */}
+          {newName.trim() && newAmount && newDueDate && obligations.some(o =>
+            (o.name || "").trim().toLowerCase() === newName.trim().toLowerCase() &&
+            o.amount === parseFloat(newAmount) &&
+            o.frequency === newFrequency &&
+            (o.nextDueDate || "").slice(0, 10) === newDueDate
+          ) && (
+            <div className="flex items-center gap-2 rounded-md bg-yellow-500/10 border border-yellow-500/30 px-3 py-2" data-testid="duplicate-create-warning">
+              <AlertTriangle className="h-3.5 w-3.5 text-yellow-600 shrink-0" />
+              <p className="text-xs text-yellow-700 dark:text-yellow-400">An identical obligation already exists (same name, amount, frequency, and due date). Creating this will make a duplicate.</p>
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
             <Button size="sm" disabled={!newName.trim() || !newAmount || parseFloat(newAmount) <= 0 || !newDueDate || createMutation.isPending}
@@ -1546,6 +1704,37 @@ export default function ObligationsManager({ showHeader = true, compact = false,
         )}
       </div>
 
+      {/* Duplicate-obligation warning: same name + amount + frequency + due date. */}
+      {!dupBannerDismissed && duplicateGroups.length > 0 && (
+        <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/5 p-3" data-testid="duplicate-banner">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-yellow-600 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-yellow-700 dark:text-yellow-400">
+                {duplicateGroups.length} possible duplicate{duplicateGroups.length > 1 ? "s" : ""} found
+              </p>
+              <div className="mt-1.5 space-y-1.5">
+                {duplicateGroups.map((g, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-muted-foreground truncate">
+                      <span className="font-medium text-foreground">{g[0].name}</span>
+                      {" · "}${g[0].amount.toLocaleString()} · {g[0].frequency} · {g.length} copies
+                    </span>
+                    <Button size="sm" variant="outline" className="h-6 text-xs shrink-0"
+                      onClick={() => removeDuplicates(g)} data-testid={`button-dedupe-${i}`}>
+                      Remove {g.length - 1} extra{g.length - 1 > 1 ? "s" : ""}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <Button size="sm" variant="ghost" className="h-6 w-6 p-0 shrink-0" onClick={() => setDupBannerDismissed(true)} aria-label="Dismiss">
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="p-4 space-y-3">
           <div className="h-8 w-48 rounded skeleton-shimmer" />
@@ -1591,7 +1780,7 @@ export default function ObligationsManager({ showHeader = true, compact = false,
                 </div>
                 <div className="grid gap-2">
                   {g.items.map(ob => (
-                    <ObligationCard key={ob.id} ob={ob} onOpen={() => setDrawerOb(ob)} />
+                    <ObligationCard key={ob.id} ob={ob} onOpen={() => setDrawerOb(ob)} ownerLabel={ownerLabelFor(ob)} />
                   ))}
                 </div>
               </div>
@@ -1599,10 +1788,35 @@ export default function ObligationsManager({ showHeader = true, compact = false,
           })}
         </div>
       ) : (
-        <div className="grid gap-3">
-          {sorted.map(ob => (
-            <ObligationCard key={ob.id} ob={ob} onOpen={() => setDrawerOb(ob)} />
-          ))}
+        // Default view: grouped by time status (Overdue / Due today / Due this
+        // week / Upcoming), each section collapsible. Recurrence is shown as a
+        // per-card badge rather than a separate bucket so nothing appears twice.
+        <div className="space-y-4" data-testid="obligations-by-status">
+          {timeSections.map(section => {
+            const collapsed = collapsedSections[section.key];
+            return (
+              <div key={section.key}>
+                <button
+                  type="button"
+                  onClick={() => setCollapsedSections(s => ({ ...s, [section.key]: !s[section.key] }))}
+                  className="flex items-center gap-2 mb-2 w-full text-left"
+                  data-testid={`section-toggle-${section.key}`}
+                >
+                  {collapsed ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+                  <span className="inline-block w-2 h-2 rounded-full" style={{ background: section.color }} />
+                  <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: section.color }}>{section.label}</h3>
+                  <span className="text-xs text-muted-foreground tabular-nums">{section.items.length}</span>
+                </button>
+                {!collapsed && (
+                  <div className="grid gap-2">
+                    {section.items.map(ob => (
+                      <ObligationCard key={ob.id} ob={ob} onOpen={() => setDrawerOb(ob)} ownerLabel={ownerLabelFor(ob)} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
