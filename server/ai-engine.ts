@@ -2550,7 +2550,7 @@ FIELD INFERENCE RULES — generate fields dynamically:
 • HEALTH: Blood Pressure → [systolic:number, diastolic:number, pulse:number, position:select(sitting,standing,lying)]. Blood Glucose → [reading:number, context:select(fasting,post-meal,bedtime), insulinDose:number]. Symptoms → [symptom:text, severity:number(1-10), duration:text, triggers:text]. Pain → [level:number(1-10), location:text, type:select(sharp,dull,throbbing,burning), triggers:text].
 • MEDICATION: [drugName:text, dosage:text, timeTaken:text, adherence:select(taken,skipped,missed), sideEffects:text, notes:text]. Category MUST be "medication".
 • FITNESS: Running → [distance:number, duration:number, pace:number, caloriesBurned:number, intensity:select(easy,moderate,hard)]. Strength → [exercise:text, sets:number, reps:number, weight:number]. Yoga → [duration:number, poses:text, flexibility:number(1-10)].
-• NUTRITION: [item:text, calories:number, protein:number, carbs:number, fat:number, mealType:select(breakfast,lunch,dinner,snack)].
+• NUTRITION: [item:text, calories:number, protein:number, carbs:number, fat:number, sugar:number, fiber:number, sodium:number, caffeine:number, mealType:select(breakfast,lunch,dinner,snack)]. sugar/fiber/sodium/caffeine ARE valid nutrition fields — log them on the same Nutrition/Calories tracker (never reject them or spin up a separate tracker).
 • SLEEP: [hours:number, quality:select(poor,fair,good,excellent), bedtime:text, wakeTime:text, disturbances:number].
 • MENTAL: Mood → [mood:select(great,good,okay,bad,awful), energy:number(1-5), anxiety:number(1-10), triggers:text]. Meditation → [duration:number, type:select(guided,breathing,body-scan,unguided), focusQuality:number(1-10)].
 • LIFESTYLE: Screen Time → [totalMinutes:number, category:select(social,work,entertainment), focusSessions:number]. Reading → [pages:number, minutes:number, book:text]. Pet Care → [activity:select(feeding,walking,grooming,medication), duration:number, notes:text].
@@ -4861,6 +4861,29 @@ export function resolveProfileByName<T extends { name: string }>(
 // directly without round-tripping through the LLM. Production code
 // reaches this via processMessage(). Do not call this from product
 // code paths.
+// Pick the existing tracker to log into, given the name-matched candidates and
+// the target profile. ROOT-CAUSE FIX for phantom "Chess (2)" trackers:
+//   1. a tracker already linked to the target profile → use it
+//   2. an ORPHAN tracker (no linkedProfiles) → ADOPT it (this was being wrongly
+//      treated as "someone else's" and cloned, producing "Name (2)")
+//   3. otherwise every match is owned by OTHER profiles → clone for the target
+// Returns { tracker } to log into, or { clone: true } to auto-create a per-person
+// copy. Pure + exported so it's unit-tested in tests/tracker-name-match.test.ts.
+export function pickTrackerForLog<T extends { linkedProfiles?: string[] }>(
+  nameMatches: T[],
+  targetProfileId: string | undefined,
+): { tracker: T | undefined; clone: boolean } {
+  if (nameMatches.length === 0) return { tracker: undefined, clone: false };
+  const owned = targetProfileId
+    ? nameMatches.find((t) => (t.linkedProfiles || []).includes(targetProfileId))
+    : undefined;
+  if (owned) return { tracker: owned, clone: false };
+  const orphan = nameMatches.find((t) => !(t.linkedProfiles && t.linkedProfiles.length > 0));
+  if (orphan) return { tracker: orphan, clone: false }; // adopt, never clone
+  // All matches belong to other profiles → make a per-person copy for target.
+  return { tracker: undefined, clone: true };
+}
+
 export async function executeTool(name: string, input: any, userId?: string): Promise<any> {
   // A2 fix: userId scopes the in-memory dedup map; without this two users
   // sending the same command within 30s would collide.
@@ -5622,33 +5645,56 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (isNutritionSearch && (nutritionAliases.some(a => tn.includes(a)) || t.category === "nutrition")) return true;
         return false;
       });
-      let tracker = nameMatches.length <= 1 ? nameMatches[0]
-        : (targetProfileId
-            ? nameMatches.find(t => (t.linkedProfiles || []).includes(targetProfileId!))
-              || nameMatches[0] // fallback to first match if none linked to target
-            : nameMatches[0]);
+      // PER-PERSON TRACKERS POLICY (2026-05-21), root-cause-corrected:
+      // Each profile gets its OWN tracker. But an UNLINKED (orphan) tracker is
+      // adopted for the target rather than cloned — previously an orphan was
+      // mistaken for "someone else's" and cloned into "<Name> (2)" every time
+      // the user logged to it (the reported "Chess (2)" bug). Only when every
+      // match is owned by a DIFFERENT profile do we null `tracker` so the code
+      // below auto-creates a per-person copy like "Running - Bob".
+      const pick = pickTrackerForLog(nameMatches, targetProfileId);
+      let tracker = pick.tracker as any;
+      if (pick.clone) {
+        logger.info("ai", `Per-person policy: "${input.trackerName}" matches only belong to other profile(s); creating a copy for the target`);
+      }
 
-      // PER-PERSON TRACKERS POLICY (2026-05-21):
-      // Each profile gets its OWN tracker. If the matched tracker belongs
-      // to a different profile (and we don't already have one for the
-      // target), null out `tracker` so the code below auto-creates a
-      // per-person clone like "Running - Bob". This is the user's chosen
-      // behavior — they want one card per person on the Linked page, with
-      // separate edit/delete scopes.
-      if (tracker && targetProfileId && nameMatches.length > 0) {
-        const trackerProfiles = tracker.linkedProfiles || [];
-        const belongsToTarget = trackerProfiles.includes(targetProfileId);
-        if (!belongsToTarget) {
-          // Prefer an existing tracker that IS linked to the target.
-          const ownTracker = nameMatches.find(t => (t.linkedProfiles || []).includes(targetProfileId!));
-          if (ownTracker) {
-            tracker = ownTracker;
-          } else {
-            // No tracker exists for this person yet → create a per-person clone.
-            logger.info("ai", `Per-person policy: matched "${tracker.name}" belongs to other profile(s); will create clone for ${targetProfileId}`);
-            tracker = undefined as any;
+      // SELF-HEAL existing pollution: if the matched family contains a clean
+      // base name AND auto-numbered copies ("Chess" + "Chess (2)"), consolidate
+      // them — fold every numbered sibling's entries into the clean canonical
+      // and delete the siblings. Only runs when such a family actually exists,
+      // so normal logs pay nothing. Cleans records the old bug already created.
+      if (tracker) {
+        const stripNum = (n: string) => n.replace(/\s*\(\d+\)\s*$/, "").trim().toLowerCase();
+        const baseKey = stripNum(tracker.name);
+        const family = nameMatches.filter((t: any) => stripNum(t.name) === baseKey);
+        const hasClean = family.some((t: any) => t.name.trim().toLowerCase() === baseKey);
+        if (family.length > 1 && hasClean) {
+          const canonical =
+            family.find((t: any) => t.name.trim().toLowerCase() === baseKey && (t.linkedProfiles || []).includes(targetProfileId!)) ||
+            family.find((t: any) => t.name.trim().toLowerCase() === baseKey) ||
+            tracker;
+          for (const sib of family) {
+            if (sib.id === canonical.id) continue;
+            for (const se of (sib.entries || [])) {
+              try { await storage.logEntry({ trackerId: canonical.id, values: se.values, profileId: targetProfileId, timestamp: se.timestamp }); } catch { /* skip */ }
+            }
+            try { await storage.deleteTracker(sib.id); } catch { /* non-fatal */ }
+            logger.info("ai", `Consolidated duplicate tracker "${sib.name}" into "${canonical.name}"`);
           }
+          tracker = canonical;
         }
+      }
+
+      // Adopt an orphan: link it to the target so it's unambiguous next time
+      // (and never re-evaluated as "someone else's").
+      if (tracker && targetProfileId && !(tracker.linkedProfiles && tracker.linkedProfiles.includes(targetProfileId))) {
+        try {
+          const adopted = await storage.updateTracker(tracker.id, {
+            linkedProfiles: Array.from(new Set([...(tracker.linkedProfiles || []), targetProfileId])),
+          } as any);
+          if (adopted) tracker = adopted;
+          logger.info("ai", `Adopted orphan tracker "${tracker.name}" for target profile (no clone created)`);
+        } catch { /* non-fatal: still log into it below */ }
       }
 
       // Merge notes into values if provided
@@ -5657,7 +5703,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (tracker) {
         // Dedup: check if nearly identical entry was logged in the last 2 minutes
         const twoMinAgo = Date.now() - 120000;
-        const recentDup = tracker.entries.find(e => {
+        const recentDup = tracker.entries.find((e: any) => {
           if (new Date(e.timestamp).getTime() < twoMinAgo) return false;
           const existingNums = Object.entries(e.values).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
           const newNums = Object.entries(entryValues).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
@@ -5696,6 +5742,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // dropped. Numeric fields get an inferred unit; short text values
         // (labels like meal type / sport / intensity) become text fields. Long
         // free-form text (notes) is left out — it already rides in _notes.
+        let addedFieldNames: string[] = [];
         if (unknownFields.length > 0) {
           const newFieldDefs: any[] = [];
           for (const fname of unknownFields) {
@@ -5732,6 +5779,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
               const updated = await storage.updateTracker(tracker.id, { fields: extendedFields });
               if (updated) {
                 tracker = updated;
+                addedFieldNames = newFieldDefs.map((f) => String(f.name).toLowerCase());
                 logger.info("ai", `Auto-extended ${tracker.name} with fields: ${newFieldDefs.map(f => f.name).join(", ")}`);
               }
             } catch (err) {
@@ -5744,10 +5792,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, normalizedValues);
-        // Attach a non-persistent hint so the chat reply builder can warn the user
-        // (e.g., "saved — note: 'quality' isn't a Sleep field").
-        if (entry && unknownFields.length > 0) {
-          (entry as any).__unknownFields = unknownFields;
+        // Only warn about fields we genuinely could NOT make first-class (long
+        // free-form text). Fields we just auto-added (sugar, fiber, sodium, …)
+        // DO show on the card/chart, so they must not trigger the scary
+        // "won't show in the standard chart" note (user-reported sugar bug).
+        const droppedFields = unknownFields.filter((f) => !addedFieldNames.includes(f.toLowerCase()));
+        if (entry && droppedFields.length > 0) {
+          (entry as any).__unknownFields = droppedFields;
           (entry as any).__trackerName = tracker.name;
           (entry as any).__knownFields = [...knownFieldNames];
         }
@@ -5845,10 +5896,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           trackerDisplayName = `${trackerDisplayName} - ${targetProfileForName.name}`;
         }
       } else {
-        // Self: keep the clean name. Only fall back to a numeric suffix if a
-        // LEGACY same-name tracker already holds it (pre-namespacing data).
+        // Self: keep the clean name. If a same-name tracker already exists,
+        // NEVER fabricate "<Name> (2)" — adopt the existing one (link it to the
+        // target and log there). Numbered copies must only ever come from the
+        // user explicitly naming a second tracker. This is the final guard for
+        // the reported "Chess (2)" bug.
         const conflictTracker = nameMatches.find(t => t.name.toLowerCase() === trackerDisplayName.toLowerCase());
-        if (conflictTracker) trackerDisplayName = `${trackerDisplayName} (2)`;
+        if (conflictTracker) {
+          try {
+            if (targetProfileId && !(conflictTracker.linkedProfiles || []).includes(targetProfileId)) {
+              await storage.updateTracker(conflictTracker.id, {
+                linkedProfiles: Array.from(new Set([...(conflictTracker.linkedProfiles || []), targetProfileId])),
+              } as any);
+            }
+          } catch { /* non-fatal */ }
+          const { values: nv } = normalizeTrackerEntry(conflictTracker as any, entryValues);
+          return await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        }
       }
 
       // PER-PERSON TRACKERS: each tracker is owned by exactly ONE profile.
