@@ -90,7 +90,13 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
  *     attributes inline and Tailwind arbitrary-value props generate inline
  *     styles, so nonce-ing/hashing styles is impractical. Accepted tradeoff:
  *     inline-style injection is far lower risk than inline-script injection.
- *   - object-src 'none': no plugins/embeds anywhere in the app.
+ *   - object-src 'self' blob': the in-app document viewer embeds PDFs via
+ *     <object>/<iframe> pointed at a same-origin blob: URL (created from the
+ *     authenticated /api/documents/:id/file response). 'none' blocked every
+ *     PDF preview ("This content is blocked"). We allow ONLY 'self' and blob:
+ *     — NOT data: — so an injected <object data="data:text/html,…"> can't run.
+ *   - frame-src 'self' blob': same rationale for the <iframe> PDF fallback and
+ *     any same-origin blob preview. data: is deliberately excluded.
  *   - worker-src 'self' (+ child-src 'self' as the worker fallback for older
  *     browsers): the service worker is same-origin.
  *   - Google Fonts hosts remain in style-src/font-src even though
@@ -104,10 +110,10 @@ export const CONTENT_SECURITY_POLICY =
   "font-src 'self' data: https://fonts.gstatic.com https://api.fontshare.com; " +
   "img-src 'self' data: blob: https:; " +
   "connect-src 'self' https://*.supabase.co https://api.anthropic.com https://api.resend.com https://challenges.cloudflare.com wss://*.supabase.co; " +
-  "frame-src https://accounts.google.com https://challenges.cloudflare.com; " +
+  "frame-src 'self' blob: https://accounts.google.com https://challenges.cloudflare.com; " +
   "worker-src 'self'; " +
   "child-src 'self'; " +
-  "object-src 'none'; " +
+  "object-src 'self' blob:; " +
   "frame-ancestors 'none'; " +
   "base-uri 'self'; " +
   "form-action 'self'; " +

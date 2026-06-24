@@ -31,6 +31,7 @@ export default defineConfig({
       'tests/auto-ownership-hook.test.ts',
       'tests/dashboard-filter-perf.test.ts',
       'tests/dashboard-timezone.test.ts',
+      'tests/document-preview.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

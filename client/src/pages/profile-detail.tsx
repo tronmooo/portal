@@ -4178,7 +4178,7 @@ function DocumentsTab({
             className="hidden"
             onChange={handleFileChange}
             data-testid="input-upload-document"
-            accept="image/*,application/pdf,.doc,.docx,.txt"
+            accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.rtf,.json,text/*"
           />
           <Button
             size="sm"

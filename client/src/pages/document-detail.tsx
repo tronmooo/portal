@@ -22,8 +22,11 @@ import {
   AlertCircle,
   Clock,
   ShieldCheck,
+  ExternalLink,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useDocumentBlobUrl, classifyDocument } from "@/lib/document-preview";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -186,8 +189,9 @@ function useViewerControls() {
 // ─── Preview panel ─────────────────────────────────────────────────────────────
 
 function PreviewPanel({ doc }: { doc: Document }) {
-  const isImage = doc.mimeType.startsWith("image/");
-  const isPdf = doc.mimeType === "application/pdf";
+  const kind = classifyDocument(doc.mimeType);
+  const isImage = kind === "image";
+  const isPdf = kind === "pdf";
   const containerRef = useRef<HTMLDivElement>(null);
   const {
     zoom, rotation, isDragging, translate,
@@ -196,17 +200,24 @@ function PreviewPanel({ doc }: { doc: Document }) {
     handleMouseDown, handleMouseMove, handleMouseUp,
   } = useViewerControls();
 
-  // BUG-D02: the server strips fileData from /api/documents/:id (only the binary
-  // endpoint /file returns it), so building `data:...;base64,${doc.fileData}` made
-  // an `image/jpeg;base64,undefined` URL that the browser silently dropped.
-  // Point both <img> and <object> at the streaming endpoint instead — it
-  // handles base64 docs AND Supabase-Storage docs transparently.
-  const dataUrl = `/api/documents/${doc.id}/file`;
-  // For docs uploaded in the current session the legacy base64 path still works,
-  // so prefer it when available (lets us preview before the server round-trip).
-  const previewUrl = (doc as any).fileData
-    ? `data:${doc.mimeType};base64,${(doc as any).fileData}`
-    : dataUrl;
+  // The server strips fileData from /api/documents/:id (only /file returns the
+  // binary), and native <img>/<object> loads can't carry the bearer token /file
+  // requires. They're also blocked by the CSP unless they point at a same-origin
+  // blob: URL. The shared hook resolves a blob: URL — from inline base64 when a
+  // freshly-uploaded doc still has it, otherwise via the authenticated /file
+  // endpoint.
+  const { url: previewUrl, loading: blobLoading, error: blobError } =
+    useDocumentBlobUrl(doc.id, doc.mimeType, (doc as any).fileData);
+
+  const downloadFromBlob = useCallback(() => {
+    if (!previewUrl) return;
+    const a = document.createElement("a");
+    a.href = previewUrl;
+    a.download = doc.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, [previewUrl, doc.name]);
 
   return (
     <div className="flex flex-col h-full rounded-xl border border-border bg-card overflow-hidden">
@@ -244,7 +255,19 @@ function PreviewPanel({ doc }: { doc: Document }) {
 
       {/* Preview */}
       <div className="flex-1 overflow-hidden relative">
-        {isImage && (
+        {blobError ? (
+          <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center" data-testid="preview-error">
+            <AlertCircle className="h-12 w-12 text-muted-foreground" />
+            <p className="text-sm font-medium">{doc.name}</p>
+            <p className="text-xs text-muted-foreground max-w-xs">
+              This file couldn't be loaded for preview. You can still download it.
+            </p>
+          </div>
+        ) : !previewUrl ? (
+          <div className="h-full flex items-center justify-center text-muted-foreground" data-testid="preview-loading">
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        ) : isImage ? (
           <div
             ref={containerRef}
             className={cn(
@@ -271,8 +294,7 @@ function PreviewPanel({ doc }: { doc: Document }) {
               draggable={false}
             />
           </div>
-        )}
-        {isPdf && (
+        ) : isPdf ? (
           <div ref={containerRef} className="h-full overflow-auto" onWheel={handleWheel} data-testid="preview-pdf">
             <div
               className="transition-transform duration-150"
@@ -282,26 +304,34 @@ function PreviewPanel({ doc }: { doc: Document }) {
                 width: zoom > 1 ? `${100 / zoom}%` : "100%",
               }}
             >
-              <object
-                data={previewUrl}
-                type="application/pdf"
-                className="w-full"
+              <iframe
+                src={previewUrl}
+                title={doc.name}
+                className="w-full border-0"
                 style={{ height: "calc(100vh - 250px)", minHeight: "400px" }}
-              >
-                <div className="flex flex-col items-center justify-center p-8 text-center">
-                  <FileText className="h-12 w-12 text-muted-foreground mb-3" />
-                  <p className="text-sm font-medium mb-1">{doc.name}</p>
-                  <p className="text-xs text-muted-foreground">PDF preview not available</p>
-                </div>
-              </object>
+              />
             </div>
           </div>
-        )}
-        {!isImage && !isPdf && (
-          <div className="h-full flex flex-col items-center justify-center gap-3" data-testid="preview-other">
+        ) : (
+          <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center" data-testid="preview-other">
             <FileText className="h-16 w-16 text-muted-foreground" />
-            <p className="text-sm font-medium">{doc.name}</p>
+            <p className="text-sm font-medium break-words">{doc.name}</p>
             <p className="text-xs text-muted-foreground">{doc.mimeType}</p>
+            <p className="text-xs text-muted-foreground max-w-xs">
+              This file type can't be previewed in the browser. Open or download it to view.
+            </p>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" className="gap-1.5" asChild>
+                <a href={previewUrl} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Open
+                </a>
+              </Button>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={downloadFromBlob}>
+                <Download className="h-3.5 w-3.5" />
+                Download
+              </Button>
+            </div>
           </div>
         )}
       </div>
@@ -360,14 +390,31 @@ function DataPanel({
     setAddingField(false);
   };
 
-  const downloadFile = () => {
-    const link = document.createElement("a");
-    link.href = `data:${doc.mimeType};base64,${doc.fileData}`;
-    link.download = doc.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast({ title: "Download started", description: doc.name });
+  const downloadFile = async () => {
+    // The server strips fileData from /api/documents/:id, so build the download
+    // from the authenticated /file endpoint (works for base64 + Supabase-Storage
+    // docs alike) rather than the now-empty doc.fileData.
+    try {
+      let href: string;
+      let revoke: string | null = null;
+      if (doc.fileData) {
+        href = `data:${doc.mimeType};base64,${doc.fileData}`;
+      } else {
+        const blob = await apiRequest("GET", `/api/documents/${doc.id}/file`).then((r) => r.blob());
+        href = URL.createObjectURL(blob);
+        revoke = href;
+      }
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = doc.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      if (revoke) setTimeout(() => URL.revokeObjectURL(revoke!), 10_000);
+      toast({ title: "Download started", description: doc.name });
+    } catch {
+      toast({ title: "Download failed", description: doc.name, variant: "destructive" });
+    }
   };
 
   const contextProfileId = useMemo(

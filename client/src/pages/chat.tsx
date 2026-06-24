@@ -2602,7 +2602,7 @@ export default function ChatPage() {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,application/pdf"
+        accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.rtf,.json,text/*"
         multiple
         className="hidden"
         onChange={handleFileSelect}
@@ -2611,7 +2611,7 @@ export default function ChatPage() {
       <input
         ref={addMoreFileInputRef}
         type="file"
-        accept="image/*,application/pdf"
+        accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.rtf,.json,text/*"
         multiple
         className="hidden"
         onChange={handleFileSelect}

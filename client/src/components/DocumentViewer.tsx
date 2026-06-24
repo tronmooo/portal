@@ -36,10 +36,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
+import { useDocumentBlobUrl, classifyDocument, DOCUMENT_UPLOAD_ACCEPT } from "@/lib/document-preview";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -156,14 +158,34 @@ function useDocumentShare() {
     toast({ title: "Messaging opened", description: `Sharing "${name}" via text` });
   };
 
-  const downloadDoc = (name: string, mimeType: string, data: string) => {
-    const link = document.createElement("a");
-    link.href = `data:${mimeType};base64,${data}`;
-    link.download = name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast({ title: "Download started", description: name });
+  const downloadDoc = async (name: string, mimeType: string, data: string, id?: string) => {
+    try {
+      let href: string;
+      let revoke: string | null = null;
+      const hasInline = data && data !== "__LAZY_LOAD__" && data.length > 0;
+      if (hasInline) {
+        href = `data:${mimeType};base64,${data}`;
+      } else if (id) {
+        // No inline base64 (lazy-loaded doc) — pull the binary from the
+        // authenticated endpoint and download via a blob URL.
+        const blob = await apiRequest("GET", `/api/documents/${id}/file`).then((r) => r.blob());
+        href = URL.createObjectURL(blob);
+        revoke = href;
+      } else {
+        toast({ title: "Download unavailable", description: name, variant: "destructive" });
+        return;
+      }
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      if (revoke) setTimeout(() => URL.revokeObjectURL(revoke!), 10_000);
+      toast({ title: "Download started", description: name });
+    } catch {
+      toast({ title: "Download failed", description: name, variant: "destructive" });
+    }
   };
 
   return { shareViaEmail, shareViaSMS, downloadDoc };
@@ -215,7 +237,7 @@ export function ShareButton({
           Send via Text
         </DropdownMenuItem>
         <DropdownMenuItem
-          onClick={() => downloadDoc(name, mimeType, data)}
+          onClick={() => downloadDoc(name, mimeType, data, id)}
           data-testid={`btn-download-${id}`}
         >
           <Download className="h-4 w-4 mr-2" />
@@ -326,8 +348,9 @@ export default function DocumentViewer({
   inline = false,
   compact = false,
 }: DocumentViewerProps) {
-  const isImage = mimeType.startsWith("image/");
-  const isPdf = mimeType === "application/pdf";
+  const kind = classifyDocument(mimeType);
+  const isImage = kind === "image";
+  const isPdf = kind === "pdf";
   const containerRef = useRef<HTMLDivElement>(null);
   const {
     zoom, rotation, expanded, setExpanded,
@@ -337,28 +360,24 @@ export default function DocumentViewer({
     handleMouseDown, handleMouseMove, handleMouseUp,
   } = useViewerControls();
 
-  // For large files, fetch as blob and create object URL (data URLs > 500KB crash mobile browsers)
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  useEffect(() => {
-    if (data && data !== "__LAZY_LOAD__" && data.length <= 500000) return; // Small enough for data URL
-    // Fetch the file as a blob via the authenticated API
-    let cancelled = false;
-    apiRequest("GET", `/api/documents/${id}/file`)
-      .then(res => res.blob())
-      .then(blob => {
-        if (!cancelled) setBlobUrl(URL.createObjectURL(blob));
-      })
-      .catch((err) => { console.error("[DocumentViewer] failed to fetch file blob:", err); });
-    return () => { cancelled = true; };
-  }, [id, data]);
+  // Everything is rendered from a same-origin blob: URL — required because the
+  // CSP only allows `frame-src`/`object-src` of `'self' blob:` (PDFs embed via
+  // <object>/<iframe>), and because native <img>/<object> loads can't carry the
+  // bearer token the /file endpoint needs. The hook decodes inline base64
+  // locally when available, else fetches the authenticated /file endpoint.
+  const { url: blobUrl, loading: blobLoading, error: blobError } =
+    useDocumentBlobUrl(id, mimeType, data);
+  const dataUrl = blobUrl || "";
 
-  // Clean up blob URL on unmount
-  useEffect(() => {
-    return () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
-  }, [blobUrl]);
-
-  const dataUrl = blobUrl
-    || (data && data !== "__LAZY_LOAD__" && data.length > 0 ? `data:${mimeType};base64,${data}` : "");
+  const downloadFromBlob = useCallback(() => {
+    if (!dataUrl) return;
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, [dataUrl, name]);
 
   const ZoomControls = () => (
     <div className="flex items-center gap-1 bg-background/90 backdrop-blur-sm rounded-lg border border-border p-1 shadow-sm">
@@ -463,23 +482,52 @@ export default function DocumentViewer({
           height: "100%",
         }}
       >
-        <object
-          data={dataUrl}
-          type="application/pdf"
-          className="w-full h-full"
+        <iframe
+          src={dataUrl}
+          title={name}
+          className="w-full h-full border-0"
           style={{ minHeight: "100%" }}
-        >
-          {/* Fallback: try iframe for better browser support */}
-          <iframe
-            src={dataUrl}
-            title={name}
-            className="w-full h-full border-0"
-            style={{ minHeight: "100%" }}
-          />
-        </object>
+        />
       </div>
     </div>
   );
+
+  // Unified content renderer — handles loading/error first, then dispatches to
+  // the type-specific renderer. PDFs render from a same-origin blob: URL (CSP
+  // allows object/frame 'self' blob:); non-previewable types fall back to a
+  // download/open card; text renders inline.
+  const renderPreview = (maxH: string) => {
+    if (blobError) {
+      return (
+        <NonRenderablePreview
+          name={name}
+          mimeType={mimeType}
+          kind={kind}
+          blobUrl={null}
+          loadFailed
+          onDownload={downloadFromBlob}
+        />
+      );
+    }
+    if (!dataUrl) {
+      return (
+        <div className="h-full min-h-[160px] flex items-center justify-center text-muted-foreground">
+          <Loader2 className="h-6 w-6 animate-spin" />
+        </div>
+      );
+    }
+    if (isImage) return renderImage(maxH);
+    if (isPdf) return renderPdf(maxH);
+    return (
+      <NonRenderablePreview
+        name={name}
+        mimeType={mimeType}
+        kind={kind}
+        blobUrl={dataUrl}
+        onDownload={downloadFromBlob}
+      />
+    );
+  };
 
   // Inline mode (inside chat bubble or document dialog)
   if (inline) {
@@ -504,15 +552,7 @@ export default function DocumentViewer({
           </div>
         </div>
         <div className="flex-1 min-h-0">
-          {isImage && renderImage(maxH)}
-          {isPdf && renderPdf("100%")}
-          {!isImage && !isPdf && (
-            <div className="p-6 text-center">
-              <FileText className="h-10 w-10 text-muted-foreground mx-auto mb-2" />
-              <p className="text-sm">{name}</p>
-              <p className="text-xs text-muted-foreground mt-1">{mimeType}</p>
-            </div>
-          )}
+          {renderPreview(maxH)}
         </div>
       </div>
     );
@@ -525,7 +565,7 @@ export default function DocumentViewer({
       data-testid={`doc-card-${id}`}
     >
       <div className="relative">
-        {isImage && (
+        {isImage && dataUrl && (
           <div className="overflow-hidden" style={{ maxHeight: compact ? "120px" : "200px" }}>
             <img
               src={dataUrl}
@@ -533,6 +573,13 @@ export default function DocumentViewer({
               className="w-full h-auto object-cover"
               draggable={false}
             />
+          </div>
+        )}
+        {isImage && !dataUrl && (
+          <div className="h-24 bg-muted/30 flex items-center justify-center">
+            {blobError
+              ? <FileText className="h-10 w-10 text-muted-foreground" />
+              : <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />}
           </div>
         )}
         {isPdf && (
@@ -552,6 +599,99 @@ export default function DocumentViewer({
           <p className="text-xs text-muted-foreground uppercase">{isPdf ? "PDF" : mimeType.split("/")[1]}</p>
         </div>
         <ShareButton id={id} name={name} mimeType={mimeType} data={data} size="icon" />
+      </div>
+    </div>
+  );
+}
+
+// ─── NonRenderablePreview ─────────────────────────────────────────────────────
+// Renderer for anything the browser can't show in an <img>/<iframe>: Office
+// docs, archives, unknown binaries (download/open card) and text-like files
+// (rendered inline). Also used as the error state for any document whose blob
+// failed to load.
+
+function NonRenderablePreview({
+  name,
+  mimeType,
+  kind,
+  blobUrl,
+  loadFailed = false,
+  onDownload,
+}: {
+  name: string;
+  mimeType: string;
+  kind: "image" | "pdf" | "text" | "other";
+  blobUrl: string | null;
+  loadFailed?: boolean;
+  onDownload: () => void;
+}) {
+  const [text, setText] = useState<string | null>(null);
+  const [textError, setTextError] = useState(false);
+
+  useEffect(() => {
+    if (kind !== "text" || !blobUrl) { setText(null); return; }
+    let cancelled = false;
+    setTextError(false);
+    fetch(blobUrl)
+      .then((r) => r.text())
+      // Cap at ~200KB so a huge log/csv can't lock the main thread on render.
+      .then((t) => { if (!cancelled) setText(t.length > 200_000 ? t.slice(0, 200_000) + "\n…(truncated)" : t); })
+      .catch(() => { if (!cancelled) setTextError(true); });
+    return () => { cancelled = true; };
+  }, [blobUrl, kind]);
+
+  if (kind === "text" && !loadFailed) {
+    if (textError) {
+      return (
+        <div className="h-full flex flex-col items-center justify-center gap-2 p-6 text-center text-muted-foreground">
+          <AlertCircle className="h-8 w-8" />
+          <p className="text-sm">Couldn't read this text file.</p>
+        </div>
+      );
+    }
+    if (text == null) {
+      return (
+        <div className="h-full min-h-[160px] flex items-center justify-center text-muted-foreground">
+          <Loader2 className="h-6 w-6 animate-spin" />
+        </div>
+      );
+    }
+    return (
+      <ScrollArea className="h-full w-full">
+        <pre className="text-xs whitespace-pre-wrap break-words p-4 font-mono leading-relaxed">{text}</pre>
+      </ScrollArea>
+    );
+  }
+
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center" data-testid="preview-nonrenderable">
+      {loadFailed
+        ? <AlertCircle className="h-12 w-12 text-muted-foreground" />
+        : <FileText className="h-12 w-12 text-muted-foreground" />}
+      <div>
+        <p className="text-sm font-medium break-words">{name}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{mimeType || "Unknown type"}</p>
+      </div>
+      <p className="text-xs text-muted-foreground max-w-xs">
+        {loadFailed
+          ? "This file couldn't be loaded for preview. You can still download it."
+          : "This file type can't be previewed in the browser. Download or open it to view."}
+      </p>
+      <div className="flex items-center gap-2">
+        {blobUrl && (
+          <Button variant="outline" size="sm" className="gap-1.5" asChild>
+            <a href={blobUrl} target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open
+            </a>
+          </Button>
+        )}
+        {blobUrl && (
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={onDownload}>
+            <Download className="h-3.5 w-3.5" />
+            Download
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -669,17 +809,34 @@ export function DocumentViewerDialog({
                 {docType && <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal shrink-0">{docType.replace(/_/g, ' ')}</span>}
               </div>
             </DialogTitle>
-            {displayData && (
+            {(displayData || hasFile) && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-7 px-2 shrink-0"
-                onClick={() => {
-                  const link = document.createElement("a");
-                  const prefix = mimeType === "application/pdf" ? "data:application/pdf;base64," : `data:${mimeType};base64,`;
-                  link.href = displayData.startsWith("data:") ? displayData : prefix + displayData;
-                  link.download = liveName;
-                  link.click();
+                onClick={async () => {
+                  try {
+                    let href: string;
+                    let revoke: string | null = null;
+                    if (displayData) {
+                      const prefix = `data:${actualMime};base64,`;
+                      href = displayData.startsWith("data:") ? displayData : prefix + displayData;
+                    } else {
+                      // Lazy-loaded doc: fetch the binary from the authenticated endpoint.
+                      const blob = await apiRequest("GET", `/api/documents/${id}/file`).then((r) => r.blob());
+                      href = URL.createObjectURL(blob);
+                      revoke = href;
+                    }
+                    const link = document.createElement("a");
+                    link.href = href;
+                    link.download = liveName;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    if (revoke) setTimeout(() => URL.revokeObjectURL(revoke!), 10_000);
+                  } catch {
+                    toast({ title: "Download failed", description: liveName, variant: "destructive" });
+                  }
                 }}
               >
                 <Download className="h-3.5 w-3.5 mr-1" />
@@ -747,7 +904,7 @@ export function DocumentViewerDialog({
                   <label className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30 hover:bg-muted/50 cursor-pointer text-xs font-medium">
                     <input
                       type="file"
-                      accept="image/*,application/pdf"
+                      accept={DOCUMENT_UPLOAD_ACCEPT}
                       className="hidden"
                       onChange={async (e) => {
                         const file = e.target.files?.[0];

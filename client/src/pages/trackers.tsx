@@ -6560,7 +6560,7 @@ export default function TrackersPage() {
                 e.target.value = "";
               }}
               data-testid="input-upload-document-global"
-              accept="image/*,application/pdf,.doc,.docx,.txt"
+              accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.rtf,.json,text/*"
             />
             <Button
               size="sm"
