@@ -661,6 +661,19 @@ function StatsRow({ entries, primaryField, unit, isBP }: { entries: TrackerEntry
 
 // ── Standard Detail Chart ──────────────────────────────────────────────────────
 
+// Reference "normal" range for a measurement metric, so a heart-rate / glucose
+// / temperature chart shows a healthy band instead of a bare line.
+function measurementZone(field: string): { low: number; high: number; label: string } | null {
+  const f = String(field || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (/(heartrate|^hr$|bpm|pulse)/.test(f)) return { low: 60, high: 100, label: "Normal resting" };
+  if (/(glucose|bloodsugar|bloodglucose)/.test(f)) return { low: 70, high: 140, label: "Normal" };
+  if (/(spo2|oxygen)/.test(f)) return { low: 95, high: 100, label: "Normal" };
+  if (/(temperature|temp)/.test(f)) return { low: 97, high: 99, label: "Normal" };
+  if (/(systolic)/.test(f)) return { low: 90, high: 120, label: "Normal" };
+  if (/(diastolic)/.test(f)) return { low: 60, high: 80, label: "Normal" };
+  return null;
+}
+
 function StandardDetailChart({
   entries,
   primaryField,
@@ -714,6 +727,15 @@ function StandardDetailChart({
     <ResponsiveContainer width="100%" height={200}>
       <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
+        {(() => {
+          const z = measurementZone(primaryField);
+          return z ? (
+            <ReferenceArea
+              y1={z.low} y2={z.high} fill="#10b981" fillOpacity={0.08} strokeOpacity={0}
+              label={{ value: z.label, position: "insideTopRight", fontSize: 9, fill: "hsl(var(--muted-foreground))" }}
+            />
+          ) : null;
+        })()}
         <XAxis
           dataKey="date"
           tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
@@ -1412,6 +1434,40 @@ function AddEntryDialog({
     onOpenChange(false);
   };
 
+  // Kind-aware one-tap logging. Additive trackers (water, minutes) get +amount
+  // chips; categorical (mood/rating) gets a 1–N picker. Both log instantly.
+  const pres = classifyTrackerPresentation(tracker as any);
+  const quickField = pres.primaryField;
+  const quickInc: number[] = (() => {
+    if (pres.metricKind === "categorical") return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const u = (pres.unit || "").toLowerCase();
+    if (/oz|ounce/.test(u)) return [8, 12, 16, 24];
+    if (/cup|glass/.test(u)) return [1, 2, 3];
+    if (/ml/.test(u)) return [250, 500, 750];
+    if (/^l$|liter|litre/.test(u)) return [0.25, 0.5, 1];
+    if (/min/.test(u)) return [10, 20, 30, 45];
+    if (/mi|km|step/.test(u)) return [1, 2, 5];
+    if (/cal/.test(u)) return [100, 250, 500];
+    return [1, 5, 10];
+  })();
+  const quickLog = useMutation<any, Error, number>({
+    mutationFn: async (amount: number) => {
+      const res = await apiRequest("POST", `/api/trackers/${tracker.id}/entries`, { values: { [quickField as string]: amount } });
+      return res.json();
+    },
+    onSuccess: (_d, amount) => {
+      toast({ title: pres.metricKind === "categorical" ? `Logged ${amount}` : `+${amount}${pres.unit ? " " + pres.unit : ""} logged` });
+      onOpenChange(false);
+    },
+    onError: (err) => toast({ title: "Failed to log", description: formatApiError(err), variant: "destructive" }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "all" });
+    },
+  });
+  const showQuick = !!quickField && (pres.metricKind === "additive" || pres.metricKind === "categorical");
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent data-testid={`dialog-add-entry-${tracker.id}`}>
@@ -1419,6 +1475,28 @@ function AddEntryDialog({
           <DialogTitle>Log Entry: {tracker.name}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 mt-2">
+          {showQuick && (
+            <div>
+              <Label className="text-xs font-medium text-muted-foreground">
+                {pres.metricKind === "categorical" ? "Quick rate" : "Quick add"}
+              </Label>
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                {quickInc.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    disabled={quickLog.isPending}
+                    onClick={() => quickLog.mutate(n)}
+                    className="px-3 py-1.5 rounded-full border border-primary/40 text-primary text-sm font-medium hover:bg-primary/10 active:scale-95 transition-all disabled:opacity-50"
+                    data-testid={`quick-log-${n}`}
+                  >
+                    {pres.metricKind === "categorical" ? n : `+${n}${pres.unit ? ` ${pres.unit}` : ""}`}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1">One tap to log · or fill the form below for details.</p>
+            </div>
+          )}
           {tracker.fields.map((f) => (
             <div key={f.name}>
               <Label className="text-xs font-medium text-muted-foreground capitalize">
