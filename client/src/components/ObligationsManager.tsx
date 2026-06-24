@@ -1379,7 +1379,15 @@ export default function ObligationsManager({ showHeader = true, compact = false,
       else if (days <= 7) buckets[2].items.push(o);
       else buckets[3].items.push(o);
     }
-    return buckets.filter(b => b.items.length > 0);
+    const out = buckets.filter(b => b.items.length > 0);
+    // "Recurring obligations" — every repeating obligation, gathered again here
+    // as an at-a-glance roster of what keeps coming back. Intentionally overlaps
+    // with the time buckets above (a recurring bill is also overdue/upcoming).
+    const recurring = sorted.filter(o => !!o.frequency && o.frequency !== "once");
+    if (recurring.length > 0) {
+      out.push({ key: "recurring", label: "Recurring obligations", color: "#7C76D9", items: recurring });
+    }
+    return out;
   }, [sorted, todayMs]);
 
   return (
