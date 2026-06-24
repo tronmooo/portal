@@ -3170,6 +3170,96 @@ type FieldDraft = {
   options: string; // comma-separated for select
 };
 
+// Starter templates for the create flow — one tap pre-fills name, category,
+// unit, and fields so a new tracker looks polished immediately (and so the
+// right card visual is chosen). "Custom" keeps the manual builder.
+type TrackerTemplate = {
+  id: string;
+  label: string;
+  iconKind: TrackerInsight["iconKind"];
+  category: string;
+  unit: string;
+  fields: FieldDraft[];
+  sample: number;
+};
+const TRACKER_TEMPLATES: TrackerTemplate[] = [
+  { id: "weight", label: "Weight", iconKind: "weight", category: "health", unit: "lbs", sample: 170, fields: [{ name: "weight", type: "number", unit: "lbs", options: "" }] },
+  { id: "bloodpressure", label: "Blood Pressure", iconKind: "bp", category: "health", unit: "mmHg", sample: 118, fields: [{ name: "systolic", type: "number", unit: "mmHg", options: "" }, { name: "diastolic", type: "number", unit: "mmHg", options: "" }] },
+  { id: "heartrate", label: "Heart Rate", iconKind: "activity", category: "health", unit: "bpm", sample: 72, fields: [{ name: "heart rate", type: "number", unit: "bpm", options: "" }] },
+  { id: "glucose", label: "Blood Sugar", iconKind: "drop", category: "health", unit: "mg/dL", sample: 95, fields: [{ name: "glucose", type: "number", unit: "mg/dL", options: "" }] },
+  { id: "bmi", label: "BMI", iconKind: "weight", category: "health", unit: "", sample: 24, fields: [{ name: "bmi", type: "number", unit: "", options: "" }] },
+  { id: "cholesterol", label: "Cholesterol", iconKind: "activity", category: "health", unit: "mg/dL", sample: 180, fields: [{ name: "ldl", type: "number", unit: "mg/dL", options: "" }, { name: "hdl", type: "number", unit: "mg/dL", options: "" }] },
+  { id: "sleep", label: "Sleep", iconKind: "sleep", category: "sleep", unit: "hr", sample: 7.5, fields: [{ name: "hours", type: "number", unit: "hr", options: "" }] },
+  { id: "steps", label: "Steps", iconKind: "walk", category: "fitness", unit: "steps", sample: 8200, fields: [{ name: "steps", type: "number", unit: "steps", options: "" }] },
+  { id: "hydration", label: "Hydration", iconKind: "drop", category: "health", unit: "oz", sample: 64, fields: [{ name: "ounces", type: "number", unit: "oz", options: "" }] },
+  { id: "calories", label: "Calories", iconKind: "flame", category: "nutrition", unit: "cal", sample: 2000, fields: [{ name: "calories", type: "number", unit: "cal", options: "" }] },
+  { id: "running", label: "Running", iconKind: "run", category: "fitness", unit: "mi", sample: 3, fields: [{ name: "distance", type: "number", unit: "mi", options: "" }, { name: "duration", type: "duration", unit: "min", options: "" }] },
+  { id: "mood", label: "Mood", iconKind: "brain", category: "health", unit: "/ 10", sample: 8, fields: [{ name: "mood", type: "number", unit: "", options: "" }] },
+  { id: "strength", label: "Strength", iconKind: "dumbbell", category: "fitness", unit: "lbs", sample: 185, fields: [{ name: "weight", type: "number", unit: "lbs", options: "" }, { name: "reps", type: "number", unit: "reps", options: "" }] },
+];
+
+// Live, static preview of how the finished tracker card will look — mirrors
+// TrackerCard's shell and reuses the same visual selector + viz primitives so
+// what the user sees here is what they get on the board.
+function TrackerCardPreview({ name, category, unit, fields, sample }: {
+  name: string; category: string; unit: string; fields: FieldDraft[]; sample: number;
+}) {
+  const catAccent = getCategoryAccent(category);
+  const ac = `hsl(${catAccent})`;
+  const Icon = iconForKind("activity");
+  const primaryField = fields.find(f => f.name.trim() && (f.type === "number" || f.type === "duration"))?.name.trim() || fields[0]?.name.trim() || "value";
+  const fakeTracker = { name: name || "New Tracker", category, unit, fields: fields.map(f => ({ name: f.name, type: f.type })) } as any;
+  const fakeInsight = { kind: "generic", progressPct: null } as unknown as TrackerInsight;
+  const visual = chooseCardVisual(fakeTracker, fakeInsight, { field: primaryField, num: sample });
+  const bigPrimary = Number.isInteger(sample) ? sample.toLocaleString() : sample.toFixed(1);
+  const series = [sample * 0.92, sample * 0.97, sample, sample * 1.01, sample * 0.99, sample];
+  return (
+    <div
+      className="rounded-2xl overflow-hidden flex flex-col relative"
+      style={{
+        height: 150,
+        background: `linear-gradient(160deg, hsl(${catAccent} / 0.16) 0%, hsl(var(--card)) 48%)`,
+        border: `1px solid hsl(${catAccent} / 0.25)`,
+        boxShadow: `0 2px 16px hsl(${catAccent} / 0.08), inset 0 1px 0 hsl(${catAccent} / 0.12)`,
+      }}
+    >
+      <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
+        <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: ac }}>
+          <Icon className="h-3.5 w-3.5" />
+        </div>
+        <p className="text-[13px] font-semibold text-foreground truncate leading-tight flex-1">{name || "New Tracker"}</p>
+      </div>
+      {visual.type === "radial" ? (
+        <div className="flex-1 px-3 pt-1 min-h-0 flex items-center gap-3">
+          <RadialGauge value={visual.value} max={visual.max} color={ac} size={70} unit={unit || `/ ${visual.max}`} />
+          <p className="text-[10px] text-muted-foreground leading-snug">Looking good — this is how your score will read.</p>
+        </div>
+      ) : (
+        <>
+          <div className="px-3 pt-1 flex items-start justify-between gap-2">
+            <div className="flex items-baseline gap-1 min-w-0">
+              <span className="leading-none font-black tabular-nums text-[28px]" style={{ color: ac }}>{bigPrimary}</span>
+              {unit && <span className="text-[11px] font-medium text-muted-foreground">{unit}</span>}
+            </div>
+            {visual.type === "ring" && <RingProgress pct={visual.pct} color={ac} size={54} centerLabel={`${Math.round(visual.pct)}%`} />}
+          </div>
+          <div className="flex-1 px-3 pt-1.5 min-h-0 flex flex-col justify-end gap-1.5">
+            {visual.type === "gauge" ? (
+              <LinearZoneGauge value={visual.value} min={visual.min} max={visual.max} zones={visual.zones} />
+            ) : (
+              <div className="opacity-90"><Sparkline values={series} color={ac} h={40} /></div>
+            )}
+          </div>
+        </>
+      )}
+      <div className="px-3 pb-2.5 pt-1 flex items-center justify-between">
+        <span className="text-[10px] font-semibold capitalize px-2 py-0.5 rounded-full" style={{ backgroundColor: `hsl(${catAccent} / 0.15)`, color: ac }}>{category || "custom"}</span>
+        <span className="text-[10px] text-muted-foreground">Preview</span>
+      </div>
+    </div>
+  );
+}
+
 function CreateTrackerDialog({
   open,
   onOpenChange,
@@ -3185,6 +3275,18 @@ function CreateTrackerDialog({
   const [fields, setFields] = useState<FieldDraft[]>([
     { name: "value", type: "number", unit: "", options: "" },
   ]);
+  // Which starter template is selected (null = Custom / manual builder).
+  const [templateId, setTemplateId] = useState<string | null>(null);
+  const applyTemplate = (t: TrackerTemplate | null) => {
+    setTemplateId(t?.id ?? null);
+    if (!t) return; // Custom: leave current fields/name as-is for manual entry
+    setName(t.label);
+    setCategory(t.category);
+    setUnit(t.unit);
+    setFields(t.fields.map(f => ({ ...f })));
+  };
+  // Sample value used to render the live preview.
+  const previewSample = TRACKER_TEMPLATES.find(t => t.id === templateId)?.sample ?? 100;
 
   const mutation = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string } | undefined>({
     mutationFn: async () => {
@@ -3273,6 +3375,7 @@ function CreateTrackerDialog({
       setCategory("custom");
       setUnit("");
       setFields([{ name: "value", type: "number", unit: "", options: "" }]);
+      setTemplateId(null);
       onOpenChange(false);
       toast({ title: "Tracker created" });
     },
@@ -3314,6 +3417,7 @@ function CreateTrackerDialog({
     setCategory("custom");
     setUnit("");
     setFields([{ name: "value", type: "number", unit: "", options: "" }]);
+    setTemplateId(null);
     onOpenChange(false);
   };
 
@@ -3325,6 +3429,56 @@ function CreateTrackerDialog({
         </DialogHeader>
 
         <div className="space-y-4 mt-2">
+          {/* Template picker — one tap pre-fills name/category/unit/fields */}
+          <div>
+            <Label className="text-xs font-medium">Start from a template</Label>
+            <div className="mt-2 grid grid-cols-3 sm:grid-cols-4 gap-2" data-testid="tracker-template-grid">
+              {TRACKER_TEMPLATES.map((t) => {
+                const TIcon = iconForKind(t.iconKind);
+                const tAccent = getCategoryAccent(t.category);
+                const selected = templateId === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => applyTemplate(t)}
+                    data-testid={`tracker-template-${t.id}`}
+                    className={`flex flex-col items-center gap-1 rounded-xl border px-1.5 py-2 transition-all hover:scale-[1.03] ${selected ? "ring-2" : ""}`}
+                    style={{
+                      borderColor: `hsl(${tAccent} / ${selected ? 0.6 : 0.25})`,
+                      background: `hsl(${tAccent} / ${selected ? 0.16 : 0.07})`,
+                      ...(selected ? { boxShadow: `0 0 0 2px hsl(${tAccent} / 0.4)` } : {}),
+                    }}
+                  >
+                    <span className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: `hsl(${tAccent} / 0.2)`, color: `hsl(${tAccent})` }}>
+                      <TIcon className="h-4 w-4" />
+                    </span>
+                    <span className="text-[10px] font-medium text-center leading-tight">{t.label}</span>
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => applyTemplate(null)}
+                data-testid="tracker-template-custom"
+                className={`flex flex-col items-center gap-1 rounded-xl border border-dashed px-1.5 py-2 transition-all hover:scale-[1.03] ${templateId === null ? "ring-2 ring-primary/40 bg-muted/40" : "bg-muted/20"}`}
+              >
+                <span className="w-7 h-7 rounded-lg flex items-center justify-center bg-muted/50 text-muted-foreground">
+                  <Plus className="h-4 w-4" />
+                </span>
+                <span className="text-[10px] font-medium">Custom</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Live preview of the finished card */}
+          <div>
+            <Label className="text-xs font-medium">Preview</Label>
+            <div className="mt-2">
+              <TrackerCardPreview name={name} category={category} unit={unit} fields={fields} sample={previewSample} />
+            </div>
+          </div>
+
           {/* Name */}
           <div>
             <Label htmlFor="tracker-name" className="text-xs font-medium">
