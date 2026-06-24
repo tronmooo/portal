@@ -1011,25 +1011,49 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     }
   }
 
-  // ---- Quick BP: "bp 120/80", "blood pressure 118/76" ----
-  const bpMatch = lower.match(/^(?:bp|blood\s*pressure)\s+(\d{2,3})\s*\/\s*(\d{2,3})(?:\s+(?:pulse\s+)?(\d{2,3}))?/);
+  // ---- Quick BP: "bp 120/80", "blood pressure 118/76", "my blood pressure is
+  //      120 over 80", "bp 130 over 85 pulse 72" ----
+  // Blood pressure is ONE measurement with two components. We accept "/" OR the
+  // word "over" as the separator, allow filler words between the keyword and the
+  // reading ("is a", "was", "of"), and — critically — find-or-CREATE a single
+  // "Blood Pressure" tracker so a reading never gets split into two incomplete
+  // systolic/diastolic trackers.
+  const bpMatch = lower.match(
+    /\b(?:bp|blood\s*pressure)\b[^0-9]{0,12}?(\d{2,3})\s*(?:\/|\s+over\s+)\s*(\d{2,3})(?:[^0-9]{0,8}?(?:pulse|hr|heart\s*rate)[^0-9]{0,4}(\d{2,3}))?/,
+  );
   if (bpMatch) {
     const sys = parseInt(bpMatch[1]), dia = parseInt(bpMatch[2]), pulse = bpMatch[3] ? parseInt(bpMatch[3]) : undefined;
-    const trackers = await storage.getTrackers();
-    // Bail to AI if multiple BP trackers exist (ambiguous)
-    const bpTrackers = trackers.filter(t => t.name.toLowerCase().includes("blood pressure"));
-    if (bpTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
-    const bpTracker = bpTrackers[0];
-    if (bpTracker) {
-      const values: Record<string, any> = { systolic: sys, diastolic: dia };
-      if (pulse) values.pulse = pulse;
+    // Sanity bounds so "blood pressure log from 2010" style noise can't log junk.
+    if (sys >= 60 && sys <= 260 && dia >= 30 && dia <= 200 && sys > dia) {
+      const trackers = await storage.getTrackers();
+      // Bail to AI only if MULTIPLE complete BP trackers exist (genuinely ambiguous).
+      // A lone "Systolic Blood Pressure"/"Diastolic Blood Pressure" split tracker
+      // should NOT count — we want to consolidate into one "Blood Pressure".
+      const bpTrackers = trackers.filter(t => {
+        const n = t.name.toLowerCase();
+        return n.includes("blood pressure") && !n.includes("systolic") && !n.includes("diastolic");
+      });
+      if (bpTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
       const bpProfiles = await storage.getProfiles();
       const bpSelfId = bpProfiles.find(p => p.type === "self")?.id;
-      const entry = await storage.logEntry({ trackerId: bpTracker.id, values, profileId: bpSelfId });
-      actions.push({ type: "log_entry", category: "health", data: { trackerName: "blood pressure", ...values } });
-      if (entry) results.push(entry);
-      const cat = entry?.computed?.bloodPressureCategory || "";
-      return { matched: true, reply: `Logged BP: ${sys}/${dia}${pulse ? ` pulse ${pulse}` : ""}${cat ? ` — ${cat.replace(/_/g, " ")}` : ""}`, actions, results };
+      const values: Record<string, any> = { systolic: sys, diastolic: dia };
+      if (pulse) values.pulse = pulse;
+
+      const bpTracker = bpTrackers[0];
+      let entry: any;
+      if (bpTracker) {
+        entry = await storage.logEntry({ trackerId: bpTracker.id, values, profileId: bpSelfId });
+      } else {
+        // No unified BP tracker — create one (with both fields) and log.
+        entry = await executeTool("log_tracker_entry", { trackerName: "Blood Pressure", values, __userMessage: message });
+        if (entry && (entry as any).error) entry = null;
+      }
+      if (entry) {
+        results.push(entry);
+        actions.push({ type: "log_entry", category: "health", data: { trackerName: "blood pressure", ...values } });
+        const cat = entry?.computed?.bloodPressureCategory || "";
+        return { matched: true, reply: `Logged BP: ${sys}/${dia}${pulse ? ` pulse ${pulse}` : ""}${cat ? ` — ${cat.replace(/_/g, " ")}` : ""}`, actions, results };
+      }
     }
   }
 

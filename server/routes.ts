@@ -1868,7 +1868,51 @@ If unsure, return "profile_fact".`,
 
       // 3. Log tracker entries
       if (trackerEntries && trackerEntries.length > 0) {
-        for (const entry of trackerEntries) {
+        // ── Consolidate multi-component vitals BEFORE creating trackers ──
+        // Medical reports list "Systolic Blood Pressure" and "Diastolic Blood
+        // Pressure" as SEPARATE rows. Creating a tracker per row yields two
+        // single-value trackers that the dashboard flags as an "incomplete
+        // reading". Blood pressure is ONE measurement with two components, so
+        // merge systolic + diastolic rows into a single "Blood Pressure" entry
+        // (values:{systolic,diastolic}) that stores, charts, and reads as a
+        // complete reading.
+        const firstNum = (v: any): number | undefined => {
+          if (v && typeof v === "object") {
+            for (const k of Object.keys(v)) { const n = Number((v as any)[k]); if (isFinite(n)) return n; }
+            return undefined;
+          }
+          const n = Number(v); return isFinite(n) ? n : undefined;
+        };
+        let bpSys: number | undefined, bpDia: number | undefined;
+        const nonBpEntries: any[] = [];
+        for (const e of trackerEntries) {
+          const nm = String(e?.trackerName || "").toLowerCase();
+          const vals = (e?.values && typeof e.values === "object") ? e.values : {};
+          // Component rows: name says systolic/diastolic, OR a value key does.
+          const sysFromKey = (vals as any).systolic ?? (vals as any).sbp;
+          const diaFromKey = (vals as any).diastolic ?? (vals as any).dbp;
+          if (/diastolic|\bdbp\b/.test(nm)) { bpDia = firstNum(e.values) ?? bpDia; continue; }
+          if (/systolic|\bsbp\b/.test(nm)) { bpSys = firstNum(e.values) ?? bpSys; continue; }
+          // A combined row that already carries both keys → leave intact, but
+          // harvest the components so we don't also emit a partial second one.
+          if (sysFromKey != null || diaFromKey != null) {
+            if (sysFromKey != null) bpSys = Number(sysFromKey);
+            if (diaFromKey != null) bpDia = Number(diaFromKey);
+            if (sysFromKey != null && diaFromKey != null) continue; // fully covered by merged entry
+          }
+          nonBpEntries.push(e);
+        }
+        let normalizedTrackerEntries = trackerEntries;
+        if (bpSys != null || bpDia != null) {
+          const bpValues: Record<string, number> = {};
+          if (bpSys != null) bpValues.systolic = bpSys;
+          if (bpDia != null) bpValues.diastolic = bpDia;
+          normalizedTrackerEntries = [
+            ...nonBpEntries,
+            { trackerName: "Blood Pressure", values: bpValues, unit: "mmHg", category: "health" },
+          ];
+        }
+        for (const entry of normalizedTrackerEntries) {
           try {
             // Find or create the tracker
             const trackers = await storage.getTrackers();
