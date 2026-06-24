@@ -13,7 +13,7 @@ import {
 import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
+import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
 import { CreateProfileDialog } from "@/pages/profiles";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -2700,7 +2700,8 @@ type CardVisual =
   | { type: "gauge"; value: number; min: number; max: number; zones: GaugeZone[] }
   | { type: "radial"; value: number; max: number }
   | { type: "checklist" }
-  | { type: "panel"; metrics: PanelMetric[] };
+  | { type: "panel"; metrics: PanelMetric[] }
+  | { type: "areaZone"; values: number[]; min: number; max: number; zones: GaugeZone[] };
 
 // Collect numeric fields in the latest entry that each have a clinical range —
 // panel-style trackers (lipid HDL/LDL/triglycerides) read best as several bars.
@@ -2735,7 +2736,14 @@ function chooseCardVisual(
   const field = primary?.field || tracker.fields?.[0]?.name || "";
   if (primary) {
     const range = getMeasurementRange(name, field);
-    if (range) return { type: "gauge", value: primary.num, min: range.min, max: range.max, zones: range.zones };
+    if (range) {
+      // With enough history, show a lush trend with clinical zone bands behind
+      // it (the dominant lab-card look); otherwise a band-position gauge.
+      if (insight.sparkValues && insight.sparkValues.length >= 3) {
+        return { type: "areaZone", values: insight.sparkValues, min: range.min, max: range.max, zones: range.zones };
+      }
+      return { type: "gauge", value: primary.num, min: range.min, max: range.max, zones: range.zones };
+    }
   }
   if (insight.progressPct != null) return { type: "ring", pct: insight.progressPct };
   if (primary) {
@@ -2796,6 +2804,17 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
     const label = doseVal != null ? `${doseVal}${doseField?.unit ? ` ${doseField.unit}` : ""}` : "Daily dose";
     return [{ label, done: takenToday }];
   })();
+  const kindEmoji = KIND_EMOJI[insight.iconKind];
+  // Sports / fitness trends get the layered "effort zone" area look.
+  const useZoneArea = insight.kind === "running" || insight.kind === "walking" || tracker.category === "fitness";
+  // Score cards (radial) can show their other numeric sub-fields as mini bars
+  // (e.g. Wellness → Mental / Activity), echoing the design references.
+  const subMetrics = (visual.type === "radial" && lastEntry)
+    ? Object.entries(lastEntry.values)
+        .filter(([k, v]) => typeof v === "number" && k !== primaryNum?.field && !String(k).startsWith("_"))
+        .slice(0, 3)
+        .map(([k, v]) => ({ label: k, value: v as number, pct: (v as number) <= 10 ? (v as number) * 10 : (v as number) <= 100 ? (v as number) : 100 }))
+    : [];
 
   return (
     <div
@@ -2813,8 +2832,14 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
       aria-label={`Open tracker: ${tracker.name}`}
       onKeyDown={onEnterOrSpace(() => onOpenDetail?.(tracker.id))}
     >
+      {/* Faint oversized kind glyph for personality (coffee / heart / pill …). */}
+      {kindEmoji && (
+        <span aria-hidden className="pointer-events-none absolute -top-1 right-1 select-none" style={{ fontSize: 44, opacity: 0.08, lineHeight: 1 }}>
+          {kindEmoji}
+        </span>
+      )}
       {/* Header: icon + title */}
-      <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
+      <div className="relative px-3 pt-2.5 pb-1 flex items-center gap-2">
         <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: ac }}>
           <Icon className="h-3.5 w-3.5" />
         </div>
@@ -2843,14 +2868,32 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
         <div className="flex-1 px-3 pt-1 min-h-0 flex items-center gap-3">
           <RadialGauge value={visual.value} max={visual.max} color={ac} size={gaugeSize} unit={insight.bigUnit || `/ ${visual.max}`} />
           <div className="min-w-0 flex-1">
-            {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
-              <span className="text-[10px] font-semibold flex items-center gap-0.5" style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}>
-                {insight.trendDir === "up" ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-                {Math.abs(Math.round(insight.trendPct))}%
-              </span>
-            )}
-            {insight.hasData && (
-              <p className="text-[10px] text-muted-foreground leading-snug line-clamp-3 mt-0.5">{insight.insight}</p>
+            {subMetrics.length > 0 ? (
+              <div className="space-y-1.5">
+                {subMetrics.map((m) => (
+                  <div key={m.label}>
+                    <div className="flex items-center justify-between leading-none mb-0.5">
+                      <span className="text-[9px] capitalize text-muted-foreground truncate">{m.label}</span>
+                      <span className="text-[9px] font-bold tabular-nums" style={{ color: ac }}>{Math.round(m.pct)}%</span>
+                    </div>
+                    <div className="h-1 rounded-full bg-muted/30 overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${Math.min(100, m.pct)}%`, backgroundColor: ac }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <>
+                {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
+                  <span className="text-[10px] font-semibold flex items-center gap-0.5" style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}>
+                    {insight.trendDir === "up" ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                    {Math.abs(Math.round(insight.trendPct))}%
+                  </span>
+                )}
+                {insight.hasData && (
+                  <p className="text-[10px] text-muted-foreground leading-snug line-clamp-3 mt-0.5">{insight.insight}</p>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -2896,21 +2939,26 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
             )}
           </div>
 
-          {/* Body: zone gauge / sparkline + insight */}
-          <div className="flex-1 px-3 pt-1.5 min-h-0 flex flex-col justify-end gap-1.5">
-            {visual.type === "gauge" ? (
-              <LinearZoneGauge value={visual.value} min={visual.min} max={visual.max} zones={visual.zones} />
-            ) : visual.type === "spark" && insight.sparkValues.length >= 2 ? (
-              <div className="opacity-90"><Sparkline values={insight.sparkValues} color={ac} h={importance === "large" ? 48 : importance === "compact" ? 28 : 40} /></div>
-            ) : visual.type === "spark" && insight.hasData ? (
-              <div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/20 to-transparent" />
-            ) : null}
-            {/* Insight sentence — only when there's room (large/normal) */}
+          {/* Body: insight sentence + a lush full-bleed chart (or padded gauge) */}
+          <div className="flex-1 min-h-0 flex flex-col justify-end">
             {importance !== "compact" && insight.hasData && (
-              <p className="text-[10px] text-muted-foreground leading-snug line-clamp-2">
+              <p className="px-3 text-[10px] text-muted-foreground leading-snug line-clamp-1 mb-1">
                 {insight.insight}
               </p>
             )}
+            {visual.type === "gauge" ? (
+              <div className="px-3 pb-2"><LinearZoneGauge value={visual.value} min={visual.min} max={visual.max} zones={visual.zones} /></div>
+            ) : visual.type === "areaZone" ? (
+              <div className="w-full"><TrendArea values={visual.values} color={ac} min={visual.min} max={visual.max} zones={visual.zones} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} /></div>
+            ) : visual.type === "spark" && insight.sparkValues.length >= 2 ? (
+              <div className="w-full">
+                {useZoneArea
+                  ? <ZoneAreaChart values={insight.sparkValues} color={ac} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} />
+                  : <TrendArea values={insight.sparkValues} color={ac} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} />}
+              </div>
+            ) : visual.type === "spark" && insight.hasData ? (
+              <div className="px-3 pb-2"><div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/20 to-transparent" /></div>
+            ) : null}
           </div>
         </>
       )}
@@ -3300,11 +3348,13 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
             </div>
             {visual.type === "ring" && <RingProgress pct={visual.pct} color={ac} size={54} centerLabel={`${Math.round(visual.pct)}%`} />}
           </div>
-          <div className="flex-1 px-3 pt-1.5 min-h-0 flex flex-col justify-end gap-1.5">
+          <div className="flex-1 min-h-0 flex flex-col justify-end">
             {visual.type === "gauge" ? (
-              <LinearZoneGauge value={visual.value} min={visual.min} max={visual.max} zones={visual.zones} />
+              <div className="px-3 pb-2"><LinearZoneGauge value={visual.value} min={visual.min} max={visual.max} zones={visual.zones} /></div>
+            ) : visual.type === "areaZone" ? (
+              <div className="w-full"><TrendArea values={visual.values} color={ac} min={visual.min} max={visual.max} zones={visual.zones} height={46} /></div>
             ) : (
-              <div className="opacity-90"><Sparkline values={series} color={ac} h={40} /></div>
+              <div className="w-full"><TrendArea values={series} color={ac} height={46} /></div>
             )}
           </div>
         </>

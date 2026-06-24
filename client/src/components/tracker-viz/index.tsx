@@ -5,6 +5,130 @@
 // accent color so they theme automatically (light/dark) and stay cheap. They
 // mirror the style of the existing inline `Sparkline` in pages/trackers.tsx.
 
+// Catmull-Rom → cubic-bezier smoothing so trend lines curve like the mockups
+// instead of zig-zagging between points.
+function smoothPath(pts: { x: number; y: number }[]): string {
+  if (pts.length < 2) return "";
+  let d = `M ${pts[0].x},${pts[0].y}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || p2;
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${cp1x.toFixed(2)},${cp1y.toFixed(2)} ${cp2x.toFixed(2)},${cp2y.toFixed(2)} ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`;
+  }
+  return d;
+}
+
+// ── AreaChart ─────────────────────────────────────────────────────────────────
+// Lush gradient area trend (the dominant look in the mockups). Optional clinical
+// `zones` paint translucent horizontal bands behind the line (HR/glucose trend).
+export function AreaChart({
+  values,
+  color,
+  height = 52,
+  min,
+  max,
+  zones,
+}: {
+  values: number[];
+  color: string;
+  height?: number;
+  min?: number;
+  max?: number;
+  zones?: GaugeZone[];
+}) {
+  if (!values || values.length < 2) return null;
+  const w = 100, h = height;
+  const lo = min ?? Math.min(...values);
+  const hi = max ?? Math.max(...values);
+  const rng = hi - lo || 1;
+  const yFor = (v: number) => h - 2 - ((v - lo) / rng) * (h - 6);
+  const pts = values.map((v, i) => ({ x: (i / (values.length - 1)) * w, y: yFor(v) }));
+  const line = smoothPath(pts);
+  const area = `${line} L ${w},${h} L 0,${h} Z`;
+  const uid = `ac${color.replace(/[^a-z0-9]/gi, "")}${Math.round(h)}`;
+  // Build zone bands (only when an explicit min/max range is supplied).
+  let bands: { y0: number; y1: number; color: string }[] = [];
+  if (zones && min != null && max != null) {
+    let prev = min;
+    bands = zones.map((z) => {
+      const b = { y0: yFor(Math.min(z.to, max)), y1: yFor(Math.max(prev, min)), color: z.color };
+      prev = z.to;
+      return b;
+    });
+  }
+  return (
+    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: "block" }}>
+      <defs>
+        <linearGradient id={uid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.5" />
+          <stop offset="55%" stopColor={color} stopOpacity="0.14" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+        </linearGradient>
+      </defs>
+      {bands.map((b, i) => (
+        <rect key={i} x={0} y={Math.min(b.y0, b.y1)} width={w} height={Math.abs(b.y1 - b.y0)} fill={b.color} opacity={0.1} />
+      ))}
+      <path d={area} fill={`url(#${uid})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+// ── ZoneAreaChart ─────────────────────────────────────────────────────────────
+// Activity-style chart: stacked translucent zone bands (Zone 1/2/3) with the
+// trend line on top. Used for heart rate, sports, and other effort series.
+export function ZoneAreaChart({
+  values,
+  color,
+  height = 52,
+  zoneColors = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444"],
+}: {
+  values: number[];
+  color: string;
+  height?: number;
+  zoneColors?: string[];
+}) {
+  if (!values || values.length < 2) {
+    return values && values.length === 1 ? <div style={{ height }} /> : null;
+  }
+  const w = 100, h = height;
+  const lo = Math.min(...values), hi = Math.max(...values);
+  const rng = hi - lo || 1;
+  const yFor = (v: number) => h - 2 - ((v - lo) / rng) * (h - 6);
+  const pts = values.map((v, i) => ({ x: (i / (values.length - 1)) * w, y: yFor(v) }));
+  const line = smoothPath(pts);
+  const area = `${line} L ${w},${h} L 0,${h} Z`;
+  const uid = `za${color.replace(/[^a-z0-9]/gi, "")}${Math.round(h)}`;
+  const n = zoneColors.length;
+  return (
+    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: "block" }}>
+      <defs>
+        <linearGradient id={uid} x1="0" y1="0" x2="0" y2="1">
+          {zoneColors.map((c, i) => (
+            <stop key={i} offset={`${(i / n) * 100}%`} stopColor={c} stopOpacity={0.32} />
+          ))}
+        </linearGradient>
+      </defs>
+      <path d={area} fill={`url(#${uid})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+// Personality accents — a faint oversized glyph per tracker kind, echoing the
+// coffee-cup / heart / pill motifs in the design references.
+export const KIND_EMOJI: Record<string, string> = {
+  bp: "🩸", weight: "⚖️", sleep: "😴", run: "🏃", walk: "🚶", drop: "💧",
+  flame: "🔥", music: "🎸", book: "📖", game: "🎮", brain: "🧠",
+  dumbbell: "🏋️", activity: "❤️", bike: "🚴",
+};
+
 // ── RadialGauge ───────────────────────────────────────────────────────────────
 // A 270° arc with the score in the center. Used for 0–10 / 0–100 "score" kinds
 // (Wellness Index, Overall Health, Mood, Sleep Score).
