@@ -6046,7 +6046,7 @@ export default function TrackersPage() {
       {/* ── Filter Bar ── */}
       <div className="space-y-2" data-testid="filter-bar">
         {/* Profile filter (page level) + Section pills */}
-        <div className="flex items-center gap-2 overflow-x-auto flex-nowrap scrollbar-hide pb-1" style={{ WebkitOverflowScrolling: 'touch' }}>
+        <div className="flex flex-wrap items-center gap-2 pb-1">
           {/* Profile filter */}
           <MultiProfileFilter
             onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
@@ -6147,7 +6147,7 @@ export default function TrackersPage() {
           "All" tab intentionally has no chip row — it would be ambiguous which
           dataset it filters. */}
       {sectionFilter === "trackers" && allTrackerCats.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 pr-4" data-testid="category-filter-chips-trackers">
+        <div className="flex flex-wrap items-center gap-1.5 pb-0.5" data-testid="category-filter-chips-trackers">
           <button
             onClick={() => setTrackerCatFilter("all")}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${trackerCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
@@ -6175,7 +6175,7 @@ export default function TrackersPage() {
       )}
 
       {sectionFilter === "documents" && docTypes.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 pr-4" data-testid="category-filter-chips-documents">
+        <div className="flex flex-wrap items-center gap-1.5 pb-0.5" data-testid="category-filter-chips-documents">
           <button
             onClick={() => setDocTypeFilter("all")}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
@@ -6201,7 +6201,7 @@ export default function TrackersPage() {
       )}
 
       {sectionFilter === "profiles" && assetTypeOptions.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 pr-4" data-testid="category-filter-chips-assets">
+        <div className="flex flex-wrap items-center gap-1.5 pb-0.5" data-testid="category-filter-chips-assets">
           <button
             onClick={() => { setAssetTypeFilter("all"); setAssetNesting("all"); }}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${assetTypeFilter === "all" && assetNestingFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
@@ -6243,7 +6243,7 @@ export default function TrackersPage() {
       )}
 
       {sectionFilter === "liabilities" && liabilityCategoryOptions.length > 1 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5 pr-4" data-testid="category-filter-chips-liabilities">
+        <div className="flex flex-wrap items-center gap-1.5 pb-0.5" data-testid="category-filter-chips-liabilities">
           <button
             onClick={() => setSubCatFilter("all")}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${subCatFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}
@@ -6284,7 +6284,23 @@ export default function TrackersPage() {
         // belonged to whom. We now group rows by their primary owner, give
         // each person a deterministic hue, and color the row icon by that
         // hue so the visual scan answers "whose data is this?" at a glance.
-        type Row = { id: string; kind: "asset" | "liability" | "document" | "tracker"; name: string; subtitle: string; meta: string; href: string; ownerIds: string[]; category?: string; };
+        type Row = { id: string; kind: "asset" | "liability" | "document" | "tracker"; name: string; subtitle: string; meta: string; href: string; ownerIds: string[]; category?: string; lastLogged?: string; };
+        // Compact relative time ("Today", "3d", "2w", "5mo") for the tracker
+        // "Last" column — more applicable than repeating the category.
+        const relTime = (iso?: string | number | Date | null): string => {
+          if (!iso) return "—";
+          const then = new Date(iso).getTime();
+          if (!isFinite(then)) return "—";
+          const diff = Date.now() - then;
+          if (diff < 0) return "Today";
+          const d = Math.floor(diff / 86400000);
+          if (d <= 0) return "Today";
+          if (d === 1) return "1d";
+          if (d < 7) return `${d}d`;
+          if (d < 30) return `${Math.floor(d / 7)}w`;
+          if (d < 365) return `${Math.floor(d / 30)}mo`;
+          return `${Math.floor(d / 365)}y`;
+        };
         const rows: Row[] = [];
         const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
         const isShowAll = filterMode === "everyone";
@@ -6339,10 +6355,20 @@ export default function TrackersPage() {
           // user can still find their own untagged items.
           return selfProfileId || null;
         };
+        // Maps a raw profile type to the same label used by the asset-type
+        // chip row, so the list view can honor the active sub-filter. Without
+        // this the highlighted "Properties"/"Vehicles" chip did nothing in
+        // list view — the chip lit up but the list still showed every asset
+        // (2026-06-25 user report).
+        const labelForAssetType = (t: string) =>
+          t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
         // Assets
         if (sectionFilter === "all" || sectionFilter === "profiles") {
           (profiles || []).forEach(p => {
             if (!childTypeSet.has(p.type)) return;
+            // Honor the asset-type sub-filter (Properties / Vehicles / …) — only
+            // active on the Assets section, mirroring the card view exactly.
+            if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForAssetType(p.type) !== assetTypeFilter) return;
             const pParent = p.parentProfileId;
             // Include co-owners via asset_party_links (Home shows for Jane).
             if (!isShowAll && !isAssetVisible(p.id, pParent)) return;
@@ -6368,6 +6394,8 @@ export default function TrackersPage() {
         if (sectionFilter === "all" || sectionFilter === "liabilities") {
           (profiles || []).forEach(p => {
             if (!isLiabilityLikeProfile(p)) return;
+            // Honor the liability sub-category sub-filter in list view too.
+            if (sectionFilter === "liabilities" && subCatFilter !== "all" && liabilitySubcategoryOf(p) !== subCatFilter) return;
             const pParent = p.parentProfileId;
             // Include co-owners via liability_profile_links.
             if (!isShowAll && !isLiabilityVisible(p.id, pParent)) return;
@@ -6389,6 +6417,8 @@ export default function TrackersPage() {
         // Documents — linkedProfiles[] tells us which people the doc is for.
         if (sectionFilter === "all" || sectionFilter === "documents") {
           (allDocuments || []).forEach(d => {
+            // Honor the document-type sub-filter in list view too.
+            if (sectionFilter === "documents" && docTypeFilter !== "all" && normalizeFilter((d as any).type) !== normalizeFilter(docTypeFilter)) return;
             const linked: string[] = ((d as any).linkedProfiles || []) as string[];
             const ownerIds = linked.filter(id => personById.has(id));
             // If no person is linked, attribute to self so the user sees
@@ -6408,13 +6438,24 @@ export default function TrackersPage() {
           (filteredTrackers || []).forEach(t => {
             const sub = t.category || "Tracker";
             const last = t.entries?.[t.entries.length - 1];
+            // Pick a meaningful "Latest" value: prefer the primary field, then
+            // ANY numeric field on the latest entry. Skip a text value that just
+            // echoes the tracker name (e.g. a "Lisinopril" drug field on the
+            // Lisinopril tracker) — that reads as a useless repeat.
             const pf = t.fields.find(fld => fld.isPrimary)?.name || t.fields[0]?.name || "value";
-            const v = last?.values?.[pf];
-            const meta = v != null ? `${typeof v === 'number' ? Number(v).toFixed(1) : String(v)}${t.unit ? ' ' + t.unit : ''}` : "—";
+            const vals = (last?.values || {}) as Record<string, any>;
+            let primary: any = vals[pf];
+            if (primary == null || (typeof primary === "string" && primary.trim().toLowerCase() === t.name.trim().toLowerCase())) {
+              const numEntry = Object.entries(vals).find(([k, val]) => k !== "_notes" && typeof val === "number" && isFinite(val));
+              primary = numEntry ? numEntry[1] : (typeof primary === "string" ? primary : undefined);
+            }
+            const meta = primary != null && !(typeof primary === "string" && primary.trim().toLowerCase() === t.name.trim().toLowerCase())
+              ? `${typeof primary === 'number' ? Number(primary).toFixed(1) : String(primary)}${typeof primary === 'number' && t.unit ? ' ' + t.unit : ''}`
+              : (t.entries && t.entries.length > 0 ? `${t.entries.length} log${t.entries.length === 1 ? '' : 's'}` : "No data");
             const linked: string[] = (t.linkedProfiles || []) as string[];
             const ownerIds = linked.filter(id => personById.has(id));
             const finalOwners = ownerIds.length > 0 ? ownerIds : (selfProfileId ? [selfProfileId] : []);
-            rows.push({ id: t.id, kind: "tracker", name: t.name, subtitle: sub, meta, href: `/trackers/${t.id}`, ownerIds: finalOwners, category: t.category || undefined });
+            rows.push({ id: t.id, kind: "tracker", name: t.name, subtitle: sub, meta, href: `/trackers/${t.id}`, ownerIds: finalOwners, category: t.category || undefined, lastLogged: relTime(last?.timestamp) });
           });
         }
         if (rows.length === 0) {
@@ -6496,6 +6537,10 @@ export default function TrackersPage() {
             return a.ownerName.localeCompare(b.ownerName);
           });
         const initials = (name: string) => name.split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() || "").join("") || "?";
+        // On the dedicated Trackers section every row is a tracker, so the
+        // middle/right columns become tracker-applicable ("Last" logged +
+        // "Latest" reading) instead of a redundant category badge + value.
+        const trackerCols = sectionFilter === "trackers";
         return (
           <div className="space-y-3" data-testid="linked-list-view">
             {sortedGroups.map(group => (
@@ -6525,8 +6570,8 @@ export default function TrackersPage() {
                 <div className="grid grid-cols-[20px_1fr_auto_72px] items-center gap-2 px-2.5 py-1 border-b border-border/40 bg-muted/20 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
                   <span />
                   <span>Name</span>
-                  <span className="text-right">Type</span>
-                  <span className="text-right">Value</span>
+                  <span className="text-right">{trackerCols ? "Last" : "Type"}</span>
+                  <span className="text-right">{trackerCols ? "Latest" : "Value"}</span>
                 </div>
                 {group.rows.map((r, ri) => {
                   // Color the row by CATEGORY (trackers) / kind (everything
@@ -6547,7 +6592,11 @@ export default function TrackersPage() {
                           <Icon className="h-3 w-3" />
                         </div>
                         <p className="text-[13px] font-medium text-foreground truncate leading-tight">{r.name}</p>
-                        <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: `hsl(${ac} / 0.14)`, color: `hsl(${ac})` }}>{typeLabel}</span>
+                        {trackerCols && r.kind === "tracker" ? (
+                          <span className="text-[11px] tabular-nums text-muted-foreground text-right whitespace-nowrap">{r.lastLogged || "—"}</span>
+                        ) : (
+                          <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: `hsl(${ac} / 0.14)`, color: `hsl(${ac})` }}>{typeLabel}</span>
+                        )}
                         <span className="text-[13px] font-semibold tabular-nums text-foreground text-right truncate">{r.meta}</span>
                       </div>
                     </Link>
