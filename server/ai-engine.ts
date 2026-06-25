@@ -413,6 +413,8 @@ function heuristicClassify(rawInput: string, ctx?: ClassifyCaptureContext): Capt
   let type = "unknown";
   if (/\$\s?\d|\bpaid\b|\bbought\b|\bspent\b|\bcost\b/.test(lower)) type = "expense";
   else if (/\bweight\b|\bbp\b|\bblood pressure\b|\bsteps\b|\bsugar\b|\bcalories\b|\bwater\b|\bsleep\b|\bmiles?\b|\bkm\b|\bworkout\b|\bgym\b|\brun\b|\bate\b|\bdrank\b/.test(lower)) type = "tracker_entry";
+  // A "remind me" with a clock time is a calendar reminder/event, not a plain task.
+  else if (/\bremind\b/.test(lower) && /\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\bat\s+\d{1,2}\b|\bnoon\b|\bmidnight\b/.test(lower)) type = "event";
   else if (/\btodo\b|\btask\b|\bremind me\b|\bneed to\b|\bhave to\b/.test(lower)) type = "task";
   else if (/\bappointment\b|\bmeeting\b|\bcalendar\b|\bschedule\b/.test(lower)) type = "event";
   else if (/\bnote\b|\bthought\b|\bidea\b/.test(lower)) type = "note";
@@ -752,8 +754,8 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
       reply: [
         "Here's what I can do \u2014 each command links to where it lands:",
         "\u2022 Log expenses: \"$50 groceries\" \u2192 [/dashboard/finance](/dashboard/finance)",
-        "\u2022 Create tasks: \"remind me to call the dentist Friday\" \u2192 [/dashboard/tasks](/dashboard/tasks)",
-        "\u2022 Schedule events: \"Standup Friday 3pm\" \u2192 [/calendar](/calendar)",
+        "\u2022 Create tasks: \"add a task to buy milk\" \u2192 [/dashboard/tasks](/dashboard/tasks)",
+        "\u2022 Reminders & events: \"remind me to call the dentist Friday at 10am\", \"Standup Friday 3pm\" \u2192 [/calendar](/calendar)",
         "\u2022 Track health: \"weight 183\", \"bp 120/80\", \"slept 7.5 hours\" \u2192 [/trackers](/trackers)",
         "\u2022 Add bills/subscriptions: \"$11 Netflix every month\" \u2192 [/dashboard/obligations](/dashboard/obligations)",
         "\u2022 Manage people, pets, vehicles, assets \u2192 [/profiles](/profiles)",
@@ -2478,7 +2480,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Tasks ---
   {
     name: "create_task",
-    description: "Create a new task or reminder. For recurring chores ('water plants weekly', 'take meds daily', 'pay rent monthly'), set the recurrence field — a new dated instance is auto-created each time the task is completed.",
+    description: "Create a new TASK — an undated or date-only to-do with NO clock time ('add a task to buy milk', 'remind me to renew registration before Aug 1'). IMPORTANT: if the user gives a CLOCK TIME or says 'remind me … at <time>' / mentions a specific day+time ('Friday at 10am', 'tomorrow at 3pm'), that is a calendar reminder — use create_reminder instead (it notifies AND lands on the calendar). For recurring chores ('water plants weekly', 'take meds daily', 'pay rent monthly', 'check tire pressure every two weeks'), set the recurrence field — a new dated instance is auto-created each time the task is completed.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -2494,7 +2496,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "create_reminder",
-    description: "Create a REAL reminder that fires an in-app notification at a specific date AND time. Use this (not create_task) whenever the user gives a clock time to be reminded ('remind me to call the dentist tomorrow at 3pm', 'remind Bob to take meds at 8am'). For undated to-dos with no clock time, use create_task instead.",
+    description: "Create a REAL reminder that fires a notification at a specific date AND time AND places it on the calendar as an event (it shows up on the Calendar and dashboard, not just as a task). ALWAYS use this (NOT create_task) whenever the user says 'remind me' OR gives a clock time to be reminded — e.g. 'remind me to call the dentist Friday at 10am', 'remind me tomorrow at 3pm', 'remind Bob to take meds at 8am'. A request with a day and/or a clock time is a calendar reminder, not a plain task. Only fall back to create_task for an undated to-do with NO time intent ('add a task to buy milk').",
     input_schema: {
       type: "object" as const,
       properties: {
