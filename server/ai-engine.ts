@@ -25,6 +25,7 @@ import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, t
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
+import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 
@@ -3928,6 +3929,7 @@ BEHAVIOR:
   Example: "Had a grande latte from Starbucks" → log_tracker_entry for Nutrition with values: { item: "Grande Latte (Starbucks)", calories: 190, protein: 13, carbs: 18, fat: 7 }.
   ALWAYS set the "item" field to a human-readable food name. Capitalize it. This is the most visible part of the entry.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
+- MULTI-EXERCISE WORKOUTS: A workout that lists several exercises is NOT one entry. Emit ONE log_tracker_entry PER exercise so none is silently dropped. "45-min chest workout: bench press 135 for 3x10, incline dumbbells 40lb, pushups to failure" → THREE log_tracker_entry calls: (1) trackerName:"Bench Press" values:{exercise:"Bench Press", weight:135, sets:3, reps:10}; (2) trackerName:"Incline Dumbbell Press" values:{exercise:"Incline Dumbbell Press", weight:40, sets:3}; (3) trackerName:"Pushups" values:{exercise:"Pushups", reps:0, notes:"to failure"}. Bodyweight/"to failure" moves (pushups, planks, pullups) STILL get their own entry even without a weight number — never omit an exercise just because it has no load. Pick the specific exercise name for each trackerName.
 - RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
   In your response, mention that both a profile and a bill were created. Example: "Created Spotify subscription profile + $11/month bill — will show on Calendar every month."
   Wording like "$20/mo", "/month", "monthly", or "every month" ALWAYS means recurring: call create_obligation, never create_expense.
@@ -5620,7 +5622,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const named = String(input.trackerName || "").toLowerCase();
         const anyMatch = trackers.some(t => {
           const tn = t.name.toLowerCase();
-          return tn === named || tn.includes(named) || named.includes(tn);
+          return tn === named || tn.includes(named) || named.includes(tn) || trackerNamesMatch(t.name, input.trackerName);
         });
         if (!anyMatch) {
           const available = trackers.slice(0, 5).map(t => t.name).join(", ") || "none yet";
@@ -5641,6 +5643,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const tn = t.name.toLowerCase();
         // Exact or contains match
         if (tn === trackerName || tn.includes(trackerName)) return true;
+        // Canonical identity match: "Multivitamin" ≡ "Supplement Multivitamin"
+        // ≡ "Daily Multivitamin" so a logged subject REUSES the existing tracker
+        // instead of spawning a worded duplicate (the multivitamin-dupe bug).
+        if (trackerNamesMatch(t.name, input.trackerName)) return true;
         // Nutrition alias matching: searching for "Calories" also matches "Nutrition" trackers and vice versa
         if (isNutritionSearch && (nutritionAliases.some(a => tn.includes(a)) || t.category === "nutrition")) return true;
         return false;
@@ -5970,9 +5976,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const selfP = ctProfiles.find(p => p.type === "self");
         if (selfP) ctTargetId = selfP.id;
       }
-      // Only match duplicates within the same profile — different profiles can have same tracker names
+      // Only match duplicates within the same profile — different profiles can have same tracker names.
+      // Match by canonical IDENTITY (not exact string) so "Multivitamin" already
+      // existing blocks a duplicate "Supplement Multivitamin"/"Daily Multivitamin".
       const dupTracker = existingTrackers.find(t => {
-        if (t.name.toLowerCase() !== (input.name || "").toLowerCase()) return false;
+        if (!trackerNamesMatch(t.name, input.name)) return false;
         const lp = t.linkedProfiles || [];
         if (lp.length === 0) return true; // unowned tracker = global match
         return ctTargetId ? lp.includes(ctTargetId) : true;

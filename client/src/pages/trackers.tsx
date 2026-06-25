@@ -1957,6 +1957,10 @@ function inferUnit(tracker: Tracker, fieldName: string, fieldUnit: string | unde
   if (fieldUnit && fieldUnit.trim()) return fieldUnit.trim();
   const t = (tracker.unit || "").trim();
   if (t) return t;
+  // Adherence trackers (medication/supplement) have NO physical-quantity unit.
+  // Never guess one from the name — that's what produced "Fish Oil → qt". The
+  // dose form (tablet/softgel) lives per-entry, not as a tracker unit.
+  if (classifyTrackerPresentation(tracker as any).metricKind === "adherence") return "";
   const f = (fieldName || "").toLowerCase().replace(/\s+/g, "_");
   if (UNIT_BY_FIELD[f]) return UNIT_BY_FIELD[f];
   // Last resort: infer from tracker name itself so "Guitar" → min,
@@ -1988,7 +1992,9 @@ function inferUnit(tracker: Tracker, fieldName: string, fieldUnit: string | unde
   if (n.includes("fuel") || n.includes("gas mileage") || n.includes("mpg")) return "mpg";
   if (n.includes("charge") || n.includes("battery")) return "%";
   if (n.includes("odometer") || n.includes("mileage")) return "mi";
-  if (n.includes("oil")) return "qt";
+  // Motor-oil quarts ONLY with explicit vehicle context — bare "oil" used to
+  // mislabel "Fish Oil" supplements as "qt".
+  if (n.includes("oil change") || n.includes("motor oil") || n.includes("engine oil")) return "qt";
   return "";
 }
 
@@ -5024,11 +5030,17 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
             : null;
           const effectivePrimKey = anyNum ? anyNum.key : primaryField;
           const val = anyNum ? anyNum.num : declaredPrim;
-          const effectiveUnit = inferUnit(
-            tracker,
-            effectivePrimKey,
-            tracker.fields.find(f => f.name === effectivePrimKey)?.unit,
-          );
+          // Adherence (medication/supplement): the "unit" is the dose form the
+          // user logged (tablet/softgel/capsule), read from the entry — never a
+          // physical unit guessed from the name (the "Fish Oil → qt" bug).
+          const isAdherenceEntry = classifyTrackerPresentation(tracker as any).metricKind === "adherence";
+          const effectiveUnit = isAdherenceEntry
+            ? String(entry.values["unit"] ?? entry.values["form"] ?? entry.values["doseForm"] ?? "").trim()
+            : inferUnit(
+                tracker,
+                effectivePrimKey,
+                tracker.fields.find(f => f.name === effectivePrimKey)?.unit,
+              );
           // Secondary fields: skip the primary, notes, item, BP
           // components, AND any string field whose value just repeats
           // the tracker name ("activity: guitar" on a Guitar tracker).

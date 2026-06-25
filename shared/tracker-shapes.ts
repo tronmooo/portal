@@ -141,6 +141,21 @@ const EXPENSE_SHAPE: TrackerField[] = [
   { name: "merchant", type: "text" },
 ];
 
+// Medication & supplement (adherence). The dose form (tablet/softgel/capsule)
+// lives in `unit`; numeric strength is `dosage`. The presence of dosage +
+// adherence/drug is what makes classifyTrackerPresentation treat this as an
+// adherence tracker (dose grid + streak), NOT a physical-quantity metric. This
+// is why "Fish Oil"/"Multivitamin"/"Amoxicillin" must land here and never on a
+// vehicle shape like oil_change (the "Fish Oil → qt" bug).
+const MEDICATION_SHAPE: TrackerField[] = [
+  { name: "drug",      type: "text", isPrimary: true },
+  { name: "dosage",    type: "number", unit: "mg" },
+  { name: "unit",      type: "text" },   // dose form: tablet / softgel / capsule / IU
+  { name: "frequency", type: "text" },
+  { name: "adherence", type: "select", options: ["taken", "skipped", "missed"] },
+  { name: "timeTaken", type: "text" },
+];
+
 // =============================================================================
 // PATTERN → SHAPE table. Each pattern is a substring (case-insensitive) tested
 // against the tracker name. First match wins, so list specific patterns before
@@ -158,6 +173,20 @@ interface ShapeEntry {
 }
 
 const CATALOG: ShapeEntry[] = [
+  // --- Medication & supplements (FIRST so dose items beat domain collisions
+  //     like oil_change's "oil" matching "Fish Oil", or "b" lifts). These are
+  //     adherence trackers, never physical-quantity metrics. ----------------
+  { id: "supplement",   fields: MEDICATION_SHAPE, patterns: [
+    "fish oil", "omega", "multivitamin", "vitamin", "creatine", "magnesium",
+    "zinc", "melatonin", "probiotic", "biotin", "collagen", "glucosamine",
+    "turmeric", "ashwagandha", "supplement", "softgel", "fiber gummy",
+  ] },
+  { id: "medication",   fields: MEDICATION_SHAPE, patterns: [
+    "amoxicillin", "lisinopril", "metformin", "atorvastatin", "statin",
+    "adderall", "ozempic", "insulin", "ibuprofen", "tylenol", "acetaminophen",
+    "advil", "aspirin", "prednisone", "amlodipine", "omeprazole", "gabapentin",
+    "antibiotic", "prescription", "medication",
+  ] },
   // --- Specific lifts ------------------------------------------------------
   { id: "bench_press",  fields: LIFT_SHAPE, patterns: ["bench press", "bench-press", "bench"] },
   { id: "squat",        fields: LIFT_SHAPE, patterns: ["squat"] },
@@ -216,7 +245,9 @@ const CATALOG: ShapeEntry[] = [
     { name: "quarts",   type: "number", unit: "qt", isPrimary: true },
     { name: "odometer", type: "number", unit: "mi" },
     { name: "oil_type", type: "text" },
-  ], patterns: ["oil change", "oil"] },
+  // NOTE: a bare "oil" pattern used to match "Fish Oil" and assign motor-oil
+  // quarts (qt). Require explicit vehicle/maintenance context instead.
+  ], patterns: ["oil change", "motor oil", "engine oil"] },
   { id: "ev_charge",  fields: [
     { name: "battery",  type: "number", unit: "%", isPrimary: true },
     { name: "kwh",      type: "number", unit: "kWh" },
@@ -240,8 +271,16 @@ export function inferTrackerShape(name: string, category?: string): TrackerField
   if (!haystack) return null;
   const cat = (category || "").toLowerCase().trim();
 
+  // Domain guard: vehicle/maintenance shapes (which carry units like qt/PSI/gal)
+  // must NEVER be applied to a health-domain tracker just because a name
+  // substring collides. "Fish Oil" is category supplement, not a car.
+  const VEHICLE_SHAPES = new Set(["oil_change", "fuel", "odometer", "ev_charge", "vehicle_service", "tire_pressure", "mileage"]);
+  const HEALTH_DOMAIN = new Set(["medication", "prescription", "supplement", "health", "nutrition", "fitness", "mental", "sleep"]);
+  const isHealthDomain = HEALTH_DOMAIN.has(cat);
+
   for (const entry of CATALOG) {
     if (entry.category && entry.category !== cat) continue;
+    if (isHealthDomain && VEHICLE_SHAPES.has(entry.id)) continue;
     for (const pat of entry.patterns) {
       if (haystack.includes(pat)) {
         return entry.fields.map(f => ({ ...f }));
