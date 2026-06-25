@@ -2948,7 +2948,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         endTime: { type: "string", description: "End time (HH:MM)" },
         location: { type: "string", description: "Location" },
         description: { type: "string", description: "Description" },
-        recurrence: { type: "string", enum: ["none", "daily", "weekly", "biweekly", "monthly", "yearly"], description: "Recurrence pattern. For 'every 6 months' use 'monthly' and note the interval in the title." },
+        recurrence: { type: "string", enum: ["none", "daily", "weekdays", "weekends", "weekly", "biweekly", "monthly", "yearly"], description: "Recurrence pattern. Use 'weekdays' for Mon–Fri (e.g. a daily standup), 'weekends' for Sat/Sun. For 'every 6 months' use 'monthly' and note the interval in the title." },
         category: { type: "string", description: "Event category. Use 'maintenance' for asset/vehicle upkeep reminders (filter replacements, oil changes, HVAC service, etc.)." },
         forProfile: { type: "string", description: "Name of the profile this event belongs to (e.g. 'Max', 'Mom', 'Tesla', 'Samsung refrigerator'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
       },

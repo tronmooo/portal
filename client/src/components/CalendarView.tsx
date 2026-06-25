@@ -481,6 +481,8 @@ function EventFormDialog({
               <SelectContent>
                 <SelectItem value="none" data-testid="recurrence-option-none">Does not repeat</SelectItem>
                 <SelectItem value="daily" data-testid="recurrence-option-daily">Daily</SelectItem>
+                <SelectItem value="weekdays" data-testid="recurrence-option-weekdays">Every weekday (Mon–Fri)</SelectItem>
+                <SelectItem value="weekends" data-testid="recurrence-option-weekends">Weekends (Sat/Sun)</SelectItem>
                 <SelectItem value="weekly" data-testid="recurrence-option-weekly">Weekly</SelectItem>
                 <SelectItem value="biweekly" data-testid="recurrence-option-biweekly">Bi-weekly</SelectItem>
                 <SelectItem value="monthly" data-testid="recurrence-option-monthly">Monthly</SelectItem>

@@ -129,6 +129,20 @@ describe('Schema Validation', () => {
       const result = insertEventSchema.safeParse({ title: 'No date' });
       expect(result.success).toBe(false);
     });
+
+    // 2026-06-25: a "daily standup on weekdays" used to fail because the event
+    // recurrence enum lacked weekdays/weekends (habits had them, events didn't).
+    it('accepts weekdays/weekends recurrence', () => {
+      for (const recurrence of ['weekdays', 'weekends', 'daily', 'weekly', 'monthly', 'yearly', 'none']) {
+        const r = insertEventSchema.safeParse({ title: 'Standup', date: '2026-06-29', recurrence });
+        expect(r.success).toBe(true);
+      }
+    });
+
+    it('still rejects an unknown recurrence value', () => {
+      const r = insertEventSchema.safeParse({ title: 'x', date: '2026-06-29', recurrence: 'fortnightly' });
+      expect(r.success).toBe(false);
+    });
   });
 
   describe('insertDocumentSchema', () => {

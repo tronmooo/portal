@@ -295,6 +295,10 @@ function rollRecurrence(rawISO: string, pattern: string | undefined, todayStr: s
   const advance = () => {
     switch (pattern) {
       case "daily": next.setDate(next.getDate() + 1); break;
+      // weekdays (Mon–Fri): step forward until we land on a weekday.
+      case "weekdays": do { next.setDate(next.getDate() + 1); } while (next.getDay() === 0 || next.getDay() === 6); break;
+      // weekends (Sat/Sun): step forward until we land on a weekend day.
+      case "weekends": do { next.setDate(next.getDate() + 1); } while (next.getDay() !== 0 && next.getDay() !== 6); break;
       case "weekly": next.setDate(next.getDate() + 7); break;
       case "biweekly": next.setDate(next.getDate() + 14); break;
       case "monthly": next.setMonth(next.getMonth() + 1); break;

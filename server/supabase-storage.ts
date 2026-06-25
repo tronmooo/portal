@@ -2691,6 +2691,18 @@ export class SupabaseStorage implements IStorage {
           const next = new Date(base);
           switch (ev.recurrence) {
             case "daily": next.setDate(next.getDate() + i); break;
+            // weekdays/weekends: walk to the i-th matching day (skip the rest).
+            case "weekdays":
+            case "weekends": {
+              let count = 0;
+              while (count < i) {
+                next.setDate(next.getDate() + 1);
+                const dow = next.getDay();
+                const matches = ev.recurrence === "weekdays" ? (dow !== 0 && dow !== 6) : (dow === 0 || dow === 6);
+                if (matches) count++;
+              }
+              break;
+            }
             case "weekly": next.setDate(next.getDate() + i * 7); break;
             case "biweekly": next.setDate(next.getDate() + i * 14); break;
             case "monthly": next.setMonth(next.getMonth() + i); break;

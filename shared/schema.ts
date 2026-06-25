@@ -729,7 +729,7 @@ export type InsertExpense = z.input<typeof insertExpenseSchema>;
 // CALENDAR EVENTS (expanded with recurrence, categories, linking)
 // ============================================================
 
-export type RecurrencePattern = "none" | "daily" | "weekly" | "biweekly" | "monthly" | "yearly";
+export type RecurrencePattern = "none" | "daily" | "weekdays" | "weekends" | "weekly" | "biweekly" | "monthly" | "yearly";
 
 export type EventCategory = "personal" | "work" | "health" | "finance" | "family" | "social" | "travel" | "education" | "other";
 // ============================================================
@@ -808,7 +808,7 @@ export const insertEventSchema = z.object({
   location: z.string().optional(),
   category: z.enum(["personal", "work", "health", "finance", "family", "social", "travel", "education", "other"]).default("personal"),
   color: z.string().optional(),
-  recurrence: z.enum(["none", "daily", "weekly", "biweekly", "monthly", "yearly"]).default("none"),
+  recurrence: z.enum(["none", "daily", "weekdays", "weekends", "weekly", "biweekly", "monthly", "yearly"]).default("none"),
   recurrenceEnd: z.string().optional(),
   linkedProfiles: z.array(z.string()).optional().default([]),
   linkedDocuments: z.array(z.string()).optional().default([]),
