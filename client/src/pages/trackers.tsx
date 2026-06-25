@@ -6581,24 +6581,44 @@ export default function TrackersPage() {
                   // apart. The person grouping (header above) still answers
                   // "whose data" — color now answers "what kind".
                   const { accent: ac, Icon, typeLabel } = rowVisual(r);
+                  const rowInner = (
+                    <div
+                      className={`grid grid-cols-[20px_1fr_auto_72px] items-center gap-2 pl-2.5 pr-2.5 py-1 border-b border-border/20 last:border-b-0 cursor-pointer hover:bg-muted/50 transition-colors ${ri % 2 === 1 ? "bg-muted/15" : ""}`}
+                      style={{ boxShadow: `inset 2px 0 0 hsl(${ac} / 0.6)` }}
+                      data-testid={`linked-list-row-${r.kind}-${r.id}`}
+                    >
+                      <div className="w-5 h-5 rounded flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${ac} / 0.16)`, color: `hsl(${ac})` }}>
+                        <Icon className="h-3 w-3" />
+                      </div>
+                      <p className="text-[13px] font-medium text-foreground truncate leading-tight">{r.name}</p>
+                      {trackerCols && r.kind === "tracker" ? (
+                        <span className="text-[11px] tabular-nums text-muted-foreground text-right whitespace-nowrap">{r.lastLogged || "—"}</span>
+                      ) : (
+                        <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: `hsl(${ac} / 0.14)`, color: `hsl(${ac})` }}>{typeLabel}</span>
+                      )}
+                      <span className="text-[13px] font-semibold tabular-nums text-foreground text-right truncate">{r.meta}</span>
+                    </div>
+                  );
+                  // Trackers open in the detail dialog — there is no /trackers/:id
+                  // route, so navigating to r.href ("/trackers/<id>") would land on
+                  // the NotFound page. The card view opens the same dialog via
+                  // setSelectedTrackerId; mirror that here so list-view rows work.
+                  if (r.kind === "tracker") {
+                    return (
+                      <div
+                        key={`${r.kind}-${r.id}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setSelectedTrackerId(r.id)}
+                        onKeyDown={onEnterOrSpace(() => setSelectedTrackerId(r.id))}
+                      >
+                        {rowInner}
+                      </div>
+                    );
+                  }
                   return (
                     <Link key={`${r.kind}-${r.id}`} href={r.href}>
-                      <div
-                        className={`grid grid-cols-[20px_1fr_auto_72px] items-center gap-2 pl-2.5 pr-2.5 py-1 border-b border-border/20 last:border-b-0 cursor-pointer hover:bg-muted/50 transition-colors ${ri % 2 === 1 ? "bg-muted/15" : ""}`}
-                        style={{ boxShadow: `inset 2px 0 0 hsl(${ac} / 0.6)` }}
-                        data-testid={`linked-list-row-${r.kind}-${r.id}`}
-                      >
-                        <div className="w-5 h-5 rounded flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${ac} / 0.16)`, color: `hsl(${ac})` }}>
-                          <Icon className="h-3 w-3" />
-                        </div>
-                        <p className="text-[13px] font-medium text-foreground truncate leading-tight">{r.name}</p>
-                        {trackerCols && r.kind === "tracker" ? (
-                          <span className="text-[11px] tabular-nums text-muted-foreground text-right whitespace-nowrap">{r.lastLogged || "—"}</span>
-                        ) : (
-                          <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: `hsl(${ac} / 0.14)`, color: `hsl(${ac})` }}>{typeLabel}</span>
-                        )}
-                        <span className="text-[13px] font-semibold tabular-nums text-foreground text-right truncate">{r.meta}</span>
-                      </div>
+                      {rowInner}
                     </Link>
                   );
                 })}
