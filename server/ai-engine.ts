@@ -4,6 +4,7 @@ import { z } from "zod";
 import { storage } from "./storage";
 import type { ParsedAction } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
+import { classifyNutritionAutoCreate } from "@shared/nutrition-shaped";
 import {
   insertProfileSchema,
   insertTaskSchema,
@@ -6044,6 +6045,32 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_tracker": {
+      // ─── NUTRITION GUARD (2026-06-25, user report) ───────────────────
+      // A specific food/dish/drink must NEVER become a standalone tracker.
+      // "Spinach Blueberry Banana Smoothie with Greek Yogurt and Honey" is a
+      // Nutrition ENTRY, not a tracker. There is one Nutrition/Calories tracker
+      // per profile; every food is a row inside it. Detection lives in
+      // shared/nutrition-shaped.ts (pure, pinned by tests/nutrition-shaped.test.ts).
+      // Diverts to log_tracker_entry on "Nutrition" so the food is captured on
+      // the right tracker instead of cluttering the list with rogue trackers.
+      {
+        const verdict = classifyNutritionAutoCreate(String(input.name || ""), input.category);
+        if (verdict.kind === "divert") {
+          logger.info("ai", `Nutrition guard: diverting tracker create "${input.name}" to a Nutrition entry (item: "${verdict.nutrition.item}")`);
+          const diverted = await executeTool("log_tracker_entry", {
+            trackerName: "Nutrition",
+            values: { item: verdict.nutrition.item },
+            ...(input.forProfile ? { forProfile: input.forProfile } : {}),
+            __userMessage: String((input as any).__userMessage || ""),
+          }, userId);
+          if (diverted && !(diverted as any).error) {
+            (diverted as any).__divertedFromTracker = input.name;
+            (diverted as any).__divertedToNutrition = true;
+          }
+          return diverted;
+        }
+      }
+
       // Dedup: check for existing tracker with same name AND same profile
       const existingTrackers = await storage.getTrackers();
       const ctProfiles = await storage.getProfiles();

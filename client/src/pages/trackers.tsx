@@ -5595,7 +5595,18 @@ export default function TrackersPage() {
   const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
   // Resolve selectedTracker from the live query cache so it refreshes after mutations
   const selectedTracker = selectedTrackerId ? (trackers || []).find(t => t.id === selectedTrackerId) || null : null;
-  const [viewMode, setViewMode] = useState<"table" | "cards">("cards");
+  // Linked-page view mode. Persisted so the user's choice (compact list vs
+  // cards) sticks as their default across sessions — "make compact list the
+  // default if I want" (2026-06-25).
+  const [viewMode, setViewModeRaw] = useState<"table" | "cards">(() => {
+    if (typeof window === "undefined") return "cards";
+    const saved = window.localStorage.getItem("portol:linkedViewMode");
+    return saved === "table" || saved === "cards" ? saved : "cards";
+  });
+  const setViewMode = (v: "table" | "cards") => {
+    setViewModeRaw(v);
+    try { window.localStorage.setItem("portol:linkedViewMode", v); } catch { /* private mode */ }
+  };
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
   const [docDeleteConfirmId, setDocDeleteConfirmId] = useState<string | null>(null);
@@ -5960,10 +5971,10 @@ export default function TrackersPage() {
         </div>
         <div className="flex items-center gap-1.5">
           <div className="flex items-center border rounded-md p-0.5">
-            <button onClick={() => setViewMode("table")} className={`p-1 rounded ${viewMode === "table" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} data-testid="view-table">
+            <button onClick={() => setViewMode("table")} title="Compact list — saved as your default" aria-label="Compact list view" className={`p-1 rounded ${viewMode === "table" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} data-testid="view-table">
               <Table2 className="w-3.5 h-3.5" />
             </button>
-            <button onClick={() => setViewMode("cards")} className={`p-1 rounded ${viewMode === "cards" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} data-testid="view-cards">
+            <button onClick={() => setViewMode("cards")} title="Card view — saved as your default" aria-label="Card view" className={`p-1 rounded ${viewMode === "cards" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} data-testid="view-cards">
               <LayoutGrid className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -6273,7 +6284,7 @@ export default function TrackersPage() {
         // belonged to whom. We now group rows by their primary owner, give
         // each person a deterministic hue, and color the row icon by that
         // hue so the visual scan answers "whose data is this?" at a glance.
-        type Row = { id: string; kind: "asset" | "liability" | "document" | "tracker"; name: string; subtitle: string; meta: string; href: string; ownerIds: string[]; };
+        type Row = { id: string; kind: "asset" | "liability" | "document" | "tracker"; name: string; subtitle: string; meta: string; href: string; ownerIds: string[]; category?: string; };
         const rows: Row[] = [];
         const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
         const isShowAll = filterMode === "everyone";
@@ -6403,7 +6414,7 @@ export default function TrackersPage() {
             const linked: string[] = (t.linkedProfiles || []) as string[];
             const ownerIds = linked.filter(id => personById.has(id));
             const finalOwners = ownerIds.length > 0 ? ownerIds : (selfProfileId ? [selfProfileId] : []);
-            rows.push({ id: t.id, kind: "tracker", name: t.name, subtitle: sub, meta, href: `/trackers/${t.id}`, ownerIds: finalOwners });
+            rows.push({ id: t.id, kind: "tracker", name: t.name, subtitle: sub, meta, href: `/trackers/${t.id}`, ownerIds: finalOwners, category: t.category || undefined });
           });
         }
         if (rows.length === 0) {
@@ -6414,6 +6425,33 @@ export default function TrackersPage() {
           );
         }
         const kindIcons: Record<Row["kind"], any> = { asset: Star, liability: TrendingDown, document: FileText, tracker: Activity };
+        // Per-row visual accent. Trackers are colored by their CATEGORY (so
+        // nutrition is orange, fitness green, medication pink, finance amber…)
+        // which is what gives the list its scan-at-a-glance variety — the prior
+        // version colored every row by person, so a single-person account
+        // rendered as one flat green wall. Assets/liabilities/documents keep a
+        // stable kind hue. This is the single source of truth (getCategoryAccent
+        // + central category-theme), never an inline color.
+        const KIND_ACCENT: Record<Row["kind"], string> = {
+          asset: "199 89% 48%",      // sky — owned things
+          liability: "0 72% 51%",    // red — money owed
+          document: "220 9% 55%",    // slate — paperwork
+          tracker: "142 71% 45%",    // (unused; trackers resolve by category)
+        };
+        const rowVisual = (r: Row): { accent: string; Icon: any; typeLabel: string } => {
+          if (r.kind === "tracker") {
+            const theme = _categoryTheme(r.category, r.name);
+            return {
+              accent: getCategoryAccent(r.category || ""),
+              Icon: theme.icon,
+              // Show the category (e.g. "nutrition", "fitness") rather than the
+              // redundant word "tracker" — the section filter already tells the
+              // user they're looking at trackers.
+              typeLabel: r.category || theme.label || "general",
+            };
+          }
+          return { accent: KIND_ACCENT[r.kind], Icon: kindIcons[r.kind], typeLabel: r.subtitle || r.kind };
+        };
         // Deterministic per-person hue. We hash the person id into a hue in
         // [0, 360) so the same person always gets the same color across
         // sessions, but different people get visually distinct colors.
@@ -6483,32 +6521,34 @@ export default function TrackersPage() {
                     {group.rows.length} {group.rows.length === 1 ? "item" : "items"}
                   </span>
                 </div>
-                {/* Column headers (within group, smaller so they don't dominate) */}
-                <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 px-3 py-1 border-b border-border/40 bg-muted/20 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
-                  <span className="w-5" />
+                {/* Column headers — compact, spreadsheet-style. */}
+                <div className="grid grid-cols-[20px_1fr_auto_72px] items-center gap-2 px-2.5 py-1 border-b border-border/40 bg-muted/20 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <span />
                   <span>Name</span>
                   <span className="text-right">Type</span>
-                  <span className="text-right min-w-[80px]">Value</span>
+                  <span className="text-right">Value</span>
                 </div>
-                {group.rows.map(r => {
-                  const Icon = kindIcons[r.kind];
-                  // Icon color = person hue (so the icon column tells you
-                  // "whose item" before you read anything). Type badge keeps
-                  // its own kind-based hue so you can still scan asset vs
-                  // liability vs tracker at a glance.
-                  const ac = group.accent;
+                {group.rows.map((r, ri) => {
+                  // Color the row by CATEGORY (trackers) / kind (everything
+                  // else) so the list reads like a color-coded spreadsheet
+                  // instead of a single-hue wall. Zebra striping + a thin
+                  // category rail on the left make rows easy to scan and tell
+                  // apart. The person grouping (header above) still answers
+                  // "whose data" — color now answers "what kind".
+                  const { accent: ac, Icon, typeLabel } = rowVisual(r);
                   return (
                     <Link key={`${r.kind}-${r.id}`} href={r.href}>
-                      <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 px-3 py-2 border-b border-border/30 last:border-b-0 cursor-pointer hover:bg-muted/40 transition-colors" data-testid={`linked-list-row-${r.kind}-${r.id}`}>
-                        <div className="w-5 h-5 rounded flex items-center justify-center" style={{ backgroundColor: `hsl(${ac} / 0.18)`, color: `hsl(${ac})` }}>
+                      <div
+                        className={`grid grid-cols-[20px_1fr_auto_72px] items-center gap-2 pl-2.5 pr-2.5 py-1 border-b border-border/20 last:border-b-0 cursor-pointer hover:bg-muted/50 transition-colors ${ri % 2 === 1 ? "bg-muted/15" : ""}`}
+                        style={{ boxShadow: `inset 2px 0 0 hsl(${ac} / 0.6)` }}
+                        data-testid={`linked-list-row-${r.kind}-${r.id}`}
+                      >
+                        <div className="w-5 h-5 rounded flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${ac} / 0.16)`, color: `hsl(${ac})` }}>
                           <Icon className="h-3 w-3" />
                         </div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-foreground truncate">{r.name}</p>
-                          <p className="text-[10px] text-muted-foreground truncate">{r.subtitle}</p>
-                        </div>
-                        <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${ac} / 0.14)`, color: `hsl(${ac})` }}>{r.kind}</span>
-                        <span className="text-sm font-bold tabular-nums text-foreground text-right min-w-[80px]">{r.meta}</span>
+                        <p className="text-[13px] font-medium text-foreground truncate leading-tight">{r.name}</p>
+                        <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: `hsl(${ac} / 0.14)`, color: `hsl(${ac})` }}>{typeLabel}</span>
+                        <span className="text-[13px] font-semibold tabular-nums text-foreground text-right truncate">{r.meta}</span>
                       </div>
                     </Link>
                   );

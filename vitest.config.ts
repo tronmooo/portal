@@ -19,6 +19,7 @@ export default defineConfig({
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
       'tests/expense-shaped.test.ts',
+      'tests/nutrition-shaped.test.ts',
       'tests/cache-isolation.test.ts',
       'tests/ownership-model.test.ts',
       'tests/scope.test.ts',
