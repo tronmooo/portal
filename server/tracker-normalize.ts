@@ -132,7 +132,8 @@ function findPrimaryFieldName(tracker: Pick<Tracker, "fields" | "category" | "na
 function resolveFieldName(
   sourceKey: string,
   tracker: Pick<Tracker, "fields" | "category" | "name">,
-  rawValue?: any
+  rawValue?: any,
+  allowSingleNumericFallback: boolean = true
 ): string {
   const fields = tracker.fields || [];
   const lc = sourceKey.toLowerCase();
@@ -171,8 +172,13 @@ function resolveFieldName(
   // wakeTime:"5:30 AM" would clobber a Sleep tracker's "hours" field with a
   // time string. Non-numeric strays keep their own key (preserved as a
   // secondary field) instead of corrupting the headline metric.
+  // Gate: only collapse onto the lone field when THIS entry has a single
+  // numeric value. A multi-metric log (Workout {weight:135, reps:10, sets:3})
+  // must NOT collapse all three onto a generic "value" field — each named
+  // numeric stays distinct so the entry keeps every metric and auto-extends the
+  // tracker with the missing fields (2026-06-25: workout logs lost weight/reps).
   const numericFields = fields.filter(f => f.type === "number");
-  if (numericFields.length === 1 && parseNumericWithUnit(rawValue) !== null) {
+  if (allowSingleNumericFallback && numericFields.length === 1 && parseNumericWithUnit(rawValue) !== null) {
     return numericFields[0].name;
   }
 
@@ -240,19 +246,24 @@ export function normalizeTrackerEntry(
   // real step count (2026-06-25 corruption bug). Computed up front so the guard
   // is independent of key iteration order.
   const exactClaimed = new Set<string>();
-  for (const k of Object.keys(rawValues || {})) {
+  let numericSourceCount = 0;
+  for (const [k, v] of Object.entries(rawValues || {})) {
     if (k === "_notes") continue;
     const lc = k.toLowerCase();
     const f = (tracker.fields || []).find(f => String(f.name).toLowerCase() === lc);
     if (f) exactClaimed.add(f.name);
+    if (parseNumericWithUnit(v) !== null) numericSourceCount++;
   }
+  // Only allow the "lone numeric field" fallback when this entry carries a
+  // SINGLE number — otherwise multiple metrics collapse onto one field.
+  const allowSingleNumericFallback = numericSourceCount <= 1;
 
   for (const [k, v] of Object.entries(rawValues || {})) {
     if (k === "_notes") { out._notes = v; continue; }
 
     // Resolve field name (value-aware: a non-numeric stray never gets mapped
     // onto a lone numeric field)
-    let canonicalKey = resolveFieldName(k, tracker, v);
+    let canonicalKey = resolveFieldName(k, tracker, v, allowSingleNumericFallback);
     // Collision guard: a remapped key must not overwrite a field another key
     // exact-matches. Keep the stray under its own name (auto-extended later).
     if (canonicalKey !== k && k.toLowerCase() !== canonicalKey.toLowerCase() && exactClaimed.has(canonicalKey)) {

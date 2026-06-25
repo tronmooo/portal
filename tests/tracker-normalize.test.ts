@@ -83,6 +83,32 @@ describe("normalizeTrackerEntry — a remap must not clobber an exact-matched fi
   });
 });
 
+describe("normalizeTrackerEntry — multiple numerics must not collapse onto a lone field (2026-06-25)", () => {
+  // A freshly-created tracker often has a single generic "value" field. Logging
+  // a multi-metric entry used to collapse every number onto "value" (last wins),
+  // losing the rest — a Workout {weight:135, reps:10, sets:3} became {value:3}.
+  const generic = {
+    name: "Workout", category: "fitness", unit: "",
+    fields: [{ name: "value", type: "number", isPrimary: true }],
+  } as any;
+
+  it("keeps each named metric distinct instead of collapsing onto 'value'", () => {
+    const { values } = normalizeTrackerEntry(generic, { exercise: "Bench Press", weight: 135, reps: 10, sets: 3 });
+    expect(values.weight).toBe(135);
+    expect(values.reps).toBe(10);
+    expect(values.sets).toBe(3);
+    expect(values.exercise).toBe("Bench Press");
+    expect(values.value).toBeUndefined(); // nothing collapsed onto the lone field
+  });
+
+  it("still maps a SINGLE numeric onto the lone field (temperature:99 → value)", () => {
+    const temp = { name: "Body Temperature", category: "health", unit: "°F",
+      fields: [{ name: "value", type: "number", isPrimary: true }] } as any;
+    const { values } = normalizeTrackerEntry(temp, { temperature: 99 });
+    expect(values.value).toBe(99);
+  });
+});
+
 describe("normalizeTrackerEntry — generic value maps to the primary field", () => {
   const hydration = {
     name: "Hydration", category: "health", unit: "oz",
