@@ -6097,18 +6097,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       {
         const verdict = classifyNutritionAutoCreate(String(input.name || ""), input.category);
         if (verdict.kind === "divert") {
-          logger.info("ai", `Nutrition guard: diverting tracker create "${input.name}" to a Nutrition entry (item: "${verdict.nutrition.item}")`);
-          const diverted = await executeTool("log_tracker_entry", {
-            trackerName: "Nutrition",
-            values: { item: verdict.nutrition.item },
-            ...(input.forProfile ? { forProfile: input.forProfile } : {}),
-            __userMessage: String((input as any).__userMessage || ""),
-          }, userId);
-          if (diverted && !(diverted as any).error) {
-            (diverted as any).__divertedFromTracker = input.name;
-            (diverted as any).__divertedToNutrition = true;
-          }
-          return diverted;
+          // Don't create a calorie-less Nutrition entry. Foods are STRUCTURED
+          // nutrition data (calories + macros) — a tracker-create call carries
+          // none, so logging it here would leave a "? kcal" row. Instead, refuse
+          // the tracker and instruct the model to re-log it on Nutrition WITH an
+          // estimate, so the entry is complete (user choice, 2026-06-25).
+          const item = verdict.nutrition.item;
+          logger.info("ai", `Nutrition guard: redirecting tracker create "${input.name}" → log_tracker_entry(Nutrition) with macros`);
+          return {
+            redirected: true,
+            needsNutritionMacros: true,
+            item,
+            message: `"${item}" is a food, not a tracker — it belongs on the Nutrition tracker as a structured entry. Do NOT create a tracker for it. Call log_tracker_entry(trackerName:"Nutrition"${input.forProfile ? `, forProfile:"${input.forProfile}"` : ""}, values:{ item:"${item}", calories:<estimate>, protein:<g>, carbs:<g>, fat:<g> }) now, estimating the calories and macros from the food.`,
+          };
         }
       }
 
