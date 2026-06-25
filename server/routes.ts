@@ -442,6 +442,23 @@ function paginate<T>(items: T[], req: any, res: any): T[] {
   return items.slice(offset, offset + limit);
 }
 
+// Full-by-default pagination for lists whose CLIENT computes an aggregate
+// (sum/total) over the whole set. The generic paginate() above hard-caps at
+// 100/page, which silently truncated the Finance page total for any user with
+// more than 100 expenses — the page sums only the rows it received, so the
+// oldest expenses were never counted ("all the expenses are not being
+// calculated"). Like paginateProfiles, we return EVERY row by default and only
+// slice when the caller explicitly opts into ?limit=/?offset=. X-Total-Count is
+// still set so opt-in pagers know the full size.
+function paginateFull<T>(items: T[], req: any, res: any): T[] {
+  res.set("X-Total-Count", String(items.length));
+  const hasPager = typeof req.query.limit === "string" || typeof req.query.offset === "string";
+  if (!hasPager) return items;
+  const limit = Math.min(Math.max(parseInt(req.query.limit as string) || items.length, 1), 10000);
+  const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+  return items.slice(offset, offset + limit);
+}
+
 // Specialised pagination for /api/profiles.
 //   - Profile lists are bounded (~thousands max), small per-row, and required
 //     in FULL for the recursive net-worth rollup. The generic paginate() above
@@ -2233,9 +2250,12 @@ If unsure, return "profile_fact".`,
         incomes: filteredIncomes,
         budgetSummary: { totalBudget, totalSpent, remaining },
         // [PERF 2026-06-10] mount-time seed datasets — shapes mirror the
-        // corresponding GET endpoints exactly (same canonical profile filter,
-        // same paginate(100) first page).
-        expenses: filteredExpenses.slice(0, 100),
+        // corresponding GET endpoints exactly (same canonical profile filter).
+        // Expenses are seeded in FULL (not a 100-row first page) so the Finance
+        // page total — computed client-side over this set — is correct on first
+        // paint, matching the now full-by-default /api/expenses endpoint. Other
+        // lists keep their first-page seed; only expenses drive a client total.
+        expenses: filteredExpenses,
         budgets: budgets || [],
         obligations: ((!filterIds || filterIds.length === 0)
           ? obligationsAll
@@ -4001,7 +4021,11 @@ Rules:
     if (req.query.to && typeof req.query.to === "string") {
       items = items.filter((e: any) => e.date <= (req.query.to as string));
     }
-    res.json(paginate(items, req, res));
+    // Full-by-default: the Finance page computes its total client-side over the
+    // entire returned set, so truncating here under-counts the total. Expense
+    // rows are small and bounded per user (the dashboard already loads them all
+    // server-side), so returning the whole set is cheap and correct.
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/expenses/:id", asyncHandler(async (req, res) => {
     const expense = await storage.getExpense(req.params.id);

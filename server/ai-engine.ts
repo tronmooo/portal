@@ -5695,7 +5695,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Nutrition aliases: "Calories", "Nutrition", "Food" all match each other
       const nutritionAliases = ["calories", "nutrition", "food", "diet", "meal"];
       const isNutritionSearch = nutritionAliases.some(a => trackerName.includes(a));
-      const nameMatches = trackers.filter(t => {
+      let nameMatches = trackers.filter(t => {
         const tn = t.name.toLowerCase();
         // Exact or contains match
         if (tn === trackerName || tn.includes(trackerName)) return true;
@@ -5707,6 +5707,30 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (isNutritionSearch && (nutritionAliases.some(a => tn.includes(a)) || t.category === "nutrition")) return true;
         return false;
       });
+
+      // VALUE-IDENTITY FALLBACK (supplement/medication duplicate fix, user report
+      // 2026-06-25): the model sometimes logs a SPECIFIC subject under a GENERIC
+      // tracker name — e.g. trackerName "Supplements" while values.drug/name is
+      // "Multivitamin" — so the literal-name match above finds nothing and the
+      // code below auto-creates a generic "Supplements" tracker right next to the
+      // user's existing "Multivitamin". When (and only when) the name matched
+      // nothing, fall back to the subject named INSIDE the entry and reuse the
+      // tracker it identity-matches. Restricted to subject-naming fields and a
+      // strong identity match, so it can never hijack an unrelated tracker.
+      if (nameMatches.length === 0) {
+        const vals = (input.values || {}) as Record<string, any>;
+        for (const k of ["drug", "medication", "supplement", "name", "item"]) {
+          const sv = vals[k];
+          if (typeof sv === "string" && sv.trim() && !trackerNamesMatch(sv, input.trackerName)) {
+            const byValue = trackers.filter(t => trackerNamesMatch(t.name, sv));
+            if (byValue.length > 0) {
+              logger.info("ai", `Value-identity match: log named "${input.trackerName}" but values.${k}="${sv}" matches existing tracker "${byValue[0].name}" — reusing it instead of creating a duplicate`);
+              nameMatches = byValue;
+              break;
+            }
+          }
+        }
+      }
       // PER-PERSON TRACKERS POLICY (2026-05-21), root-cause-corrected:
       // Each profile gets its OWN tracker. But an UNLINKED (orphan) tracker is
       // adopted for the target rather than cloned — previously an orphan was
