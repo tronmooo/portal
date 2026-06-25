@@ -71,7 +71,7 @@ import {
   Scale, Activity as ActivityIcon, Moon,
   Users, TrendingDown,
   CalendarDays, Pin, PinOff, Filter as FilterIcon, Sparkle,
-  Lightbulb,
+  Lightbulb, Repeat, Flag, User,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
@@ -1200,8 +1200,17 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   const [, navigate] = useLocation();
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [addingTo, setAddingTo] = useState<string | null>(null);
+  // Which task is expanded into the detail/edit panel.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   // U1 fix: track which task is pending confirmation before delete.
   const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
+  // Profiles for the assigned-to chip (id → name).
+  const { data: allProfiles = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    enabled: open,
+  });
+  const profileName = (id: string) => allProfiles.find((p: any) => p.id === id)?.name || "Someone";
   // Force refetch when popup opens — prevents stale cache after AI chat mutations
   useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); } }, [open]);
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -1314,6 +1323,59 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
     },
   });
 
+  // Generic field update (priority, dueDate, description, recurrence-via-tags).
+  // Patches the cached list optimistically so edits feel instant.
+  const updateMutation = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Record<string, any> }) =>
+      apiRequest("PATCH", `/api/tasks/${id}`, patch).then(r => r.json()),
+    onMutate: async ({ id, patch }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks", filterMode, ...filterIds] });
+      const prev = queryClient.getQueryData<any[]>(["/api/tasks", filterMode, ...filterIds]);
+      queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) =>
+        (old || []).map((t: any) => t.id === id ? { ...t, ...patch } : t));
+      return { prev };
+    },
+    onError: (_e, _v, ctx: any) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx.prev);
+      toast({ title: "Couldn't update task", variant: "destructive" });
+    },
+    onSettled: () => { invalidateDomain("tasks"); },
+  });
+
+  // ── Recurrence helpers (cadence lives in a `recur:<freq>` tag) ──
+  const RECUR_OPTIONS: { value: string; label: string }[] = [
+    { value: "", label: "Does not repeat" },
+    { value: "daily", label: "Daily" },
+    { value: "weekly", label: "Weekly" },
+    { value: "biweekly", label: "Every 2 weeks" },
+    { value: "monthly", label: "Monthly" },
+  ];
+  const recurOf = (t: any): string => {
+    const tag = (t.tags || []).find((x: string) => String(x).startsWith("recur:"));
+    return tag ? String(tag).slice(6) : "";
+  };
+  const recurLabel = (freq: string) => RECUR_OPTIONS.find(o => o.value === freq)?.label
+    || (freq.startsWith("every-") ? `Every ${freq.split("-")[1]} days` : freq);
+  const setRecurrence = (t: any, freq: string) => {
+    const tags = (t.tags || []).filter((x: string) => !String(x).startsWith("recur:"));
+    if (freq) tags.push(`recur:${freq}`);
+    updateMutation.mutate({ id: t.id, patch: { tags } });
+  };
+  // Next occurrence for a recurring task (from its due date, or today).
+  const nextOccurrence = (t: any): string | null => {
+    const freq = recurOf(t);
+    if (!freq) return null;
+    const base = t.dueDate ? new Date(t.dueDate + "T00:00:00") : new Date();
+    const d = new Date(base);
+    if (freq === "daily") d.setDate(d.getDate() + 1);
+    else if (freq === "weekly") d.setDate(d.getDate() + 7);
+    else if (freq === "biweekly") d.setDate(d.getDate() + 14);
+    else if (freq === "monthly") d.setMonth(d.getMonth() + 1);
+    else if (freq.startsWith("every-")) d.setDate(d.getDate() + (parseInt(freq.split("-")[1]) || 1));
+    else return null;
+    return d.toLocaleDateString('en-CA');
+  };
+
   const todayStr = new Date().toLocaleDateString('en-CA');
   const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('en-CA'); })();
   const pending = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) !== normalizeFilter('done')), [tasks]);
@@ -1334,42 +1396,131 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
     setAddingTo(null);
   };
 
-  const TaskRow = ({ t, dimmed = false }: { t: any; dimmed?: boolean }) => (
-    <div className={`flex items-start gap-3 px-4 py-2.5 ${dimmed ? 'opacity-50' : 'hover:bg-muted/30'} transition-colors`}>
-      <button
-        onClick={() => toggleMutation.mutate({ id: t.id, status: dimmed ? 'todo' : 'done' })}
-        className="shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center touch-manipulation"
-        aria-label={dimmed ? "Mark as not done" : "Mark as done"}
-        title={dimmed ? "Mark as not done" : "Mark as done"}
-      >
-        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${dimmed ? 'bg-muted-foreground/20 border-muted-foreground/30' : 'border-muted-foreground/40 hover:border-primary'}`}>
-          {dimmed && <Check className="h-3 w-3 text-muted-foreground/50" strokeWidth={3} />}
-        </div>
-      </button>
-      <div className="flex-1 min-w-0">
-        <p className={`text-sm ${dimmed ? 'line-through text-muted-foreground' : 'text-foreground'} truncate`}>{t.title}</p>
-        {/* Priority color line — Any.do style */}
-        {!dimmed && t.priority && (
-          <div className="h-[2.5px] w-7 rounded-full mt-1" style={{ backgroundColor: PLINE[t.priority] || '#42A5F5' }} />
-        )}
-        {t.dueDate && t.dueDate !== todayStr && !dimmed && (
-          <span className="text-[10px] text-muted-foreground mt-0.5 block">{fmtDate(t.dueDate)}</span>
+  const TaskRow = ({ t, dimmed = false }: { t: any; dimmed?: boolean }) => {
+    const freq = recurOf(t);
+    const expanded = expandedId === t.id;
+    const isReminder = (t.tags || []).includes("reminder") || (t.source === "reminder");
+    const onCalendar = !!t.dueDate; // tasks with a due date materialize on the calendar
+    return (
+    <div className={`${dimmed ? 'opacity-50' : ''} ${expanded ? 'bg-muted/20' : 'hover:bg-muted/30'} transition-colors border-b border-border/10 last:border-b-0`}>
+      <div className="flex items-start gap-3 px-4 py-2.5">
+        <button
+          onClick={() => toggleMutation.mutate({ id: t.id, status: dimmed ? 'todo' : 'done' })}
+          className="shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center touch-manipulation"
+          aria-label={dimmed ? "Mark as not done" : "Mark as done"}
+          title={dimmed ? "Mark as not done" : "Mark as done"}
+        >
+          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${dimmed ? 'bg-muted-foreground/20 border-muted-foreground/30' : 'border-muted-foreground/40 hover:border-primary'}`}>
+            {dimmed && <Check className="h-3 w-3 text-muted-foreground/50" strokeWidth={3} />}
+          </div>
+        </button>
+        {/* Title + meta — click to expand the detail/edit panel */}
+        <button
+          className="flex-1 min-w-0 text-left"
+          onClick={() => setExpandedId(expanded ? null : t.id)}
+          data-testid={`task-row-${t.id}`}
+          aria-expanded={expanded}
+        >
+          <div className="flex items-center gap-1.5">
+            {!dimmed && t.priority && (
+              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: PLINE[t.priority] || '#42A5F5' }} />
+            )}
+            <p className={`text-sm ${dimmed ? 'line-through text-muted-foreground' : 'text-foreground'} truncate`}>{t.title}</p>
+          </div>
+          {!dimmed && (
+            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+              {isReminder && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400"><Bell className="h-2.5 w-2.5" />Reminder</span>
+              )}
+              {freq && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-primary/12 text-primary"><Repeat className="h-2.5 w-2.5" />{recurLabel(freq)}</span>
+              )}
+              {t.dueDate && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground"><Calendar className="h-2.5 w-2.5" />{fmtDate(t.dueDate)}</span>
+              )}
+              {onCalendar && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-sky-500/12 text-sky-600 dark:text-sky-400"><CalendarDays className="h-2.5 w-2.5" />On calendar</span>
+              )}
+              {(t.linkedProfiles || []).slice(0, 1).map((pid: string) => (
+                <span key={pid} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground"><User className="h-2.5 w-2.5" />{profileName(pid)}</span>
+              ))}
+              {t.description && (
+                <span className="inline-flex items-center text-muted-foreground/60"><FileText className="h-2.5 w-2.5" /></span>
+              )}
+            </div>
+          )}
+          {freq && nextOccurrence(t) && !dimmed && (
+            <span className="text-[10px] text-muted-foreground/70 mt-0.5 block">Next: {fmtDate(nextOccurrence(t)!)}</span>
+          )}
+        </button>
+        {dimmed ? (
+          <button
+            onClick={() => setTaskToDelete({ id: t.id, title: t.title })}
+            disabled={deleteMutation.isPending}
+            className="shrink-0 mt-0.5 text-muted-foreground/40 hover:text-destructive touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center disabled:opacity-40"
+            aria-label="Delete task permanently" title="Delete task permanently" data-testid={`btn-delete-task-${t.id}`}
+          ><X className="h-3.5 w-3.5" /></button>
+        ) : (
+          <button onClick={() => setExpandedId(expanded ? null : t.id)} className="shrink-0 mt-0.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-muted-foreground/50" aria-label="Edit task" data-testid={`task-expand-${t.id}`}>
+            {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
         )}
       </div>
-      {dimmed && (
-        <button
-          onClick={() => setTaskToDelete({ id: t.id, title: t.title })}
-          disabled={deleteMutation.isPending}
-          className="shrink-0 mt-0.5 text-muted-foreground/40 hover:text-destructive touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center disabled:opacity-40"
-          aria-label="Delete task permanently"
-          title="Delete task permanently"
-          data-testid={`btn-delete-task-${t.id}`}
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+
+      {/* ── Expanded detail / edit panel ── */}
+      {expanded && !dimmed && (
+        <div className="px-4 pb-3 pt-1 space-y-3" data-testid={`task-detail-${t.id}`}>
+          {/* Priority */}
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Flag className="h-3 w-3" />Priority</label>
+            <div className="flex gap-1.5">
+              {(["low", "medium", "high"] as const).map(p => (
+                <button key={p} onClick={() => updateMutation.mutate({ id: t.id, patch: { priority: p } })}
+                  className={`flex-1 text-xs py-1.5 rounded-lg border capitalize transition-colors ${t.priority === p ? 'text-white border-transparent' : 'bg-muted/40 border-border text-muted-foreground hover:bg-muted'}`}
+                  style={t.priority === p ? { backgroundColor: PLINE[p] } : undefined}
+                  data-testid={`task-priority-${p}`}
+                >{p}</button>
+              ))}
+            </div>
+          </div>
+          {/* Due date + Recurrence */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Calendar className="h-3 w-3" />Due date</label>
+              <input type="date" value={t.dueDate || ""} onChange={e => updateMutation.mutate({ id: t.id, patch: { dueDate: e.target.value || undefined } })}
+                className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-due-date" />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Repeat className="h-3 w-3" />Repeat</label>
+              <select value={freq} onChange={e => setRecurrence(t, e.target.value)}
+                className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-recurrence">
+                {RECUR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                {freq.startsWith("every-") && <option value={freq}>{recurLabel(freq)}</option>}
+              </select>
+            </div>
+          </div>
+          {/* Notes */}
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><FileText className="h-3 w-3" />Notes</label>
+            <textarea defaultValue={t.description || ""} rows={2} placeholder="Add notes…"
+              onBlur={e => { if ((e.target.value || "") !== (t.description || "")) updateMutation.mutate({ id: t.id, patch: { description: e.target.value } }); }}
+              className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-notes" />
+          </div>
+          {/* Footer: assigned + calendar link + delete */}
+          <div className="flex items-center justify-between pt-0.5">
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1"><User className="h-3 w-3" />{(t.linkedProfiles || []).length ? profileName(t.linkedProfiles[0]) : "You"}</span>
+              {onCalendar && <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400"><CalendarDays className="h-3 w-3" />On calendar</span>}
+            </div>
+            <button onClick={() => setTaskToDelete({ id: t.id, title: t.title })} className="text-[11px] text-muted-foreground/60 hover:text-destructive inline-flex items-center gap-1" data-testid={`task-delete-${t.id}`}>
+              <Trash2 className="h-3 w-3" />Delete
+            </button>
+          </div>
+        </div>
       )}
     </div>
-  );
+    );
+  };
 
   const SectionHeader = ({ label, section }: { label: string; section: string }) => (
     <div className="flex items-center justify-between px-4 pt-3 pb-1">
@@ -1396,7 +1547,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   ) : null;
 
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); } }}>
+    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); setExpandedId(null); } }}>
       <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl max-h-[85vh] overflow-y-auto">
         {/* Any.do header */}
         <div className="flex items-center justify-between px-4 pt-3 pb-3 border-b border-border/40">
