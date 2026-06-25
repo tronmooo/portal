@@ -57,7 +57,47 @@ every code path (chat engine, cards, history, charts) reads from.
 
 ---
 
+## The mechanism that guarantees "the same unit every time"
+
+The complaint is not "Fish Oil should say X." It is "**a tracker must show the
+same unit in every view, every time, including future trackers nobody has
+named yet.**" You cannot get that by fixing patterns one by one — you get it by
+removing the ability to disagree:
+
+1. **One resolver.** `shared/tracker-units.ts :: resolveTrackerUnit(tracker,
+   field)` is now the ONLY place a unit is decided. One precedence ladder
+   (declared field unit → adherence ⇒ "" → declared tracker unit → one
+   canonical field-name table → one name fallback → ""), one chosen spelling per
+   unit ("lbs" not "lb", "kcal" not "cal"). Deterministic: the same (tracker,
+   field) always returns the same string.
+2. **Every view delegates to it.** The tracker page (`inferUnit` is now a
+   one-line wrapper), the presentation engine (`classifyTrackerPresentation`),
+   the AI chart builder (`ai-engine`), and the profile detail page all call
+   `resolveTrackerUnit`. The 4 divergent guessers (`inferUnit`/`UNIT_BY_FIELD`,
+   two different `guessUnit`s, an inline `duration?"min"`) are **deleted**, not
+   patched.
+3. **It cannot regress.** `tests/smoke/contracts/no-inline-unit-guessing.test.ts`
+   fails the build if any file outside the resolver grows a unit-literal ladder
+   (`return "lbs"` / `return "qt"` …). A future "let me just guess a unit here,"
+   in any new variation, breaks CI. `tests/tracker-units.test.ts` additionally
+   pins that the presentation engine and the resolver always agree.
+
+This is the difference between fixing the examples and fixing the cause: there is
+now exactly one unit per (tracker, field), produced in one place, enforced by a
+test — so history, card, chart, overview, dashboard, and profile detail are
+incapable of showing different units, for fish oil or for anything invented next
+month.
+
+The same shape applies to **identity** (`shared/tracker-identity.ts` is the one
+matcher used by both logging and dedup) and **shape** (`shared/tracker-shapes.ts`
+is the one catalog with a domain guard). Three properties that used to be
+re-guessed everywhere are now each a single, tested source of truth.
+
 ## The fixes (permanent, not per-case)
+
+### 0. `shared/tracker-units.ts` (new) — one unit resolver + a contract test
+See the mechanism above. This is the central change; the items below are the
+domain-correct data and wiring it depends on.
 
 ### 1. `shared/tracker-shapes.ts` — domain-correct shapes
 - Added a **medication/supplement shape** (`drug, dosage, unit(dose form),

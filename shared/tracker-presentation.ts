@@ -9,6 +9,7 @@
 // view (detail overview, dashboard card, AI chart).
 
 import { classifyMetric } from "./chart-data";
+import { resolveTrackerUnit, isAdherenceTracker } from "./tracker-units";
 
 export type MetricKind =
   | "additive"     // sum over a period: water, calories, miles, minutes, $ spent
@@ -47,38 +48,13 @@ export interface TrackerPresentation {
 
 const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
-const SUPPLEMENT_NAME = /\b(fish ?oil|omega|multivitamin|vitamin|creatine|magnesium|zinc|melatonin|probiotic|biotin|collagen|glucosamine|turmeric|ashwagandha|supplement|softgel|capsule|lozenge|gummy)\b/;
-
-function guessUnit(field: string): string {
-  const f = norm(field);
-  if (/(carb|protein|fat|sugar|fiber|sodium)/.test(f)) return "g";
-  if (/(calorie|cal|kcal)/.test(f)) return "kcal";
-  if (/(mile|distance)/.test(f)) return "mi";
-  if (/(step)/.test(f)) return "steps";
-  if (/(ounce|^oz$|water|hydrat|fluid)/.test(f)) return "oz";
-  if (/(weight|bodyweight|^lbs?$)/.test(f)) return "lb";
-  if (/(systolic|diastolic|^bp$|mmhg)/.test(f)) return "mmHg";
-  if (/(glucose|bloodsugar|bloodglucose)/.test(f)) return "mg/dL";
-  if (/(heartrate|^hr$|bpm|pulse)/.test(f)) return "bpm";
-  if (/(minute|duration)/.test(f)) return "min";
-  if (/(hour|sleep)/.test(f)) return "hr";
-  return "";
-}
-
 function fieldNames(t: TrackerLike): string[] {
   return (t.fields || []).map((f) => norm(f.name));
 }
 
-// Is this a medication/supplement (adherence) tracker?
-function isAdherence(t: TrackerLike): boolean {
-  const cat = norm(t.category);
-  if (["medication", "prescription", "supplement"].includes(cat)) return true;
-  const fns = fieldNames(t);
-  const doseShaped = (fns.includes("dosage") || fns.includes("dose")) &&
-    (fns.includes("taken") || fns.includes("adherence") || fns.includes("drug") || fns.includes("drugname"));
-  if (doseShaped) return true;
-  return SUPPLEMENT_NAME.test(String(t.name || "").toLowerCase());
-}
+// Adherence detection lives in tracker-units (single definition); alias it here
+// so the rest of this module reads naturally.
+const isAdherence = isAdherenceTracker;
 
 // Is this blood pressure (a paired systolic/diastolic reading)?
 function isDual(t: TrackerLike): boolean {
@@ -132,7 +108,7 @@ export function classifyTrackerPresentation(t: TrackerLike): TrackerPresentation
     };
   }
 
-  const unit = t.unit || (t.fields || []).find((f) => norm(f.name) === norm(field))?.unit || guessUnit(field);
+  const unit = resolveTrackerUnit(t, field);
   // chart-data's classifyMetric covers most fields; extend it with volume/count
   // context (hydration, drinks, reps) so a "Hydration" tracker measured in
   // ounces/cups/mL SUMS to a daily total instead of being treated as a reading.

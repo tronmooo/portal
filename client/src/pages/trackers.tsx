@@ -11,6 +11,7 @@ import {
   getDefaultMetricDefinition,
 } from "@shared/tracker-metric-definition";
 import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
+import { resolveTrackerUnit } from "@shared/tracker-units";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
@@ -1933,69 +1934,13 @@ interface TrackerInsight {
           | "bike";
 }
 
-// Common unit dictionaries — used to *infer* what an undeclared number means
-// when the tracker.unit field is empty (which it often is for user-typed
-// trackers). The inference is intentionally conservative: a unit is only
-// surfaced when the field name, tracker name, or value range gives us
-// reasonable certainty. Otherwise we render the raw number with a generic
-// noun like "logged" or no unit at all rather than guess wrong.
-const UNIT_BY_FIELD: Record<string, string> = {
-  steps: "steps", step_count: "steps",
-  distance: "mi", miles: "mi", km: "km", kilometers: "km",
-  duration: "min", minutes: "min", mins: "min", time: "min",
-  hours: "hr", hr: "hr", hours_slept: "hr",
-  reps: "reps", sets: "sets", rep: "reps",
-  weight: "lbs", lbs: "lbs", kg: "kg",
-  cups: "cups", oz: "oz", ml: "ml", liters: "L", litres: "L", l: "L",
-  calories: "cal", kcal: "kcal", cal: "cal",
-  pace: "min/mi",
-  bpm: "bpm", heart_rate: "bpm",
-  pages: "pages",
-};
-
-function inferUnit(tracker: Tracker, fieldName: string, fieldUnit: string | undefined): string {
-  if (fieldUnit && fieldUnit.trim()) return fieldUnit.trim();
-  const t = (tracker.unit || "").trim();
-  if (t) return t;
-  // Adherence trackers (medication/supplement) have NO physical-quantity unit.
-  // Never guess one from the name — that's what produced "Fish Oil → qt". The
-  // dose form (tablet/softgel) lives per-entry, not as a tracker unit.
-  if (classifyTrackerPresentation(tracker as any).metricKind === "adherence") return "";
-  const f = (fieldName || "").toLowerCase().replace(/\s+/g, "_");
-  if (UNIT_BY_FIELD[f]) return UNIT_BY_FIELD[f];
-  // Last resort: infer from tracker name itself so "Guitar" → min,
-  // "Walking" → steps, even when the field is named generically (e.g.
-  // "activity" or "value"). This is what lets a Guitar entry with values
-  // { activity: 30 } render as "30 min" instead of "activity: 30".
-  const n = (tracker.name || "").toLowerCase();
-  if (n.includes("guitar") || n.includes("piano") || n.includes("instrument")
-      || n.includes("meditat") || n.includes("yoga") || n.includes("mindful")
-      || n.includes("gam") || n.includes("practice")) return "min";
-  if (n.includes("read") || n.includes("book")) return "min";
-  if (n.includes("walk") || n.includes("step")) return "steps";
-  if (n.includes("hydrat") || n.includes("water") || n.includes("drink")) return "oz";
-  if (n.includes("run") || n.includes("bike") || n.includes("cycl")) return "mi";
-  if (n.includes("calorie")) return "cal";
-  if (n.includes("sleep")) return "hr";
-  // Lifting words ONLY — do NOT bare-match "press" (would match "Tire Pressure",
-  // "Blood Pressure", "Espresso", etc. and wrongly return lbs). Pair "press"
-  // with bench/shoulder/leg/overhead/chest qualifiers.
-  if (n.includes("bench press") || n.includes("shoulder press") || n.includes("leg press")
-      || n.includes("chest press") || n.includes("overhead press")
-      || n.includes("squat") || n.includes("deadlift")
-      || n.includes("body weight") || n.includes("bodyweight") || n.includes("scale weight")
-      || n === "weight") return "lbs";
-  // Pressure trackers — PSI is the right default unless tracker.unit overrides.
-  if (n.includes("tire pressure") || n.includes("psi")) return "PSI";
-  if (n.includes("blood pressure")) return "mmHg";
-  // Fuel / charge
-  if (n.includes("fuel") || n.includes("gas mileage") || n.includes("mpg")) return "mpg";
-  if (n.includes("charge") || n.includes("battery")) return "%";
-  if (n.includes("odometer") || n.includes("mileage")) return "mi";
-  // Motor-oil quarts ONLY with explicit vehicle context — bare "oil" used to
-  // mislabel "Fish Oil" supplements as "qt".
-  if (n.includes("oil change") || n.includes("motor oil") || n.includes("engine oil")) return "qt";
-  return "";
+// Display unit for a tracker field. Thin wrapper over the ONE canonical
+// resolver in shared/tracker-units.ts so the history tab, card, chart, and
+// overview can never show different units for the same field. Do NOT add unit
+// guessing here — extend shared/tracker-units.ts instead (enforced by a
+// contract test).
+function inferUnit(tracker: Tracker, fieldName: string, _fieldUnit?: string | undefined): string {
+  return resolveTrackerUnit(tracker as any, fieldName);
 }
 
 // Find the most likely numeric measurement in an entry, even when the

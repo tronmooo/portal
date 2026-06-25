@@ -26,6 +26,7 @@ import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medi
 import { passesProfileFilter } from "@shared/profile-filter";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
+import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 
@@ -8996,21 +8997,6 @@ async function resolveProfileId(name?: string): Promise<string | undefined> {
   return profiles.find(p => p.name.toLowerCase() === lc || (p.type === 'self' && lc === 'me'))?.id;
 }
 
-// Best-guess display unit for a metric when the tracker doesn't declare one.
-function guessUnit(field: string): string {
-  const f = field.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (/(carb|protein|fat|sugar|fiber|sodium)/.test(f)) return "g";
-  if (/(calorie|cal|kcal)/.test(f)) return "kcal";
-  if (/(mile|distance)/.test(f)) return "mi";
-  if (/(step)/.test(f)) return "steps";
-  if (/(weight|bodyweight)/.test(f)) return "lb";
-  if (/(systolic|diastolic|bp)/.test(f)) return "mmHg";
-  if (/(glucose|bloodsugar)/.test(f)) return "mg/dL";
-  if (/(minute|duration)/.test(f)) return "min";
-  if (/(amount|cost|spend|price|total)/.test(f)) return "$";
-  return "";
-}
-
 // The "rubric / key" the user asked for: a short, honest provenance + coverage
 // note set rendered under every chart, so the visual is self-explaining and its
 // limits are visible (how many logs, what each value means, where the gaps are).
@@ -9232,7 +9218,7 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
       { since: sinceEff, until: now, granularity: gran, mode },
     );
     if (agg.usedCount === 0) throw new Error(`No numeric "${field}" values found for "${tracker.name}" in this period.`);
-    const unit = tracker.unit || guessUnit(field);
+    const unit = resolveTrackerUnit(tracker as any, field);
     const seriesName = `${field.charAt(0).toUpperCase()}${field.slice(1)}${unit ? ` (${unit})` : ""}`;
     const data = agg.points.map(p => ({ label: p.label, [field]: p.value }));
     const aggWord = mode === "sum" ? `${granLabel}ly total` : mode === "avg" ? `${granLabel}ly average` : "reading";

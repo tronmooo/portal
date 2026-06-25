@@ -29,6 +29,7 @@ import {
   ZONE_COLORS,
 } from "@shared/tracker-metric-definition";
 import { effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
+import { resolveTrackerUnit } from "@shared/tracker-units";
 
 /**
  * PR F: Auto-hide past events on active schedule views.
@@ -5838,11 +5839,13 @@ function TrackerCard_Profile({
 
                       // Primary value uses the same fieldName the headline does.
                       const primaryVal = fieldName ? vals[fieldName] : undefined;
-                      const primaryUnit =
-                        (numericField as any)?.unit ||
-                        (healedFields?.find((f: any) => f.name === fieldName) as any)?.unit ||
-                        healedUnit ||
-                        "";
+                      // Resolve over the healed fields so shape-provided units
+                      // are honored, but through the ONE canonical resolver so
+                      // this matches the tracker card / history / chart exactly.
+                      const primaryUnit = resolveTrackerUnit(
+                        { name: tracker.name, category: tracker.category, unit: tracker.unit, fields: healedFields as any },
+                        fieldName ?? undefined,
+                      );
 
                       // Every other field with a meaningful value, in healed
                       // field order so the user sees the proper labels (e.g.
@@ -6610,11 +6613,9 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
       const v = vals[f.name];
       if (v == null || v === "") return null;
       const num = Number(v);
-      // Field-level unit wins. Fall back to the tracker-level unit only for
-      // the primary field (so Hydration whose tracker.unit is "oz" renders
-      // "90 oz" instead of bare "90"). Duration fields default to "min".
-      const fallbackUnit = f.name === primaryFieldName ? (tracker.unit || "") : "";
-      const unit = (f.unit || fallbackUnit || (f.type === "duration" ? "min" : "") || "").trim();
+      // Unit comes from the ONE canonical resolver so this matches the tracker
+      // card / history / chart exactly (no per-page unit logic).
+      const unit = resolveTrackerUnit(tracker as any, f.name);
       if (!isNaN(num) && typeof v !== "boolean") {
         const formatted = num.toLocaleString(undefined, { maximumFractionDigits: 2 });
         return unit ? `${formatted} ${unit}` : formatted;
@@ -7194,7 +7195,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                             <p className="text-xs font-medium">Log Entry — {t.name}</p>
                             <div className="grid grid-cols-2 gap-2">
                               {formFields.map((f: any, idx: number) => {
-                                const fieldUnit = f.unit || (f.name === pf ? (t.unit || "") : "") || (f.type === "duration" ? "min" : "");
+                                const fieldUnit = resolveTrackerUnit(t as any, f.name);
                                 const isNumeric = f.type === "number" || f.type === "duration";
                                 return (
                                   <Input
