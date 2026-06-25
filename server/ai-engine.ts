@@ -5423,6 +5423,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "create_reminder": {
       // BUG 3: real reminders. Resolve an optional forProfile name to a
       // profileId, persist the reminder, and let the cron fire loop deliver it.
+      // GUARD (2026-06-25): a reminder with a missing/unparseable fireAt would
+      // otherwise persist a reminder AND a companion calendar event literally
+      // dated "Invalid Date" (new Date(undefined) → NaN). The upstream payload
+      // validator normally catches this, but defend the executor too so no
+      // direct caller can write junk. Reject instead of creating garbage.
+      {
+        const when = input.fireAt ? new Date(input.fireAt) : null;
+        if (!when || isNaN(when.getTime())) {
+          return { error: `I need a valid date and time for the reminder "${input.title || ""}". Tell me when (e.g. "tomorrow at 10am").` };
+        }
+        input.fireAt = when.toISOString();
+      }
       let reminderProfileId: string | undefined;
       // Third-person fallback: "remind Bob to ..." should target Bob even if the
       // model didn't populate forProfile. Parse the captured name (skip me/us).
