@@ -3697,15 +3697,17 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Document management ---
   {
     name: "manage_document",
-    description: "Rename, delete, or re-extract data from a stored document. 're_extract' re-reads the document's saved file (no re-upload needed) and recovers any fields the first pass missed — e.g. a driver-license number, secondary IDs — merging them into the document without overwriting existing values. Use when user says 'rename my document X to Y', 'delete document X', 're-extract my insurance card', 'pull the license number off my ID', or 'scan my license again'.",
+    description: "Rename, delete, re-extract, or RE-LINK a stored document to a person/profile. Actions: 'rename', 'delete', 're_extract' (re-reads the saved file and recovers fields the first pass missed), 'link' (ADD the document to a profile — keeps any existing links), 'move' (set the document's owner(s) to EXACTLY the named profile(s), replacing existing links — use for 'this belongs to Jane not Bob', 'move this document to Jane only', 'this upload belongs to Jane'), and 'unlink' (REMOVE a profile from the document). Use the link/move/unlink actions to FIX a document that landed on the wrong profile or shows under 'everyone' — e.g. 'link Jane Doe's license to her profile', 'this document belongs to Jane, not Bob', 'remove shared visibility'. Identify the document by documentId when known, or by documentName otherwise (search_documents/retrieve_document can find it first).",
     input_schema: {
       type: "object" as const,
       properties: {
-        action: { type: "string", enum: ["rename", "delete", "re_extract"], description: "Action to perform" },
-        documentId: { type: "string", description: "ID of the document" },
+        action: { type: "string", enum: ["rename", "delete", "re_extract", "link", "move", "unlink"], description: "Action to perform" },
+        documentId: { type: "string", description: "ID of the document (preferred). If unknown, pass documentName instead." },
+        documentName: { type: "string", description: "Document name (partial match) — used to find the document when documentId isn't known." },
         newName: { type: "string", description: "New name (required for rename action)" },
+        profileName: { type: "string", description: "Profile/person name to link/move/unlink (required for link, move, unlink). Comma-separate to target multiple people (e.g. 'Bob, Jane')." },
       },
-      required: ["action", "documentId"],
+      required: ["action"],
     },
   },
 
@@ -4888,6 +4890,25 @@ export function pickTrackerForLog<T extends { linkedProfiles?: string[] }>(
   if (orphan) return { tracker: orphan, clone: false }; // adopt, never clone
   // All matches belong to other profiles → make a per-person copy for target.
   return { tracker: undefined, clone: true };
+}
+
+/**
+ * Pure link-set semantics for document → profile re-linking (#3, 2026-06-25),
+ * used by manage_document's link/move/unlink actions. Exported so it's unit
+ * tested in tests/document-linking.test.ts.
+ *   - link:   ADD the ids (union) — keep existing owners.
+ *   - move:   REPLACE with exactly the ids ("belongs to Jane, not Bob").
+ *   - unlink: REMOVE the ids.
+ */
+export function computeDocProfileLinks(
+  current: string[] | null | undefined,
+  action: "link" | "move" | "unlink",
+  ids: string[],
+): string[] {
+  const cur = Array.isArray(current) ? current : [];
+  if (action === "link") return Array.from(new Set([...cur, ...ids]));
+  if (action === "move") return Array.from(new Set(ids));
+  return cur.filter(id => !ids.includes(id)); // unlink
 }
 
 export async function executeTool(name: string, input: any, userId?: string): Promise<any> {
@@ -8815,8 +8836,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "manage_document": {
-      const docId = input.documentId;
-      if (!docId) return { error: "documentId is required" };
+      // Resolve the document by id, else by a (partial) name match. Allowing a
+      // name lookup lets the AI act on "this document" / "Jane's license"
+      // without first round-tripping for the id.
+      let docId = input.documentId as string | undefined;
+      if (!docId && input.documentName) {
+        const allDocs = await storage.getDocuments();
+        const qn = String(input.documentName).toLowerCase().trim();
+        const docMatch = allDocs.find(d => (d.name || "").toLowerCase() === qn)
+          || allDocs.find(d => (d.name || "").toLowerCase().includes(qn));
+        if (docMatch) docId = docMatch.id;
+        if (!docId) return { error: `No document found matching "${input.documentName}".` };
+      }
+      if (!docId) return { error: "documentId or documentName is required" };
       switch (input.action) {
         case "rename": {
           if (!input.newName) return { error: "newName is required for rename action" };
@@ -8828,6 +8860,53 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           const deleted = await storage.deleteDocument(docId);
           if (!deleted) return { error: "Document not found or could not be deleted" };
           return { success: true, message: "Document deleted" };
+        }
+        // #3 (2026-06-25): document → profile linkage repair. Previously the
+        // ONLY way a document got a profile was the AI-pick at extraction time;
+        // if it guessed wrong (or a doc was merely TAGGED with a name), the user
+        // was stuck — "the AI can't fix it on request." These actions are that
+        // fix: link (add), move (replace with exactly these owners), unlink.
+        case "link":
+        case "move":
+        case "unlink": {
+          if (!input.profileName || !String(input.profileName).trim()) {
+            return { error: `profileName is required for the '${input.action}' action.` };
+          }
+          const doc = await storage.getDocument(docId);
+          if (!doc) return { error: "Document not found" };
+          const allProfiles = await storage.getProfiles();
+          const names = String(input.profileName).split(",").map(s => s.trim()).filter(Boolean);
+          const resolvedIds: string[] = [];
+          const unresolved: string[] = [];
+          for (const nm of names) {
+            const res = resolveProfileByName(allProfiles, nm);
+            if (res.kind === "found") resolvedIds.push(res.profile.id);
+            else if (res.kind === "ambiguous") {
+              return { error: `"${nm}" matches more than one profile: ${res.matches.slice(0, 5).map(p => `"${p.name}"`).join(", ")}. Tell me the full name.` };
+            } else unresolved.push(nm);
+          }
+          if (resolvedIds.length === 0) {
+            return { error: `Profile${names.length > 1 ? "s" : ""} not found: ${unresolved.join(", ")}.` };
+          }
+          const current: string[] = Array.isArray((doc as any).linkedProfiles) ? (doc as any).linkedProfiles : [];
+          const next = computeDocProfileLinks(current, input.action, resolvedIds);
+          await storage.updateDocument(docId, { linkedProfiles: next } as Partial<Document>);
+          // Reconcile the join table so profile-scoped queries agree with the array.
+          const added = next.filter(id => !current.includes(id));
+          const removed = current.filter(id => !next.includes(id));
+          for (const id of added) {
+            try { await storage.linkProfileTo(id, "document", docId); await storage.propagateDocumentToAncestors(docId, id); } catch { /* may already be linked */ }
+          }
+          for (const id of removed) {
+            try { await storage.unlinkProfileFrom(id, "document", docId); } catch { /* may already be unlinked */ }
+          }
+          const nameFor = (id: string) => allProfiles.find(p => p.id === id)?.name || id;
+          const ownerNames = next.map(nameFor);
+          const verb = input.action === "link" ? "Linked" : input.action === "move" ? "Moved" : "Unlinked";
+          const msg = input.action === "unlink"
+            ? `${verb} ${resolvedIds.map(nameFor).join(", ")} from "${doc.name}". Now linked to: ${ownerNames.length ? ownerNames.join(", ") : "no one"}.`
+            : `${verb} "${doc.name}" → ${ownerNames.join(", ")}.${unresolved.length ? ` (Couldn't find: ${unresolved.join(", ")}.)` : ""}`;
+          return { success: true, message: msg, document: { id: docId, name: doc.name, linkedProfiles: next }, actions: [{ type: "update", category: "document", data: { id: docId, linkedProfiles: next } }] };
         }
         case "re_extract": {
           // Real re-extraction: re-read the file we already stored (no re-upload
