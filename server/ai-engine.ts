@@ -28,6 +28,7 @@ import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from 
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
+import { DEFAULT_TIMEZONE } from "@shared/timezone";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
@@ -5423,14 +5424,68 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
         throw e;
       }
+      const _remTz = (storage as any)._timezone || DEFAULT_TIMEZONE;
       const fireDate = new Date(reminder.fireAt);
       const human = fireDate.toLocaleString("en-US", {
-        timeZone: "America/Los_Angeles",
+        timeZone: _remTz,
         weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
       });
+
+      // A timed reminder is also a calendar item — the user expects "remind me
+      // to call the dentist Friday at 10am" to show up on the calendar/dashboard
+      // exactly like an event, not just fire a silent notification. So we mirror
+      // the reminder onto the calendar by creating a companion event. The
+      // reminder row still drives the in-app notification via the cron loop; the
+      // event makes it visible. The card/undo target this event id.
+      let calendarEvent: any = null;
+      try {
+        const evDate = fireDate.toLocaleDateString("en-CA", { timeZone: _remTz }); // YYYY-MM-DD
+        const evTime = fireDate.toLocaleTimeString("en-GB", { timeZone: _remTz, hour: "2-digit", minute: "2-digit" }); // HH:MM (24h)
+        const evDedupKey = `event:${safeLC(reminderForProfile || "")}:${safeLC(input.title)}:${evDate}`;
+        const existingEvents = await storage.getEvents();
+        const dupEvent = existingEvents.find(e => e.title.toLowerCase() === safeLC(input.title) && e.date === evDate);
+        if (dupEvent) {
+          calendarEvent = dupEvent;
+        } else if (!isDuplicateCreation(dedupUser, evDedupKey)) {
+          const remEventPayload = validateAiPayload(insertEventSchema, {
+            title: input.title.trim(),
+            date: evDate,
+            time: evTime,
+            allDay: false,
+            recurrence: "none",
+            category: "personal",
+            source: "chat",
+            linkedProfiles: reminderProfileId ? [reminderProfileId] : [],
+            linkedDocuments: [],
+            tags: ["reminder"],
+          }, "event");
+          if (remEventPayload.ok) {
+            calendarEvent = await storage.createEvent(remEventPayload.data);
+            markCreation(dedupUser, evDedupKey);
+            if (reminderProfileId) {
+              await storage.linkProfileTo(reminderProfileId, "event", calendarEvent.id)
+                .catch((e: any) => console.warn("[AI] Reminder event linking failed:", e?.message));
+            }
+          }
+        }
+      } catch (e: any) {
+        // Calendar mirroring is best-effort — a failure here must not lose the
+        // reminder itself, which was already persisted above.
+        console.warn("[AI] Failed to mirror reminder onto calendar:", e?.message || e);
+      }
+
       return {
         ...reminder,
-        message: `Reminder set for ${human}. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
+        // Surface the calendar event id as the primary id so the chat action
+        // card and its Undo button target the visible calendar entry.
+        id: calendarEvent?.id || reminder.id,
+        reminderId: reminder.id,
+        eventId: calendarEvent?.id,
+        title: input.title,
+        date: calendarEvent?.date,
+        time: calendarEvent?.time,
+        forProfile: input.forProfile,
+        message: `Reminder set for ${human} and added to your calendar. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
         actions: [{ type: "create", category: "reminder", data: reminder }],
       };
     }
@@ -11060,7 +11115,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // BUG 3: a real reminder was persisted when allActions carries a reminder
       // create. The create_reminder executor already returns the honest
       // "Reminder set for ..." message, so we don't prepend anything here.
-      const reminderCreated = allActions.some(a => (a.category as string) === "reminder");
+      const reminderCreated = allActions.some(a => a.type === "create_reminder");
       if (/((google|apple|outlook|gcal|icloud)\s*calendar.*sync|sync.*(google|apple|outlook|gcal|icloud)\s*calendar|sync.*calendar)/i.test(msgForDisclaimer)) {
         finalReply = "Google/Apple/Outlook calendar sync isn't connected yet. Your Portol calendar still works internally.";
       } else if (!reminderCreated && /(remind\s+(?:me|him|her|them|\w+)|notify me|alert me|reminder)/i.test(msgForDisclaimer)) {
@@ -11239,6 +11294,7 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
     delete_expense: "log_expense",
     create_event: "create_event",
     update_event: "create_event",
+    create_reminder: "create_reminder",
     create_habit: "create_habit",
     checkin_habit: "checkin_habit",
     create_obligation: "create_obligation",

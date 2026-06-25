@@ -43,6 +43,7 @@ import {
   ListTodo,
   DollarSign,
   CalendarDays,
+  Bell,
   Sparkles,
   Bot,
   Paperclip,
@@ -342,6 +343,8 @@ function actionIcon(type: string) {
     case "create_event":
     case "complete_event":
       return <CalendarDays className="h-3 w-3" />;
+    case "create_reminder":
+      return <Bell className="h-3 w-3" />;
     case "create_goal":
       return <Target className="h-3 w-3" />;
     case "create_habit":
@@ -371,6 +374,7 @@ const ACTION_LABELS: Record<string, string> = {
   delete_habit: "Delete Habit",
   create_goal: "Create Goal",
   create_event: "Create Event",
+  create_reminder: "Set Reminder",
   complete_event: "Complete Event",
   log_entry: "Log Entry",
   create_tracker: "Create Tracker",
@@ -2829,7 +2833,7 @@ export default function ChatPage() {
                   <div className="mt-3 space-y-1.5">
                     {msg.actions.filter(a => [
                       'log_entry', 'log_tracker_entry', 'add_tracker_entry',
-                      'log_expense', 'create_task', 'create_event',
+                      'log_expense', 'create_task', 'create_event', 'create_reminder',
                       'create_habit', 'checkin_habit', 'create_obligation',
                       'create_goal', 'create_profile', 'update_profile',
                       'create_tracker', 'journal_entry', 'create_artifact',
@@ -2846,6 +2850,8 @@ export default function ChatPage() {
                         create_task: "tasks",
                         log_expense: "expenses",
                         create_event: "events",
+                        create_reminder: "events", // mirrored onto the calendar; undo removes the event
+
                         create_habit: "habits",
                         create_obligation: "obligations",
                         create_goal: "goals",
