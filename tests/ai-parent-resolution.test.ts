@@ -37,6 +37,28 @@ describe("resolveProfileByName", () => {
     }
   });
 
+  // #4 (2026-06-25): a bare "Honda" matching two vehicles must NOT silently
+  // resolve to one and overwrite it — "Honda CR-V" overwrote "Honda HR-V".
+  it("returns 'ambiguous' for a make that matches two vehicles", () => {
+    const r = resolveProfileByName(profiles(["Honda HR-V", "Honda CR-V"]), "Honda");
+    expect(r.kind).toBe("ambiguous");
+    if (r.kind === "ambiguous") {
+      expect(r.matches.map(m => m.name).sort()).toEqual(["Honda CR-V", "Honda HR-V"]);
+    }
+  });
+
+  it("still resolves the exact model name unambiguously", () => {
+    const r = resolveProfileByName(profiles(["Honda HR-V", "Honda CR-V"]), "Honda CR-V");
+    expect(r.kind).toBe("found");
+    if (r.kind === "found") expect(r.profile.name).toBe("Honda CR-V");
+  });
+
+  it("returns 'none' (never a wrong match) when the named model doesn't exist", () => {
+    // Only "Honda HR-V" exists; "Honda CR-V" must not silently match it.
+    const r = resolveProfileByName(profiles(["Honda HR-V"]), "Honda CR-V");
+    expect(r.kind).toBe("none");
+  });
+
   it("prefers exact match over word-boundary match (even longer ones)", () => {
     // "Computer" is an EXACT match for "computer" and short-circuits.
     // Even though "Gaming Desktop Computer" also contains the word

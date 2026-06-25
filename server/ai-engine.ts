@@ -3868,6 +3868,7 @@ MEDICATION TRACKING (separate system from habits):
 - NEVER lump medications into habit check-ins. Medications are structured data, not binary check-offs.
 - If a user says "I took my Metformin 500mg" → log_tracker_entry to the Metformin tracker (or create it) with { drug: "Metformin", dosage: "500mg", taken: true }
 - If a user says "set up a medication tracker for Lisinopril 10mg daily" → create_tracker with name="Lisinopril", category="medication", fields including drug, dosage, frequency, prescriber, startDate
+- AMBIGUOUS MEDICATION REFERENCES — ASK, NEVER ASSUME (#5, 2026-06-25 user report): when the user references a medication WITHOUT naming it ("I took my meds", "missed my medication", "forgot my pill", "skipped my dose this morning"), do NOT infer the drug from earlier in the conversation or from the most recently discussed medication. Instead: (a) if the user has exactly ONE medication tracker, use it; (b) if they have TWO OR MORE, ask which one ("Which medication — Lisinopril or Metformin?") before logging; (c) if they have none, ask which medication they mean. Logging "missed a dose" against the wrong drug is a real adherence/safety error, so confirm rather than guess. This applies even when a specific medication was mentioned moments ago — recency is NOT consent.
 
 CALENDAR DATA ACCURACY:
 - All events MUST include correct ownership (who it belongs to), correct date and time (timezone-aware), and correct category
@@ -5269,17 +5270,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "update_profile": {
       const profiles = await storage.getProfiles();
       const searchName = (input.name || "").toLowerCase().trim();
-      // Smart matching: exact name first, then partial. Prefer primary types (vehicle > asset, person > subscription)
-      const typeWeight: Record<string, number> = { self: 10, person: 9, pet: 8, vehicle: 7, property: 6, asset: 5, medical: 4, investment: 3, loan: 2, subscription: 1, account: 1 };
+      // Resolve via the shared word-boundary matcher (single source of truth,
+      // tested in tests/ai-parent-resolution.test.ts). This replaces a loose
+      // includes() match that would SILENTLY pick one of several partial
+      // matches and overwrite it — e.g. a bare "Honda" overwriting one of
+      // "Honda HR-V" / "Honda CR-V" (#4, 2026-06-25 user report). Ambiguous
+      // partial names now ask the user instead of guessing.
       let profile = profiles.find(p => p.name.toLowerCase() === searchName);
       if (!profile) {
-        // Partial match — pick the highest-weight type when multiple match
-        const matches = profiles.filter(p => p.name.toLowerCase().includes(searchName) || searchName.includes(p.name.toLowerCase()));
-        if (matches.length > 0) {
-          profile = matches.sort((a, b) => (typeWeight[b.type] || 0) - (typeWeight[a.type] || 0))[0];
+        const res = resolveProfileByName(profiles, input.name);
+        if (res.kind === "found") {
+          profile = res.profile;
+        } else if (res.kind === "ambiguous") {
+          return {
+            error: `"${input.name}" matches more than one profile: ${res.matches.slice(0, 5).map(p => `"${p.name}"`).join(", ")}. Which one do you mean? Tell me the full name so I update the right one — I won't guess and risk overwriting the wrong record.`,
+          };
         }
       }
-      
+
       // If profile not found, return error with suggestions (don't auto-create on typos)
       if (!profile) {
         const suggestions = profiles

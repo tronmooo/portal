@@ -1820,6 +1820,12 @@ export default function ChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Synchronous send lock (#8, 2026-06-25): react-query's isPending only flips
+  // on the NEXT render, so two sends fired within the same tick (fast double-tap
+  // / Enter-then-tap) could both dispatch before isPending caught up, merging or
+  // duplicating commands. This ref is set synchronously the instant a send
+  // commits, so the second rapid send is rejected immediately.
+  const sendingRef = useRef(false);
   const addMoreFileInputRef = useRef<HTMLInputElement>(null);
   const batchIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const queryClient = useQueryClient();
@@ -1914,6 +1920,9 @@ export default function ChatPage() {
         },
       ]);
     },
+    // Release the synchronous send lock once the round-trip resolves (success
+    // or error), so the next message can be sent.
+    onSettled: () => { sendingRef.current = false; },
   });
 
   const uploadMutation = useMutation({
@@ -2516,7 +2525,9 @@ export default function ChatPage() {
   const handleSend = () => {
     const msg = input.trim();
     const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending || saveOnlyMutation.isPending;
-    if (isPending) return;
+    // Reject re-entrant sends synchronously (sendingRef) AND while any mutation
+    // is in flight (isPending). The ref catches the same-tick race isPending misses.
+    if (sendingRef.current || isPending) return;
     if (!msg) return;
 
     const userMsg: ChatMessage = {
@@ -2556,6 +2567,7 @@ export default function ChatPage() {
 
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    sendingRef.current = true; // lock BEFORE mutate so a rapid second send can't slip through
     chatMutation.mutate(msg);
   };
 
@@ -3333,8 +3345,12 @@ export default function ChatPage() {
                 rows={3}
                 data-testid="input-chat"
               />
-              {/* Action row inside the box */}
-              <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 pb-3">
+              {/* Action row inside the box. z-10 keeps these controls stacked
+                  ABOVE the textarea — without it, on mobile the native textarea
+                  (which extends under this row via its pb-14 padding) could
+                  swallow taps meant for the Send button, so only the Enter key
+                  worked (#2, 2026-06-25 user report). */}
+              <div className="absolute bottom-0 left-0 right-0 z-10 flex items-center justify-between px-3 pb-3">
                 <div className="flex items-center gap-0.5">
                   <button
                     onClick={() => fileInputRef.current?.click()}
