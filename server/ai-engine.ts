@@ -749,17 +749,21 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   if (lower === "/help" || lower === "help" || lower === "what can you do" || lower === "what can you do?" || lower === "how do i use this" || lower === "how do i use this?") {
     return {
       matched: true,
+      // NOTE: the chat bubble renders content as PLAIN TEXT (no markdown), so
+      // markdown link syntax like [label](/route) would show up as raw brackets.
+      // Describe where each command lands in prose instead.
       reply: [
-        "Here's what I can do \u2014 each command links to where it lands:",
-        "\u2022 Log expenses: \"$50 groceries\" \u2192 [/dashboard/finance](/dashboard/finance)",
-        "\u2022 Create tasks: \"remind me to call the dentist Friday\" \u2192 [/dashboard/tasks](/dashboard/tasks)",
-        "\u2022 Schedule events: \"Standup Friday 3pm\" \u2192 [/calendar](/calendar)",
-        "\u2022 Track health: \"weight 183\", \"bp 120/80\", \"slept 7.5 hours\" \u2192 [/trackers](/trackers)",
-        "\u2022 Add bills/subscriptions: \"$11 Netflix every month\" \u2192 [/dashboard/obligations](/dashboard/obligations)",
-        "\u2022 Manage people, pets, vehicles, assets \u2192 [/profiles](/profiles)",
-        "\u2022 Open documents: \"open my drivers license\" \u2192 [/linked](/linked)",
-        "\u2022 Journal entries: \"add a journal entry saying I had a great day\" \u2192 [/dashboard/journal](/dashboard/journal)",
-        "\u2022 Set goals: \"Save $5000 by December\" \u2192 Goals widget on [/dashboard](/dashboard)",
+        "Here's what I can do \u2014 just type naturally and I'll route it to the right place:",
+        "\u2022 Log expenses: \"$50 groceries\" \u2192 shows up under Finance",
+        "\u2022 Create tasks: \"remind me to call the dentist Friday\" \u2192 Tasks",
+        "\u2022 Schedule events: \"Standup Friday 3pm\" \u2192 Calendar",
+        "\u2022 Track health: \"weight 183\", \"bp 120/80\", \"slept 7.5 hours\" \u2192 Trackers",
+        "\u2022 Add bills/subscriptions: \"$11 Netflix every month\" \u2192 Bills & Obligations",
+        "\u2022 Manage people, pets, vehicles, assets \u2192 Profiles",
+        "\u2022 Open documents: \"open my drivers license\" \u2192 shows the document inline",
+        "\u2022 Journal entries: \"add a journal entry saying I had a great day\" \u2192 Journal",
+        "\u2022 Set goals: \"Save $5000 by December\" \u2192 Goals on your Dashboard",
+        "Tip: you can also say \"go to my dashboard\" or \"open trackers\" and I'll take you there.",
       ].join("\n"),
       actions: [],
       results: [],
@@ -8789,7 +8793,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     // --- Income logging ---
     case "log_income": {
       if (!input.amount || !input.source) return { error: "amount and source are required" };
-      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      // Default the income date to today in the USER's timezone (not hard-coded
+      // LA time) so late-night income east of LA doesn't land on the prior day.
+      // Mirrors the create_expense behavior above.
+      const incomeTz = (storage as any)._timezone || 'America/Los_Angeles';
+      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: incomeTz });
       // P0.3a: validate with the shared insert schema before writing.
       const incomePayload = validateAiPayload(insertIncomeSchema, {
         description: input.source,
@@ -11019,7 +11027,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // Map tool name to a ParsedAction type for backwards compat
           const actionType = mapToolToActionType(toolUse.name);
           const inp = toolUse.input as Record<string, any>;
-          const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
+          const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id || result?.income?.id;
           // Only count as a real action if it succeeded (no error field)
           if (result && !result.error) {
             // Forward revert metadata so the chat UI can render an Undo/Revert
@@ -11409,8 +11417,26 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       }
     }
 
+    // Surface a navigation target to the client. The `navigate` tool returns
+    // { navigateTo: <page>, profileId } but nothing previously consumed it, so
+    // "open my dashboard" / "go to trackers" silently did nothing. Translate the
+    // page enum into an actual hash route the client can navigate to.
+    let navigateTo: string | undefined;
+    const navHit = allResults.find((r: any) => r && typeof r.navigateTo === "string");
+    if (navHit) {
+      const pageRoutes: Record<string, string> = {
+        dashboard: "/dashboard",
+        chat: "/",
+        trackers: "/trackers",
+        profiles: "/profiles",
+        profile_detail: navHit.profileId ? `/profiles/${navHit.profileId}` : "/profiles",
+      };
+      navigateTo = pageRoutes[String(navHit.navigateTo)] || undefined;
+    }
+
     return {
       reply: finalReply,
+      navigateTo,
       actions: allActions,
       results: allResults,
       documentPreview,
@@ -11472,7 +11498,7 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
     query_expenses: "retrieve",
     query_tasks: "retrieve",
     spending_analytics: "retrieve",
-    log_income: "log_expense",
+    log_income: "log_income",
     manage_document: "retrieve",
     schedule_medication_refills: "create_event",
     get_asset_rollup: "retrieve",

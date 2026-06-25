@@ -382,6 +382,7 @@ const ACTION_LABELS: Record<string, string> = {
   update_tracker_entry: "Update Entry",
   journal_entry: "Journal Entry",
   log_expense: "Log Expense",
+  log_income: "Log Income",
   create_profile: "Create Profile",
   update_profile: "Update Profile",
   create_obligation: "Add Bill",
@@ -1908,6 +1909,12 @@ export default function ChatPage() {
       };
       setMessages((prev: any) => [...prev, assistantMsg]);
       invalidateAll();
+      // "open my dashboard" / "go to trackers": the navigate tool returns a
+      // route the client should jump to. Defer briefly so the assistant's
+      // confirmation message paints before we leave the chat page.
+      if (typeof data.navigateTo === "string" && data.navigateTo) {
+        setTimeout(() => hashNavigate(data.navigateTo), 350);
+      }
     },
     onError: (err: Error) => {
       setMessages((prev) => [
@@ -2861,6 +2868,7 @@ export default function ChatPage() {
                         // By ParsedAction type (what gets stored in action.type)
                         create_task: "tasks",
                         log_expense: "expenses",
+                        log_income: "incomes",
                         create_event: "events",
                         create_reminder: "events", // mirrored onto the calendar; undo removes the event
 

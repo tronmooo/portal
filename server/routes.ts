@@ -6778,6 +6778,18 @@ No emojis. No prose outside the JSON.`,
     res.json(incomes);
   }));
 
+  // Net-worth history powers the dashboard trend + "net worth up/down X%"
+  // key findings. The client polls GET /api/net-worth/history?lookbackDays=120,
+  // but no such route existed — the request 404'd and the dashboard silently
+  // rendered an empty trend (the query swallows the error with .catch(() => [])).
+  app.get("/api/net-worth/history", asyncHandler(async (req, res) => {
+    const lookbackRaw = Number(req.query.lookbackDays);
+    const lookbackDays = Number.isFinite(lookbackRaw) && lookbackRaw > 0 ? lookbackRaw : 120;
+    const fp = req.query.profileId as string | undefined;
+    const history = await storage.getNetWorthHistory(fp || undefined, lookbackDays);
+    res.json(history);
+  }));
+
   // Helper: bust every cache key derived from income (cashflow / dashboard /
   // stats / enhanced). Without this, adding a paycheck wouldn't move the
   // "Income this month" or "Net cashflow" numbers until the 5-min server
