@@ -233,12 +233,31 @@ export function normalizeTrackerEntry(
   const warnings: string[] = [];
   const trackerUnit = (tracker as any).unit as string | undefined;
 
+  // Field names claimed by an EXACT key match in this entry. A remap/fallback
+  // (e.g. an unknown "distance" mapped onto a Steps tracker's lone "steps"
+  // field) must never clobber a field that another key already names exactly —
+  // otherwise logging {steps:9800, distance:4.6} stored steps=4.6, losing the
+  // real step count (2026-06-25 corruption bug). Computed up front so the guard
+  // is independent of key iteration order.
+  const exactClaimed = new Set<string>();
+  for (const k of Object.keys(rawValues || {})) {
+    if (k === "_notes") continue;
+    const lc = k.toLowerCase();
+    const f = (tracker.fields || []).find(f => String(f.name).toLowerCase() === lc);
+    if (f) exactClaimed.add(f.name);
+  }
+
   for (const [k, v] of Object.entries(rawValues || {})) {
     if (k === "_notes") { out._notes = v; continue; }
 
     // Resolve field name (value-aware: a non-numeric stray never gets mapped
     // onto a lone numeric field)
-    const canonicalKey = resolveFieldName(k, tracker, v);
+    let canonicalKey = resolveFieldName(k, tracker, v);
+    // Collision guard: a remapped key must not overwrite a field another key
+    // exact-matches. Keep the stray under its own name (auto-extended later).
+    if (canonicalKey !== k && k.toLowerCase() !== canonicalKey.toLowerCase() && exactClaimed.has(canonicalKey)) {
+      canonicalKey = k;
+    }
     if (canonicalKey !== k) {
       warnings.push(`Renamed field "${k}" → "${canonicalKey}"`);
     }

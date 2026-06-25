@@ -61,6 +61,28 @@ describe("normalizeTrackerEntry — sleep duration (the reported bug)", () => {
   });
 });
 
+describe("normalizeTrackerEntry — a remap must not clobber an exact-matched field (2026-06-25)", () => {
+  // Steps tracker with a SINGLE numeric field. Logging {steps:9800, distance:4.6}
+  // used to store steps=4.6 — the unknown "distance" was remapped onto the lone
+  // numeric "steps" field, overwriting the real step count.
+  const steps = {
+    name: "Steps", category: "fitness", unit: "steps",
+    fields: [{ name: "steps", type: "number", unit: "steps", isPrimary: true }],
+  } as any;
+
+  it("keeps the exact-matched value and does not let a stray numeric clobber it", () => {
+    const { values } = normalizeTrackerEntry(steps, { steps: 9800, distance: 4.6 });
+    expect(values.steps).toBe(9800);     // not 4.6
+    expect(values.distance).toBe(4.6);   // stray kept under its own name
+  });
+
+  it("is order-independent (stray listed first still doesn't win)", () => {
+    const { values } = normalizeTrackerEntry(steps, { distance: 4.6, steps: 9800 });
+    expect(values.steps).toBe(9800);
+    expect(values.distance).toBe(4.6);
+  });
+});
+
 describe("normalizeTrackerEntry — generic value maps to the primary field", () => {
   const hydration = {
     name: "Hydration", category: "health", unit: "oz",
