@@ -5621,6 +5621,8 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
   // Captioned trend modules (Phase 3) — replaces static Key Findings snippets.
   { id: "trends",           label: "Trends",               icon: Activity,     visible: true, column: "full" },
+  // Health snapshot — top health/fitness trackers (latest + trend).
+  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "full" },
   // ── EXPLORE ─────────────────────────────────────────────────────────────
   // Compact domain navigation cards (Phase 4).
   { id: "domain-hubs",      label: "Explore",              icon: BarChart3,    visible: true, column: "full" },
@@ -5640,12 +5642,12 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
 // Swimlane groups (id sets) — render small group header chips during layout
 const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: string[] }> = [
   { key: "now",        label: "Now",        emoji: "⚡", ids: ["hero-briefing", "now-queue"] },
-  { key: "trajectory", label: "Trajectory", emoji: "📈", ids: ["hero-kpis", "kpis", "trends"] },
+  { key: "trajectory", label: "Trajectory", emoji: "📈", ids: ["hero-kpis", "kpis", "trends", "health"] },
   { key: "explore",    label: "Explore",    emoji: "🧭", ids: ["domain-hubs", "goals", "activity"] },
   { key: "more",       label: "More (legacy)", emoji: "🗂️", ids: ["ai-summary", "finance", "obligations", "today", "needs-attention", "key-findings", "upcoming-dates"] },
 ];
 
-const LAYOUT_VERSION = 11; // Dashboard v2 (Phases 1–4): Briefing + Now Queue + Trends + Domain Hubs; legacy sections hidden by default
+const LAYOUT_VERSION = 12; // Add Health section to the default v2 layout
 
 // ── Dashboard v2 Phase 5: Focus modes ───────────────────────────────────────
 // A mode reweights WHICH sections show and in WHAT order — Portol is too broad
@@ -5664,7 +5666,7 @@ const MODE_LABELS: Record<DashMode, string> = {
 // "what do I do today" view with no trends/finance hero.
 const MODE_ORDER: Record<Exclude<DashMode, "executive">, string[]> = {
   finance: ["hero-briefing", "now-queue", "hero-kpis", "finance", "trends", "kpis", "domain-hubs"],
-  health:  ["hero-briefing", "now-queue", "trends", "kpis", "goals", "domain-hubs"],
+  health:  ["hero-briefing", "now-queue", "health", "trends", "kpis", "goals", "domain-hubs"],
   daily:   ["hero-briefing", "now-queue", "kpis", "domain-hubs", "goals"],
 };
 function loadDashMode(): DashMode {
@@ -6312,6 +6314,9 @@ export default function DashboardPage() {
         break;
       case "domain-hubs":
         content = <DomainHubsSection enhanced={enhanced} stats={stats} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} />;
+        break;
+      case "health":
+        content = <HealthSection data={enhanced?.healthSnapshot || []} />;
         break;
       case "today":
         content = <TodaySection enhanced={enhanced} stats={stats} />;

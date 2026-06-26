@@ -1,3 +1,3 @@
 # Portol
 
-<!-- redeploy trigger: 2026-06-26T20:35:00Z — make focus modes visibly distinct + hide in household -->
+<!-- redeploy trigger: 2026-06-26T21:20:43Z — Health dashboard section + Spending Breakdown in Budget popup -->

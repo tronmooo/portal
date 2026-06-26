@@ -8,6 +8,7 @@
  * Filter-aware. All endpoints already exist on the server.
  */
 import { useMemo, useState } from "react";
+import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { isInScope as scopeIsInScope, selfIdsFrom } from "@shared/scope";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -530,6 +531,168 @@ function SectionCard({
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// SPENDING BREAKDOWN (rendered at the top of the Budget popup)
+// ═════════════════════════════════════════════════════════════════════════════
+
+const SPEND_COLORS = ["#8b5cf6", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#a855f7", "#06b6d4", "#ec4899", "#84cc16", "#94a3b8"];
+
+function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
+  const [period, setPeriod] = useState<"month" | "lastMonth" | "year">("month");
+  const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: expRaw } = useQuery<any>({
+    queryKey: ["/api/expenses", filterMode, ...filterIds, "spend-breakdown"],
+    queryFn: () => apiRequest("GET", `/api/expenses${leading}`).then(r => r.json()).catch(() => []),
+  });
+  const expenses: any[] = Array.isArray(expRaw) ? expRaw : (expRaw?.items || []);
+
+  const now = new Date();
+  const ymNow = now.toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+  const yearNow = ymNow.slice(0, 4);
+  const lastDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const ymLast = `${lastDate.getFullYear()}-${String(lastDate.getMonth() + 1).padStart(2, "0")}`;
+
+  const view = useMemo(() => {
+    const inP = (d: string) => {
+      const s = String(d || "").slice(0, 10);
+      if (period === "month") return s.slice(0, 7) === ymNow;
+      if (period === "lastMonth") return s.slice(0, 7) === ymLast;
+      return s.slice(0, 4) === yearNow;
+    };
+    const periodExp = expenses.filter((e) => inP(e.date));
+    const byCat: Record<string, number> = {};
+    let total = 0;
+    for (const e of periodExp) {
+      const c = (e.category || "other");
+      const a = Number(e.amount) || 0;
+      byCat[c] = (byCat[c] || 0) + a;
+      total += a;
+    }
+    const rows = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+    const txns = periodExp.length;
+    let days: number;
+    if (period === "month") days = now.getDate();
+    else if (period === "lastMonth") days = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
+    else { const start = new Date(now.getFullYear(), 0, 0); days = Math.max(1, Math.ceil((now.getTime() - start.getTime()) / 86400000)); }
+    const dailyAvg = days > 0 ? total / days : 0;
+    // Trend vs the previous comparable period (only meaningful for the month view).
+    let trendPct: number | null = null;
+    if (period === "month") {
+      const lastTotal = expenses.filter((e) => String(e.date || "").slice(0, 7) === ymLast).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      if (lastTotal > 0) trendPct = Math.round(((total - lastTotal) / lastTotal) * 1000) / 10;
+    }
+    return { rows, total, txns, dailyAvg, trendPct, perDay: days > 0 ? txns / days : 0 };
+  }, [expenses, period, ymNow, ymLast, yearNow]);
+
+  const donutData = view.rows.slice(0, 8).map(([name, value], i) => ({ name, value, color: SPEND_COLORS[i % SPEND_COLORS.length] }));
+  const otherTotal = view.rows.slice(8).reduce((s, [, v]) => s + v, 0);
+  if (otherTotal > 0) donutData.push({ name: "Other", value: otherTotal, color: SPEND_COLORS[9] });
+  const periodSub = period === "month" ? "This month" : period === "lastMonth" ? "Last month" : `${yearNow}`;
+
+  return (
+    <div className="p-3 space-y-3 border-b border-border">
+      {/* Period tabs */}
+      <div className="flex gap-1 rounded-xl bg-muted/50 p-1">
+        {([["month", "This Month"], ["lastMonth", "Last Month"], ["year", "This Year"]] as const).map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setPeriod(k)}
+            className={`flex-1 rounded-lg py-1.5 text-[11px] font-semibold transition-colors ${period === k ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {/* Summary stat cards */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-xl border border-border bg-card/60 p-2.5">
+          <p className="text-[10px] text-muted-foreground">Total Spent</p>
+          <p className="text-base font-bold tabular-nums leading-tight">${fmt(view.total)}</p>
+          {view.trendPct != null && (
+            <p className={`text-[10px] font-medium tabular-nums ${view.trendPct > 0 ? "text-red-500" : "text-green-500"}`}>
+              {view.trendPct > 0 ? "▲" : "▼"} {Math.abs(view.trendPct)}% vs last
+            </p>
+          )}
+        </div>
+        <div className="rounded-xl border border-border bg-card/60 p-2.5">
+          <p className="text-[10px] text-muted-foreground">Daily Average</p>
+          <p className="text-base font-bold tabular-nums leading-tight">${fmt(view.dailyAvg)}</p>
+        </div>
+        <div className="rounded-xl border border-border bg-card/60 p-2.5">
+          <p className="text-[10px] text-muted-foreground">Transactions</p>
+          <p className="text-base font-bold tabular-nums leading-tight">{view.txns}</p>
+          <p className="text-[10px] text-muted-foreground">~{view.perDay.toFixed(1)}/day</p>
+        </div>
+      </div>
+
+      {/* Donut by category */}
+      {view.total > 0 ? (
+        <div className="rounded-xl border border-border bg-card/60 p-3">
+          <p className="text-xs font-semibold mb-2">Spending by Category</p>
+          <div className="flex items-center gap-3">
+            <div className="relative shrink-0" style={{ width: 116, height: 116 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={donutData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={38} outerRadius={56} paddingAngle={2} stroke="none">
+                    {donutData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <span className="text-[13px] font-bold tabular-nums leading-none">${fmt(view.total)}</span>
+                <span className="text-[8px] uppercase tracking-wider text-muted-foreground mt-0.5">{periodSub}</span>
+              </div>
+            </div>
+            <div className="flex-1 min-w-0 space-y-1">
+              {donutData.map((d) => {
+                const pct = view.total > 0 ? Math.round((d.value / view.total) * 100) : 0;
+                return (
+                  <div key={d.name} className="flex items-center gap-1.5 text-[11px]">
+                    <span className="h-2 w-2 rounded-full shrink-0" style={{ background: d.color }} />
+                    <span className="capitalize truncate flex-1">{d.name}</span>
+                    <span className="tabular-nums text-muted-foreground shrink-0">{pct}%</span>
+                    <span className="tabular-nums font-medium shrink-0 w-14 text-right">${fmt(d.value)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground text-center py-4">No spending recorded {periodSub.toLowerCase()}.</p>
+      )}
+
+      {/* Category details with bars */}
+      {view.rows.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-semibold">Category Details</p>
+          <div className="rounded-xl border border-border divide-y divide-border/60">
+            {view.rows.map(([cat, amt], i) => {
+              const pct = view.total > 0 ? Math.round((amt / view.total) * 100) : 0;
+              const color = SPEND_COLORS[i % SPEND_COLORS.length];
+              return (
+                <div key={cat} className="flex items-center gap-2.5 px-3 py-2">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ background: `${color}22` }}>
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: color }} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium capitalize truncate">{cat}</p>
+                      <p className="text-xs font-semibold tabular-nums shrink-0">${fmt(amt)}</p>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">{pct}% of total</p>
+                    <div className="mt-1 h-1 rounded-full bg-muted/60 overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // BUDGET POPUP
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -724,7 +887,11 @@ export function BudgetPopup({
       total={hasBudget ? `${overallPct}%` : ""}
       testId="popup-budget"
     >
+      {/* Spending Breakdown — period tabs, summary stats, donut, category details */}
+      <SpendingBreakdown filterMode={filterMode} filterIds={filterIds} />
+
       <div className="p-3 space-y-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Budget</p>
         {/* Overall progress — only when a budget exists */}
         {hasBudget && (
           <div className="rounded-lg border border-border bg-muted/20 px-3 py-2">
