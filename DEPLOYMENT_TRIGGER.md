@@ -1,2 +1,2 @@
-1782511311
-Spending KPI popup donut Fri Jun 26 22:01:51 UTC 2026
+1782514190
+Budget card resilience + capped refetch indicator Fri Jun 26 22:49:50 UTC 2026

@@ -561,6 +561,19 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
 }) {
   const [, navigate] = useLocation();
   const [heroPopup, setHeroPopup] = useState<"networth" | "cashflow" | "budget" | null>(null);
+  // BUG (2026-06-26): the "Updating filter…" badge + 60% dim was wired straight
+  // to react-query's isFetching, so a slow/cold fetch (a minute+) left the whole
+  // hero greyed out and the badge spinning the entire time — it read as the UI
+  // breaking. Cap the indicator: show it only while actually fetching, but never
+  // for more than ~3.5s, so a long cold start quietly resolves instead of
+  // looking stuck. (The numbers under it stay visible; only the chrome dims.)
+  const [showRefetch, setShowRefetch] = useState(false);
+  useEffect(() => {
+    if (!refetching) { setShowRefetch(false); return; }
+    setShowRefetch(true);
+    const t = setTimeout(() => setShowRefetch(false), 3500);
+    return () => clearTimeout(t);
+  }, [refetching]);
   const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
   const trailing = filterMode === "selected" && filterIds.length > 0 ? `&profileIds=${filterIds.join(",")}` : "";
   const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -581,7 +594,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
   // from the prior Everyone/Self filter that was still cached. Setting
   // placeholderData: undefined here forces budgetSummary to show the loading
   // state during swap and snap to the correct $0 when the new query lands.
-  const { data: budgetSummary } = useQuery<{ totalBudget: number; totalSpent: number; remaining: number }>({
+  const { data: budgetSummary, isSuccess: budgetLoaded } = useQuery<{ totalBudget: number; totalSpent: number; remaining: number }>({
     queryKey: ["/api/budgets/summary", currentMonth, filterMode, ...filterIds, "hero"],
     queryFn: async () => {
       const [budgetRes, expensesRes] = await Promise.all([
@@ -703,7 +716,15 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
   // The previous behavior rendered "0% of $0" which read as a real metric and made
   // people think every profile had a budget. The tile can still be re-enabled the
   // moment a budget exists by setting one in BudgetPopup.
-  const effectiveHideBudget = hideBudget || totalBudget <= 0;
+  // BUG (2026-06-26, user report "my budget disappeared"): the Budget hero card
+  // was gated purely on `totalBudget <= 0`. While the budget query is still in
+  // flight (cold serverless start can take a minute+), `budgetSummary` is
+  // undefined → totalBudget 0 → the whole card VANISHES, then pops back when the
+  // fetch lands. That reads as the UI breaking. Fix: only treat 0 as "no budget"
+  // once we have a SUCCESSFUL response (budgetLoaded). Until then we reserve the
+  // slot with a skeleton (budgetPending) so nothing disappears mid-scroll.
+  const effectiveHideBudget = hideBudget || (budgetLoaded && totalBudget <= 0);
+  const budgetPending = !hideBudget && !budgetLoaded;
 
   // BUG (2026-06-10, user report): Math.max(0, ...) clamped NEGATIVE net worth
   // to a permanent "$0" while the sub-label showed the real assets/liabilities.
@@ -776,16 +797,16 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
     <div className="relative">
       {/* NW-16: subtle refetch indicator so the user sees the tiles are
           updating during a filter switch instead of staring at stale numbers. */}
-      {refetching && (
+      {showRefetch && (
         <div
           className="absolute top-1 right-1 z-10 flex items-center gap-1.5 rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm border border-border/50 animate-pulse"
           data-testid="hero-kpi-refetching"
         >
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/70" />
-          Updating filter…
+          Updating…
         </div>
       )}
-      <div className={`mb-2 space-y-2.5 transition-opacity duration-200 ${refetching ? "opacity-60" : "opacity-100"}`}>
+      <div className={`mb-2 space-y-2.5 transition-opacity duration-200 ${showRefetch ? "opacity-60" : "opacity-100"}`}>
       {/* ───── NET WORTH HERO ───── */}
       <button
         type="button"
@@ -886,8 +907,27 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
           <span className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-primary">View Cash Flow <ArrowRight className="h-3 w-3" /></span>
         </button>
 
-        {/* BUDGET */}
-        {!effectiveHideBudget && (
+        {/* BUDGET — skeleton placeholder while the query is still loading so the
+            card never vanishes mid-scroll on a slow/cold start. */}
+        {budgetPending && (
+          <div
+            className="relative flex flex-col overflow-hidden rounded-2xl border border-border/50 p-4"
+            style={{ background: 'linear-gradient(150deg, hsl(155 60% 44% / 0.06) 0%, transparent 55%)' }}
+            data-testid="hero-kpi-budget-skeleton"
+            aria-hidden
+          >
+            <div className="flex items-center gap-2">
+              <div className="icon-badge" style={{ background: 'hsl(155 60% 44% / 0.12)' }}>
+                <Target className="h-4 w-4" style={{ color: 'hsl(155 65% 50% / 0.5)' }} />
+              </div>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/50">Budget</span>
+            </div>
+            <div className="mt-3 h-7 w-24 rounded bg-muted/40 animate-pulse" />
+            <div className="mt-2 h-3 w-20 rounded bg-muted/30 animate-pulse" />
+            <div className="mt-3 h-3 w-28 rounded bg-muted/20 animate-pulse" />
+          </div>
+        )}
+        {!effectiveHideBudget && !budgetPending && (
         <button
           type="button"
           onClick={() => setHeroPopup("budget")}
