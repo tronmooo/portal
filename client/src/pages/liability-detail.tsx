@@ -2734,31 +2734,36 @@ interface AISummaryData {
 }
 
 function AISummaryCard({ profileId }: { profileId: string }) {
-  const { data: aiSummary, isLoading, isError, isFetching } = useQuery<AISummaryData>({
+  // When set, the next fetch appends ?force=true so the server regenerates
+  // instead of serving its 2h cache. A ref (not state) keeps the single
+  // useQuery queryFn as the only fetch path — the old handler set the cache to
+  // undefined and kicked a second fetchQuery, which blanked the card mid-refresh
+  // and, on error, made it disappear for good.
+  const forceRef = useRef(false);
+  const { data: aiSummary, isLoading, isError, isFetching, refetch } = useQuery<AISummaryData>({
     queryKey: ["/api/profiles", profileId, "ai-summary"],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/profiles/${profileId}/ai-summary`);
+      const force = forceRef.current;
+      forceRef.current = false;
+      const res = await apiRequest(
+        "GET",
+        `/api/profiles/${profileId}/ai-summary${force ? "?force=true" : ""}`,
+      );
       return res.json();
     },
     enabled: !!profileId,
     retry: false,
   });
 
-  const handleRefresh = useCallback(async () => {
-    queryClient.setQueryData(["/api/profiles", profileId, "ai-summary"], undefined);
-    queryClient.fetchQuery({
-      queryKey: ["/api/profiles", profileId, "ai-summary"],
-      queryFn: async () => {
-        const res = await apiRequest(
-          "GET",
-          `/api/profiles/${profileId}/ai-summary?force=true`,
-        );
-        return res.json();
-      },
-    });
-  }, [profileId]);
+  const handleRefresh = useCallback(() => {
+    forceRef.current = true;
+    refetch();
+  }, [refetch]);
 
-  if (isError) return null;
+  // Only hide outright when there's nothing to show. Once a summary has loaded,
+  // keep it on screen across refresh errors (react-query retains the last data)
+  // instead of blanking the whole card.
+  if (isError && !aiSummary) return null;
 
   if (isLoading) {
     return (

@@ -2003,10 +2003,16 @@ interface AISummaryData {
 }
 
 function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId: string; profileType: string; profileUpdatedAt?: string }) {
-  const { data: aiSummary, isLoading, isError, isFetching } = useQuery<AISummaryData>({
+  // When set, the next fetch appends ?force=true so the server regenerates
+  // instead of serving its 2h cache. Kept as a ref so the single useQuery
+  // queryFn stays the only fetch path (see handleRefresh).
+  const forceRef = useRef(false);
+  const { data: aiSummary, isLoading, isError, isFetching, refetch } = useQuery<AISummaryData>({
     queryKey: ["/api/profiles", profileId, "ai-summary"],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/profiles/${profileId}/ai-summary`);
+      const force = forceRef.current;
+      forceRef.current = false;
+      const res = await apiRequest("GET", `/api/profiles/${profileId}/ai-summary${force ? "?force=true" : ""}`);
       return res.json();
     },
     enabled: !!profileId,
@@ -2028,17 +2034,13 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     }
   }, [profileUpdatedAt, profileId, aiSummary]);
 
-  const handleRefresh = useCallback(async () => {
-    // Force refresh bypassing server cache
-    queryClient.setQueryData(["/api/profiles", profileId, "ai-summary"], undefined);
-    queryClient.fetchQuery({
-      queryKey: ["/api/profiles", profileId, "ai-summary"],
-      queryFn: async () => {
-        const res = await apiRequest("GET", `/api/profiles/${profileId}/ai-summary?force=true`);
-        return res.json();
-      },
-    });
-  }, [profileId]);
+  const handleRefresh = useCallback(() => {
+    // Force regeneration on the next fetch, then refetch through the normal
+    // query path (keeps the existing summary visible while it reloads and
+    // retains it if the refresh errors, instead of blanking the card).
+    forceRef.current = true;
+    refetch();
+  }, [refetch]);
 
   // Wave 9: Look up current market value via web search + AI.
   // Only shown for asset-like profile types (asset/vehicle/property/investment).
@@ -2166,9 +2168,11 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     </Card>
   );
 
-  // Error or empty summary. For asset-like profiles keep the card so the value
-  // lookup stays reachable; for everything else there's nothing actionable.
-  if (isError || (!isLoading && !aiSummary)) {
+  // No summary to show (initial error or empty result). A refresh error while a
+  // summary is already loaded keeps `aiSummary`, so this falls through to the
+  // normal render instead of blanking. For asset-like profiles keep the card so
+  // the value lookup stays reachable; for everything else there's nothing to show.
+  if (!isLoading && !aiSummary) {
     if (!canLookupValue) return null;
     return renderShell(
       <p className="text-xs text-muted-foreground" data-testid="text-ai-summary-unavailable">
