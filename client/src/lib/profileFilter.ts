@@ -44,6 +44,30 @@ function storageKey(): string {
 
 let _state: FilterState = loadFromStorage();
 
+// Referentially-stable snapshot for reactive consumers (useSyncExternalStore).
+// getProfileFilter() intentionally returns a FRESH object every call (callers
+// rely on that for defensive copies), which makes it unusable as a
+// useSyncExternalStore snapshot — a new reference every render triggers an
+// infinite re-render loop. `_snapshot` is rebuilt ONLY when the state actually
+// changes (see rebuildSnapshot() callers) and returned as-is between changes,
+// so Object.is sees a stable value until something really moves. This is the
+// single reactive source of truth every page subscribes to via useProfileScope.
+let _snapshot: Readonly<FilterState> = freezeState(_state);
+
+function freezeState(s: FilterState): Readonly<FilterState> {
+  return Object.freeze({
+    mode: s.mode,
+    selectedIds: Object.freeze([...s.selectedIds]) as string[],
+    selectedNames: Object.freeze([...s.selectedNames]) as string[],
+  });
+}
+
+/** Rebuild the stable snapshot after any mutation to `_state`. Cheap (small
+ *  arrays); called once per state change, never per render. */
+function rebuildSnapshot(): void {
+  _snapshot = freezeState(_state);
+}
+
 function loadFromStorage(): FilterState {
   try {
     const raw = localStorage.getItem(storageKey());
@@ -64,6 +88,7 @@ export function setActiveUserForFilter(userId: string | null) {
     }
   } catch {}
   _state = loadFromStorage();
+  rebuildSnapshot();
   try {
     if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
       window.dispatchEvent(new CustomEvent(FILTER_EVENT, { detail: { ..._state } }));
@@ -78,6 +103,7 @@ export function setActiveUserForFilter(userId: string | null) {
  *  next sign-in for the same user (filter persists across sign-out). */
 export function clearProfileFilterForUser() {
   _state = { mode: "everyone", selectedIds: [], selectedNames: [] };
+  rebuildSnapshot();
   try {
     const uid = localStorage.getItem(USER_ID_KEY) || "";
     if (uid) localStorage.removeItem(`${LOCAL_KEY_BASE}:${uid}`);
@@ -93,6 +119,9 @@ export function clearProfileFilterForUser() {
 }
 
 function saveToStorage() {
+  // Refresh the reactive snapshot FIRST so any synchronous listener that reads
+  // getProfileFilterSnapshot() in response to the event below sees the new value.
+  rebuildSnapshot();
   try {
     const json = JSON.stringify(_state);
     localStorage.setItem(storageKey(), json);
@@ -126,6 +155,7 @@ export function subscribeProfileFilter(
     if (e.key !== storageKey()) return;
     try {
       _state = e.newValue ? JSON.parse(e.newValue) : { mode: "everyone", selectedIds: [], selectedNames: [] };
+      rebuildSnapshot();
       cb(getProfileFilter());
     } catch {}
   };
@@ -138,9 +168,26 @@ export function subscribeProfileFilter(
 
 // ── Public API ──────────────────────────────────────────────
 
-/** Get the current filter state */
+/** Get the current filter state. Returns a fresh defensive copy every call —
+ *  safe to mutate, but NOT referentially stable. For reactive subscriptions use
+ *  getProfileFilterSnapshot() with subscribeProfileFilterRaw() (see
+ *  hooks/useProfileScope.ts), never this. */
 export function getProfileFilter(): FilterState {
   return { ..._state };
+}
+
+/** Referentially-stable snapshot for useSyncExternalStore. The SAME object is
+ *  returned until the filter actually changes, so it can drive React's external
+ *  store subscription without an infinite loop. Treat the result as read-only. */
+export function getProfileFilterSnapshot(): Readonly<FilterState> {
+  return _snapshot;
+}
+
+/** Bare subscribe for useSyncExternalStore: invokes `onChange` (no args) on any
+ *  filter mutation, including cross-tab storage writes. Returns an unsubscribe
+ *  function. Built on subscribeProfileFilter so there is exactly one event path. */
+export function subscribeProfileFilterRaw(onChange: () => void): () => void {
+  return subscribeProfileFilter(() => onChange());
 }
 
 /** Whether the active user has an explicitly-stored filter choice. When false,

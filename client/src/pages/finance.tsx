@@ -6,7 +6,7 @@ import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -48,17 +48,11 @@ const EXPENSE_CATEGORIES = ["entertainment", "food", "general", "health", "housi
 export default function FinancePage() {
   useEffect(() => { document.title = "Finance — Portol"; }, []);
   const { toast } = useToast();
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
-  useEffect(() => {
-    const handleFocus = () => {
-      const { mode, selectedIds } = getProfileFilter();
-      setFilterMode(mode);
-      setFilterIds(selectedIds);
-    };
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, []);
+  // PROFILE-CONTEXT FIX: read the active scope reactively from the single source
+  // of truth. The old code only resynced on the window `focus` event, so a
+  // filter change made elsewhere (or by the chip on this page) left Finance
+  // showing the previous profile's numbers until you tabbed away and back.
+  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   // CRITICAL: each filtered query MUST set its own queryFn that appends
@@ -669,7 +663,9 @@ export default function FinancePage() {
           </button>
 
           <MultiProfileFilter
-            onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+            // Reactive via useProfileScope — the chip writes to the global store
+            // and this page re-renders from it; no local state to sync.
+            onChange={() => {}}
             compact
           />
           <div className="ml-auto flex items-center gap-2">

@@ -15,15 +15,14 @@ import { ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 import ObligationsManager from "@/components/ObligationsManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { getProfileFilter, type FilterMode } from "@/lib/profileFilter";
+import { useProfileScope } from "@/hooks/useProfileScope";
 
 export default function ObligationsPage() {
   useEffect(() => { document.title = "Obligations — Portol"; }, []);
 
-  // Seed from the persisted global filter so navigating here from another
-  // page that set a filter keeps it visible.
-  const [filterMode, setFilterMode] = useState<FilterMode>(() => getProfileFilter().mode);
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
+  // Single source of truth: the active scope is read reactively so it stays in
+  // lockstep with the rest of the app and survives navigation.
+  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
 
   return (
     <div className="h-full overflow-y-auto pb-24 px-2 py-2 md:px-4 md:py-3" data-testid="obligations-page">
@@ -34,7 +33,7 @@ export default function ObligationsPage() {
         </Link>
         <MultiProfileFilter
           compact
-          onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+          onChange={() => {}}
         />
         <Link href="/calendar?tab=obligations" className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors" data-testid="link-go-to-calendar-tab">
           Manage on Calendar →

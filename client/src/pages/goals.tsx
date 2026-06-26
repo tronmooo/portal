@@ -1,13 +1,13 @@
-import { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { useProfileScope } from "@/hooks/useProfileScope";
 import { GoalsSection } from "@/pages/dashboard";
 
 export default function GoalsPage() {
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  // Single source of truth: read the active scope reactively instead of
+  // mirroring it into local state via the chip's onChange.
+  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
 
   // When "everyone", pass no ids so GoalsSection shows every profile's goals.
   const ids = filterMode === "everyone" ? [] : filterIds;
@@ -28,7 +28,7 @@ export default function GoalsPage() {
         <h1 className="text-lg font-semibold">Goals</h1>
         <div className="ml-auto">
           <MultiProfileFilter
-            onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+            onChange={() => {}}
             compact
           />
         </div>

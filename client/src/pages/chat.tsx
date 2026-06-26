@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { useProfileScope } from "@/hooks/useProfileScope";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stopProp } from "@/lib/event-utils";
@@ -1864,6 +1865,16 @@ export default function ChatPage() {
     queryKey: ["/api/profiles"],
   });
 
+  // PROFILE-CONTEXT FIX: the AI must answer within the SAME profile scope the
+  // rest of the UI is showing. The server already honors `profileFilterIds`
+  // (routes.ts /api/chat → processMessage), but the client never sent it, so
+  // every AI command and AI answer silently ignored the selected profile. We
+  // read the scope reactively and stash it in a ref so the mutation closure
+  // always sends the CURRENT selection without re-creating the mutation.
+  const chatScope = useProfileScope();
+  const chatScopeRef = useRef<string[]>([]);
+  chatScopeRef.current = chatScope.mode === "selected" ? chatScope.selectedIds : [];
+
   // Default the attachment link target to "my profile" (the self profile) on first
   // load, so anything the user attaches is linked to them unless they pick otherwise.
   const didDefaultProfile = useRef(false);
@@ -1888,7 +1899,14 @@ export default function ChatPage() {
         .filter(m => m.id !== "welcome")
         .slice(-10)
         .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
-      const res = await apiRequest("POST", "/api/chat", { message, history });
+      // Scope the AI to the active profile selection (empty array ⇒ household/
+      // everyone, which the server treats as unscoped). See chatScopeRef above.
+      const profileFilterIds = chatScopeRef.current;
+      const res = await apiRequest("POST", "/api/chat", {
+        message,
+        history,
+        ...(profileFilterIds.length > 0 ? { profileFilterIds } : {}),
+      });
       return res.json();
     },
     onSuccess: (data) => {

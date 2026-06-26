@@ -15,7 +15,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { useProfileScope } from "@/hooks/useProfileScope";
 import { passesProfileFilter } from "@shared/profile-filter";
 import {
   Archive, FileText, BookOpen, Brain, Camera, File, Heart,
@@ -639,9 +639,8 @@ export default function ArtifactsPage() {
     setSelectedArtifact(item);
   };
 
-  // Profile filter state
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  // Profile filter — single source of truth, read reactively.
+  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
 
   // Wave 8: tag filter (acts as virtual folders).
   const [activeTag, setActiveTag] = useState<string | null>(null);
@@ -881,7 +880,7 @@ export default function ArtifactsPage() {
         <div className="flex items-center gap-2">
           <SmartFillTrigger />
           <MultiProfileFilter
-            onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+            onChange={() => {}}
             compact
           />
         </div>
