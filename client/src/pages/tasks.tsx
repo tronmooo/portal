@@ -567,6 +567,19 @@ export default function TasksPage() {
   }, [tasks, filterMode, filterIds, allProfiles]);
   const activeTasks = useMemo(() => profileFilteredTasks.filter(t => t.status !== "done"), [profileFilteredTasks]);
   const completedTasks = useMemo(() => profileFilteredTasks.filter(t => t.status === "done"), [profileFilteredTasks]);
+  // v2 summary band: overdue / today / upcoming / done.
+  const taskSummary = useMemo(() => {
+    const todayStr = new Date().toLocaleDateString("en-CA");
+    let overdue = 0, dueToday = 0, upcoming = 0;
+    for (const t of activeTasks) {
+      const d = String(t.dueDate || "").slice(0, 10);
+      if (!d) continue;
+      if (d < todayStr) overdue++;
+      else if (d === todayStr) dueToday++;
+      else upcoming++;
+    }
+    return { overdue, dueToday, upcoming, done: completedTasks.length };
+  }, [activeTasks, completedTasks]);
 
   if (isLoading) {
     return (
@@ -611,6 +624,21 @@ export default function TasksPage() {
         <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="button-new-task">
           <Plus className="h-3.5 w-3.5 mr-1" /> New Task
         </Button>
+      </div>
+
+      {/* v2 summary band */}
+      <div className="grid grid-cols-4 gap-2" data-testid="tasks-summary">
+        {[
+          { label: "Overdue", value: taskSummary.overdue, color: "0 72% 55%" },
+          { label: "Today", value: taskSummary.dueToday, color: "43 85% 52%" },
+          { label: "Upcoming", value: taskSummary.upcoming, color: "200 80% 55%" },
+          { label: "Done", value: taskSummary.done, color: "155 60% 48%" },
+        ].map(s => (
+          <div key={s.label} className="rounded-xl border border-border/50 bg-card/60 p-2.5 text-center">
+            <p className="text-lg font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
+            <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</p>
+          </div>
+        ))}
       </div>
 
       {/* Tab filters */}

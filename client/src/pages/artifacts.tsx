@@ -886,6 +886,20 @@ export default function ArtifactsPage() {
         </div>
       </div>
 
+      {/* v2 summary band */}
+      <div className="grid grid-cols-3 gap-2" data-testid="artifacts-summary">
+        {[
+          { label: "Documents", value: documents.filter((d: any) => !d.deletedAt).length, color: "205 90% 58%" },
+          { label: "Artifacts", value: artifacts.filter((a: any) => !a.deletedAt).length, color: "262 70% 62%" },
+          { label: "Showing", value: profileFiltered.length, color: "155 60% 48%" },
+        ].map(s => (
+          <div key={s.label} className="rounded-xl border border-border/50 bg-card/60 p-2.5 text-center">
+            <p className="text-lg font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
+            <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</p>
+          </div>
+        ))}
+      </div>
+
       {/* Search bar */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
