@@ -107,6 +107,10 @@ export function NetWorthPopup({
   open, onOpenChange, filterMode, filterIds,
 }: { open: boolean; onOpenChange: (o: boolean) => void } & FilterContext) {
   const [, navigate] = useLocation();
+  // Close the dialog BEFORE navigating. Navigating while the Radix Dialog is
+  // still open unmounts it without running its cleanup, which leaves
+  // `pointer-events: none` stuck on <body> and makes the whole app unclickable.
+  const go = (to: string) => { onOpenChange(false); setTimeout(() => navigate(to), 0); };
 
   // NOTE: /api/profiles ignores ?profileIds — fetch ALL and filter on the client
   // using the same semantics as trackers/dashboard (selected id OR child of selected parent).
@@ -210,8 +214,8 @@ export function NetWorthPopup({
               total={displayTotalA}
               emptyLabel="No assets yet"
               addLabel="Add asset"
-              onAdd={() => navigate("/editor/new/asset")}
-              onOpen={(p) => navigate(`/profiles/${p.id}`)}
+              onAdd={() => go("/editor/new/asset")}
+              onOpen={(p) => go(`/profiles/${p.id}`)}
             />
           </TabsContent>
           <TabsContent value="liabilities" className="m-0">
@@ -220,8 +224,8 @@ export function NetWorthPopup({
               total={displayTotalL}
               emptyLabel="No liabilities yet"
               addLabel="Add liability"
-              onAdd={() => navigate("/editor/new/liability")}
-              onOpen={(p) => navigate(`/profiles/${p.id}`)}
+              onAdd={() => go("/editor/new/liability")}
+              onOpen={(p) => go(`/profiles/${p.id}`)}
             />
           </TabsContent>
         </Tabs>
@@ -302,6 +306,9 @@ export function CashFlowPopup({
 }: { open: boolean; onOpenChange: (o: boolean) => void } & FilterContext) {
   const param = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const [, navigate] = useLocation();
+  // Close the dialog before navigating (see NetWorthPopup) so we never leave
+  // `pointer-events: none` stuck on <body>, which freezes the whole app.
+  const go = (to: string) => { onOpenChange(false); setTimeout(() => navigate(to), 0); };
 
   const { data: incomes = [] } = useQuery<any[]>({
     queryKey: ["/api/incomes", filterMode, ...filterIds, "cashflow"],
@@ -379,8 +386,8 @@ export function CashFlowPopup({
           total={`$${fmt(monthlyIncome)}`}
           empty="No income added"
           items={incomes.map((i) => ({ id: i.id, label: i.name || i.source || "Income", amount: Number(i.amount) || 0 }))}
-          onAdd={() => navigate("/dashboard/finance")}
-          onOpen={() => navigate("/dashboard/finance")}
+          onAdd={() => go("/dashboard/finance")}
+          onOpen={() => go("/dashboard/finance")}
           addLabel="Add income"
         />
 
@@ -415,7 +422,7 @@ export function CashFlowPopup({
             <p className="px-3 py-3 text-[11px] text-muted-foreground text-center">No recurring expenses</p>
           )}
           <div className="px-3 py-1.5 border-t border-border bg-muted/20">
-            <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={() => navigate("/calendar?tab=obligations")} data-testid="cash-flow-view-obligations">
+            <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={() => go("/calendar?tab=obligations")} data-testid="cash-flow-view-obligations">
               <ExternalLink className="h-3 w-3 mr-1.5" /> Manage obligations
             </Button>
           </div>
@@ -435,8 +442,8 @@ export function CashFlowPopup({
             amount: -(Number(e.amount) || 0),
           }))}
           extraNote={monthlyExpenses.length > 8 ? `+${monthlyExpenses.length - 8} more` : undefined}
-          onAdd={() => navigate("/dashboard/finance")}
-          onOpen={() => navigate("/dashboard/finance")}
+          onAdd={() => go("/dashboard/finance")}
+          onOpen={() => go("/dashboard/finance")}
           addLabel="Add expense"
         />
 

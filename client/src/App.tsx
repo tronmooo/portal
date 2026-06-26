@@ -543,6 +543,63 @@ function DataPrefetch() {
   return null;
 }
 
+// Global safety net for a well-known Radix UI bug: when a Dialog/Popover/Menu
+// is open it sets `pointer-events: none` on <body> to enforce modality. If that
+// overlay unmounts WITHOUT running its close cleanup — most commonly because the
+// app navigates to a new route while the dialog is still open (every Net Worth /
+// Cash Flow popup row does `navigate(...)` mid-open) — the stuck style is never
+// removed and the ENTIRE app becomes unclickable until a manual reload. This is
+// exactly the "I pressed something and now none of the buttons work" symptom.
+//
+// This guard clears the stuck style after navigations and whenever <body>'s
+// style changes, but ONLY when no Radix overlay is actually open, so it never
+// breaks a legitimately-open modal.
+function isAnyOverlayOpen(): boolean {
+  return !!document.querySelector(
+    '[data-radix-popper-content-wrapper],' +
+    '[role="dialog"][data-state="open"],' +
+    '[role="alertdialog"][data-state="open"],' +
+    '[role="menu"][data-state="open"],' +
+    '[data-state="open"][data-radix-menu-content],' +
+    '[data-radix-dialog-overlay],' +
+    '[data-radix-alert-dialog-overlay],' +
+    '[vaul-overlay],[vaul-drawer][data-state="open"]'
+  );
+}
+function clearStuckBodyPointerEvents() {
+  try {
+    const body = document.body;
+    if (!body || body.style.pointerEvents !== "none") return;
+    if (!isAnyOverlayOpen()) body.style.pointerEvents = "";
+  } catch { /* ignore */ }
+}
+function PointerEventsGuard() {
+  const [location] = useLocation();
+  // After every route change, give the DOM a tick to unmount any open overlay,
+  // then clear the stuck style if nothing modal remains.
+  useEffect(() => {
+    const raf = requestAnimationFrame(clearStuckBodyPointerEvents);
+    const t = setTimeout(clearStuckBodyPointerEvents, 200);
+    return () => { cancelAnimationFrame(raf); clearTimeout(t); };
+  }, [location]);
+  // Belt-and-suspenders: watch <body> directly for the stuck style, since some
+  // dismissals (external nav, unmount races) don't change the wouter location.
+  useEffect(() => {
+    if (typeof MutationObserver === "undefined" || !document.body) return;
+    let scheduled = false;
+    const obs = new MutationObserver(() => {
+      if (scheduled) return;
+      scheduled = true;
+      // Delay so we don't race Radix's own open-time setup (it sets the style
+      // and mounts the overlay in the same frame).
+      setTimeout(() => { scheduled = false; clearStuckBodyPointerEvents(); }, 150);
+    });
+    obs.observe(document.body, { attributes: true, attributeFilter: ["style"] });
+    return () => obs.disconnect();
+  }, []);
+  return null;
+}
+
 function AppRouter() {
   return (
     <SectionErrorBoundary name="app">
@@ -624,6 +681,7 @@ function App() {
           <ErrorBoundary>
           <Router hook={useHashLocation}>
             <ScrollToTop />
+            <PointerEventsGuard />
             <RouteTitle />
             <KeepAlive />
             <DataPrefetch />
