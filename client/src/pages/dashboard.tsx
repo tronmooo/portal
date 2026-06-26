@@ -5658,10 +5658,14 @@ const DASH_MODE_LS_KEY = "portol_dashboard_mode_v1";
 const MODE_LABELS: Record<DashMode, string> = {
   executive: "Executive", finance: "Finance", health: "Health", daily: "Daily ops",
 };
+// Each mode shows a DISTINCT set so switching is unmistakable (not just a
+// reorder of the same cards): Finance surfaces the full Finance widget; Health
+// drops the finance hero entirely and leads with Trends; Daily ops is a lean
+// "what do I do today" view with no trends/finance hero.
 const MODE_ORDER: Record<Exclude<DashMode, "executive">, string[]> = {
-  finance: ["hero-briefing", "now-queue", "hero-kpis", "trends", "kpis", "finance", "domain-hubs", "goals", "activity"],
-  health:  ["hero-briefing", "now-queue", "trends", "kpis", "domain-hubs", "goals", "hero-kpis", "activity"],
-  daily:   ["hero-briefing", "now-queue", "kpis", "domain-hubs", "goals", "trends", "hero-kpis", "activity"],
+  finance: ["hero-briefing", "now-queue", "hero-kpis", "finance", "trends", "kpis", "domain-hubs"],
+  health:  ["hero-briefing", "now-queue", "trends", "kpis", "goals", "domain-hubs"],
+  daily:   ["hero-briefing", "now-queue", "kpis", "domain-hubs", "goals"],
 };
 function loadDashMode(): DashMode {
   try {
@@ -6397,7 +6401,10 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Focus mode switcher (Phase 5) — reweights which sections show + order */}
+      {/* Focus mode switcher (Phase 5) — reweights which sections show + order.
+          Hidden in Everyone/Household scope, where the layout is fixed and the
+          modes would be inert ("these buttons don't work"). */}
+      {filterMode !== "everyone" && (
       <div className="flex items-center gap-1 overflow-x-auto no-scrollbar -mx-0.5 px-0.5" data-testid="dashboard-mode-switcher">
         {(["executive", "finance", "health", "daily"] as DashMode[]).map((m) => (
           <button
@@ -6411,6 +6418,7 @@ export default function DashboardPage() {
           </button>
         ))}
       </div>
+      )}
 
       {/* Import Dialog */}
       <Dialog open={importOpen} onOpenChange={(o) => { if (!o) setImporting(false); setImportOpen(o); }}>
