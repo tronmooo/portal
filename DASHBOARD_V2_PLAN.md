@@ -195,6 +195,34 @@ and hubs. Persist via existing layout preference.
 - **Optional:** fold the AI 3-state into `/api/dashboard-enhanced` or a tiny
   `/api/briefing` so the homepage stays one round-trip.
 
+## Non-negotiable invariants (must hold through every phase)
+The redesign is **presentation-layer only**. It must NOT change what the app can
+do — especially the AI chat, which must keep being able to "talk and do
+everything" exactly as it does today.
+
+- **AI chat is untouched.** `client/src/pages/chat.tsx`, `POST /api/chat`,
+  `processMessage` / the tool chain (`server/ai-engine.ts`, `server/ai-decide.ts`)
+  and every tool it calls stay exactly as-is. The dashboard already has **zero**
+  imports of the chat or `/api/chat` — they are decoupled and stay decoupled.
+- **No data/CRUD endpoint changes.** Every endpoint the AI tools (and other
+  pages) write to or read from — tasks, expenses, habits/checkins, obligations,
+  events, documents, goals, profiles, budgets, incomes — keeps its contract.
+  New dashboard blocks are new **readers** of existing endpoints; they never
+  replace or gate them.
+- **Storage layer untouched.** No change to `server/storage.ts` /
+  `supabase-storage.ts` write paths or the schema.
+- **Shared data, one source of truth.** When the AI mutates data, the dashboard
+  reflects it (same cache keys / invalidation already in place). The Now Queue
+  and AI briefing read the same entities the chat writes — they never fork a
+  second data path.
+- **Every interactive widget stays functional.** Like the rebuilt Habits popup,
+  any consolidated widget (Now Queue actions: Pay / Snooze / Mark done / Open)
+  calls the same mutation endpoints that exist today, so chat and dashboard
+  remain interchangeable ways to act on the same data.
+- **Regression gate:** before each phase ships, verify a chat round-trip
+  (e.g. "log $12 lunch", "check in Drink water", "add task") still creates the
+  record AND the redesigned dashboard shows it.
+
 ## Decisions (locked 2026-06-26)
 - **Build scope:** plan only for now — do not implement until explicitly asked.
 - **Default mode:** **Executive (balanced)** — top urgency + 6 metrics + 3 trends.
