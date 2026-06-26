@@ -23,8 +23,9 @@ import {
   Palette, Info, CheckCircle2, Loader2, ArrowLeft, Bell, BellOff, Bot, Zap,
   Globe, Calendar, Lock, Trash2, HardDrive, RefreshCw, ExternalLink,
   Smartphone, Monitor, ChevronRight, Heart, Key, Eye, EyeOff, Clock,
-  Users, Activity, ListTodo, FileText,
+  Users, Activity, ListTodo, FileText, Sparkles,
 } from "lucide-react";
+import { ChatGPTImportDialog, ChatGPTImportHistory } from "@/components/ChatGPTImportDialog";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme, COLOR_PRESETS } from "@/components/theme-provider";
@@ -217,6 +218,7 @@ export default function SettingsPage() {
   const csvInputRef = useRef<HTMLInputElement>(null);
 
   const [exporting, setExporting] = useState(false);
+  const [chatgptImportOpen, setChatgptImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importingCsv, setImportingCsv] = useState(false);
   const [showSignOutDialog, setShowSignOutDialog] = useState(false);
@@ -922,6 +924,30 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
+        {/* ─── Import from ChatGPT ─── */}
+        <Card data-testid="card-chatgpt-import">
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <CardTitle className="text-base">Import from ChatGPT</CardTitle>
+            </div>
+            <CardDescription>
+              Generate a prompt, run it in ChatGPT, then paste the result back to update your finances —
+              transactions, bills, subscriptions, accounts, assets, liabilities and budgets — in one import.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Button onClick={() => setChatgptImportOpen(true)} className="gap-2" data-testid="btn-open-chatgpt-import">
+              <Sparkles className="h-4 w-4" /> Refresh from ChatGPT
+            </Button>
+            <Separator />
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Import history</Label>
+              <ChatGPTImportHistory />
+            </div>
+          </CardContent>
+        </Card>
+
         {/* ─── Connected Services ─── */}
         <Card data-testid="card-integrations">
           <CardHeader className="pb-3">
@@ -1068,6 +1094,8 @@ export default function SettingsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ChatGPTImportDialog open={chatgptImportOpen} onOpenChange={setChatgptImportOpen} />
     </div>
   );
 }

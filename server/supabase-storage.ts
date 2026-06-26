@@ -6353,4 +6353,47 @@ export class SupabaseStorage implements IStorage {
     }
     return this._captures.delete(id);
   }
+
+  // ── Finance imports ("Import from ChatGPT") — batch history + undo ──────────
+  private _rowToFinanceImport(r: any): any {
+    return {
+      id: r.id,
+      profileId: r.profile_id ?? null,
+      status: r.status,
+      summary: r.summary ?? {},
+      recordCount: r.record_count ?? 0,
+      createdRecords: r.created_records ?? { expenses: [], obligations: [], incomes: [], profiles: [], budgets: [] },
+      createdAt: r.created_at,
+      undoneAt: r.undone_at ?? null,
+    };
+  }
+  async createFinanceImport(rec: any): Promise<any> {
+    const now = new Date().toISOString();
+    const { error } = await this.supabase.from("finance_imports").insert({
+      id: rec.id, user_id: this.userId, profile_id: rec.profileId || null,
+      status: rec.status, summary: rec.summary || {}, record_count: rec.recordCount || 0,
+      created_records: rec.createdRecords || {}, created_at: now,
+    });
+    if (error) throw error;
+    return (await this.getFinanceImport(rec.id))!;
+  }
+  async listFinanceImports(limit = 50): Promise<any[]> {
+    const { data, error } = await this.supabase
+      .from("finance_imports").select("*").eq("user_id", this.userId)
+      .order("created_at", { ascending: false }).limit(limit);
+    if (error) throw error;
+    return (data || []).map((r) => this._rowToFinanceImport(r));
+  }
+  async getFinanceImport(id: string): Promise<any | null> {
+    const { data, error } = await this.supabase
+      .from("finance_imports").select("*").eq("id", id).eq("user_id", this.userId).maybeSingle();
+    if (error) throw error;
+    return data ? this._rowToFinanceImport(data) : null;
+  }
+  async setFinanceImportStatus(id: string, status: "committed" | "undone"): Promise<void> {
+    const patch: any = { status };
+    if (status === "undone") patch.undone_at = new Date().toISOString();
+    const { error } = await this.supabase.from("finance_imports").update(patch).eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+  }
 }

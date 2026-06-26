@@ -222,6 +222,12 @@ export interface IStorage {
   // Bulk delete all user data (preserves profiles)
   deleteAllUserData(): Promise<{ deleted: Record<string, number> }>;
 
+  // Finance imports ("Import from ChatGPT") — batch history + undo.
+  createFinanceImport(rec: import("./finance-import").FinanceImportRecordInput): Promise<import("./finance-import").FinanceImportRecord>;
+  listFinanceImports(limit?: number): Promise<import("./finance-import").FinanceImportRecord[]>;
+  getFinanceImport(id: string): Promise<import("./finance-import").FinanceImportRecord | null>;
+  setFinanceImportStatus(id: string, status: "committed" | "undone"): Promise<void>;
+
   // Liabilities (Phase 1)
   getLiabilityAssetLinks(liabilityProfileId?: string): Promise<import("@shared/schema").LiabilityAssetLink[]>;
   getLiabilityAssetLinksForAsset(assetProfileId: string): Promise<import("@shared/schema").LiabilityAssetLink[]>;
@@ -2117,6 +2123,24 @@ export class MemStorage implements IStorage {
     const copied = source.map(b => ({ ...b, id: crypto.randomUUID() }));
     this.budgetStore.set(toMonth, copied);
     return copied.length;
+  }
+
+  // Finance imports (in-memory; MemStorage is dev-only).
+  private financeImports = new Map<string, any>();
+  async createFinanceImport(rec: any) {
+    const row = { ...rec, createdAt: new Date().toISOString(), undoneAt: null };
+    this.financeImports.set(rec.id, row);
+    return row;
+  }
+  async listFinanceImports(limit = 50) {
+    return Array.from(this.financeImports.values())
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+      .slice(0, limit);
+  }
+  async getFinanceImport(id: string) { return this.financeImports.get(id) || null; }
+  async setFinanceImportStatus(id: string, status: "committed" | "undone") {
+    const row = this.financeImports.get(id);
+    if (row) { row.status = status; if (status === "undone") row.undoneAt = new Date().toISOString(); }
   }
 
   // Reminder stubs

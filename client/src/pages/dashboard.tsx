@@ -14,6 +14,7 @@ import {
   type RecurrenceRule,
 } from "@shared/recurrence";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
+import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { computeNetWorth } from "@shared/net-worth";
 import { computeNowItems, type NowItem } from "@shared/now-rank";
@@ -6108,6 +6109,7 @@ export default function DashboardPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
+  const [chatgptImportOpen, setChatgptImportOpen] = useState(false);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   // Keep dashboard filter state in lockstep with the global filter store — prevents
@@ -6464,6 +6466,9 @@ export default function DashboardPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setChatgptImportOpen(true)} data-testid="btn-refresh-from-chatgpt">
+                <Sparkles className="h-4 w-4 mr-2" /> Refresh from ChatGPT
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
                 <Settings className="h-4 w-4 mr-2" /> Customize
               </DropdownMenuItem>
@@ -6541,6 +6546,9 @@ export default function DashboardPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Import from ChatGPT */}
+      <ChatGPTImportDialog open={chatgptImportOpen} onOpenChange={setChatgptImportOpen} />
 
       {/* Customize Dialog */}
       <CustomizeDialog open={customizeOpen} onOpenChange={setCustomizeOpen}

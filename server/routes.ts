@@ -10,6 +10,8 @@ import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "
 import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { selfIdsFrom } from "@shared/scope";
+import { validateFinanceImport } from "@shared/finance-import-schema";
+import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 
@@ -4026,6 +4028,95 @@ Rules:
     if (!fromMonth || !toMonth) return res.status(400).json({ error: "fromMonth and toMonth required" });
     const count = await storage.copyBudgetsToMonth(fromMonth, toMonth);
     res.json({ copied: count, toMonth });
+  }));
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Import from ChatGPT — finance import engine
+  // (prompt → paste → validate → preview → atomic commit → history → undo)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // Resolve the single profile an import is scoped to: the caller's selection,
+  // validated to belong to THIS user; falls back to the self profile. Never lets
+  // an import target a profile the user doesn't own (cross-user/profile guard).
+  async function resolveImportProfileId(req: any): Promise<string> {
+    const requested = (req.body?.profileId ?? req.query?.profileId) as string | undefined;
+    if (requested && typeof requested === "string") {
+      const owned = await storage.getProfile(requested).catch(() => null);
+      if (owned) return owned.id;
+    }
+    const self = await storage.getSelfProfile?.();
+    if (self) return self.id;
+    const all = await storage.getProfiles();
+    if (all.length > 0) return all[0].id;
+    throw new Error("No profile available to import into. Create a profile first.");
+  }
+
+  // Generate the strict ChatGPT prompt seeded with the user's current finance state.
+  app.post("/api/finance-import/prompt", asyncHandler(async (req, res) => {
+    const profileId = await resolveImportProfileId(req);
+    const [profiles, obligations, history] = await Promise.all([
+      storage.getProfiles(),
+      storage.getObligations().catch(() => []),
+      storage.listFinanceImports(1).catch(() => []),
+    ]);
+    const byType = (t: string) => profiles.filter((p: any) => p.type === t).map((p: any) => p.name);
+    const subs = obligations.filter((o: any) => o.kind === "subscription").map((o: any) => o.name);
+    const bills = obligations.filter((o: any) => o.kind !== "subscription").map((o: any) => o.name);
+    const month = getUserCurrentMonth(getTimezone(req));
+    const budgets = (await storage.getBudgets(month).catch(() => [])).map((b: any) => b.category);
+    const profile = profiles.find((p: any) => p.id === profileId);
+    const prompt = buildImportPrompt({
+      accounts: byType("account"),
+      subscriptions: subs,
+      budgets,
+      liabilities: [...byType("liability"), ...byType("loan"), ...bills],
+      assets: [...byType("asset"), ...byType("property"), ...byType("vehicle"), ...byType("investment")],
+      lastImportAt: history[0]?.createdAt || null,
+      profileName: profile?.name || "Me",
+      baseCurrency: "USD",
+    });
+    res.json({ prompt, profileId, profileName: profile?.name || "Me" });
+  }));
+
+  // Validate + dry-run: returns the diff (new/duplicate/update/warnings) WITHOUT writing.
+  app.post("/api/finance-import/preview", asyncHandler(async (req, res) => {
+    const profileId = await resolveImportProfileId(req);
+    const raw = typeof req.body?.json === "string" ? req.body.json : JSON.stringify(req.body?.json ?? "");
+    const validation = validateFinanceImport(raw);
+    if (!validation.ok || !validation.data) {
+      return res.status(422).json({ ok: false, errors: validation.errors });
+    }
+    const plan = await planImport(storage, validation.data, profileId);
+    res.json({ ok: true, profileId, recordCount: validation.recordCount, plan });
+  }));
+
+  // Validate + commit atomically. Re-validates server-side (never trusts the client preview).
+  app.post("/api/finance-import/commit", asyncHandler(async (req, res) => {
+    const profileId = await resolveImportProfileId(req);
+    const raw = typeof req.body?.json === "string" ? req.body.json : JSON.stringify(req.body?.json ?? "");
+    const validation = validateFinanceImport(raw);
+    if (!validation.ok || !validation.data) {
+      return res.status(422).json({ ok: false, errors: validation.errors });
+    }
+    const plan = await planImport(storage, validation.data, profileId);
+    const result = await applyImport(storage, validation.data, profileId, plan);
+    res.json({ ok: true, batchId: result.batchId, summary: result.summary, plan, profileId });
+  }));
+
+  // Import history (most recent first).
+  app.get("/api/finance-import/history", asyncHandler(async (_req, res) => {
+    const items = await storage.listFinanceImports(50).catch(() => []);
+    res.json({ items });
+  }));
+
+  // Undo a committed import — deletes every row it created.
+  app.post("/api/finance-import/:id/undo", asyncHandler(async (req, res) => {
+    try {
+      const result = await undoImport(storage, req.params.id);
+      res.json({ ok: true, removed: result.removed });
+    } catch (e: any) {
+      res.status(404).json({ ok: false, error: e?.message || "Import not found" });
+    }
   }));
 
   // ---- Expenses ----
