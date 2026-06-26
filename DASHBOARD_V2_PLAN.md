@@ -195,12 +195,19 @@ and hubs. Persist via existing layout preference.
 - **Optional:** fold the AI 3-state into `/api/dashboard-enhanced` or a tiny
   `/api/briefing` so the homepage stays one round-trip.
 
-## Open decisions (need your call)
-1. **Recent Activity:** right rail, collapsible block, or its own tab?
-2. **Default mode:** Executive, or Finance-first given your data is finance-heavy?
-3. **Now Queue depth:** fixed top 5, or "top 5 + show N more"?
-4. **Modes in v1**, or ship the static Executive layout first and add modes in
-   a fast-follow?
+## Decisions (locked 2026-06-26)
+- **Build scope:** plan only for now — do not implement until explicitly asked.
+- **Default mode:** **Executive (balanced)** — top urgency + 6 metrics + 3 trends.
+- **Recent Activity + full lists:** **collapsible block at the bottom** (the
+  `feed` block), below the domain hubs. Not a separate tab, not a right rail.
+- **Dashboard modes:** **fast-follow**, NOT in v1. Ship the static Executive
+  layout first (Phases 1–4); add the mode switcher + ranking weights + pinning
+  afterward (Phase 5).
+
+### Still open (decide at build time, sensible defaults noted)
+- **Now Queue depth:** default to **top 5 + "show N more"**.
+- Whether the AI 3-state resolver ships server-side or client-side first
+  (default: client-side in Phase 2, fold into an endpoint later).
 
 ## Definition of done (v1 = Phases 1–3)
 The homepage answers exactly three questions, shows **one** urgency queue, the
