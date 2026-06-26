@@ -285,7 +285,7 @@ function MiniStat({
   const accentColor = accent ? `hsl(${accent})` : color;
   return (
     <div
-      className={`relative flex flex-col p-2.5 rounded-xl border min-h-[72px] overflow-hidden card-lift ${
+      className={`relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden card-lift ${
         onClick ? "cursor-pointer active:scale-[0.97] transition-all hover:-translate-y-0.5 hover:shadow-md" : ""
       }`}
       onClick={onClick}
@@ -294,9 +294,8 @@ function MiniStat({
       onKeyDown={onClick ? onEnterOrSpace(onClick) : undefined}
       data-testid={`stat-card-${label.toLowerCase().replace(/\s+/g, "-")}`}
       style={accent ? {
-        borderColor: `hsl(${accent} / 0.30)`,
-        background: `linear-gradient(135deg, hsl(${accent} / 0.14) 0%, hsl(var(--card)) 75%)`,
-      } : { borderColor: 'hsl(var(--border) / 0.5)' }}
+        background: `linear-gradient(135deg, hsl(${accent} / 0.10) 0%, transparent 60%)`,
+      } : {}}
     >
       {/* Top accent strip */}
       {accent && <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />}
@@ -335,6 +334,14 @@ function MiniStat({
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
       {sub && <p className="text-[9px] text-muted-foreground/60 leading-tight mt-0.5 truncate w-full relative z-10">{sub}</p>}
+      {/* Bottom accent dashes (matches the mockup's tile footer) */}
+      {accent && !sparkData && (
+        <div className="mt-auto flex gap-1 pt-1.5 relative z-10">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-1 flex-1 rounded-full" style={{ background: `hsl(${accent} / ${i === 0 ? 1 : 0.25})` }} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

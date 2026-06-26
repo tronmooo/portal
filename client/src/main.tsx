@@ -3,8 +3,10 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 // P1.3: self-hosted fonts (were render-blocking Google Fonts CDN links in
-// index.html). Inter Variable registers as font-family "Inter Variable";
-// index.css lists it ahead of "Inter" in --font-sans.
+// index.html). Plus Jakarta Sans Variable is the primary UI typeface (matches
+// the dashboard design); Inter is kept as a fallback. Both register their own
+// font-family names; index.css lists Plus Jakarta first in --font-sans.
+import "@fontsource-variable/plus-jakarta-sans";
 import "@fontsource-variable/inter";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";
