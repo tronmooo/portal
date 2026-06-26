@@ -1086,6 +1086,38 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                     </div>
                   </div>
                 )}
+                {/* Donut — spending by category */}
+                {categories.length > 0 && total > 0 && (
+                  <div className="relative h-36">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={categories.map(([cat, amt]) => ({ name: cat, value: amt as number }))}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={42}
+                          outerRadius={62}
+                          paddingAngle={2}
+                          stroke="none"
+                        >
+                          {categories.map(([cat], i) => (
+                            <Cell key={cat} fill={SPEND_COLORS[i % SPEND_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          formatter={(v: any, n: any) => [formatMoney(v as number), n]}
+                          contentStyle={{ fontSize: 11, borderRadius: 8, padding: "4px 8px" }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                      <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Spent</p>
+                      <p className="text-sm font-bold tabular-nums">{formatMoney(total)}</p>
+                    </div>
+                  </div>
+                )}
                 {/* Top category callout */}
                 {topCategory && total > 0 && (
                   <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-amber-500/5 border border-amber-500/20">
