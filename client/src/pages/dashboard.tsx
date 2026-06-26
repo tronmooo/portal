@@ -285,7 +285,7 @@ function MiniStat({
   const accentColor = accent ? `hsl(${accent})` : color;
   return (
     <div
-      className={`relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden card-lift ${
+      className={`relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden card-lift ${
         onClick ? "cursor-pointer active:scale-[0.97] transition-all hover:-translate-y-0.5 hover:shadow-md" : ""
       }`}
       onClick={onClick}
@@ -330,7 +330,7 @@ function MiniStat({
         )}
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
+        <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
       {sub && <p className="text-[9px] text-muted-foreground/60 leading-tight mt-0.5 truncate w-full relative z-10">{sub}</p>}
@@ -382,7 +382,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
   const animatedCount = useCountUp(count);
   const fillPct = Math.min(100, Math.round((count / Math.max(count, 50)) * 100));
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(262 65% 62% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-open-tasks"
       role="button" tabIndex={0} aria-label="Open tasks" onKeyDown={onEnterOrSpace(onClick)}>
@@ -393,7 +393,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
         </div>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
+        <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Open Tasks</p>
       {/* Fill bar */}
@@ -413,7 +413,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
   const bars = finSnap?.dailySpend?.slice(-7) || Array.from({length:7}, (_,i) => i === 6 ? amount * 0.3 : Math.random() * amount * 0.15);
   const maxBar = Math.max(...bars, 1);
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-monthly-spend"
       role="button" tabIndex={0} aria-label="Monthly spend" onKeyDown={onEnterOrSpace(onClick)}>
@@ -427,7 +427,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
         </span>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
+        <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
       {/* Mini bar chart */}
@@ -446,14 +446,14 @@ function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct:
   const animatedPct = useCountUp(pct);
   const dash = (pct / 100) * circ;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-habits-today"
       role="button" tabIndex={0} aria-label="Habits today" onKeyDown={onEnterOrSpace(onClick)}>
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
       <div className="flex items-start justify-between gap-2 relative z-10">
         <div>
-          <div className="text-lg font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
+          <div className="text-sm font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5">Habits Today</p>
           <p className="text-[9px] text-muted-foreground/60">{totalHabits} tracked</p>
         </div>
@@ -474,7 +474,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
   const dots = Array.from({length:7}, (_,i) => i >= (7 - Math.min(streak, 7)));
   const moodConf = mood ? MOOD_CONFIG[mood as MoodLevel] : null;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(310 50% 58% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-journal-streak"
       role="button" tabIndex={0} aria-label="Journal streak" onKeyDown={onEnterOrSpace(onClick)}>
@@ -485,7 +485,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
         </div>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
+        <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
       <p className="text-[9px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{streak > 0 ? `${streak}-day streak!` : "Keep it going!"}</p>
@@ -508,7 +508,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   // state is blue (all-clear) — the popup is where the user takes action.
   const accent = isUrgent ? '0 72% 52%' : '205 90% 58%';
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, transparent 60%)`, borderColor: isUrgent ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.4)' }}
       data-testid="stat-card-expiring-docs"
       role="button" tabIndex={0} aria-label="Expiring documents" onKeyDown={onEnterOrSpace(onClick)}>
@@ -520,7 +520,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
         {isUrgent && <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1 py-0.5 rounded">{expiredCount} EXPIRED</span>}
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none tabular-nums" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
+        <span className="text-sm font-bold metric-value tracking-tight leading-none tabular-nums" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
       {count === 0 ? (
@@ -1011,7 +1011,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
   return (
     <>
       <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
-        <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
+        <div className="grid grid-cols-6 gap-1.5">
           <KPITaskCard count={safeStats.activeTasks} onClick={() => setPopup("tasks")} />
           {/* Bug fix: prefer financeSnapshot.totalMonthlySpend (same source as the drilldown popup)
                over stats.monthlySpend (/api/stats) so the KPI card and popup show identical totals. */}
@@ -2126,6 +2126,8 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
   const [, navigate] = useLocation();
   const [addingHabit, setAddingHabit] = useState(false);
   const [newHabitName, setNewHabitName] = useState('');
+  const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'year'>('today');
+  const [timeFilter, setTimeFilter] = useState<'all' | 'morning' | 'afternoon' | 'evening' | 'night'>('all');
   // Force refetch when popup opens — prevents stale cache after AI chat mutations
   useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); } }, [open]);
 
@@ -2192,48 +2194,153 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
     },
     onSettled: () => {
       invalidateDomain("habits");
-      toast({ title: "Habit checked in" });
     },
+  });
+
+  // Un-check (toggle off) today's completion. The design's check button toggles,
+  // so tapping a completed habit must remove today's check-in.
+  const deleteCheckinMutation = useMutation({
+    mutationFn: ({ id, checkinId }: { id: string; checkinId: string }) =>
+      apiRequest("DELETE", `/api/habits/${id}/checkin/${checkinId}`),
+    onMutate: async ({ id }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      const prevStats = queryClient.getQueryData<any>(["/api/stats", filterMode, ...filterIds]);
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+        (old || []).map((h: any) => h.id === id
+          ? { ...h, checkins: (h.checkins || []).filter((c: any) => c.date !== today) }
+          : h)
+      );
+      const updated = queryClient.getQueryData<any[]>(["/api/habits", filterMode, ...filterIds]);
+      if (updated) recomputeStatsHabitRate(updated);
+      return { prev, prevStats };
+    },
+    onError: (_e: any, _v: any, ctx: any) => {
+      if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
+      if (ctx?.prevStats !== undefined) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], ctx.prevStats);
+      toast({ title: "Failed to update habit", variant: "destructive" });
+    },
+    onSettled: () => { invalidateDomain("habits"); },
   });
 
   const active = useMemo(() => habits.filter((h: any) => !h.archivedAt), [habits]);
   const VIVID = ['#6C5CE7','#E84393','#E55353','#F6A623','#2ECC71','#3498DB','#E67E22','#9B59B6','#1ABC9C','#E74C3C'];
 
-  // Group by category if available, else default group
-  const grouped = useMemo(() => {
-    const g: Record<string, any[]> = {};
-    active.forEach((h: any) => {
-      const cat = (h as any).category || h.group || 'Daily';
-      if (!g[cat]) g[cat] = [];
-      g[cat].push(h);
-    });
-    return g;
-  }, [active]);
+  // ── Derived view state for the redesigned Habits screen ──────────────────
+  const dateKey = (d: Date) => d.toLocaleDateString('en-CA');
+  const periodDays = period === 'today' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 365;
+  const last7 = useMemo(() => {
+    const arr: string[] = []; const t = new Date();
+    for (let i = 6; i >= 0; i--) { const d = new Date(t); d.setDate(t.getDate() - i); arr.push(dateKey(d)); }
+    return arr;
+  }, []);
+  const windowDates = useMemo(() => {
+    const arr: string[] = []; const t = new Date();
+    for (let i = periodDays - 1; i >= 0; i--) { const d = new Date(t); d.setDate(t.getDate() - i); arr.push(dateKey(d)); }
+    return arr;
+  }, [periodDays]);
+  const isDone = (h: any, dk: string) => (h.checkins || []).some((c: any) => c.date === dk);
+  const todayCheckinId = (h: any): string | undefined => (h.checkins || []).find((c: any) => c.date === today)?.id;
+  const togglePending = checkinMutation.isPending || deleteCheckinMutation.isPending;
+  const toggleToday = (h: any) => {
+    const cid = todayCheckinId(h);
+    if (cid) deleteCheckinMutation.mutate({ id: h.id, checkinId: cid });
+    else checkinMutation.mutate({ id: h.id });
+  };
+  // Time-of-day bucket derived from the habit's most recent check-in timestamp
+  // (there's no time field on a Habit, so we infer it from real check-in data).
+  const bucketOf = (h: any): string | null => {
+    const cs = h.checkins || []; if (!cs.length) return null;
+    const last = cs[cs.length - 1];
+    const hr = new Date(last.timestamp || `${last.date}T12:00:00`).getHours();
+    if (hr >= 5 && hr < 12) return 'morning';
+    if (hr >= 12 && hr < 17) return 'afternoon';
+    if (hr >= 17 && hr < 21) return 'evening';
+    return 'night';
+  };
+  const getEmoji = (name: string) => {
+    const n = (name || '').toLowerCase();
+    if (n.includes('meditat') || n.includes('mindful')) return '🧘';
+    if (n.includes('journal') || n.includes('write') || n.includes('diary')) return '📝';
+    if (n.includes('water') || n.includes('hydrat')) return '💧';
+    if (n.includes('run') || n.includes('jog')) return '🏃';
+    if (n.includes('exercise') || n.includes('workout') || n.includes('gym') || n.includes('lift')) return '💪';
+    if (n.includes('walk') || n.includes('step')) return '👣';
+    if (n.includes('read') || n.includes('book')) return '📚';
+    if (n.includes('sleep') || n.includes('bed')) return '😴';
+    if (n.includes('eat') || n.includes('food') || n.includes('meal') || n.includes('sugar')) return '🥗';
+    if (n.includes('vitamin') || n.includes('pill') || n.includes('medication') || n.includes('medicine')) return '💊';
+    if (n.includes('teeth') || n.includes('brush') || n.includes('dental')) return '🦷';
+    if (n.includes('guitar') || n.includes('music') || n.includes('piano') || n.includes('practic')) return '🎸';
+    if (n.includes('wake') || n.includes('morning')) return '☀️';
+    if (n.includes('stretch') || n.includes('yoga')) return '🤸';
+    return '⭐';
+  };
+  const visible = useMemo(
+    () => active
+      .filter((h: any) => timeFilter === 'all' || bucketOf(h) === timeFilter)
+      .sort((a: any, b: any) => (b.currentStreak || 0) - (a.currentStreak || 0) || (a.name || '').localeCompare(b.name || '')),
+    [active, timeFilter]
+  );
+
+  // Summary metrics for the selected period.
+  const totalActive = active.length;
+  const completedInWindow = active.reduce((s: number, h: any) => s + windowDates.filter((dk) => isDone(h, dk)).length, 0);
+  const possible = totalActive * periodDays;
+  const overallPct = possible > 0 ? Math.round((completedInWindow / possible) * 100) : 0;
+  const completedToday = active.filter((h: any) => isDone(h, today)).length;
+  const bestStreak = active.reduce((m: number, h: any) => Math.max(m, h.currentStreak || 0), 0);
+  const allTimeCheckins = active.reduce((s: number, h: any) => s + (h.checkins || []).length, 0);
+  const completedStat = period === 'today' ? completedToday : completedInWindow;
+
+  const STAT_CHIPS = [
+    { Icon: CheckCircle2, color: '155 60% 48%', value: completedStat, label: 'Completed' },
+    { Icon: Flame, color: '28 90% 55%', value: bestStreak, label: 'Day Streak' },
+    { Icon: Target, color: '262 70% 62%', value: totalActive, label: 'Habits' },
+    { Icon: ListChecks, color: '205 90% 58%', value: allTimeCheckins, label: 'Check-ins' },
+  ];
+  const TIME_FILTERS = [
+    { key: 'all', label: 'All' }, { key: 'morning', label: '☀️ Morning' },
+    { key: 'afternoon', label: 'Afternoon' }, { key: 'evening', label: 'Evening' }, { key: 'night', label: '🌙 Night' },
+  ] as const;
+  const ringR = 26, ringC = 2 * Math.PI * ringR;
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingHabit(false); setNewHabitName(''); } }}>
-      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-md flex flex-col p-0 gap-0 rounded-2xl max-h-[92vh] overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-border/40">
-          <span className="font-bold text-base text-foreground">Today's Habits</span>
+        <div className="flex items-center justify-between px-4 pt-3 pb-2">
+          <span className="w-9" />
+          <span className="font-bold text-lg text-foreground">Habits</span>
           <div className="flex items-center gap-1">
             <button
               onClick={() => setAddingHabit(v => !v)}
-              className={`w-10 h-10 flex items-center justify-center rounded-full transition-colors ${
-                addingHabit ? 'bg-primary text-primary-foreground' : 'hover:bg-muted active:bg-muted/80 text-muted-foreground'
-              }`}
+              aria-label="Add habit"
+              className={`w-9 h-9 flex items-center justify-center rounded-full transition-colors ${addingHabit ? 'bg-primary text-primary-foreground' : 'bg-primary/15 text-primary hover:bg-primary/25'}`}
             >
               <Plus className="h-5 w-5" />
             </button>
-            <DialogClose className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
+            <DialogClose className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
               <X className="h-5 w-5" />
             </DialogClose>
           </div>
         </div>
 
+        {/* Period tabs */}
+        <div className="px-3">
+          <div className="flex gap-1 rounded-xl bg-muted/40 p-1">
+            {(['today', 'week', 'month', 'year'] as const).map((p) => (
+              <button key={p} onClick={() => setPeriod(p)}
+                className={`flex-1 rounded-lg py-1.5 text-xs font-semibold capitalize transition-colors ${period === p ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Inline add habit form */}
         {addingHabit && (
-          <div className="px-3 pt-3 pb-1">
+          <div className="px-3 pt-2.5">
             <div className="flex gap-2">
               <input
                 autoFocus
@@ -2257,129 +2364,124 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
           </div>
         )}
 
-        {/* Native scroll — NOT ScrollArea (broken on iOS Safari in dialogs) */}
-        <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '70vh' }}>
+        {/* Summary: overall ring + stat chips */}
+        <div className="px-3 pt-3">
+          <div className="flex items-center gap-3 rounded-2xl border border-border/50 bg-card/60 p-3">
+            <div className="relative shrink-0" style={{ width: 64, height: 64 }}>
+              <svg width="64" height="64" className="-rotate-90">
+                <circle cx="32" cy="32" r={ringR} fill="none" stroke="hsl(var(--muted))" strokeWidth="6" />
+                <circle cx="32" cy="32" r={ringR} fill="none" stroke="hsl(262 70% 60%)" strokeWidth="6" strokeLinecap="round"
+                  strokeDasharray={`${(overallPct / 100) * ringC} ${ringC}`}
+                  style={{ transition: 'stroke-dasharray 0.7s cubic-bezier(0.34,1.56,0.64,1)' }} />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className="text-sm font-bold tabular-nums leading-none">{overallPct}%</span>
+                <span className="text-[8px] uppercase tracking-wider text-muted-foreground mt-0.5">Overall</span>
+              </div>
+            </div>
+            <div className="grid flex-1 grid-cols-2 gap-x-2 gap-y-2.5">
+              {STAT_CHIPS.map(({ Icon, color, value, label }) => (
+                <div key={label} className="flex items-center gap-1.5">
+                  <Icon className="h-4 w-4 shrink-0" style={{ color: `hsl(${color})` }} />
+                  <div className="leading-none min-w-0">
+                    <div className="text-sm font-bold tabular-nums">{value}</div>
+                    <div className="text-[9px] text-muted-foreground truncate">{label}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Time-of-day filter chips */}
+        <div className="px-3 pt-2.5 pb-1">
+          <div className="flex flex-wrap gap-1.5">
+            {TIME_FILTERS.map((f) => (
+              <button key={f.key} onClick={() => setTimeFilter(f.key)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${timeFilter === f.key ? 'bg-primary text-primary-foreground' : 'bg-muted/50 text-muted-foreground hover:bg-muted'}`}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Habit list — native scroll (ScrollArea is broken on iOS Safari in dialogs) */}
+        <div className="flex-1 overflow-y-auto overscroll-contain px-3 pb-2" style={{ WebkitOverflowScrolling: 'touch' }}>
           {isLoading ? (
-            <div className="px-3 space-y-2 py-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-14 rounded-2xl" />)}</div>
+            <div className="space-y-2 py-2">{[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-16 rounded-2xl" />)}</div>
           ) : active.length === 0 ? (
             <div className="py-10 text-center px-4">
               <Flame className="h-12 w-12 text-muted-foreground/20 mx-auto mb-3" />
               <p className="text-sm text-muted-foreground mb-4">No habits tracked yet</p>
               <Button onClick={() => setAddingHabit(true)}>Add your first habit</Button>
             </div>
+          ) : visible.length === 0 ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">No habits in this time block yet.</p>
           ) : (
-            <div className="px-3 pb-4">
-              {Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([category, items]) => (
-                <div key={category}>
-                  {/* Category header — orange text like Habituator */}
-                  <div className="flex items-center gap-2 py-2 px-1">
-                    <span className="text-sm font-bold" style={{ color: '#F6A623' }}>{category}</span>
-                    <ChevronDown className="h-4 w-4" style={{ color: '#F6A623' }} />
-                  </div>
-
-                  <div className="space-y-2">
-                    {items.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((h: any, idx: number) => {
-                      const color = (h.color && h.color !== '#4F98A3') ? h.color : VIVID[h.id.charCodeAt(0) % VIVID.length];
-                      const target = (h as any).targetPerDay || 1;
-                      const todayCount = (h.checkins || []).filter((c: any) => c.date === today).length;
-                      const allDone = todayCount >= target;
-                      const streak = h.currentStreak || 0;
-                      // emoji based on name keywords
-                      const getEmoji = (name: string) => {
-                        const n = name.toLowerCase();
-                        if (n.includes('meditat') || n.includes('mindful')) return '🧘';
-                        if (n.includes('journal') || n.includes('write') || n.includes('diary')) return '📝';
-                        if (n.includes('water') || n.includes('drink') || n.includes('hydrat')) return '💧';
-                        if (n.includes('run') || n.includes('jog')) return '🏃';
-                        if (n.includes('exercise') || n.includes('workout') || n.includes('gym') || n.includes('lift')) return '💪';
-                        if (n.includes('walk') || n.includes('step')) return '👣';
-                        if (n.includes('read') || n.includes('book')) return '📚';
-                        if (n.includes('sleep') || n.includes('bed')) return '😴';
-                        if (n.includes('eat') || n.includes('food') || n.includes('meal')) return '🥗';
-                        if (n.includes('vitamin') || n.includes('pill') || n.includes('medication') || n.includes('medicine')) return '💊';
-                        if (n.includes('bathroom') || n.includes('toilet')) return '🚿';
-                        if (n.includes('teeth') || n.includes('brush') || n.includes('dental')) return '🦷';
-                        if (n.includes('guitar') || n.includes('music') || n.includes('piano') || n.includes('practic')) return '🎸';
-                        if (n.includes('alcohol') || n.includes('drink') || n.includes('wine') || n.includes('beer')) return '🍷';
-                        if (n.includes('smok') || n.includes('cigarett')) return '🚬';
-                        if (n.includes('phone') || n.includes('screen')) return '📱';
-                        if (n.includes('rex') || n.includes('dog') || n.includes('pet')) return '🐕';
-                        if (n.includes('stretch') || n.includes('yoga')) return '🤸';
-                        return '⭐';
-                      };
-                      const emoji = getEmoji(h.name);
-
-                      return (
-                        // FULL SOLID COLOR ROW — exact Habituator style
-                        <div
-                          key={h.id}
-                          className="rounded-2xl overflow-hidden relative"
-                          style={{ background: `linear-gradient(135deg, ${color}, ${color}cc)`, boxShadow: `0 3px 12px ${color}40` }}
-                        >
-                          <div className="flex items-center gap-3 px-4 py-3">
-                            {/* Emoji icon */}
-                            <span className="text-xl shrink-0">{emoji}</span>
-
-                            {/* Name + dots */}
-                            <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-sm text-white truncate">
-                                {h.name}
-                                {streak > 0 && <span className="ml-2 text-white/70 text-xs">🔥{streak}</span>}
-                              </p>
-                              {/* CHECK-IN DOTS — filled white = done, empty ring = tap to log */}
-                              <div className="flex items-center gap-1.5 mt-1.5">
-                                {Array.from({ length: Math.min(target, 10) }).map((_, i) => {
-                                  const filled = i < todayCount;
-                                  return (
-                                    <button
-                                      key={i}
-                                      onClick={() => !filled && checkinMutation.mutate({ id: h.id })}
-                                      disabled={filled || checkinMutation.isPending}
-                                      className="touch-manipulation active:scale-90 transition-transform disabled:cursor-default flex items-center justify-center"
-                                      style={{ minWidth: 44, minHeight: 44 }}
-                                    >
-                                      <div
-                                        className="rounded-full border-2 transition-all duration-150"
-                                        style={{
-                                          width: 24, height: 24,
-                                          backgroundColor: filled ? 'rgba(255,255,255,0.9)' : 'transparent',
-                                          borderColor: filled ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.5)',
-                                        }}
-                                      />
-                                    </button>
-                                  );
-                                })}
-                                <span className="text-[11px] text-white/60 ml-1">
-                                  {allDone ? '✓' : `${todayCount}/${target}`}
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Done checkmark or empty ring — tap to check in */}
-                            <button
-                              onClick={() => !allDone && checkinMutation.mutate({ id: h.id })}
-                              disabled={allDone || checkinMutation.isPending}
-                              className="min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0 touch-manipulation"
-                            >
-                              <div
-                                className="w-9 h-9 rounded-full border-2 flex items-center justify-center transition-all"
-                                style={{
-                                  backgroundColor: allDone ? 'rgba(255,255,255,0.9)' : 'transparent',
-                                  borderColor: allDone ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.4)',
-                                }}
-                              >
-                                {allDone && <Check className="h-4 w-4" style={{ color }} strokeWidth={3} />}
-                              </div>
-                            </button>
-                          </div>
+            <div className="space-y-2 pt-1">
+              {visible.map((h: any) => {
+                const color = (h.color && h.color !== '#4F98A3') ? h.color : VIVID[h.id.charCodeAt(0) % VIVID.length];
+                const done = isDone(h, today);
+                const streak = h.currentStreak || 0;
+                const emoji = h.icon || getEmoji(h.name);
+                const sub = (h.targetPerDay || 1) > 1 ? `${h.targetPerDay}× daily` : (h.frequency === 'weekly' ? 'Weekly' : 'Daily');
+                return (
+                  <div key={h.id} className="flex items-center gap-3 rounded-2xl border border-border/50 bg-card/60 px-3 py-2.5">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg"
+                      style={{ background: `${color}22`, border: `1px solid ${color}55` }}>
+                      <span>{emoji}</span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold truncate">{h.name}</p>
+                      <p className="text-[11px] text-muted-foreground truncate">{sub}</p>
+                      <div className="mt-1.5 flex gap-1">
+                        {last7.map((dk) => (
+                          <span key={dk} className="h-2 w-2 rounded-full" title={dk}
+                            style={{ background: isDone(h, dk) ? 'hsl(155 60% 48%)' : 'hsl(var(--muted))' }} />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <span className="flex items-center gap-0.5 text-[11px] font-semibold tabular-nums leading-none"
+                        style={{ color: streak > 0 ? 'hsl(28 90% 55%)' : 'hsl(var(--muted-foreground))' }}>
+                        {streak} {streak > 0 ? '🔥' : ''}
+                      </span>
+                      <span className="text-[8px] uppercase tracking-wide text-muted-foreground/70 leading-none">day streak</span>
+                      <button onClick={() => toggleToday(h)} disabled={togglePending}
+                        aria-label={done ? 'Mark not done today' : 'Mark done today'}
+                        className="touch-manipulation active:scale-90 transition-transform mt-0.5"
+                        style={{ minWidth: 40, minHeight: 40 }}>
+                        <div className="flex h-7 w-7 items-center justify-center rounded-full border-2 transition-all"
+                          style={{
+                            background: done ? 'hsl(262 70% 58%)' : 'transparent',
+                            borderColor: done ? 'hsl(262 70% 58%)' : 'hsl(var(--muted-foreground) / 0.5)',
+                          }}>
+                          {done && <Check className="h-4 w-4 text-white" strokeWidth={3} />}
                         </div>
-                      );
-                    })}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
+        </div>
+
+        {/* Motivational footer */}
+        <div className="px-3 pb-3 pt-1">
+          <div className="flex items-center gap-3 rounded-2xl px-4 py-3"
+            style={{ background: 'linear-gradient(135deg, hsl(262 70% 55% / 0.18), hsl(280 70% 55% / 0.05))' }}>
+            <Sparkles className="h-5 w-5 shrink-0" style={{ color: 'hsl(262 70% 62%)' }} />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">Small habits, big changes.</p>
+              <p className="text-xs text-muted-foreground">
+                {active.length === 0 ? 'Add your first habit to begin.'
+                  : overallPct >= 80 ? "You're doing great!"
+                  : overallPct > 0 ? 'Keep it up!'
+                  : 'Tap a habit to start your streak.'}
+              </p>
+            </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
