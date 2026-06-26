@@ -4876,18 +4876,31 @@ export class SupabaseStorage implements IStorage {
     const assetChildTypes = ASSET_PROFILE_TYPES;
     const liabilityChildTypes = LIABILITY_PROFILE_TYPES;
     const noFilterBreak = !fpIds || fpIds.length === 0;
-    // Ownership share for the selected filter, via the shared model. Nesting
-    // (parentProfileId) is NOT consulted — ownership is explicit links, else
-    // Self owns 100%. Selecting the asset/liability profile itself = full value.
+    // STRICT "explicitly-assigned" scope (product decision 2026-06): when a
+    // profile filter is active, an asset/liability counts toward the selected
+    // profile(s) ONLY when it is
+    //   • itself selected, OR
+    //   • nested under a selected profile (parentProfileId), OR
+    //   • explicitly owned by a selected profile (asset_party_links /
+    //     liability_profile_links).
+    // Unowned items NO LONGER default to Self under an active filter — that
+    // Self-100% default was exactly why filtering to the primary user still
+    // showed every unassigned asset/liability from across the whole account.
+    // To assign an unowned item, give it an owner (or nest it under a profile).
+    // "Everyone"/no-filter still values everything at 100%. Passing `null` as
+    // the self id to shareForParties disables the Self default, so an item with
+    // no explicit owner links contributes 0% under an active filter.
     const shareForAsset = (p: any): number => {
       if (noFilterBreak) return 100;
       if (fpIds!.includes(p.id)) return 100;
-      return shareForParties(fpIds!, assetLinksByAsset.get(p.id), selfId);
+      if (p.parentProfileId && fpIds!.includes(p.parentProfileId)) return 100;
+      return shareForParties(fpIds!, assetLinksByAsset.get(p.id), null);
     };
     const shareForLiability = (p: any): number => {
       if (noFilterBreak) return 100;
       if (fpIds!.includes(p.id)) return 100;
-      return shareForParties(fpIds!, liabLinksByLiability.get(p.id), selfId);
+      if (p.parentProfileId && fpIds!.includes(p.parentProfileId)) return 100;
+      return shareForParties(fpIds!, liabLinksByLiability.get(p.id), null);
     };
     const assetBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
