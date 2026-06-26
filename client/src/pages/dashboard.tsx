@@ -268,7 +268,7 @@ function MiniStat({
   const accentColor = accent ? `hsl(${accent})` : color;
   return (
     <div
-      className={`relative flex flex-col p-2.5 rounded-xl border min-h-[72px] overflow-hidden card-lift ${
+      className={`relative flex flex-col p-3 rounded-2xl border min-h-[96px] overflow-hidden card-lift ${
         onClick ? "cursor-pointer active:scale-[0.97] transition-all hover:-translate-y-0.5 hover:shadow-md" : ""
       }`}
       onClick={onClick}
@@ -314,7 +314,7 @@ function MiniStat({
         )}
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
+        <span className="text-xl font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
     </div>
@@ -357,7 +357,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
   const animatedCount = useCountUp(count);
   const fillPct = Math.min(100, Math.round((count / Math.max(count, 50)) * 100));
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-3 rounded-2xl border border-border/40 min-h-[96px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(262 65% 62% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-open-tasks"
       role="button" tabIndex={0} aria-label="Open tasks" onKeyDown={onEnterOrSpace(onClick)}>
@@ -368,7 +368,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
         </div>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
+        <span className="text-xl font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Open Tasks</p>
       {/* Fill bar */}
@@ -385,10 +385,15 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
 function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; trend: "up"|"down"|"flat"; enhanced: any; onClick: () => void }) {
   const animatedAmount = useCountUp(Math.round(amount));
   const finSnap = enhanced?.financeSnapshot;
-  const bars = finSnap?.dailySpend?.slice(-7) || Array.from({length:7}, (_,i) => i === 6 ? amount * 0.3 : Math.random() * amount * 0.15);
+  // Honest viz: only render daily bars when the server actually provides a
+  // per-day spend series. Previously this fell back to Math.random(), which
+  // fabricated a different chart on every render. No data → no chart.
+  const bars: number[] = Array.isArray(finSnap?.dailySpend) && finSnap.dailySpend.length > 0
+    ? finSnap.dailySpend.slice(-7)
+    : [];
   const maxBar = Math.max(...bars, 1);
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-3 rounded-2xl border border-border/40 min-h-[96px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-monthly-spend"
       role="button" tabIndex={0} aria-label="Monthly spend" onKeyDown={onEnterOrSpace(onClick)}>
@@ -402,15 +407,17 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
         </span>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
+        <span className="text-xl font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
-      {/* Mini bar chart */}
-      <div className="mt-1.5 flex items-end gap-0.5 h-5 relative z-10">
-        {bars.map((v: number, i: number) => (
-          <div key={i} className="flex-1 rounded-sm" style={{ height: `${Math.max(10, (v/maxBar)*100)}%`, background: i === bars.length-1 ? 'hsl(43 85% 52%)' : 'hsl(43 85% 52% / 0.35)' }} />
-        ))}
-      </div>
+      {/* Mini bar chart — only when a real per-day series exists */}
+      {bars.length > 0 && (
+        <div className="mt-1.5 flex items-end gap-0.5 h-5 relative z-10">
+          {bars.map((v: number, i: number) => (
+            <div key={i} className="flex-1 rounded-sm" style={{ height: `${Math.max(10, (v/maxBar)*100)}%`, background: i === bars.length-1 ? 'hsl(43 85% 52%)' : 'hsl(43 85% 52% / 0.35)' }} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -421,14 +428,14 @@ function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct:
   const animatedPct = useCountUp(pct);
   const dash = (pct / 100) * circ;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-3 rounded-2xl border border-border/40 min-h-[96px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-habits-today"
       role="button" tabIndex={0} aria-label="Habits today" onKeyDown={onEnterOrSpace(onClick)}>
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
       <div className="flex items-start justify-between gap-2 relative z-10">
         <div>
-          <div className="text-lg font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
+          <div className="text-xl font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5">Habits Today</p>
           <p className="text-[9px] text-muted-foreground/60">{totalHabits} tracked</p>
         </div>
@@ -449,7 +456,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
   const dots = Array.from({length:7}, (_,i) => i >= (7 - Math.min(streak, 7)));
   const moodConf = mood ? MOOD_CONFIG[mood as MoodLevel] : null;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border border-border/40 min-h-[80px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-3 rounded-2xl border border-border/40 min-h-[96px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(310 50% 58% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-journal-streak"
       role="button" tabIndex={0} aria-label="Journal streak" onKeyDown={onEnterOrSpace(onClick)}>
@@ -460,7 +467,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
         </div>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
+        <span className="text-xl font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
       {/* 7-day dots */}
@@ -482,7 +489,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   // the user takes action (snooze / open), so this tile no longer screams.
   const accent = isUrgent ? '0 72% 52%' : '25 80% 54%';
   return (
-    <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-3 rounded-2xl border min-h-[96px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, transparent 60%)`, borderColor: isUrgent ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.4)' }}
       data-testid="stat-card-expiring-docs"
       role="button" tabIndex={0} aria-label="Expiring documents" onKeyDown={onEnterOrSpace(onClick)}>
@@ -494,7 +501,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
         {isUrgent && <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1 py-0.5 rounded">{expiredCount} EXPIRED</span>}
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-lg font-bold metric-value tracking-tight leading-none tabular-nums" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
+        <span className="text-xl font-bold metric-value tracking-tight leading-none tabular-nums" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
       {mostOverdue && (
@@ -761,16 +768,30 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
         style={{ background: 'radial-gradient(130% 150% at 82% -10%, hsl(265 72% 32% / 0.6) 0%, transparent 55%), radial-gradient(120% 130% at 0% 110%, hsl(200 80% 32% / 0.4) 0%, transparent 50%), linear-gradient(160deg, hsl(245 46% 13%) 0%, hsl(240 42% 8%) 100%)' }}
         data-testid="hero-kpi-net-worth"
       >
+        {/* Scenic backdrop — night sky, a glowing portal, and a layered mountain
+            horizon, composed purely from CSS/SVG so there's no raster asset to ship. */}
+        <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-3xl" aria-hidden="true">
+          {/* starfield */}
+          <div className="absolute inset-0 opacity-70" style={{ backgroundImage: 'radial-gradient(1px 1px at 18% 28%, rgba(255,255,255,0.8) 0, transparent 100%), radial-gradient(1px 1px at 58% 18%, rgba(255,255,255,0.55) 0, transparent 100%), radial-gradient(1.5px 1.5px at 78% 38%, rgba(255,255,255,0.7) 0, transparent 100%), radial-gradient(1px 1px at 33% 58%, rgba(255,255,255,0.4) 0, transparent 100%), radial-gradient(1px 1px at 88% 62%, rgba(255,255,255,0.5) 0, transparent 100%), radial-gradient(1px 1px at 10% 72%, rgba(255,255,255,0.35) 0, transparent 100%), radial-gradient(1px 1px at 46% 40%, rgba(255,255,255,0.5) 0, transparent 100%)' }} />
+          {/* glowing portal */}
+          <div className="absolute -top-7 right-7 h-28 w-28 rounded-full blur-2xl" style={{ background: 'radial-gradient(circle, hsl(265 90% 66% / 0.55) 0%, hsl(282 90% 60% / 0.25) 42%, transparent 70%)' }} />
+          <div className="absolute top-3 right-[3.4rem] h-9 w-9 rounded-full blur-md" style={{ background: 'radial-gradient(circle, hsl(190 95% 78% / 0.85) 0%, transparent 72%)' }} />
+          {/* mountain / horizon silhouette */}
+          <svg className="absolute bottom-0 left-0 right-0 w-full" viewBox="0 0 100 22" preserveAspectRatio="none" style={{ height: 70 }}>
+            <path d="M0,22 L0,14 L12,9 L22,15 L34,6 L46,16 L58,8 L70,17 L82,11 L92,18 L100,12 L100,22 Z" fill="hsl(248 52% 7% / 0.92)" />
+            <path d="M0,22 L0,17 L16,13 L30,19 L44,12 L60,19 L74,14 L88,20 L100,16 L100,22 Z" fill="hsl(242 46% 4%)" />
+          </svg>
+        </div>
         {/* Real net-worth trend line, drawn full-bleed behind the content. */}
         {sparkPath && (
-          <svg className="pointer-events-none absolute inset-0 h-full w-full opacity-80" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <svg className="pointer-events-none absolute inset-0 h-full w-full opacity-90" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
             <defs>
               <linearGradient id="nwSparkStroke" x1="0" y1="0" x2="1" y2="0">
                 <stop offset="0%" stopColor={trendUp ? 'hsl(155 70% 55%)' : 'hsl(0 75% 60%)'} stopOpacity="0.12" />
                 <stop offset="100%" stopColor={trendUp ? 'hsl(155 85% 62%)' : 'hsl(285 85% 68%)'} stopOpacity="0.95" />
               </linearGradient>
             </defs>
-            <path d={sparkPath} fill="none" stroke="url(#nwSparkStroke)" strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+            <path d={sparkPath} fill="none" stroke="url(#nwSparkStroke)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" style={{ filter: `drop-shadow(0 0 3px ${trendUp ? 'hsl(155 85% 60% / 0.6)' : 'hsl(285 85% 66% / 0.6)'})` }} />
           </svg>
         )}
         <div className="relative z-10">
@@ -998,23 +1019,37 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
 
   return (
     <>
-      <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
-        <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
-          <KPITaskCard count={safeStats.activeTasks} onClick={() => setPopup("tasks")} />
+      {/* Horizontally-scrollable stat row on mobile (cards bleed off the right
+          edge, matching the target design); a 6-up grid from lg upward. */}
+      <div data-testid="section-kpis">
+        <div className="flex gap-2.5 overflow-x-auto pb-1.5 -mx-3 px-3 snap-x lg:grid lg:grid-cols-6 lg:gap-2 lg:mx-0 lg:px-0 lg:overflow-visible lg:pb-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+          <div className="snap-start shrink-0 w-[30%] min-w-[122px] lg:w-auto lg:min-w-0">
+            <KPITaskCard count={safeStats.activeTasks} onClick={() => setPopup("tasks")} />
+          </div>
           {/* Bug fix: prefer financeSnapshot.totalMonthlySpend (same source as the drilldown popup)
                over stats.monthlySpend (/api/stats) so the KPI card and popup show identical totals. */}
-          <KPISpendCard amount={enhanced?.financeSnapshot?.totalMonthlySpend ?? safeStats?.monthlySpend ?? 0} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
-          <KPIHabitsCard completionPct={safeStats.habitCompletionRate} totalHabits={safeStats.totalHabits} onClick={() => setPopup("habits")} />
-          <KPIJournalCard streak={safeStats.journalStreak} mood={safeStats.currentMood || null} onClick={() => navigate("/dashboard/journal")} />
+          <div className="snap-start shrink-0 w-[30%] min-w-[122px] lg:w-auto lg:min-w-0">
+            <KPISpendCard amount={enhanced?.financeSnapshot?.totalMonthlySpend ?? safeStats?.monthlySpend ?? 0} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
+          </div>
+          <div className="snap-start shrink-0 w-[30%] min-w-[122px] lg:w-auto lg:min-w-0">
+            <KPIHabitsCard completionPct={safeStats.habitCompletionRate} totalHabits={safeStats.totalHabits} onClick={() => setPopup("habits")} />
+          </div>
+          <div className="snap-start shrink-0 w-[30%] min-w-[122px] lg:w-auto lg:min-w-0">
+            <KPIJournalCard streak={safeStats.journalStreak} mood={safeStats.currentMood || null} onClick={() => navigate("/dashboard/journal")} />
+          </div>
           {/* Bug fix: derive bill count from the same enhanced.financeSnapshot.upcomingBills
                array the popup renders, so the count on the KPI card always matches the
                number of rows shown in the drilldown. Falls back to the legacy stats field
                for the brief window before /api/dashboard-enhanced resolves. */}
-          <MiniStat accent="43 75% 50%" icon={CreditCard} label="Bills Due"
-            value={enhanced?.financeSnapshot?.upcomingBills?.length ?? safeStats.upcomingObligations}
-            sub={formatMoney(safeStats.monthlyObligationTotal) + "/mo"}
-            onClick={() => setPopup("bills")} />
-          <KPIDocsCard docs={visibleDocs} onClick={() => setPopup("docs")} />
+          <div className="snap-start shrink-0 w-[30%] min-w-[122px] lg:w-auto lg:min-w-0">
+            <MiniStat accent="43 75% 50%" icon={CreditCard} label="Bills Due"
+              value={enhanced?.financeSnapshot?.upcomingBills?.length ?? safeStats.upcomingObligations}
+              sub={formatMoney(safeStats.monthlyObligationTotal) + "/mo"}
+              onClick={() => setPopup("bills")} />
+          </div>
+          <div className="snap-start shrink-0 w-[30%] min-w-[122px] lg:w-auto lg:min-w-0">
+            <KPIDocsCard docs={visibleDocs} onClick={() => setPopup("docs")} />
+          </div>
         </div>
       </div>
 
