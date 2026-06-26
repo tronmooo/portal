@@ -151,6 +151,23 @@ function daysUntilStr(days: number): string {
   return `in ${days}d`;
 }
 
+// Bills carry NO "overdue" status (product decision 2026-06). A recurring bill
+// whose nextDueDate sits in the past simply hasn't been rolled forward yet, so
+// flagging it red as "overdue" was misleading and made nearly every bill scream
+// red. Every bill surface now shows the bill with its due date in neutral
+// styling: future bills show their date, today/tomorrow get a friendly label,
+// and past-due bills just show the date they were due — never "overdue".
+function billDueLabel(bill: { daysUntil?: number | null; dueDate?: string | null }): string {
+  const d = bill?.daysUntil;
+  if (typeof d === "number") {
+    if (d === 0) return "Due today";
+    if (d === 1) return "Due tomorrow";
+  }
+  if (bill?.dueDate) return `Due ${fmtDate(bill.dueDate)}`;
+  if (typeof d === "number" && d > 1) return `Due in ${d}d`;
+  return "Due";
+}
+
 // resolveAssetValue / resolveLiabilityBalance now live in shared/asset-value.ts
 // (BUG-20260528-asset-resolver-duplication). Imported at top of file. Must stay
 // byte-for-byte equivalent across client + server because the Dashboard renders
@@ -1026,7 +1043,6 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
             const manualBills = bills.filter(b => !b.autopay);
             const autopayTotal = autopayBills.reduce((s, b) => s + (b.amount || 0), 0);
             const manualTotal = manualBills.reduce((s, b) => s + (b.amount || 0), 0);
-            const overdue = bills.filter(b => b.daysUntil < 0 && !b.autopay);
             const within7 = bills.filter(b => b.daysUntil >= 0 && b.daysUntil <= 7);
             return (
               <>
@@ -1056,29 +1072,22 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                     </div>
                   </div>
                 )}
-                {(overdue.length > 0 || within7.length > 0) && bills.length > 0 && (
+                {within7.length > 0 && bills.length > 0 && (
                   <div className="flex gap-2 mt-1">
-                    {overdue.length > 0 && (
-                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-red-500/10 text-red-500">
-                        {overdue.length} overdue
-                      </span>
-                    )}
-                    {within7.length > 0 && (
-                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">
-                        {within7.length} due this week
-                      </span>
-                    )}
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">
+                      {within7.length} due this week
+                    </span>
                   </div>
                 )}
                 <div className="overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '50vh' }}>
                   <div className="space-y-1.5 py-2">
                     {bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 999) - (b.daysUntil ?? 999)).map((bill: any) => {
-                      const urgent = bill.daysUntil <= 3;
-                      const soon = bill.daysUntil <= 7;
-                      const overdueBill = bill.daysUntil < 0;
+                      // Bills have no overdue status — due-this-week (0-7) gets a calm
+                      // amber accent; everything else (including past-due) is neutral.
+                      const soon = typeof bill.daysUntil === "number" && bill.daysUntil >= 0 && bill.daysUntil <= 7;
                       return (
                         <div key={bill.id}
-                          className={`flex items-center justify-between p-2 rounded-lg border ${overdueBill && !bill.autopay ? "border-red-500/40 bg-red-500/8" : urgent ? "border-red-500/30 bg-red-500/5" : soon ? "border-amber-500/30 bg-amber-500/5" : "border-border/50"}`}>
+                          className={`flex items-center justify-between p-2 rounded-lg border ${soon && !bill.autopay ? "border-amber-500/30 bg-amber-500/5" : "border-border/50"}`}>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
                               <p className="text-xs font-medium truncate">{bill.name}</p>
@@ -1088,10 +1097,9 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                                 </span>
                               )}
                             </div>
-                            <p className={`text-xs ${overdueBill && !bill.autopay ? "text-red-500 font-semibold" : urgent ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground"}`}>
-                              {daysUntilStr(bill.daysUntil)}
+                            <p className={`text-xs ${soon && !bill.autopay ? "text-amber-500" : "text-muted-foreground"}`}>
+                              {billDueLabel(bill)}
                               {bill.autopay && <span className="ml-1 text-green-500">• autopay</span>}
-                              {bill.dueDate && <span className="ml-1 text-muted-foreground/70">· {fmtDate(bill.dueDate)}</span>}
                             </p>
                           </div>
                           <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
@@ -2322,14 +2330,13 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     return raw.filter((t: any) => !dismissedIds.has(`task-${t.id}`));
   }, [enhanced, dismissedIds]);
 
-  const overdueBills: any[] = useMemo(() => {
-    // Bug fix: autopay bills don't go "overdue" — they auto-charge on the due date.
-    // A daysUntil<0 on autopay just means the server hasn't rolled forward to the
-    // next cycle yet; surfacing it as an overdue bill is misleading and causes
-    // every recurring autopay subscription to scream red on the dashboard.
-    const raw: any[] = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil < 0 && !b.autopay);
-    return raw.filter((b: any) => !dismissedIds.has(`bill-${b.id}`));
-  }, [enhanced, dismissedIds]);
+  // Bills have NO overdue status (product decision 2026-06). A recurring bill
+  // whose due date has passed simply hasn't been rolled forward yet, so it must
+  // never be surfaced here as a red "X days overdue" action item — that was the
+  // source of the dashboard flagging nearly every bill as overdue. Past-due
+  // bills still appear (with their real due date) in the Bills section and the
+  // Upcoming Bills popup; only the "needs attention / overdue" framing is gone.
+  const overdueBills: any[] = [];
 
   const soonTasks: any[] = useMemo(() => {
     const raw: any[] = (enhanced?.tasksDueSoon || []).filter((t: any) => {
@@ -2448,16 +2455,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
         sortKey: -days,
       });
     }
-    // Overdue bills
-    for (const b of overdueBills) {
-      const days = Math.abs(b.daysUntil);
-      items.push({
-        id: b.id, title: b.name,
-        detail: `${days} day${days !== 1 ? "s" : ""} overdue${b.amount ? ` · ${formatMoney(b.amount)}` : ""}`,
-        sourceType: "bill", accentColor: "#ef4444",
-        sortKey: -days,
-      });
-    }
+    // Overdue bills intentionally omitted — bills have no overdue status.
     // Due soon tasks
     for (const t of soonTasks) {
       const d = new Date(t.dueDate);
@@ -3027,10 +3025,11 @@ function ObligationsSection({ data }: { data: any[] }) {
     },
   });
 
-  // Group bills by timeframe — autopay bills are never "overdue" (they auto-charge on due date).
-  // They show up under their next-cycle window instead of the overdue group.
-  const overdueBills = useMemo(() => (data || []).filter((b: any) => b.daysUntil < 0 && !b.autopay), [data]);
-  const thisWeekBills = useMemo(() => (data || []).filter((b: any) => (b.daysUntil >= 0 && b.daysUntil <= 7) || (b.autopay && b.daysUntil < 0)), [data]);
+  // Group bills by timeframe. No "overdue" bucket (product decision 2026-06): a
+  // recurring bill whose due date has passed simply hasn't rolled forward yet, so
+  // it belongs in the soonest window showing its real due date — never flagged red.
+  // "This Week" = anything due within 7 days, INCLUDING past-due (daysUntil <= 7).
+  const thisWeekBills = useMemo(() => (data || []).filter((b: any) => b.daysUntil <= 7), [data]);
   const thisMonthBills = useMemo(() => (data || []).filter((b: any) => b.daysUntil > 7 && b.daysUntil <= 30), [data]);
 
   const monthlyTotal = useMemo(() => (data || []).reduce((sum: number, b: any) => sum + (b.amount || 0), 0), [data]);
@@ -3086,27 +3085,23 @@ function ObligationsSection({ data }: { data: any[] }) {
         <div className="space-y-1">
           {/* Proportion overview bar */}
           {(() => {
-            const ov = overdueBills.reduce((s:number,b:any)=>s+(b.amount||0),0);
             const wk = thisWeekBills.reduce((s:number,b:any)=>s+(b.amount||0),0);
             const mn = thisMonthBills.reduce((s:number,b:any)=>s+(b.amount||0),0);
-            const total = ov+wk+mn;
+            const total = wk+mn;
             if (total === 0) return null;
             return (
               <div className="mb-2">
                 <div className="flex h-2 rounded-full overflow-hidden gap-px bg-muted/30">
-                  {ov > 0 && <div style={{width:`${(ov/total)*100}%`,background:'#ef4444'}} className="rounded-l-full transition-all" />}
-                  {wk > 0 && <div style={{width:`${(wk/total)*100}%`,background:'#f59e0b'}} className="transition-all" />}
+                  {wk > 0 && <div style={{width:`${(wk/total)*100}%`,background:'#f59e0b'}} className="rounded-l-full transition-all" />}
                   {mn > 0 && <div style={{width:`${(mn/total)*100}%`,background:'hsl(var(--muted-foreground) / 0.35)'}} className="rounded-r-full transition-all" />}
                 </div>
                 <div className="flex gap-3 mt-1">
-                  {ov > 0 && <span className="text-[9px] text-red-500 font-semibold">● Overdue ${ov.toFixed(0)}</span>}
                   {wk > 0 && <span className="text-[9px] text-amber-500 font-medium">● Week ${wk.toFixed(0)}</span>}
                   {mn > 0 && <span className="text-[9px] text-muted-foreground">● Month ${mn.toFixed(0)}</span>}
                 </div>
               </div>
             );
           })()}
-          <BillGroup title="Overdue" bills={overdueBills} color="#ef4444" />
           <BillGroup title="Due This Week" bills={thisWeekBills} color="#f59e0b" />
           <BillGroup title="Due This Month" bills={thisMonthBills} color="#6b7280" />
         </div>
@@ -3120,12 +3115,10 @@ function ObligationsSection({ data }: { data: any[] }) {
             const bill = selectedBill;
             if (!bill) return null;
             const days = bill.daysUntil;
-            const overdueBill = typeof days === 'number' && days < 0 && !bill.autopay;
-            const urgent = typeof days === 'number' && days >= 0 && days <= 3;
+            // No overdue state — due-this-week gets a calm amber chip, everything
+            // else (including past-due) is neutral and shows its real due date.
             const soon = typeof days === 'number' && days >= 0 && days <= 7;
-            const chipColor = overdueBill ? 'text-red-500 bg-red-500/10 border-red-500/30'
-              : urgent ? 'text-red-500 bg-red-500/10 border-red-500/30'
-              : soon ? 'text-amber-500 bg-amber-500/10 border-amber-500/30'
+            const chipColor = soon ? 'text-amber-500 bg-amber-500/10 border-amber-500/30'
               : 'text-muted-foreground bg-muted/40 border-border';
             return (
               <>
@@ -3146,7 +3139,7 @@ function ObligationsSection({ data }: { data: any[] }) {
                   {typeof days === 'number' && (
                     <span className={`inline-flex items-center gap-1 mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${chipColor}`}>
                       <Clock className="h-2.5 w-2.5" />
-                      {overdueBill ? `${Math.abs(days)} day${Math.abs(days) !== 1 ? 's' : ''} overdue` : daysUntilStr(days)}
+                      {billDueLabel(bill)}
                     </span>
                   )}
                 </div>
