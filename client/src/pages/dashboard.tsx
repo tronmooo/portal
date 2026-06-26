@@ -74,7 +74,7 @@ import {
   ChevronLeft, ChevronRight, Plus, ShieldCheck,
   Wallet, PieChart as PieChartIcon, Settings2, AlertCircle, Bell, BellOff,
   Scale, Activity as ActivityIcon, Moon,
-  Users, TrendingDown,
+  Users, TrendingDown, ArrowRight,
   CalendarDays, Pin, PinOff, Filter as FilterIcon, Sparkle,
   Lightbulb, Repeat, Flag, User,
   Pause, Play, SkipForward, Tag as TagIcon, AlarmClock, ListChecks, Timer, ChevronsUpDown,
@@ -578,6 +578,24 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
   });
   const incomes = Array.isArray(incomesRaw) ? incomesRaw : (incomesRaw as any)?.items || [];
 
+  // Net-worth history powers the hero's trend sparkline and the real
+  // "vs last month" delta. Scope mirrors the snapshot table: a single selected
+  // profile, else the household aggregate. The number is only ever shown when at
+  // least two snapshots exist, so we never fabricate a trend.
+  // Only one profile (or the whole household) maps cleanly onto a snapshot row;
+  // a multi-profile selection has no matching aggregate, so skip the trend there
+  // rather than show a household line next to a scoped number.
+  const nwHistoryScoped = !(filterMode === "selected" && filterIds.length > 1);
+  const nwHistoryQuery = filterMode === "selected" && filterIds.length === 1
+    ? `?profileIds=${filterIds[0]}&days=30`
+    : "?days=30";
+  const { data: nwHistory = [] } = useQuery<Array<{ snapshotDate: string; netWorth: number }>>({
+    queryKey: ["/api/net-worth-history", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/net-worth-history${nwHistoryQuery}`).then(r => r.json()),
+    staleTime: 5 * 60_000,
+    enabled: nwHistoryScoped,
+  });
+
   // Co-ownership link tables: a profile passes the filter when the selected
   // profile is a co-owner via asset_party_links / liability_profile_links,
   // not only when it's the profile itself or its direct parent.
@@ -682,6 +700,43 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
 
   const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
 
+  // ── Privacy toggle (the eye icon next to NET WORTH) ──────────────────────────
+  // Blurs every dollar amount in the hero so balances can be glanced at in public.
+  const [amountsHidden, setAmountsHidden] = useState(false);
+  const privacyClass = amountsHidden ? "blur-[7px] select-none pointer-events-none" : "";
+
+  // ── Real trend from net_worth_snapshots ──────────────────────────────────────
+  // Append today's live net worth so the line ends on the current value even
+  // before the daily snapshot job has run. Delta compares the oldest snapshot in
+  // the 30-day window to now; shown only when we actually have history.
+  const nwSeries = useMemo(() => {
+    const pts = (nwHistory || []).map(h => h.netWorth);
+    if (pts.length === 0) return [netWorth];
+    return [...pts, netWorth];
+  }, [nwHistory, netWorth]);
+  const hasTrend = (nwHistory?.length ?? 0) >= 1;
+  const trendBase = hasTrend ? nwHistory[0].netWorth : netWorth;
+  const trendDeltaPct = hasTrend && Math.abs(trendBase) > 0
+    ? ((netWorth - trendBase) / Math.abs(trendBase)) * 100
+    : 0;
+  const trendUp = netWorth >= trendBase;
+  // Build an SVG polyline path normalized into a 0..100 × 0..100 viewBox.
+  const sparkPath = useMemo(() => {
+    const pts = nwSeries;
+    if (pts.length < 2) return "";
+    const min = Math.min(...pts);
+    const max = Math.max(...pts);
+    const span = max - min || 1;
+    const stepX = 100 / (pts.length - 1);
+    return pts
+      .map((v, i) => {
+        const x = i * stepX;
+        const y = 100 - ((v - min) / span) * 100;
+        return `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(" ");
+  }, [nwSeries]);
+
   return (
     <div className="relative">
       {/* NW-16: subtle refetch indicator so the user sees the tiles are
@@ -695,91 +750,87 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
           Updating filter…
         </div>
       )}
-      <div className={`grid grid-cols-1 ${effectiveHideBudget ? "sm:grid-cols-2" : "sm:grid-cols-3"} gap-2.5 mb-2 transition-opacity duration-200 ${refetching ? "opacity-60" : "opacity-100"}`}>
-      {/* NET WORTH */}
-      <button
-        type="button"
+      <div className={`space-y-2.5 mb-2 transition-opacity duration-200 ${refetching ? "opacity-60" : "opacity-100"}`}>
+      {/* ── NET WORTH HERO ──────────────────────────────────────────────── */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setHeroPopup("networth")}
-        className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
-        style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.16) 0%, hsl(155 60% 44% / 0.04) 60%, transparent 100%)' }}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setHeroPopup("networth"); } }}
+        className="relative overflow-hidden rounded-3xl border border-white/10 p-5 text-left cursor-pointer card-lift active:scale-[0.99] transition-all"
+        style={{ background: 'radial-gradient(130% 150% at 82% -10%, hsl(265 72% 32% / 0.6) 0%, transparent 55%), radial-gradient(120% 130% at 0% 110%, hsl(200 80% 32% / 0.4) 0%, transparent 50%), linear-gradient(160deg, hsl(245 46% 13%) 0%, hsl(240 42% 8%) 100%)' }}
         data-testid="hero-kpi-net-worth"
       >
-        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
-            <div className="icon-badge" style={{ background: 'hsl(155 60% 44% / 0.18)' }}>
-              <Wallet className="h-4 w-4" style={{ color: 'hsl(155 60% 44%)' }} />
+        {/* Real net-worth trend line, drawn full-bleed behind the content. */}
+        {sparkPath && (
+          <svg className="pointer-events-none absolute inset-0 h-full w-full opacity-80" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="nwSparkStroke" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stopColor={trendUp ? 'hsl(155 70% 55%)' : 'hsl(0 75% 60%)'} stopOpacity="0.12" />
+                <stop offset="100%" stopColor={trendUp ? 'hsl(155 85% 62%)' : 'hsl(285 85% 68%)'} stopOpacity="0.95" />
+              </linearGradient>
+            </defs>
+            <path d={sparkPath} fill="none" stroke="url(#nwSparkStroke)" strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          </svg>
+        )}
+        <div className="relative z-10">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/55">Net Worth</span>
+              <button
+                type="button"
+                onClick={stopProp(() => setAmountsHidden(v => !v))}
+                className="text-white/45 hover:text-white/85 transition-colors"
+                aria-label={amountsHidden ? "Show amounts" : "Hide amounts"}
+                data-testid="hero-net-worth-privacy"
+              >
+                {amountsHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </button>
             </div>
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Net Worth</span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/[0.06] px-2.5 py-1 text-[11px] font-medium text-white/70">
+              This Month <ChevronDown className="h-3 w-3" />
+            </span>
           </div>
-        </div>
-        <div className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-3xl font-bold tracking-tight" style={{ color: netWorthNegative ? 'hsl(0 72% 56%)' : 'hsl(155 60% 44%)' }}>{netWorthNegative ? "-" : ""}${fmt(animatedNetWorth)}</span>
-        </div>
-        <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground/80 tabular-nums">
-          <span>Assets ${fmt(Math.round(totalAssetValue))}</span>
-          <span>·</span>
-          <span>Liab ${fmt(Math.round(totalLiabilities))}</span>
-        </div>
-      </button>
-
-      {/* BUDGET */}
-      {!effectiveHideBudget && (
-      <button
-        type="button"
-        onClick={() => setHeroPopup("budget")}
-        className="relative flex flex-col p-4 rounded-2xl border overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
-        style={{
-          background: budgetBreached
-            ? 'linear-gradient(135deg, hsl(0 72% 52% / 0.18) 0%, hsl(0 72% 52% / 0.04) 60%, transparent 100%)'
-            : 'linear-gradient(135deg, hsl(43 85% 52% / 0.16) 0%, hsl(43 85% 52% / 0.04) 60%, transparent 100%)',
-          borderColor: budgetBreached ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.5)',
-        }}
-        data-testid="hero-kpi-budget"
-      >
-        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: budgetBreached ? 'linear-gradient(90deg, hsl(0 72% 52%), transparent)' : 'linear-gradient(90deg, hsl(43 85% 52%), transparent)' }} />
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
-            <div className="icon-badge" style={{ background: budgetBreached ? 'hsl(0 72% 52% / 0.18)' : 'hsl(43 85% 52% / 0.18)' }}>
-              <PieChartIcon className="h-4 w-4" style={{ color: budgetBreached ? 'hsl(0 72% 52%)' : 'hsl(43 85% 52%)' }} />
+          <div className={`mt-2 text-[40px] leading-none font-bold tracking-tight tabular-nums ${privacyClass}`} style={{ color: netWorthNegative ? 'hsl(0 82% 67%)' : 'white' }}>
+            {netWorthNegative ? "-" : ""}${fmt(animatedNetWorth)}
+          </div>
+          {hasTrend && (
+            <div className="mt-2 flex items-center gap-1.5 text-[13px] font-medium">
+              {trendUp
+                ? <ArrowUp className="h-3.5 w-3.5" style={{ color: 'hsl(155 65% 58%)' }} />
+                : <ArrowDown className="h-3.5 w-3.5" style={{ color: 'hsl(0 78% 64%)' }} />}
+              <span style={{ color: trendUp ? 'hsl(155 65% 62%)' : 'hsl(0 78% 66%)' }}>{Math.abs(trendDeltaPct).toFixed(1)}%</span>
+              <span className="text-white/45">vs last month</span>
             </div>
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Budget</span>
-          </div>
-          {budgetBreached && (
-            <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded">OVER</span>
           )}
+          <div className="mt-4 grid grid-cols-2 gap-2.5">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-2.5">
+              <p className="text-[11px] font-medium text-white/55">Assets</p>
+              <p className={`mt-0.5 text-lg font-bold tabular-nums ${privacyClass}`} style={{ color: 'hsl(155 62% 62%)' }}>${fmt(Math.round(totalAssetValue))}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.05] px-3 py-2.5">
+              <p className="text-[11px] font-medium text-white/55">Liabilities</p>
+              <p className={`mt-0.5 text-lg font-bold tabular-nums ${privacyClass}`} style={{ color: 'hsl(265 82% 74%)' }}>${fmt(Math.round(totalLiabilities))}</p>
+            </div>
+          </div>
         </div>
-        <div className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-3xl font-bold tracking-tight" style={{ color: budgetBreached ? 'hsl(0 72% 52%)' : 'hsl(43 85% 52%)' }}>{animatedBudget}%</span>
-          <span className="text-xs text-muted-foreground/70">of ${fmt(totalBudget)}</span>
-        </div>
-        <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: 'hsl(var(--muted) / 0.6)' }}>
-          <div
-            className="h-full rounded-full transition-all duration-700"
-            style={{
-              width: `${Math.min(100, budgetPct)}%`,
-              background: budgetBreached ? 'hsl(0 72% 52%)' : budgetPct >= 80 ? 'hsl(43 85% 52%)' : 'hsl(155 60% 44%)',
-            }}
-          />
-        </div>
-      </button>
-      )}
+      </div>
 
-      {/* CASH FLOW */}
-      <button
-        type="button"
-        onClick={() => setHeroPopup("cashflow")}
-        className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
-        style={{
-          background: cashFlow >= 0
-            ? 'linear-gradient(135deg, hsl(200 80% 52% / 0.18) 0%, hsl(200 80% 52% / 0.04) 60%, transparent 100%)'
-            : 'linear-gradient(135deg, hsl(0 72% 52% / 0.18) 0%, hsl(0 72% 52% / 0.04) 60%, transparent 100%)',
-        }}
-        data-testid="hero-kpi-cash-flow"
-      >
-        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: cashFlow >= 0 ? 'linear-gradient(90deg, hsl(200 80% 52%), transparent)' : 'linear-gradient(90deg, hsl(0 72% 52%), transparent)' }} />
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
+      {/* ── CASH FLOW + BUDGET ──────────────────────────────────────────── */}
+      <div className={`grid gap-2.5 ${effectiveHideBudget ? "grid-cols-1" : "grid-cols-2"}`}>
+        {/* CASH FLOW */}
+        <button
+          type="button"
+          onClick={() => setHeroPopup("cashflow")}
+          className="relative flex flex-col overflow-hidden rounded-3xl border border-border/50 p-4 text-left card-lift active:scale-[0.98] transition-all"
+          style={{
+            background: cashFlow >= 0
+              ? 'linear-gradient(160deg, hsl(200 80% 52% / 0.14) 0%, transparent 72%)'
+              : 'linear-gradient(160deg, hsl(0 72% 52% / 0.14) 0%, transparent 72%)',
+          }}
+          data-testid="hero-kpi-cash-flow"
+        >
+          <div className="flex items-center gap-2 mb-1.5">
             <div className="icon-badge" style={{ background: cashFlow >= 0 ? 'hsl(200 80% 52% / 0.18)' : 'hsl(0 72% 52% / 0.18)' }}>
               {cashFlow >= 0
                 ? <TrendingUp className="h-4 w-4" style={{ color: 'hsl(200 80% 52%)' }} />
@@ -787,18 +838,77 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
             </div>
             <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Cash Flow</span>
           </div>
-        </div>
-        <div className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-3xl font-bold tracking-tight" style={{ color: cashFlow >= 0 ? 'hsl(200 80% 52%)' : 'hsl(0 72% 52%)' }}>
+          <div className={`text-2xl font-bold tracking-tight tabular-nums ${privacyClass}`} style={{ color: cashFlow >= 0 ? 'hsl(200 80% 56%)' : 'hsl(0 72% 56%)' }}>
             {cashFlow >= 0 ? '+' : '−'}${fmt(animatedCashFlow)}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground/80 tabular-nums">
+            <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(155 60% 50%)' }} />In <span className={privacyClass}>${fmt(Math.round(monthlyIncome))}</span></span>
+            <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(0 72% 55%)' }} />Out <span className={privacyClass}>${fmt(Math.round(monthlySpend))}</span></span>
+          </div>
+          {/* Honest In-vs-Out bars (no fabricated per-day data). */}
+          <div className="mt-2.5 flex items-end gap-2 h-9">
+            {[{ label: 'In', val: monthlyIncome, color: 'hsl(155 60% 48%)' }, { label: 'Out', val: monthlySpend, color: 'hsl(0 72% 55%)' }].map(b => (
+              <div key={b.label} className="flex flex-1 flex-col items-center justify-end">
+                <div className="w-full max-w-[44px] rounded-md transition-all duration-700" style={{ height: `${Math.max(8, Math.round((b.val / Math.max(monthlyIncome, monthlySpend, 1)) * 100))}%`, background: b.color, opacity: 0.85 }} />
+              </div>
+            ))}
+          </div>
+          <span className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold" style={{ color: cashFlow >= 0 ? 'hsl(200 80% 62%)' : 'hsl(0 72% 62%)' }}>
+            View Cash Flow <ArrowRight className="h-3 w-3" />
           </span>
-        </div>
-        <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground/80 tabular-nums">
-          <span>In ${fmt(Math.round(monthlyIncome))}</span>
-          <span>·</span>
-          <span>Out ${fmt(Math.round(monthlySpend))}</span>
-        </div>
-      </button>
+        </button>
+
+        {/* BUDGET */}
+        {!effectiveHideBudget && (() => {
+          const donutColor = budgetBreached ? 'hsl(0 72% 56%)' : budgetPct >= 80 ? 'hsl(43 85% 54%)' : 'hsl(155 60% 50%)';
+          return (
+          <button
+            type="button"
+            onClick={() => setHeroPopup("budget")}
+            className="relative flex flex-col overflow-hidden rounded-3xl border p-4 text-left card-lift active:scale-[0.98] transition-all"
+            style={{
+              background: budgetBreached
+                ? 'linear-gradient(160deg, hsl(0 72% 52% / 0.14) 0%, transparent 72%)'
+                : 'linear-gradient(160deg, hsl(43 85% 52% / 0.13) 0%, transparent 72%)',
+              borderColor: budgetBreached ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.5)',
+            }}
+            data-testid="hero-kpi-budget"
+          >
+            <div className="flex items-center gap-2 mb-1.5">
+              <div className="icon-badge" style={{ background: budgetBreached ? 'hsl(0 72% 52% / 0.18)' : 'hsl(43 85% 52% / 0.18)' }}>
+                <PieChartIcon className="h-4 w-4" style={{ color: budgetBreached ? 'hsl(0 72% 52%)' : 'hsl(43 85% 52%)' }} />
+              </div>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Budget</span>
+              {budgetBreached && (
+                <span className="ml-auto text-[9px] font-bold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded">OVER</span>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="relative h-16 w-16 shrink-0">
+                <svg viewBox="0 0 36 36" className="h-16 w-16 -rotate-90">
+                  <circle cx="18" cy="18" r="15.5" fill="none" stroke="hsl(var(--muted) / 0.5)" strokeWidth="3.6" />
+                  <circle cx="18" cy="18" r="15.5" fill="none" stroke={donutColor} strokeWidth="3.6" strokeLinecap="round" pathLength={100} strokeDasharray={`${Math.min(100, budgetPct)} 100`} style={{ transition: 'stroke-dasharray 0.7s ease' }} />
+                </svg>
+                <div className="absolute inset-0 flex items-center justify-center text-sm font-bold tabular-nums" style={{ color: donutColor }}>{animatedBudget}%</div>
+              </div>
+              <div className="min-w-0 space-y-1.5">
+                <div>
+                  <p className="text-[10px] text-muted-foreground/70">Remaining</p>
+                  <p className={`text-base font-bold tabular-nums ${privacyClass}`}>${fmt(Math.round(Math.max(0, totalBudget - totalSpent)))}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-muted-foreground/70">Spent</p>
+                  <p className={`text-sm font-semibold tabular-nums ${privacyClass}`} style={{ color: 'hsl(43 85% 55%)' }}>${fmt(Math.round(totalSpent))}</p>
+                </div>
+              </div>
+            </div>
+            <span className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold" style={{ color: donutColor }}>
+              View Budget <ArrowRight className="h-3 w-3" />
+            </span>
+          </button>
+          );
+        })()}
+      </div>
       </div>
 
       {/* Hero KPI Popups */}

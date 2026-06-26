@@ -2151,6 +2151,29 @@ If unsure, return "profile_fact".`,
     res.json(data);
   }));
 
+  // ---- Net-worth history (W4-5) ----
+  // Exposes the persisted daily net_worth_snapshots series so the dashboard hero
+  // can render a real trend sparkline and a real "vs last month" delta instead of
+  // a fabricated number. Scope: a single selected profile, else the household
+  // aggregate (profile_id NULL). Multiple selected ids fall back to the aggregate
+  // since the snapshot table only stores per-profile and aggregate rows.
+  app.get("/api/net-worth-history", asyncHandler(async (req, res) => {
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    const profileId = req.query.profileId as string | undefined;
+    const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
+    const scopedProfileId = filterIds.length === 1 ? filterIds[0] : undefined;
+    const days = Math.min(365, Math.max(1, parseInt(String(req.query.days ?? "30"), 10) || 30));
+    const userId = cacheUserKey(req as AuthenticatedRequest);
+    const cacheKey = `nwhistory:${userId}:${scopedProfileId || "all"}:${days}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
+    const history = await dedupe(cacheKey, () => storage.getNetWorthHistory(scopedProfileId, days));
+    // Ascending by date so the client can read [0]=oldest, [n-1]=newest.
+    const sorted = [...history].sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+    setCache(cacheKey, sorted, 60 * 1000);
+    res.json(sorted);
+  }));
+
   // ---- Dashboard Bootstrap (PERF 2026-05-28) ----
   // Single round-trip that returns everything the dashboard skeleton blocks
   // on: stats, enhanced, profiles, incomes, budget summary. Each individual
