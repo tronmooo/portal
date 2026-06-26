@@ -334,6 +334,7 @@ function MiniStat({
         <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
+      {sub && <p className="text-[9px] text-muted-foreground/60 leading-tight mt-0.5 truncate w-full relative z-10">{sub}</p>}
     </div>
   );
 }
@@ -480,6 +481,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
         <span className="text-lg font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
+      <p className="text-[9px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{streak > 0 ? `${streak}-day streak!` : "Keep it going!"}</p>
       {/* 7-day dots */}
       <div className="flex gap-0.5 mt-1.5 relative z-10">
         {dots.map((filled, i) => (
@@ -494,10 +496,10 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   const expiredCount = (docs || []).filter(d => normalizeFilter(d.status) === normalizeFilter('expired')).length;
   const mostOverdue = (docs || []).filter(d => d.daysUntil < 0).sort((a,b) => a.daysUntil - b.daysUntil)[0];
   const isUrgent = expiredCount > 0;
-  // Color discipline: red ONLY for genuinely overdue documents. The ambient
-  // tile color stays amber to keep visual weight balanced — the popup is where
-  // the user takes action (snooze / open), so this tile no longer screams.
-  const accent = isUrgent ? '0 72% 52%' : '25 80% 54%';
+  const count = (docs || []).length;
+  // Color discipline: red ONLY for genuinely overdue documents. The calm/empty
+  // state is blue (all-clear) — the popup is where the user takes action.
+  const accent = isUrgent ? '0 72% 52%' : '205 90% 58%';
   return (
     <div onClick={onClick} className="relative flex flex-col p-2.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, transparent 60%)`, borderColor: isUrgent ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.4)' }}
@@ -514,10 +516,16 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
         <span className="text-lg font-bold metric-value tracking-tight leading-none tabular-nums" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
-      {mostOverdue && (
+      {count === 0 ? (
+        <p className="text-[9px] mt-0.5 relative z-10 truncate flex items-center gap-1" style={{ color: `hsl(${accent})` }}>
+          <CheckCircle2 className="h-2.5 w-2.5" /> You're all set!
+        </p>
+      ) : mostOverdue ? (
         <p className="text-[9px] text-red-500 mt-0.5 relative z-10 truncate tabular-nums">
           Tap to snooze · {Math.abs(mostOverdue.daysUntil)}d overdue
         </p>
+      ) : (
+        <p className="text-[9px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{count} expiring soon</p>
       )}
       {isUrgent && (
         <div className="mt-1.5 relative z-10">
@@ -1007,10 +1015,15 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                array the popup renders, so the count on the KPI card always matches the
                number of rows shown in the drilldown. Falls back to the legacy stats field
                for the brief window before /api/dashboard-enhanced resolves. */}
-          <MiniStat accent="43 75% 50%" icon={CreditCard} label="Bills Due"
-            value={enhanced?.financeSnapshot?.upcomingBills?.length ?? safeStats.upcomingObligations}
-            sub={formatMoney(safeStats.monthlyObligationTotal) + "/mo"}
-            onClick={() => setPopup("bills")} />
+          {(() => {
+            const billCount = enhanced?.financeSnapshot?.upcomingBills?.length ?? safeStats.upcomingObligations;
+            return (
+              <MiniStat accent="43 75% 50%" icon={CreditCard} label="Bills Due"
+                value={billCount}
+                sub={billCount > 0 ? "Due soon" : "All clear"}
+                onClick={() => setPopup("bills")} />
+            );
+          })()}
           <KPIDocsCard docs={visibleDocs} onClick={() => setPopup("docs")} />
         </div>
       </div>
