@@ -1,3 +1,3 @@
 # Portol
 
-<!-- redeploy trigger: 2026-06-26T21:37:07Z — v2 light header: Calendar -->
+<!-- redeploy trigger: 2026-06-26T21:49:51Z — fix habits daily reset (use user timezone everywhere) -->

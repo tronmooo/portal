@@ -558,6 +558,18 @@ export async function registerRoutes(
     next();
   });
 
+  // Pin the request-scoped storage to the USER'S timezone (X-Timezone header)
+  // for EVERY /api route — not just /api/chat. Without this, "today" defaulted
+  // to America/Los_Angeles everywhere, so habit check-ins and the
+  // habits-completed-today count kept showing yesterday's completions past the
+  // user's local midnight (until LA rolled over). Setting it globally makes
+  // every date boundary (habit reset, "this month", streaks) align with the
+  // user's actual day. Storage is request-scoped, so this is per-request safe.
+  app.use("/api", (req, _res, next) => {
+    try { (storage as any)._timezone = getTimezone(req); } catch { /* ignore */ }
+    next();
+  });
+
   // Version endpoint — frontend polls this to detect new deploys
   const BUILD_VERSION = Date.now().toString(36);
   app.get("/api/version", (req, res) => {

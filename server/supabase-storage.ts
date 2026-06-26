@@ -241,7 +241,7 @@ function getExtension(mimeType: string): string {
 }
 
 // ---- Streak calculator (timezone-aware) ----
-function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1): { current: number; longest: number } {
+function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1, timezone: string = 'America/Los_Angeles'): { current: number; longest: number } {
   if (checkins.length === 0) return { current: 0, longest: 0 };
   // Count check-ins per date
   const countByDate = new Map<string, number>();
@@ -255,7 +255,7 @@ function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1)
     .sort()
     .reverse();
   if (completeDates.length === 0) return { current: 0, longest: 0 };
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: timezone });
   function addDays(dateStr: string, days: number): string {
     const d = new Date(dateStr + 'T12:00:00');
     d.setDate(d.getDate() + days);
@@ -3420,7 +3420,7 @@ export class SupabaseStorage implements IStorage {
     if (error) throw error;
     // Recalculate streaks (with targetPerDay support)
     const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
-    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1);
+    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1, this._timezone);
     await this.supabase.from("habits").update({
       current_streak: current, longest_streak: Math.max(longest, habit.longestStreak),
     }).eq("id", habitId).eq("user_id", this.userId);
@@ -3435,7 +3435,7 @@ export class SupabaseStorage implements IStorage {
     if (error) return false;
     // Recalculate streaks after deletion
     const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
-    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1);
+    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1, this._timezone);
     await this.supabase.from("habits").update({
       current_streak: current, longest_streak: longest,
     }).eq("id", habitId).eq("user_id", this.userId);
