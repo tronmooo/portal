@@ -34,6 +34,22 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+// Decode a JWT payload (NO signature verification — the server re-validates
+// every request via authMiddleware). Used only to restore UI session state when
+// /api/auth/me is unreachable (cold serverless instance / flaky network) so a
+// transient blip doesn't sign out a user whose token is still valid.
+function decodeJwt(token: string): { sub?: string; email?: string; exp?: number } | null {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64.padEnd(Math.ceil(b64.length / 4) * 4, "=");
+    return JSON.parse(decodeURIComponent(escape(atob(padded))));
+  } catch {
+    return null;
+  }
+}
+
 // Token storage — memory + sessionStorage for persistence across page refreshes.
 // sessionStorage works in most sandboxed iframes (unlike localStorage).
 let memoryTokens: { access_token: string; refresh_token: string; expires_at: number } | null = null;
@@ -324,28 +340,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           } else {
             persistTokens(null);
           }
-        } catch {
-          persistTokens(null);
+        } catch (e: any) {
+          // Only discard tokens when the refresh token is genuinely rejected.
+          // On a pure network failure (cold instance / offline) keep them so a
+          // later attempt can refresh without forcing a fresh sign-in.
+          const m = (e?.message || "").toLowerCase();
+          const networkErr = m.includes("load failed") || m.includes("failed to fetch") || m.includes("networkerror") || m.includes("network request failed");
+          if (!networkErr) persistTokens(null);
         }
         setLoading(false);
       } else {
-        // Verify token
-        const res = await fetch(`${API_BASE}/api/auth/me`, {
-          headers: { Authorization: `Bearer ${tokens.access_token}` },
-        });
-        if (res.ok) {
+        // Verify token. A NETWORK failure here (cold serverless instance, flaky
+        // connection) must NOT sign the user out — the token is still inside its
+        // validity window (checked above). Only an explicit 401/403 means the
+        // token was actually rejected.
+        let res: Response | null = null;
+        try {
+          res = await fetch(`${API_BASE}/api/auth/me`, {
+            headers: { Authorization: `Bearer ${tokens.access_token}` },
+          });
+        } catch {
+          res = null; // network error — fall through to optimistic restore
+        }
+        if (res && res.ok) {
           const data = await res.json();
           setUser(data.user);
           setSession(tokens);
           // Pre-warm server cache immediately after restoring session
           fetch(`${API_BASE}/api/warmup`, { headers: { Authorization: `Bearer ${tokens.access_token}` } }).catch(() => {});
+        } else if (res && (res.status === 401 || res.status === 403)) {
+          persistTokens(null); // token genuinely rejected → sign out
         } else {
-          persistTokens(null);
+          // Unreachable server or a transient 5xx — restore optimistically from
+          // the JWT so a valid session survives the blip. Every API call still
+          // re-verifies server-side, so this cannot grant access to a bad token.
+          const claims = decodeJwt(tokens.access_token);
+          if (claims?.sub) {
+            setUser({ id: claims.sub, email: claims.email || "" });
+            setSession(tokens);
+          }
         }
         setLoading(false);
       }
     } catch {
-      persistTokens(null);
+      // Never hard-clear the session on an unexpected error — just stop loading.
       setLoading(false);
     }
   }
@@ -368,9 +406,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signIn = useCallback(async (email: string, password: string) => {
-    try {
+    // A cold serverless instance can drop the very first request (Safari shows
+    // "Load failed"). Signin is safe to retry — it creates no state — so we warm
+    // the function and retry once on a pure network failure before giving up.
+    const isNetworkError = (m?: string) => {
+      const s = (m || "").toLowerCase();
+      return s.includes("load failed") || s.includes("failed to fetch") || s.includes("networkerror") || s.includes("network request failed");
+    };
+    const attempt = async () => {
       const res = await apiRequest("POST", "/api/auth/signin", { email, password });
-      const data = await res.json();
+      return res.json();
+    };
+    try {
+      let data;
+      try {
+        data = await attempt();
+      } catch (err: any) {
+        if (!isNetworkError(err?.message)) throw err;
+        // Warm the function, then retry once.
+        try { await fetch("/api/warmup", { cache: "no-store" }); } catch { /* ignore */ }
+        data = await attempt();
+      }
       if (data.error) return { error: humanizeAuthError(data.error, "Sign in failed") };
 
       persistTokens(data.session);

@@ -1,3 +1,3 @@
 # Portol
 
-<!-- redeploy trigger: 2026-06-26T18:49:12Z — ship grid-cols-6 KPI row + Habits popup redesign (commit b81ee93) to production -->
+<!-- redeploy trigger: 2026-06-26T19:03:20Z — perf/reliability: public pre-warm endpoint + boot pre-warm + auth retry + no-logout-on-network-blip -->

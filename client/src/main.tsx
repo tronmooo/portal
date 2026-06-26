@@ -32,6 +32,20 @@ registerSW({
   },
 });
 
+// Pre-warm the serverless API as early as possible — BEFORE auth, before React
+// even mounts. On Vercel the API is a serverless function that cold-starts after
+// inactivity; the very first request (often /api/auth/signin or /api/auth/me)
+// otherwise eats the whole cold start and can fail with "Load failed". Firing a
+// public /api/warmup the instant the bundle loads means the function is already
+// warming while the user reads the sign-in screen, so their first real request
+// hits a warm instance. Fire-and-forget; failures are irrelevant.
+try {
+  const warm = () => { fetch("/api/warmup", { method: "GET", cache: "no-store", keepalive: true }).catch(() => {}); };
+  warm();
+  // A second nudge shortly after, in case the first hit a different cold instance.
+  setTimeout(warm, 1500);
+} catch { /* ignore */ }
+
 // Install BEFORE anything else — catches lazy-import failures thrown from
 // route Switches, sentinels, or any code path that bypasses the React tree.
 // When the browser has a cached HTML referencing chunk hashes that no longer

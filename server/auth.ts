@@ -141,6 +141,15 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     return next();
   }
 
+  // Public, no-auth utility endpoints. These MUST be reachable before login so
+  // the client can pre-warm the serverless function (pay the cold start while
+  // the user is still on the sign-in screen, so the first real request — incl.
+  // /api/auth/signin — hits a warm instance instead of timing out with
+  // "Load failed"). /version and /client-errors must also work pre-auth.
+  if (req.path === "/warmup" || req.path === "/version" || req.path === "/client-errors") {
+    return next();
+  }
+
   // Cron endpoints authenticate via CRON_SECRET (validated inside the handler).
   if (req.path.startsWith("/cron/")) {
     return next();
