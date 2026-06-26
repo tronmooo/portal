@@ -137,6 +137,14 @@ export function NetWorthPopup({
     enabled: open,
   });
 
+  // Net-worth history for the trend line + month-over-month delta.
+  const histUrl = param ? `/api/net-worth/history${param}&lookbackDays=120` : `/api/net-worth/history?lookbackDays=120`;
+  const { data: nwHistory = [] } = useQuery<any[]>({
+    queryKey: ["/api/net-worth/history", filterMode, ...filterIds, "popup"],
+    queryFn: async () => apiRequest("GET", histUrl).then(r => r.json()).catch(() => []),
+    enabled: open,
+  });
+
   // FIX 2: route through the canonical `isInScope` primitive so this popup
   //   answers the same question with the same logic as every other surface.
   //   Candidates come from one place only: the profile's own id and its
@@ -186,6 +194,30 @@ export function NetWorthPopup({
   const displayTotalL = snap?.totalLiabilities ?? liabilities.reduce((s: number, r: any) => s + (r.value || 0), 0);
   const netWorth = displayTotalA - displayTotalL;
 
+  // Trend series (oldest→newest), pinned to the live net worth at the end.
+  const nwSeries = useMemo(() => {
+    const rows = Array.isArray(nwHistory) ? [...nwHistory] : [];
+    rows.sort((a, b) => String(a.snapshotDate).localeCompare(String(b.snapshotDate)));
+    const pts = rows.map((r: any) => Number(r.netWorth) || 0);
+    if (pts.length === 0) return [netWorth];
+    pts[pts.length - 1] = netWorth;
+    return pts;
+  }, [nwHistory, netWorth]);
+  const nwTrend = useMemo(() => {
+    if (nwSeries.length < 2) return null;
+    const first = nwSeries[0], last = nwSeries[nwSeries.length - 1];
+    if (!isFinite(first) || first === 0) return null;
+    return { pct: ((last - first) / Math.abs(first)) * 100, up: last >= first, delta: last - first };
+  }, [nwSeries]);
+  const nwPath = useMemo(() => {
+    const s = nwSeries.length >= 2 ? nwSeries : null;
+    if (!s) return null;
+    const min = Math.min(...s), max = Math.max(...s), span = (max - min) || 1;
+    const W = 280, H = 40;
+    return s.map((v, i) => `${i === 0 ? "M" : "L"}${((i / (s.length - 1)) * W).toFixed(1)},${(H - ((v - min) / span) * H + 2).toFixed(1)}`).join(" ");
+  }, [nwSeries]);
+  const ratio = displayTotalA > 0 ? Math.min(100, Math.round((displayTotalL / displayTotalA) * 100)) : 0;
+
   return (
     <MetricPopupShell
       open={open}
@@ -200,6 +232,42 @@ export function NetWorthPopup({
       {isLoading ? (
         <div className="px-4 py-10 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
       ) : (
+        <>
+        {/* Trend + summary */}
+        <div className="px-4 pt-3 pb-2 border-b border-border">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Net worth</p>
+              <p className="text-xl font-bold tabular-nums leading-tight" style={{ color: netWorth < 0 ? "hsl(0 80% 60%)" : "hsl(155 60% 44%)" }}>
+                {netWorth < 0 ? "-" : ""}${fmt(Math.abs(netWorth))}
+              </p>
+            </div>
+            {nwTrend && (
+              <div className="text-right">
+                <p className="text-[11px] font-semibold tabular-nums" style={{ color: nwTrend.up ? "hsl(155 60% 44%)" : "hsl(0 80% 60%)" }}>
+                  {nwTrend.up ? "▲" : "▼"} {Math.abs(nwTrend.pct).toFixed(1)}%
+                </p>
+                <p className="text-[9px] text-muted-foreground">{nwTrend.delta >= 0 ? "+" : "−"}${fmt(Math.abs(nwTrend.delta))} this period</p>
+              </div>
+            )}
+          </div>
+          {nwPath && (
+            <svg viewBox="0 0 280 44" className="mt-1.5 h-10 w-full" preserveAspectRatio="none">
+              <path d={nwPath} fill="none" stroke={`hsl(${nwTrend && !nwTrend.up ? "0 80% 60%" : "155 60% 44%"})`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+          {/* Assets vs liabilities split bar */}
+          <div className="mt-1.5">
+            <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
+              <div style={{ width: `${100 - ratio}%`, background: "hsl(155 60% 44%)" }} />
+              <div style={{ width: `${ratio}%`, background: "hsl(270 80% 65%)" }} />
+            </div>
+            <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+              <span><span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(155 60% 44%)" }} /> Assets ${fmt(displayTotalA)}</span>
+              <span>Liab ${fmt(displayTotalL)} <span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(270 80% 65%)" }} /></span>
+            </div>
+          </div>
+        </div>
         <Tabs defaultValue="assets" className="w-full">
           <TabsList className="grid w-full grid-cols-2 rounded-none border-b">
             <TabsTrigger value="assets" className="text-xs">
@@ -230,6 +298,7 @@ export function NetWorthPopup({
             />
           </TabsContent>
         </Tabs>
+        </>
       )}
     </MetricPopupShell>
   );
