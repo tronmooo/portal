@@ -3254,7 +3254,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const response = await client.messages.create({
-        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
+        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
         max_tokens: 1024,
         messages: [
           { role: "user", content: userPrompt },
@@ -6289,7 +6289,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const response = await client.messages.create({
-        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
+        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
         max_tokens: 2048,
         messages: [
           { role: "user", content: userPrompt },
