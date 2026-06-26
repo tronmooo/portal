@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import CalendarView from "@/components/CalendarView";
 import ObligationsManager from "@/components/ObligationsManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -40,6 +42,28 @@ export default function CalendarPage() {
   const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const [tab, setTab] = useState<TabKey>(readInitialTab);
 
+  // v2 summary band — Today / This Week / Total events.
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: events = [] } = useQuery<any[]>({
+    queryKey: ["/api/events", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const evSummary = useMemo(() => {
+    const todayStr = new Date().toLocaleDateString("en-CA");
+    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+    let today = 0, week = 0;
+    const list = Array.isArray(events) ? events : [];
+    for (const e of list) {
+      const d = String(e.date || "").slice(0, 10);
+      if (!d) continue;
+      if (d === todayStr) today++;
+      const dd = new Date(`${d}T12:00:00`);
+      const diff = Math.round((dd.getTime() - t0.getTime()) / 86400000);
+      if (diff >= 0 && diff <= 7) week++;
+    }
+    return { today, week, total: list.length };
+  }, [events]);
+
   // Keep ?tab= synced WITHOUT touching window.location.hash, because the
   // hash holds the wouter route. Touching it would knock the router back
   // to "/" (Chat). We mutate URLSearchParams only.
@@ -67,6 +91,20 @@ export default function CalendarPage() {
           onChange={() => {}}
           compact
         />
+      </div>
+
+      {/* v2 summary band */}
+      <div className="grid grid-cols-3 gap-2 mb-2" data-testid="calendar-summary">
+        {[
+          { label: "Today", value: evSummary.today, color: "200 80% 55%" },
+          { label: "This Week", value: evSummary.week, color: "262 70% 62%" },
+          { label: "Total", value: evSummary.total, color: "155 60% 48%" },
+        ].map(s => (
+          <div key={s.label} className="rounded-xl border border-border/50 bg-card/60 p-2.5 text-center">
+            <p className="text-lg font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
+            <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</p>
+          </div>
+        ))}
       </div>
 
       <Tabs value={tab} onValueChange={v => setTab(v as TabKey)} className="w-full">
