@@ -1202,6 +1202,8 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   const [addingTo, setAddingTo] = useState<string | null>(null);
   // Which task is expanded into the detail/edit panel.
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Type filter so the user can see & reconcile by kind.
+  const [typeFilter, setTypeFilter] = useState<"all" | "reminders" | "recurring" | "scheduled">("all");
   // U1 fix: track which task is pending confirmation before delete.
   const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
   // Profiles for the assigned-to chip (id → name).
@@ -1378,7 +1380,23 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
 
   const todayStr = new Date().toLocaleDateString('en-CA');
   const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('en-CA'); })();
-  const pending = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) !== normalizeFilter('done')), [tasks]);
+  // Type predicates used by both the filter chips (counts) and the list filter.
+  const isReminderT = (t: any) => (t.tags || []).includes("reminder") || t.source === "reminder";
+  const isRecurringT = (t: any) => (t.tags || []).some((x: string) => String(x).startsWith("recur:"));
+  const isScheduledT = (t: any) => !!t.dueDate;
+  const matchesType = (t: any) => typeFilter === "all"
+    || (typeFilter === "reminders" && isReminderT(t))
+    || (typeFilter === "recurring" && isRecurringT(t))
+    || (typeFilter === "scheduled" && isScheduledT(t));
+  const pendingAll = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) !== normalizeFilter('done')), [tasks]);
+  const pending = useMemo(() => pendingAll.filter(matchesType), [pendingAll, typeFilter]);
+  // Chip counts (from the unfiltered pending set).
+  const typeCounts = useMemo(() => ({
+    all: pendingAll.length,
+    reminders: pendingAll.filter(isReminderT).length,
+    recurring: pendingAll.filter(isRecurringT).length,
+    scheduled: pendingAll.filter(isScheduledT).length,
+  }), [pendingAll]);
   const done = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).slice(0, 5), [tasks]);
   const todayTasks = useMemo(() => pending.filter((t: any) => !t.dueDate || t.dueDate <= todayStr), [pending, todayStr]);
   const tomorrowTasks = useMemo(() => pending.filter((t: any) => t.dueDate === tomorrowStr), [pending, tomorrowStr]);
@@ -1547,7 +1565,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   ) : null;
 
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); setExpandedId(null); } }}>
+    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); setExpandedId(null); setTypeFilter("all"); } }}>
       <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl max-h-[85vh] overflow-y-auto">
         {/* Any.do header */}
         <div className="flex items-center justify-between px-4 pt-3 pb-3 border-b border-border/40">
@@ -1561,6 +1579,30 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
           <DialogClose className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
             <X className="h-5 w-5" />
           </DialogClose>
+        </div>
+
+        {/* Type filter chips — see & reconcile tasks by kind */}
+        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border/30 overflow-x-auto scrollbar-hide">
+          {([
+            { key: "all", label: "All", icon: ListTodo },
+            { key: "reminders", label: "Reminders", icon: Bell },
+            { key: "recurring", label: "Recurring", icon: Repeat },
+            { key: "scheduled", label: "Scheduled", icon: CalendarDays },
+          ] as const).map(({ key, label, icon: Icon }) => {
+            const active = typeFilter === key;
+            const count = (typeCounts as any)[key];
+            return (
+              <button
+                key={key}
+                onClick={() => setTypeFilter(key)}
+                data-testid={`task-filter-${key}`}
+                className={`inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 transition-colors ${active ? 'bg-primary text-primary-foreground' : 'bg-muted/50 text-muted-foreground hover:bg-muted border border-border/50'}`}
+              >
+                <Icon className="h-3 w-3" />{label}
+                <span className={`tabular-nums ${active ? 'opacity-80' : 'opacity-60'}`}>{count}</span>
+              </button>
+            );
+          })}
         </div>
 
         <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '65vh' }}>
