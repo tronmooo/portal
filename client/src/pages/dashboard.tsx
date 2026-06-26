@@ -1202,8 +1202,8 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   const [addingTo, setAddingTo] = useState<string | null>(null);
   // Which task is expanded into the detail/edit panel.
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  // Type filter so the user can see & reconcile by kind.
-  const [typeFilter, setTypeFilter] = useState<"all" | "reminders" | "recurring" | "scheduled">("all");
+  // Active tab — organizes tasks the way a task manager does.
+  const [tab, setTab] = useState<"today" | "recurring" | "upcoming" | "completed">("today");
   // U1 fix: track which task is pending confirmation before delete.
   const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
   // Profiles for the assigned-to chip (id → name).
@@ -1380,27 +1380,18 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
 
   const todayStr = new Date().toLocaleDateString('en-CA');
   const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('en-CA'); })();
-  // Type predicates used by both the filter chips (counts) and the list filter.
+  // Kind predicates used for badges + tab routing.
   const isReminderT = (t: any) => (t.tags || []).includes("reminder") || t.source === "reminder";
   const isRecurringT = (t: any) => (t.tags || []).some((x: string) => String(x).startsWith("recur:"));
-  const isScheduledT = (t: any) => !!t.dueDate;
-  const matchesType = (t: any) => typeFilter === "all"
-    || (typeFilter === "reminders" && isReminderT(t))
-    || (typeFilter === "recurring" && isRecurringT(t))
-    || (typeFilter === "scheduled" && isScheduledT(t));
   const pendingAll = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) !== normalizeFilter('done')), [tasks]);
-  const pending = useMemo(() => pendingAll.filter(matchesType), [pendingAll, typeFilter]);
-  // Chip counts (from the unfiltered pending set).
-  const typeCounts = useMemo(() => ({
-    all: pendingAll.length,
-    reminders: pendingAll.filter(isReminderT).length,
-    recurring: pendingAll.filter(isRecurringT).length,
-    scheduled: pendingAll.filter(isScheduledT).length,
-  }), [pendingAll]);
-  const done = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).slice(0, 5), [tasks]);
-  const todayTasks = useMemo(() => pending.filter((t: any) => !t.dueDate || t.dueDate <= todayStr), [pending, todayStr]);
-  const tomorrowTasks = useMemo(() => pending.filter((t: any) => t.dueDate === tomorrowStr), [pending, tomorrowStr]);
-  const upcomingTasks = useMemo(() => pending.filter((t: any) => t.dueDate && t.dueDate > tomorrowStr), [pending, tomorrowStr]);
+  const done = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).slice(0, 8), [tasks]);
+  // Recurring lives in its own tab; Today/Upcoming exclude recurring so a chore
+  // doesn't show in three places at once.
+  const recurringTasks = useMemo(() => pendingAll.filter(isRecurringT), [pendingAll]);
+  const todayTasks = useMemo(() => pendingAll.filter((t: any) => !isRecurringT(t) && (!t.dueDate || t.dueDate <= todayStr)), [pendingAll, todayStr]);
+  const upcomingTasks = useMemo(() => pendingAll.filter((t: any) => !isRecurringT(t) && t.dueDate && t.dueDate > todayStr), [pendingAll, todayStr]);
+  const tabCounts = { today: todayTasks.length, recurring: recurringTasks.length, upcoming: upcomingTasks.length, completed: done.length };
+  const activeList = tab === "today" ? todayTasks : tab === "recurring" ? recurringTasks : tab === "upcoming" ? upcomingTasks : done;
 
   // Priority color lines — exact Any.do style
   const PLINE: Record<string, string> = { high: '#E53935', medium: '#FFA726', low: '#42A5F5' };
@@ -1414,80 +1405,78 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
     setAddingTo(null);
   };
 
+  // Deterministic avatar color from a profile id.
+  const avatarHue = (id: string) => { let h = 0; for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0; return h % 360; };
+  const Avatars = ({ ids }: { ids: string[] }) => (
+    <div className="flex -space-x-1.5 shrink-0">
+      {ids.slice(0, 3).map((pid) => {
+        const nm = profileName(pid); const init = nm.split(/\s+/).slice(0, 2).map((w: string) => w[0]?.toUpperCase() || "").join("") || "?";
+        return <span key={pid} title={nm} className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white ring-1 ring-background" style={{ backgroundColor: `hsl(${avatarHue(pid)} 55% 45%)` }}>{init}</span>;
+      })}
+      {ids.length > 3 && <span className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-[8px] font-bold text-muted-foreground ring-1 ring-background">+{ids.length - 3}</span>}
+    </div>
+  );
+
   const TaskRow = ({ t, dimmed = false }: { t: any; dimmed?: boolean }) => {
     const freq = recurOf(t);
     const expanded = expandedId === t.id;
     const isReminder = (t.tags || []).includes("reminder") || (t.source === "reminder");
-    const onCalendar = !!t.dueDate; // tasks with a due date materialize on the calendar
+    const onCalendar = !!t.dueDate;
+    const pColor = PLINE[t.priority] || '#42A5F5';
     return (
-    <div className={`${dimmed ? 'opacity-50' : ''} ${expanded ? 'bg-muted/20' : 'hover:bg-muted/30'} transition-colors border-b border-border/10 last:border-b-0`}>
-      <div className="flex items-start gap-3 px-4 py-2.5">
+    <div
+      className={`rounded-xl border transition-all ${dimmed ? 'opacity-50 border-border/30 bg-card/40' : expanded ? 'border-emerald-500/50 bg-card shadow-[0_0_0_1px_rgba(16,185,129,0.35),0_4px_20px_-6px_rgba(16,185,129,0.25)]' : 'border-border/50 bg-card/60 hover:border-border hover:bg-card'}`}
+      data-testid={`task-card-${t.id}`}
+    >
+      <div className="flex items-start gap-2.5 p-3">
+        {/* Glowing circular checkbox */}
         <button
           onClick={() => toggleMutation.mutate({ id: t.id, status: dimmed ? 'todo' : 'done' })}
-          className="shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center touch-manipulation"
+          className="shrink-0 min-w-[36px] min-h-[36px] flex items-center justify-center touch-manipulation -m-1"
           aria-label={dimmed ? "Mark as not done" : "Mark as done"}
-          title={dimmed ? "Mark as not done" : "Mark as done"}
         >
-          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${dimmed ? 'bg-muted-foreground/20 border-muted-foreground/30' : 'border-muted-foreground/40 hover:border-primary'}`}>
-            {dimmed && <Check className="h-3 w-3 text-muted-foreground/50" strokeWidth={3} />}
+          <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${dimmed ? 'bg-emerald-500/15 border-emerald-500/40' : expanded ? 'border-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'border-muted-foreground/40 hover:border-emerald-500'}`}>
+            {(dimmed || expanded) && <Check className={`h-3.5 w-3.5 ${dimmed ? 'text-emerald-500/60' : 'text-emerald-500'}`} strokeWidth={3} />}
           </div>
         </button>
-        {/* Title + meta — click to expand the detail/edit panel */}
-        <button
-          className="flex-1 min-w-0 text-left"
-          onClick={() => setExpandedId(expanded ? null : t.id)}
-          data-testid={`task-row-${t.id}`}
-          aria-expanded={expanded}
-        >
+        {/* Title + meta — click to expand */}
+        <button className="flex-1 min-w-0 text-left" onClick={() => setExpandedId(expanded ? null : t.id)} data-testid={`task-row-${t.id}`} aria-expanded={expanded}>
           <div className="flex items-center gap-1.5">
-            {!dimmed && t.priority && (
-              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: PLINE[t.priority] || '#42A5F5' }} />
-            )}
-            <p className={`text-sm ${dimmed ? 'line-through text-muted-foreground' : 'text-foreground'} truncate`}>{t.title}</p>
+            {!dimmed && <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: pColor }} />}
+            <p className={`text-[15px] font-medium ${dimmed ? 'line-through text-muted-foreground' : 'text-foreground'} truncate`}>{t.title}</p>
           </div>
           {!dimmed && (
-            <div className="flex flex-wrap items-center gap-1.5 mt-1">
-              {isReminder && (
-                <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400"><Bell className="h-2.5 w-2.5" />Reminder</span>
-              )}
-              {freq && (
-                <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-primary/12 text-primary"><Repeat className="h-2.5 w-2.5" />{recurLabel(freq)}</span>
-              )}
-              {t.dueDate && (
-                <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground"><Calendar className="h-2.5 w-2.5" />{fmtDate(t.dueDate)}</span>
-              )}
-              {onCalendar && (
-                <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-sky-500/12 text-sky-600 dark:text-sky-400"><CalendarDays className="h-2.5 w-2.5" />On calendar</span>
-              )}
-              {(t.linkedProfiles || []).slice(0, 1).map((pid: string) => (
-                <span key={pid} className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground"><User className="h-2.5 w-2.5" />{profileName(pid)}</span>
-              ))}
-              {t.description && (
-                <span className="inline-flex items-center text-muted-foreground/60"><FileText className="h-2.5 w-2.5" /></span>
-              )}
+            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+              {isReminder && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400"><Bell className="h-2.5 w-2.5" />Reminder</span>}
+              {freq && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-500/12 text-emerald-600 dark:text-emerald-400"><Repeat className="h-2.5 w-2.5" />{recurLabel(freq)}</span>}
+              {t.dueDate && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><Calendar className="h-2.5 w-2.5" />{fmtDate(t.dueDate)}</span>}
+              {onCalendar && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-sky-500/12 text-sky-600 dark:text-sky-400"><CalendarDays className="h-2.5 w-2.5" />On calendar</span>}
+              {t.description && <FileText className="h-3 w-3 text-muted-foreground/50" />}
             </div>
           )}
           {freq && nextOccurrence(t) && !dimmed && (
-            <span className="text-[10px] text-muted-foreground/70 mt-0.5 block">Next: {fmtDate(nextOccurrence(t)!)}</span>
+            <span className="text-[10px] text-muted-foreground/70 mt-1 block">Next: {fmtDate(nextOccurrence(t)!)}</span>
           )}
         </button>
-        {dimmed ? (
-          <button
-            onClick={() => setTaskToDelete({ id: t.id, title: t.title })}
-            disabled={deleteMutation.isPending}
-            className="shrink-0 mt-0.5 text-muted-foreground/40 hover:text-destructive touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center disabled:opacity-40"
-            aria-label="Delete task permanently" title="Delete task permanently" data-testid={`btn-delete-task-${t.id}`}
-          ><X className="h-3.5 w-3.5" /></button>
-        ) : (
-          <button onClick={() => setExpandedId(expanded ? null : t.id)} className="shrink-0 mt-0.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-muted-foreground/50" aria-label="Edit task" data-testid={`task-expand-${t.id}`}>
-            {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          </button>
-        )}
+        {/* Right: avatar stack + reminder bell / expand */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {!dimmed && (t.linkedProfiles || []).length > 0 && <Avatars ids={t.linkedProfiles} />}
+          {dimmed ? (
+            <button onClick={() => setTaskToDelete({ id: t.id, title: t.title })} disabled={deleteMutation.isPending}
+              className="text-muted-foreground/40 hover:text-destructive min-w-[36px] min-h-[36px] flex items-center justify-center disabled:opacity-40" aria-label="Delete task" data-testid={`btn-delete-task-${t.id}`}><X className="h-3.5 w-3.5" /></button>
+          ) : isReminder ? (
+            <Bell className="h-4 w-4 text-amber-500" />
+          ) : (
+            <button onClick={() => setExpandedId(expanded ? null : t.id)} className="min-w-[36px] min-h-[36px] flex items-center justify-center text-muted-foreground/50" aria-label="Edit task" data-testid={`task-expand-${t.id}`}>
+              {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── Expanded detail / edit panel ── */}
       {expanded && !dimmed && (
-        <div className="px-4 pb-3 pt-1 space-y-3" data-testid={`task-detail-${t.id}`}>
+        <div className="px-3 pb-3 pt-0 space-y-3 border-t border-border/30 mt-0" data-testid={`task-detail-${t.id}`}>
           {/* Priority */}
           <div>
             <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Flag className="h-3 w-3" />Priority</label>
@@ -1540,108 +1529,79 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
     );
   };
 
-  const SectionHeader = ({ label, section }: { label: string; section: string }) => (
-    <div className="flex items-center justify-between px-4 pt-3 pb-1">
-      <span className="font-bold text-base text-foreground">{label}</span>
-      <button onClick={() => setAddingTo(section)} className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-muted transition-colors" data-testid={`button-add-to-${section}`}>
-        <Plus className="h-4 w-4 text-muted-foreground" />
-      </button>
-    </div>
-  );
-
-  const AddRow = ({ section }: { section: string }) => addingTo === section ? (
-    <div className="px-4 py-2">
-      <input
-        autoFocus
-        data-testid={`input-new-task-${section}`}
-        className="w-full text-sm bg-muted/40 border border-border rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
-        placeholder="I want to..."
-        value={newTaskTitle}
-        onChange={e => setNewTaskTitle(e.target.value)}
-        onKeyDown={handleAdd}
-        onBlur={() => { if (!newTaskTitle.trim()) setAddingTo(null); }}
-      />
-    </div>
-  ) : null;
 
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); setExpandedId(null); setTypeFilter("all"); } }}>
-      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-sm flex flex-col p-0 gap-0 rounded-2xl max-h-[85vh] overflow-y-auto">
-        {/* Any.do header */}
-        <div className="flex items-center justify-between px-4 pt-3 pb-3 border-b border-border/40">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-sm bg-red-500 flex items-center justify-center">
+    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); setExpandedId(null); setTab("today"); } }}>
+      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-md flex flex-col p-0 gap-0 rounded-2xl max-h-[85vh] overflow-hidden">
+        {/* Header with a subtle top glow */}
+        <div className="relative flex items-center justify-between px-4 pt-3.5 pb-3 border-b border-border/40">
+          <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-rose-500/10 to-transparent pointer-events-none" />
+          <div className="relative flex items-center gap-2">
+            <div className="w-6 h-6 rounded-md bg-red-500 flex items-center justify-center">
               <Check className="h-4 w-4 text-white" strokeWidth={3} />
             </div>
-            <span className="font-bold text-sm uppercase tracking-wide text-foreground">All Tasks</span>
-            <Badge variant="secondary">{pending.length}</Badge>
+            <span className="font-bold text-sm uppercase tracking-wide text-foreground">Task Manager</span>
+            <Badge variant="secondary">{pendingAll.length}</Badge>
           </div>
-          <DialogClose className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
+          <DialogClose className="relative w-10 h-10 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
             <X className="h-5 w-5" />
           </DialogClose>
         </div>
 
-        {/* Type filter chips — see & reconcile tasks by kind */}
-        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border/30 overflow-x-auto scrollbar-hide">
+        {/* Tabs — Today / Recurring / Upcoming / Completed */}
+        <div className="flex items-center gap-1 px-2 py-2 border-b border-border/30 overflow-x-auto scrollbar-hide">
           {([
-            { key: "all", label: "All", icon: ListTodo },
-            { key: "reminders", label: "Reminders", icon: Bell },
+            { key: "today", label: "Today", icon: Flame },
             { key: "recurring", label: "Recurring", icon: Repeat },
-            { key: "scheduled", label: "Scheduled", icon: CalendarDays },
+            { key: "upcoming", label: "Upcoming", icon: CalendarDays },
+            { key: "completed", label: "Completed", icon: CheckCircle2 },
           ] as const).map(({ key, label, icon: Icon }) => {
-            const active = typeFilter === key;
-            const count = (typeCounts as any)[key];
+            const active = tab === key;
+            const count = (tabCounts as any)[key];
             return (
               <button
                 key={key}
-                onClick={() => setTypeFilter(key)}
-                data-testid={`task-filter-${key}`}
-                className={`inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 transition-colors ${active ? 'bg-primary text-primary-foreground' : 'bg-muted/50 text-muted-foreground hover:bg-muted border border-border/50'}`}
+                onClick={() => { setTab(key); setExpandedId(null); }}
+                data-testid={`task-tab-${key}`}
+                className={`inline-flex items-center gap-1.5 text-[13px] font-medium px-3 py-1.5 rounded-lg whitespace-nowrap shrink-0 transition-colors ${active ? 'bg-foreground text-background' : 'text-muted-foreground hover:bg-muted/60'}`}
               >
-                <Icon className="h-3 w-3" />{label}
-                <span className={`tabular-nums ${active ? 'opacity-80' : 'opacity-60'}`}>{count}</span>
+                <Icon className="h-3.5 w-3.5" />{label}
+                <span className={`tabular-nums text-[11px] ${active ? 'opacity-70' : 'opacity-50'}`}>({count})</span>
               </button>
             );
           })}
         </div>
 
-        <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '65vh' }}>
+        <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
           {isLoading ? (
-            <div className="p-4 space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
+            <div className="p-4 space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>
           ) : (
-            <div className="pb-4">
-              {/* TODAY */}
-              <SectionHeader label="Today" section="today" />
-              <AddRow section="today" />
-              {todayTasks.length === 0 && !addingTo && (
-                <p className="text-sm text-muted-foreground px-4 py-2">Nothing due today</p>
+            <div className="p-3">
+              {/* Section header for the active tab */}
+              <div className="flex items-center justify-between px-1 mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  {tab === "today" ? "Today's priorities" : tab === "recurring" ? "Recurring schedules" : tab === "upcoming" ? "Upcoming" : "Completed"}
+                </span>
+                {tab !== "completed" && (
+                  <button onClick={() => setAddingTo('today')} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors" data-testid="button-add-task"><Plus className="h-4 w-4 text-muted-foreground" /></button>
+                )}
+              </div>
+              {addingTo && tab !== "completed" && (
+                <div className="mb-2">
+                  <input autoFocus data-testid="input-new-task" className="w-full text-sm bg-muted/40 border border-border rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary"
+                    placeholder="I want to…" value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} onKeyDown={handleAdd}
+                    onBlur={() => { if (!newTaskTitle.trim()) setAddingTo(null); }} />
+                </div>
               )}
-              {todayTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}
-
-              {/* Completed (grayed, strikethrough) */}
-              {done.length > 0 && (
-                <>
-                  <div className="my-1 mx-4 border-t border-border/30" />
-                  {done.map((t: any) => <TaskRow key={t.id} t={t} dimmed />)}
-                </>
+              {activeList.length === 0 && !addingTo ? (
+                <div className="text-center py-10 text-sm text-muted-foreground">
+                  {tab === "today" ? "Nothing for today 🎉" : tab === "recurring" ? "No recurring tasks yet" : tab === "upcoming" ? "Nothing upcoming" : "No completed tasks"}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {activeList.map((t: any) => <TaskRow key={t.id} t={t} dimmed={tab === "completed"} />)}
+                </div>
               )}
-
-              {/* TOMORROW */}
-              {(tomorrowTasks.length > 0 || addingTo === 'tomorrow') && (
-                <>
-                  <SectionHeader label="Tomorrow" section="tomorrow" />
-                  <AddRow section="tomorrow" />
-                  {tomorrowTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}
-                </>
-              )}
-
-              {/* UPCOMING */}
-              <SectionHeader label="Upcoming" section="upcoming" />
-              <AddRow section="upcoming" />
-              {upcomingTasks.length === 0 && !addingTo && (
-                <p className="text-sm text-muted-foreground px-4 py-2">No upcoming tasks</p>
-              )}
-              {upcomingTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}
             </div>
           )}
         </div>
