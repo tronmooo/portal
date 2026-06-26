@@ -2530,6 +2530,236 @@ function saveDismissed(ids: Set<string>) {
   } catch { /* ignore quota errors */ }
 }
 
+// ─── Section: HERO BRIEFING (Dashboard v2, Phase 2) ──────────────────────────
+// Replaces the long AI Summary narrative with a greeting + ONE state
+// (attention needed / on track / opportunity) + ONE action. Computed from the
+// SAME ranked Now list (shared/now-rank) plus finance momentum, so it can never
+// contradict the Now Queue or the data on screen. Deterministic & instant — no
+// extra AI round-trip, no restating of metrics.
+function timeGreeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+function HeroBriefing({ enhanced, allProfiles, filterIds = [], filterMode = "everyone" }: { enhanced: any; allProfiles: any[]; filterIds?: string[]; filterMode?: string }) {
+  const [, navigate] = useLocation();
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: events = [] } = useQuery<any[]>({
+    queryKey: ["/api/events", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const { data: goalsRaw } = useQuery<any>({
+    queryKey: ["/api/goals", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
+  const items = useMemo(() => computeNowItems({
+    overdueTasks: enhanced?.overdueTasks || [],
+    dueSoonTasks: [...(enhanced?.tasksDueSoon || []), ...(enhanced?.upcomingTasks || [])],
+    bills: enhanced?.financeSnapshot?.upcomingBills || [],
+    documents: enhanced?.expiringDocuments || [],
+    events: Array.isArray(events) ? events : [],
+    goals: Array.isArray(goals) ? goals : [],
+  }), [enhanced, events, goals]);
+
+  const name = useMemo(() => {
+    const pick = (n?: string) => (n || "").trim().split(/\s+/)[0];
+    if (filterMode === "selected" && filterIds.length === 1) {
+      const p = (allProfiles || []).find((x: any) => x.id === filterIds[0]);
+      if (p?.name) return pick(p.name);
+    }
+    const self = (allProfiles || []).find((x: any) => x.type === "self");
+    return pick(self?.name) || "there";
+  }, [allProfiles, filterIds, filterMode]);
+
+  const spendTrend = Number(enhanced?.financeSnapshot?.spendTrend ?? 0);
+  const briefing = useMemo(() => {
+    const top = items[0];
+    const overdue = items.filter(i => (i.daysUntil ?? 1) < 0);
+    if (top && (top.daysUntil ?? 1) < 0) {
+      return {
+        state: "attention" as const,
+        sentence: overdue.length > 1 ? `${overdue.length} items are overdue — start with “${top.title}”.` : `“${top.title}” is overdue (${top.detail}).`,
+        cta: { label: top.action === "pay" ? "Pay now" : top.action === "complete" ? "Complete it" : "Open", href: top.href },
+      };
+    }
+    if (top && (top.daysUntil ?? 99) <= 2) {
+      return { state: "attention" as const, sentence: `“${top.title}” is due ${top.detail}.`, cta: { label: "Open", href: top.href } };
+    }
+    if (top) {
+      return { state: "on_track" as const, sentence: `You're on pace. Next up: “${top.title}” (${top.detail}).`, cta: { label: "Open", href: top.href } };
+    }
+    if (spendTrend < -5) {
+      return { state: "opportunity" as const, sentence: `Spending is down ${Math.abs(spendTrend)}% vs last month — a good moment to move it to savings.`, cta: { label: "Open Finance", href: "/dashboard/finance" } };
+    }
+    return { state: "on_track" as const, sentence: "You're all caught up — nothing needs attention right now.", cta: { label: "Open Finance", href: "/dashboard/finance" } };
+  }, [items, spendTrend]);
+
+  const META = {
+    attention: { label: "Attention needed", color: "0 72% 55%", Icon: AlertTriangle },
+    on_track: { label: "On track", color: "155 60% 48%", Icon: CheckCircle2 },
+    opportunity: { label: "Opportunity", color: "262 70% 62%", Icon: Sparkles },
+  } as const;
+  const meta = META[briefing.state];
+  const Icon = meta.Icon;
+
+  return (
+    <div className="rounded-2xl border border-border/50 p-4" style={{ background: `linear-gradient(135deg, hsl(${meta.color} / 0.10) 0%, transparent 60%)` }} data-testid="section-hero-briefing">
+      <p className="text-sm text-muted-foreground">{timeGreeting()}, <span className="font-semibold text-foreground">{name}</span>.</p>
+      <span className="mt-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide" style={{ background: `hsl(${meta.color} / 0.15)`, color: `hsl(${meta.color})` }}>
+        <Icon className="h-3 w-3" /> {meta.label}
+      </span>
+      <p className="mt-2 text-[15px] font-semibold leading-snug">{briefing.sentence}</p>
+      <Button size="sm" className="mt-3 h-8" onClick={() => navigate(briefing.cta.href)} data-testid="briefing-cta">
+        {briefing.cta.label} <ArrowRight className="ml-1 h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
+}
+
+// ─── Section: TRENDS (Dashboard v2, Phase 3) ─────────────────────────────────
+// 2–3 high-signal trend modules, each ending in a next-step caption (a verb),
+// replacing the static Key Findings snippets. Reads existing endpoints only.
+function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone" }: { enhanced: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
+  const [, navigate] = useLocation();
+  const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: incomesRaw } = useQuery<any>({
+    queryKey: ["/api/incomes", filterMode, ...filterIds, "trends"],
+    queryFn: () => apiRequest("GET", `/api/incomes${leading}`).then(r => r.json()).catch(() => []),
+    staleTime: 60_000,
+  });
+  const incomes = Array.isArray(incomesRaw) ? incomesRaw : (incomesRaw?.items || []);
+  const histUrl = leading ? `/api/net-worth/history${leading}&lookbackDays=120` : `/api/net-worth/history?lookbackDays=120`;
+  const { data: nwHistory = [] } = useQuery<any[]>({
+    queryKey: ["/api/net-worth/history", filterMode, ...filterIds, "trends"],
+    queryFn: () => apiRequest("GET", histUrl).then(r => r.json()).catch(() => []),
+    staleTime: 60_000,
+  });
+
+  const income = incomes.reduce((s: number, i: any) => s + (Number(i.amount) || 0), 0);
+  const spend = Number(enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0);
+  const net = income - spend;
+  const adherence = Math.min(100, Number(stats?.habitCompletionRate ?? 0));
+
+  const nwSeries = useMemo(() => {
+    const rows = Array.isArray(nwHistory) ? [...nwHistory] : [];
+    rows.sort((a, b) => String(a.snapshotDate).localeCompare(String(b.snapshotDate)));
+    return rows.map((r: any) => Number(r.netWorth) || 0);
+  }, [nwHistory]);
+  const nwTrend = nwSeries.length >= 2 && nwSeries[0] !== 0 ? ((nwSeries[nwSeries.length - 1] - nwSeries[0]) / Math.abs(nwSeries[0])) * 100 : null;
+  const nwPath = useMemo(() => {
+    const s = nwSeries.length >= 2 ? nwSeries : null;
+    if (!s) return null;
+    const min = Math.min(...s), max = Math.max(...s), span = (max - min) || 1;
+    const W = 100, H = 28;
+    return s.map((v, i) => `${i === 0 ? "M" : "L"}${((i / (s.length - 1)) * W).toFixed(1)},${(H - ((v - min) / span) * H).toFixed(1)}`).join(" ");
+  }, [nwSeries]);
+
+  const fmt = (n: number) => `$${Math.round(Math.abs(n)).toLocaleString()}`;
+  const cards = [
+    {
+      key: "cashflow", title: "Spending vs income", accent: net >= 0 ? "155 60% 48%" : "0 72% 55%",
+      headline: `${net >= 0 ? "+" : "−"}${fmt(net)}`,
+      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>In {fmt(income)}</span><span>·</span><span>Out {fmt(spend)}</span></div>,
+      caption: net >= 0 ? "You're cash-flow positive — consider moving the surplus to savings." : "You're spending more than you earn — review top categories.",
+      href: "/dashboard/finance",
+    },
+    {
+      key: "networth", title: "Net worth", accent: (nwTrend ?? 0) >= 0 ? "155 60% 48%" : "0 72% 55%",
+      headline: nwTrend == null ? "—" : `${nwTrend >= 0 ? "↑" : "↓"} ${Math.abs(nwTrend).toFixed(1)}%`,
+      body: nwPath ? (
+        <svg viewBox="0 0 100 28" className="mt-1 h-7 w-full" preserveAspectRatio="none">
+          <path d={nwPath} fill="none" stroke={`hsl(${(nwTrend ?? 0) >= 0 ? "155 60% 48%" : "0 72% 55%"})`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : <p className="mt-1 text-[10px] text-muted-foreground">Tracking — more data soon.</p>,
+      caption: nwTrend == null ? "Snapshots are accumulating; a trend appears within days." : nwTrend >= 0 ? "Trending up — keep paying down high-interest debt." : "Trending down — review your largest liabilities.",
+      href: "/dashboard/finance",
+    },
+    {
+      key: "health", title: "Habit adherence", accent: adherence >= 60 ? "155 60% 48%" : "43 85% 52%",
+      headline: `${adherence}%`,
+      body: <div className="mt-1.5 h-1.5 rounded-full bg-muted/60 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${adherence}%`, background: `hsl(${adherence >= 60 ? "155 60% 48%" : "43 85% 52%"})` }} /></div>,
+      caption: adherence >= 60 ? "Strong consistency — keep the streak going." : "Below your target — pick one keystone habit to lock in today.",
+      href: "/dashboard/health",
+    },
+  ];
+
+  return (
+    <CollapsibleSection accent="200 80% 55%" icon={Activity} label="Trends" testId="section-trends">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+        {cards.map((c) => (
+          <button key={c.key} type="button" onClick={() => navigate(c.href)}
+            className="flex flex-col rounded-2xl border border-border/50 bg-card/60 p-3 text-left card-lift active:scale-[0.98] transition-all"
+            data-testid={`trend-${c.key}`}>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{c.title}</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums" style={{ color: `hsl(${c.accent})` }}>{c.headline}</p>
+            {c.body}
+            <p className="mt-2 text-[10px] leading-snug text-muted-foreground">{c.caption}</p>
+          </button>
+        ))}
+      </div>
+    </CollapsibleSection>
+  );
+}
+
+// ─── Section: DOMAIN HUBS (Dashboard v2, Phase 4) ────────────────────────────
+// Compact navigation cards — one per life domain — each = a count + one CTA.
+// Replaces the large mixed-content sections (full lists) with drill-down links.
+function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filterMode = "everyone" }: { enhanced: any; stats: DashboardStats | undefined; allProfiles: any[]; filterIds?: string[]; filterMode?: string }) {
+  const [, navigate] = useLocation();
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: events = [] } = useQuery<any[]>({
+    queryKey: ["/api/events", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const { data: goalsRaw } = useQuery<any>({
+    queryKey: ["/api/goals", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const next7Events = (Array.isArray(events) ? events : []).filter((e: any) => {
+    const d = new Date(`${(e.date || "").slice(0, 10)}T12:00:00`); if (isNaN(d.getTime())) return false;
+    const diff = Math.round((d.getTime() - today.getTime()) / 86400000); return diff >= 0 && diff <= 7;
+  }).length;
+  const activeGoals = (Array.isArray(goals) ? goals : []).filter((g: any) => { const s = String(g.status || "").toLowerCase(); return s !== "completed" && s !== "abandoned"; }).length;
+  const expiringDocs = (enhanced?.expiringDocuments || []).length;
+  const billCount = (enhanced?.financeSnapshot?.upcomingBills || []).length;
+  const people = (allProfiles || []).filter((p: any) => p.type === "person" || p.type === "self").length;
+  const adherence = Math.round(Number(stats?.habitCompletionRate ?? 0));
+
+  const hubs = [
+    { key: "finance", label: "Finance", Icon: DollarSign, accent: "43 85% 52%", value: `${billCount} bill${billCount === 1 ? "" : "s"} due`, href: "/dashboard/finance" },
+    { key: "health", label: "Health", Icon: HeartPulse, accent: "155 60% 48%", value: `${adherence}% adherence`, href: "/dashboard/health" },
+    { key: "calendar", label: "Calendar", Icon: CalendarDays, accent: "200 80% 55%", value: `${next7Events} this week`, href: "/calendar" },
+    { key: "documents", label: "Documents", Icon: FileText, accent: "205 90% 58%", value: expiringDocs > 0 ? `${expiringDocs} expiring` : "All current", href: "/dashboard/documents" },
+    { key: "goals", label: "Goals", Icon: Target, accent: "262 70% 62%", value: `${activeGoals} active`, href: "/goals" },
+    { key: "relationships", label: "People", Icon: Users, accent: "310 50% 58%", value: `${people} ${people === 1 ? "profile" : "profiles"}`, href: "/profiles" },
+  ];
+
+  return (
+    <CollapsibleSection accent="262 60% 58%" icon={BarChart3} label="Explore" testId="section-domain-hubs">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {hubs.map(({ key, label, Icon, accent, value, href }) => (
+          <button key={key} type="button" onClick={() => navigate(href)}
+            className="flex items-center gap-2.5 rounded-xl border border-border/50 bg-card/60 p-2.5 text-left card-lift active:scale-[0.98] transition-all"
+            data-testid={`hub-${key}`}>
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: `hsl(${accent} / 0.15)` }}>
+              <Icon className="h-4 w-4" style={{ color: `hsl(${accent})` }} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold truncate">{label}</p>
+              <p className="text-[10px] text-muted-foreground truncate">{value}</p>
+            </div>
+          </button>
+        ))}
+      </div>
+    </CollapsibleSection>
+  );
+}
+
 // ─── Section: NOW QUEUE (Dashboard v2, Phase 1) ──────────────────────────────
 // The single urgency surface. Merges Action Required (tasks+bills), Bills due,
 // Today's Schedule (events), Upcoming (events/renewals via docs), and
@@ -5054,7 +5284,7 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
   );
 
   return (
-    <CollapsibleSection icon={Activity} label="Recent Activity" count={validActivities.length} testId="section-activity">
+    <CollapsibleSection icon={Activity} label="Recent Activity" count={validActivities.length} defaultOpen={false} testId="section-activity">
       <div className="space-y-0.5">
         {validActivities.map((item, i) => {
           const Icon = ACTIVITY_ICONS[item.type] || Activity;
@@ -5373,51 +5603,80 @@ interface DashboardSection {
   column: "left" | "right" | "full";
 }
 
+// Dashboard v2 — Executive layout. Three layers: NOW (what needs attention) →
+// TRAJECTORY (am I improving) → EXPLORE (where do I go next). Each section
+// appears once; the legacy duplicates are kept in code but hidden by default
+// (still toggleable via Customize and reachable on their own pages).
 const DEFAULT_SECTIONS: DashboardSection[] = [
-  // 1) AI Summary at the very top — hero context-setter
-  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: true, column: "full" },
-  // 2) Hero KPIs — Net Worth / Budget / Cash Flow (big tiles)
-  { id: "hero-kpis",        label: "Hero Metrics",         icon: Sparkles,     visible: true, column: "full" },
-  // 3) Secondary KPI chip row (tasks, spend, habits, journal, docs)
-  { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
-  // 4) NOW QUEUE (Dashboard v2, Phase 1) — the single urgency surface. Merges
-  // Action Required, Bills due, Today's Schedule, Upcoming, and overdue Goals
-  // into one ranked list. The four legacy urgency sections below are hidden by
-  // default (still available via Customize) so urgency is shown ONCE.
+  // ── NOW ─────────────────────────────────────────────────────────────────
+  // Greeting + one AI state + one action (Phase 2). Replaces the long AI Summary.
+  { id: "hero-briefing",    label: "Briefing",             icon: Sparkles,     visible: true, column: "full" },
+  // The single urgency surface (Phase 1) — merges Action Required, Bills,
+  // Today's Schedule, Upcoming, and overdue Goals into one ranked list.
   { id: "now-queue",        label: "Now",                  icon: Flame,        visible: true, column: "full" },
-  // === 💰 Money swimlane ===
-  // BUG-20260529-finance-section-leak: the Finance section aggregates spending/
-  // budget/cash-flow across every profile (Bob, Jane, shared budgets, etc.)
-  // and renders the inflated "Budget exceeded by \$703,210 · 28228% of \$2,500"
-  // banner that the user reported. The hero KPIs already cover Net Worth /
-  // Budget / Cash Flow in a profile-aware way; the FinanceWidget duplicates
-  // those numbers without the same filtering discipline. Hidden by default
-  // until the per-profile budgeting fix lands. LAYOUT_VERSION bumped below
-  // so existing saved layouts reset and pick up the new default.
+  // ── TRAJECTORY ──────────────────────────────────────────────────────────
+  // Hero finance metrics (Net Worth / Cash Flow / Budget).
+  { id: "hero-kpis",        label: "Hero Metrics",         icon: Sparkles,     visible: true, column: "full" },
+  // Secondary metric chip row (6 tiles).
+  { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
+  // Captioned trend modules (Phase 3) — replaces static Key Findings snippets.
+  { id: "trends",           label: "Trends",               icon: Activity,     visible: true, column: "full" },
+  // ── EXPLORE ─────────────────────────────────────────────────────────────
+  // Compact domain navigation cards (Phase 4).
+  { id: "domain-hubs",      label: "Explore",              icon: BarChart3,    visible: true, column: "full" },
+  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "full" },
+  // Log-style data lives at the BOTTOM, collapsed by default (Phase 4).
+  { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
+
+  // ── Hidden by default (superseded; available via Customize) ──────────────
+  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: false, column: "full" },
   { id: "finance",          label: "Finance",              icon: DollarSign,   visible: false, column: "full" },
-  // Bills/urgency are now folded into the Now Queue. Hidden by default (the
-  // full Bills & Subscriptions detail remains one Customize toggle away, and on
-  // the /dashboard/obligations page).
   { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: false, column: "full" },
-  // === 📅 Today swimlane === (folded into Now Queue; hidden by default)
   { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: false, column: "left" },
   { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: false, column: "right" },
-  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "full" },
-  // === 💡 Insights swimlane (PR K — replaced health-only swimlane) ===
-  { id: "key-findings",     label: "Key Findings",         icon: Lightbulb,    visible: true, column: "full" },
-  { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
-  // PR I — Cross-app reminder center: birthdays, renewals, expirations, appointments, etc.
-  // Upcoming reminders are folded into the Now Queue; hidden by default.
+  { id: "key-findings",     label: "Key Findings",         icon: Lightbulb,    visible: false, column: "full" },
   { id: "upcoming-dates",   label: "Upcoming",             icon: CalendarDays, visible: false, column: "full" },
 ];
 // Swimlane groups (id sets) — render small group header chips during layout
 const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: string[] }> = [
-  { key: "money",  label: "Money",  emoji: "💰", ids: ["finance", "obligations"] },
-  { key: "today",  label: "Today",  emoji: "📅", ids: ["today", "needs-attention", "goals"] },
-  { key: "insights", label: "Insights", emoji: "💡", ids: ["key-findings", "activity"] },
+  { key: "now",        label: "Now",        emoji: "⚡", ids: ["hero-briefing", "now-queue"] },
+  { key: "trajectory", label: "Trajectory", emoji: "📈", ids: ["hero-kpis", "kpis", "trends"] },
+  { key: "explore",    label: "Explore",    emoji: "🧭", ids: ["domain-hubs", "goals", "activity"] },
+  { key: "more",       label: "More (legacy)", emoji: "🗂️", ids: ["ai-summary", "finance", "obligations", "today", "needs-attention", "key-findings", "upcoming-dates"] },
 ];
 
-const LAYOUT_VERSION = 10; // Dashboard v2 Phase 1: Now Queue replaces the 4 urgency sections (needs-attention/today/obligations/upcoming-dates) which are now hidden by default
+const LAYOUT_VERSION = 11; // Dashboard v2 (Phases 1–4): Briefing + Now Queue + Trends + Domain Hubs; legacy sections hidden by default
+
+// ── Dashboard v2 Phase 5: Focus modes ───────────────────────────────────────
+// A mode reweights WHICH sections show and in WHAT order — Portol is too broad
+// for one static homepage. "Executive" honors the user's saved/custom layout;
+// the focused modes derive a fresh preset from the known sections. Persisted in
+// localStorage. Non-destructive: switching back to Executive restores the
+// saved layout untouched.
+export type DashMode = "executive" | "finance" | "health" | "daily";
+const DASH_MODE_LS_KEY = "portol_dashboard_mode_v1";
+const MODE_LABELS: Record<DashMode, string> = {
+  executive: "Executive", finance: "Finance", health: "Health", daily: "Daily ops",
+};
+const MODE_ORDER: Record<Exclude<DashMode, "executive">, string[]> = {
+  finance: ["hero-briefing", "now-queue", "hero-kpis", "trends", "kpis", "finance", "domain-hubs", "goals", "activity"],
+  health:  ["hero-briefing", "now-queue", "trends", "kpis", "domain-hubs", "goals", "hero-kpis", "activity"],
+  daily:   ["hero-briefing", "now-queue", "kpis", "domain-hubs", "goals", "trends", "hero-kpis", "activity"],
+};
+function loadDashMode(): DashMode {
+  try {
+    const m = localStorage.getItem(DASH_MODE_LS_KEY) as DashMode | null;
+    if (m && (m === "executive" || m === "finance" || m === "health" || m === "daily")) return m;
+  } catch { /* ignore */ }
+  return "executive";
+}
+function buildModeSections(mode: Exclude<DashMode, "executive">): DashboardSection[] {
+  const known = new Map(DEFAULT_SECTIONS.map(s => [s.id, s]));
+  return MODE_ORDER[mode]
+    .map(id => known.get(id))
+    .filter((s): s is DashboardSection => !!s)
+    .map(s => ({ ...s, visible: true, column: "full" as const }));
+}
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
@@ -5964,8 +6223,16 @@ export default function DashboardPage() {
     },
   });
 
-  const sections: DashboardSection[] =
-    parseSavedLayout(savedLayoutData?.value ?? null) || DEFAULT_SECTIONS;
+  // Phase 5: focus mode. Executive honors the saved/custom layout; the focused
+  // modes derive a preset. Persisted to localStorage; non-destructive.
+  const [dashMode, setDashMode] = useState<DashMode>(() => loadDashMode());
+  const changeDashMode = (m: DashMode) => {
+    setDashMode(m);
+    try { localStorage.setItem(DASH_MODE_LS_KEY, m); } catch { /* ignore */ }
+  };
+  const sections: DashboardSection[] = dashMode === "executive"
+    ? (parseSavedLayout(savedLayoutData?.value ?? null) || DEFAULT_SECTIONS)
+    : buildModeSections(dashMode);
 
   const saveMutation = useMutation({
     mutationFn: (layout: DashboardSection[]) =>
@@ -6030,8 +6297,17 @@ export default function DashboardPage() {
         content = (showDashSkeleton && !stats) ? <SkeletonGrid cols={3} rows={2} h="h-14" /> :
           stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={filterIds} filterMode={filterMode} /> : null;
         break;
+      case "hero-briefing":
+        content = <HeroBriefing enhanced={enhanced} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} />;
+        break;
       case "now-queue":
         content = <NowQueueSection enhanced={enhanced} stats={stats} filterIds={filterIds} filterMode={filterMode} />;
+        break;
+      case "trends":
+        content = <TrendsSection enhanced={enhanced} stats={stats} filterIds={filterIds} filterMode={filterMode} />;
+        break;
+      case "domain-hubs":
+        content = <DomainHubsSection enhanced={enhanced} stats={stats} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} />;
         break;
       case "today":
         content = <TodaySection enhanced={enhanced} stats={stats} />;
@@ -6119,6 +6395,21 @@ export default function DashboardPage() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+      </div>
+
+      {/* Focus mode switcher (Phase 5) — reweights which sections show + order */}
+      <div className="flex items-center gap-1 overflow-x-auto no-scrollbar -mx-0.5 px-0.5" data-testid="dashboard-mode-switcher">
+        {(["executive", "finance", "health", "daily"] as DashMode[]).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => changeDashMode(m)}
+            className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition-colors ${dashMode === m ? "bg-primary text-primary-foreground" : "bg-muted/50 text-muted-foreground hover:bg-muted"}`}
+            data-testid={`mode-${m}`}
+          >
+            {MODE_LABELS[m]}
+          </button>
+        ))}
       </div>
 
       {/* Import Dialog */}

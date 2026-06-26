@@ -884,3 +884,8 @@ button, a, [role="button"], .card-lift {
   filter: drop-shadow(0 0 4px hsl(var(--primary) / 0.45));
 }
 
+
+/* Hide scrollbars on horizontally-scrollable chip rows (dashboard mode switcher,
+   habit time filters) while keeping them scrollable. */
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
