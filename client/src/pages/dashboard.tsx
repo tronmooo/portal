@@ -1203,7 +1203,14 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   // Which task is expanded into the detail/edit panel.
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // Active tab — organizes tasks the way a task manager does.
-  const [tab, setTab] = useState<"today" | "recurring" | "upcoming" | "completed">("today");
+  const [tab, setTab] = useState<"today" | "recurring" | "upcoming">("today");
+  // Rich add-task composer.
+  const emptyComposer = { open: false, title: "", priority: "medium", recurrence: "", dueDate: "", assignees: [] as string[] };
+  const [composer, setComposer] = useState(emptyComposer);
+  // Reveal completed tasks (collapsed by default — no dedicated tab anymore).
+  const [showCompleted, setShowCompleted] = useState(false);
+  // Sort within a tab.
+  const [sortBy, setSortBy] = useState<"smart" | "priority" | "due">("smart");
   // U1 fix: track which task is pending confirmation before delete.
   const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
   // Profiles for the assigned-to chip (id → name).
@@ -1225,12 +1232,12 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   const isLoading = isPending;
 
   const createMutation = useMutation({
-    mutationFn: (title: string) => apiRequest("POST", "/api/tasks", { title, priority: "medium", status: "todo" }),
-    onMutate: async (title) => {
+    mutationFn: (payload: Record<string, any>) => apiRequest("POST", "/api/tasks", { status: "todo", priority: "medium", ...payload }),
+    onMutate: async (payload: Record<string, any>) => {
       await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
       const prev = queryClient.getQueryData(["/api/tasks", filterMode, ...filterIds]);
       queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) =>
-        [{ id: 'tmp-' + Date.now(), title, status: 'todo', priority: 'medium' }, ...(old || [])]
+        [{ id: 'tmp-' + Date.now(), status: 'todo', priority: 'medium', tags: [], linkedProfiles: [], ...payload }, ...(old || [])]
       );
       return { prev };
     },
@@ -1387,22 +1394,47 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   const done = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).slice(0, 8), [tasks]);
   // Recurring lives in its own tab; Today/Upcoming exclude recurring so a chore
   // doesn't show in three places at once.
-  const recurringTasks = useMemo(() => pendingAll.filter(isRecurringT), [pendingAll]);
-  const todayTasks = useMemo(() => pendingAll.filter((t: any) => !isRecurringT(t) && (!t.dueDate || t.dueDate <= todayStr)), [pendingAll, todayStr]);
-  const upcomingTasks = useMemo(() => pendingAll.filter((t: any) => !isRecurringT(t) && t.dueDate && t.dueDate > todayStr), [pendingAll, todayStr]);
-  const tabCounts = { today: todayTasks.length, recurring: recurringTasks.length, upcoming: upcomingTasks.length, completed: done.length };
-  const activeList = tab === "today" ? todayTasks : tab === "recurring" ? recurringTasks : tab === "upcoming" ? upcomingTasks : done;
+  const PRIO_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const sortTasks = (list: any[]) => {
+    if (sortBy === "priority") return [...list].sort((a, b) => (PRIO_RANK[a.priority] ?? 1) - (PRIO_RANK[b.priority] ?? 1));
+    if (sortBy === "due") return [...list].sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"));
+    return list; // smart = server order
+  };
+  const recurringTasks = useMemo(() => sortTasks(pendingAll.filter(isRecurringT)), [pendingAll, sortBy]);
+  const todayTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => !isRecurringT(t) && (!t.dueDate || t.dueDate <= todayStr))), [pendingAll, todayStr, sortBy]);
+  const upcomingTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => !isRecurringT(t) && t.dueDate && t.dueDate > todayStr)), [pendingAll, todayStr, sortBy]);
+  const tabCounts = { today: todayTasks.length, recurring: recurringTasks.length, upcoming: upcomingTasks.length };
+  const activeList = tab === "today" ? todayTasks : tab === "recurring" ? recurringTasks : upcomingTasks;
+  // Today progress (done today vs total touched today) for the summary bar.
+  const doneToday = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).length, [tasks]);
+  const todayTotal = todayTasks.length + doneToday;
 
   // Priority color lines — exact Any.do style
   const PLINE: Record<string, string> = { high: '#E53935', medium: '#FFA726', low: '#42A5F5' };
+
+  // Person-type profiles available for assignment.
+  const assignableProfiles = useMemo(() => (allProfiles || []).filter((p: any) => ["self", "person", "pet"].includes(p.type)), [allProfiles]);
 
   const handleAdd = (e: React.KeyboardEvent) => {
     if (e.key !== 'Enter') return;
     const title = newTaskTitle.trim();
     if (!title) return;
-    createMutation.mutate(title);
+    createMutation.mutate({ title });
     setNewTaskTitle("");
     setAddingTo(null);
+  };
+
+  // Submit the rich composer.
+  const submitComposer = () => {
+    const title = composer.title.trim();
+    if (!title) return;
+    const tags = composer.recurrence ? [`recur:${composer.recurrence}`] : [];
+    createMutation.mutate({
+      title, priority: composer.priority, tags,
+      ...(composer.dueDate ? { dueDate: composer.dueDate } : {}),
+      ...(composer.assignees.length ? { linkedProfiles: composer.assignees } : {}),
+    });
+    setComposer(emptyComposer);
   };
 
   // Deterministic avatar color from a profile id.
@@ -1506,6 +1538,36 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
               </select>
             </div>
           </div>
+          {/* Quick reschedule */}
+          <div className="flex items-center gap-1.5">
+            {[
+              { label: "Today", to: () => todayStr },
+              { label: "Tomorrow", to: () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('en-CA'); } },
+              { label: "+1 week", to: () => { const d = t.dueDate ? new Date(t.dueDate+'T00:00:00') : new Date(); d.setDate(d.getDate()+7); return d.toLocaleDateString('en-CA'); } },
+            ].map(q => (
+              <button key={q.label} onClick={() => updateMutation.mutate({ id: t.id, patch: { dueDate: q.to() } })}
+                className="text-[11px] px-2 py-1 rounded-md bg-muted/50 text-muted-foreground hover:bg-muted" data-testid={`task-snooze-${q.label}`}>{q.label}</button>
+            ))}
+          </div>
+          {/* Assignee — each task gets its own profile/owner */}
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><User className="h-3 w-3" />Assigned to</label>
+            <div className="flex flex-wrap gap-1.5">
+              {assignableProfiles.map((p: any) => {
+                const on = (t.linkedProfiles || []).includes(p.id);
+                return (
+                  <button key={p.id} data-testid={`task-assign-${p.id}`}
+                    onClick={() => { const cur = t.linkedProfiles || []; const next = on ? cur.filter((x: string) => x !== p.id) : [...cur, p.id]; updateMutation.mutate({ id: t.id, patch: { linkedProfiles: next } }); }}
+                    className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border transition-colors ${on ? 'border-transparent text-white' : 'bg-muted/40 border-border text-muted-foreground hover:bg-muted'}`}
+                    style={on ? { backgroundColor: `hsl(${avatarHue(p.id)} 55% 45%)` } : undefined}
+                  >
+                    <span className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-bold text-white" style={{ backgroundColor: `hsl(${avatarHue(p.id)} 55% 45%)` }}>{(p.name||'?')[0]?.toUpperCase()}</span>
+                    {p.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           {/* Notes */}
           <div>
             <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><FileText className="h-3 w-3" />Notes</label>
@@ -1513,12 +1575,11 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
               onBlur={e => { if ((e.target.value || "") !== (t.description || "")) updateMutation.mutate({ id: t.id, patch: { description: e.target.value } }); }}
               className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-notes" />
           </div>
-          {/* Footer: assigned + calendar link + delete */}
+          {/* Footer */}
           <div className="flex items-center justify-between pt-0.5">
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-              <span className="inline-flex items-center gap-1"><User className="h-3 w-3" />{(t.linkedProfiles || []).length ? profileName(t.linkedProfiles[0]) : "You"}</span>
-              {onCalendar && <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400"><CalendarDays className="h-3 w-3" />On calendar</span>}
-            </div>
+            {onCalendar
+              ? <span className="inline-flex items-center gap-1 text-[11px] text-sky-600 dark:text-sky-400"><CalendarDays className="h-3 w-3" />On calendar</span>
+              : <span className="text-[11px] text-muted-foreground/50">Add a due date to put it on the calendar</span>}
             <button onClick={() => setTaskToDelete({ id: t.id, title: t.title })} className="text-[11px] text-muted-foreground/60 hover:text-destructive inline-flex items-center gap-1" data-testid={`task-delete-${t.id}`}>
               <Trash2 className="h-3 w-3" />Delete
             </button>
@@ -1531,30 +1592,38 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
 
 
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); setExpandedId(null); setTab("today"); } }}>
+    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); setExpandedId(null); setTab("today"); setComposer(emptyComposer); setShowCompleted(false); } }}>
       <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-md flex flex-col p-0 gap-0 rounded-2xl max-h-[85vh] overflow-hidden">
-        {/* Header with a subtle top glow */}
-        <div className="relative flex items-center justify-between px-4 pt-3.5 pb-3 border-b border-border/40">
+        {/* Header with a subtle top glow + today's progress */}
+        <div className="relative px-4 pt-3.5 pb-2.5 border-b border-border/40">
           <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-rose-500/10 to-transparent pointer-events-none" />
-          <div className="relative flex items-center gap-2">
-            <div className="w-6 h-6 rounded-md bg-red-500 flex items-center justify-center">
-              <Check className="h-4 w-4 text-white" strokeWidth={3} />
+          <div className="relative flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-md bg-red-500 flex items-center justify-center">
+                <Check className="h-4 w-4 text-white" strokeWidth={3} />
+              </div>
+              <span className="font-bold text-sm uppercase tracking-wide text-foreground">Task Manager</span>
+              <Badge variant="secondary">{pendingAll.length}</Badge>
             </div>
-            <span className="font-bold text-sm uppercase tracking-wide text-foreground">Task Manager</span>
-            <Badge variant="secondary">{pendingAll.length}</Badge>
+            <DialogClose className="relative w-10 h-10 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
+              <X className="h-5 w-5" />
+            </DialogClose>
           </div>
-          <DialogClose className="relative w-10 h-10 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
-            <X className="h-5 w-5" />
-          </DialogClose>
+          {/* Today's progress bar */}
+          <div className="relative mt-2 flex items-center gap-2">
+            <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+              <div className="h-full bg-emerald-500 transition-all" style={{ width: `${todayTotal ? Math.round((doneToday / todayTotal) * 100) : 0}%` }} />
+            </div>
+            <span className="text-[10px] text-muted-foreground tabular-nums">{doneToday}/{todayTotal} done today</span>
+          </div>
         </div>
 
-        {/* Tabs — Today / Recurring / Upcoming / Completed */}
+        {/* Tabs — Today / Recurring / Upcoming + sort */}
         <div className="flex items-center gap-1 px-2 py-2 border-b border-border/30 overflow-x-auto scrollbar-hide">
           {([
             { key: "today", label: "Today", icon: Flame },
             { key: "recurring", label: "Recurring", icon: Repeat },
             { key: "upcoming", label: "Upcoming", icon: CalendarDays },
-            { key: "completed", label: "Completed", icon: CheckCircle2 },
           ] as const).map(({ key, label, icon: Icon }) => {
             const active = tab === key;
             const count = (tabCounts as any)[key];
@@ -1570,6 +1639,13 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
               </button>
             );
           })}
+          <div className="ml-auto shrink-0">
+            <button
+              onClick={() => setSortBy(s => s === "smart" ? "priority" : s === "priority" ? "due" : "smart")}
+              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground px-2 py-1 rounded-md hover:bg-muted/60"
+              data-testid="task-sort" title="Change sort order"
+            ><ArrowDown className="h-3 w-3" />{sortBy === "smart" ? "Smart" : sortBy === "priority" ? "Priority" : "Due date"}</button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
@@ -1580,26 +1656,77 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
               {/* Section header for the active tab */}
               <div className="flex items-center justify-between px-1 mb-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                  {tab === "today" ? "Today's priorities" : tab === "recurring" ? "Recurring schedules" : tab === "upcoming" ? "Upcoming" : "Completed"}
+                  {tab === "today" ? "Today's priorities" : tab === "recurring" ? "Recurring schedules" : "Upcoming"}
                 </span>
-                {tab !== "completed" && (
-                  <button onClick={() => setAddingTo('today')} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors" data-testid="button-add-task"><Plus className="h-4 w-4 text-muted-foreground" /></button>
-                )}
+                <button onClick={() => setComposer(c => ({ ...emptyComposer, open: !c.open, recurrence: tab === "recurring" ? "weekly" : "" }))} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors" data-testid="button-add-task"><Plus className="h-4 w-4 text-muted-foreground" /></button>
               </div>
-              {addingTo && tab !== "completed" && (
-                <div className="mb-2">
-                  <input autoFocus data-testid="input-new-task" className="w-full text-sm bg-muted/40 border border-border rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary"
-                    placeholder="I want to…" value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} onKeyDown={handleAdd}
-                    onBlur={() => { if (!newTaskTitle.trim()) setAddingTo(null); }} />
+
+              {/* ── Rich add-task composer ── */}
+              {composer.open && (
+                <div className="mb-3 rounded-xl border border-border bg-card p-3 space-y-2.5" data-testid="task-composer">
+                  <input autoFocus value={composer.title} onChange={e => setComposer(c => ({ ...c, title: e.target.value }))}
+                    onKeyDown={e => { if (e.key === 'Enter') submitComposer(); }}
+                    placeholder="What needs doing?" data-testid="composer-title"
+                    className="w-full text-sm bg-transparent font-medium focus:outline-none placeholder:text-muted-foreground/60" />
+                  {/* Priority */}
+                  <div className="flex gap-1.5">
+                    {(["low","medium","high"] as const).map(p => (
+                      <button key={p} onClick={() => setComposer(c => ({ ...c, priority: p }))}
+                        className={`flex-1 text-xs py-1 rounded-lg border capitalize transition-colors ${composer.priority === p ? 'text-white border-transparent' : 'bg-muted/40 border-border text-muted-foreground'}`}
+                        style={composer.priority === p ? { backgroundColor: PLINE[p] } : undefined} data-testid={`composer-priority-${p}`}>{p}</button>
+                    ))}
+                  </div>
+                  {/* Repeat + Due */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <select value={composer.recurrence} onChange={e => setComposer(c => ({ ...c, recurrence: e.target.value }))}
+                      className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="composer-recurrence">
+                      {RECUR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.value ? `🔁 ${o.label}` : 'No repeat'}</option>)}
+                    </select>
+                    <input type="date" value={composer.dueDate} onChange={e => setComposer(c => ({ ...c, dueDate: e.target.value }))}
+                      className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="composer-due" />
+                  </div>
+                  {/* Assignees */}
+                  {assignableProfiles.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {assignableProfiles.map((p: any) => {
+                        const on = composer.assignees.includes(p.id);
+                        return (
+                          <button key={p.id} onClick={() => setComposer(c => ({ ...c, assignees: on ? c.assignees.filter(x => x !== p.id) : [...c.assignees, p.id] }))}
+                            className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border ${on ? 'border-transparent text-white' : 'bg-muted/40 border-border text-muted-foreground'}`}
+                            style={on ? { backgroundColor: `hsl(${avatarHue(p.id)} 55% 45%)` } : undefined} data-testid={`composer-assign-${p.id}`}>
+                            <span className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-bold text-white" style={{ backgroundColor: `hsl(${avatarHue(p.id)} 55% 45%)` }}>{(p.name||'?')[0]?.toUpperCase()}</span>{p.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 pt-0.5">
+                    <button onClick={submitComposer} disabled={!composer.title.trim()} data-testid="composer-add"
+                      className="flex-1 text-sm font-semibold py-2 rounded-lg bg-primary text-primary-foreground disabled:opacity-40">Add task</button>
+                    <button onClick={() => setComposer(emptyComposer)} className="text-sm text-muted-foreground px-3 py-2">Cancel</button>
+                  </div>
                 </div>
               )}
-              {activeList.length === 0 && !addingTo ? (
+
+              {activeList.length === 0 && !composer.open ? (
                 <div className="text-center py-10 text-sm text-muted-foreground">
-                  {tab === "today" ? "Nothing for today 🎉" : tab === "recurring" ? "No recurring tasks yet" : tab === "upcoming" ? "Nothing upcoming" : "No completed tasks"}
+                  {tab === "today" ? "Nothing for today 🎉" : tab === "recurring" ? "No recurring tasks — tap + to add one" : "Nothing upcoming"}
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {activeList.map((t: any) => <TaskRow key={t.id} t={t} dimmed={tab === "completed"} />)}
+                  {activeList.map((t: any) => <TaskRow key={t.id} t={t} />)}
+                </div>
+              )}
+
+              {/* Completed — collapsed by default (no dedicated tab) */}
+              {done.length > 0 && (
+                <div className="mt-3">
+                  <button onClick={() => setShowCompleted(s => !s)} data-testid="toggle-completed"
+                    className="w-full flex items-center justify-between px-1 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground">
+                    <span className="inline-flex items-center gap-1.5"><CheckCircle2 className="h-3.5 w-3.5" />Completed ({done.length})</span>
+                    {showCompleted ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  </button>
+                  {showCompleted && <div className="space-y-2 mt-1">{done.map((t: any) => <TaskRow key={t.id} t={t} dimmed />)}</div>}
                 </div>
               )}
             </div>
