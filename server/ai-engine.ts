@@ -2488,7 +2488,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         priority: { type: "string", enum: ["low", "medium", "high"], description: "Priority level" },
         dueDate: { type: "string", description: "Due date (YYYY-MM-DD)" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
-        recurrence: { type: "string", enum: ["daily", "weekly", "biweekly", "monthly"], description: "Set when the task repeats on a schedule (e.g. 'water plants weekly'). Leave unset for one-off tasks." },
+        recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"], description: "Set when the task repeats on a schedule (e.g. 'water plants weekly', 'check tire pressure every two weeks', 'take vitamins every morning'→daily, 'change batteries every year'→yearly). For odd intervals like 'every 3 days' put it in the title and the parser will encode it. Leave unset for one-off tasks." },
         forProfile: { type: "string", description: "Name of an EXISTING profile to link this task to (e.g. 'Max', 'Mom', 'Tesla'). Only set this if the person/entity already exists as a profile. If the user just mentions someone by name in the task (e.g. 'return book to Sarah'), put the name in the title instead — do NOT create a profile for them." },
       },
       required: ["title"],
@@ -5607,11 +5607,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // explicit `recurrence` arg, the title, or the user's message.
       const recurText = `${input.recurrence || ""} ${input.title || ""} ${String((input as any).__userMessage || "")}`.toLowerCase();
       let recurFreq: string | undefined;
+      const everyNDays = recurText.match(/every (\d+) days?/);
+      const everyNWeeks = recurText.match(/every (\d+) weeks?/);
       if (/\bdaily\b|every day|each day/.test(recurText)) recurFreq = "daily";
+      else if (/\bweekdays?\b|every weekday|mon(day)?(\s*[-–to]+\s*)fri(day)?/.test(recurText)) recurFreq = "weekdays";
+      else if (/\bbiweekly\b|every (other|2|two) weeks/.test(recurText)) recurFreq = "biweekly";
+      else if (everyNWeeks && +everyNWeeks[1] > 1) recurFreq = `every-${everyNWeeks[1]}-weeks`;
       else if (/\bweekly\b|every week|each week/.test(recurText)) recurFreq = "weekly";
-      else if (/\bbiweekly\b|every (other|2) weeks|every two weeks/.test(recurText)) recurFreq = "biweekly";
-      else if (/\bmonthly\b|every month|each month/.test(recurText)) recurFreq = "monthly";
-      else { const m = recurText.match(/every (\d+) days?/); if (m) recurFreq = `every-${m[1]}-days`; }
+      else if (/\b(monthly|every month|each month)\b/.test(recurText)) recurFreq = "monthly";
+      else if (/\b(yearly|annually|annual|every year|each year)\b/.test(recurText)) recurFreq = "yearly";
+      else if (everyNDays) recurFreq = +everyNDays[1] === 1 ? "daily" : `every-${everyNDays[1]}-days`;
       const taskTags = [...(input.tags || [])];
       if (recurFreq && !taskTags.some(t => String(t).startsWith("recur:"))) {
         taskTags.push(`recur:${recurFreq}`);

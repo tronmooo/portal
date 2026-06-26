@@ -8,6 +8,11 @@ import { categoryTheme } from "@/lib/category-theme";
 import { AccentCard } from "@/components/ui/accent-card";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { goalsQueryKey } from "@shared/query-keys";
+import {
+  RECUR_PRESETS, parseRecurrence, recurrenceToTags, isRecurring as isRecurringRule,
+  nextOccurrence as nextRecurOccurrence, seriesEnded, humanSummary, freqToUnit,
+  type RecurrenceRule,
+} from "@shared/recurrence";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { computeNetWorth } from "@shared/net-worth";
@@ -72,6 +77,7 @@ import {
   Users, TrendingDown,
   CalendarDays, Pin, PinOff, Filter as FilterIcon, Sparkle,
   Lightbulb, Repeat, Flag, User,
+  Pause, Play, SkipForward, Tag as TagIcon, AlarmClock, ListChecks, Timer, ChevronsUpDown,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
@@ -1205,7 +1211,7 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   // Active tab — organizes tasks the way a task manager does.
   const [tab, setTab] = useState<"today" | "recurring" | "upcoming">("today");
   // Rich add-task composer.
-  const emptyComposer = { open: false, title: "", priority: "medium", recurrence: "", dueDate: "", assignees: [] as string[] };
+  const emptyComposer = { open: false, title: "", priority: "medium", recurrence: "", dueDate: "", dueTime: "", category: "" };
   const [composer, setComposer] = useState(emptyComposer);
   // Reveal completed tasks (collapsed by default — no dedicated tab anymore).
   const [showCompleted, setShowCompleted] = useState(false);
@@ -1351,69 +1357,135 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
     onSettled: () => { invalidateDomain("tasks"); },
   });
 
-  // ── Recurrence helpers (cadence lives in a `recur:<freq>` tag) ──
-  const RECUR_OPTIONS: { value: string; label: string }[] = [
-    { value: "", label: "Does not repeat" },
-    { value: "daily", label: "Daily" },
-    { value: "weekly", label: "Weekly" },
-    { value: "biweekly", label: "Every 2 weeks" },
-    { value: "monthly", label: "Monthly" },
-  ];
-  const recurOf = (t: any): string => {
-    const tag = (t.tags || []).find((x: string) => String(x).startsWith("recur:"));
-    return tag ? String(tag).slice(6) : "";
+  // ── Recurrence + metadata helpers ──
+  // Recurrence rules and rich task metadata live in the task's `tags` array (no
+  // schema column), so everything persists through the normal tasks API.
+  const ruleOf = (t: any): RecurrenceRule => parseRecurrence(t.tags || []);
+  const isReminderT = (t: any) => (t.tags || []).includes("reminder") || t.source === "reminder";
+  const isRecurringT = (t: any) => isRecurringRule(t.tags || []);
+  const setRule = (t: any, rule: RecurrenceRule) =>
+    updateMutation.mutate({ id: t.id, patch: { tags: recurrenceToTags(rule, t.tags || []) } });
+
+  // Single-value metadata tags: cat:<x>, time:<HH:MM>, remind:<offset>, est:<min>.
+  const metaOf = (t: any, prefix: string) => {
+    const tag = (t.tags || []).find((x: string) => x.startsWith(prefix));
+    return tag ? tag.slice(prefix.length) : "";
   };
-  const recurLabel = (freq: string) => RECUR_OPTIONS.find(o => o.value === freq)?.label
-    || (freq.startsWith("every-") ? `Every ${freq.split("-")[1]} days` : freq);
-  const setRecurrence = (t: any, freq: string) => {
-    const tags = (t.tags || []).filter((x: string) => !String(x).startsWith("recur:"));
-    if (freq) tags.push(`recur:${freq}`);
+  const setMetaTag = (t: any, prefix: string, value: string) => {
+    const tags = (t.tags || []).filter((x: string) => !x.startsWith(prefix));
+    if (value) tags.push(prefix + value);
     updateMutation.mutate({ id: t.id, patch: { tags } });
   };
-  // Next occurrence for a recurring task (from its due date, or today).
-  const nextOccurrence = (t: any): string | null => {
-    const freq = recurOf(t);
-    if (!freq) return null;
-    const base = t.dueDate ? new Date(t.dueDate + "T00:00:00") : new Date();
-    const d = new Date(base);
-    if (freq === "daily") d.setDate(d.getDate() + 1);
-    else if (freq === "weekly") d.setDate(d.getDate() + 7);
-    else if (freq === "biweekly") d.setDate(d.getDate() + 14);
-    else if (freq === "monthly") d.setMonth(d.getMonth() + 1);
-    else if (freq.startsWith("every-")) d.setDate(d.getDate() + (parseInt(freq.split("-")[1]) || 1));
-    else return null;
-    return d.toLocaleDateString('en-CA');
+  const hasFlag = (t: any, flag: string) => (t.tags || []).includes(flag);
+  const toggleFlag = (t: any, flag: string) => {
+    const tags = hasFlag(t, flag) ? (t.tags || []).filter((x: string) => x !== flag) : [...(t.tags || []), flag];
+    updateMutation.mutate({ id: t.id, patch: { tags } });
   };
 
+  // Priority gains a 4th level — "critical" — encoded as a `prio:critical` tag
+  // on top of the stored priority (kept "high" for calendar compatibility).
+  const effPrio = (t: any): string => (hasFlag(t, "prio:critical") ? "critical" : t.priority);
+  const setPriority = (t: any, p: string) => {
+    const tags = (t.tags || []).filter((x: string) => x !== "prio:critical");
+    if (p === "critical") { tags.push("prio:critical"); updateMutation.mutate({ id: t.id, patch: { priority: "high", tags } }); }
+    else updateMutation.mutate({ id: t.id, patch: { priority: p, tags } });
+  };
+
+  // Subtasks: `st:<0|1>:<text>` tags → checklist with completion %.
+  const subtasksOf = (t: any) => (t.tags || []).filter((x: string) => x.startsWith("st:"))
+    .map((raw: string) => ({ raw, done: raw[3] === "1", text: raw.slice(5) }));
+  const addSubtask = (t: any, text: string) => {
+    if (!text.trim()) return;
+    updateMutation.mutate({ id: t.id, patch: { tags: [...(t.tags || []), `st:0:${text.trim()}`] } });
+  };
+  const toggleSubtask = (t: any, raw: string) =>
+    updateMutation.mutate({ id: t.id, patch: { tags: (t.tags || []).map((x: string) => x === raw ? `st:${x[3] === "1" ? "0" : "1"}:${x.slice(5)}` : x) } });
+  const removeSubtask = (t: any, raw: string) =>
+    updateMutation.mutate({ id: t.id, patch: { tags: (t.tags || []).filter((x: string) => x !== raw) } });
+
+  // User-facing free tags (everything that isn't a system-encoded tag).
+  const SYS_TAG_RE = /^(recur:|runtil:|rcount:|rdone:|rpaused$|prio:|cat:|time:|remind:|est:|st:|reminder$|allday$)/;
+  const freeTagsOf = (t: any) => (t.tags || []).filter((x: string) => !SYS_TAG_RE.test(x));
+
+  // ── Recurring lifecycle ──
+  const completeTask = (t: any) => {
+    const rule = ruleOf(t);
+    if (rule.freq && !rule.paused) {
+      const next = nextRecurOccurrence(t.dueDate, rule);
+      if (seriesEnded(rule, next)) {
+        toggleMutation.mutate({ id: t.id, status: "done" });
+        toast({ title: "Series complete 🎉" });
+      } else {
+        const tags = recurrenceToTags({ ...rule, done: rule.done + 1 }, t.tags || []);
+        updateMutation.mutate({ id: t.id, patch: { dueDate: next || t.dueDate, tags } });
+        toast({ title: `Done — next on ${next ? fmtDate(next) : "schedule"}` });
+      }
+    } else {
+      toggleMutation.mutate({ id: t.id, status: "done" });
+    }
+  };
+  const skipOccurrence = (t: any) => {
+    const next = nextRecurOccurrence(t.dueDate, ruleOf(t));
+    updateMutation.mutate({ id: t.id, patch: { dueDate: next || t.dueDate } });
+    toast({ title: `Skipped to ${next ? fmtDate(next) : "next"}` });
+  };
+  const togglePause = (t: any) => { const r = ruleOf(t); setRule(t, { ...r, paused: !r.paused }); };
+  const endSeries = (t: any) => { setRule(t, { freq: "", interval: 1, unit: "", done: 0, paused: false }); toast({ title: "Repeat ended" }); };
+
+  // ── Date scaffolding for smart sections ──
   const todayStr = new Date().toLocaleDateString('en-CA');
-  const tomorrowStr = (() => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('en-CA'); })();
-  // Kind predicates used for badges + tab routing.
-  const isReminderT = (t: any) => (t.tags || []).includes("reminder") || t.source === "reminder";
-  const isRecurringT = (t: any) => (t.tags || []).some((x: string) => String(x).startsWith("recur:"));
-  const pendingAll = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) !== normalizeFilter('done')), [tasks]);
-  const done = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).slice(0, 8), [tasks]);
-  // Recurring lives in its own tab; Today/Upcoming exclude recurring so a chore
-  // doesn't show in three places at once.
-  const PRIO_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const addDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toLocaleDateString('en-CA'); };
+  const tomorrowStr = addDays(1);
+  const daysToSunday = (7 - new Date().getDay()) % 7;
+  const endThisWeek = addDays(daysToSunday);
+  const endNextWeek = addDays(daysToSunday + 7);
+  // A pending task's effective date: its dueDate, or today for an undated recurring chore.
+  const whenOf = (t: any): string | null => t.dueDate || (isRecurringT(t) ? todayStr : null);
+  // Paused recurring chores don't surface a next occurrence in the date views.
+  const datedVisible = (t: any) => !(isRecurringT(t) && ruleOf(t).paused);
+
+  const PRIO_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
   const sortTasks = (list: any[]) => {
-    if (sortBy === "priority") return [...list].sort((a, b) => (PRIO_RANK[a.priority] ?? 1) - (PRIO_RANK[b.priority] ?? 1));
-    if (sortBy === "due") return [...list].sort((a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"));
+    if (sortBy === "priority") return [...list].sort((a, b) => (PRIO_RANK[effPrio(a)] ?? 2) - (PRIO_RANK[effPrio(b)] ?? 2));
+    if (sortBy === "due") return [...list].sort((a, b) => ((a.dueDate || "9999") + (metaOf(a, "time:") || "99:99")).localeCompare((b.dueDate || "9999") + (metaOf(b, "time:") || "99:99")));
     return list; // smart = server order
   };
+
+  const pendingAll = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) !== normalizeFilter('done')), [tasks]);
+  const done = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).slice(0, 8), [tasks]);
+
+  // Today tab = overdue + due-today (+ undated one-offs). Recurring chores flow
+  // in here too, by their next occurrence date.
+  const overdueTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => datedVisible(t) && t.dueDate && t.dueDate < todayStr)), [pendingAll, todayStr, sortBy]);
+  const todayTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => datedVisible(t) && (whenOf(t) === todayStr || (!t.dueDate && !isRecurringT(t))))), [pendingAll, todayStr, sortBy]);
+  // Recurring tab = every series (incl. paused) for management.
   const recurringTasks = useMemo(() => sortTasks(pendingAll.filter(isRecurringT)), [pendingAll, sortBy]);
-  const todayTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => !isRecurringT(t) && (!t.dueDate || t.dueDate <= todayStr))), [pendingAll, todayStr, sortBy]);
-  const upcomingTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => !isRecurringT(t) && t.dueDate && t.dueDate > todayStr)), [pendingAll, todayStr, sortBy]);
-  const tabCounts = { today: todayTasks.length, recurring: recurringTasks.length, upcoming: upcomingTasks.length };
-  const activeList = tab === "today" ? todayTasks : tab === "recurring" ? recurringTasks : upcomingTasks;
+  // Upcoming tab = everything after today, grouped into smart sections.
+  const upcomingPending = useMemo(() => sortTasks(pendingAll.filter((t: any) => datedVisible(t) && whenOf(t) && whenOf(t)! > todayStr)), [pendingAll, todayStr, sortBy]);
+  const upcomingSections = useMemo(() => {
+    const buckets: Record<string, any[]> = { tomorrow: [], week: [], nextweek: [], later: [] };
+    for (const t of upcomingPending) {
+      const w = whenOf(t)!;
+      if (w === tomorrowStr) buckets.tomorrow.push(t);
+      else if (w <= endThisWeek) buckets.week.push(t);
+      else if (w <= endNextWeek) buckets.nextweek.push(t);
+      else buckets.later.push(t);
+    }
+    return [
+      { key: "tomorrow", label: "Tomorrow", items: buckets.tomorrow },
+      { key: "week", label: "This Week", items: buckets.week },
+      { key: "nextweek", label: "Next Week", items: buckets.nextweek },
+      { key: "later", label: "Later", items: buckets.later },
+    ].filter(s => s.items.length > 0);
+  }, [upcomingPending, tomorrowStr, endThisWeek, endNextWeek]);
+
+  const tabCounts = { today: overdueTasks.length + todayTasks.length, recurring: recurringTasks.length, upcoming: upcomingPending.length };
   // Today progress (done today vs total touched today) for the summary bar.
   const doneToday = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).length, [tasks]);
-  const todayTotal = todayTasks.length + doneToday;
+  const todayTotal = overdueTasks.length + todayTasks.length + doneToday;
 
-  // Priority color lines — exact Any.do style
-  const PLINE: Record<string, string> = { high: '#E53935', medium: '#FFA726', low: '#42A5F5' };
-
-  // Person-type profiles available for assignment.
-  const assignableProfiles = useMemo(() => (allProfiles || []).filter((p: any) => ["self", "person", "pet"].includes(p.type)), [allProfiles]);
+  // Priority color lines — critical adds a distinct violet above the rest.
+  const PLINE: Record<string, string> = { critical: '#9333EA', high: '#E53935', medium: '#FFA726', low: '#42A5F5' };
 
   const handleAdd = (e: React.KeyboardEvent) => {
     if (e.key !== 'Enter') return;
@@ -1428,42 +1500,58 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
   const submitComposer = () => {
     const title = composer.title.trim();
     if (!title) return;
-    const tags = composer.recurrence ? [`recur:${composer.recurrence}`] : [];
+    const tags: string[] = [];
+    if (composer.recurrence) tags.push(`recur:${composer.recurrence}`);
+    if (composer.priority === "critical") tags.push("prio:critical");
+    if (composer.dueTime) tags.push(`time:${composer.dueTime}`);
+    if (composer.category) tags.push(`cat:${composer.category}`);
     createMutation.mutate({
-      title, priority: composer.priority, tags,
-      ...(composer.dueDate ? { dueDate: composer.dueDate } : {}),
-      ...(composer.assignees.length ? { linkedProfiles: composer.assignees } : {}),
+      title,
+      priority: composer.priority === "critical" ? "high" : composer.priority,
+      tags,
+      ...(composer.dueDate ? { dueDate: composer.dueDate } : composer.recurrence ? { dueDate: todayStr } : {}),
     });
     setComposer(emptyComposer);
   };
 
-  // Deterministic avatar color from a profile id.
-  const avatarHue = (id: string) => { let h = 0; for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0; return h % 360; };
-  const Avatars = ({ ids }: { ids: string[] }) => (
-    <div className="flex -space-x-1.5 shrink-0">
-      {ids.slice(0, 3).map((pid) => {
-        const nm = profileName(pid); const init = nm.split(/\s+/).slice(0, 2).map((w: string) => w[0]?.toUpperCase() || "").join("") || "?";
-        return <span key={pid} title={nm} className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white ring-1 ring-background" style={{ backgroundColor: `hsl(${avatarHue(pid)} 55% 45%)` }}>{init}</span>;
-      })}
-      {ids.length > 3 && <span className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-[8px] font-bold text-muted-foreground ring-1 ring-background">+{ids.length - 3}</span>}
-    </div>
-  );
+  // Reminder offset presets (label ↔ encoded value).
+  const REMINDER_OPTS = [
+    { value: "", label: "No reminder" },
+    { value: "0", label: "At due time" },
+    { value: "5m", label: "5 min before" },
+    { value: "15m", label: "15 min before" },
+    { value: "30m", label: "30 min before" },
+    { value: "1h", label: "1 hour before" },
+    { value: "1d", label: "1 day before" },
+  ];
+  const CATEGORY_OPTS = ["", "home", "work", "health", "finance", "errands", "family", "auto"];
 
   const TaskRow = ({ t, dimmed = false }: { t: any; dimmed?: boolean }) => {
-    const freq = recurOf(t);
+    const rule = ruleOf(t);
+    const recurring = !!rule.freq;
     const expanded = expandedId === t.id;
     const isReminder = (t.tags || []).includes("reminder") || (t.source === "reminder");
     const onCalendar = !!t.dueDate;
-    const pColor = PLINE[t.priority] || '#42A5F5';
+    const ep = effPrio(t);
+    const pColor = PLINE[ep] || '#42A5F5';
+    const subs = subtasksOf(t);
+    const subDone = subs.filter((s: any) => s.done).length;
+    const dTime = metaOf(t, "time:");
+    const cat = metaOf(t, "cat:");
+    const est = metaOf(t, "est:");
+    const overdue = !dimmed && t.dueDate && t.dueDate < todayStr;
+    const [adv, setAdv] = useState(false);
+    const [newSub, setNewSub] = useState("");
+    const [newTag, setNewTag] = useState("");
     return (
     <div
-      className={`rounded-xl border transition-all ${dimmed ? 'opacity-50 border-border/30 bg-card/40' : expanded ? 'border-emerald-500/50 bg-card shadow-[0_0_0_1px_rgba(16,185,129,0.35),0_4px_20px_-6px_rgba(16,185,129,0.25)]' : 'border-border/50 bg-card/60 hover:border-border hover:bg-card'}`}
+      className={`rounded-xl border transition-all ${dimmed ? 'opacity-50 border-border/30 bg-card/40' : expanded ? 'border-emerald-500/50 bg-card shadow-[0_0_0_1px_rgba(16,185,129,0.35),0_4px_20px_-6px_rgba(16,185,129,0.25)]' : overdue ? 'border-red-500/40 bg-card/60 hover:bg-card' : 'border-border/50 bg-card/60 hover:border-border hover:bg-card'}`}
       data-testid={`task-card-${t.id}`}
     >
       <div className="flex items-start gap-2.5 p-3">
-        {/* Glowing circular checkbox */}
+        {/* Glowing circular checkbox — completing a recurring task advances it */}
         <button
-          onClick={() => toggleMutation.mutate({ id: t.id, status: dimmed ? 'todo' : 'done' })}
+          onClick={() => dimmed ? toggleMutation.mutate({ id: t.id, status: 'todo' }) : completeTask(t)}
           className="shrink-0 min-w-[36px] min-h-[36px] flex items-center justify-center touch-manipulation -m-1"
           aria-label={dimmed ? "Mark as not done" : "Mark as done"}
         >
@@ -1474,30 +1562,28 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
         {/* Title + meta — click to expand */}
         <button className="flex-1 min-w-0 text-left" onClick={() => setExpandedId(expanded ? null : t.id)} data-testid={`task-row-${t.id}`} aria-expanded={expanded}>
           <div className="flex items-center gap-1.5">
-            {!dimmed && <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: pColor }} />}
+            {!dimmed && <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: pColor }} title={ep} />}
             <p className={`text-[15px] font-medium ${dimmed ? 'line-through text-muted-foreground' : 'text-foreground'} truncate`}>{t.title}</p>
           </div>
           {!dimmed && (
             <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+              {ep === 'critical' && <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-violet-500/15 text-violet-500 font-semibold">Critical</span>}
+              {overdue && <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 font-semibold">Overdue</span>}
               {isReminder && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400"><Bell className="h-2.5 w-2.5" />Reminder</span>}
-              {freq && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-500/12 text-emerald-600 dark:text-emerald-400"><Repeat className="h-2.5 w-2.5" />{recurLabel(freq)}</span>}
-              {t.dueDate && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><Calendar className="h-2.5 w-2.5" />{fmtDate(t.dueDate)}</span>}
-              {onCalendar && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-sky-500/12 text-sky-600 dark:text-sky-400"><CalendarDays className="h-2.5 w-2.5" />On calendar</span>}
+              {recurring && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-500/12 text-emerald-600 dark:text-emerald-400"><Repeat className="h-2.5 w-2.5" />{rule.paused ? 'Paused' : humanSummary(rule, t.dueDate)}</span>}
+              {t.dueDate && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><Calendar className="h-2.5 w-2.5" />{fmtDate(t.dueDate)}{dTime ? ` · ${dTime}` : ''}</span>}
+              {cat && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-sky-500/12 text-sky-600 dark:text-sky-400 capitalize"><TagIcon className="h-2.5 w-2.5" />{cat}</span>}
+              {metaOf(t, "remind:") && <Bell className="h-3 w-3 text-amber-500" />}
+              {subs.length > 0 && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><ListChecks className="h-2.5 w-2.5" />{subDone}/{subs.length}</span>}
               {t.description && <FileText className="h-3 w-3 text-muted-foreground/50" />}
             </div>
           )}
-          {freq && nextOccurrence(t) && !dimmed && (
-            <span className="text-[10px] text-muted-foreground/70 mt-1 block">Next: {fmtDate(nextOccurrence(t)!)}</span>
-          )}
         </button>
-        {/* Right: avatar stack + reminder bell / expand */}
+        {/* Right: delete (completed) / expand */}
         <div className="flex items-center gap-1.5 shrink-0">
-          {!dimmed && (t.linkedProfiles || []).length > 0 && <Avatars ids={t.linkedProfiles} />}
           {dimmed ? (
             <button onClick={() => setTaskToDelete({ id: t.id, title: t.title })} disabled={deleteMutation.isPending}
               className="text-muted-foreground/40 hover:text-destructive min-w-[36px] min-h-[36px] flex items-center justify-center disabled:opacity-40" aria-label="Delete task" data-testid={`btn-delete-task-${t.id}`}><X className="h-3.5 w-3.5" /></button>
-          ) : isReminder ? (
-            <Bell className="h-4 w-4 text-amber-500" />
           ) : (
             <button onClick={() => setExpandedId(expanded ? null : t.id)} className="min-w-[36px] min-h-[36px] flex items-center justify-center text-muted-foreground/50" aria-label="Edit task" data-testid={`task-expand-${t.id}`}>
               {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -1509,20 +1595,24 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
       {/* ── Expanded detail / edit panel ── */}
       {expanded && !dimmed && (
         <div className="px-3 pb-3 pt-0 space-y-3 border-t border-border/30 mt-0" data-testid={`task-detail-${t.id}`}>
-          {/* Priority */}
+          {/* Title */}
+          <input defaultValue={t.title} placeholder="Task title"
+            onBlur={e => { const v = e.target.value.trim(); if (v && v !== t.title) updateMutation.mutate({ id: t.id, patch: { title: v } }); }}
+            className="w-full text-sm font-semibold bg-transparent border-b border-border/40 pb-1.5 mt-1 focus:outline-none focus:border-primary" data-testid="task-title-edit" />
+          {/* Priority — 4 levels incl. Critical */}
           <div>
             <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Flag className="h-3 w-3" />Priority</label>
-            <div className="flex gap-1.5">
-              {(["low", "medium", "high"] as const).map(p => (
-                <button key={p} onClick={() => updateMutation.mutate({ id: t.id, patch: { priority: p } })}
-                  className={`flex-1 text-xs py-1.5 rounded-lg border capitalize transition-colors ${t.priority === p ? 'text-white border-transparent' : 'bg-muted/40 border-border text-muted-foreground hover:bg-muted'}`}
-                  style={t.priority === p ? { backgroundColor: PLINE[p] } : undefined}
+            <div className="grid grid-cols-4 gap-1.5">
+              {(["low", "medium", "high", "critical"] as const).map(p => (
+                <button key={p} onClick={() => setPriority(t, p)}
+                  className={`text-[11px] py-1.5 rounded-lg border capitalize transition-colors ${ep === p ? 'text-white border-transparent' : 'bg-muted/40 border-border text-muted-foreground hover:bg-muted'}`}
+                  style={ep === p ? { backgroundColor: PLINE[p] } : undefined}
                   data-testid={`task-priority-${p}`}
                 >{p}</button>
               ))}
             </div>
           </div>
-          {/* Due date + Recurrence */}
+          {/* Due date + time */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Calendar className="h-3 w-3" />Due date</label>
@@ -1530,43 +1620,72 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
                 className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-due-date" />
             </div>
             <div>
-              <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Repeat className="h-3 w-3" />Repeat</label>
-              <select value={freq} onChange={e => setRecurrence(t, e.target.value)}
-                className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-recurrence">
-                {RECUR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                {freq.startsWith("every-") && <option value={freq}>{recurLabel(freq)}</option>}
-              </select>
+              <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Clock className="h-3 w-3" />Due time</label>
+              <input type="time" value={dTime} disabled={hasFlag(t, 'allday')} onChange={e => setMetaTag(t, 'time:', e.target.value)}
+                className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-40" data-testid="task-due-time" />
             </div>
           </div>
+          <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer">
+            <input type="checkbox" checked={hasFlag(t, 'allday')} onChange={() => toggleFlag(t, 'allday')} className="rounded accent-emerald-500" data-testid="task-allday" />
+            All-day (no specific time)
+          </label>
           {/* Quick reschedule */}
           <div className="flex items-center gap-1.5">
             {[
               { label: "Today", to: () => todayStr },
-              { label: "Tomorrow", to: () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString('en-CA'); } },
-              { label: "+1 week", to: () => { const d = t.dueDate ? new Date(t.dueDate+'T00:00:00') : new Date(); d.setDate(d.getDate()+7); return d.toLocaleDateString('en-CA'); } },
+              { label: "Tomorrow", to: () => addDays(1) },
+              { label: "+1 week", to: () => { const d = t.dueDate ? new Date(t.dueDate + 'T00:00:00') : new Date(); d.setDate(d.getDate() + 7); return d.toLocaleDateString('en-CA'); } },
             ].map(q => (
               <button key={q.label} onClick={() => updateMutation.mutate({ id: t.id, patch: { dueDate: q.to() } })}
                 className="text-[11px] px-2 py-1 rounded-md bg-muted/50 text-muted-foreground hover:bg-muted" data-testid={`task-snooze-${q.label}`}>{q.label}</button>
             ))}
           </div>
-          {/* Assignee — each task gets its own profile/owner */}
+          {/* Repeat preset + live preview */}
           <div>
-            <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><User className="h-3 w-3" />Assigned to</label>
-            <div className="flex flex-wrap gap-1.5">
-              {assignableProfiles.map((p: any) => {
-                const on = (t.linkedProfiles || []).includes(p.id);
-                return (
-                  <button key={p.id} data-testid={`task-assign-${p.id}`}
-                    onClick={() => { const cur = t.linkedProfiles || []; const next = on ? cur.filter((x: string) => x !== p.id) : [...cur, p.id]; updateMutation.mutate({ id: t.id, patch: { linkedProfiles: next } }); }}
-                    className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border transition-colors ${on ? 'border-transparent text-white' : 'bg-muted/40 border-border text-muted-foreground hover:bg-muted'}`}
-                    style={on ? { backgroundColor: `hsl(${avatarHue(p.id)} 55% 45%)` } : undefined}
-                  >
-                    <span className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-bold text-white" style={{ backgroundColor: `hsl(${avatarHue(p.id)} 55% 45%)` }}>{(p.name||'?')[0]?.toUpperCase()}</span>
-                    {p.name}
-                  </button>
-                );
-              })}
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Repeat className="h-3 w-3" />Repeat</label>
+            <select value={RECUR_PRESETS.some(o => o.value === rule.freq) ? rule.freq : (rule.freq ? "__custom" : "")}
+              onChange={e => { if (e.target.value === "__custom") return; const f = e.target.value; const u = freqToUnit(f); setRule(t, { ...rule, freq: f, unit: u.unit, interval: u.interval, ...(f ? {} : { until: undefined, count: undefined, done: 0, paused: false }) }); }}
+              className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-recurrence">
+              {RECUR_PRESETS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              {rule.freq && !RECUR_PRESETS.some(o => o.value === rule.freq) && <option value="__custom">Custom…</option>}
+            </select>
+            {recurring && (
+              <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1.5 flex items-center gap-1" data-testid="task-recur-summary">
+                <Sparkles className="h-3 w-3" />{humanSummary(rule, t.dueDate)}
+                {nextRecurOccurrence(t.dueDate, rule) && !rule.paused && <span className="text-muted-foreground/70">· next {fmtDate(nextRecurOccurrence(t.dueDate, rule)!)}</span>}
+              </p>
+            )}
+          </div>
+          {/* Recurring lifecycle controls */}
+          {recurring && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button onClick={() => togglePause(t)} data-testid="task-pause" className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-muted/50 text-muted-foreground hover:bg-muted">
+                {rule.paused ? <><Play className="h-3 w-3" />Resume</> : <><Pause className="h-3 w-3" />Pause</>}
+              </button>
+              <button onClick={() => skipOccurrence(t)} data-testid="task-skip" className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-muted/50 text-muted-foreground hover:bg-muted"><SkipForward className="h-3 w-3" />Skip</button>
+              <button onClick={() => endSeries(t)} data-testid="task-end-repeat" className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-muted/50 text-muted-foreground hover:bg-muted"><X className="h-3 w-3" />End repeat</button>
             </div>
+          )}
+          {/* Subtasks / checklist with progress */}
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><ListChecks className="h-3 w-3" />Subtasks{subs.length > 0 && <span className="text-muted-foreground/60 normal-case">· {subDone}/{subs.length}</span>}</label>
+            {subs.length > 0 && (
+              <div className="h-1 rounded-full bg-muted overflow-hidden mb-2"><div className="h-full bg-emerald-500 transition-all" style={{ width: `${Math.round((subDone / subs.length) * 100)}%` }} /></div>
+            )}
+            <div className="space-y-1">
+              {subs.map((s: any) => (
+                <div key={s.raw} className="flex items-center gap-2">
+                  <button onClick={() => toggleSubtask(t, s.raw)} className="shrink-0" data-testid={`subtask-toggle-${s.raw}`}>
+                    <div className={`w-4 h-4 rounded border flex items-center justify-center ${s.done ? 'bg-emerald-500 border-emerald-500' : 'border-muted-foreground/40'}`}>{s.done && <Check className="h-3 w-3 text-white" strokeWidth={3} />}</div>
+                  </button>
+                  <span className={`flex-1 text-xs ${s.done ? 'line-through text-muted-foreground' : ''}`}>{s.text}</span>
+                  <button onClick={() => removeSubtask(t, s.raw)} className="text-muted-foreground/40 hover:text-destructive"><X className="h-3 w-3" /></button>
+                </div>
+              ))}
+            </div>
+            <input value={newSub} onChange={e => setNewSub(e.target.value)} placeholder="Add a subtask…"
+              onKeyDown={e => { if (e.key === 'Enter') { addSubtask(t, newSub); setNewSub(""); } }}
+              className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 mt-1 focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-add-subtask" />
           </div>
           {/* Notes */}
           <div>
@@ -1575,6 +1694,83 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
               onBlur={e => { if ((e.target.value || "") !== (t.description || "")) updateMutation.mutate({ id: t.id, patch: { description: e.target.value } }); }}
               className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-notes" />
           </div>
+          {/* ── Advanced options (collapsed by default) ── */}
+          <button onClick={() => setAdv(a => !a)} className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground" data-testid="task-advanced-toggle">
+            <ChevronsUpDown className="h-3 w-3" />{adv ? "Hide advanced" : "Advanced options"}
+          </button>
+          {adv && (
+            <div className="space-y-3 rounded-lg bg-muted/20 p-2.5">
+              {/* Custom recurrence builder */}
+              <div>
+                <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground mb-1 block">Custom repeat</label>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-muted-foreground">Every</span>
+                  <input type="number" min={1} value={rule.interval}
+                    onChange={e => { const n = Math.max(1, parseInt(e.target.value) || 1); const u = (rule.unit || 'day'); const f = u === 'day' ? (n === 1 ? 'daily' : `every-${n}-days`) : u === 'week' ? (n === 1 ? 'weekly' : `every-${n}-weeks`) : u === 'month' ? 'monthly' : u === 'year' ? 'yearly' : 'weekdays'; setRule(t, { ...rule, freq: f, unit: u as any, interval: n }); }}
+                    className="w-14 bg-background border border-border rounded-md px-2 py-1 focus:outline-none" data-testid="task-custom-interval" />
+                  <select value={rule.unit || 'day'}
+                    onChange={e => { const u = e.target.value; const n = (u === 'day' || u === 'week') ? rule.interval : 1; const f = u === 'day' ? (n === 1 ? 'daily' : `every-${n}-days`) : u === 'week' ? (n === 1 ? 'weekly' : `every-${n}-weeks`) : u === 'month' ? 'monthly' : u === 'year' ? 'yearly' : 'weekdays'; setRule(t, { ...rule, freq: f, unit: u as any, interval: n }); }}
+                    className="flex-1 bg-background border border-border rounded-md px-2 py-1 focus:outline-none" data-testid="task-custom-unit">
+                    <option value="day">day(s)</option>
+                    <option value="week">week(s)</option>
+                    <option value="month">month</option>
+                    <option value="year">year</option>
+                    <option value="weekday">weekday</option>
+                  </select>
+                </div>
+                {/* End condition */}
+                {recurring && (
+                  <div className="flex items-center gap-1.5 text-xs mt-2">
+                    <span className="text-muted-foreground">Ends</span>
+                    <select value={rule.until ? 'until' : rule.count ? 'count' : 'never'}
+                      onChange={e => { const m = e.target.value; if (m === 'never') setRule(t, { ...rule, until: undefined, count: undefined }); else if (m === 'until') setRule(t, { ...rule, until: rule.until || addDays(30), count: undefined }); else setRule(t, { ...rule, count: rule.count || 5, until: undefined }); }}
+                      className="bg-background border border-border rounded-md px-2 py-1 focus:outline-none" data-testid="task-end-mode">
+                      <option value="never">Never</option>
+                      <option value="until">On date</option>
+                      <option value="count">After N times</option>
+                    </select>
+                    {rule.until && <input type="date" value={rule.until} onChange={e => setRule(t, { ...rule, until: e.target.value })} className="flex-1 bg-background border border-border rounded-md px-2 py-1 focus:outline-none" data-testid="task-end-date" />}
+                    {rule.count != null && <input type="number" min={1} value={rule.count} onChange={e => setRule(t, { ...rule, count: Math.max(1, parseInt(e.target.value) || 1) })} className="w-16 bg-background border border-border rounded-md px-2 py-1 focus:outline-none" data-testid="task-end-count" />}
+                  </div>
+                )}
+              </div>
+              {/* Category + Reminder */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><TagIcon className="h-3 w-3" />Category</label>
+                  <select value={cat} onChange={e => setMetaTag(t, 'cat:', e.target.value)} className="w-full text-xs bg-background border border-border rounded-lg px-2 py-1.5 capitalize focus:outline-none" data-testid="task-category">
+                    {CATEGORY_OPTS.map(c => <option key={c} value={c}>{c || "None"}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><AlarmClock className="h-3 w-3" />Reminder</label>
+                  <select value={metaOf(t, "remind:")} onChange={e => setMetaTag(t, 'remind:', e.target.value)} className="w-full text-xs bg-background border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="task-reminder">
+                    {REMINDER_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              {/* Estimated duration */}
+              <div>
+                <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Timer className="h-3 w-3" />Estimated minutes</label>
+                <input type="number" min={0} value={est} onChange={e => setMetaTag(t, 'est:', e.target.value)} placeholder="e.g. 30"
+                  className="w-full text-xs bg-background border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="task-estimate" />
+              </div>
+              {/* Free tags */}
+              <div>
+                <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><TagIcon className="h-3 w-3" />Tags</label>
+                <div className="flex flex-wrap gap-1.5 mb-1">
+                  {freeTagsOf(t).map((tag: string) => (
+                    <span key={tag} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">#{tag}
+                      <button onClick={() => updateMutation.mutate({ id: t.id, patch: { tags: (t.tags || []).filter((x: string) => x !== tag) } })} className="hover:text-destructive"><X className="h-2.5 w-2.5" /></button>
+                    </span>
+                  ))}
+                </div>
+                <input value={newTag} onChange={e => setNewTag(e.target.value)} placeholder="Add tag + Enter"
+                  onKeyDown={e => { if (e.key === 'Enter') { const v = newTag.trim().replace(/^#/, ''); if (v && !(t.tags || []).includes(v)) updateMutation.mutate({ id: t.id, patch: { tags: [...(t.tags || []), v] } }); setNewTag(""); } }}
+                  className="w-full text-xs bg-background border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="task-add-tag" />
+              </div>
+            </div>
+          )}
           {/* Footer */}
           <div className="flex items-center justify-between pt-0.5">
             {onCalendar
@@ -1668,37 +1864,36 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
                     onKeyDown={e => { if (e.key === 'Enter') submitComposer(); }}
                     placeholder="What needs doing?" data-testid="composer-title"
                     className="w-full text-sm bg-transparent font-medium focus:outline-none placeholder:text-muted-foreground/60" />
-                  {/* Priority */}
-                  <div className="flex gap-1.5">
-                    {(["low","medium","high"] as const).map(p => (
+                  {/* Priority — 4 levels */}
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {(["low","medium","high","critical"] as const).map(p => (
                       <button key={p} onClick={() => setComposer(c => ({ ...c, priority: p }))}
-                        className={`flex-1 text-xs py-1 rounded-lg border capitalize transition-colors ${composer.priority === p ? 'text-white border-transparent' : 'bg-muted/40 border-border text-muted-foreground'}`}
+                        className={`text-[11px] py-1 rounded-lg border capitalize transition-colors ${composer.priority === p ? 'text-white border-transparent' : 'bg-muted/40 border-border text-muted-foreground'}`}
                         style={composer.priority === p ? { backgroundColor: PLINE[p] } : undefined} data-testid={`composer-priority-${p}`}>{p}</button>
                     ))}
                   </div>
-                  {/* Repeat + Due */}
+                  {/* Repeat + Due date */}
                   <div className="grid grid-cols-2 gap-2">
                     <select value={composer.recurrence} onChange={e => setComposer(c => ({ ...c, recurrence: e.target.value }))}
                       className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="composer-recurrence">
-                      {RECUR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.value ? `🔁 ${o.label}` : 'No repeat'}</option>)}
+                      {RECUR_PRESETS.map(o => <option key={o.value} value={o.value}>{o.value ? `🔁 ${o.label}` : 'No repeat'}</option>)}
                     </select>
                     <input type="date" value={composer.dueDate} onChange={e => setComposer(c => ({ ...c, dueDate: e.target.value }))}
                       className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="composer-due" />
                   </div>
-                  {/* Assignees */}
-                  {assignableProfiles.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {assignableProfiles.map((p: any) => {
-                        const on = composer.assignees.includes(p.id);
-                        return (
-                          <button key={p.id} onClick={() => setComposer(c => ({ ...c, assignees: on ? c.assignees.filter(x => x !== p.id) : [...c.assignees, p.id] }))}
-                            className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border ${on ? 'border-transparent text-white' : 'bg-muted/40 border-border text-muted-foreground'}`}
-                            style={on ? { backgroundColor: `hsl(${avatarHue(p.id)} 55% 45%)` } : undefined} data-testid={`composer-assign-${p.id}`}>
-                            <span className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-[7px] font-bold text-white" style={{ backgroundColor: `hsl(${avatarHue(p.id)} 55% 45%)` }}>{(p.name||'?')[0]?.toUpperCase()}</span>{p.name}
-                          </button>
-                        );
-                      })}
-                    </div>
+                  {/* Due time + Category */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <input type="time" value={composer.dueTime} onChange={e => setComposer(c => ({ ...c, dueTime: e.target.value }))}
+                      className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="composer-time" />
+                    <select value={composer.category} onChange={e => setComposer(c => ({ ...c, category: e.target.value }))}
+                      className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 capitalize focus:outline-none" data-testid="composer-category">
+                      {CATEGORY_OPTS.map(c => <option key={c} value={c}>{c || 'No category'}</option>)}
+                    </select>
+                  </div>
+                  {composer.recurrence && (
+                    <p className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                      <Sparkles className="h-3 w-3" />{humanSummary(parseRecurrence([`recur:${composer.recurrence}`]), composer.dueDate || todayStr)}
+                    </p>
                   )}
                   <div className="flex items-center gap-2 pt-0.5">
                     <button onClick={submitComposer} disabled={!composer.title.trim()} data-testid="composer-add"
@@ -1708,14 +1903,45 @@ function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: 
                 </div>
               )}
 
-              {activeList.length === 0 && !composer.open ? (
-                <div className="text-center py-10 text-sm text-muted-foreground">
-                  {tab === "today" ? "Nothing for today 🎉" : tab === "recurring" ? "No recurring tasks — tap + to add one" : "Nothing upcoming"}
-                </div>
+              {/* ── Lists — smart sections per tab ── */}
+              {tab === "today" ? (
+                (overdueTasks.length + todayTasks.length) === 0 && !composer.open ? (
+                  <div className="text-center py-10 text-sm text-muted-foreground">Nothing for today 🎉</div>
+                ) : (
+                  <div className="space-y-4">
+                    {overdueTasks.length > 0 && (
+                      <div data-testid="section-overdue">
+                        <div className="flex items-center gap-1.5 px-1 mb-1.5 text-[11px] font-bold uppercase tracking-wider text-red-500"><AlertTriangle className="h-3 w-3" />Overdue ({overdueTasks.length})</div>
+                        <div className="space-y-2">{overdueTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                      </div>
+                    )}
+                    {todayTasks.length > 0 && (
+                      <div data-testid="section-today">
+                        {overdueTasks.length > 0 && <div className="px-1 mb-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Today</div>}
+                        <div className="space-y-2">{todayTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                      </div>
+                    )}
+                  </div>
+                )
+              ) : tab === "recurring" ? (
+                recurringTasks.length === 0 && !composer.open ? (
+                  <div className="text-center py-10 text-sm text-muted-foreground">No recurring tasks — tap + to add one</div>
+                ) : (
+                  <div className="space-y-2">{recurringTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                )
               ) : (
-                <div className="space-y-2">
-                  {activeList.map((t: any) => <TaskRow key={t.id} t={t} />)}
-                </div>
+                upcomingSections.length === 0 && !composer.open ? (
+                  <div className="text-center py-10 text-sm text-muted-foreground">Nothing upcoming</div>
+                ) : (
+                  <div className="space-y-4">
+                    {upcomingSections.map((s) => (
+                      <div key={s.key} data-testid={`section-${s.key}`}>
+                        <div className="px-1 mb-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{s.label} ({s.items.length})</div>
+                        <div className="space-y-2">{s.items.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )
               )}
 
               {/* Completed — collapsed by default (no dedicated tab) */}
