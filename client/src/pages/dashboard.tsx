@@ -16,6 +16,7 @@ import {
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { computeNetWorth } from "@shared/net-worth";
+import { computeNowItems, type NowItem } from "@shared/now-rank";
 import {
   aggregateUpcomingDates,
   groupByTimeframe,
@@ -2527,6 +2528,128 @@ function saveDismissed(ids: Set<string>) {
       ids: Array.from(ids),
     }));
   } catch { /* ignore quota errors */ }
+}
+
+// ─── Section: NOW QUEUE (Dashboard v2, Phase 1) ──────────────────────────────
+// The single urgency surface. Merges Action Required (tasks+bills), Bills due,
+// Today's Schedule (events), Upcoming (events/renewals via docs), and
+// overdue/at-risk Goals into ONE ranked list via shared/now-rank. Every action
+// hits the SAME mutation endpoints the AI chat uses (complete task / pay bill),
+// so chat and dashboard stay interchangeable (Dashboard v2 invariant).
+function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyone" }: { enhanced: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const [acted, setActed] = useState<Set<string>>(new Set());
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+
+  const { data: events = [] } = useQuery<any[]>({
+    queryKey: ["/api/events", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const { data: goalsRaw } = useQuery<any>({
+    queryKey: ["/api/goals", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
+
+  const items = useMemo(() => computeNowItems({
+    overdueTasks: enhanced?.overdueTasks || [],
+    dueSoonTasks: [...(enhanced?.tasksDueSoon || []), ...(enhanced?.upcomingTasks || [])],
+    bills: enhanced?.financeSnapshot?.upcomingBills || [],
+    documents: enhanced?.expiringDocuments || [],
+    events: Array.isArray(events) ? events : [],
+    goals: Array.isArray(goals) ? goals : [],
+  }).filter(i => !acted.has(i.key)), [enhanced, events, goals, acted]);
+
+  const completeTask = useMutation({
+    mutationFn: (id: string) => apiRequest("PATCH", `/api/tasks/${id}`, { status: "done" }),
+    onSuccess: () => {
+      ["/api/stats", "/api/dashboard-enhanced", "/api/tasks"].forEach(k => queryClient.invalidateQueries({ queryKey: [k] }));
+    },
+    onError: () => toast({ title: "Couldn't complete task", variant: "destructive" }),
+  });
+  const payBill = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", `/api/obligations/${id}/pay`, {}),
+    onSuccess: () => {
+      ["/api/obligations", "/api/dashboard-enhanced", "/api/stats", "/api/cashflow"].forEach(k => queryClient.invalidateQueries({ queryKey: [k] }));
+    },
+    onError: () => toast({ title: "Couldn't mark bill paid", variant: "destructive" }),
+  });
+
+  const doAction = (it: NowItem) => {
+    if (it.action === "complete") {
+      setActed(s => new Set(s).add(it.key));
+      completeTask.mutate(it.sourceId);
+      toast({ title: `"${it.title}" completed` });
+    } else if (it.action === "pay") {
+      setActed(s => new Set(s).add(it.key));
+      payBill.mutate(it.sourceId);
+      toast({ title: `"${it.title}" marked paid` });
+    } else {
+      navigate(it.href);
+    }
+  };
+
+  const KIND_ICON: Record<NowItem["kind"], any> = {
+    task: ListTodo, bill: CreditCard, event: CalendarDays, document: FileWarning, goal: Target,
+  };
+  const overdueCount = items.filter(i => (i.daysUntil ?? 0) < 0).length;
+  const shown = expanded ? items : items.slice(0, 5);
+
+  return (
+    <CollapsibleSection
+      accent="262 70% 60%"
+      icon={Flame}
+      label="Now"
+      sub={items.length > 0 ? `${items.length} need${items.length === 1 ? "s" : ""} attention${overdueCount > 0 ? ` · ${overdueCount} overdue` : ""}` : undefined}
+      count={items.length || undefined}
+      testId="section-now-queue"
+    >
+      {items.length === 0 ? (
+        <div className="py-6 text-center">
+          <CheckCircle2 className="h-8 w-8 text-green-500/40 mx-auto mb-2" />
+          <p className="text-xs text-muted-foreground">You're all caught up — nothing urgent right now.</p>
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {shown.map((it) => {
+            const Icon = KIND_ICON[it.kind];
+            const overdue = (it.daysUntil ?? 0) < 0;
+            const actionLabel = it.action === "complete" ? "Done" : it.action === "pay" ? "Pay" : "Open";
+            return (
+              <div key={it.key}
+                className="flex items-center gap-2.5 rounded-xl border px-2.5 py-2 transition-colors hover:bg-muted/30"
+                style={{ borderColor: overdue ? "hsl(0 72% 52% / 0.35)" : "hsl(var(--border) / 0.5)" }}>
+                <button type="button" onClick={() => navigate(it.href)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left" data-testid={`now-item-${it.key}`}>
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ background: `hsl(${it.accent} / 0.15)` }}>
+                    <Icon className="h-4 w-4" style={{ color: `hsl(${it.accent})` }} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium">{it.title}</p>
+                    <p className="truncate text-[10px]" style={{ color: overdue ? "hsl(0 72% 56%)" : "hsl(var(--muted-foreground))" }}>
+                      <span className="uppercase tracking-wide text-muted-foreground/60">{it.kind}</span>
+                      {it.detail ? ` · ${it.detail}` : ""}
+                    </p>
+                  </div>
+                </button>
+                <Button size="sm" variant={it.action === "open" ? "ghost" : "outline"} className="h-7 shrink-0 px-2.5 text-[11px]"
+                  disabled={completeTask.isPending || payBill.isPending}
+                  onClick={() => doAction(it)} data-testid={`now-action-${it.key}`}>
+                  {actionLabel}
+                </Button>
+              </div>
+            );
+          })}
+          {items.length > 5 && (
+            <button type="button" onClick={() => setExpanded(v => !v)} className="w-full pt-1 text-center text-[11px] font-medium text-primary hover:underline">
+              {expanded ? "Show less" : `Show ${items.length - 5} more`}
+            </button>
+          )}
+        </div>
+      )}
+    </CollapsibleSection>
+  );
 }
 
 function ActionRequiredSection({ stats, enhanced, profileId }: { stats: DashboardStats; enhanced: any; profileId?: string }) {
@@ -5257,6 +5380,11 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "hero-kpis",        label: "Hero Metrics",         icon: Sparkles,     visible: true, column: "full" },
   // 3) Secondary KPI chip row (tasks, spend, habits, journal, docs)
   { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
+  // 4) NOW QUEUE (Dashboard v2, Phase 1) — the single urgency surface. Merges
+  // Action Required, Bills due, Today's Schedule, Upcoming, and overdue Goals
+  // into one ranked list. The four legacy urgency sections below are hidden by
+  // default (still available via Customize) so urgency is shown ONCE.
+  { id: "now-queue",        label: "Now",                  icon: Flame,        visible: true, column: "full" },
   // === 💰 Money swimlane ===
   // BUG-20260529-finance-section-leak: the Finance section aggregates spending/
   // budget/cash-flow across every profile (Bob, Jane, shared budgets, etc.)
@@ -5267,16 +5395,20 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   // until the per-profile budgeting fix lands. LAYOUT_VERSION bumped below
   // so existing saved layouts reset and pick up the new default.
   { id: "finance",          label: "Finance",              icon: DollarSign,   visible: false, column: "full" },
-  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
-  // === 📅 Today swimlane ===
-  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "left" },
-  { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "right" },
+  // Bills/urgency are now folded into the Now Queue. Hidden by default (the
+  // full Bills & Subscriptions detail remains one Customize toggle away, and on
+  // the /dashboard/obligations page).
+  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: false, column: "full" },
+  // === 📅 Today swimlane === (folded into Now Queue; hidden by default)
+  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: false, column: "left" },
+  { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: false, column: "right" },
   { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "full" },
   // === 💡 Insights swimlane (PR K — replaced health-only swimlane) ===
   { id: "key-findings",     label: "Key Findings",         icon: Lightbulb,    visible: true, column: "full" },
   { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
   // PR I — Cross-app reminder center: birthdays, renewals, expirations, appointments, etc.
-  { id: "upcoming-dates",   label: "Upcoming",             icon: CalendarDays, visible: true, column: "full" },
+  // Upcoming reminders are folded into the Now Queue; hidden by default.
+  { id: "upcoming-dates",   label: "Upcoming",             icon: CalendarDays, visible: false, column: "full" },
 ];
 // Swimlane groups (id sets) — render small group header chips during layout
 const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: string[] }> = [
@@ -5285,7 +5417,7 @@ const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: s
   { key: "insights", label: "Insights", emoji: "💡", ids: ["key-findings", "activity"] },
 ];
 
-const LAYOUT_VERSION = 9; // PR K: Health swimlane replaced by Key Findings // Bump: hide Finance section by default (cross-profile leak)
+const LAYOUT_VERSION = 10; // Dashboard v2 Phase 1: Now Queue replaces the 4 urgency sections (needs-attention/today/obligations/upcoming-dates) which are now hidden by default
 
 function parseSavedLayout(saved: string | null): DashboardSection[] | null {
   if (!saved) return null;
@@ -5897,6 +6029,9 @@ export default function DashboardPage() {
       case "kpis":
         content = (showDashSkeleton && !stats) ? <SkeletonGrid cols={3} rows={2} h="h-14" /> :
           stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={filterIds} filterMode={filterMode} /> : null;
+        break;
+      case "now-queue":
+        content = <NowQueueSection enhanced={enhanced} stats={stats} filterIds={filterIds} filterMode={filterMode} />;
         break;
       case "today":
         content = <TodaySection enhanced={enhanced} stats={stats} />;

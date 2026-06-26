@@ -6,6 +6,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/now-rank.test.ts',
       'tests/schema.test.ts',
       'tests/utils.test.ts',
       'tests/recall-match.test.ts',

@@ -1,3 +1,3 @@
 # Portol
 
-<!-- redeploy trigger: 2026-06-26T19:03:20Z — perf/reliability: public pre-warm endpoint + boot pre-warm + auth retry + no-logout-on-network-blip -->
+<!-- redeploy trigger: 2026-06-26T19:29:59Z — Dashboard v2 Phase 1: unified Now Queue -->
