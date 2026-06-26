@@ -2,7 +2,8 @@ import { formatApiError } from "@/lib/formatError";
 import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getProfileFilter, getFilterLabel } from "@/lib/profileFilter";
+import { getFilterLabel } from "@/lib/profileFilter";
+import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -191,13 +192,16 @@ export default function JournalPage() {
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
-  const selfProfile = profiles.find(p => p.type === "self");
-  // Default to self profile once loaded
+  // Default a new entry's profile to the ACTIVE scope (the profile the user is
+  // working in), not unconditionally "me".
+  const activeCreateProfileId = useActiveCreateProfileId(profiles);
   useEffect(() => {
-    if (selfProfile && !selectedProfileId) setSelectedProfileId(selfProfile.id);
-  }, [selfProfile]);
+    if (activeCreateProfileId && !selectedProfileId) setSelectedProfileId(activeCreateProfileId);
+  }, [activeCreateProfileId]);
 
-  const { mode: filterMode, selectedIds: filterIds } = getProfileFilter();
+  // Reactive read of the active profile scope (single source of truth) so this
+  // page re-renders the instant the selection changes anywhere in the app.
+  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const filterLabel = getFilterLabel();
   const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
 
@@ -223,7 +227,7 @@ export default function JournalPage() {
     setMood(null); setEnergy(3);
     setGrateful1(""); setGrateful2(""); setGrateful3("");
     setMakeAmazing(""); setAffirmation("");
-    setSelectedProfileId(selfProfile?.id || "");
+    setSelectedProfileId(activeCreateProfileId || "");
     setEditingEntry(null);
   };
 

@@ -4,7 +4,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { getProfileFilter, setFilterEveryone } from "@/lib/profileFilter";
+import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent } from "@/components/ui/card";
@@ -85,10 +85,13 @@ function TaskDialog({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
-  const selfProfile = profiles.find(p => p.type === "self");
+  // Default the new task's profile to whichever profile is ACTIVE in the global
+  // scope (the one the user is working in) — not unconditionally "me". Creating
+  // a task while "Jane" is selected must link it to Jane so it stays visible.
+  const activeCreateProfileId = useActiveCreateProfileId(profiles);
   useEffect(() => {
-    if (selfProfile && !selectedProfileId) setSelectedProfileId(selfProfile.id);
-  }, [selfProfile]);
+    if (activeCreateProfileId && !selectedProfileId) setSelectedProfileId(activeCreateProfileId);
+  }, [activeCreateProfileId]);
 
   const mutation = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async () => {
@@ -525,24 +528,13 @@ export default function TasksPage() {
     }
   }, []);
   const [editTask, setEditTask] = useState<Task | null>(null);
-  // BUG-TSK-001/PRF-001: Tasks page should NOT inherit the global profile filter.
-  // Reset to "Everyone" on mount so the user always sees all tasks first.
-  const [filterIds, setFilterIds] = useState<string[]>([]);
-  const [filterMode, setFilterMode] = useState<"everyone" | "selected">("everyone");
-  useEffect(() => {
-    setFilterEveryone();
-    setFilterMode("everyone");
-    setFilterIds([]);
-  }, []);
-  useEffect(() => {
-    const handleFocus = () => {
-      const { mode, selectedIds } = getProfileFilter();
-      setFilterMode(mode);
-      setFilterIds(selectedIds);
-    };
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, []);
+  // PROFILE-CONTEXT FIX: Tasks now honors the global active-profile scope like
+  // every other page. The old code called setFilterEveryone() on mount, which
+  // WIPED the user's selection for the entire app every time they opened Tasks —
+  // the single most visible "the app forgot which profile I picked" bug. The
+  // scope is read reactively from the one source of truth (useProfileScope), so
+  // it updates instantly when the user changes the filter here or anywhere else.
+  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const [tabFilter, setTabFilter] = useState<"all" | "open" | "completed">("all");
 
   const taskUrl = filterMode === "selected" && filterIds.length > 0
@@ -606,7 +598,9 @@ export default function TasksPage() {
             </Link>
 
             <MultiProfileFilter
-              onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+              // The chip writes straight to the global scope store; useProfileScope
+              // above re-renders this page reactively, so no local wiring is needed.
+              onChange={() => {}}
               compact
             />
           </div>

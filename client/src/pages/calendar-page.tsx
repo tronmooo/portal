@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import CalendarView from "@/components/CalendarView";
 import ObligationsManager from "@/components/ObligationsManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { getProfileFilter } from "@/lib/profileFilter";
+import { useProfileScope } from "@/hooks/useProfileScope";
 import { ArrowLeft, CalendarDays, Repeat } from "lucide-react";
 import { Link } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -36,8 +36,8 @@ function readInitialTab(): TabKey {
 
 export default function CalendarPage() {
   useEffect(() => { document.title = "Calendar — Portol"; }, []);
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  // Single source of truth: active scope read reactively.
+  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const [tab, setTab] = useState<TabKey>(readInitialTab);
 
   // Keep ?tab= synced WITHOUT touching window.location.hash, because the
@@ -64,7 +64,7 @@ export default function CalendarPage() {
           <span>Dashboard</span>
         </Link>
         <MultiProfileFilter
-          onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
+          onChange={() => {}}
           compact
         />
       </div>

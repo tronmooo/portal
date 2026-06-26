@@ -2003,10 +2003,16 @@ interface AISummaryData {
 }
 
 function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId: string; profileType: string; profileUpdatedAt?: string }) {
-  const { data: aiSummary, isLoading, isError, isFetching } = useQuery<AISummaryData>({
+  // When set, the next fetch appends ?force=true so the server regenerates
+  // instead of serving its 2h cache. Kept as a ref so the single useQuery
+  // queryFn stays the only fetch path (see handleRefresh).
+  const forceRef = useRef(false);
+  const { data: aiSummary, isLoading, isError, isFetching, refetch } = useQuery<AISummaryData>({
     queryKey: ["/api/profiles", profileId, "ai-summary"],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/profiles/${profileId}/ai-summary`);
+      const force = forceRef.current;
+      forceRef.current = false;
+      const res = await apiRequest("GET", `/api/profiles/${profileId}/ai-summary${force ? "?force=true" : ""}`);
       return res.json();
     },
     enabled: !!profileId,
@@ -2028,17 +2034,13 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     }
   }, [profileUpdatedAt, profileId, aiSummary]);
 
-  const handleRefresh = useCallback(async () => {
-    // Force refresh bypassing server cache
-    queryClient.setQueryData(["/api/profiles", profileId, "ai-summary"], undefined);
-    queryClient.fetchQuery({
-      queryKey: ["/api/profiles", profileId, "ai-summary"],
-      queryFn: async () => {
-        const res = await apiRequest("GET", `/api/profiles/${profileId}/ai-summary?force=true`);
-        return res.json();
-      },
-    });
-  }, [profileId]);
+  const handleRefresh = useCallback(() => {
+    // Force regeneration on the next fetch, then refetch through the normal
+    // query path (keeps the existing summary visible while it reloads and
+    // retains it if the refresh errors, instead of blanking the card).
+    forceRef.current = true;
+    refetch();
+  }, [refetch]);
 
   // Wave 9: Look up current market value via web search + AI.
   // Only shown for asset-like profile types (asset/vehicle/property/investment).
@@ -2076,11 +2078,120 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     }
   }, [profileId]);
 
-  // Graceful degradation: if AI fails, just don't show the card
-  if (isError) return null;
+  // Shared header actions (Look up value + Refresh). Defined once so the
+  // value-lookup button is byte-for-byte identical whether or not the AI
+  // summary loaded — it must never be coupled to the summary succeeding.
+  const headerActions = (
+    <div className="flex items-center gap-1">
+      {canLookupValue && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
+          onClick={handleLookupValue}
+          disabled={lookupBusy}
+          data-testid="button-lookup-value"
+          title="Estimate current market value from live web data"
+        >
+          {lookupBusy
+            ? <RefreshCw className="h-3 w-3 animate-spin" />
+            : <Search className="h-3 w-3" />}
+          {lookupBusy ? "Looking up…" : "Look up value"}
+        </Button>
+      )}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
+        onClick={handleRefresh}
+        disabled={isFetching}
+        data-testid="button-refresh-ai-summary"
+      >
+        <RefreshCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} />
+        Refresh
+      </Button>
+    </div>
+  );
+
+  // Lookup result / error banner — shared across loaded + degraded states so
+  // the value the user just looked up is always visible.
+  const lookupBanners = (
+    <>
+      {lookupError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="text-lookup-error">
+          {lookupError}
+        </div>
+      )}
+      {lookupResult && (
+        <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs space-y-1" data-testid="text-lookup-result">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold">Estimated current value</span>
+            <span className="font-semibold tabular-nums">${lookupResult.value.toLocaleString()}</span>
+          </div>
+          <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5">
+            {lookupResult.range && <span>Range: {lookupResult.range}</span>}
+            <span>Confidence: {lookupResult.confidence}</span>
+            <span>Source: {lookupResult.method}</span>
+            {lookupResult.previousValue > 0 && lookupResult.previousValue !== lookupResult.value && (
+              <span>
+                vs prior ${lookupResult.previousValue.toLocaleString()}{" "}
+                ({lookupResult.value > lookupResult.previousValue ? "+" : ""}
+                ${(lookupResult.value - lookupResult.previousValue).toLocaleString()})
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  // Card shell used for the degraded states (loading / error / empty summary).
+  // Keeps the header — and therefore the "Look up value" button — on screen for
+  // asset-like profiles even when the AI summary can't be generated. Previously
+  // every degraded state returned null and the button vanished with the card.
+  const renderShell = (body: React.ReactNode) => (
+    <Card className="overflow-hidden" data-testid="card-ai-summary">
+      <div className={`h-1 bg-gradient-to-r ${profileGradient(profileType).replace(/\/20/g, '/60').replace(/\/5/g, '/30')}`} />
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <CardTitle className="text-sm font-semibold">AI Summary</CardTitle>
+          </div>
+          {headerActions}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {lookupBanners}
+        {body}
+      </CardContent>
+    </Card>
+  );
+
+  // No summary to show (initial error or empty result). A refresh error while a
+  // summary is already loaded keeps `aiSummary`, so this falls through to the
+  // normal render instead of blanking. For asset-like profiles keep the card so
+  // the value lookup stays reachable; for everything else there's nothing to show.
+  if (!isLoading && !aiSummary) {
+    if (!canLookupValue) return null;
+    return renderShell(
+      <p className="text-xs text-muted-foreground" data-testid="text-ai-summary-unavailable">
+        Summary unavailable right now — tap Refresh to try again. You can still look up the current market value above.
+      </p>
+    );
+  }
 
   // Loading skeleton
   if (isLoading) {
+    // Asset-like types still get the action buttons while the summary generates.
+    if (canLookupValue) {
+      return renderShell(
+        <>
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/4" />
+        </>
+      );
+    }
     return (
       <Card className="overflow-hidden" data-testid="card-ai-summary-loading">
         <div className={`h-1 bg-gradient-to-r ${profileGradient(profileType).replace(/\/20/g, '/60').replace(/\/5/g, '/30')}`} />
@@ -2120,35 +2231,7 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
             <Sparkles className="h-4 w-4 text-primary" />
             <CardTitle className="text-sm font-semibold">AI Summary</CardTitle>
           </div>
-          <div className="flex items-center gap-1">
-            {canLookupValue && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
-                onClick={handleLookupValue}
-                disabled={lookupBusy}
-                data-testid="button-lookup-value"
-                title="Estimate current market value from live web data"
-              >
-                {lookupBusy
-                  ? <RefreshCw className="h-3 w-3 animate-spin" />
-                  : <Search className="h-3 w-3" />}
-                {lookupBusy ? "Looking up…" : "Look up value"}
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
-              onClick={handleRefresh}
-              disabled={isFetching}
-              data-testid="button-refresh-ai-summary"
-            >
-              <RefreshCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
-          </div>
+          {headerActions}
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -2158,31 +2241,7 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
         </p>
 
         {/* Wave 9: Lookup result/error banner */}
-        {lookupError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="text-lookup-error">
-            {lookupError}
-          </div>
-        )}
-        {lookupResult && (
-          <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs space-y-1" data-testid="text-lookup-result">
-            <div className="flex items-center justify-between">
-              <span className="font-semibold">Estimated current value</span>
-              <span className="font-semibold tabular-nums">${lookupResult.value.toLocaleString()}</span>
-            </div>
-            <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5">
-              {lookupResult.range && <span>Range: {lookupResult.range}</span>}
-              <span>Confidence: {lookupResult.confidence}</span>
-              <span>Source: {lookupResult.method}</span>
-              {lookupResult.previousValue > 0 && lookupResult.previousValue !== lookupResult.value && (
-                <span>
-                  vs prior ${lookupResult.previousValue.toLocaleString()}{" "}
-                  ({lookupResult.value > lookupResult.previousValue ? "+" : ""}
-                  ${(lookupResult.value - lookupResult.previousValue).toLocaleString()})
-                </span>
-              )}
-            </div>
-          </div>
-        )}
+        {lookupBanners}
 
         {/* Highlights row */}
         {(aiSummary.highlights?.length ?? 0) > 0 && (

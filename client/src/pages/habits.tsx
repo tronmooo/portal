@@ -2,7 +2,8 @@ import { formatApiError } from "@/lib/formatError";
 import { stopProp } from "@/lib/event-utils";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
-import { getProfileFilter, getFilterLabel } from "@/lib/profileFilter";
+import { getFilterLabel } from "@/lib/profileFilter";
+import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import EditableTitle from "@/components/EditableTitle";
@@ -393,12 +394,15 @@ export default function HabitsPage() {
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
-  const selfProfile = profiles.find(p => p.type === "self");
-  // Default to self profile once loaded
+  // Default a new habit's profile to the ACTIVE scope (the profile the user is
+  // working in), not unconditionally "me".
+  const activeCreateProfileId = useActiveCreateProfileId(profiles);
   useEffect(() => {
-    if (selfProfile && !selectedProfileId) setSelectedProfileId(selfProfile.id);
-  }, [selfProfile]);
-  const { mode: filterMode, selectedIds: filterIds } = getProfileFilter();
+    if (activeCreateProfileId && !selectedProfileId) setSelectedProfileId(activeCreateProfileId);
+  }, [activeCreateProfileId]);
+  // Reactive read of the active profile scope (single source of truth) so this
+  // page re-renders the instant the selection changes anywhere in the app.
+  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const filterLabel = getFilterLabel();
   const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
 
@@ -434,7 +438,7 @@ export default function HabitsPage() {
       frequency: "daily",
       ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
     }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] }); const saved = newName.trim(); setNewName(""); setSelectedProfileId(selfProfile?.id || ""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] }); const saved = newName.trim(); setNewName(""); setSelectedProfileId(activeCreateProfileId || ""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
     onError: (err: Error) => toast({ title: "Failed to create habit", description: formatApiError(err), variant: "destructive" }),
   });
 
