@@ -448,6 +448,44 @@ export function CashFlowPopup({
       testId="popup-cash-flow"
     >
       <div className="p-3 space-y-3">
+        {/* Summary — net, savings rate, in/out ratio, recurring vs one-time */}
+        <div className="rounded-lg border border-border bg-card p-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Net this month</p>
+              <p className="text-xl font-bold tabular-nums leading-tight" style={{ color: net >= 0 ? "hsl(200 70% 55%)" : "hsl(43 85% 52%)" }}>{net >= 0 ? "+" : "−"}${fmt(Math.abs(net))}</p>
+            </div>
+            {monthlyIncome > 0 && (
+              <div className="text-right">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Savings rate</p>
+                <p className="text-lg font-bold tabular-nums leading-tight" style={{ color: net >= 0 ? "hsl(155 60% 44%)" : "hsl(0 72% 52%)" }}>{Math.round((net / monthlyIncome) * 100)}%</p>
+              </div>
+            )}
+          </div>
+          {(monthlyIncome + monthlyOut) > 0 && (
+            <>
+              <div className="mt-2 flex h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div style={{ width: `${(monthlyIncome / (monthlyIncome + monthlyOut)) * 100}%`, background: "hsl(155 60% 44%)" }} />
+                <div style={{ width: `${(monthlyOut / (monthlyIncome + monthlyOut)) * 100}%`, background: "hsl(0 72% 52%)" }} />
+              </div>
+              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                <span><span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(155 60% 44%)" }} /> In ${fmt(monthlyIncome)}</span>
+                <span>Out ${fmt(monthlyOut)} <span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(0 72% 52%)" }} /></span>
+              </div>
+            </>
+          )}
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <div className="rounded-lg bg-muted/30 px-2 py-1.5">
+              <p className="text-[9px] uppercase tracking-wide text-muted-foreground">Recurring out</p>
+              <p className="text-sm font-bold tabular-nums">${fmt(recurringTotal)}/mo</p>
+            </div>
+            <div className="rounded-lg bg-muted/30 px-2 py-1.5">
+              <p className="text-[9px] uppercase tracking-wide text-muted-foreground">One-time out</p>
+              <p className="text-sm font-bold tabular-nums">${fmt(oneTimeTotal)}</p>
+            </div>
+          </div>
+        </div>
+
         {/* Income */}
         <SectionCard
           icon={ArrowDownToLine}

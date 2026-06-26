@@ -1,3 +1,2 @@
-# Portol
-
-<!-- redeploy trigger: 2026-06-26T21:52:53Z — richer Net Worth popup (trend + asset/liability split) -->
+1782511139
+Cash Flow popup enrichment Fri Jun 26 21:58:59 UTC 2026
