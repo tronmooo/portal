@@ -67,7 +67,7 @@ import {
   Check, Clock, MapPin,
   ChevronDown, ChevronUp,
   ExternalLink, Eye,
-  HeartPulse, ArrowUp, ArrowDown, Minus, FileWarning, CalendarClock,
+  HeartPulse, ArrowUp, ArrowDown, ArrowRight, ArrowUpRight, ArrowDownRight, Minus, FileWarning, CalendarClock,
   Download, UploadCloud, MoreVertical,
   EyeOff, GripVertical, Settings, RotateCcw, Target,
   Trash2, Pencil, FileText, CheckCircle2, X,
@@ -699,6 +699,63 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
 
   const fmt = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 0 });
 
+  // ── Hero redesign data ──────────────────────────────────────────────────
+  // Privacy toggle (eye icon) masks every money figure in the hero.
+  const [hideAmounts, setHideAmounts] = useState(false);
+  const money = (n: number) => hideAmounts ? "••••" : `$${fmt(Math.round(n))}`;
+  // Net-worth snapshot history powers the hero trend line + the month-over-month %.
+  const histUrl = leading
+    ? `/api/net-worth/history${leading}&lookbackDays=120`
+    : `/api/net-worth/history?lookbackDays=120`;
+  const { data: nwHistory = [] } = useQuery<any[]>({
+    queryKey: ["/api/net-worth/history", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", histUrl).then(r => r.json()).catch(() => []),
+    staleTime: 60_000,
+  });
+  const nwSeries = useMemo(() => {
+    const rows = Array.isArray(nwHistory) ? [...nwHistory] : [];
+    rows.sort((a, b) => String(a.snapshotDate).localeCompare(String(b.snapshotDate)));
+    const pts = rows.map((r: any) => Number(r.netWorth) || 0);
+    // Pin the last point to the live net worth so the line agrees with the headline.
+    if (pts.length === 0) return [netWorth];
+    pts[pts.length - 1] = netWorth;
+    return pts;
+  }, [nwHistory, netWorth]);
+  const nwTrend = useMemo(() => {
+    if (nwSeries.length < 2) return null;
+    const first = nwSeries[0], last = nwSeries[nwSeries.length - 1];
+    if (!isFinite(first) || first === 0) return null;
+    return { pct: ((last - first) / Math.abs(first)) * 100, up: last >= first };
+  }, [nwSeries]);
+  const nwPath = useMemo(() => {
+    const s = nwSeries.length >= 2 ? nwSeries : [netWorth, netWorth];
+    const min = Math.min(...s), max = Math.max(...s), span = (max - min) || 1;
+    const W = 160, H = 52;
+    return s.map((v, i) => {
+      const x = (i / (s.length - 1)) * W;
+      const y = H - ((v - min) / span) * H;
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${(y + 2).toFixed(1)}`;
+    }).join(" ");
+  }, [nwSeries, netWorth]);
+  // Last 7 days of real net cash flow (per-day income baseline − that day's spend).
+  const weekBars = useMemo(() => {
+    const recs: any[] = enhanced?.financeSnapshot?.monthlyExpenseRecords || [];
+    const perDayIncome = monthlyIncome / 30;
+    const dow = ["S", "M", "T", "W", "T", "F", "S"];
+    const today = new Date();
+    const out: { label: string; net: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today); d.setDate(today.getDate() - i);
+      const key = d.toLocaleDateString("en-CA");
+      const spent = recs.filter((e) => String(e.date || "").slice(0, 10) === key)
+        .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      out.push({ label: dow[d.getDay()], net: perDayIncome - spent });
+    }
+    return out;
+  }, [enhanced, monthlyIncome]);
+  const weekMax = Math.max(1, ...weekBars.map((b) => Math.abs(b.net)));
+  const budgetRemaining = Math.max(0, totalBudget - totalSpent);
+
   return (
     <div className="relative">
       {/* NW-16: subtle refetch indicator so the user sees the tiles are
@@ -712,110 +769,143 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
           Updating filter…
         </div>
       )}
-      <div className={`grid grid-cols-1 ${effectiveHideBudget ? "sm:grid-cols-2" : "sm:grid-cols-3"} gap-2.5 mb-2 transition-opacity duration-200 ${refetching ? "opacity-60" : "opacity-100"}`}>
-      {/* NET WORTH */}
+      <div className={`mb-2 space-y-2.5 transition-opacity duration-200 ${refetching ? "opacity-60" : "opacity-100"}`}>
+      {/* ───── NET WORTH HERO ───── */}
       <button
         type="button"
         onClick={() => setHeroPopup("networth")}
-        className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
-        style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.16) 0%, hsl(155 60% 44% / 0.04) 60%, transparent 100%)' }}
+        className="relative w-full overflow-hidden rounded-2xl border border-border/50 p-4 text-left card-lift active:scale-[0.99] transition-all"
+        style={{ background: 'radial-gradient(130% 150% at 88% -10%, hsl(265 70% 32% / 0.55) 0%, hsl(232 55% 16% / 0.6) 42%, hsl(222 47% 9%) 100%)' }}
         data-testid="hero-kpi-net-worth"
       >
-        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
-            <div className="icon-badge" style={{ background: 'hsl(155 60% 44% / 0.18)' }}>
-              <Wallet className="h-4 w-4" style={{ color: 'hsl(155 60% 44%)' }} />
-            </div>
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Net Worth</span>
-          </div>
-        </div>
-        <div className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-3xl font-bold tracking-tight" style={{ color: netWorthNegative ? 'hsl(0 72% 56%)' : 'hsl(155 60% 44%)' }}>{netWorthNegative ? "-" : ""}${fmt(animatedNetWorth)}</span>
-        </div>
-        <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground/80 tabular-nums">
-          <span>Assets ${fmt(Math.round(totalAssetValue))}</span>
-          <span>·</span>
-          <span>Liab ${fmt(Math.round(totalLiabilities))}</span>
-        </div>
-      </button>
+        {/* aurora glow */}
+        <div className="pointer-events-none absolute -right-12 -top-20 h-52 w-52 rounded-full opacity-50 blur-3xl" style={{ background: 'radial-gradient(circle, hsl(285 85% 60% / 0.7), transparent 70%)' }} />
+        {/* live net-worth trend line */}
+        <svg className="pointer-events-none absolute right-4 top-9 h-14 w-40 overflow-visible" viewBox="0 0 160 56" fill="none" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="nwLine" x1="0" y1="0" x2="160" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="hsl(190 90% 62%)" />
+              <stop offset="100%" stopColor="hsl(312 90% 66%)" />
+            </linearGradient>
+          </defs>
+          <path d={nwPath} stroke="url(#nwLine)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ filter: 'drop-shadow(0 0 6px hsl(305 90% 60% / 0.65))' }} />
+        </svg>
 
-      {/* BUDGET */}
-      {!effectiveHideBudget && (
-      <button
-        type="button"
-        onClick={() => setHeroPopup("budget")}
-        className="relative flex flex-col p-4 rounded-2xl border overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
-        style={{
-          background: budgetBreached
-            ? 'linear-gradient(135deg, hsl(0 72% 52% / 0.18) 0%, hsl(0 72% 52% / 0.04) 60%, transparent 100%)'
-            : 'linear-gradient(135deg, hsl(43 85% 52% / 0.16) 0%, hsl(43 85% 52% / 0.04) 60%, transparent 100%)',
-          borderColor: budgetBreached ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.5)',
-        }}
-        data-testid="hero-kpi-budget"
-      >
-        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: budgetBreached ? 'linear-gradient(90deg, hsl(0 72% 52%), transparent)' : 'linear-gradient(90deg, hsl(43 85% 52%), transparent)' }} />
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
-            <div className="icon-badge" style={{ background: budgetBreached ? 'hsl(0 72% 52% / 0.18)' : 'hsl(43 85% 52% / 0.18)' }}>
-              <PieChartIcon className="h-4 w-4" style={{ color: budgetBreached ? 'hsl(0 72% 52%)' : 'hsl(43 85% 52%)' }} />
-            </div>
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Budget</span>
+        <div className="relative z-10 flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/55">Net Worth</span>
+            <span
+              role="button" tabIndex={0} aria-label={hideAmounts ? "Show amounts" : "Hide amounts"}
+              onClick={(e) => { e.stopPropagation(); setHideAmounts(v => !v); }}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setHideAmounts(v => !v); } }}
+              className="cursor-pointer text-white/45 transition-colors hover:text-white/80"
+            >
+              {hideAmounts ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </span>
           </div>
-          {budgetBreached && (
-            <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded">OVER</span>
-          )}
-        </div>
-        <div className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-3xl font-bold tracking-tight" style={{ color: budgetBreached ? 'hsl(0 72% 52%)' : 'hsl(43 85% 52%)' }}>{animatedBudget}%</span>
-          <span className="text-xs text-muted-foreground/70">of ${fmt(totalBudget)}</span>
-        </div>
-        <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: 'hsl(var(--muted) / 0.6)' }}>
-          <div
-            className="h-full rounded-full transition-all duration-700"
-            style={{
-              width: `${Math.min(100, budgetPct)}%`,
-              background: budgetBreached ? 'hsl(0 72% 52%)' : budgetPct >= 80 ? 'hsl(43 85% 52%)' : 'hsl(155 60% 44%)',
-            }}
-          />
-        </div>
-      </button>
-      )}
-
-      {/* CASH FLOW */}
-      <button
-        type="button"
-        onClick={() => setHeroPopup("cashflow")}
-        className="relative flex flex-col p-4 rounded-2xl border border-border/50 overflow-hidden text-left card-lift active:scale-[0.98] transition-all min-h-[112px]"
-        style={{
-          background: cashFlow >= 0
-            ? 'linear-gradient(135deg, hsl(200 80% 52% / 0.18) 0%, hsl(200 80% 52% / 0.04) 60%, transparent 100%)'
-            : 'linear-gradient(135deg, hsl(0 72% 52% / 0.18) 0%, hsl(0 72% 52% / 0.04) 60%, transparent 100%)',
-        }}
-        data-testid="hero-kpi-cash-flow"
-      >
-        <div className="absolute top-0 left-0 right-0" style={{ height: 3, background: cashFlow >= 0 ? 'linear-gradient(90deg, hsl(200 80% 52%), transparent)' : 'linear-gradient(90deg, hsl(0 72% 52%), transparent)' }} />
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
-            <div className="icon-badge" style={{ background: cashFlow >= 0 ? 'hsl(200 80% 52% / 0.18)' : 'hsl(0 72% 52% / 0.18)' }}>
-              {cashFlow >= 0
-                ? <TrendingUp className="h-4 w-4" style={{ color: 'hsl(200 80% 52%)' }} />
-                : <TrendingDown className="h-4 w-4" style={{ color: 'hsl(0 72% 52%)' }} />}
-            </div>
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">Cash Flow</span>
-          </div>
-        </div>
-        <div className="flex items-baseline gap-1 tabular-nums">
-          <span className="text-3xl font-bold tracking-tight" style={{ color: cashFlow >= 0 ? 'hsl(200 80% 52%)' : 'hsl(0 72% 52%)' }}>
-            {cashFlow >= 0 ? '+' : '−'}${fmt(animatedCashFlow)}
+          <span className="flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-medium text-white/75 backdrop-blur-sm">
+            This Month <ChevronDown className="h-3 w-3" />
           </span>
         </div>
-        <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground/80 tabular-nums">
-          <span>In ${fmt(Math.round(monthlyIncome))}</span>
-          <span>·</span>
-          <span>Out ${fmt(Math.round(monthlySpend))}</span>
+
+        <div className="relative z-10 mt-2">
+          <span className="text-4xl font-bold tracking-tight tabular-nums" style={{ color: netWorthNegative ? 'hsl(0 85% 68%)' : 'hsl(155 70% 55%)' }}>
+            {hideAmounts ? "••••••" : `${netWorthNegative ? "-" : ""}$${fmt(animatedNetWorth)}`}
+          </span>
+          {nwTrend && (
+            <div className="mt-1 flex items-center gap-1 text-[12px] font-medium" style={{ color: nwTrend.up ? 'hsl(155 70% 55%)' : 'hsl(0 85% 68%)' }}>
+              {nwTrend.up ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
+              {Math.abs(nwTrend.pct).toFixed(1)}% <span className="font-normal text-white/45">vs last month</span>
+            </div>
+          )}
+        </div>
+
+        <div className="relative z-10 mt-3 flex gap-2">
+          <div className="flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 backdrop-blur-sm">
+            <p className="text-[10px] uppercase tracking-wider text-white/45">Assets</p>
+            <p className="text-base font-bold tabular-nums" style={{ color: 'hsl(155 70% 58%)' }}>{money(totalAssetValue)}</p>
+          </div>
+          <div className="flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 backdrop-blur-sm">
+            <p className="text-[10px] uppercase tracking-wider text-white/45">Liabilities</p>
+            <p className="text-base font-bold tabular-nums" style={{ color: 'hsl(270 80% 74%)' }}>{money(totalLiabilities)}</p>
+          </div>
         </div>
       </button>
+
+      {/* ───── CASH FLOW + BUDGET ───── */}
+      <div className={`grid gap-2.5 ${effectiveHideBudget ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2"}`}>
+        {/* CASH FLOW */}
+        <button
+          type="button"
+          onClick={() => setHeroPopup("cashflow")}
+          className="relative flex flex-col overflow-hidden rounded-2xl border border-border/50 p-4 text-left card-lift active:scale-[0.98] transition-all"
+          style={{ background: 'linear-gradient(150deg, hsl(200 70% 50% / 0.10) 0%, transparent 55%)' }}
+          data-testid="hero-kpi-cash-flow"
+        >
+          <div className="flex items-center gap-2">
+            <div className="icon-badge" style={{ background: 'hsl(200 80% 52% / 0.16)' }}>
+              {cashFlow >= 0
+                ? <TrendingUp className="h-4 w-4" style={{ color: 'hsl(200 80% 60%)' }} />
+                : <TrendingDown className="h-4 w-4" style={{ color: 'hsl(0 80% 62%)' }} />}
+            </div>
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Cash Flow</span>
+          </div>
+          <div className="mt-2 text-2xl font-bold tabular-nums" style={{ color: cashFlow >= 0 ? 'hsl(155 65% 50%)' : 'hsl(0 80% 62%)' }}>
+            {hideAmounts ? "••••" : `${cashFlow >= 0 ? '+' : '−'}$${fmt(animatedCashFlow)}`}
+          </div>
+          <div className="mt-0.5 flex items-center gap-2.5 text-[11px] text-muted-foreground">
+            <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(155 65% 50%)' }} />In {money(monthlyIncome)}</span>
+            <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(0 80% 62%)' }} />Out {money(monthlySpend)}</span>
+          </div>
+          <div className="mt-2.5 flex items-end gap-1.5">
+            {weekBars.map((b, i) => (
+              <div key={i} className="flex flex-1 flex-col items-center gap-1">
+                <div className="flex w-full items-end justify-center" style={{ height: 32 }}>
+                  <div className="w-full rounded-md transition-all duration-500" style={{ height: `${Math.max(8, (Math.abs(b.net) / weekMax) * 100)}%`, background: b.net >= 0 ? 'hsl(155 60% 48%)' : 'hsl(0 78% 60%)' }} />
+                </div>
+                <span className="text-[9px] text-muted-foreground/50">{b.label}</span>
+              </div>
+            ))}
+          </div>
+          <span className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-primary">View Cash Flow <ArrowRight className="h-3 w-3" /></span>
+        </button>
+
+        {/* BUDGET */}
+        {!effectiveHideBudget && (
+        <button
+          type="button"
+          onClick={() => setHeroPopup("budget")}
+          className="relative flex flex-col overflow-hidden rounded-2xl border border-border/50 p-4 text-left card-lift active:scale-[0.98] transition-all"
+          style={{ background: 'linear-gradient(150deg, hsl(155 60% 44% / 0.10) 0%, transparent 55%)' }}
+          data-testid="hero-kpi-budget"
+        >
+          <div className="flex items-center gap-2">
+            <div className="icon-badge" style={{ background: budgetBreached ? 'hsl(0 72% 52% / 0.16)' : 'hsl(155 60% 44% / 0.16)' }}>
+              <Target className="h-4 w-4" style={{ color: budgetBreached ? 'hsl(0 72% 55%)' : 'hsl(155 65% 50%)' }} />
+            </div>
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Budget</span>
+            {budgetBreached && <span className="ml-auto rounded bg-red-500/10 px-1.5 py-0.5 text-[9px] font-bold text-red-500">OVER</span>}
+          </div>
+          <div className="mt-2 flex items-center gap-3">
+            <div className="min-w-0">
+              <div className="text-2xl font-bold tabular-nums" style={{ color: budgetBreached ? 'hsl(0 72% 58%)' : 'hsl(155 65% 50%)' }}>{animatedBudget}%</div>
+              <p className="text-[11px] text-muted-foreground">of {money(totalBudget)}</p>
+            </div>
+            <svg width="72" height="72" className="ml-auto shrink-0 -rotate-90">
+              <circle cx="36" cy="36" r="29" fill="none" stroke="hsl(var(--muted))" strokeWidth="7" />
+              <circle cx="36" cy="36" r="29" fill="none" stroke={budgetBreached ? 'hsl(0 72% 55%)' : 'hsl(155 65% 50%)'} strokeWidth="7" strokeLinecap="round"
+                strokeDasharray={`${(Math.min(100, budgetPct) / 100) * (2 * Math.PI * 29)} ${2 * Math.PI * 29}`}
+                style={{ transition: 'stroke-dasharray 0.8s cubic-bezier(0.34,1.56,0.64,1)' }} />
+            </svg>
+          </div>
+          <div className="mt-2 flex items-center gap-5 text-[11px]">
+            <div><p className="text-muted-foreground">Remaining</p><p className="font-bold tabular-nums" style={{ color: 'hsl(155 65% 50%)' }}>{money(budgetRemaining)}</p></div>
+            <div><p className="text-muted-foreground">Spent</p><p className="font-bold tabular-nums">{money(totalSpent)}</p></div>
+          </div>
+          <span className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-primary">View Budget <ArrowRight className="h-3 w-3" /></span>
+        </button>
+        )}
+      </div>
       </div>
 
       {/* Hero KPI Popups */}

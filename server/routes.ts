@@ -2151,6 +2151,27 @@ If unsure, return "profile_fact".`,
     res.json(data);
   }));
 
+  // ---- Net Worth History (powers the dashboard hero trend line + MoM %) ----
+  // The client has long called this endpoint (with a graceful []-fallback) but
+  // it was never registered, so the hero chart had no data. Returns the daily
+  // net-worth snapshot series. When exactly one profile is selected we return
+  // that profile's per-profile series; otherwise the account aggregate.
+  app.get("/api/net-worth/history", asyncHandler(async (req, res) => {
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    const profileId = req.query.profileId as string | undefined;
+    const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
+    const lookbackDays = Math.min(400, Math.max(1, parseInt(String(req.query.lookbackDays || "120"), 10) || 120));
+    const pid = ids.length === 1 ? ids[0] : undefined;
+    try {
+      const rows = typeof (storage as any).getNetWorthHistory === "function"
+        ? await (storage as any).getNetWorthHistory(pid, lookbackDays)
+        : [];
+      res.json(Array.isArray(rows) ? rows : []);
+    } catch {
+      res.json([]);
+    }
+  }));
+
   // ---- Dashboard Bootstrap (PERF 2026-05-28) ----
   // Single round-trip that returns everything the dashboard skeleton blocks
   // on: stats, enhanced, profiles, incomes, budget summary. Each individual
