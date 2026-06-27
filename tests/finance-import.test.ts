@@ -6,6 +6,7 @@ import {
   extractJsonBlock,
 } from "../shared/finance-import-schema";
 import { planImport, type FinanceImportStore } from "../server/finance-import";
+import { detectImportSignals } from "../shared/finance-import-insights";
 
 // ── Schema validation ────────────────────────────────────────────────────────
 describe("validateFinanceImport", () => {
@@ -160,5 +161,94 @@ describe("planImport", () => {
     })).data!;
     const plan = await planImport(fakeStore(), payload, "p1");
     expect(plan.warnings.some((w) => /currenc/i.test(w))).toBe(true);
+  });
+});
+
+// ── Smart detection ──────────────────────────────────────────────────────────
+function pl(json: any) { return validateFinanceImport(JSON.stringify(json)).data!; }
+const emptyExisting = { existingExpenses: [], existingObligations: [], existingIncomes: [], budgets: [], month: "2026-06" };
+
+describe("detectImportSignals", () => {
+  it("flags a new subscription not already tracked", () => {
+    const sig = detectImportSignals({ payload: pl({ subscriptions: [{ unique_id: "s1", name: "Spotify", amount: 9.99, frequency: "monthly" }] }), ...emptyExisting });
+    expect(sig.some((s) => s.kind === "new_subscription")).toBe(true);
+  });
+
+  it("does NOT flag a subscription that already exists", () => {
+    const sig = detectImportSignals({
+      payload: pl({ subscriptions: [{ unique_id: "s1", name: "Netflix", amount: 15.99, frequency: "monthly" }] }),
+      ...emptyExisting,
+      existingObligations: [{ name: "Netflix", amount: 15.99, kind: "subscription", frequency: "monthly" }],
+    });
+    expect(sig.some((s) => s.kind === "new_subscription")).toBe(false);
+  });
+
+  it("detects a salary change vs prior income", () => {
+    const sig = detectImportSignals({
+      payload: pl({ income: [{ unique_id: "i1", source_name: "Acme Corp", amount: 6000, frequency: "monthly", category: "salary" }] }),
+      ...emptyExisting,
+      existingIncomes: [{ description: "Acme Corp", amount: 5000, category: "salary" }],
+    });
+    const s = sig.find((x) => x.kind === "salary_change");
+    expect(s).toBeTruthy();
+    expect(s!.title).toMatch(/increased/i);
+  });
+
+  it("flags a large purchase and a new loan", () => {
+    const sig = detectImportSignals({
+      payload: pl({
+        transactions: [{ unique_id: "t1", date: "2026-06-01", merchant: "Apple Store", amount: 2999, type: "expense" }],
+        liabilities: [{ unique_id: "l1", name: "Tesla Auto Loan", value: 40000 }],
+      }),
+      ...emptyExisting,
+    });
+    expect(sig.some((s) => s.kind === "large_purchase")).toBe(true);
+    expect(sig.some((s) => s.kind === "new_liability")).toBe(true);
+  });
+
+  it("detects a possible duplicate charge (same merchant+amount within a few days)", () => {
+    const sig = detectImportSignals({
+      payload: pl({ transactions: [
+        { unique_id: "t1", date: "2026-06-01", merchant: "Uber", amount: 23.5, type: "expense" },
+        { unique_id: "t2", date: "2026-06-02", merchant: "Uber", amount: 23.5, type: "expense" },
+      ] }),
+      ...emptyExisting,
+    });
+    expect(sig.some((s) => s.kind === "possible_duplicate")).toBe(true);
+  });
+
+  it("flags a budget overrun from existing + imported spend", () => {
+    const sig = detectImportSignals({
+      payload: pl({ transactions: [{ unique_id: "t1", date: "2026-06-10", merchant: "Whole Foods", amount: 250, category: "food", type: "expense" }] }),
+      existingExpenses: [{ date: "2026-06-02", amount: 300, category: "food", description: "groceries" }],
+      existingObligations: [], existingIncomes: [],
+      budgets: [{ category: "food", amount: 400 }],
+      month: "2026-06",
+    });
+    const s = sig.find((x) => x.kind === "budget_overrun");
+    expect(s).toBeTruthy();
+    expect(s!.severity).toBe("alert");
+  });
+
+  it("reports net-worth impact from new assets and liabilities", () => {
+    const sig = detectImportSignals({
+      payload: pl({ assets: [{ unique_id: "a1", name: "Car", value: 20000 }], liabilities: [{ unique_id: "l1", name: "Loan", value: 5000 }] }),
+      ...emptyExisting,
+    });
+    const s = sig.find((x) => x.kind === "net_worth_impact");
+    expect(s).toBeTruthy();
+    expect(s!.detail).toMatch(/15,000/);
+  });
+
+  it("orders alerts before info", () => {
+    const sig = detectImportSignals({
+      payload: pl({
+        transactions: [{ unique_id: "t1", date: "2026-06-01", merchant: "Jeweler", amount: 5000, type: "expense" }],
+        assets: [{ unique_id: "a1", name: "Ring", value: 5000 }],
+      }),
+      ...emptyExisting,
+    });
+    expect(sig.length).toBeGreaterThan(1);
+    expect(sig[0].severity).toBe("alert");
   });
 });

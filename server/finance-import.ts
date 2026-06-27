@@ -26,6 +26,7 @@ import {
   normalizeMerchant,
   normalizeCategory,
 } from "@shared/finance-import-schema";
+import { detectImportSignals, type ImportSignal } from "@shared/finance-import-insights";
 import type { Expense, Obligation, Income, Profile } from "@shared/schema";
 
 // ── Minimal storage surface the engine needs (keeps planImport testable) ─────
@@ -61,7 +62,8 @@ export interface FinanceImportRecordInput {
   id: string;
   profileId: string | null;
   status: "committed" | "undone";
-  summary: ImportSummary;
+  /** Persisted summary; carries the smart-detection signals so history can show them. */
+  summary: ImportSummary & { signals?: ImportSignal[] };
   recordCount: number;
   createdRecords: CreatedRecords;
 }
@@ -101,6 +103,8 @@ export interface ImportPlan {
   ops: PlannedOp[];
   warnings: string[];
   summary: ImportSummary;
+  /** Smart-detection signals (new/cancelled subs, large purchases, overruns…). */
+  signals: ImportSignal[];
 }
 
 function emptySection(): SectionCount { return { create: 0, duplicate: 0, update: 0, skip: 0 }; }
@@ -234,8 +238,33 @@ export async function planImport(
   for (const t of payload.transactions) if (t.currency && t.currency !== base) foreign.add(t.currency);
   if (foreign.size > 0) warnings.push(`Mixed currencies detected (${[...foreign].join(", ")} alongside ${base}). Amounts are imported as-is, not converted.`);
 
+  // ── Smart detection ─────────────────────────────────────────────────────────
+  // Run the deterministic signal detector over the payload + existing data.
+  const importMonth = dominantMonth(payload.transactions.map((t) => t.date)) || new Date().toISOString().slice(0, 7);
+  const monthBudgets = budgetMonths.get(importMonth) || (await store.getBudgets(importMonth).catch(() => []));
+  const signals = detectImportSignals({
+    payload,
+    existingExpenses: expenses.map((e) => ({ date: e.date, amount: e.amount, category: e.category, vendor: e.vendor, description: e.description })),
+    existingObligations: obligations.map((o) => ({ name: o.name, amount: o.amount, kind: (o as any).kind, frequency: o.frequency })),
+    existingIncomes: incomes.map((i) => ({ description: i.description, amount: i.amount, category: i.category })),
+    budgets: monthBudgets.map((b) => ({ category: b.category, amount: b.amount })),
+    month: importMonth,
+  });
+
   const summary = summarize(bySection, warnings.length);
-  return { batchId: randomUUID(), profileId, ops, warnings, summary };
+  return { batchId: randomUUID(), profileId, ops, warnings, summary, signals };
+}
+
+/** Most common YYYY-MM among a list of dates, or "" if none. */
+function dominantMonth(dates: string[]): string {
+  const counts = new Map<string, number>();
+  for (const d of dates) {
+    const m = (d || "").slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(m)) counts.set(m, (counts.get(m) || 0) + 1);
+  }
+  let best = "", bestN = 0;
+  for (const [m, n] of counts) if (n > bestN) { best = m; bestN = n; }
+  return best;
 }
 
 function summarize(bySection: Record<string, SectionCount>, warnings: number): ImportSummary {
@@ -339,7 +368,7 @@ export async function applyImport(
   }
 
   const record = await store.createFinanceImport({
-    id: batchId, profileId, status: "committed", summary: plan.summary,
+    id: batchId, profileId, status: "committed", summary: { ...plan.summary, signals: plan.signals },
     recordCount: created.expenses.length + created.obligations.length + created.incomes.length + created.profiles.length + created.budgets.length,
     createdRecords: created,
   });

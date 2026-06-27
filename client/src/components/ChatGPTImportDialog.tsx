@@ -29,7 +29,8 @@ type Step = "prompt" | "paste" | "review" | "done";
 
 interface PlannedOp { section: string; action: string; uniqueId: string; label: string; reason?: string; }
 interface Summary { created: number; duplicates: number; updated: number; skipped: number; warnings: number; bySection: Record<string, any>; }
-interface Plan { ops: PlannedOp[]; warnings: string[]; summary: Summary; }
+interface Signal { kind: string; severity: "info" | "warn" | "alert"; title: string; detail: string; confidence: number; }
+interface Plan { ops: PlannedOp[]; warnings: string[]; summary: Summary; signals?: Signal[]; }
 
 export function ChatGPTImportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { toast } = useToast();
@@ -168,6 +169,24 @@ export function ChatGPTImportDialog({ open, onOpenChange }: { open: boolean; onO
                 ))}
               </div>
             )}
+            {plan!.signals && plan!.signals.length > 0 && (
+              <div className="space-y-1.5" data-testid="import-signals">
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                  <Sparkles className="h-3 w-3 text-primary" /> Smart detection
+                </p>
+                <div className="space-y-1">
+                  {plan!.signals.map((sig, i) => (
+                    <div key={i} className="flex items-start gap-2 rounded-md border px-2.5 py-1.5">
+                      <SignalDot severity={sig.severity} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-medium">{sig.title}</p>
+                        <p className="text-[10px] text-muted-foreground">{sig.detail}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="max-h-56 overflow-y-auto rounded-md border divide-y divide-border/60">
               {plan!.ops.map((op, i) => (
                 <div key={i} className="flex items-center gap-2 px-2.5 py-1.5">
@@ -214,6 +233,11 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: "goo
   );
 }
 
+function SignalDot({ severity }: { severity: "info" | "warn" | "alert" }) {
+  const color = severity === "alert" ? "bg-red-500" : severity === "warn" ? "bg-amber-500" : "bg-blue-500";
+  return <span className={`mt-1 h-1.5 w-1.5 rounded-full shrink-0 ${color}`} aria-hidden />;
+}
+
 function ActionBadge({ action }: { action: string }) {
   const map: Record<string, { label: string; cls: string }> = {
     create: { label: "New", cls: "bg-green-500/10 text-green-600 border-green-500/30" },
@@ -253,6 +277,9 @@ export function ChatGPTImportHistory() {
             <p className="text-[11px] truncate">
               {new Date(it.createdAt).toLocaleString()} · {it.summary?.created ?? 0} added{it.summary?.updated ? `, ${it.summary.updated} updated` : ""}
             </p>
+            {Array.isArray(it.summary?.signals) && it.summary.signals.length > 0 && (
+              <p className="text-[10px] text-muted-foreground flex items-center gap-1"><Sparkles className="h-2.5 w-2.5 text-primary" /> {it.summary.signals.length} insight{it.summary.signals.length === 1 ? "" : "s"}</p>
+            )}
             {it.status === "undone" && <p className="text-[10px] text-muted-foreground">Undone</p>}
           </div>
           <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" disabled={it.status === "undone" || undoMut.isPending} onClick={() => undoMut.mutate(it.id)}>
