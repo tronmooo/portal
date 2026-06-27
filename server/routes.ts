@@ -2242,7 +2242,7 @@ If unsure, return "profile_fact".`,
         storage.getProfiles(),
         storage.getIncomes ? storage.getIncomes() : Promise.resolve([] as any[]),
         storage.getExpenses(),
-        storage.getBudgets ? storage.getBudgets(month) : Promise.resolve([] as any[]),
+        storage.getBudgets ? storage.getBudgets(month, filterIds) : Promise.resolve([] as any[]),
         // [PERF 2026-06-10] Seed payloads: the dashboard fired ~12 separate
         // GETs on mount — on serverless each parallel request can hit its own
         // cold instance. Bootstrap now carries every mount-time dataset so the
@@ -2268,7 +2268,21 @@ If unsure, return "profile_fact".`,
           );
       const monthExpenses = filteredExpenses.filter((e: any) => (e.date || "").slice(0, 7) === month);
       const totalSpent = monthExpenses.reduce((s: number, e: any) => s + (e.amount || 0), 0);
-      const totalBudget = (budgets || []).reduce((s: number, b: any) => s + (b.amount || 0), 0);
+      // BUG (user report 2026-06-27 "Craig has no budget but it shows $2,150"):
+      // budgets were fetched UNSCOPED here (getBudgets(month) without filterIds),
+      // so totalBudget summed every profile's budget regardless of the active
+      // filter while totalSpent above was correctly scoped. The mismatched
+      // budgetSummary then got seeded into the scoped query key, showing the
+      // global budget total ($2,150 = Bob + Mike) on a profile (Craig) that owns
+      // none. Scope budgets the same way GET /api/budgets does: getBudgets now
+      // receives filterIds (returns matching + shared/null entries), then drop
+      // the shared/null entries unless a self profile is in the selection.
+      const selfIds = new Set(profiles.filter((p: any) => p.type === "self").map((p: any) => p.id));
+      const selfInSel = !!filterIds && filterIds.some((id: string) => selfIds.has(id));
+      const scopedBudgets = (!filterIds || filterIds.length === 0 || selfInSel)
+        ? (budgets || [])
+        : (budgets || []).filter((b: any) => b.profileId);
+      const totalBudget = scopedBudgets.reduce((s: number, b: any) => s + (b.amount || 0), 0);
       const remaining = totalBudget - totalSpent;
 
       // BUG-20260528-profile-filter-leakage: same fix for incomes path.
@@ -2291,7 +2305,7 @@ If unsure, return "profile_fact".`,
         // paint, matching the now full-by-default /api/expenses endpoint. Other
         // lists keep their first-page seed; only expenses drive a client total.
         expenses: filteredExpenses,
-        budgets: budgets || [],
+        budgets: scopedBudgets,
         obligations: ((!filterIds || filterIds.length === 0)
           ? obligationsAll
           : obligationsAll.filter((o: any) =>
