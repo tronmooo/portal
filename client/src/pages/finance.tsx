@@ -2,6 +2,7 @@ import { formatApiError } from "@/lib/formatError";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { matchesExpenseSearch, sortExpenses, type ExpenseSort } from "@shared/expense-view";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo } from "react";
@@ -19,7 +20,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2, Repeat, ChevronDown } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2, Repeat, ChevronDown, Search, ArrowUpDown, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Link } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
@@ -45,6 +46,13 @@ const categoryColors: Record<string, string> = {
 };
 
 const EXPENSE_CATEGORIES = ["entertainment", "food", "general", "health", "housing", "pet", "transport", "utilities", "vehicle"];
+
+/** Order profile-picker options: self ("Me") pinned first, everyone else A→Z. */
+function sortProfilesForSelect(a: { type?: string; name?: string }, b: { type?: string; name?: string }) {
+  if (a.type === "self" && b.type !== "self") return -1;
+  if (b.type === "self" && a.type !== "self") return 1;
+  return (a.name || "").localeCompare(b.name || "");
+}
 
 /**
  * Collapsible list row used by the Expenses / Income / Paychecks lists.
@@ -116,6 +124,10 @@ export default function FinancePage() {
     refetchOnMount: "always",
   });
   const [filterCategory, setFilterCategory] = useState<string>("all");
+  // Expenses page controls (user request): free-text search + sort. Category
+  // and profile filters already existed; these complete the toolbar.
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [sortBy, setSortBy] = useState<ExpenseSort>("date-desc");
   const [addOpen, setAddOpen] = useState(false);
   // QA Bug 7: open Add Expense dialog when arriving via command palette with ?new=expense
   useEffect(() => {
@@ -626,7 +638,14 @@ export default function FinancePage() {
     allProfiles: (profiles || []).map((p: any) => ({ id: p.id, type: p.type })),
   }), [filterMode, filterIds, profiles]);
   const profileFiltered = useMemo(() => (expenses || []).filter(e => passesProfileFilter(e.linkedProfiles, filterCtx)), [expenses, filterCtx]);
-  const filtered = useMemo(() => filterCategory === "all" ? profileFiltered : profileFiltered.filter(e => normalizeFilter(e.category) === normalizeFilter(filterCategory)), [profileFiltered, filterCategory]);
+  // Category + free-text search (shared/expense-view drives the search match).
+  const filtered = useMemo(() => profileFiltered.filter(e => {
+    if (filterCategory !== "all" && normalizeFilter(e.category) !== normalizeFilter(filterCategory)) return false;
+    return matchesExpenseSearch(e, searchQuery);
+  }), [profileFiltered, filterCategory, searchQuery]);
+  // List ordering is user-selectable. Filters (above) drive totals/chart; sort
+  // only reorders the rendered rows.
+  const sortedExpenses = useMemo(() => sortExpenses(filtered, sortBy), [filtered, sortBy]);
   const total = useMemo(() => filtered.reduce((s, e) => s + e.amount, 0), [filtered]);
 
   // Group by category
@@ -708,7 +727,28 @@ export default function FinancePage() {
             onChange={() => {}}
             compact
           />
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <Input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search expenses…"
+                className="h-8 w-[180px] pl-8 pr-7 text-xs"
+                data-testid="input-expense-search"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                  data-testid="btn-clear-expense-search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
             <Select value={filterCategory} onValueChange={setFilterCategory}>
               <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-category-filter">
                 <Filter className="h-3 w-3 mr-1" />
@@ -719,6 +759,19 @@ export default function FinancePage() {
                 {categories.map(c => (
                   <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+            <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
+              <SelectTrigger className="w-[150px] h-8 text-xs" data-testid="select-expense-sort">
+                <ArrowUpDown className="h-3 w-3 mr-1" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="date-desc">Newest first</SelectItem>
+                <SelectItem value="date-asc">Oldest first</SelectItem>
+                <SelectItem value="amount-desc">Amount: high → low</SelectItem>
+                <SelectItem value="amount-asc">Amount: low → high</SelectItem>
+                <SelectItem value="name-asc">Name: A → Z</SelectItem>
               </SelectContent>
             </Select>
             <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setAddAttempt(false); } }}>
@@ -771,7 +824,7 @@ export default function FinancePage() {
                     <Select value={expenseProfileId} onValueChange={setExpenseProfileId}>
                       <SelectTrigger data-testid="select-expense-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
                       <SelectContent>
-                        {(profiles || []).filter((p: any) => ["self", "person", "pet"].includes(p.type)).map((p: any) => (
+                        {(profiles || []).filter((p: any) => ["self", "person", "pet"].includes(p.type)).sort(sortProfilesForSelect).map((p: any) => (
                           <SelectItem key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -1028,9 +1081,8 @@ export default function FinancePage() {
                   <p className="text-sm text-muted-foreground">No expenses match the selected filter.</p>
                 </div>
               )}
-              {/* Newest first. The old sort keyed on description (alphabetical),
-                  which is why the user saw stale expenses jumbled out of order. */}
-              {filtered.slice().sort((a, b) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime() || (b.description || '').localeCompare(a.description || '')).map((expense) => (
+              {/* Order driven by the Sort control (defaults to newest first). */}
+              {sortedExpenses.map((expense) => (
                 <ExpandableRow
                   key={expense.id}
                   testId={`expense-${expense.id}`}
@@ -1097,7 +1149,7 @@ export default function FinancePage() {
               <Select value={editForm.profileId} onValueChange={v => setEditForm(f => ({ ...f, profileId: v }))}>
                 <SelectTrigger data-testid="select-edit-expense-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
                 <SelectContent>
-                  {(profiles || []).filter((p: any) => ["self", "person", "pet"].includes(p.type)).map((p: any) => (
+                  {(profiles || []).filter((p: any) => ["self", "person", "pet"].includes(p.type)).sort(sortProfilesForSelect).map((p: any) => (
                     <SelectItem key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -1390,7 +1442,7 @@ export default function FinancePage() {
               <Select value={newIncome.profileId || expenseProfileId} onValueChange={v => setNewIncome(p => ({ ...p, profileId: v }))}>
                 <SelectTrigger data-testid="select-income-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
                 <SelectContent>
-                  {(profiles || []).filter((p: any) => ["self", "person", "pet", "business"].includes(p.type)).map((p: any) => (
+                  {(profiles || []).filter((p: any) => ["self", "person", "pet", "business"].includes(p.type)).sort(sortProfilesForSelect).map((p: any) => (
                     <SelectItem key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -1478,7 +1530,7 @@ export default function FinancePage() {
               <Select value={editIncomeForm.profileId} onValueChange={v => setEditIncomeForm(p => ({ ...p, profileId: v }))}>
                 <SelectTrigger data-testid="select-edit-income-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
                 <SelectContent>
-                  {(profiles || []).filter((p: any) => ["self", "person", "pet", "business"].includes(p.type)).map((p: any) => (
+                  {(profiles || []).filter((p: any) => ["self", "person", "pet", "business"].includes(p.type)).sort(sortProfilesForSelect).map((p: any) => (
                     <SelectItem key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</SelectItem>
                   ))}
                 </SelectContent>

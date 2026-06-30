@@ -19,6 +19,7 @@ export default defineConfig({
       'tests/tracker-presentation.test.ts',
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
+      'tests/expense-view.test.ts',
       'tests/profile-scope.test.ts',
       'tests/useProfileScope.dom.test.tsx',
       'tests/finance-import.test.ts',

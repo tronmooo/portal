@@ -421,9 +421,11 @@ function EntityList({
       </div>
     );
   }
+  // User request: list assets/liabilities alphabetically by name (was value-desc).
+  const sortedItems = [...items].sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
   return (
     <div className="divide-y divide-border/60">
-      {items.map((p) => {
+      {sortedItems.map((p) => {
         const Icon = iconForProfile(p.type);
         // BUG-NW-2 fix (2026-06-03): row value is the ownership-share-adjusted
         // amount from the server breakdown (the popup no longer multiplies a

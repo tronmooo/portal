@@ -175,4 +175,16 @@ describe("passesProfileFilter — cross-leak regression scenarios", () => {
     expect(passesProfileFilter([], ctx(["acme"]))).toBe(false);
     expect(passesProfileFilter(["acme"], ctx(["acme"]))).toBe(true);
   });
+
+  // PRODUCTION BUG (profile-context-isolation): user filtered to their self
+  // profile ("Test") and saw "Groceries - Bob" / "Drugs - Bob". Root cause was
+  // the AI linking those to self instead of Bob; once correctly linked to Bob,
+  // they MUST NOT appear under the self filter. Pin that exactly.
+  it("selecting self only: an expense correctly linked to Bob stays hidden", () => {
+    expect(passesProfileFilter(["bob"], ctx(["alice"]))).toBe(false);
+  });
+
+  it("selecting self only: the user's own (self-linked) expense shows", () => {
+    expect(passesProfileFilter(["alice"], ctx(["alice"]))).toBe(true);
+  });
 });
