@@ -110,6 +110,7 @@ export function buildBillPayload(input: BillInput, ownerProfileId?: string): Bui
 export interface NoteInput {
   content: string;
   date?: string;
+  mood?: string;
 }
 
 export function buildNotePayload(input: NoteInput, ownerProfileId?: string): BuildResult {
@@ -119,6 +120,9 @@ export function buildNotePayload(input: NoteInput, ownerProfileId?: string): Bui
     ok: true,
     body: {
       content,
+      // /api/journal requires a mood (insertJournalEntrySchema); default to
+      // "neutral" for a plain note so the quick-add doesn't 400.
+      mood: input.mood || "neutral",
       ...(input.date ? { date: input.date } : {}),
       tags: [],
       ...linkedProfiles(ownerProfileId),

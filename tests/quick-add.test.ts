@@ -67,10 +67,10 @@ describe("buildBillPayload", () => {
 });
 
 describe("buildNotePayload", () => {
-  it("trims content and rejects empty", () => {
+  it("trims content, defaults mood, and rejects empty", () => {
     const r = buildNotePayload({ content: " hello " }, "bob");
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.body).toMatchObject({ content: "hello", linkedProfiles: ["bob"] });
+    if (r.ok) expect(r.body).toMatchObject({ content: "hello", mood: "neutral", linkedProfiles: ["bob"] });
     expect(buildNotePayload({ content: "   " }).ok).toBe(false);
   });
 });
