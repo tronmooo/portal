@@ -31,6 +31,9 @@ import {
   CreditCard, Building2, Car, Banknote, RefreshCw, Receipt, ChevronRight, Loader2,
   ArrowDownToLine, ArrowUpFromLine, ExternalLink,
 } from "lucide-react";
+import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
+import { isTestEntity } from "@shared/test-data";
+import { useShowTestData } from "@/lib/showTestData";
 
 // P1.2 remediation: the asset/liability value resolvers are imported from
 // @shared/asset-value (the single source of truth) instead of the hand-copied
@@ -277,10 +280,18 @@ export function NetWorthPopup({
   }, [allProfiles, filterMode, filterIds.join(",")]);
 
   const snap = enhancedRes?.financeSnapshot;
-  const assets = Array.isArray(snap?.assetBreakdown) ? snap.assetBreakdown : fallback.assets;
-  const liabilities = Array.isArray(snap?.liabilityBreakdown) ? snap.liabilityBreakdown : fallback.liabilities;
-  const displayTotalA = snap?.totalAssetValue ?? assets.reduce((s: number, r: any) => s + (r.value || 0), 0);
-  const displayTotalL = snap?.totalLiabilities ?? liabilities.reduce((s: number, r: any) => s + (r.value || 0), 0);
+  const showTestData = useShowTestData();
+  const rawAssets = Array.isArray(snap?.assetBreakdown) ? snap.assetBreakdown : fallback.assets;
+  const rawLiabilities = Array.isArray(snap?.liabilityBreakdown) ? snap.liabilityBreakdown : fallback.liabilities;
+  // Hide synthetic test rows unless toggled on (point 11). When rows are
+  // actually removed, recompute the total from the visible rows so the headline
+  // matches the list; otherwise keep the server's (co-ownership-aware) total.
+  const assets = showTestData ? rawAssets : rawAssets.filter((r: any) => !isTestEntity(r));
+  const liabilities = showTestData ? rawLiabilities : rawLiabilities.filter((r: any) => !isTestEntity(r));
+  const removedA = assets.length !== rawAssets.length;
+  const removedL = liabilities.length !== rawLiabilities.length;
+  const displayTotalA = (!removedA && snap?.totalAssetValue != null) ? snap.totalAssetValue : assets.reduce((s: number, r: any) => s + (r.value || 0), 0);
+  const displayTotalL = (!removedL && snap?.totalLiabilities != null) ? snap.totalLiabilities : liabilities.reduce((s: number, r: any) => s + (r.value || 0), 0);
   const netWorth = displayTotalA - displayTotalL;
 
   // Trend series (oldest→newest), pinned to the live net worth at the end.
@@ -479,6 +490,15 @@ export function CashFlowPopup({
   // `pointer-events: none` stuck on <body>, which freezes the whole app.
   const go = (to: string) => { onOpenChange(false); setTimeout(() => navigate(to), 0); };
 
+  // In-place quick-add (replaces the old go("/dashboard/finance") redirects so
+  // income / expense / bill can be added without leaving the dashboard).
+  const [quickAdd, setQuickAdd] = useState<QuickAddKind | null>(null);
+  const { data: allProfilesCF = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"], enabled: open });
+  const cashFlowOwnerId = useMemo(() => {
+    if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
+    return (allProfilesCF.find((p: any) => p.type === "self")?.id) || "";
+  }, [filterMode, filterIds, allProfilesCF]);
+
   const { data: incomes = [] } = useQuery<any[]>({
     queryKey: ["/api/incomes", filterMode, ...filterIds, "cashflow"],
     queryFn: async () => {
@@ -505,16 +525,20 @@ export function CashFlowPopup({
     enabled: open,
   });
 
-  const monthlyExpenses: any[] = enhancedRes?.financeSnapshot?.monthlyExpenseRecords ?? [];
+  const showTestData = useShowTestData();
+  const hideTest = (e: any) => showTestData || !isTestEntity(e);
+  const monthlyExpenses: any[] = (enhancedRes?.financeSnapshot?.monthlyExpenseRecords ?? []).filter(hideTest);
+  const visibleIncomes = useMemo(() => incomes.filter(hideTest), [incomes, showTestData]);
+  const visibleObligations = useMemo(() => obligations.filter(hideTest), [obligations, showTestData]);
 
-  const monthlyIncome = useMemo(() => incomes.reduce((s, i) => s + (Number(i.amount) || 0), 0), [incomes]);
+  const monthlyIncome = useMemo(() => visibleIncomes.reduce((s, i) => s + (Number(i.amount) || 0), 0), [visibleIncomes]);
 
   // Group obligations into Subscriptions / Bills / Loan payments / Other
   const recurringGroups = useMemo(() => {
     const groups: Record<string, any[]> = {
       Subscriptions: [], Bills: [], "Loan payments": [], Other: [],
     };
-    for (const o of obligations) {
+    for (const o of visibleObligations) {
       if (o.status === "paused" || o.status === "cancelled") continue;
       const monthly = monthlyizeAmount(o);
       if (monthly <= 0) continue;
@@ -525,7 +549,7 @@ export function CashFlowPopup({
       else groups.Other.push(item);
     }
     return groups;
-  }, [obligations]);
+  }, [visibleObligations]);
 
   const recurringTotal = Object.values(recurringGroups).flat().reduce((s, o) => s + o._monthly, 0);
   const oneTimeTotal = monthlyExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
@@ -592,8 +616,8 @@ export function CashFlowPopup({
           title="Income"
           total={`$${fmt(monthlyIncome)}`}
           empty="No income added"
-          items={incomes.map((i) => ({ id: i.id, label: i.name || i.source || "Income", amount: Number(i.amount) || 0 }))}
-          onAdd={() => go("/dashboard/finance")}
+          items={visibleIncomes.map((i) => ({ id: i.id, label: i.name || i.source || "Income", amount: Number(i.amount) || 0 }))}
+          onAdd={() => setQuickAdd("income")}
           onOpen={() => go("/dashboard/finance")}
           addLabel="Add income"
         />
@@ -629,6 +653,9 @@ export function CashFlowPopup({
             <p className="px-3 py-3 text-[11px] text-muted-foreground text-center">No recurring expenses</p>
           )}
           <div className="px-3 py-1.5 border-t border-border bg-muted/20">
+            <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={() => setQuickAdd("bill")} data-testid="cash-flow-add-bill">
+              <Plus className="h-3 w-3 mr-1.5" /> Add bill
+            </Button>
             <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={() => go("/calendar?tab=obligations")} data-testid="cash-flow-view-obligations">
               <ExternalLink className="h-3 w-3 mr-1.5" /> Manage obligations
             </Button>
@@ -649,7 +676,7 @@ export function CashFlowPopup({
             amount: -(Number(e.amount) || 0),
           }))}
           extraNote={monthlyExpenses.length > 8 ? `+${monthlyExpenses.length - 8} more` : undefined}
-          onAdd={() => go("/dashboard/finance")}
+          onAdd={() => setQuickAdd("expense")}
           onOpen={() => go("/dashboard/finance")}
           addLabel="Add expense"
         />
@@ -663,6 +690,9 @@ export function CashFlowPopup({
           </span>
         </div>
       </div>
+      {quickAdd && (
+        <QuickAddDialog open kind={quickAdd} ownerProfileId={cashFlowOwnerId} onClose={() => setQuickAdd(null)} />
+      )}
     </MetricPopupShell>
   );
 }

@@ -3,6 +3,8 @@ import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { matchesExpenseSearch, sortExpenses, type ExpenseSort } from "@shared/expense-view";
+import { isTestEntity } from "@shared/test-data";
+import { useShowTestData } from "@/lib/showTestData";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo } from "react";
@@ -637,7 +639,11 @@ export default function FinancePage() {
     selectedIds: filterMode === "everyone" ? [] : filterIds,
     allProfiles: (profiles || []).map((p: any) => ({ id: p.id, type: p.type })),
   }), [filterMode, filterIds, profiles]);
-  const profileFiltered = useMemo(() => (expenses || []).filter(e => passesProfileFilter(e.linkedProfiles, filterCtx)), [expenses, filterCtx]);
+  const showTestData = useShowTestData();
+  const profileFiltered = useMemo(
+    () => (expenses || []).filter(e => passesProfileFilter(e.linkedProfiles, filterCtx) && (showTestData || !isTestEntity(e))),
+    [expenses, filterCtx, showTestData],
+  );
   // Category + free-text search (shared/expense-view drives the search match).
   const filtered = useMemo(() => profileFiltered.filter(e => {
     if (filterCategory !== "all" && normalizeFilter(e.category) !== normalizeFilter(filterCategory)) return false;

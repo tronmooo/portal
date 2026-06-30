@@ -4846,6 +4846,32 @@ Rules:
     bustCache(`obligations:${uid_o1}`); bustCache(`stats:${uid_o1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o1}`); bustCache(`calendar:${uid_o1}`); bustCache(`notifications:${uid_o1}`);
     res.status(201).json(created);
   }));
+
+  // ---- Reminders (manual create from the dashboard quick-add) --------------
+  // Previously reminders were ONLY created by the AI / cron; the dashboard
+  // "Add reminder" quick-action needs a plain REST create. listReminders /
+  // createReminder already exist on IStorage (used by the cron firer).
+  app.get("/api/reminders", asyncHandler(async (_req, res) => {
+    const reminders = await storage.listReminders();
+    res.json(reminders);
+  }));
+  app.post("/api/reminders", asyncHandler(async (req, res) => {
+    const rawTitle = typeof req.body?.title === "string" ? req.body.title.trim() : "";
+    if (!rawTitle) return res.status(400).json({ error: "Title is required" });
+    // fireAt is optional — default to now so a quick "remind me" lands in the
+    // feed immediately. An explicit date must be valid.
+    let fireAt: string;
+    if (req.body?.fireAt) {
+      const d = new Date(req.body.fireAt);
+      if (isNaN(d.getTime())) return res.status(400).json({ error: "Invalid fireAt date" });
+      fireAt = d.toISOString();
+    } else {
+      fireAt = new Date().toISOString();
+    }
+    const profileId = typeof req.body?.profileId === "string" && req.body.profileId ? req.body.profileId : undefined;
+    const created = await storage.createReminder({ title: sanitize(rawTitle), fireAt, profileId });
+    res.status(201).json(created);
+  }));
   app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
     {
       const parsed = insertObligationSchema.partial().safeParse(req.body);

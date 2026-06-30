@@ -20,6 +20,8 @@ export default defineConfig({
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
       'tests/expense-view.test.ts',
+      'tests/test-data-filter.test.ts',
+      'tests/quick-add.test.ts',
       'tests/profile-scope.test.ts',
       'tests/useProfileScope.dom.test.tsx',
       'tests/finance-import.test.ts',

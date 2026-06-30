@@ -79,14 +79,17 @@ import {
   Users, TrendingDown,
   CalendarDays, Pin, PinOff, Filter as FilterIcon, Sparkle,
   Lightbulb, Repeat, Flag, User,
-  Pause, Play, SkipForward, Tag as TagIcon, AlarmClock, ListChecks, Timer, ChevronsUpDown,
+  Pause, Play, SkipForward, Tag as TagIcon, AlarmClock, ListChecks, Timer, ChevronsUpDown, FlaskConical,
 } from "lucide-react";
+import { useShowTestData, toggleShowTestData } from "@/lib/showTestData";
+import { isTestEntity } from "@shared/test-data";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { NetWorthPopup, CashFlowPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
+import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1017,6 +1020,13 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | "docs" | "habits" | null>(null);
+  // In-place quick-add from the Spending / Bills dialogs (no redirect).
+  const [quickAdd, setQuickAdd] = useState<QuickAddKind | null>(null);
+  const { data: kpiProfiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  const kpiOwnerId = useMemo(() => {
+    if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
+    return (kpiProfiles.find((p: any) => p.type === "self")?.id) || "";
+  }, [filterMode, filterIds, kpiProfiles]);
   const [docSnoozeMap, setDocSnoozeMap] = useState<Record<string, number>>(() => loadDocSnoozeMap());
   const snoozeDoc = (docId: string) => {
     const next = { ...docSnoozeMap, [docId]: Date.now() + 30 * 86400000 };
@@ -1213,6 +1223,9 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
               </div>
             );
           })()}
+          <Button size="sm" className="w-full mt-1" onClick={() => setQuickAdd("expense")} data-testid="btn-spending-add-expense">
+            <Plus className="h-3.5 w-3.5 mr-1.5" /> Add expense
+          </Button>
           <ViewPageLink href="/dashboard/finance" label="View Finance Page" />
         </DialogContent>
       </Dialog>
@@ -1298,6 +1311,9 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                     )}
                   </div>
                 </div>
+                <Button size="sm" className="w-full mt-1" onClick={() => setQuickAdd("bill")} data-testid="btn-bills-add-bill">
+                  <Plus className="h-3.5 w-3.5 mr-1.5" /> Add bill
+                </Button>
                 <ViewPageLink href="/dashboard/obligations" label="View All Obligations" />
               </>
             );
@@ -1385,6 +1401,10 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
           <ViewPageLink href="/dashboard/documents" label="View All Documents" />
         </DialogContent>
       </Dialog>
+
+      {quickAdd && (
+        <QuickAddDialog open kind={quickAdd} ownerProfileId={kpiOwnerId} onClose={() => setQuickAdd(null)} />
+      )}
     </>
   );
 }
@@ -4705,11 +4725,14 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   const monthlySpend = data?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
   const monthlyIncome = useMemo(() => (incomes || []).reduce((s, i) => s + (i.amount || 0), 0), [incomes]);
   const cashFlow = monthlyIncome - monthlySpend;
-  const recentExpenses: any[] = data?.recentExpenses || [];
+  // Hide synthetic test rows unless the dashboard toggle is on (point 11).
+  const showTestData = useShowTestData();
+  const hideTest = (e: any) => showTestData || !isTestEntity(e);
+  const recentExpenses: any[] = (data?.recentExpenses || []).filter(hideTest);
 
   // Build drill-down data — use profile-filtered monthlyExpenseRecords from enhanced API
   const now = new Date();
-  const monthExpenses: any[] = data?.monthlyExpenseRecords || [];
+  const monthExpenses: any[] = (data?.monthlyExpenseRecords || []).filter(hideTest);
   const byCategory = useMemo(() => {
     const cats: Record<string, number> = {};
     monthExpenses.forEach((e: any) => { cats[e.category || "general"] = (cats[e.category || "general"] || 0) + e.amount; });
@@ -6112,6 +6135,8 @@ export default function DashboardPage() {
   const [chatgptImportOpen, setChatgptImportOpen] = useState(false);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
+  // Whether synthetic test/QA rows are shown (point 11). Default off.
+  const showTestData = useShowTestData();
   // Keep dashboard filter state in lockstep with the global filter store — prevents
   // multi-profile selections from silently collapsing if a child component's onChange
   // is stale or batched.
@@ -6477,6 +6502,9 @@ export default function DashboardPage() {
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setImportOpen(true)} data-testid="btn-import">
                 <UploadCloud className="h-4 w-4 mr-2" /> Import Backup
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => toggleShowTestData()} data-testid="btn-toggle-test-data">
+                <FlaskConical className="h-4 w-4 mr-2" /> {showTestData ? "Hide test data" : "Show test data"}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
