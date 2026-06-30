@@ -5,6 +5,8 @@ import { passesProfileFilter } from "@shared/profile-filter";
 import { matchesExpenseSearch, sortExpenses, type ExpenseSort } from "@shared/expense-view";
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
+import { formatMoney, formatListDate } from "@/lib/format";
+import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo } from "react";
@@ -22,7 +24,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2, Repeat, ChevronDown, Search, ArrowUpDown, X } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2, Repeat, ChevronDown, Search, ArrowUpDown, X, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Link } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
@@ -125,11 +127,15 @@ export default function FinancePage() {
     queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
     refetchOnMount: "always",
   });
-  const [filterCategory, setFilterCategory] = useState<string>("all");
-  // Expenses page controls (user request): free-text search + sort. Category
-  // and profile filters already existed; these complete the toolbar.
+  // Expenses page controls — persisted in localStorage so the toolbar survives
+  // reloads (search + category + sort + date range).
+  const [filterCategory, setFilterCategory] = useState<string>(() => { try { return localStorage.getItem("portol_exp_cat") || "all"; } catch { return "all"; } });
   const [searchQuery, setSearchQuery] = useState<string>("");
-  const [sortBy, setSortBy] = useState<ExpenseSort>("date-desc");
+  const [sortBy, setSortBy] = useState<ExpenseSort>(() => { try { return (localStorage.getItem("portol_exp_sort") as ExpenseSort) || "date-desc"; } catch { return "date-desc"; } });
+  const [dateRange, setDateRange] = useState<"all" | "month" | "30d" | "year">(() => { try { return (localStorage.getItem("portol_exp_range") as any) || "all"; } catch { return "all"; } });
+  useEffect(() => { try { localStorage.setItem("portol_exp_cat", filterCategory); } catch {} }, [filterCategory]);
+  useEffect(() => { try { localStorage.setItem("portol_exp_sort", sortBy); } catch {} }, [sortBy]);
+  useEffect(() => { try { localStorage.setItem("portol_exp_range", dateRange); } catch {} }, [dateRange]);
   const [addOpen, setAddOpen] = useState(false);
   // QA Bug 7: open Add Expense dialog when arriving via command palette with ?new=expense
   useEffect(() => {
@@ -644,11 +650,22 @@ export default function FinancePage() {
     () => (expenses || []).filter(e => passesProfileFilter(e.linkedProfiles, filterCtx) && (showTestData || !isTestEntity(e))),
     [expenses, filterCtx, showTestData],
   );
-  // Category + free-text search (shared/expense-view drives the search match).
+  // Category + free-text search + date range (shared/expense-view drives search).
+  const rangeStart = useMemo(() => {
+    if (dateRange === "all") return null;
+    const now = new Date();
+    if (dateRange === "month") return new Date(now.getFullYear(), now.getMonth(), 1);
+    if (dateRange === "year") return new Date(now.getFullYear(), 0, 1);
+    return new Date(now.getTime() - 30 * 86400000); // 30d
+  }, [dateRange]);
   const filtered = useMemo(() => profileFiltered.filter(e => {
     if (filterCategory !== "all" && normalizeFilter(e.category) !== normalizeFilter(filterCategory)) return false;
+    if (rangeStart) {
+      const d = new Date((e.date?.slice(0, 10) || "") + "T00:00:00");
+      if (isNaN(d.getTime()) || d < rangeStart) return false;
+    }
     return matchesExpenseSearch(e, searchQuery);
-  }), [profileFiltered, filterCategory, searchQuery]);
+  }), [profileFiltered, filterCategory, searchQuery, rangeStart]);
   // List ordering is user-selectable. Filters (above) drive totals/chart; sort
   // only reorders the rendered rows.
   const sortedExpenses = useMemo(() => sortExpenses(filtered, sortBy), [filtered, sortBy]);
@@ -765,6 +782,18 @@ export default function FinancePage() {
                 {categories.map(c => (
                   <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+            <Select value={dateRange} onValueChange={(v) => setDateRange(v as typeof dateRange)}>
+              <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-expense-range">
+                <CalendarDays className="h-3 w-3 mr-1" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All time</SelectItem>
+                <SelectItem value="month">This month</SelectItem>
+                <SelectItem value="30d">Last 30 days</SelectItem>
+                <SelectItem value="year">This year</SelectItem>
               </SelectContent>
             </Select>
             <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
@@ -1075,17 +1104,11 @@ export default function FinancePage() {
         </CardHeader>
         <CardContent>
           {profileFiltered.length === 0 ? (
-            <div className="text-center py-10">
-              <DollarSign className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground">No expenses logged yet.</p>
-              <p className="text-xs text-muted-foreground mt-1">Try: "spent $50 on groceries"</p>
-            </div>
+            <EmptyState icon={DollarSign} label="No expenses logged yet." hint={'Try: "spent $50 on groceries"'} />
           ) : (
             <div className="divide-y divide-border">
               {filtered.length === 0 && profileFiltered.length > 0 && (
-                <div className="text-center py-6">
-                  <p className="text-sm text-muted-foreground">No expenses match the selected filter.</p>
-                </div>
+                <EmptyState icon={Filter} label="No expenses match the selected filter." />
               )}
               {/* Order driven by the Sort control (defaults to newest first). */}
               {sortedExpenses.map((expense) => (
@@ -1099,11 +1122,9 @@ export default function FinancePage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm truncate">{expense.description}</p>
-                        <span className="text-xs text-muted-foreground">
-                          {new Date((expense.date?.slice(0, 10) || "") + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-                        </span>
+                        <span className="text-xs text-muted-foreground">{formatListDate(expense.date)}</span>
                       </div>
-                      <span className="text-sm font-semibold tabular-nums shrink-0">${expense.amount.toFixed(2)}</span>
+                      <span className="text-sm font-semibold tabular-nums shrink-0">{formatMoney(expense.amount)}</span>
                     </>
                   }
                   detail={
@@ -1258,11 +1279,13 @@ export default function FinancePage() {
                         Expected {new Date(pc.expected_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                       </p>
                     </div>
-                    <span className="text-xs font-bold tabular-nums">${(pc.actual_amount || pc.amount).toLocaleString()}</span>
+                    <span className="text-xs font-bold tabular-nums">{formatMoney(pc.actual_amount || pc.amount)}</span>
                     {pc.confirmed ? (
                       <span className="text-[10px] font-semibold text-green-500 flex items-center gap-0.5 shrink-0"><Check className="h-3 w-3" /> Received</span>
+                    ) : isFuture ? (
+                      <span className="text-[10px] font-medium text-muted-foreground shrink-0">Upcoming</span>
                     ) : (
-                      <span className="text-[10px] font-medium text-muted-foreground shrink-0">{isFuture ? 'Upcoming' : 'Due'}</span>
+                      <span className="text-[10px] font-semibold text-red-500 shrink-0">Overdue</span>
                     )}
                   </>
                 }
@@ -1357,7 +1380,7 @@ export default function FinancePage() {
                         {inc.date ? ` · ${new Date(inc.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
                       </p>
                     </div>
-                    <span className="text-xs font-bold tabular-nums">${Number(inc.amount || 0).toLocaleString()}</span>
+                    <span className="text-xs font-bold tabular-nums">{formatMoney(Number(inc.amount || 0))}</span>
                   </>
                 }
                 detail={

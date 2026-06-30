@@ -34,6 +34,7 @@ import {
 import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
+import { EmptyState } from "@/components/ui/empty-state";
 
 // P1.2 remediation: the asset/liability value resolvers are imported from
 // @shared/asset-value (the single source of truth) instead of the hand-copied
@@ -343,7 +344,7 @@ export function NetWorthPopup({
               </p>
             </div>
             {nwTrend && (
-              <div className="text-right">
+              <div className="text-right" title={`Change since the start of the selected period (${nwSeries.length} days of snapshots)`}>
                 <p className="text-[11px] font-semibold tabular-nums" style={{ color: nwTrend.up ? "hsl(155 60% 44%)" : "hsl(0 80% 60%)" }}>
                   {nwTrend.up ? "▲" : "▼"} {Math.abs(nwTrend.pct).toFixed(1)}%
                 </p>
@@ -423,14 +424,7 @@ function EntityList({
   onOpen: (p: any) => void;
 }) {
   if (items.length === 0) {
-    return (
-      <div className="px-4 py-10 flex flex-col items-center gap-2">
-        <p className="text-xs text-muted-foreground">{emptyLabel}</p>
-        <Button size="sm" variant="outline" onClick={onAdd} data-testid="button-entity-add-empty">
-          <Plus className="h-3.5 w-3.5 mr-1.5" /> {addLabel}
-        </Button>
-      </div>
-    );
+    return <EmptyState icon={Wallet} label={emptyLabel} ctaLabel={addLabel} onCta={onAdd} />;
   }
   // User request: list assets/liabilities alphabetically by name (was value-desc).
   const sortedItems = [...items].sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));

@@ -83,6 +83,7 @@ import {
 } from "lucide-react";
 import { useShowTestData, toggleShowTestData } from "@/lib/showTestData";
 import { isTestEntity } from "@shared/test-data";
+import { formatMoney, formatListDate } from "@/lib/format";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
@@ -92,10 +93,6 @@ import { NetWorthPopup, CashFlowPopup, BudgetPopup } from "@/components/dashboar
 import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatMoney(n: number): string {
-  return n % 1 === 0 ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
-}
 
 function timeAgo(ts: string): string {
   // Round-6 fix (BUG-009): previous logic computed elapsed hours and said
@@ -1063,7 +1060,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
   return (
     <>
       <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
-        <div className="grid grid-cols-6 gap-1.5">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
           <KPITaskCard count={safeStats.activeTasks} onClick={() => setPopup("tasks")} />
           {/* Bug fix: prefer financeSnapshot.totalMonthlySpend (same source as the drilldown popup)
                over stats.monthlySpend (/api/stats) so the KPI card and popup show identical totals. */}
@@ -1279,22 +1276,26 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                 <div className="overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '50vh' }}>
                   <div className="space-y-1.5 py-2">
                     {bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 999) - (b.daysUntil ?? 999)).map((bill: any) => {
-                      // Bills have no overdue status — due-this-week (0-7) gets a calm
-                      // amber accent; everything else (including past-due) is neutral.
-                      const soon = typeof bill.daysUntil === "number" && bill.daysUntil >= 0 && bill.daysUntil <= 7;
+                      // Past-due (daysUntil < 0) and not autopay reads RED; due
+                      // this week (0-7) gets a calm amber; everything else neutral.
+                      const overdue = typeof bill.daysUntil === "number" && bill.daysUntil < 0 && !bill.autopay;
+                      const soon = typeof bill.daysUntil === "number" && bill.daysUntil >= 0 && bill.daysUntil <= 7 && !bill.autopay;
+                      const accent = overdue ? "border-red-500/40 bg-red-500/5" : soon ? "border-amber-500/30 bg-amber-500/5" : "border-border/50";
+                      const textAccent = overdue ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground";
                       return (
                         <div key={bill.id}
-                          className={`flex items-center justify-between p-2 rounded-lg border ${soon && !bill.autopay ? "border-amber-500/30 bg-amber-500/5" : "border-border/50"}`}>
+                          className={`flex items-center justify-between p-2 rounded-lg border ${accent}`}>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
                               <p className="text-xs font-medium truncate">{bill.name}</p>
+                              {overdue && <span className="text-[9px] font-semibold uppercase tracking-wider text-red-500 shrink-0">Overdue</span>}
                               {bill.category && (
                                 <span className="text-[9px] uppercase tracking-wider text-muted-foreground/60 shrink-0">
                                   {bill.category}
                                 </span>
                               )}
                             </div>
-                            <p className={`text-xs ${soon && !bill.autopay ? "text-amber-500" : "text-muted-foreground"}`}>
+                            <p className={`text-xs ${textAccent}`}>
                               {billDueLabel(bill)}
                               {bill.autopay && <span className="ml-1 text-green-500">• autopay</span>}
                             </p>
@@ -4658,6 +4659,13 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
 function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }: { data: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
   const [drill, setDrill] = useState<"spending" | "income" | "cashflow" | "networth" | "budget" | null>(null);
+  // In-place add from the legacy drill-downs (no longer read-only).
+  const [drillQuickAdd, setDrillQuickAdd] = useState<QuickAddKind | null>(null);
+  const { data: fwProfiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  const fwOwnerId = useMemo(() => {
+    if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
+    return (fwProfiles.find((p: any) => p.type === "self")?.id) || "";
+  }, [filterMode, filterIds, fwProfiles]);
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const incomeUrl = filterMode === "selected" && filterIds.length > 0
     ? `/api/incomes?profileIds=${filterIds.join(",")}`
@@ -4908,7 +4916,8 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             {recentExpenses.slice().sort((a: any, b: any) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime() || (b.description || '').localeCompare(a.description || '')).slice(0, 5).map((exp: any) => (
               <div key={exp.id} className="flex items-center justify-between py-1 text-xs">
                 <span className="truncate flex-1">{exp.description || "Expense"}</span>
-                <span className="font-medium tabular-nums ml-2">${exp.amount?.toLocaleString()}</span>
+                <span className="text-muted-foreground tabular-nums ml-2 shrink-0">{formatListDate(exp.date)}</span>
+                <span className="font-medium tabular-nums ml-2 shrink-0">{formatMoney(exp.amount)}</span>
               </div>
             ))}
           </div>
@@ -4944,6 +4953,8 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           category: e.category,
           vendor: e.vendor,
         }))}
+        onAdd={() => setDrillQuickAdd("expense")}
+        addLabel="Add expense"
       />
 
       {/* Income Drill-Down */}
@@ -4958,7 +4969,9 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           sub: i.frequency,
           category: i.category,
         }))}
-        emptyMessage="No income sources yet. Add them on the Finance page."
+        emptyMessage="No income sources yet."
+        onAdd={() => setDrillQuickAdd("income")}
+        addLabel="Add income"
       />
 
       {/* Cash Flow Drill-Down */}
@@ -5001,6 +5014,8 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         obligations={(allObligations || []).map((o: any) => ({
           id: o.id, name: o.name, amount: o.amount, frequency: o.frequency, nextDueDate: o.nextDueDate || o.dueDate,
         }))}
+        onAdd={() => setDrillQuickAdd("bill")}
+        addLabel="Add bill"
       />
         );
       })()}
@@ -5071,6 +5086,10 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           <BudgetManager filterIds={filterIds} filterMode={filterMode} />
         </DialogContent>
       </Dialog>
+
+      {drillQuickAdd && (
+        <QuickAddDialog open kind={drillQuickAdd} ownerProfileId={fwOwnerId} onClose={() => setDrillQuickAdd(null)} />
+      )}
     </CollapsibleSection>
   );
 }

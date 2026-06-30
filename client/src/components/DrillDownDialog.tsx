@@ -1,6 +1,8 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Button } from "@/components/ui/button";
+import { Plus } from "lucide-react";
 
 interface DrillDownItem {
   label: string;
@@ -48,6 +50,9 @@ interface DrillDownDialogProps {
   tasks?: TaskRecord[];
   obligations?: ObligationRecord[];
   emptyMessage?: string;
+  /** Optional in-place add action rendered as a footer button. */
+  onAdd?: () => void;
+  addLabel?: string;
 }
 
 function fmtDate(dateStr: string): string {
@@ -65,7 +70,7 @@ const PRIORITY_CLR: Record<string, string> = {
   high: "bg-red-500/10 text-red-600",
 };
 
-export function DrillDownDialog({ open, onClose, title, subtitle, total, items, expenses, tasks, obligations, emptyMessage }: DrillDownDialogProps) {
+export function DrillDownDialog({ open, onClose, title, subtitle, total, items, expenses, tasks, obligations, emptyMessage, onAdd, addLabel }: DrillDownDialogProps) {
   const expenseTotal = expenses?.reduce((s, e) => s + e.amount, 0) ?? 0;
   const hasRecords = (expenses?.length ?? 0) > 0 || (tasks?.length ?? 0) > 0 || (obligations?.length ?? 0) > 0;
 
@@ -229,6 +234,11 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
             </>
           )}
         </div>
+        {onAdd && addLabel && (
+          <Button size="sm" className="w-full mt-1 shrink-0" onClick={onAdd} data-testid="drilldown-add">
+            <Plus className="h-3.5 w-3.5 mr-1.5" /> {addLabel}
+          </Button>
+        )}
       </DialogContent>
     </Dialog>
   );
