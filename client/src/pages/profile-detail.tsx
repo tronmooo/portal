@@ -877,6 +877,9 @@ function ChildAssetsCard({
   const [showAddChild, setShowAddChild] = useState(false);
   const [childName, setChildName] = useState("");
   const [childType, setChildType] = useState<NestedAssetType>("asset");
+  // Value at creation time so the new asset counts toward net worth immediately
+  // (previously you had to create it, then open it to add the worth separately).
+  const [childValue, setChildValue] = useState("");
   // ADOPT-AS-CHILD (2026-05-26 redesign): the inline picker that used to live
   // here was renamed to "Adopt as Child" and moved into a dedicated component
   // with a preview + two-step confirm flow. That removes the reversed-parent
@@ -949,11 +952,17 @@ function ChildAssetsCard({
   const createChildMut = useMutation({
     mutationFn: async () => {
       if (!childName.trim()) throw new Error("Name required");
+      // Parse the optional value; store under `currentValue` — the key BOTH the
+      // client rollup (getAssetBaseValue) and the server net worth
+      // (resolveAssetValue) read first, so it counts the moment it's created.
+      const valNum = parseFloat(String(childValue).replace(/[^0-9.]/g, ""));
+      const hasValue = childValue.trim() !== "" && isFinite(valNum) && valNum > 0;
       const res = await apiRequest("POST", "/api/profiles", {
         name: childName.trim(),
         type: childType,
         parentProfileId: profile.id,
         tags: [],
+        ...(hasValue ? { fields: { currentValue: valNum } } : {}),
       });
       return res.json();
     },
@@ -961,8 +970,12 @@ function ChildAssetsCard({
       toast({ title: `"${childName}" created` });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
+      // Net worth / rollup are derived — refresh those surfaces too.
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "tree"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setChildName("");
       setChildType("asset");
+      setChildValue("");
       setShowAddChild(false);
       onChildAdded();
     },
@@ -1167,6 +1180,26 @@ function ChildAssetsCard({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium" htmlFor="child-asset-value">
+                {childType === "account" ? "Balance" : childType === "investment" ? "Market value" : "Value"} <span className="text-muted-foreground font-normal">(optional)</span>
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">$</span>
+                <Input
+                  id="child-asset-value"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={childValue}
+                  onChange={(e) => setChildValue(e.target.value)}
+                  className="h-[44px] text-sm pl-7"
+                  onKeyDown={(e) => { if (e.key === "Enter") createChildMut.mutate(); }}
+                  data-testid="input-child-asset-value"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground">Adds to net worth right away. You can change it later.</p>
             </div>
             {/* Path preview — shows the user where this new child will live */}
             <RebuildPathPreview
