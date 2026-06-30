@@ -11,6 +11,7 @@ import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance }
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { selfIdsFrom } from "@shared/scope";
 import { validateFinanceImport } from "@shared/finance-import-schema";
+import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
@@ -2674,11 +2675,8 @@ If unsure, return "profile_fact".`,
     // last). No fuzzy/AI matching — it produced false positives like "Tv" ≈
     // "Samsung TV" that blocked valid creates.
     const existing = await storage.getProfiles();
-    const PERSON_TYPES = new Set(["person", "self"]);
-    if (PERSON_TYPES.has(req.body.type) && !req.body.skipDupCheck) {
-      const norm = (s: any) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
-      const newName = norm(req.body.name);
-      const dup = existing.find(p => PERSON_TYPES.has(p.type) && !p.deletedAt && norm(p.name) === newName);
+    if (!req.body.skipDupCheck) {
+      const dup = findBlockingDuplicateProfile({ name: req.body.name, type: req.body.type }, existing);
       if (dup) {
         return res.status(409).json({ error: `A person named "${dup.name}" already exists`, existingId: dup.id });
       }

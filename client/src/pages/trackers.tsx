@@ -6,6 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
+import { passesProfileFilter } from "@shared/profile-filter";
 import {
   type TrackerMetricDefinition,
   getDefaultMetricDefinition,
@@ -1381,6 +1382,18 @@ function AddEntryDialog({
   };
   const removeCustomField = (k: string) =>
     setCustomFields((p) => { const n = { ...p }; delete n[k]; return n; });
+  // FLUSH a pending "add a field" the user typed but didn't tap "+ Add" on — so
+  // hitting "Log Entry" never silently drops it (same fix as the per-entry editor).
+  const collectCustomFields = (): Record<string, any> => {
+    const out = { ...customFields };
+    const pn = newFieldName.trim();
+    if (pn) {
+      const raw = newFieldValue.trim();
+      const num = Number(raw);
+      out[pn] = raw !== "" && !isNaN(num) && String(num) === raw ? num : newFieldValue;
+    }
+    return out;
+  };
 
   const mutation = useMutation<any,Error,void>({
     mutationFn: async () => {
@@ -1395,8 +1408,8 @@ function AddEntryDialog({
           coerced[f.name] = raw ?? "";
         }
       }
-      // Merge any ad-hoc custom fields the user added.
-      for (const [k, v] of Object.entries(customFields)) coerced[k] = v;
+      // Merge any ad-hoc custom fields the user added (including a pending one).
+      for (const [k, v] of Object.entries(collectCustomFields())) coerced[k] = v;
       // Prevent empty entries
       const hasValue = Object.values(coerced).some(v => v !== undefined && v !== "" && v !== null);
       if (!hasValue) throw new Error("Please fill in at least one field");
@@ -1422,7 +1435,7 @@ function AddEntryDialog({
         else if (f.type === "boolean") coerced[f.name] = raw === true || raw === "true";
         else coerced[f.name] = raw ?? "";
       }
-      for (const [k, v] of Object.entries(customFields)) coerced[k] = v;
+      for (const [k, v] of Object.entries(collectCustomFields())) coerced[k] = v;
       const tempEntry = { id: 'temp-' + Date.now(), values: coerced, notes: notes.trim() || undefined, timestamp: new Date().toISOString(), computed: {} };
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
         (old || []).map((t: any) => t.id === tracker.id
@@ -5899,11 +5912,12 @@ export default function TrackersPage() {
   // Profile-filtered documents (before type filter, so type pills don't disappear)
   const profileFilteredDocs = useMemo(() => allDocuments.filter(d => {
     if (filterMode === "selected" && filterIds.length > 0) {
-      const linkedIds = d.linkedProfiles || [];
-      return linkedIds.some(id => filterIds.includes(id));
+      // Canonical rule (orphan docs with no linkedProfiles belong to self) —
+      // the inline `.some(includes)` used to hide them when filtering to self.
+      return passesProfileFilter(d.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles || [] });
     }
     return true;
-  }), [allDocuments, filterMode, filterIds]);
+  }), [allDocuments, filterMode, filterIds, profiles]);
 
   // Unique doc types for filter chips — derived from profile-filtered docs (NOT type-filtered)
   const docTypes = useMemo(() => [...new Set(profileFilteredDocs.map(d => d.type).filter(Boolean))].sort(), [profileFilteredDocs]);
@@ -5997,8 +6011,8 @@ export default function TrackersPage() {
   // Apply profile filter — memoized
   const filteredTrackers = useMemo(() => (trackers || []).filter(t => {
     if (filterMode === "selected" && filterIds.length > 0) {
-      const linkedIds = t.linkedProfiles || [];
-      if (!linkedIds.some(id => filterIds.includes(id))) return false;
+      // Canonical rule so orphan trackers (no linkedProfiles) still show for self.
+      if (!passesProfileFilter(t.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles || [] })) return false;
     }
     // The tracker-category chip filter only applies when the user is actually
     // on the Trackers tab. If they’re viewing "All" or some other section, a
@@ -6008,7 +6022,7 @@ export default function TrackersPage() {
     if (sectionFilter === "trackers" && trackerCatFilter !== "all" && normalizeFilter(getCanonicalGroup(t.category)) !== normalizeFilter(trackerCatFilter)) return false;
     return true;
   }).sort((a, b) => cleanTrackerName(a.name).toLowerCase().localeCompare(cleanTrackerName(b.name).toLowerCase())
-  ), [trackers, filterMode, filterIds, trackerCatFilter, sectionFilter]);
+  ), [trackers, filterMode, filterIds, trackerCatFilter, sectionFilter, profiles]);
 
   // Group trackers by canonical group — memoized
   const { grouped, sortedCats } = useMemo(() => {
@@ -6519,8 +6533,10 @@ export default function TrackersPage() {
             // it under their own section rather than "Unassigned".
             const finalOwners = ownerIds.length > 0 ? ownerIds : (selfProfileId ? [selfProfileId] : []);
             if (!isShowAll) {
-              const inScope = linked.some(id => filterIds.includes(id));
-              if (!inScope) return;
+              // Canonical rule: orphan docs (no linked person) belong to self —
+              // consistent with finalOwners above, which already attributes them
+              // to self. The old `.some(includes)` hid them when filtering to self.
+              if (!passesProfileFilter(linked, { selectedIds: filterIds, allProfiles: profiles || [] })) return;
             }
             const sub = ((d as any).type || "Document").toString();
             const dt = d.createdAt ? new Date(d.createdAt).toLocaleDateString() : "";

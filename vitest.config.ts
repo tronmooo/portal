@@ -22,6 +22,7 @@ export default defineConfig({
       'tests/profile-scope.test.ts',
       'tests/useProfileScope.dom.test.tsx',
       'tests/finance-import.test.ts',
+      'tests/profile-dedup.test.ts',
       'tests/expense-shaped.test.ts',
       'tests/nutrition-shaped.test.ts',
       'tests/document-linking.test.ts',
