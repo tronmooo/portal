@@ -12733,7 +12733,10 @@ export default function ProfileDetailPage() {
     return list.filter((t: any) => {
       const linked = Array.isArray(t.linkedProfiles) ? t.linkedProfiles : [];
       const linksThisProfile = linked.includes(profile.id);
-      const linksChildAsset = linked.some((id: string) => childAssetIds.has(id));
+      // Not a profile-scope filter: checks whether the tracker is linked to one
+      // of THIS profile's child assets, so a child's tracker isn't surfaced as
+      // the parent's own. (Set membership, not the active multi-profile filter.)
+      const linksChildAsset = Array.from(childAssetIds).some((cid) => linked.includes(cid));
       return linksThisProfile && !linksChildAsset;
     });
   }, [profile, childAssetIds]);

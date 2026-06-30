@@ -6,6 +6,8 @@
 // across the WHOLE requested range, aggregate correctly (sum vs measurement),
 // and report how much real data backed the result.
 
+import { DEFAULT_TIMEZONE } from "./timezone";
+
 export type AggMode = "sum" | "avg" | "last";
 export type Granularity = "day" | "week" | "month";
 
@@ -113,7 +115,7 @@ export function aggregateTimeSeries(
   entries: Array<{ date: Date | string | number; value: number }>,
   opts: AggregateOptions,
 ): AggregateResult {
-  const tz = opts.tz || "America/Los_Angeles";
+  const tz = opts.tz || DEFAULT_TIMEZONE;
   const until = opts.until || new Date();
   const g = opts.granularity;
   const maxBuckets = opts.maxBuckets ?? 120;

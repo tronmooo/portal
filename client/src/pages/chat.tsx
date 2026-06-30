@@ -79,6 +79,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
+import { DEFAULT_TIMEZONE } from "@shared/timezone";
 // Type-only import — erased at compile time, does NOT pull recharts into the bundle.
 import type { ChartSpec2 } from "@/components/ChatChartRenderer";
 // ChartCard lazy-loads the recharts body itself, so importing it here stays light.
@@ -784,7 +785,7 @@ function ExtractionConfirmation({
         vendor: vendorField?.value ? String(vendorField.value) : undefined,
         date: dateField?.value
           ? String(dateField.value)
-          : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          : new Date().toLocaleDateString('en-CA', { timeZone: DEFAULT_TIMEZONE }),
       };
     }
 

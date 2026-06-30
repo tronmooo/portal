@@ -16,6 +16,8 @@
 //   - Pure, deterministic, no API calls — feed it the data it needs.
 // =============================================================================
 
+import { isInScope } from "./scope";
+
 export type FindingSeverity = "positive" | "negative" | "neutral" | "warning" | "milestone";
 export type FindingDirection = "improving" | "declining" | "stable";
 
@@ -451,10 +453,13 @@ export interface InsightInputs {
 export function computeKeyFindings(input: InsightInputs, now: number = Date.now()): KeyFinding[] {
   const all: KeyFinding[] = [];
   for (const t of input.trackers || []) {
-    if (input.scopedProfileIds && input.scopedProfileIds.length > 0) {
-      const linked: string[] = Array.isArray(t?.linkedProfiles) ? t.linkedProfiles : [];
-      const ok = linked.some(pid => input.scopedProfileIds!.includes(pid));
-      if (!ok) continue;
+    // Use the canonical scope primitive instead of an inline intersection.
+    // selfIds is empty here (insights scope is a strict intersection: orphan
+    // trackers with no linkedProfiles are excluded when a filter is active),
+    // which reproduces the previous `linked.some(pid => scoped.includes(pid))`
+    // behaviour exactly while routing through shared/scope.ts.
+    if (!isInScope(t?.linkedProfiles, { selectedIds: input.scopedProfileIds ?? [], selfIds: new Set() })) {
+      continue;
     }
     all.push(...findingsFromTracker(t, now));
   }

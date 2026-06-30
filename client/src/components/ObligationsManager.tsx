@@ -1137,10 +1137,11 @@ export default function ObligationsManager({ showHeader = true, compact = false,
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
 
-  // BUG-20260528-profile-filter-leakage: previously inline `linkedProfiles.some(id => filterIds.includes(id))`
-  // which dropped orphan obligations (no linkedProfiles) even when a
-  // self-profile was selected and the server correctly returned them.
-  // Now uses canonical passesProfileFilter so client and server agree.
+  // BUG-20260528-profile-filter-leakage: this used to re-implement the profile
+  // filter inline (intersecting an obligation's owners with the selected ids),
+  // which dropped orphan obligations (no owners) even when a self-profile was
+  // selected and the server correctly returned them. Now uses canonical
+  // passesProfileFilter so client and server agree.
   const obligations = useMemo(() => filterMode === "selected" && filterIds.length > 0
     ? allObligations.filter(o => passesProfileFilter(o.linkedProfiles, {
         selectedIds: filterIds,
