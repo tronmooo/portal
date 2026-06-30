@@ -10655,7 +10655,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // PR Q: Always emit a COMPLETE profile-name index (every profile, no slice cap) so the LLM
   // cannot falsely deny the existence of a profile that's past the rich-snapshot cap.
   // The rich snapshot below stays bounded to keep tokens reasonable.
-  const profileNameIndex = `Profile Name Index (${profiles.length}, complete list — every profile owned by user):\n${profiles.map((p: any) => `- ${p.name} (${p.type}, id:${p.id.slice(0,8)})`).join("\n") || "  (none)"}`;
+  //
+  // BUG (profile-context-isolation): this index MUST be built from `allProfiles`,
+  // not the scoped `profiles`. When the UI is in "selected profile only" mode and
+  // the selection excludes (say) Bob, building the index from `profiles` hid Bob
+  // entirely — so "log Bob's groceries" got a false "I don't see a 'Bob' profile"
+  // and the expense was wrongly logged to self. The name→profile resolvers used by
+  // the tools (matchProfileByName / the expense-link lookup) already read the full
+  // unscoped profile list, so surfacing every name here lets the AI route the
+  // expense to the right profile. The bounded rich snapshot below stays scoped.
+  const profileNameIndex = `Profile Name Index (${allProfiles.length}, complete list — every profile owned by user):\n${allProfiles.map((p: any) => `- ${p.name} (${p.type}, id:${p.id.slice(0,8)})`).join("\n") || "  (none)"}`;
   const context = (await Promise.all([
     profileNameIndex,
     `Profile Details (showing up to 60 of ${profiles.length}): ${profiles.slice(0, 60).map(p => {

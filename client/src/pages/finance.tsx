@@ -19,7 +19,8 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2, Repeat } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2, Repeat, ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Link } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -44,6 +45,45 @@ const categoryColors: Record<string, string> = {
 };
 
 const EXPENSE_CATEGORIES = ["entertainment", "food", "general", "health", "housing", "pet", "transport", "utilities", "vehicle"];
+
+/**
+ * Collapsible list row used by the Expenses / Income / Paychecks lists.
+ *
+ * Replaces the old always-on rows with hover-only edit/delete buttons (which
+ * the user couldn't discover on touch and which crammed every detail onto one
+ * line). The row now shows a compact summary; clicking it expands a drop-down
+ * panel with the full details + actions. Self-contained open state so the big
+ * page component doesn't need to track per-row toggles.
+ */
+function ExpandableRow({
+  summary, detail, testId,
+}: {
+  summary: React.ReactNode;
+  detail: React.ReactNode;
+  testId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div data-testid={testId}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-muted/40 transition-colors select-none"
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen((o) => !o); } }}
+      >
+        <ChevronDown className={cn("h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform", open ? "rotate-0" : "-rotate-90")} />
+        {summary}
+      </div>
+      {open && (
+        <div className="px-3 pb-3 pl-9 bg-muted/20" onClick={stopProp(() => {})}>
+          {detail}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function FinancePage() {
   useEffect(() => { document.title = "Finance — Portol"; }, []);
@@ -988,28 +1028,42 @@ export default function FinancePage() {
                   <p className="text-sm text-muted-foreground">No expenses match the selected filter.</p>
                 </div>
               )}
-              {filtered.slice().sort((a, b) => a.description.localeCompare(b.description) || new Date(b.date || '').getTime() - new Date(a.date || '').getTime()).map((expense) => (
-                <div key={expense.id} className="flex items-center gap-3 py-3 group" data-testid={`expense-${expense.id}`}>
-                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                    <ShoppingCart className="h-3.5 w-3.5 text-primary" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm truncate">{expense.description}</p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <Badge variant="secondary" className="text-xs capitalize">{expense.category}</Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date((expense.date?.slice(0, 10) || "") + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                      </span>
+              {/* Newest first. The old sort keyed on description (alphabetical),
+                  which is why the user saw stale expenses jumbled out of order. */}
+              {filtered.slice().sort((a, b) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime() || (b.description || '').localeCompare(a.description || '')).map((expense) => (
+                <ExpandableRow
+                  key={expense.id}
+                  testId={`expense-${expense.id}`}
+                  summary={
+                    <>
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                        <ShoppingCart className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm truncate">{expense.description}</p>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date((expense.date?.slice(0, 10) || "") + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                        </span>
+                      </div>
+                      <span className="text-sm font-semibold tabular-nums shrink-0">${expense.amount.toFixed(2)}</span>
+                    </>
+                  }
+                  detail={
+                    <div className="space-y-2 pt-1">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <Badge variant="secondary" className="capitalize">{expense.category}</Badge>
+                        {expense.vendor && <span className="text-muted-foreground">{expense.vendor}</span>}
+                        <span className="text-muted-foreground">
+                          {new Date((expense.date?.slice(0, 10) || "") + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "long", day: "numeric", year: "numeric" })}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={stopProp(() => setEditingExpense(expense))} data-testid={`btn-edit-expense-${expense.id}`}><Pencil className="h-3 w-3" /> Edit</Button>
+                        <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-destructive" onClick={stopProp(() => setDeleteConfirmId(expense.id))} data-testid={`btn-delete-expense-${expense.id}`}><Trash2 className="h-3 w-3" /> Delete</Button>
+                      </div>
                     </div>
-                  </div>
-                  <span className="text-sm font-semibold tabular-nums shrink-0">${expense.amount.toFixed(2)}</span>
-                  <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {/* ST5: form is now seeded by an effect on editingExpense?.id,
-                       so we just set the target row here. */}
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={stopProp(() => setEditingExpense(expense))} title="Edit"><Pencil className="h-3 w-3" /></Button>
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" onClick={stopProp(() => setDeleteConfirmId(expense.id))} title="Delete"><Trash2 className="h-3 w-3" /></Button>
-                  </div>
-                </div>
+                  }
+                />
               ))}
             </div>
           )}
@@ -1124,7 +1178,9 @@ export default function FinancePage() {
           </div>
         ) : (
           <div className="rounded-xl border border-border/40 divide-y divide-border/30 overflow-hidden">
-            {paychecks.slice().sort((a: any, b: any) => (a.source || '').localeCompare(b.source || '')).map((pc: any) => {
+            {/* Most recent expected date first (was alphabetical by source, which
+                buried recent paychecks under old stale ones the user flagged). */}
+            {paychecks.slice().sort((a: any, b: any) => new Date(b.expected_date || '').getTime() - new Date(a.expected_date || '').getTime() || (a.source || '').localeCompare(b.source || '')).map((pc: any) => {
               // Round-6 fix (BUG-024): user reported the "Received" badge appearing on
               // paychecks before their expected date. The server allowed confirm at any
               // time. Gate the Received button at the UI layer so a paycheck can only be
@@ -1133,37 +1189,50 @@ export default function FinancePage() {
               const expectedISO = (pc.expected_date || '').slice(0, 10);
               const isFuture = expectedISO && expectedISO > todayISO;
               return (
-              <div key={pc.id} className="flex items-center gap-3 px-3 py-2 group" style={{ background: pc.confirmed ? 'hsl(142 60% 50% / 0.05)' : undefined }}>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium truncate">{pc.source}</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    Expected {new Date(pc.expected_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                    {pc.confirmed && pc.received_date && <> · Received {new Date(pc.received_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</>}
-                  </p>
-                </div>
-                <span className="text-xs font-bold tabular-nums">${(pc.actual_amount || pc.amount).toLocaleString()}</span>
-                {pc.confirmed ? (
-                  <span className="text-[10px] font-semibold text-green-500 flex items-center gap-0.5"><Check className="h-3 w-3" /> Received</span>
-                ) : isFuture ? (
-                  <span className="text-[10px] font-medium text-muted-foreground">Upcoming</span>
-                ) : (
-                  <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-green-600 border-green-500/30"
-                    disabled={confirmPaycheckMut.isPending}
-                    onClick={stopProp(() => confirmPaycheckMut.mutate({ id: pc.id }))}>
-                    <Check className="h-3 w-3" /> Received
-                  </Button>
-                )}
-                {/* U2 fix: open confirmation dialog instead of deleting immediately.
-                    Also disable while a previous delete is in flight (avoids spam clicks). */}
-                <button className="text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 flex items-center justify-center disabled:opacity-50"
-                  type="button"
-                  aria-label="Delete paycheck"
-                  disabled={deletePaycheckMut.isPending}
-                  data-testid={`btn-delete-paycheck-${pc.id}`}
-                  onClick={stopProp(() => setPaycheckToDelete({ id: pc.id, source: pc.source, amount: (pc.actual_amount || pc.amount) }))}>
-                  {deletePaycheckMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                </button>
-              </div>
+              <ExpandableRow
+                key={pc.id}
+                testId={`paycheck-${pc.id}`}
+                summary={
+                  <>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate">{pc.source}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        Expected {new Date(pc.expected_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </p>
+                    </div>
+                    <span className="text-xs font-bold tabular-nums">${(pc.actual_amount || pc.amount).toLocaleString()}</span>
+                    {pc.confirmed ? (
+                      <span className="text-[10px] font-semibold text-green-500 flex items-center gap-0.5 shrink-0"><Check className="h-3 w-3" /> Received</span>
+                    ) : (
+                      <span className="text-[10px] font-medium text-muted-foreground shrink-0">{isFuture ? 'Upcoming' : 'Due'}</span>
+                    )}
+                  </>
+                }
+                detail={
+                  <div className="space-y-2 pt-1">
+                    <p className="text-[11px] text-muted-foreground">
+                      Expected {new Date(pc.expected_date).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}
+                      {pc.confirmed && pc.received_date && <> · Received {new Date(pc.received_date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}</>}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      {!pc.confirmed && !isFuture && (
+                        <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-green-600 border-green-500/30"
+                          disabled={confirmPaycheckMut.isPending}
+                          onClick={stopProp(() => confirmPaycheckMut.mutate({ id: pc.id }))}>
+                          <Check className="h-3 w-3" /> Mark received
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-destructive"
+                        type="button"
+                        disabled={deletePaycheckMut.isPending}
+                        data-testid={`btn-delete-paycheck-${pc.id}`}
+                        onClick={stopProp(() => setPaycheckToDelete({ id: pc.id, source: pc.source, amount: (pc.actual_amount || pc.amount) }))}>
+                        {deletePaycheckMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Delete
+                      </Button>
+                    </div>
+                  </div>
+                }
+              />
               );
             })}
           </div>
@@ -1216,34 +1285,39 @@ export default function FinancePage() {
           </div>
         ) : (
           <div className="rounded-xl border border-border/40 divide-y divide-border/30 overflow-hidden">
-            {incomes.slice().sort((a: any, b: any) => (a.description || '').localeCompare(b.description || '')).map((inc: any) => (
-              <div key={inc.id} className="flex items-center gap-3 px-3 py-2 group">
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium truncate">{inc.description}</p>
-                  <p className="text-[10px] text-muted-foreground capitalize">
-                    {inc.category || 'income'} · {inc.frequency || 'monthly'}
-                    {inc.date ? ` · ${new Date(inc.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : ''}
-                  </p>
-                </div>
-                <span className="text-xs font-bold tabular-nums">${Number(inc.amount || 0).toLocaleString()}</span>
-                <button
-                  className="text-muted-foreground/60 hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 flex items-center justify-center disabled:opacity-50"
-                  onClick={stopProp(() => setEditingIncome(inc))}
-                  data-testid={`btn-edit-income-${inc.id}`}
-                  aria-label="Edit income"
-                >
-                  <Pencil className="h-3 w-3" />
-                </button>
-                <button
-                  className="text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 flex items-center justify-center disabled:opacity-50"
-                  disabled={deleteIncomeMut.isPending}
-                  onClick={stopProp(() => setIncomeToDelete({ id: inc.id, description: inc.description, amount: Number(inc.amount || 0) }))}
-                  data-testid={`btn-delete-income-${inc.id}`}
-                  aria-label="Delete income"
-                >
-                  {deleteIncomeMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                </button>
-              </div>
+            {/* Newest first by date (was alphabetical by description). */}
+            {incomes.slice().sort((a: any, b: any) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime() || (b.description || '').localeCompare(a.description || '')).map((inc: any) => (
+              <ExpandableRow
+                key={inc.id}
+                testId={`income-${inc.id}`}
+                summary={
+                  <>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate">{inc.description}</p>
+                      <p className="text-[10px] text-muted-foreground capitalize">
+                        {inc.frequency || 'monthly'}
+                        {inc.date ? ` · ${new Date(inc.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+                      </p>
+                    </div>
+                    <span className="text-xs font-bold tabular-nums">${Number(inc.amount || 0).toLocaleString()}</span>
+                  </>
+                }
+                detail={
+                  <div className="space-y-2 pt-1">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <Badge variant="secondary" className="capitalize">{inc.category || 'income'}</Badge>
+                      <span className="text-muted-foreground capitalize">{inc.frequency || 'monthly'}</span>
+                      {inc.date && <span className="text-muted-foreground">{new Date(inc.date).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={stopProp(() => setEditingIncome(inc))} data-testid={`btn-edit-income-${inc.id}`}><Pencil className="h-3 w-3" /> Edit</Button>
+                      <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-destructive" disabled={deleteIncomeMut.isPending} onClick={stopProp(() => setIncomeToDelete({ id: inc.id, description: inc.description, amount: Number(inc.amount || 0) }))} data-testid={`btn-delete-income-${inc.id}`}>
+                        {deleteIncomeMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Delete
+                      </Button>
+                    </div>
+                  </div>
+                }
+              />
             ))}
           </div>
         )}

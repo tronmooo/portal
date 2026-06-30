@@ -52,6 +52,87 @@ function iconForProfile(type: string) {
   return Wallet;
 }
 
+// ─── Add asset / liability dialog (saves directly; no editor detour) ──────────
+// Replaces the old `navigate("/editor/new/asset")` which is why "Add asset"
+// "didn't save" — it just opened a route. This creates the profile via the API,
+// scoped to the active/self profile, and refreshes every finance surface.
+function AddHoldingDialog({
+  open, kind, onClose, ownerProfileId,
+}: {
+  open: boolean;
+  kind: "asset" | "liability";
+  onClose: () => void;
+  ownerProfileId: string;
+}) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const isLiab = kind === "liability";
+
+  const mut = useMutation({
+    mutationFn: async () => {
+      const valNum = parseFloat(String(value).replace(/[^0-9.]/g, ""));
+      const hasValue = value.trim() !== "" && isFinite(valNum) && valNum >= 0;
+      // Store under the key both the client rollup and server net worth read.
+      const fields = hasValue ? (isLiab ? { balance: valNum } : { currentValue: valNum }) : {};
+      const res = await apiRequest("POST", "/api/profiles", {
+        name: name.trim(),
+        type: isLiab ? "liability" : "asset",
+        ...(ownerProfileId ? { parentProfileId: ownerProfileId } : {}),
+        fields,
+        tags: [],
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: `${isLiab ? "Liability" : "Asset"} added`, description: name.trim() });
+      // Net worth / assets / liabilities are derived — refresh every finance surface.
+      qc.invalidateQueries({ predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/") });
+      onClose();
+    },
+    onError: (e: any) => toast({ title: "Couldn't save", description: e?.message || "Try again", variant: "destructive" }),
+  });
+
+  const submit = () => { if (name.trim() && !mut.isPending) mut.mutate(); };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-xs" data-testid={`dialog-add-${kind}`}>
+        <DialogHeader>
+          <DialogTitle className="text-sm">{isLiab ? "Add liability" : "Add asset"}</DialogTitle>
+          <DialogDescription className="text-xs">
+            {isLiab ? "A debt — loan, credit card, or mortgage balance." : "Something you own — at its current value."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <label className="text-xs font-medium">Name</label>
+            <Input value={name} autoFocus placeholder={isLiab ? "e.g. Visa card" : "e.g. Savings, TV"}
+              onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+              data-testid={`input-add-${kind}-name`} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium">{isLiab ? "Balance owed" : "Value"} <span className="text-muted-foreground font-normal">(optional)</span></label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">$</span>
+              <Input type="text" inputMode="decimal" className="pl-7" value={value} placeholder="0.00"
+                onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+                data-testid={`input-add-${kind}-value`} />
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end pt-1">
+            <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+            <Button size="sm" disabled={!name.trim() || mut.isPending} onClick={submit} data-testid={`btn-add-${kind}-save`}>
+              {mut.isPending ? "Saving…" : "Add"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── shared shell ─────────────────────────────────────────────────────────────
 
 interface ShellProps {
@@ -124,6 +205,14 @@ export function NetWorthPopup({
     },
     enabled: open,
   });
+
+  // Add asset / liability dialog state. New holdings are owned by the active
+  // single-selected profile, else the self profile.
+  const [addKind, setAddKind] = useState<"asset" | "liability" | null>(null);
+  const addOwnerProfileId = useMemo(() => {
+    if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
+    return (allProfiles.find((p: any) => p.type === "self")?.id) || "";
+  }, [filterMode, filterIds, allProfiles]);
 
   // SCOPE CONTRACT: the server financeSnapshot is the single source of truth for
   // the headline/tab totals (party_links + parent-residual aware). The client
@@ -283,7 +372,7 @@ export function NetWorthPopup({
               total={displayTotalA}
               emptyLabel="No assets yet"
               addLabel="Add asset"
-              onAdd={() => go("/editor/new/asset")}
+              onAdd={() => setAddKind("asset")}
               onOpen={(p) => go(`/profiles/${p.id}`)}
             />
           </TabsContent>
@@ -293,12 +382,20 @@ export function NetWorthPopup({
               total={displayTotalL}
               emptyLabel="No liabilities yet"
               addLabel="Add liability"
-              onAdd={() => go("/editor/new/liability")}
+              onAdd={() => setAddKind("liability")}
               onOpen={(p) => go(`/profiles/${p.id}`)}
             />
           </TabsContent>
         </Tabs>
         </>
+      )}
+      {addKind && (
+        <AddHoldingDialog
+          open
+          kind={addKind}
+          ownerProfileId={addOwnerProfileId}
+          onClose={() => setAddKind(null)}
+        />
       )}
     </MetricPopupShell>
   );

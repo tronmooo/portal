@@ -4882,7 +4882,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         {recentExpenses.length > 0 && (
           <div className="space-y-0.5">
             <p className="text-xs font-medium text-muted-foreground uppercase">Recent Expenses</p>
-            {recentExpenses.slice().sort((a: any, b: any) => (a.description || '').localeCompare(b.description || '')).slice(0, 5).map((exp: any) => (
+            {recentExpenses.slice().sort((a: any, b: any) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime() || (b.description || '').localeCompare(a.description || '')).slice(0, 5).map((exp: any) => (
               <div key={exp.id} className="flex items-center justify-between py-1 text-xs">
                 <span className="truncate flex-1">{exp.description || "Expense"}</span>
                 <span className="font-medium tabular-nums ml-2">${exp.amount?.toLocaleString()}</span>
@@ -4929,7 +4929,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
         onClose={() => setDrill(null)}
         title="Income Sources"
         total={`$${monthlyIncome.toLocaleString()}/mo`}
-        items={(incomes || []).slice().sort((a: any, b: any) => (a.description || '').localeCompare(b.description || '')).map((i: any) => ({
+        items={(incomes || []).slice().sort((a: any, b: any) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime() || (b.description || '').localeCompare(a.description || '')).map((i: any) => ({
           label: i.description,
           value: `$${i.amount.toLocaleString()}`,
           sub: i.frequency,
