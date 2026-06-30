@@ -29,6 +29,7 @@ import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from 
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
+import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE } from "@shared/timezone";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 
@@ -9349,7 +9350,7 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
     const active = obligations.filter((o:any) => o.status !== "cancelled" && (!profileId || o.linkedProfiles?.includes(profileId)));
     if (active.length === 0) throw new Error("No active bills/obligations found to chart.");
     // Normalize each to a monthly amount so a yearly bill doesn't dwarf rent.
-    const monthly = (o:any) => { const a = Number(o.amount||0); const f=(o.frequency||"").toLowerCase(); return f==="weekly"?a*4.33:f==="annual"||f==="yearly"?a/12:f==="quarterly"?a/3:a; };
+    const monthly = (o:any) => toMonthlyAmount(Number(o.amount||0), o.frequency);
     const grouped: Record<string, number> = {};
     for (const o of active) { const k = o.category || o.name || "bill"; grouped[k] = (grouped[k]||0) + monthly(o); }
     const data = Object.entries(grouped).sort((a,b)=>b[1]-a[1]).map(([category,amount],i)=>({ category, amount: Math.round(amount*100)/100, fill: CHART_COLORS[i%CHART_COLORS.length] }));
@@ -10782,13 +10783,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       const totalLiabs = children.filter((c: any) => c.type === "loan" || c.type === "liability" || c.fields?.loanBalance)
         .reduce((s, c) => s + Number(c.fields?.remainingBalance || c.fields?.loanBalance || 0), 0);
       const monthlySubs = obligations.filter((o: any) => o.status !== "cancelled")
-        .reduce((s, o) => {
-          const amt = Number(o.amount || 0);
-          const f = (o.frequency || "").toLowerCase();
-          if (f === "weekly") return s + amt * 4.33;
-          if (f === "annual" || f === "yearly") return s + amt / 12;
-          return s + amt;
-        }, 0);
+        .reduce((s, o) => s + toMonthlyAmount(Number(o.amount || 0), o.frequency), 0);
       const thisMonthSpend = expenses.filter(e => e.date?.startsWith(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0,7)))
         .reduce((s, e) => s + Number(e.amount || 0), 0);
       return `Financial Snapshot: Net Worth ~$${(totalAssets - totalLiabs).toLocaleString()}, Assets $${totalAssets.toLocaleString()}, Liabilities $${totalLiabs.toLocaleString()}, Monthly subscriptions $${Math.round(monthlySubs)}/mo, This month's spending $${Math.round(thisMonthSpend)}`;

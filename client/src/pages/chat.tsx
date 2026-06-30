@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { getUserToday } from "@shared/timezone";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { hashNavigate } from "@/lib/hashNavigate";
@@ -784,7 +785,7 @@ function ExtractionConfirmation({
         vendor: vendorField?.value ? String(vendorField.value) : undefined,
         date: dateField?.value
           ? String(dateField.value)
-          : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          : getUserToday(BROWSER_TIMEZONE),
       };
     }
 

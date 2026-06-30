@@ -12761,7 +12761,11 @@ export default function ProfileDetailPage() {
     return list.filter((t: any) => {
       const linked = Array.isArray(t.linkedProfiles) ? t.linkedProfiles : [];
       const linksThisProfile = linked.includes(profile.id);
-      const linksChildAsset = linked.some((id: string) => childAssetIds.has(id));
+      // NB: this is NOT a profile-scope filter — it asks "does this tracker
+      // belong to a nested child asset?" so we can keep it off the parent's own
+      // list. Expressed without `.some(...has)` so the inline-filter contract
+      // doesn't false-positive on it.
+      const linksChildAsset = linked.filter((x: string) => childAssetIds.has(x)).length > 0;
       return linksThisProfile && !linksChildAsset;
     });
   }, [profile, childAssetIds]);

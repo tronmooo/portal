@@ -650,15 +650,23 @@ function ObligationOccurrencePanel() {
     queryFn: () => apiRequest("GET", `/api/obligation-occurrences?start=${start}&end=${end}${profileParam}`).then(r => r.json()),
     staleTime: 60_000,
   });
+  // Profiles list — needed by the canonical passesProfileFilter (to apply the
+  // orphan rule) in the defense-in-depth occurrence filters below and the
+  // obligations list filter further down.
+  const { data: profilesList = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    staleTime: 5 * 60_000,
+  });
   // Defense-in-depth client filter — if the server is on an older deploy
   // that ignores profileIds, still hide other profiles' occurrences.
   const occurrences = useMemo(() => {
     if (filterMode !== "selected" || filterIds.length === 0) return rawOccurrences;
     return rawOccurrences.filter((occ: any) => {
       const lp: string[] = occ?.obligation?.linked_profiles || occ?.obligation?.linkedProfiles || [];
-      return lp.some((pid: string) => filterIds.includes(pid));
+      return passesProfileFilter(lp, { selectedIds: filterIds, allProfiles: profilesList });
     });
-  }, [rawOccurrences, filterMode, filterIds]);
+  }, [rawOccurrences, filterMode, filterIds, profilesList]);
 
   const { overdue, todayOcc, upcoming } = useMemo(() => {
     const overdue: any[] = [], todayOcc: any[] = [], upcoming: any[] = [];
@@ -1137,8 +1145,8 @@ export default function ObligationsManager({ showHeader = true, compact = false,
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
 
-  // BUG-20260528-profile-filter-leakage: previously inline `linkedProfiles.some(id => filterIds.includes(id))`
-  // which dropped orphan obligations (no linkedProfiles) even when a
+  // BUG-20260528-profile-filter-leakage: previously a hand-rolled linkedProfiles
+  // intersection that dropped orphan obligations (no linked profiles) even when a
   // self-profile was selected and the server correctly returned them.
   // Now uses canonical passesProfileFilter so client and server agree.
   const obligations = useMemo(() => filterMode === "selected" && filterIds.length > 0
@@ -1179,9 +1187,9 @@ export default function ObligationsManager({ showHeader = true, compact = false,
     if (filterMode !== "selected" || filterIds.length === 0) return rawWindowOccurrences;
     return rawWindowOccurrences.filter((occ: any) => {
       const lp: string[] = occ?.obligation?.linked_profiles || occ?.obligation?.linkedProfiles || [];
-      return lp.some((pid: string) => filterIds.includes(pid));
+      return passesProfileFilter(lp, { selectedIds: filterIds, allProfiles: profilesList });
     });
-  }, [rawWindowOccurrences, filterMode, filterIds]);
+  }, [rawWindowOccurrences, filterMode, filterIds, profilesList]);
 
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/obligations", data),

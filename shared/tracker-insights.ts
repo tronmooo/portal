@@ -16,6 +16,8 @@
 //   - Pure, deterministic, no API calls — feed it the data it needs.
 // =============================================================================
 
+import { isInScope } from "./scope";
+
 export type FindingSeverity = "positive" | "negative" | "neutral" | "warning" | "milestone";
 export type FindingDirection = "improving" | "declining" | "stable";
 
@@ -453,8 +455,10 @@ export function computeKeyFindings(input: InsightInputs, now: number = Date.now(
   for (const t of input.trackers || []) {
     if (input.scopedProfileIds && input.scopedProfileIds.length > 0) {
       const linked: string[] = Array.isArray(t?.linkedProfiles) ? t.linkedProfiles : [];
-      const ok = linked.some(pid => input.scopedProfileIds!.includes(pid));
-      if (!ok) continue;
+      // Canonical scope primitive. selfIds is empty here (findings have no
+      // profile list) and orphans stay out of a scoped findings view —
+      // preserving the previous behavior without a hand-rolled intersection.
+      if (!isInScope(linked, { selectedIds: input.scopedProfileIds, selfIds: new Set() }, "out_of_scope")) continue;
     }
     all.push(...findingsFromTracker(t, now));
   }
