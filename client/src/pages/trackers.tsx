@@ -1072,17 +1072,43 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
     const field = tracker.fields.find(f => f.name === name);
     return (field as any)?.default || latestEntry?.values?.[name] || '';
   };
-  const drugName = getFieldDefault('drugName') || tracker.name;
-  const dosage = getFieldDefault('dosage') || tracker.unit || '';
+  const drugName = getFieldDefault('drug') || getFieldDefault('drugName') || tracker.name;
+  // `dosage` is a NUMERIC field (strength), `unit` on that field is the unit
+  // (mg). The old code fell back to `tracker.unit` for the VALUE, so a med with
+  // no strength set logged `dosage: "mg"` — which the server rejects as a
+  // non-numeric value ("Failed to log dose"). Derive a real number for the value
+  // and a separate human label for display.
+  const dosageField = tracker.fields.find(f => f.name === 'dosage');
+  const dosageUnit = (dosageField as any)?.unit || '';
+  const rawDosage = getFieldDefault('dosage');
+  const dosageNum = (() => {
+    if (rawDosage === '' || rawDosage == null) return null;
+    const n = parseFloat(String(rawDosage).replace(/[^0-9.]/g, ''));
+    return isFinite(n) && /\d/.test(String(rawDosage)) ? n : null;
+  })();
+  const dosageLabel = dosageNum != null ? `${dosageNum}${dosageUnit ? ` ${dosageUnit}` : ''}` : '';
   const frequency = getFieldDefault('frequency') || '';
   const refillDate = getFieldDefault('refillDate') || '';
   const prescriber = getFieldDefault('prescriber') || '';
+
+  // Build the values for a dose log. Only include `dosage` when it's a real
+  // number — never the bare unit — so the numeric-field check can't 400.
+  const buildLogValues = () => {
+    const v: Record<string, any> = {
+      drug: drugName,
+      timeTaken: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+      adherence: 'taken',
+    };
+    if (dosageNum != null) v.dosage = dosageNum;
+    if (frequency) v.frequency = frequency;
+    return v;
+  };
 
   // Log dose mutation — optimistic so the "Taken today" badge flips instantly
   // and the day count rolls up before the network round-trip completes.
   const logDoseMut = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: () => apiRequest('POST', `/api/trackers/${tracker.id}/entries`, {
-      values: { drugName, dosage, timeTaken: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), adherence: 'taken', frequency },
+      values: buildLogValues(),
       notes: `Dose taken at ${new Date().toLocaleTimeString()}`
     }),
     onMutate: async () => {
@@ -1094,7 +1120,7 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
         id: tempId,
         trackerId: tracker.id,
         timestamp: nowIso,
-        values: { drugName, dosage, timeTaken: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), adherence: 'taken', frequency },
+        values: buildLogValues(),
         notes: `Dose taken at ${new Date().toLocaleTimeString()}`,
         _optimistic: true,
       };
@@ -1120,7 +1146,7 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
       qc.invalidateQueries({ queryKey: ['/api/trackers'], refetchType: "all" });
       qc.invalidateQueries({ queryKey: ['/api/stats'], refetchType: "all" });
       qc.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'], refetchType: "all" });
-      toast({ title: `${drugName} logged`, description: `${dosage} taken at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` });
+      toast({ title: `${drugName} logged`, description: `${dosageLabel ? `${dosageLabel} ` : ''}taken at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` });
     },
     onError: (_e, _v, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) qc.setQueryData(key, data); }
@@ -1144,7 +1170,7 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
               <Pill className="h-5 w-5 text-rose-500" />
               <h3 className="font-bold text-lg">{drugName}</h3>
             </div>
-            {dosage && <p className="text-sm text-muted-foreground mt-1">Dosage: <span className="font-medium text-foreground">{dosage}</span></p>}
+            {dosageLabel && <p className="text-sm text-muted-foreground mt-1">Dosage: <span className="font-medium text-foreground">{dosageLabel}</span></p>}
             {frequency && <p className="text-sm text-muted-foreground">Frequency: <span className="font-medium text-foreground">{frequency}</span></p>}
             {prescriber && <p className="text-sm text-muted-foreground">Prescriber: <span className="font-medium text-foreground">{prescriber}</span></p>}
             {refillDate && <p className="text-sm text-muted-foreground">Refill: <span className="font-medium text-foreground">{refillDate}</span></p>}
@@ -1166,7 +1192,7 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
           className="w-full py-3 rounded-xl bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
         >
           <Pill className="h-4 w-4" />
-          {logDoseMut.isPending ? 'Logging...' : `Log ${dosage} ${drugName} Now`}
+          {logDoseMut.isPending ? 'Logging...' : `Log ${dosageLabel ? `${dosageLabel} ` : ''}${drugName} Now`}
         </button>
       )}
 
@@ -1218,7 +1244,12 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
               <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg bg-muted/30 text-sm">
                 <div className="flex items-center gap-2">
                   <div className={`w-2 h-2 rounded-full ${e.values?.adherence === 'taken' || e.values?.taken ? 'bg-green-500' : 'bg-red-500'}`} />
-                  <span>{e.values?.dosage || dosage}</span>
+                  <span>{(() => {
+                    const d = e.values?.dosage;
+                    const num = typeof d === 'number' ? d : (d != null && /\d/.test(String(d)) ? parseFloat(String(d).replace(/[^0-9.]/g, '')) : null);
+                    if (num != null && isFinite(num)) return `${num}${dosageUnit ? ` ${dosageUnit}` : ''}`;
+                    return e.values?.drug || drugName || 'Dose taken';
+                  })()}</span>
                 </div>
                 <span className="text-xs text-muted-foreground">
                   {e.values?.timeTaken || new Date(e.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
@@ -2824,8 +2855,10 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
     if (intensityStr) chips.push({ emoji: "⚡", label: intensityStr });
     else if (intensityNum != null) chips.push({ emoji: "⚡", label: `Zone ${intensityNum}` });
     const reps = num(/(^reps$|reps)/);
-    if (chips.length < 3 && reps != null) chips.push({ emoji: "🔁", label: `${reps} reps` });
-    return chips.slice(0, 3);
+    if (chips.length < 2 && reps != null) chips.push({ emoji: "🔁", label: `${reps} reps` });
+    // Cap at 2 chips: on the narrow 2-column grid, 3 chips wrap to a second line
+    // and overflow the fixed-height card, colliding with the value above.
+    return chips.slice(0, 2);
   })();
 
   return (
@@ -2925,17 +2958,19 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
       ) : visual.type === "activity" && activityData ? (
         /* Activity/duration: latest value + weekly session bars + week stats. */
         <>
-          <div className="px-3 pt-1 flex items-baseline gap-1">
+          <div className="px-3 pt-1 flex items-baseline gap-1 shrink-0">
             <span className={`leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`} style={{ color: ac }}>
               {insight.bigPrimary}
             </span>
             {insight.bigUnit && <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>}
           </div>
-          <div className="flex-1 min-h-0 flex flex-col justify-end">
+          {/* overflow-hidden so a tight card clips here instead of bleeding the
+              chips up over the value line; chips stay on ONE line (no wrap). */}
+          <div className="flex-1 min-h-0 flex flex-col justify-end overflow-hidden">
             {activityChips.length > 0 && (
-              <div className="px-3 flex items-center gap-1.5 flex-wrap mb-1.5">
+              <div className="px-3 flex items-center gap-1.5 flex-nowrap overflow-hidden mb-1.5">
                 {activityChips.map((c, i) => (
-                  <span key={i} className="inline-flex items-center gap-1 text-[10px] rounded-full px-1.5 py-0.5" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>
+                  <span key={i} className="inline-flex items-center gap-1 text-[10px] rounded-full px-1.5 py-0.5 shrink-0 whitespace-nowrap" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>
                     <span aria-hidden>{c.emoji}</span><span className="font-medium tabular-nums">{c.label}</span>
                   </span>
                 ))}
@@ -2979,7 +3014,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
           </div>
 
           {/* Body: insight sentence + a lush full-bleed chart (or padded gauge) */}
-          <div className="flex-1 min-h-0 flex flex-col justify-end">
+          <div className="flex-1 min-h-0 flex flex-col justify-end overflow-hidden">
             {importance !== "compact" && insight.hasData && (
               <p className="px-3 text-[10px] text-muted-foreground leading-snug line-clamp-1 mb-1">
                 {insight.insight}
