@@ -3077,8 +3077,22 @@ function EntryEditor({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  // Seed the editor with EVERY field this tracker uses — the schema fields plus
+  // any field that appears on ANY of its entries — so common fields (e.g.
+  // "intensity") show as fillable inputs even on an entry that doesn't have them
+  // yet. Previously the editor only showed fields already on THIS entry, which
+  // forced users into the clunky "add a field" box (and that box silently
+  // dropped values if you hit Save before tapping "+ Add").
   const seed = () => {
     const v: Record<string, any> = {};
+    for (const f of tracker.fields || []) {
+      if (f?.name && f.name !== "_notes") v[f.name] = "";
+    }
+    for (const e of tracker.entries || []) {
+      for (const k of Object.keys(e.values || {})) {
+        if (k !== "_notes" && !(k in v)) v[k] = "";
+      }
+    }
     for (const [k, val] of Object.entries(entry.values || {})) {
       if (k !== "_notes") v[k] = val;
     }
@@ -3089,39 +3103,39 @@ function EntryEditor({
   const [newFieldName, setNewFieldName] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
 
-  const editMutation = useMutation({
-    mutationFn: () => {
-      // Keys that existed on the entry but the user removed → explicit delete
-      // signal. Remaining keys in editVals are upserted, so adding a brand-new
-      // field just works.
+  const editMutation = useMutation<any, Error, Record<string, any>, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: (vals: Record<string, any>) => {
+      // Keys that existed on the entry but are gone from the final values →
+      // explicit delete signal. Remaining keys are upserted.
       const orig = Object.keys(entry.values || {}).filter((k) => k !== "_notes");
-      const valuesToDelete = orig.filter((k) => !(k in editVals));
+      const valuesToDelete = orig.filter((k) => !(k in vals));
       return apiRequest("PATCH", `/api/trackers/${tracker.id}/entries/${entry.id}`, {
-        values: editVals,
+        values: vals,
         valuesToDelete,
         notes: editNotes,
       });
     },
-    // Optimistic: rebuild the entry's values from the editor state so adds,
-    // edits AND deletes all reflect instantly. Roll back if the server rejects.
-    onMutate: async () => {
+    // Optimistic: rebuild the entry's values from the final values so adds, edits
+    // AND deletes reflect instantly. Roll back if the server rejects. Handles
+    // both array caches (the tracker lists) and single-object caches so the
+    // detail view refreshes the moment Save is tapped — no waiting on a refetch.
+    onMutate: async (vals: Record<string, any>) => {
       await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/trackers"] });
+      const patchEntry = (e: any) => {
+        if (e?.id !== entry.id) return e;
+        const nv: any = { ...vals };
+        if (editNotes) nv._notes = editNotes;
+        return { ...e, values: nv, notes: editNotes };
+      };
+      const patchTracker = (t: any) => {
+        if (t?.id !== tracker.id || !Array.isArray(t.entries)) return t;
+        return { ...t, entries: t.entries.map(patchEntry) };
+      };
       queryClient.setQueriesData({ queryKey: ["/api/trackers"] }, (old: any) => {
-        if (!Array.isArray(old)) return old;
-        return old.map((t: any) => {
-          if (t.id !== tracker.id) return t;
-          if (!Array.isArray(t.entries)) return t;
-          return {
-            ...t,
-            entries: t.entries.map((e: any) => {
-              if (e.id !== entry.id) return e;
-              const nv: any = { ...editVals };
-              if (editNotes) nv._notes = editNotes;
-              return { ...e, values: nv, notes: editNotes };
-            }),
-          };
-        });
+        if (Array.isArray(old)) return old.map(patchTracker);
+        if (old && typeof old === "object" && old.id === tracker.id) return patchTracker(old);
+        return old;
       });
       return { prev };
     },
@@ -3129,18 +3143,40 @@ function EntryEditor({
       onClose();
       toast({ title: "Entry updated" });
     },
-    onError: (err: Error, _vars, context: any) => {
+    onError: (err: Error, _vars, context) => {
       if (context?.prev) {
         for (const [key, value] of context.prev) queryClient.setQueryData(key, value);
       }
       toast({ title: "Update failed", description: err.message, variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // refetchType "active" so the open detail view refetches immediately
+      // instead of going stale-but-not-refetched until the next focus.
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "active" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "active" });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "active" });
     },
   });
+
+  // Build the final values and submit. Critically, this FLUSHES a pending
+  // "add a field" the user typed but didn't tap "+ Add" — the bug that silently
+  // dropped "intensity = extreme" — and strips empty inputs so blank fields
+  // aren't written.
+  const handleSave = () => {
+    const merged: Record<string, any> = { ...editVals };
+    const pendingName = newFieldName.trim();
+    if (pendingName) {
+      const raw = newFieldValue.trim();
+      const num = Number(raw);
+      merged[pendingName] = raw !== "" && !isNaN(num) && String(num) === raw ? num : newFieldValue;
+    }
+    const cleaned: Record<string, any> = {};
+    for (const [k, val] of Object.entries(merged)) {
+      if (val === "" || val === null || val === undefined) continue;
+      cleaned[k] = val;
+    }
+    editMutation.mutate(cleaned);
+  };
 
   const fieldIsNumeric = (k: string) => {
     const def = tracker.fields.find((f) => f.name.toLowerCase() === k.toLowerCase());
@@ -3174,7 +3210,10 @@ function EntryEditor({
         {keys.length === 0 && (
           <span className="text-muted-foreground italic">No fields — add one below.</span>
         )}
-        {keys.map((k) => (
+        {keys.map((k) => {
+          const def = tracker.fields.find((f) => f.name.toLowerCase() === k.toLowerCase());
+          const selectOptions = def?.type === "select" && Array.isArray((def as any).options) ? ((def as any).options as string[]).filter(Boolean) : null;
+          return (
           <div key={k} className="flex items-center gap-1.5">
             <label className="text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
             {typeof editVals[k] === "boolean" ? (
@@ -3182,6 +3221,13 @@ function EntryEditor({
                 checked={!!editVals[k]}
                 onCheckedChange={(v) => setEditVals((prev) => ({ ...prev, [k]: !!v }))}
               />
+            ) : selectOptions && selectOptions.length > 0 ? (
+              <Select value={String(editVals[k] ?? "")} onValueChange={(val) => setEditVals((prev) => ({ ...prev, [k]: val }))}>
+                <SelectTrigger className="h-6 flex-1 text-xs px-1.5" data-testid={`entry-field-${k}`}><SelectValue placeholder="Select…" /></SelectTrigger>
+                <SelectContent>
+                  {selectOptions.map((o) => <SelectItem key={o} value={o} className="text-xs">{o}</SelectItem>)}
+                </SelectContent>
+              </Select>
             ) : (
               <Input
                 className="h-6 flex-1 text-xs px-1.5"
@@ -3202,7 +3248,8 @@ function EntryEditor({
               <X className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Notes */}
@@ -3241,7 +3288,7 @@ function EntryEditor({
 
       <div className="flex items-center gap-1 justify-end">
         <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={onClose}>Cancel</Button>
-        <Button size="sm" className="h-6 px-2 text-xs" onClick={() => editMutation.mutate()} disabled={editMutation.isPending} data-testid={`entry-save-${entry.id}`}>
+        <Button size="sm" className="h-6 px-2 text-xs" onClick={handleSave} disabled={editMutation.isPending} data-testid={`entry-save-${entry.id}`}>
           <Check className="h-3 w-3 mr-1" />Save
         </Button>
       </div>
@@ -4907,7 +4954,19 @@ function HistoryEntryRow({
             {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </span>
         </div>
-        <Pencil className="h-3.5 w-3.5 text-muted-foreground/60 group-hover:text-foreground transition-colors" />
+        {/* Explicit button (not a hover-revealed icon): real <button> elements
+            register on the FIRST tap on iOS, where a hover-styled div often
+            needs two taps. */}
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+          className="p-1 rounded hover:bg-muted transition-colors"
+          aria-label="Edit entry"
+          title="Edit entry"
+          data-testid={`edit-entry-${entry.id}`}
+        >
+          <Pencil className="h-3.5 w-3.5 text-muted-foreground/60 group-hover:text-foreground transition-colors" />
+        </button>
         <div onClick={(e) => e.stopPropagation()}>
           <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
         </div>
