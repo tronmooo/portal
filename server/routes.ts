@@ -2666,48 +2666,21 @@ If unsure, return "profile_fact".`,
         return res.status(400).json({ error: "Blood type must be A+, A-, B+, B-, AB+, AB-, O+, or O-" });
       }
     }
-    // Duplicate detection: warn if a profile with the same name and type exists.
-    // BUG-P04 (Round 8): Honor skipDupCheck so the client's "Create Anyway"
-    // flow can actually create a second profile with the same name+type.
+    // Duplicate detection policy (product decision 2026-06): duplicates are
+    // ALLOWED for assets, vehicles, properties, subscriptions, loans, accounts,
+    // investments, pets — everything except PEOPLE. You can legitimately own two
+    // "Samsung TV"s or nest a "Tv" under a laptop. The only profiles that must
+    // not duplicate are people, and ONLY on an EXACT full-name match (first +
+    // last). No fuzzy/AI matching — it produced false positives like "Tv" ≈
+    // "Samsung TV" that blocked valid creates.
     const existing = await storage.getProfiles();
-    if (!req.body.skipDupCheck) {
-      const dup = existing.find(p => p.name.toLowerCase() === req.body.name.toLowerCase() && p.type === req.body.type);
+    const PERSON_TYPES = new Set(["person", "self"]);
+    if (PERSON_TYPES.has(req.body.type) && !req.body.skipDupCheck) {
+      const norm = (s: any) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+      const newName = norm(req.body.name);
+      const dup = existing.find(p => PERSON_TYPES.has(p.type) && !p.deletedAt && norm(p.name) === newName);
       if (dup) {
-        return res.status(409).json({ error: `A ${req.body.type} profile named "${dup.name}" already exists`, existingId: dup.id });
-      }
-    }
-
-    // Wave 3 #7 — AI fuzzy duplicate detection. Catches near-dupes the exact
-    // check misses: "Netflix" vs "Netflix Premium", "Chase Visa" vs "Chase
-    // Credit Card", "State Farm Auto" vs "State Farm Insurance".
-    // Only fires when caller did NOT pass `skipDupCheck:true` so chat tool
-    // calls (which already intend to create) can bypass.
-    if (!req.body.skipDupCheck) {
-      const sameType = existing.filter(p => p.type === req.body.type && !p.deletedAt);
-      if (sameType.length > 0 && sameType.length < 100) {
-        try {
-          const decision = await aiPickIndex({
-            task: "profile-fuzzy-dup",
-            question: `Is "${req.body.name}" a duplicate or near-duplicate of any existing ${req.body.type} profile below? Pick its index. Pick -1 if all existing profiles are clearly distinct.`,
-            context: `New profile name: "${req.body.name}"\nNew profile type: ${req.body.type}`,
-            options: sameType.map(p => `${p.name}${p.fields?.lender ? ` (lender: ${p.fields.lender})` : ""}${p.fields?.last4 ? ` (…${p.fields.last4})` : ""}`),
-            timeoutMs: 2500,
-            minConfidence: 0.75,
-            fallback: () => -1,
-          });
-          if (decision.value.index >= 0 && sameType[decision.value.index]) {
-            const dupCandidate = sameType[decision.value.index];
-            return res.status(409).json({
-              error: `Possible duplicate of existing ${req.body.type} profile "${dupCandidate.name}". Set { skipDupCheck: true } to create anyway.`,
-              existingId: dupCandidate.id,
-              fuzzy: true,
-              reason: decision.value.reason,
-              confidence: decision.value.confidence,
-            });
-          }
-        } catch (e: any) {
-          console.error(`[profile-create] fuzzy-dup AI check failed silently: ${e?.message || e}`);
-        }
+        return res.status(409).json({ error: `A person named "${dup.name}" already exists`, existingId: dup.id });
       }
     }
     // Auto-assign child-type profiles to self profile if no parent specified
