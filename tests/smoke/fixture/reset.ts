@@ -29,7 +29,16 @@ export async function reset(): Promise<void> {
   });
   for (const p of sorted) {
     if (p.type === "self") continue;
-    await api("DELETE", `/profiles/${p.id}`);
+    const del = await api("DELETE", `/profiles/${p.id}`);
+    // Surface real delete failures instead of silently moving on. A 404 is fine
+    // (already cascade-deleted via its parent); anything else (e.g. a 500 from a
+    // failed cascade) must fail loudly — otherwise "wipe done" lies and the next
+    // seed hits a duplicate. This is exactly how the net_worth_snapshots FK bug
+    // stayed hidden.
+    if (!del.ok && del.status !== 404) {
+      const detail = typeof del.data === "string" ? del.data : JSON.stringify(del.data);
+      throw new Error(`[smoke-reset] failed to delete ${p.type} "${p.name}" (${p.id}): ${del.status} ${detail}`);
+    }
   }
 }
 
