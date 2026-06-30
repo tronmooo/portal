@@ -512,7 +512,9 @@ export default function FinancePage() {
   // tip into next month for Pacific users in the evening (Dashboard shows May
   // while Finance showed April). Match dashboard's `currentMonth` derivation.
   const cfMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
-  const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth] });
+  // select: coerce to an array so a non-array/error response can never crash
+  // the page via cashflow.map (QA: "cashflow.map is not a function").
+  const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth], select: (d: any) => Array.isArray(d) ? d : [] });
 
   // ── Cashflow upsert mutation (POST /api/cashflow) ────────────────────────
   const addCashflowMut = useMutation<void, Error, void, { prev: [readonly unknown[], unknown][] }>({

@@ -11,6 +11,17 @@ import { authMiddleware, registerAuthRoutes } from "./auth";
 const app = express();
 const httpServer = createServer(app);
 
+// Resilience: a rejected promise or thrown error that escapes a request handler
+// (e.g. the storage layer throwing on a misconfigured/missing Supabase env, or a
+// background task) must NOT take the whole server process down. Log it and keep
+// serving — individual requests still get a 500 from the error middleware below.
+process.on("unhandledRejection", (reason) => {
+  console.error("[Portol] Unhandled promise rejection (kept alive):", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[Portol] Uncaught exception (kept alive):", err);
+});
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;

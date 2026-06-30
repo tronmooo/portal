@@ -11163,13 +11163,17 @@ function AddLinkedPersonModal({
 // cache (no separate subscription needed) — a refetch on the assets or
 // liabilities lists automatically refreshes this strip.
 function NetWorthStrip({ profileId }: { profileId: string }) {
+  // select: always hand back an array — a non-array/error response must never
+  // crash the page via .reduce/.map (QA: "(assetRows || []).reduce is not a function").
   const { data: assetRows = [] } = useQuery<any[]>({
     queryKey: ["/api/parties", profileId, "assets"],
     queryFn: () => apiRequest("GET", `/api/parties/${profileId}/assets`).then(r => r.json()),
+    select: (d: any) => Array.isArray(d) ? d : [],
   });
   const { data: liabRows = [] } = useQuery<any[]>({
     queryKey: ["/api/parties", profileId, "liabilities"],
     queryFn: () => apiRequest("GET", `/api/parties/${profileId}/liabilities`).then(r => r.json()),
+    select: (d: any) => Array.isArray(d) ? d : [],
   });
 
   const totalAssets = (assetRows || []).reduce((s: number, r: any) => {
@@ -11391,6 +11395,7 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
         return await apiRequest("GET", `/api/parties/${profile.id}/assets`).then(r => r.json());
       } catch { return []; }
     },
+    select: (d: any) => Array.isArray(d) ? d : [],
   });
   const { assetCount, assetTotal } = useMemo(() => {
     const ASSET_LIKE = new Set(["asset","vehicle","property","investment","account"]);
@@ -13020,9 +13025,9 @@ export default function ProfileDetailPage() {
           const tabSet = new Set(getTabsForType(ptype, profile).map(t => t.value));
           if (tabSet.has("health"))    stats.push({ label: "Health",  value: ownTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c))).length });
           if (tabSet.has("all-trackers")) stats.push({ label: "Trackers", value: ownTrackers.length });
-          if (tabSet.has("trackers"))  stats.push({ label: "Docs", value: profile.relatedDocuments.length });
+          if (tabSet.has("trackers"))  stats.push({ label: "Docs", value: (profile.relatedDocuments || []).length });
           if (tabSet.has("finances"))  stats.push({ label: ptype === 'subscription' ? "Billing" : "Expenses", value: (profile.relatedExpenses || []).filter((e: any) => Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profile.id).length });
-          if (tabSet.has("tasks"))     stats.push({ label: "Tasks",    value: profile.relatedTasks.length });
+          if (tabSet.has("tasks"))     stats.push({ label: "Tasks",    value: (profile.relatedTasks || []).length });
           const gridCls = stats.length <= 3 ? "grid-cols-3" : stats.length <= 4 ? "grid-cols-4" : "grid-cols-5";
           return (
             <div className={`grid ${gridCls} gap-2 mt-4`}>

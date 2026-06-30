@@ -927,20 +927,30 @@ export function CreateProfileDialog({
                 />
               </FieldRow>
 
-              {/* Dynamic fields from schema */}
-              {selectedTypeDef && selectedTypeDef.field_schema && selectedTypeDef.field_schema.length > 0 && (
-                <div className="border-t pt-3">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
-                    {selectedTypeDef.label} Details
-                  </p>
-                  <DynamicProfileForm
-                    fieldSchema={selectedTypeDef.field_schema}
-                    values={fields}
-                    onChange={setFields}
-                    disabled={createMutation.isPending}
-                  />
-                </div>
-              )}
+              {/* Dynamic fields from schema.
+                  Drop schema fields already covered by the generic wrapper:
+                  the type's own name field (full_name/name) duplicates the
+                  required "Name" input above, and a schema "notes" field
+                  duplicates the "Notes" textarea below. Without this filter the
+                  Person form renders two Name inputs and two Notes boxes (QA). */}
+              {(() => {
+                const dupKeys = new Set(["name", "full_name", "notes"]);
+                const schemaFields = (selectedTypeDef?.field_schema || []).filter((f) => !dupKeys.has(f.key));
+                if (!selectedTypeDef || schemaFields.length === 0) return null;
+                return (
+                  <div className="border-t pt-3">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                      {selectedTypeDef.label} Details
+                    </p>
+                    <DynamicProfileForm
+                      fieldSchema={schemaFields}
+                      values={fields}
+                      onChange={setFields}
+                      disabled={createMutation.isPending}
+                    />
+                  </div>
+                );
+              })()}
 
               {/* Tags */}
               <div className="border-t pt-3 space-y-3">
