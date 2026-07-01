@@ -168,24 +168,27 @@ function QuickAddSection({ onCreated }: { onCreated: () => void }) {
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<ReturnType<typeof parseQuickAdd> | null>(null);
 
-  const create = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][]; previewSnapshot: ReturnType<typeof parseQuickAdd> | null; textSnapshot: string }>({
-    mutationFn: async () => {
-      if (!preview) throw new Error("Nothing to create");
-      const path = preview.kind === "obligation" ? "/api/obligations"
-        : preview.kind === "task" ? "/api/tasks" : "/api/events";
-      return apiRequest("POST", path, preview.payload).then(r => r.json());
+  // RACE FIX: the submit handlers called mutate() and then synchronously reset
+  // text/preview. React Query re-reads the mutationFn closure after that
+  // re-render, so it saw preview === null and threw "Nothing to create" — the
+  // quick-add button silently failed. The parsed item + text are now passed as
+  // mutation VARIABLES, captured at call time and immune to the reset.
+  type QuickAddVars = { item: NonNullable<ReturnType<typeof parseQuickAdd>>; textSnapshot: string };
+  const create = useMutation<any, Error, QuickAddVars, { prev: [readonly unknown[], unknown][]; previewSnapshot: ReturnType<typeof parseQuickAdd> | null; textSnapshot: string }>({
+    mutationFn: async ({ item }) => {
+      const path = item.kind === "obligation" ? "/api/obligations"
+        : item.kind === "task" ? "/api/tasks" : "/api/events";
+      return apiRequest("POST", path, item.payload).then(r => r.json());
     },
-    onMutate: async () => {
-      const previewSnapshot = preview;
-      const textSnapshot = text;
-      if (!preview) return { prev: [], previewSnapshot, textSnapshot };
-      const path = preview.kind === "obligation" ? "/api/obligations"
-        : preview.kind === "task" ? "/api/tasks" : "/api/events";
+    onMutate: async ({ item, textSnapshot }) => {
+      const previewSnapshot = item;
+      const path = item.kind === "obligation" ? "/api/obligations"
+        : item.kind === "task" ? "/api/tasks" : "/api/events";
       await queryClient.cancelQueries({ queryKey: [path] });
       const prev = queryClient.getQueriesData({ queryKey: [path] });
       const tempId = `temp-${Date.now()}`;
       queryClient.setQueriesData({ queryKey: [path] }, (old: any) => {
-        const tempItem = { id: tempId, ...preview.payload, _optimistic: true };
+        const tempItem = { id: tempId, ...item.payload, _optimistic: true };
         if (Array.isArray(old)) return [tempItem, ...old];
         return old;
       });
@@ -227,9 +230,9 @@ function QuickAddSection({ onCreated }: { onCreated: () => void }) {
             onChange={(e) => { setText(e.target.value); setPreview(parseQuickAdd(e.target.value)); }}
             placeholder="Describe a one-time or recurring item…"
             data-testid="quick-add-input"
-            onKeyDown={(e) => { if (e.key === "Enter" && preview) { create.mutate(); setText(""); setPreview(null); onCreated(); } }}
+            onKeyDown={(e) => { if (e.key === "Enter" && preview) { create.mutate({ item: preview, textSnapshot: text }); setText(""); setPreview(null); onCreated(); } }}
           />
-          <Button size="sm" disabled={!preview} onClick={() => { create.mutate(); setText(""); setPreview(null); onCreated(); }} data-testid="quick-add-submit">
+          <Button size="sm" disabled={!preview} onClick={() => { if (!preview) return; create.mutate({ item: preview, textSnapshot: text }); setText(""); setPreview(null); onCreated(); }} data-testid="quick-add-submit">
             Add
           </Button>
         </div>
@@ -282,38 +285,16 @@ function ManualEventSection() {
   const [linkedProfile, setLinkedProfile] = useState<string>("");
   const [linkedDoc, setLinkedDoc] = useState<string>("");
 
-  const create = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][] }>({
-    mutationFn: () => apiRequest("POST", "/api/events", {
-      title: title.trim(), date,
-      time: !allDay && time ? time : undefined,
-      endTime: !allDay && endTime ? endTime : undefined,
-      allDay,
-      location: location || undefined,
-      category,
-      recurrence,
-      recurrenceEnd: recurrence !== "none" && recurrenceEnd ? recurrenceEnd : undefined,
-      description: description || undefined,
-      linkedProfiles: linkedProfile ? [linkedProfile] : [],
-      linkedDocuments: linkedDoc ? [linkedDoc] : [],
-      source: "manual",
-    }).then(r => r.json()),
-    onMutate: async () => {
+  // RACE FIX: payload built in the click handler and passed as variables —
+  // mutate() then a synchronous state reset made the mutationFn read the
+  // EMPTIED form (see QuickAddSection comment).
+  const create = useMutation<any, Error, Record<string, any>, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: (payload) => apiRequest("POST", "/api/events", payload).then(r => r.json()),
+    onMutate: async (payload) => {
       await queryClient.cancelQueries({ queryKey: ["/api/events"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/events"] });
       const tempId = `temp-${Date.now()}`;
-      const temp = {
-        id: tempId,
-        title: title.trim(), date,
-        time: !allDay && time ? time : undefined,
-        endTime: !allDay && endTime ? endTime : undefined,
-        allDay,
-        location: location || undefined,
-        category,
-        recurrence,
-        description: description || undefined,
-        source: "manual",
-        _optimistic: true,
-      };
+      const temp = { id: tempId, ...payload, _optimistic: true };
       queryClient.setQueriesData({ queryKey: ["/api/events"] }, (old: any) => {
         if (Array.isArray(old)) return [temp, ...old];
         return old;
@@ -328,6 +309,20 @@ function ManualEventSection() {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: "Couldn't add event", description: formatApiError(err), variant: "destructive" });
     },
+  });
+  const buildEventPayload = () => ({
+    title: title.trim(), date,
+    time: !allDay && time ? time : undefined,
+    endTime: !allDay && endTime ? endTime : undefined,
+    allDay,
+    location: location || undefined,
+    category,
+    recurrence,
+    recurrenceEnd: recurrence !== "none" && recurrenceEnd ? recurrenceEnd : undefined,
+    description: description || undefined,
+    linkedProfiles: linkedProfile ? [linkedProfile] : [],
+    linkedDocuments: linkedDoc ? [linkedDoc] : [],
+    source: "manual" as const,
   });
 
   return (
@@ -416,7 +411,7 @@ function ManualEventSection() {
         </div>
         <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Notes (optional)" rows={2} />
         <Button size="sm" className="w-full" disabled={!title.trim()} onClick={() => {
-          create.mutate();
+          create.mutate(buildEventPayload()); // snapshot BEFORE reset (race fix)
           setTitle(""); setLocation(""); setDescription(""); setRecurrence("none"); setLinkedProfile(""); setLinkedDoc("");
         }} data-testid="event-create">
           <Plus className="h-3.5 w-3.5 mr-1" /> Add event
@@ -457,41 +452,15 @@ function RecurringObligationSection() {
     setAutoLog(k === "bill" || k === "subscription");
   };
 
-  const create = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][] }>({
-    mutationFn: () => apiRequest("POST", "/api/obligations", {
-      name: name.trim(),
-      amount: parseFloat(amount || "0"),
-      frequency,
-      category: kind === "bill" ? "utility" : kind === "subscription" ? "subscription"
-        : kind === "loan_payment" ? "loan" : kind === "appointment" || kind === "medication" ? "health" : "other",
-      nextDueDate: dueDate,
-      kind,
-      leadTimeDays: parseInt(leadTimeDays) || 0,
-      autopay,
-      autoLogExpense: autoLog,
-      recurrenceEnd: recurrenceEnd || undefined,
-      notes: notes || undefined,
-      linkedAssetId: linkedAsset || undefined,
-      linkedLiabilityId: linkedLiability || undefined,
-      linkedDocumentId: linkedDoc || undefined,
-    }).then(r => r.json()),
-    onMutate: async () => {
+  // RACE FIX: payload built in the click handler and passed as variables (the
+  // submit reset the form before the mutationFn read it — see QuickAddSection).
+  const create = useMutation<any, Error, Record<string, any>, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: (payload) => apiRequest("POST", "/api/obligations", payload).then(r => r.json()),
+    onMutate: async (payload) => {
       await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
       const tempId = `temp-${Date.now()}`;
-      const temp = {
-        id: tempId,
-        name: name.trim(),
-        amount: parseFloat(amount || "0"),
-        frequency,
-        nextDueDate: dueDate,
-        kind,
-        leadTimeDays: parseInt(leadTimeDays) || 0,
-        autopay,
-        autoLogExpense: autoLog,
-        notes: notes || undefined,
-        _optimistic: true,
-      };
+      const temp = { id: tempId, ...payload, _optimistic: true };
       queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) => {
         if (Array.isArray(old)) return [temp, ...old];
         return old;
@@ -506,6 +475,24 @@ function RecurringObligationSection() {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: "Couldn't create", description: formatApiError(err), variant: "destructive" });
     },
+  });
+
+  const buildObligationPayload = () => ({
+    name: name.trim(),
+    amount: parseFloat(amount || "0"),
+    frequency,
+    category: kind === "bill" ? "utility" : kind === "subscription" ? "subscription"
+      : kind === "loan_payment" ? "loan" : kind === "appointment" || kind === "medication" ? "health" : "other",
+    nextDueDate: dueDate,
+    kind,
+    leadTimeDays: parseInt(leadTimeDays) || 0,
+    autopay,
+    autoLogExpense: autoLog,
+    recurrenceEnd: recurrenceEnd || undefined,
+    notes: notes || undefined,
+    linkedAssetId: linkedAsset || undefined,
+    linkedLiabilityId: linkedLiability || undefined,
+    linkedDocumentId: linkedDoc || undefined,
   });
 
   const meta = OBLIGATION_KIND_META[kind];
@@ -634,7 +621,7 @@ function RecurringObligationSection() {
         <Button size="sm" className="w-full"
           disabled={!name.trim() || !dueDate}
           onClick={() => {
-            create.mutate();
+            create.mutate(buildObligationPayload()); // snapshot BEFORE reset (race fix)
             setName(""); setAmount(""); setNotes(""); setLinkedAsset(""); setLinkedLiability(""); setLinkedDoc("");
           }} data-testid="obl-create">
           <Icon className="h-3.5 w-3.5 mr-1" style={{ color: meta.color }} /> Add {meta.label}
@@ -657,30 +644,14 @@ function BirthdaySection() {
   });
   const [linkedPerson, setLinkedPerson] = useState<string>("");
 
-  const create = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][] }>({
-    mutationFn: () => apiRequest("POST", "/api/events", {
-      title: type === "birthday" ? `🎂 ${name}'s birthday` : `💞 ${name} — anniversary`,
-      date,
-      allDay: true,
-      category: "family",
-      recurrence: "yearly",
-      linkedProfiles: linkedPerson ? [linkedPerson] : [],
-      source: "manual",
-    }).then(r => r.json()),
-    onMutate: async () => {
+  // RACE FIX: payload passed as variables (see QuickAddSection comment).
+  const create = useMutation<any, Error, Record<string, any>, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: (payload) => apiRequest("POST", "/api/events", payload).then(r => r.json()),
+    onMutate: async (payload) => {
       await queryClient.cancelQueries({ queryKey: ["/api/events"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/events"] });
       const tempId = `temp-${Date.now()}`;
-      const temp = {
-        id: tempId,
-        title: type === "birthday" ? `🎂 ${name}'s birthday` : `💞 ${name} — anniversary`,
-        date,
-        allDay: true,
-        category: "family",
-        recurrence: "yearly",
-        source: "manual",
-        _optimistic: true,
-      };
+      const temp = { id: tempId, ...payload, _optimistic: true };
       queryClient.setQueriesData({ queryKey: ["/api/events"] }, (old: any) => {
         if (Array.isArray(old)) return [temp, ...old];
         return old;
@@ -728,7 +699,16 @@ function BirthdaySection() {
           </Select>
         </div>
         <Button size="sm" className="w-full" disabled={!name.trim()} onClick={() => {
-          create.mutate();
+          // Snapshot BEFORE reset (race fix).
+          create.mutate({
+            title: type === "birthday" ? `🎂 ${name}'s birthday` : `💞 ${name} — anniversary`,
+            date,
+            allDay: true,
+            category: "family",
+            recurrence: "yearly",
+            linkedProfiles: linkedPerson ? [linkedPerson] : [],
+            source: "manual",
+          });
           setName(""); setLinkedPerson("");
         }} data-testid="bday-create">
           <Plus className="h-3.5 w-3.5 mr-1" /> Add (recurs yearly)
@@ -747,21 +727,14 @@ function TaskSection() {
   const [priority, setPriority] = useState("medium");
   const [description, setDescription] = useState("");
 
-  const create = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][] }>({
-    mutationFn: () => apiRequest("POST", "/api/tasks", {
-      title: title.trim(), dueDate, priority, description: description || undefined,
-    }).then(r => r.json()),
-    onMutate: async () => {
+  // RACE FIX: payload passed as variables (see QuickAddSection comment).
+  const create = useMutation<any, Error, Record<string, any>, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: (payload) => apiRequest("POST", "/api/tasks", payload).then(r => r.json()),
+    onMutate: async (payload) => {
       await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/tasks"] });
       const tempId = `temp-${Date.now()}`;
-      const temp = {
-        id: tempId,
-        title: title.trim(), dueDate, priority,
-        description: description || undefined,
-        completed: false,
-        _optimistic: true,
-      };
+      const temp = { id: tempId, ...payload, completed: false, _optimistic: true };
       queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) => {
         if (Array.isArray(old)) return [temp, ...old];
         return old;
@@ -805,7 +778,8 @@ function TaskSection() {
         </div>
         <Textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Details (optional)" rows={2} />
         <Button size="sm" className="w-full" disabled={!title.trim()} onClick={() => {
-          create.mutate();
+          // Snapshot BEFORE reset (race fix).
+          create.mutate({ title: title.trim(), dueDate, priority, description: description || undefined });
           setTitle(""); setDescription("");
         }} data-testid="task-create">
           <Plus className="h-3.5 w-3.5 mr-1" /> Add reminder

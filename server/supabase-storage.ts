@@ -4823,9 +4823,17 @@ export class SupabaseStorage implements IStorage {
     const healthSnapshot: any[] = [];
     const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
     for (const t of healthTrackers) {
-      const recent = t.entries.filter(e => new Date(e.timestamp).getTime() >= sevenDaysAgoMs);
       const primaryField = t.fields.find((f: any) => f.isPrimary) || t.fields[0];
-      if (!primaryField || recent.length === 0) continue;
+      if (!primaryField) continue;
+      // BUG (user report: "Bob has weight data but Health says no data"): only
+      // the last 7 days were considered, so a tracker whose entries are older
+      // was silently dropped and the section claimed "No health data yet".
+      // Fall back to the most recent entries so the latest known value always
+      // shows (with its real lastEntry date); the 7-day window still drives
+      // the trend when fresh data exists.
+      const last7 = t.entries.filter(e => new Date(e.timestamp).getTime() >= sevenDaysAgoMs);
+      const recent = last7.length > 0 ? last7 : t.entries.slice(-5);
+      if (recent.length === 0) continue;
       const values = recent.map(e => Number(e.values[primaryField.name])).filter(v => !isNaN(v));
       if (values.length === 0) continue;
       const latest = values[values.length - 1];

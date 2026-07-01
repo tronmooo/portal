@@ -22,6 +22,7 @@ export default defineConfig({
       'tests/expense-view.test.ts',
       'tests/test-data-filter.test.ts',
       'tests/quick-add.test.ts',
+      'tests/mutate-reset-race.test.ts',
       'tests/profile-scope.test.ts',
       'tests/useProfileScope.dom.test.tsx',
       'tests/finance-import.test.ts',

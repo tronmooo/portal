@@ -230,54 +230,61 @@ export default function FinancePage() {
     actual_expenses: "",
   });
 
-  const addExpenseMutation = useMutation<{ amount: number; description: string }, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
-    mutationFn: async () => {
+  // RACE FIX (user report: "Failed to add expense — Amount must be a positive
+  // number" despite a filled form): the submit handler called mutate() and then
+  // synchronously RESET the form state. React Query re-reads mutationFn's
+  // closure after that reset re-render, so the request was built from the
+  // EMPTIED form (parseFloat("") = NaN → 400). The payload is now built in the
+  // click handler and passed as mutation VARIABLES — captured at call time and
+  // immune to re-renders. Same fix applied to paycheck + income below.
+  type NewExpenseVars = { description: string; amount: number; category: string; vendor?: string; date: string; profileId?: string };
+  const addExpenseMutation = useMutation<{ amount: number; description: string }, Error, NewExpenseVars, { prev: [readonly unknown[], unknown][]; tempId: string }>({
+    mutationFn: async (vars) => {
       // Defense-in-depth: validate amount before sending. The submit button
       // already guards this, but if mutation is invoked any other way we
       // refuse to send a non-finite amount that would coerce to $0 server-side.
-      const amt = parseFloat(newExpense.amount);
-      if (!isFinite(amt) || amt <= 0) {
+      if (!isFinite(vars.amount) || vars.amount <= 0) {
         throw new Error("Amount must be a positive number");
       }
-      const desc = (newExpense.description || "").trim();
+      const desc = (vars.description || "").trim();
       if (!desc) {
         throw new Error("Description is required");
       }
       // Round-6 fix (BUG-016): honour the user-entered date. Falls back to today
       // in the user's timezone if for some reason the field is cleared.
-      const expenseDate = (newExpense.date || "").trim()
+      const expenseDate = (vars.date || "").trim()
         || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
       await apiRequest("POST", "/api/expenses", {
         description: desc,
-        amount: amt,
-        category: newExpense.category,
-        vendor: newExpense.vendor || undefined,
+        amount: vars.amount,
+        category: vars.category,
+        vendor: vars.vendor || undefined,
         date: expenseDate,
         tags: [],
-        ...(expenseProfileId ? { linkedProfiles: [expenseProfileId] } : {}),
+        ...(vars.profileId ? { linkedProfiles: [vars.profileId] } : {}),
       });
-      return { amount: amt, description: desc };
+      return { amount: vars.amount, description: desc };
     },
-    onMutate: async () => {
-      const amt = parseFloat(newExpense.amount);
-      const desc = (newExpense.description || "").trim();
+    onMutate: async (vars) => {
+      const amt = vars.amount;
+      const desc = (vars.description || "").trim();
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       if (!isFinite(amt) || amt <= 0 || !desc) {
         // mutationFn will throw — nothing to do
         return { prev: [], tempId };
       }
-      const expenseDate = (newExpense.date || "").trim() || todayLocalISO;
+      const expenseDate = (vars.date || "").trim() || todayLocalISO;
       await queryClient.cancelQueries({ queryKey: ["/api/expenses"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/expenses"] });
       const tempExpense: any = {
         id: tempId,
         description: desc,
         amount: amt,
-        category: newExpense.category,
-        vendor: newExpense.vendor || undefined,
+        category: vars.category,
+        vendor: vars.vendor || undefined,
         date: expenseDate,
         tags: [],
-        linkedProfiles: expenseProfileId ? [expenseProfileId] : [],
+        linkedProfiles: vars.profileId ? [vars.profileId] : [],
         createdAt: new Date().toISOString(),
         _optimistic: true,
       };
@@ -309,23 +316,26 @@ export default function FinancePage() {
   // ── ALL hooks MUST be above early returns (React Rules of Hooks) ──
   // Paychecks
   const { data: paychecks = [] } = useQuery<any[]>({ queryKey: ["/api/paychecks"] });
-  const addPaycheckMut = useMutation<void, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
-    mutationFn: async () => {
+  // RACE FIX: payload passed as variables — see addExpenseMutation comment.
+  // (User hit "400: source is required" because the form was reset before the
+  // mutation read it.)
+  const addPaycheckMut = useMutation<void, Error, { source: string; amount: number; expectedDate: string }, { prev: [readonly unknown[], unknown][]; tempId: string }>({
+    mutationFn: async (vars) => {
       await apiRequest("POST", "/api/paychecks", {
-        source: newPaycheck.source.trim(),
-        amount: parseFloat(newPaycheck.amount),
-        expected_date: newPaycheck.expectedDate,
+        source: vars.source.trim(),
+        amount: vars.amount,
+        expected_date: vars.expectedDate,
       });
     },
-    onMutate: async () => {
+    onMutate: async (vars) => {
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       await queryClient.cancelQueries({ queryKey: ["/api/paychecks"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/paychecks"] });
       const temp = {
         id: tempId,
-        source: newPaycheck.source.trim(),
-        amount: parseFloat(newPaycheck.amount),
-        expected_date: newPaycheck.expectedDate,
+        source: vars.source.trim(),
+        amount: vars.amount,
+        expected_date: vars.expectedDate,
         confirmed: false,
         _optimistic: true,
       };
@@ -334,12 +344,12 @@ export default function FinancePage() {
       );
       return { prev, tempId };
     },
-    onSuccess: () => {
+    onSuccess: (_d, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      toast({ title: "Paycheck added", description: `${newPaycheck.source} — $${parseFloat(newPaycheck.amount).toFixed(2)}` });
+      toast({ title: "Paycheck added", description: `${vars.source} — $${vars.amount.toFixed(2)}` });
     },
     onError: (err: Error, _v, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
@@ -435,42 +445,44 @@ export default function FinancePage() {
   // ── Incomes (separate from paychecks: recurring income streams) ──────────
   const { data: incomes = [] } = useQuery<any[]>({ queryKey: ["/api/incomes"] });
 
-  const addIncomeMut = useMutation<{ description: string; amount: number }, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
-    mutationFn: async () => {
-      const amt = parseFloat(newIncome.amount);
+  // RACE FIX: payload passed as variables — see addExpenseMutation comment.
+  type NewIncomeVars = { description: string; amount: number; category: string; frequency: string; date?: string; profileId?: string };
+  const addIncomeMut = useMutation<{ description: string; amount: number }, Error, NewIncomeVars, { prev: [readonly unknown[], unknown][]; tempId: string }>({
+    mutationFn: async (vars) => {
+      const amt = vars.amount;
       if (!isFinite(amt) || amt <= 0) throw new Error("Amount must be a positive number");
-      const desc = newIncome.description.trim();
+      const desc = vars.description.trim();
       if (!desc) throw new Error("Description is required");
       // Bug #5: prefer the dialog's own profile picker; fall back to the
       // page-level expenseProfileId chip so users who don't change it still
       // get correct attribution.
-      const chosenProfileId = newIncome.profileId || expenseProfileId;
+      const chosenProfileId = vars.profileId || expenseProfileId;
       await apiRequest("POST", "/api/incomes", {
         description: desc,
         amount: amt,
-        category: newIncome.category,
-        frequency: newIncome.frequency,
-        date: newIncome.date || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
+        category: vars.category,
+        frequency: vars.frequency,
+        date: vars.date || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
         tags: [],
         ...(chosenProfileId ? { linkedProfiles: [chosenProfileId] } : {}),
       });
       return { description: desc, amount: amt };
     },
-    onMutate: async () => {
-      const amt = parseFloat(newIncome.amount);
-      const desc = newIncome.description.trim();
+    onMutate: async (vars) => {
+      const amt = vars.amount;
+      const desc = vars.description.trim();
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       if (!isFinite(amt) || amt <= 0 || !desc) return { prev: [], tempId };
-      const chosenProfileId = newIncome.profileId || expenseProfileId;
+      const chosenProfileId = vars.profileId || expenseProfileId;
       await queryClient.cancelQueries({ queryKey: ["/api/incomes"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/incomes"] });
       const temp: any = {
         id: tempId,
         description: desc,
         amount: amt,
-        category: newIncome.category,
-        frequency: newIncome.frequency,
-        date: newIncome.date || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
+        category: vars.category,
+        frequency: vars.frequency,
+        date: vars.date || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
         tags: [],
         linkedProfiles: chosenProfileId ? [chosenProfileId] : [],
         _optimistic: true,
@@ -575,14 +587,16 @@ export default function FinancePage() {
   const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth] });
 
   // ── Cashflow upsert mutation (POST /api/cashflow) ────────────────────────
-  const addCashflowMut = useMutation<void, Error, void, { prev: [readonly unknown[], unknown][] }>({
-    mutationFn: async () => {
-      const wk = parseInt(newCashflow.week, 10);
+  // RACE FIX: payload passed as variables — see addExpenseMutation comment.
+  type CashflowVars = { month: string; week: string; projected_income: string; projected_expenses: string; actual_income: string; actual_expenses: string };
+  const addCashflowMut = useMutation<void, Error, CashflowVars, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: async (vars) => {
+      const wk = parseInt(vars.week, 10);
       if (!isFinite(wk) || wk < 1 || wk > 6) throw new Error("Week must be between 1 and 6");
-      if (!/^\d{4}-\d{2}$/.test(newCashflow.month)) throw new Error("Month must be in YYYY-MM format");
-      const body: Record<string, any> = { month: newCashflow.month, week: wk };
+      if (!/^\d{4}-\d{2}$/.test(vars.month)) throw new Error("Month must be in YYYY-MM format");
+      const body: Record<string, any> = { month: vars.month, week: wk };
       for (const k of ["projected_income", "projected_expenses", "actual_income", "actual_expenses"] as const) {
-        const raw = (newCashflow as any)[k] as string;
+        const raw = (vars as any)[k] as string;
         if (raw === "" || raw == null) continue;
         const n = Number(raw);
         if (!isFinite(n)) throw new Error(`${k} must be a number`);
@@ -590,15 +604,15 @@ export default function FinancePage() {
       }
       await apiRequest("POST", "/api/cashflow", body);
     },
-    onMutate: async () => {
+    onMutate: async (vars) => {
       // Optimistic upsert: merge the new row into the cached cashflow list so the
       // chart/table updates immediately. Server is the source of truth on refetch.
-      const wk = parseInt(newCashflow.week, 10);
+      const wk = parseInt(vars.week, 10);
       if (!isFinite(wk) || wk < 1 || wk > 6) return { prev: [] };
-      if (!/^\d{4}-\d{2}$/.test(newCashflow.month)) return { prev: [] };
+      if (!/^\d{4}-\d{2}$/.test(vars.month)) return { prev: [] };
       const numeric: Record<string, number> = {};
       for (const k of ["projected_income", "projected_expenses", "actual_income", "actual_expenses"] as const) {
-        const raw = (newCashflow as any)[k] as string;
+        const raw = (vars as any)[k] as string;
         if (raw === "" || raw == null) continue;
         const n = Number(raw);
         if (isFinite(n)) numeric[k] = n;
@@ -607,14 +621,14 @@ export default function FinancePage() {
       const prev = queryClient.getQueriesData({ queryKey: ["/api/cashflow"] });
       queryClient.setQueriesData({ queryKey: ["/api/cashflow"] }, (old: any) => {
         if (!Array.isArray(old)) return old;
-        const idx = old.findIndex((c: any) => c?.month === newCashflow.month && Number(c?.week) === wk);
+        const idx = old.findIndex((c: any) => c?.month === vars.month && Number(c?.week) === wk);
         if (idx >= 0) {
-          const merged = { ...old[idx], ...numeric, month: newCashflow.month, week: wk };
+          const merged = { ...old[idx], ...numeric, month: vars.month, week: wk };
           return old.map((c: any, i: number) => i === idx ? merged : c);
         }
         const temp = {
           id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          month: newCashflow.month,
+          month: vars.month,
           week: wk,
           projected_income: numeric.projected_income ?? 0,
           projected_expenses: numeric.projected_expenses ?? 0,
@@ -899,7 +913,16 @@ export default function FinancePage() {
                         toast({ title: "Amount must be greater than $0", variant: "destructive" });
                         return;
                       }
-                      addExpenseMutation.mutate();
+                      // Snapshot the payload BEFORE resetting the form (see the
+                      // RACE FIX comment on addExpenseMutation).
+                      addExpenseMutation.mutate({
+                        description: newExpense.description,
+                        amount: amt,
+                        category: newExpense.category,
+                        vendor: newExpense.vendor || undefined,
+                        date: newExpense.date,
+                        profileId: expenseProfileId || undefined,
+                      });
                       // Close immediately — optimistic insert already populated the list.
                       setAddOpen(false);
                       setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
@@ -1339,7 +1362,8 @@ export default function FinancePage() {
             </div>
             <Button className="w-full" onClick={() => {
               if (!newPaycheck.source.trim() || !newPaycheck.amount || parseFloat(newPaycheck.amount) <= 0 || !newPaycheck.expectedDate) return;
-              addPaycheckMut.mutate();
+              // Snapshot payload BEFORE resetting the form (race fix).
+              addPaycheckMut.mutate({ source: newPaycheck.source, amount: parseFloat(newPaycheck.amount), expectedDate: newPaycheck.expectedDate });
               // Close immediately — optimistic insert already populated the list.
               setAddPaycheckOpen(false);
               setNewPaycheck({ source: "", amount: "", expectedDate: "" });
@@ -1480,8 +1504,16 @@ export default function FinancePage() {
             <Button
               className="w-full"
               onClick={() => {
-                // Close immediately for snappy UX — optimistic insert is in onMutate.
-                addIncomeMut.mutate();
+                // Snapshot payload BEFORE resetting the form (race fix), then
+                // close immediately — optimistic insert is in onMutate.
+                addIncomeMut.mutate({
+                  description: newIncome.description,
+                  amount: parseFloat(newIncome.amount),
+                  category: newIncome.category,
+                  frequency: newIncome.frequency,
+                  date: newIncome.date || undefined,
+                  profileId: newIncome.profileId || undefined,
+                });
                 setAddIncomeOpen(false);
                 setNewIncome({ description: "", amount: "", category: "salary", frequency: "monthly", date: "", profileId: "" });
               }}
@@ -1794,8 +1826,9 @@ export default function FinancePage() {
             <Button
               className="w-full"
               onClick={() => {
-                // Close immediately for snappy UX — optimistic upsert is in onMutate.
-                addCashflowMut.mutate();
+                // Snapshot payload BEFORE resetting the form (race fix), then
+                // close immediately — optimistic upsert is in onMutate.
+                addCashflowMut.mutate({ ...newCashflow });
                 setAddCashflowOpen(false);
                 setNewCashflow({
                   month: new Date().toISOString().slice(0, 7),

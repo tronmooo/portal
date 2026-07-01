@@ -1395,21 +1395,26 @@ function AddEntryDialog({
     return out;
   };
 
-  const mutation = useMutation<any,Error,void>({
-    mutationFn: async () => {
-      const coerced: Record<string, any> = {};
-      for (const f of tracker.fields) {
-        const raw = values[f.name];
-        if (f.type === "number") {
-          coerced[f.name] = raw !== undefined && raw !== "" ? parseFloat(raw) : undefined;
-        } else if (f.type === "boolean") {
-          coerced[f.name] = raw === true || raw === "true";
-        } else {
-          coerced[f.name] = raw ?? "";
-        }
-      }
-      // Merge any ad-hoc custom fields the user added (including a pending one).
-      for (const [k, v] of Object.entries(collectCustomFields())) coerced[k] = v;
+  // RACE FIX (user report: entry logging failed on a filled form): the submit
+  // called mutate() then synchronously reset values/notes; React Query re-reads
+  // the mutationFn closure after that reset re-render, so it coerced an EMPTY
+  // form. The coerced payload is now built by buildEntryPayload() in the click
+  // handler and passed as mutation VARIABLES — immune to the reset.
+  const buildEntryPayload = (): { values: Record<string, any>; notes?: string } => {
+    const coerced: Record<string, any> = {};
+    for (const f of tracker.fields) {
+      const raw = values[f.name];
+      if (f.type === "number") coerced[f.name] = raw !== undefined && raw !== "" ? parseFloat(raw) : undefined;
+      else if (f.type === "boolean") coerced[f.name] = raw === true || raw === "true";
+      else coerced[f.name] = raw ?? "";
+    }
+    // Merge any ad-hoc custom fields the user added (including a pending one).
+    for (const [k, v] of Object.entries(collectCustomFields())) coerced[k] = v;
+    return { values: coerced, notes: notes.trim() || undefined };
+  };
+  const mutation = useMutation<any, Error, { values: Record<string, any>; notes?: string }>({
+    mutationFn: async (vars) => {
+      const coerced = vars.values;
       // Prevent empty entries
       const hasValue = Object.values(coerced).some(v => v !== undefined && v !== "" && v !== null);
       if (!hasValue) throw new Error("Please fill in at least one field");
@@ -1421,22 +1426,14 @@ function AddEntryDialog({
       if (hasNaN) throw new Error("All fields must be valid numbers");
       const res = await apiRequest("POST", `/api/trackers/${tracker.id}/entries`, {
         values: coerced,
-        notes: notes.trim() || undefined,
+        notes: vars.notes,
       });
       return res.json();
     },
-    onMutate: async () => {
+    onMutate: async (vars) => {
       await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/trackers"] });
-      const coerced: Record<string, any> = {};
-      for (const f of tracker.fields) {
-        const raw = values[f.name];
-        if (f.type === "number") coerced[f.name] = raw !== undefined && raw !== "" ? parseFloat(raw) : undefined;
-        else if (f.type === "boolean") coerced[f.name] = raw === true || raw === "true";
-        else coerced[f.name] = raw ?? "";
-      }
-      for (const [k, v] of Object.entries(collectCustomFields())) coerced[k] = v;
-      const tempEntry = { id: 'temp-' + Date.now(), values: coerced, notes: notes.trim() || undefined, timestamp: new Date().toISOString(), computed: {} };
+      const tempEntry = { id: 'temp-' + Date.now(), values: vars.values, notes: vars.notes, timestamp: new Date().toISOString(), computed: {} };
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
         (old || []).map((t: any) => t.id === tracker.id
           ? { ...t, entries: [...(t.entries || []), tempEntry] }
@@ -1679,16 +1676,15 @@ function AddEntryDialog({
           </Button>
           <Button
             onClick={() => {
+              // Snapshot the payload BEFORE any state reset (race fix).
+              const payload = buildEntryPayload();
               // Validate before close so we don't dismiss the dialog on an invalid entry
-              const hasValue = tracker.fields.some(f => {
-                const v = values[f.name];
-                return v !== undefined && v !== "" && v !== null;
-              }) || Object.keys(customFields).length > 0;
+              const hasValue = Object.values(payload.values).some(v => v !== undefined && v !== "" && v !== null);
               if (!hasValue) {
-                mutation.mutate(); // will throw "Please fill in at least one field"
+                mutation.mutate(payload); // will throw "Please fill in at least one field"
                 return;
               }
-              mutation.mutate();
+              mutation.mutate(payload);
               // Close immediately — optimistic update has already added the entry to the chart
               setValues({});
               setNotes("");
@@ -3547,15 +3543,20 @@ function CreateTrackerDialog({
   // Sample value used to render the live preview.
   const previewSample = TRACKER_TEMPLATES.find(t => t.id === templateId)?.sample ?? 100;
 
-  const mutation = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string } | undefined>({
-    mutationFn: async () => {
-      if (!name.trim()) { toast({ title: "Name required", description: "Enter a tracker name", variant: "destructive" }); throw new Error("Name required"); }
+  // RACE FIX: name/category/unit/fields are snapshotted into mutation VARIABLES
+  // by the submit handler — the old no-arg mutationFn read component state that
+  // the handler reset immediately after mutate(), so the request was built from
+  // an emptied form ("Name required" on a filled form).
+  type NewTrackerVars = { name: string; category: string; unit: string; fields: typeof fields };
+  const mutation = useMutation<any, Error, NewTrackerVars, { prev: [readonly unknown[], unknown][]; tempId: string } | undefined>({
+    mutationFn: async (vars) => {
+      if (!vars.name.trim()) { toast({ title: "Name required", description: "Enter a tracker name", variant: "destructive" }); throw new Error("Name required"); }
       const INVALID_NAMES = ["tracker", "log", "new tracker", "custom tracker", "my tracker", "track"];
-      if (INVALID_NAMES.includes(name.trim().toLowerCase())) {
+      if (INVALID_NAMES.includes(vars.name.trim().toLowerCase())) {
         toast({ title: "Be more specific", description: "Give this tracker a descriptive name like 'Blood Pressure' or 'Morning Run'", variant: "destructive" });
         throw new Error("Generic name");
       }
-      let builtFields = fields
+      let builtFields = vars.fields
         .filter((f) => f.name.trim())
         .map((f, i) => ({
           name: f.name.trim(),
@@ -3569,38 +3570,38 @@ function CreateTrackerDialog({
         }));
       // If no fields defined, create a default "value" field
       if (builtFields.length === 0) {
-        builtFields = [{ name: "value", type: "number", unit: unit.trim() || undefined, isPrimary: true, options: undefined }];
+        builtFields = [{ name: "value", type: "number", unit: vars.unit.trim() || undefined, isPrimary: true, options: undefined }];
       }
 
       // PR H: attach canonical metric definition derived from category, with
       // user-supplied name and unit applied as surface overrides.
-      const baseDef = getDefaultMetricDefinition(category);
+      const baseDef = getDefaultMetricDefinition(vars.category);
       const metricDefinition: TrackerMetricDefinition = {
         ...baseDef,
-        metric: name.trim() || baseDef.metric,
-        unit: unit.trim() || baseDef.unit,
-        unitDisplay: unit.trim() || baseDef.unitDisplay,
+        metric: vars.name.trim() || baseDef.metric,
+        unit: vars.unit.trim() || baseDef.unit,
+        unitDisplay: vars.unit.trim() || baseDef.unitDisplay,
       };
       const res = await apiRequest("POST", "/api/trackers", {
-        name: name.trim(),
-        category,
-        unit: unit.trim() || undefined,
+        name: vars.name.trim(),
+        category: vars.category,
+        unit: vars.unit.trim() || undefined,
         fields: builtFields,
         metricDefinition,
       });
       return res.json();
     },
-    onMutate: async () => {
+    onMutate: async (vars) => {
       // Optimistic create: prepend a temp tracker so the list updates instantly.
       // Skip validation errors here — mutationFn will throw them and we'll roll back.
-      if (!name.trim()) return undefined;
+      if (!vars.name.trim()) return undefined;
       const INVALID_NAMES = ["tracker", "log", "new tracker", "custom tracker", "my tracker", "track"];
-      if (INVALID_NAMES.includes(name.trim().toLowerCase())) return undefined;
+      if (INVALID_NAMES.includes(vars.name.trim().toLowerCase())) return undefined;
 
       await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/trackers"] });
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const builtFields = fields
+      const builtFields = vars.fields
         .filter((f) => f.name.trim())
         .map((f, i) => ({
           name: f.name.trim(),
@@ -3613,10 +3614,10 @@ function CreateTrackerDialog({
         }));
       const tempTracker: any = {
         id: tempId,
-        name: name.trim(),
-        category,
-        unit: unit.trim() || undefined,
-        fields: builtFields.length > 0 ? builtFields : [{ name: "value", type: "number", unit: unit.trim() || undefined, isPrimary: true }],
+        name: vars.name.trim(),
+        category: vars.category,
+        unit: vars.unit.trim() || undefined,
+        fields: builtFields.length > 0 ? builtFields : [{ name: "value", type: "number", unit: vars.unit.trim() || undefined, isPrimary: true }],
         entries: [],
         createdAt: new Date().toISOString(),
         _optimistic: true,
@@ -3890,7 +3891,8 @@ function CreateTrackerDialog({
               if (!name.trim()) return;
               const INVALID_NAMES = ["tracker", "log", "new tracker", "custom tracker", "my tracker", "track"];
               const isGeneric = INVALID_NAMES.includes(name.trim().toLowerCase());
-              mutation.mutate();
+              // Snapshot the payload BEFORE resetting the form (race fix).
+              mutation.mutate({ name, category, unit, fields });
               // Close immediately when input is valid — optimistic update has
               // already prepended the tracker. If the name is generic, keep the dialog
               // open so the user can fix it (mutationFn will toast the error).
