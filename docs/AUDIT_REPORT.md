@@ -26,7 +26,29 @@ both are addressed below.
   large". Guarded by a unit test in `tests/schema.test.ts`.
 - **Retest:** unit test passes; live re-probe after deploy returns 400.
 
-### 2. ⚠️ Serverless cold-start ~12s (mitigation recommended)
+### 2. 🐞 "Add co-owner" on asset/liability tabs failed with a silent 500 (FIXED)
+- **Symptom:** the deep profile-detail workflow audit (`tests/audit/verify-profile-detail.ts`)
+  found `POST /api/asset-party-links` and `POST /api/liability-profile-links`
+  returned **500 "Internal server error"** — the "add owner / co-owner" buttons
+  on the asset and liability detail tabs appeared to do nothing.
+- **Root cause:** a newly-created asset/liability is **auto-owned 100%** by its
+  self profile (auto-ownership hook). Adding a second owner pushes the total over
+  100%, tripping the DB ownership-sum guard trigger
+  (`guard_asset_party_ownership_sum`, `check_violation` / code 23514). That DB
+  error bubbled up unhandled as a raw 500. (The DB write itself is correct — the
+  guard is doing its job; the bug was the missing error handling + no path to add
+  a co-owner.)
+- **Fix:** POST/PATCH for both link types now catch the overflow and return a
+  clear **400 "Total ownership would exceed 100%. Lower an existing owner's share
+  first…"** (`server/routes.ts`). The client already toasts `formatApiError`, so
+  the user now gets an actionable message. The real workflow — rebalance the
+  auto-owner, then add the co-owner — works end-to-end.
+- **Retest:** `verify-profile-detail.ts` now **21/21 pass** live, including
+  "add co-owner over 100% → graceful 400", "add co-owner after rebalance → 200"
+  (asset + liability), edit-ownership-%, pay-obligation, link/unlink, and all 9
+  relational read endpoints the tabs depend on.
+
+### 3. ⚠️ Serverless cold-start ~12s (mitigation recommended)
 - **Symptom:** the **first** API request after the function goes idle took
   12.3–12.8s (both a direct write and the first AI call). Every subsequent
   request was fast (< 800ms). This is the real cause of the occasional "it feels
