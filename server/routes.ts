@@ -7520,13 +7520,23 @@ No emojis. No prose outside the JSON.`,
       storage.getProfile(parsed.data.partyProfileId),
     ]);
     if (!liabOwned || !partyOwned) return res.status(404).json({ error: "Resource not found" });
-    const row = await storage.createLiabilityProfileLink(parsed.data);
-    res.json(row);
+    try {
+      const row = await storage.createLiabilityProfileLink(parsed.data);
+      res.json(row);
+    } catch (err: any) {
+      if (isOwnershipOverflow(err)) return res.status(400).json({ error: OWNERSHIP_OVERFLOW_MSG });
+      throw err;
+    }
   }));
   app.patch("/api/liability-profile-links/:id", asyncHandler(async (req, res) => {
-    const updated = await storage.updateLiabilityProfileLink(req.params.id, req.body || {});
-    if (!updated) return res.status(404).json({ error: "Not found" });
-    res.json(updated);
+    try {
+      const updated = await storage.updateLiabilityProfileLink(req.params.id, req.body || {});
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (err: any) {
+      if (isOwnershipOverflow(err)) return res.status(400).json({ error: OWNERSHIP_OVERFLOW_MSG });
+      throw err;
+    }
   }));
   app.delete("/api/liability-profile-links/:id", asyncHandler(async (req, res) => {
     const ok = await storage.deleteLiabilityProfileLink(req.params.id);
@@ -7650,6 +7660,18 @@ No emojis. No prose outside the JSON.`,
       .map((r: any) => ({ ...r, asset: assetById[r.assetProfileId] }));
     res.json(enriched);
   }));
+  // A new asset/liability is auto-owned 100% by its self profile, so adding a
+  // second owner trips the DB ownership-sum guard (check_violation, code 23514).
+  // Previously that bubbled up as a raw 500 "Internal server error" — the
+  // add-co-owner button appeared to silently fail. Detect it and return an
+  // actionable 400 instead.
+  const isOwnershipOverflow = (err: any): boolean => {
+    const msg = String(err?.message || err?.details || err?.hint || "").toLowerCase();
+    return err?.code === "23514" || msg.includes("would total") || msg.includes("exceed 100") || msg.includes("must not exceed");
+  };
+  const OWNERSHIP_OVERFLOW_MSG =
+    "Total ownership would exceed 100%. Lower an existing owner's share first, then add the co-owner.";
+
   app.post("/api/asset-party-links", asyncHandler(async (req, res) => {
     const parsed = insertAssetPartyLinkSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -7658,13 +7680,23 @@ No emojis. No prose outside the JSON.`,
       storage.getProfile(parsed.data.partyProfileId),
     ]);
     if (!assetOwned || !partyOwned) return res.status(404).json({ error: "Resource not found" });
-    const row = await storage.createAssetPartyLink(parsed.data);
-    res.json(row);
+    try {
+      const row = await storage.createAssetPartyLink(parsed.data);
+      res.json(row);
+    } catch (err: any) {
+      if (isOwnershipOverflow(err)) return res.status(400).json({ error: OWNERSHIP_OVERFLOW_MSG });
+      throw err;
+    }
   }));
   app.patch("/api/asset-party-links/:id", asyncHandler(async (req, res) => {
-    const updated = await storage.updateAssetPartyLink(req.params.id, req.body || {});
-    if (!updated) return res.status(404).json({ error: "Not found" });
-    res.json(updated);
+    try {
+      const updated = await storage.updateAssetPartyLink(req.params.id, req.body || {});
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (err: any) {
+      if (isOwnershipOverflow(err)) return res.status(400).json({ error: OWNERSHIP_OVERFLOW_MSG });
+      throw err;
+    }
   }));
   app.delete("/api/asset-party-links/:id", asyncHandler(async (req, res) => {
     const ok = await storage.deleteAssetPartyLink(req.params.id);
