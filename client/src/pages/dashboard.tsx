@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { formatApiError } from "@/lib/formatError";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -2823,48 +2823,185 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
   }, [nwSeries]);
 
   const fmt = (n: number) => `$${Math.round(Math.abs(n)).toLocaleString()}`;
-  const cards = [
-    {
-      key: "cashflow", title: "Spending vs income", accent: net >= 0 ? "155 60% 48%" : "0 72% 55%",
+  const fmtVal = (n: number) => Number.isInteger(n) ? n.toLocaleString() : (Math.round(n * 10) / 10).toLocaleString();
+
+  // ── Dynamic, per-person trend pool ────────────────────────────────────────
+  // Instead of three fixed cards, we assemble every trend the person actually
+  // has data for — cash flow, spending momentum, top category, bills, net
+  // worth, habits, streaks, and their own health trackers — score each by how
+  // much real signal it carries for THIS person, then render the strongest
+  // three. Empty domains disappear rather than showing "—" placeholders.
+  const GOOD = "155 60% 48%", BAD = "0 72% 55%", WARN = "43 85% 52%", INFO = "200 80% 55%", VIOLET = "262 70% 62%";
+  type TrendCard = { key: string; title: string; accent: string; headline: string; body?: ReactNode; caption: string; href: string; score: number };
+  const finSnap = enhanced?.financeSnapshot || {};
+  const spendByCategory: Record<string, number> = finSnap.spendByCategory || {};
+  const spendTrend = Number(finSnap.spendTrend ?? 0);
+  const lastMonthTotal = Number(finSnap.lastMonthTotal ?? 0);
+  const upcomingBills: any[] = Array.isArray(finSnap.upcomingBills) ? finSnap.upcomingBills : [];
+  const healthSnap: any[] = Array.isArray(enhanced?.healthSnapshot) ? enhanced.healthSnapshot : [];
+  const bestStreak = (Array.isArray(stats?.streaks) ? stats!.streaks : []).reduce(
+    (best: { name: string; days: number } | null, s: any) => (Number(s?.days) || 0) > (best?.days ?? 0) ? { name: s.name, days: Number(s.days) } : best, null);
+  const journalStreak = Number(stats?.journalStreak ?? 0);
+
+  const pool: TrendCard[] = [];
+
+  // Cash flow — only meaningful once there's income or spend on record.
+  if (income > 0 || spend > 0) {
+    const noIncome = income <= 0;
+    pool.push({
+      key: "cashflow", title: "Spending vs income", accent: net >= 0 ? GOOD : BAD,
       headline: `${net >= 0 ? "+" : "−"}${fmt(net)}`,
       body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>In {fmt(income)}</span><span>·</span><span>Out {fmt(spend)}</span></div>,
-      caption: net >= 0 ? "You're cash-flow positive — consider moving the surplus to savings." : "You're spending more than you earn — review top categories.",
+      caption: noIncome ? "No income recorded yet — add a source to see true cash flow." : net >= 0 ? "You're cash-flow positive — consider moving the surplus to savings." : "You're spending more than you earn — review top categories.",
       href: "/dashboard/finance",
-    },
-    {
-      key: "networth", title: "Net worth", accent: (nwTrend ?? 0) >= 0 ? "155 60% 48%" : "0 72% 55%",
-      headline: nwTrend == null ? "—" : `${nwTrend >= 0 ? "↑" : "↓"} ${Math.abs(nwTrend).toFixed(1)}%`,
-      body: nwPath ? (
+      score: 60 + Math.min(30, Math.abs(net) / 100) + (net < 0 ? 8 : 0),
+    });
+  }
+
+  // Spending momentum — this month vs last (needs a prior month to compare).
+  if (lastMonthTotal > 0 && spend > 0) {
+    const up = spendTrend > 0;
+    pool.push({
+      key: "spend-momentum", title: "Spending momentum", accent: up ? WARN : GOOD,
+      headline: `${up ? "↑" : spendTrend < 0 ? "↓" : ""} ${Math.abs(spendTrend)}%`,
+      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>This mo {fmt(spend)}</span><span>·</span><span>Last {fmt(lastMonthTotal)}</span></div>,
+      caption: up ? "Spending is climbing vs last month — check what changed." : spendTrend < 0 ? "You're spending less than last month — nice restraint." : "Spending is holding steady month over month.",
+      href: "/dashboard/finance",
+      score: 48 + Math.min(24, Math.abs(spendTrend) / 2),
+    });
+  }
+
+  // Top spending category — where the money actually goes.
+  const catEntries = Object.entries(spendByCategory).filter(([, v]) => Number(v) > 0).sort((a, b) => Number(b[1]) - Number(a[1]));
+  if (catEntries.length > 0 && spend > 0) {
+    const [topCat, topAmt] = catEntries[0];
+    const pct = spend > 0 ? Math.round((Number(topAmt) / spend) * 100) : 0;
+    pool.push({
+      key: "top-category", title: "Top category", accent: INFO,
+      headline: fmt(Number(topAmt)),
+      body: <div className="mt-1 text-[10px] text-muted-foreground"><span className="capitalize">{topCat}</span> · {pct}% of spend</div>,
+      caption: pct >= 40 ? `${topCat} dominates your spend — a small cut here goes far.` : `Most of your spend is on ${topCat} this month.`,
+      href: "/dashboard/finance",
+      score: 40 + Math.min(20, pct / 2),
+    });
+  }
+
+  // Upcoming bills — near-term cash commitments.
+  if (upcomingBills.length > 0) {
+    const soon = upcomingBills.filter((b: any) => Number(b.daysUntil) <= 7);
+    const dueTotal = upcomingBills.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
+    const overdue = upcomingBills.filter((b: any) => Number(b.daysUntil) < 0).length;
+    pool.push({
+      key: "bills", title: "Bills ahead", accent: overdue > 0 ? BAD : soon.length > 0 ? WARN : INFO,
+      headline: fmt(dueTotal),
+      body: <div className="mt-1 text-[10px] text-muted-foreground">{upcomingBills.length} due in 30d{soon.length > 0 ? ` · ${soon.length} this week` : ""}</div>,
+      caption: overdue > 0 ? `${overdue} bill${overdue === 1 ? "" : "s"} overdue — clear ${overdue === 1 ? "it" : "them"} to avoid fees.` : soon.length > 0 ? `${soon.length} bill${soon.length === 1 ? "" : "s"} due this week — line up the cash.` : "Bills are scheduled — nothing urgent this week.",
+      href: "/dashboard/finance",
+      score: 44 + (overdue > 0 ? 20 : 0) + soon.length * 4,
+    });
+  }
+
+  // Net worth — only once there are ≥2 snapshots to draw a real trend.
+  if (nwTrend != null && nwPath) {
+    pool.push({
+      key: "networth", title: "Net worth", accent: nwTrend >= 0 ? GOOD : BAD,
+      headline: `${nwTrend >= 0 ? "↑" : "↓"} ${Math.abs(nwTrend).toFixed(1)}%`,
+      body: (
         <svg viewBox="0 0 100 28" className="mt-1 h-7 w-full" preserveAspectRatio="none">
-          <path d={nwPath} fill="none" stroke={`hsl(${(nwTrend ?? 0) >= 0 ? "155 60% 48%" : "0 72% 55%"})`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d={nwPath} fill="none" stroke={`hsl(${nwTrend >= 0 ? GOOD : BAD})`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-      ) : <p className="mt-1 text-[10px] text-muted-foreground">Tracking — more data soon.</p>,
-      caption: nwTrend == null ? "Snapshots are accumulating; a trend appears within days." : nwTrend >= 0 ? "Trending up — keep paying down high-interest debt." : "Trending down — review your largest liabilities.",
+      ),
+      caption: nwTrend >= 0 ? "Trending up — keep paying down high-interest debt." : "Trending down — review your largest liabilities.",
       href: "/dashboard/finance",
-    },
-    {
-      key: "health", title: "Habit adherence", accent: adherence >= 60 ? "155 60% 48%" : "43 85% 52%",
+      score: 58 + Math.min(20, Math.abs(nwTrend)),
+    });
+  }
+
+  // Habit adherence — only when the person is actually running habits.
+  if (Number(stats?.totalHabits ?? 0) > 0) {
+    pool.push({
+      key: "habits", title: "Habit adherence", accent: adherence >= 60 ? GOOD : WARN,
       headline: `${adherence}%`,
-      body: <div className="mt-1.5 h-1.5 rounded-full bg-muted/60 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${adherence}%`, background: `hsl(${adherence >= 60 ? "155 60% 48%" : "43 85% 52%"})` }} /></div>,
+      body: <div className="mt-1.5 h-1.5 rounded-full bg-muted/60 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${adherence}%`, background: `hsl(${adherence >= 60 ? GOOD : WARN})` }} /></div>,
       caption: adherence >= 60 ? "Strong consistency — keep the streak going." : "Below your target — pick one keystone habit to lock in today.",
       href: "/dashboard/health",
-    },
-  ];
+      score: 56 + adherence / 5,
+    });
+  }
+
+  // Best active streak — momentum worth protecting.
+  if (bestStreak && bestStreak.days >= 2) {
+    pool.push({
+      key: "streak", title: "Best streak", accent: VIOLET,
+      headline: `${bestStreak.days}d`,
+      body: <div className="mt-1 text-[10px] text-muted-foreground truncate">{bestStreak.name}</div>,
+      caption: `${bestStreak.days} days on “${bestStreak.name}” — don't break the chain today.`,
+      href: "/dashboard/health",
+      score: 38 + Math.min(20, bestStreak.days),
+    });
+  }
+
+  // Journal streak — reflective consistency.
+  if (journalStreak >= 2) {
+    pool.push({
+      key: "journal-streak", title: "Journaling", accent: VIOLET,
+      headline: `${journalStreak}d`,
+      body: <div className="mt-1 text-[10px] text-muted-foreground">days in a row</div>,
+      caption: `${journalStreak}-day journaling streak — keep showing up for yourself.`,
+      href: "/journal",
+      score: 30 + Math.min(16, journalStreak),
+    });
+  }
+
+  // Health trackers — the person's own metrics (weight, steps, water, BP…).
+  // Rank by how actively they log; surface the two strongest so a
+  // health-focused user sees their real data, not a generic placeholder.
+  const rankedHealth = [...healthSnap]
+    .filter((h: any) => typeof h.latestValue === "number" && !isNaN(h.latestValue))
+    .sort((a: any, b: any) => (Number(b.entryCount) || 0) - (Number(a.entryCount) || 0));
+  rankedHealth.slice(0, 2).forEach((h: any, idx: number) => {
+    const dir = h.trend === "up" ? "↑" : h.trend === "down" ? "↓" : "→";
+    const val = h.dailyTotal != null ? h.dailyTotal : h.latestValue;
+    const moved = Number(h.trendValue) > 0;
+    pool.push({
+      key: `health-${h.trackerId}`, title: h.name, accent: INFO,
+      headline: `${fmtVal(Number(val))}${h.unit ? ` ${h.unit}` : ""}`,
+      body: <div className="mt-1 text-[10px] text-muted-foreground">{h.entryCount} log{h.entryCount === 1 ? "" : "s"} · 7-day avg {fmtVal(Number(h.average))}</div>,
+      caption: moved ? `${h.name} ${dir === "↑" ? "rose" : dir === "↓" ? "fell" : "held"} ${fmtVal(Number(h.trendValue))}${h.unit ? ` ${h.unit}` : ""} this week — keep logging.` : `${h.name} steady this week — keep the habit going.`,
+      href: "/dashboard/health",
+      // Primary tracker competes with finance/habits; the second only fills
+      // a slot when higher-signal domains are absent.
+      score: (idx === 0 ? 50 : 26) + Math.min(20, (Number(h.entryCount) || 0) * 2),
+    });
+  });
+
+  const cards = pool.sort((a, b) => b.score - a.score).slice(0, 3);
+
+  // Grid columns follow the number of live cards so 1–2 trends don't leave
+  // awkward empty tracks (a single card shouldn't sit in a 3-wide grid).
+  const gridCols = cards.length >= 3 ? "sm:grid-cols-3" : cards.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-1";
 
   return (
     <CollapsibleSection accent="200 80% 55%" icon={Activity} label="Trends" testId="section-trends">
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-        {cards.map((c) => (
-          <button key={c.key} type="button" onClick={() => navigate(c.href)}
-            className="flex flex-col rounded-2xl border border-border/50 bg-card/60 p-3 text-left card-lift active:scale-[0.98] transition-all"
-            data-testid={`trend-${c.key}`}>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{c.title}</p>
-            <p className="mt-0.5 text-lg font-bold tabular-nums" style={{ color: `hsl(${c.accent})` }}>{c.headline}</p>
-            {c.body}
-            <p className="mt-2 text-[10px] leading-snug text-muted-foreground">{c.caption}</p>
-          </button>
-        ))}
-      </div>
+      {cards.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-border/50 bg-card/40 p-4 text-center" data-testid="trend-empty">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">No trends yet</p>
+          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">Log some spending, habits, or a health metric and personalized trends will appear here.</p>
+        </div>
+      ) : (
+        <div className={`grid grid-cols-1 ${gridCols} gap-2.5`}>
+          {cards.map((c) => (
+            <button key={c.key} type="button" onClick={() => navigate(c.href)}
+              className="flex flex-col rounded-2xl border border-border/50 bg-card/60 p-3 text-left card-lift active:scale-[0.98] transition-all"
+              data-testid={`trend-${c.key}`}>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{c.title}</p>
+              <p className="mt-0.5 text-lg font-bold tabular-nums" style={{ color: `hsl(${c.accent})` }}>{c.headline}</p>
+              {c.body}
+              <p className="mt-2 text-[10px] leading-snug text-muted-foreground">{c.caption}</p>
+            </button>
+          ))}
+        </div>
+      )}
     </CollapsibleSection>
   );
 }
