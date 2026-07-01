@@ -18,7 +18,7 @@ import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
 
 export default function ObligationsPage() {
-  useEffect(() => { document.title = "Obligations — Portol"; }, []);
+  useEffect(() => { document.title = "Bills — Portol"; }, []);
 
   // Single source of truth: the active scope is read reactively so it stays in
   // lockstep with the rest of the app and survives navigation.
@@ -35,9 +35,6 @@ export default function ObligationsPage() {
           compact
           onChange={() => {}}
         />
-        <Link href="/calendar?tab=obligations" className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors" data-testid="link-go-to-calendar-tab">
-          Manage on Calendar →
-        </Link>
       </div>
       <ObligationsManager
         showHeader

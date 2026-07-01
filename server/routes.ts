@@ -9,6 +9,8 @@ import { passesProfileFilter } from "@shared/profile-filter";
 import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "@shared/ownership-model";
 import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
+import { isRecurringBill } from "@shared/liability-types";
+import { advanceLiabilityDueDate, readDueDate } from "@shared/liability-recurrence";
 import { selfIdsFrom } from "@shared/scope";
 import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
@@ -1163,6 +1165,97 @@ export async function registerRoutes(
   });
   app.get("/api/cron/snapshot-net-worth", cronSnapshotNetWorth);
   app.post("/api/cron/snapshot-net-worth", cronSnapshotNetWorth);
+
+  // ---- Cron: recurring-liability due scan (replaces the obligation engine) ----
+  // Global cross-user job. For every recurring-bill liability whose next due
+  // date falls within the reminder window: autopay bills are auto-logged (a
+  // liability_payments row is written and the due date rolls forward), and
+  // non-autopay bills get a one-time reminder (deduped by title + fire date) so
+  // the user sees it on the dashboard. This is the liability-native replacement
+  // for materializeOccurrences / fire-due-reminders on obligations.
+  const REMINDER_WINDOW_DAYS = 3;
+  const cronLiabilityDueScan: any = asyncHandler(async (req: any, res: any) => {
+    const secret = process.env.CRON_SECRET;
+    const provided = String(req.query.key || "").trim();
+    if (!secret || !provided || !safeEqual(provided, secret)) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      const { createClient } = await import("@supabase/supabase-js");
+      const url = process.env.VITE_SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!url || !key) return res.status(500).json({ error: "Supabase admin env vars missing" });
+      const admin = createClient(url, key);
+      const { data: usersList, error: listErr } = await (admin as any).auth.admin.listUsers({ perPage: 1000 });
+      if (listErr) throw listErr;
+      const users = usersList?.users || [];
+      const { createScopedStorage, requestStorageContext } = await import("./storage");
+
+      let autopaid = 0;
+      let reminded = 0;
+      for (const u of users) {
+        try {
+          const scoped = createScopedStorage(u.id);
+          await new Promise<void>((resolve) => {
+            requestStorageContext.run(scoped, async () => {
+              try {
+                const todayISO = getUserToday(DEFAULT_TIMEZONE);
+                const windowEnd = toLocalDateStr(new Date(Date.now() + REMINDER_WINDOW_DAYS * 86400000), DEFAULT_TIMEZONE);
+                const profiles = await scoped.getProfiles();
+                const bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey));
+                const existingReminders = await scoped.listReminders().catch(() => [] as any[]);
+                for (const bill of bills) {
+                  const f: any = bill.fields || {};
+                  const due = readDueDate(f);
+                  if (!due || due > windowEnd) continue; // not due within the window
+                  const amount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? 0) || 0;
+                  const autopay = f.autopay === true || f.autoPay === true || String(f.autopay ?? "").toLowerCase() === "true";
+                  if (autopay && amount > 0) {
+                    // Auto-log the payment and roll the due date forward.
+                    try {
+                      await scoped.createLiabilityPayment({
+                        liabilityProfileId: bill.id,
+                        paymentDate: todayISO,
+                        amount,
+                        principalPortion: amount,
+                        interestPortion: 0,
+                        paymentType: "standard",
+                        notes: "Autopay",
+                      } as any);
+                      const nextDue = advanceLiabilityDueDate(f, todayISO);
+                      await scoped.updateProfile(bill.id, {
+                        fields: { ...f, dueDate: nextDue, nextDueDate: nextDue, lastPaidDate: todayISO, status: "upcoming" },
+                      });
+                      autopaid++;
+                    } catch { /* per-bill best effort */ }
+                  } else {
+                    // Non-autopay: surface a reminder (deduped by title + fire date).
+                    const title = `Bill due: ${bill.name}`;
+                    const fireAt = `${due}T09:00:00`;
+                    const dup = (existingReminders || []).some((r: any) =>
+                      r.title === title && String(r.fireAt || "").slice(0, 10) === due);
+                    if (!dup) {
+                      try {
+                        await scoped.createReminder({ title, fireAt, profileId: bill.id });
+                        reminded++;
+                      } catch { /* best effort */ }
+                    }
+                  }
+                }
+              } catch { /* per-user failure shouldn't abort the run */ }
+              resolve();
+            });
+          });
+        } catch { /* skip user */ }
+      }
+      res.json({ autopaid, reminded });
+    } catch (err: any) {
+      log.error("[Cron Liability Due Scan]", err?.message || err);
+      res.status(500).json({ error: "Cron failed" });
+    }
+  });
+  app.get("/api/cron/liability-due-scan", cronLiabilityDueScan);
+  app.post("/api/cron/liability-due-scan", cronLiabilityDueScan);
 
   // ---- Activity Feed ----
   app.get("/api/activity", asyncHandler(async (req, res) => {
@@ -4967,8 +5060,10 @@ Rules:
       return bk.localeCompare(ak);
     });
     const latest = sorted[0];
+    // Payments now live in liability_payments (obligations retired) — a bill's
+    // payment history is projected from there.
     const { error } = await (storage as any).supabase
-      .from("obligation_payments")
+      .from("liability_payments")
       .delete()
       .eq("id", latest.id)
       .eq("user_id", uid);
@@ -7556,6 +7651,33 @@ No emojis. No prose outside the JSON.`,
     const parsed = insertLiabilityPaymentSchema.safeParse({ ...req.body, liabilityProfileId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
+    // Payment behavior branches on the liability family (type_key). A recurring
+    // service bill (utility / phone / streaming) has no balance to pay down —
+    // paying it just LOGS the charge and ADVANCES the next due date by one cycle.
+    // Amortizing / revolving / one-time debts reduce a real balance.
+    const recurring = isRecurringBill((liability as any).type_key ?? (liability as any).typeKey);
+    const data = { ...parsed.data };
+
+    if (recurring) {
+      // No permanent balance: record the full amount as principal (no interest,
+      // no remainingBalanceAfter) and roll the due date forward.
+      data.principalPortion = data.amount;
+      data.interestPortion = 0;
+      const row = await storage.createLiabilityPayment(data);
+      const todayISO = getUserToday(getTimezone(req));
+      const nextDue = advanceLiabilityDueDate(liability.fields, todayISO);
+      await storage.updateProfile(req.params.id, {
+        fields: {
+          ...(liability.fields || {}),
+          dueDate: nextDue,
+          nextDueDate: nextDue,
+          lastPaidDate: (data as any).paymentDate || todayISO,
+          status: "upcoming",
+        },
+      });
+      return res.json(row);
+    }
+
     // SINGLE SOURCE OF TRUTH: the server — not the client — owns the
     // principal/interest split AND the resulting balance. The client used to
     // compute these and ship them, but a field-name mismatch silently dropped
@@ -7564,7 +7686,6 @@ No emojis. No prose outside the JSON.`,
     // history, dashboard totals, net worth, linked page) agrees.
     const balanceBefore = resolveLiabilityBalance(liability);
     const annualRate = resolveAnnualRate(liability.fields);
-    const data = { ...parsed.data };
     if (balanceBefore > 0) {
       const split = allocatePayment(data.amount, balanceBefore, annualRate, data.fees ?? 0);
       data.principalPortion = split.principal;

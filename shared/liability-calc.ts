@@ -177,11 +177,15 @@ export function allocatePayment(
   remaining -= interestPaid;
   const principalPaid = Math.min(remaining, currentBalance);
   const newBalance = Math.max(0, currentBalance - principalPaid);
+  // Round every money output to cents so decimal payments (e.g. $0.17) save and
+  // reduce the balance by the EXACT amount instead of drifting on float error
+  // (60 - 0.17 must be 59.83, not 59.82999999).
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
   return {
-    principal: principalPaid,
-    interest: interestPaid,
-    fees: safeFees,
-    remainingBalanceAfter: newBalance,
+    principal: round2(principalPaid),
+    interest: round2(interestPaid),
+    fees: round2(safeFees),
+    remainingBalanceAfter: round2(newBalance),
   };
 }
 

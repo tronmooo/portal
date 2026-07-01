@@ -125,7 +125,7 @@ const QUICK_ACTIONS = [
   { label: "Go to Journal",   icon: BookOpen,        path: "/dashboard/journal", shortcut: "J" },
   { label: "Go to Calendar",  icon: Calendar,        path: "/calendar", shortcut: "L" },
   { label: "Go to Artifacts", icon: FileText,        path: "/artifacts", shortcut: "A" },
-  { label: "Go to Obligations", icon: Bell,          path: "/obligations", shortcut: "O" },
+  { label: "Go to Bills",     icon: Bell,            path: "/bills", shortcut: "O" },
   { label: "Go to Settings",  icon: SettingsIcon,    path: "/settings", shortcut: "S" },
   { label: "Insights",        icon: Sparkles,        path: "/insights", shortcut: "I" },
 ];
@@ -541,7 +541,7 @@ export function CommandSearch() {
             )}
 
             {results.obligations && results.obligations.length > 0 && (
-              <CommandGroup heading="Obligations">
+              <CommandGroup heading="Bills">
                 {results.obligations.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((o) => (
                   <CommandItem
                     key={`obligation-${o.id}`}

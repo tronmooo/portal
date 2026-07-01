@@ -1403,7 +1403,7 @@ export default function ObligationsManager({ showHeader = true, compact = false,
       {showHeader && (
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-base font-semibold">Obligations</h2>
+            <h2 className="text-base font-semibold">Bills</h2>
             <p className="text-xs text-muted-foreground">Recurring bills, subscriptions, payments, and reminders</p>
           </div>
           <Button size="sm" onClick={() => setAddOpen(true)} data-testid="button-add-obligation">
@@ -1416,7 +1416,7 @@ export default function ObligationsManager({ showHeader = true, compact = false,
       <Dialog open={addOpen} onOpenChange={(v) => { if (!v) { setNewName(""); setNewAmount(""); setNewFrequency("monthly"); setNewCategory("housing"); setNewDueDate(""); setNewRecurrenceEnd(""); setNewKind("bill"); setNewLinkedProfiles([]); setNewRemindDays(""); setNewAutopay(false); setNewAutoLogExpense("auto"); setNewNotes(""); setShowAdvanced(false); } setAddOpen(v); }}>
         <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-sm">New Obligation</DialogTitle>
+            <DialogTitle className="text-sm">New Bill</DialogTitle>
             <DialogDescription className="text-xs">Add a recurring bill, subscription, payment, appointment, or reminder.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">

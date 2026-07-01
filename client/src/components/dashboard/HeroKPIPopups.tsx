@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { isInScope as scopeIsInScope, selfIdsFrom } from "@shared/scope";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
+import { isRecurringBill } from "@shared/liability-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -269,7 +270,7 @@ export function NetWorthPopup({
         const v = resolveAssetValue(p);
         if (v > 0) assets.push({ id: p.id, name: p.name, type: p.type, grossValue: v, share: 100, value: v });
       }
-      if (LIABILITY_TYPES.has(p.type) || (p.type === "vehicle" || p.type === "property" || p.type === "asset")) {
+      if ((LIABILITY_TYPES.has(p.type) || (p.type === "vehicle" || p.type === "property" || p.type === "asset")) && !isRecurringBill(p.type_key)) {
         const v = resolveLiabilityBalance(p);
         if (v > 0) liabilities.push({ id: p.id, name: p.name, type: p.type, grossValue: v, share: 100, value: v });
       }

@@ -202,7 +202,7 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
               {obligations && obligations.length > 0 && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Obligations</p>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bills</p>
                     <span className="text-xs text-muted-foreground">{obligations.length} items</span>
                   </div>
                   <ScrollArea className="max-h-[40vh]">

@@ -13,7 +13,7 @@ import {
   resolveAssetValue,
   resolveLiabilityBalance,
   isAssetProfile,
-  isLiabilityProfile,
+  isNetWorthLiabilityProfile,
 } from "./asset-value";
 import { isInScope } from "./scope";
 
@@ -116,7 +116,7 @@ export function computeNetWorth(profiles: any[], ctx: NetWorthContext): NetWorth
         assetProfiles.push(p);
       }
     }
-    if (isLiabilityProfile(p)) {
+    if (isNetWorthLiabilityProfile(p)) {
       const v = resolveLiabilityBalance(p);
       if (v > 0) {
         liabilities += v;

@@ -563,6 +563,7 @@ function getMaintenanceCost(fields: any): number {
 // removed 2026-05-27.
 import { computeAssetRollup as sharedComputeAssetRollup } from "@shared/asset-rollup";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
+import { isRecurringBill } from "@shared/liability-types";
 function computeAssetRollup(profile: any, descendants: TreeNode[]): AssetRollup {
   // The shared function ignores everything except `fields` and
   // `parentProfileId`, which is exactly what TreeNode carries, so we can
@@ -4604,7 +4605,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
         const ownership = Number(link.ownershipPercentage ?? 100);
         return { link, profile: lp, ownership };
       })
-      .filter((x: any) => x && !childProfileIds.has(x.profile.id)),
+      // Recurring service bills are cash-flow, not shared balance-sheet debt.
+      .filter((x: any) => x && !childProfileIds.has(x.profile.id) && !isRecurringBill(x.profile.type_key)),
     [sharedLiabilityLinks, allProfilesForLinks, childProfileIds],
   );
   const sharedLiabilitiesUserShare = useMemo(

@@ -23,6 +23,8 @@ export default defineConfig({
       'tests/test-data-filter.test.ts',
       'tests/quick-add.test.ts',
       'tests/mutate-reset-race.test.ts',
+      'tests/liability-types.test.ts',
+      'tests/liability-recurrence.test.ts',
       'tests/profile-scope.test.ts',
       'tests/useProfileScope.dom.test.tsx',
       'tests/finance-import.test.ts',

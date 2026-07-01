@@ -28,7 +28,10 @@ import {
   resolveLiabilityBalance as _sharedResolveLiabilityBalance,
   ASSET_PROFILE_TYPES,
   LIABILITY_PROFILE_TYPES,
+  isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
+import { isRecurringBill } from "../shared/liability-types";
+import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
   type Profile, type InsertProfile,
@@ -829,9 +832,9 @@ export class SupabaseStorage implements IStorage {
         .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
-      this.supabase.from("obligations").select("*")
-        .eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]))
-        .then(r => r.data || []),
+      // Obligations retired — recurring bills are liability child profiles now,
+      // so the profile timeline no longer needs a separate obligation feed.
+      Promise.resolve([] as any[]),
       // journal_entries.linked_profiles is text[] (ARRAY) — .contains() works fine here.
       this.supabase.from("journal_entries")
         .select("*")
@@ -852,9 +855,8 @@ export class SupabaseStorage implements IStorage {
       trackerIds.length > 0
         ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).is("deleted_at", null).order("timestamp", { ascending: false }).then(r => r.data || [])
         : Promise.resolve([] as any[]),
-      obligationIds.length > 0
-        ? this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).in("obligation_id", obligationIds).order("date", { ascending: false }).then(r => r.data || [])
-        : Promise.resolve([] as any[]),
+      // Obligations retired — no separate obligation payment feed on the timeline.
+      Promise.resolve([] as any[]),
       habitIds.length > 0
         ? this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).in("habit_id", habitIds).order("date", { ascending: true }).then(r => r.data || [])
         : Promise.resolve([] as any[]),
@@ -1345,18 +1347,9 @@ export class SupabaseStorage implements IStorage {
       }
     } catch (e) { errors.push("habits"); }
 
-    try { // 5. Obligations (multi-owner: preserve shared rows)
-      const allObligations = await this.getObligations();
-      for (const ob of allObligations) {
-        const lp = ob.linkedProfiles || [];
-        if (!lp.includes(id)) continue;
-        if (lp.length <= 1) {
-          await this.supabase.from("obligations").delete().eq("id", ob.id).eq("user_id", this.userId);
-        } else {
-          await this.supabase.from("obligations").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", ob.id).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("obligations"); }
+    // 5. Obligations retired — recurring bills are liability profiles now and are
+    //    deleted through the normal profile-deletion path, so there is no
+    //    separate obligations table to clean up here.
 
     try { // 6. Events (multi-owner: preserve shared rows)
       const allEvents = await this.getEvents();
@@ -2729,84 +2722,10 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    // Wave 16 — prefer persisted obligation_occurrences when they exist.
-    // Falls back to virtual generation only for obligations that haven't been
-    // materialized yet (legacy data). Occurrences carry per-instance status
-    // so the calendar can visually distinguish done / skipped / late.
-    const { data: occRows } = await this.supabase
-      .from("obligation_occurrences")
-      .select("id,obligation_id,due_at,original_due_at,status,actual_amount")
-      .eq("user_id", this.userId)
-      .gte("due_at", startDate)
-      .lte("due_at", endDate);
-    const occByOb = new Map<string, any[]>();
-    for (const r of (occRows || [])) {
-      const arr = occByOb.get(r.obligation_id) || [];
-      arr.push(r);
-      occByOb.set(r.obligation_id, arr);
-    }
-    const KIND_COLORS: Record<string, string> = {
-      bill: "#BB653B", subscription: "#5591C7", loan_payment: "#A13544",
-      medication: "#6DAA45", maintenance: "#797876", appointment: "#A86FDF",
-      habit: "#20808D", doc_expiration: "#D19900", task: "#4F98A3",
-    };
-    const STATUS_TINT: Record<string, string> = {
-      done: "#6DAA45", skipped: "#797876", late: "#A13544", pending: "", rescheduled: "#A86FDF",
-    };
-
-    for (const ob of obligations) {
-      const kind = (ob as any).kind || "bill";
-      const baseColor = KIND_COLORS[kind] || "#BB653B";
-      const occs = occByOb.get(ob.id) || [];
-      const matchedDates = new Set<string>();
-
-      // Emit a calendar item for every persisted occurrence.
-      for (const occ of occs) {
-        matchedDates.add(occ.original_due_at);
-        const color = STATUS_TINT[occ.status] || baseColor;
-        items.push({
-          id: `obligation-${ob.id}-${occ.due_at}`,
-          type: "obligation", title: `${ob.name} — $${ob.amount}`,
-          date: occ.due_at, allDay: true, color, category: ob.category,
-          description: occ.status === "done" ? "Paid"
-            : occ.status === "skipped" ? "Skipped"
-            : occ.status === "rescheduled" ? "Rescheduled"
-            : occ.status === "late" ? `OVERDUE — $${ob.amount}`
-            : ob.autopay ? "Autopay enabled" : `$${ob.amount} due`,
-          completed: occ.status === "done",
-          linkedProfiles: ob.linkedProfiles, sourceId: ob.id,
-          meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay, kind, occurrenceId: occ.id, status: occ.status }
-        });
-      }
-
-      // Fallback virtual generation for obligations without materialized rows.
-      // Keeps the calendar populated for legacy data until the next mutation
-      // triggers materialization.
-      if (occs.length === 0) {
-        const baseDate = ob.nextDueDate.slice(0, 10);
-        if (baseDate >= startDate && baseDate <= endDate) {
-          items.push({ id: `obligation-${ob.id}-${baseDate}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: baseDate, allDay: true, color: baseColor, category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay, kind } });
-        }
-        if (ob.frequency !== "once") {
-          const base = parseLocalDate(ob.nextDueDate.slice(0, 10));
-          for (let i = 1; i <= 24; i++) {
-            const next = new Date(base);
-            switch (ob.frequency) {
-              case "weekly": next.setDate(next.getDate() + i * 7); break;
-              case "biweekly": next.setDate(next.getDate() + i * 14); break;
-              case "monthly": next.setMonth(next.getMonth() + i); break;
-              case "quarterly": next.setMonth(next.getMonth() + i * 3); break;
-              case "yearly": next.setFullYear(next.getFullYear() + i); break;
-            }
-            const nextStr = next.toLocaleDateString('en-CA');
-            if (nextStr > endDate) break;
-            if (nextStr >= startDate) {
-              items.push({ id: `obligation-${ob.id}-${nextStr}`, type: "obligation", title: `${ob.name} — $${ob.amount}`, date: nextStr, allDay: true, color: baseColor, category: ob.category, description: ob.autopay ? "Autopay enabled" : `$${ob.amount} due`, linkedProfiles: ob.linkedProfiles, sourceId: ob.id, meta: { amount: ob.amount, frequency: ob.frequency, autopay: ob.autopay, kind } });
-            }
-          }
-        }
-      }
-    }
+    // Obligations retired (2026-07) — recurring bills no longer appear on the
+    // calendar grid (user decision). Bills live on their liability pages and in
+    // the Bills Due / Cash Flow surfaces, not cluttering the calendar. The
+    // per-occurrence emission and the obligation_occurrences table are gone.
 
     // Habits intentionally NOT emitted as calendar items — they live on their
     // own page and clutter the calendar with repeating noise. Re-enable here
@@ -3482,317 +3401,175 @@ export class SupabaseStorage implements IStorage {
   }
 
   // ============================================================
-  // OBLIGATIONS
+  // OBLIGATIONS — compat projection over recurring-bill liabilities
   // ============================================================
+  // The dedicated `obligations` tables were retired (2026-07). Every recurring
+  // bill now lives as a recurring-family LIABILITY profile (type_key utility /
+  // subscription / bill …) with its recurrence in `fields`. These methods
+  // project those liabilities into the legacy Obligation shape so existing
+  // readers (dashboard upcoming bills, monthly total, insights, finance import)
+  // keep working against the single liability source of truth. No obligation
+  // table is ever queried.
+
+  private billTypeKey(kind?: string | null, category?: string | null): string {
+    const k = String(kind || "").toLowerCase();
+    const c = String(category || "").toLowerCase();
+    if (k === "subscription" || c === "subscription") return "subscription";
+    if (c === "utilities" || c === "utility") return "utility";
+    return "bill";
+  }
+
+  private liabilityToObligation(p: Profile, payments: ObligationPayment[] = []): Obligation {
+    const f: any = p.fields || {};
+    const amount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? f.balance ?? 0) || 0;
+    const frequency = String(f.frequency ?? f.billingFrequency ?? "monthly");
+    const nextDueDate = String(
+      f.dueDate ?? f.due_date ?? f.nextDueDate ?? f.next_due_date ?? f.renewalDate ?? "",
+    ).slice(0, 10);
+    const tk = String((p as any).type_key ?? (p as any).typeKey ?? "").toLowerCase();
+    const kind = tk === "subscription" ? "subscription" : "bill";
+    const parent = (p as any).parentProfileId;
+    return {
+      id: p.id, name: p.name, amount, frequency,
+      category: String(f.category ?? "general"),
+      nextDueDate: nextDueDate || "",
+      autopay: f.autopay === true || f.autoPay === true,
+      status: String(f.status ?? "active"),
+      kind: kind as any,
+      leadTimeDays: 3,
+      autoLogExpense: false,
+      linkedLiabilityId: p.id,
+      linkedProfiles: parent ? [parent] : [],
+      payments,
+      notes: f.notes || undefined,
+      createdAt: (p as any).createdAt,
+      updatedAt: (p as any).updatedAt,
+    } as Obligation;
+  }
+
+  private paymentRowToObligationPayment(r: any): ObligationPayment {
+    return {
+      id: r.id, amount: Number(r.amount) || 0, date: r.payment_date,
+      method: r.source_account || undefined,
+    };
+  }
+
   async getObligations(profileIds?: string[]): Promise<Obligation[]> {
     return this.memo(`getObligations${this._fk(profileIds)}`, async () => {
-      // PERF (durable-fix-phase1): DB pushdown via idx_obligations_linked_profiles_gin.
-      let obligationsQuery = this.supabase.from("obligations").select("*").eq("user_id", this.userId);
-      obligationsQuery = this._applyProfileFilter(obligationsQuery, profileIds);
-      // Fetch obligations and ALL payments in 2 parallel queries (not N+1)
-      const [obligationsResult, paymentsResult] = await Promise.all([
-        obligationsQuery,
-        this.supabase.from("obligation_payments").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
-      ]);
-      if (obligationsResult.error) throw obligationsResult.error;
-      const paymentsByObligation = new Map<string, any[]>();
-      for (const p of paymentsResult.data || []) {
-        const arr = paymentsByObligation.get(p.obligation_id) || [];
-        arr.push(p);
-        paymentsByObligation.set(p.obligation_id, arr);
+      const profiles = await this.getProfiles();
+      let bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey));
+      if (profileIds && profileIds.length > 0) {
+        const set = new Set(profileIds);
+        bills = bills.filter((p: any) => set.has(p.id) || (p.parentProfileId && set.has(p.parentProfileId)));
       }
-      return (obligationsResult.data || []).map(r =>
-        this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map(p => this.rowToPayment(p)))
-      );
+      if (bills.length === 0) return [];
+      const ids = bills.map(p => p.id);
+      const { data: payRows } = await this.supabase
+        .from("liability_payments").select("*")
+        .eq("user_id", this.userId).in("liability_profile_id", ids)
+        .order("payment_date", { ascending: true });
+      const byLiab = new Map<string, ObligationPayment[]>();
+      for (const r of payRows || []) {
+        const arr = byLiab.get(r.liability_profile_id) || [];
+        arr.push(this.paymentRowToObligationPayment(r));
+        byLiab.set(r.liability_profile_id, arr);
+      }
+      return bills.map(p => this.liabilityToObligation(p, byLiab.get(p.id) || []));
     });
   }
 
   async getObligation(id: string): Promise<Obligation | undefined> {
-    const { data, error } = await this.supabase.from("obligations").select("*").eq("id", id).eq("user_id", this.userId).single();
-    if (error || !data) return undefined;
-    const { data: payments } = await this.supabase.from("obligation_payments").select("*").eq("obligation_id", id).eq("user_id", this.userId).order("date", { ascending: true });
-    return this.rowToObligation(data, (payments || []).map(p => this.rowToPayment(p)));
-  }
-
-  // ── Bills-as-liabilities (2026-07-01 user decision) ────────────────────────
-  // Every money-owed obligation maintains its own liability profile — a single
-  // source of truth for "amount owed" that shows up in Net Worth and the
-  // liability pages. Auto-created on create, kept in sync on update/pay,
-  // removed with the obligation. Only liabilities CREATED BY THIS SYNC
-  // (fields.source === "obligation") are ever written or deleted — a user's own
-  // loan liability that a payment obligation merely links to is never touched.
-  private static readonly BILL_LIABILITY_KINDS = new Set(["bill", "subscription", "membership", "loan_payment", "other"]);
-
-  private obligationLiabilityStatus(nextDueDate?: string | null, paid = false): string {
-    if (paid) return "paid";
-    if (!nextDueDate) return "upcoming";
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: this._timezone || "America/Los_Angeles" });
-    const due = String(nextDueDate).slice(0, 10);
-    if (due < today) return "overdue";
-    if (due === today) return "due_today";
-    return "upcoming";
-  }
-
-  private async ensureObligationLiability(ob: Obligation | undefined, opts: { paid?: boolean } = {}): Promise<void> {
-    if (!ob) return;
-    try {
-      const kind = (ob as any).kind || "bill";
-      if (!SupabaseStorage.BILL_LIABILITY_KINDS.has(kind)) return;
-      if ((ob as any).status === "cancelled") return;
-      const amount = Number(ob.amount) || 0;
-      if (amount <= 0) return;
-      const syncFields = {
-        balance: amount,
-        dueDate: ob.nextDueDate,
-        frequency: ob.frequency,
-        status: this.obligationLiabilityStatus(ob.nextDueDate, opts.paid),
-        category: ob.category,
-        ...(ob.notes ? { notes: ob.notes } : {}),
-        source: "obligation",
-        obligationId: ob.id,
-      };
-      const linkedId = (ob as any).linkedLiabilityId;
-      if (linkedId) {
-        const liab = await this.getProfile(linkedId);
-        if (!liab) return;
-        if ((liab.fields as any)?.source !== "obligation") return; // user-owned: hands off
-        await this.updateProfile(liab.id, { name: ob.name, fields: syncFields } as any);
-        return;
-      }
-      // First sync: create the liability record and back-link it.
-      const person = (ob.linkedProfiles || [])[0];
-      const created = await this.createProfile({
-        name: ob.name,
-        type: "liability",
-        ...(person ? { parentProfileId: person } : {}),
-        fields: syncFields,
-        tags: [],
-      } as any);
-      await this.supabase.from("obligations")
-        .update({ linked_liability_id: created.id })
-        .eq("id", ob.id).eq("user_id", this.userId);
-    } catch (e: any) {
-      // Best-effort — a sync failure must never break the obligation write.
-      console.warn("[bills→liability] sync failed (non-fatal):", e?.message || e);
-    }
+    const p = await this.getProfile(id);
+    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return undefined;
+    const { data: payRows } = await this.supabase
+      .from("liability_payments").select("*")
+      .eq("user_id", this.userId).eq("liability_profile_id", id)
+      .order("payment_date", { ascending: true });
+    return this.liabilityToObligation(p, (payRows || []).map(r => this.paymentRowToObligationPayment(r)));
   }
 
   async createObligation(data: InsertObligation): Promise<Obligation> {
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    // Auto-link to self profile if no profiles specified
-    let linkedProfiles = (data as any).linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
-    }
     const kind = (data as any).kind || "bill";
-    const { error } = await this.supabase.from("obligations").insert({
-      id, user_id: this.userId, name: data.name, amount: data.amount,
-      frequency: data.frequency || "monthly", category: data.category || "general",
-      kind,
-      next_due_date: data.nextDueDate, autopay: data.autopay || false,
-      // Bug fix (AI e2e): the DB column is NOT NULL, but the AI path
-      // calls createObligation without supplying leadTimeDays and the
-      // insert blew up with "null value in column lead_time_days". The
-      // read path already defaults to 3 when missing (see getObligations),
-      // so write the same default here.
-      lead_time_days: (data as any).leadTimeDays ?? 3,
-      auto_log_expense: (data as any).autoLogExpense ?? false,
-      linked_asset_id: (data as any).linkedAssetId || null,
-      linked_liability_id: (data as any).linkedLiabilityId || null,
-      linked_document_id: (data as any).linkedDocumentId || null,
-      recurrence_end: (data as any).recurrenceEnd || null,
-      currency: (data as any).currency || "USD",
-      icon: (data as any).icon || null,
-      linked_profiles: linkedProfiles, notes: data.notes || null, created_at: now,
-    });
-    if (error) throw error;
-    for (const pId of linkedProfiles) {
-      await this.linkProfileTo(pId, "obligation", id);
+    const category = (data as any).category || "general";
+    const typeKey = this.billTypeKey(kind, category);
+    let parent: string | undefined = ((data as any).linkedProfiles || [])[0];
+    if (!parent) {
+      const self = await this.getSelfProfile();
+      parent = self?.id;
     }
-    this.logActivity("obligation", `Created obligation: ${data.name}`);
-
-    // Wave 17 — materialize the FULL series. With recurrence_end set, the
-    // engine expands every occurrence (e.g. 12 monthly for a 1-year housing
-    // bill). Without it, the engine uses its 2-year default horizon. Single
-    // source of truth for calendar / dashboard / reminder feeds.
-    try {
-      const { materializeOccurrences } = await import("./obligation-engine");
-      await materializeOccurrences(this.supabase, this.userId, id);
-    } catch (e: any) {
-      console.error("[obligations] materialize failed (non-fatal):", e?.message || e);
-    }
-
-    // NOTE: Calendar events for obligations are generated dynamically by
-    // getCalendarTimeline() — no need to create a stored event here.
-    // This avoids duplicate entries on the calendar view.
-
-    const created = (await this.getObligation(id))!;
-    // Bills-as-liabilities: give the new bill its liability record.
-    await this.ensureObligationLiability(created);
-    return (await this.getObligation(id))!;
+    const amount = Number(data.amount) || 0;
+    const freq = data.frequency || "monthly";
+    const nextDue = String((data as any).nextDueDate || getUserToday(this._timezone)).slice(0, 10);
+    const created = await this.createProfile({
+      name: data.name,
+      type: "liability",
+      type_key: typeKey,
+      ...(parent ? { parentProfileId: parent } : {}),
+      fields: {
+        monthlyAmount: amount, amount,
+        frequency: freq, billingFrequency: freq,
+        dueDate: nextDue, nextDueDate: nextDue,
+        autopay: (data as any).autopay || false,
+        category,
+        status: "upcoming",
+        source: "obligation",
+        ...(data.notes ? { notes: data.notes } : {}),
+      },
+      tags: [],
+    } as any);
+    this.logActivity("obligation", `Created bill: ${data.name}`);
+    return (await this.getObligation(created.id))!;
   }
 
   async updateObligation(id: string, data: Partial<Obligation>): Promise<Obligation | undefined> {
-    const existing = await this.getObligation(id);
-    if (!existing) return undefined;
-    // [P0.2] optimistic concurrency — 409 if the row moved since the caller read it.
-    this.assertNoWriteConflict(data as Record<string, any>, existing.updatedAt);
-    const merged = { ...existing, ...data };
-    const { error } = await this.supabase.from("obligations").update({
-      name: merged.name, amount: merged.amount, frequency: merged.frequency,
-      category: merged.category,
-      kind: merged.kind,
-      next_due_date: merged.nextDueDate,
-      autopay: merged.autopay,
-      lead_time_days: merged.leadTimeDays,
-      auto_log_expense: merged.autoLogExpense,
-      linked_asset_id: merged.linkedAssetId || null,
-      linked_liability_id: merged.linkedLiabilityId || null,
-      linked_document_id: merged.linkedDocumentId || null,
-      recurrence_end: merged.recurrenceEnd || null,
-      currency: merged.currency || "USD",
-      icon: merged.icon || null,
-      notes: merged.notes || null,
-      // Bug fix: status (active|paused|...) was previously dropped on update,
-      // making the pause/resume button a no-op. Forward the merged value so
-      // PATCH /api/obligations/:id { status } actually persists.
-      status: merged.status || "active",
-      updated_at: new Date().toISOString(),
-    }).eq("id", id).eq("user_id", this.userId);
-    if (error) throw error;
-    // [P2.2] Ownership patches go through the single writer (setOwners), not a
-    // raw linked_profiles write alongside the rest of the patch.
-    if (data.linkedProfiles !== undefined) {
-      await this.applyOwnershipPatch("obligation", id, data.linkedProfiles);
-    }
-    // Re-materialize when cadence or due date changes — keeps calendar correct.
-    if (data.frequency !== undefined || data.nextDueDate !== undefined || data.recurrenceEnd !== undefined) {
-      try {
-        const { materializeOccurrences } = await import("./obligation-engine");
-        await materializeOccurrences(this.supabase, this.userId, id);
-      } catch (e: any) {
-        console.error("[obligations] re-materialize failed (non-fatal):", e?.message || e);
-      }
-    }
-    const updated = await this.getObligation(id);
-    // Bills-as-liabilities: keep the liability record in lockstep.
-    await this.ensureObligationLiability(updated);
+    const existing = await this.getProfile(id);
+    if (!existing || !isRecurringBill((existing as any).type_key ?? (existing as any).typeKey)) return undefined;
+    const fieldsPatch: any = {};
+    if (data.amount !== undefined) { fieldsPatch.monthlyAmount = data.amount; fieldsPatch.amount = data.amount; }
+    if (data.frequency !== undefined) { fieldsPatch.frequency = data.frequency; fieldsPatch.billingFrequency = data.frequency; }
+    if (data.nextDueDate !== undefined) { fieldsPatch.dueDate = data.nextDueDate; fieldsPatch.nextDueDate = data.nextDueDate; }
+    if (data.autopay !== undefined) fieldsPatch.autopay = data.autopay;
+    if ((data as any).category !== undefined) fieldsPatch.category = (data as any).category;
+    if (data.status !== undefined) fieldsPatch.status = data.status;
+    if (data.notes !== undefined) fieldsPatch.notes = data.notes;
+    await this.updateProfile(id, {
+      ...(data.name !== undefined ? { name: data.name } : {}),
+      ...(Object.keys(fieldsPatch).length > 0 ? { fields: fieldsPatch } : {}),
+    } as any);
     return this.getObligation(id);
   }
 
   async payObligation(obligationId: string, amount: number, method?: string, confirmationNumber?: string, date?: string): Promise<ObligationPayment | undefined> {
-    const ob = await this.getObligation(obligationId);
-    if (!ob) return undefined;
-    const id = randomUUID();
-    const today = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-    const { error } = await this.supabase.from("obligation_payments").insert({
-      id, user_id: this.userId, obligation_id: obligationId, amount, date: today,
-      method: method || null, confirmation_number: confirmationNumber || null,
-    });
-    if (error) throw error;
-
-    // Wave 17 — ALSO mark the earliest pending/late occurrence as done so the
-    // user actually sees the late item disappear from their list. Previously
-    // we only advanced next_due_date which didn't touch obligation_occurrences,
-    // so the user saw "nothing happened" after marking paid. Find the earliest
-    // un-done occurrence (preferring late > pending, oldest first) and link the
-    // new payment to it.
-    try {
-      const { data: targetOcc } = await this.supabase
-        .from("obligation_occurrences")
-        .select("id")
-        .eq("user_id", this.userId)
-        .eq("obligation_id", obligationId)
-        .in("status", ["pending", "late"])
-        .order("due_at", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      if (targetOcc?.id) {
-        await this.supabase.from("obligation_occurrences").update({
-          status: "done",
-          completed_at: new Date().toISOString(),
-          actual_amount: amount,
-          payment_id: id,
-          updated_at: new Date().toISOString(),
-        }).eq("id", targetOcc.id).eq("user_id", this.userId);
-      }
-    } catch (e: any) {
-      console.error("[payObligation] occurrence mark failed (non-fatal):", e?.message || e);
-    }
-    // Advance next due date. "once" obligations don't recur — leave them.
-    // For everything else, advance from the LATER of (current next_due_date,
-    // today). This keeps a stuck overdue bill from staying overdue forever
-    // when the user marks it paid: we jump to the next future cycle.
-    if (ob.frequency && ob.frequency !== "once") {
-      const todayLocal = new Date();
-      todayLocal.setHours(0, 0, 0, 0);
-      // parseLocalDate-style: avoid UTC drift by constructing in local TZ.
-      const [y, mo, d] = String(ob.nextDueDate).slice(0, 10).split("-").map(Number);
-      let nextDue = new Date(y || 1970, (mo || 1) - 1, d || 1, 0, 0, 0, 0);
-      // Advance the cycle at least once; keep advancing until strictly after today.
-      for (let i = 0; i < 600; i++) {
-        switch (ob.frequency) {
-          case "weekly": nextDue.setDate(nextDue.getDate() + 7); break;
-          case "biweekly": nextDue.setDate(nextDue.getDate() + 14); break;
-          case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
-          case "quarterly": nextDue.setMonth(nextDue.getMonth() + 3); break;
-          case "yearly": nextDue.setFullYear(nextDue.getFullYear() + 1); break;
-          default: nextDue.setMonth(nextDue.getMonth() + 1); break;
-        }
-        if (nextDue > todayLocal) break;
-      }
-      // Format as YYYY-MM-DD in local time — not UTC — so a date computed
-      // in PT doesn't get pushed back a day when toISOString() converts to UTC.
-      const yy = nextDue.getFullYear();
-      const mm = String(nextDue.getMonth() + 1).padStart(2, "0");
-      const dd = String(nextDue.getDate()).padStart(2, "0");
-      const newDateStr = `${yy}-${mm}-${dd}`;
-      // Use .select() so we can VERIFY the update actually ran. The previous
-      // version silently ignored update errors — the user paid 3 times in a
-      // row because next_due_date never advanced and the bill kept showing as
-      // overdue. Log loudly if the update failed.
-      const { data: updated, error: upErr } = await this.supabase
-        .from("obligations")
-        .update({ next_due_date: newDateStr, updated_at: new Date().toISOString() })
-        .eq("id", obligationId)
-        .eq("user_id", this.userId)
-        .select("id, next_due_date")
-        .single();
-      if (upErr) {
-        console.error("[payObligation] failed to advance next_due_date:", { obligationId, newDateStr, error: upErr.message });
-      } else if (!updated || updated.next_due_date !== newDateStr) {
-        console.error("[payObligation] next_due_date update returned unexpected result:", { obligationId, newDateStr, updated });
-      }
-    }
-    this.logActivity("obligation", `Paid ${ob.name}: $${amount}`);
-    // Bills-as-liabilities: reflect the payment on the liability record
-    // (status "paid", dueDate advanced to the new next_due_date).
-    await this.ensureObligationLiability(await this.getObligation(obligationId), { paid: true });
-    return { id, amount, date: today, method, confirmationNumber };
+    const p = await this.getProfile(obligationId);
+    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return undefined;
+    const today = date || getUserToday(this._timezone);
+    // Log the payment against the liability (single source of truth). Recurring
+    // bills carry no permanent balance, so the whole amount is principal.
+    const payment: any = await this.createLiabilityPayment({
+      liabilityProfileId: obligationId,
+      paymentDate: today,
+      amount,
+      principalPortion: amount,
+      interestPortion: 0,
+      fees: 0,
+      paymentType: "standard",
+      sourceAccount: method || null,
+      notes: confirmationNumber ? `Confirmation ${confirmationNumber}` : null,
+    } as any);
+    // Advance the next due date by one cycle and mark upcoming.
+    const f: any = p.fields || {};
+    const nextDue = advanceLiabilityDueDate(f, today);
+    await this.updateProfile(obligationId, {
+      fields: { dueDate: nextDue, nextDueDate: nextDue, lastPaidDate: today, status: "upcoming" },
+    } as any);
+    this.logActivity("obligation", `Paid ${p.name}: $${amount}`);
+    return { id: payment?.id || randomUUID(), amount, date: today, method, confirmationNumber };
   }
 
   async deleteObligation(id: string): Promise<boolean> {
-    // Bills-as-liabilities: read BEFORE delete so we can remove the liability
-    // record this obligation auto-created (never a user-created liability that
-    // a payment obligation merely linked to — those lack source:"obligation").
-    const existing = await this.getObligation(id);
-    /* D1: clean up entity_links rows that reference this obligation */
-    await this.cleanupEntityLinks("obligation", id);
-    await this.supabase.from("obligation_payments").delete().eq("obligation_id", id).eq("user_id", this.userId);
-    const { error } = await this.supabase.from("obligations").delete().eq("id", id).eq("user_id", this.userId);
-    if (!error && (existing as any)?.linkedLiabilityId) {
-      try {
-        const liab = await this.getProfile((existing as any).linkedLiabilityId);
-        if (liab && (liab.fields as any)?.source === "obligation") {
-          await this.deleteProfile(liab.id);
-        }
-      } catch (e: any) {
-        console.warn("[bills→liability] cleanup failed (non-fatal):", e?.message || e);
-      }
-    }
-    return !error;
+    const p = await this.getProfile(id);
+    if (!p) return false;
+    return this.deleteProfile(id);
   }
 
   // ============================================================
@@ -4981,7 +4758,6 @@ export class SupabaseStorage implements IStorage {
     // Source of truth: shared/asset-value.ts. Do NOT inline a local copy of
     // these type sets — drift here silently desyncs dashboard net worth.
     const assetChildTypes = ASSET_PROFILE_TYPES;
-    const liabilityChildTypes = LIABILITY_PROFILE_TYPES;
     const noFilterBreak = !fpIds || fpIds.length === 0;
     // Ownership share for the selected filter, via the shared model. An item
     // with explicit owner links is attributed to those owners; an item with NO
@@ -5012,7 +4788,10 @@ export class SupabaseStorage implements IStorage {
     assetBreakdown.sort((a, b) => b.value - a.value);
     const liabilityBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
-      if (!liabilityChildTypes.has(p.type)) continue;
+      // Only real balance-sheet debt. Recurring service bills (utility/streaming/
+      // phone) are tracked as liabilities for Bills/Cash Flow but excluded from the
+      // Net Worth debt total (user decision: "only real debt counts").
+      if (!isNetWorthLiabilityProfile(p)) continue;
       const gross = resolveLiabilityValue(p.fields);
       if (gross <= 0) continue;
       const share = shareForLiability(p);
@@ -5060,10 +4839,11 @@ export class SupabaseStorage implements IStorage {
         totalLiabilities: (() => {
           // 'liability' is the new canonical type (Phase 1+); 'loan' is the legacy
           // alias kept around for any rows that haven't been migrated yet.
-          const liabilityTypes = LIABILITY_PROFILE_TYPES;
+          // Recurring service bills are excluded here (isNetWorthLiabilityProfile)
+          // — they are monthly cash-flow items, not balance-sheet debt.
           // Same ownership-share rule as liabilityBreakdown (shared model).
           return allProfiles.reduce((s, p) => {
-            if (!liabilityTypes.has(p.type)) return s;
+            if (!isNetWorthLiabilityProfile(p)) return s;
             const share = shareForLiability(p);
             if (share <= 0) return s;
             return s + (resolveLiabilityValue(p.fields) * share / 100);
@@ -6020,7 +5800,6 @@ export class SupabaseStorage implements IStorage {
     // Source of truth: shared/asset-value.ts. Do NOT inline a local copy of
     // these type sets — drift here silently desyncs dashboard net worth.
     const assetChildTypes = ASSET_PROFILE_TYPES;
-    const liabilityChildTypes = LIABILITY_PROFILE_TYPES;
     // This profile's ownership share of an item: the item itself = 100%; else
     // the profile's explicit ownership %, or 100% if it's Self and the item has
     // no explicit owners.
@@ -6039,7 +5818,8 @@ export class SupabaseStorage implements IStorage {
     }
     const liabilities: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
-      if (!liabilityChildTypes.has(p.type)) continue;
+      // Recurring service bills are not balance-sheet debt — exclude from net worth.
+      if (!isNetWorthLiabilityProfile(p)) continue;
       const gross = resolveLiabilityValue(p.fields);
       if (gross <= 0) continue;
       const share = shareForItem(p, liabLinksByLiability);

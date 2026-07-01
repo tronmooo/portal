@@ -99,6 +99,8 @@ import {
   normalizeAnnualRate,
   type AmortizationRow,
 } from "@shared/liability-calc";
+import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
+import { liabilityBillStatus, BILL_STATUS_META } from "@shared/liability-status";
 
 interface LiabilityProfileLike {
   id: string;
@@ -644,6 +646,19 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     ""
   ).toString();
   const subtypeLabel = SUBTYPE_LABELS[subtypeRaw] || "Liability";
+  // Behavioral family drives which cards/calcs the page shows. A phone bill is
+  // NOT amortized over 360 months (that produced the $0.17/mo bug); only real
+  // loans + credit cards run the payoff schedule.
+  const family = liabilityFamily(subtypeRaw);
+  const amortize = isAmortizable(subtypeRaw);
+  const recurringBill = isRecurringBill(subtypeRaw);
+  const f2 = (profile.fields || {}) as any;
+  const billMonthly = Number(f2.monthlyAmount ?? f2.monthly_amount ?? f2.amount ?? f2.balance ?? f2.cost ?? 0) || 0;
+  const billDueRaw = String(f2.dueDate ?? f2.due_date ?? f2.nextDueDate ?? f2.renewalDate ?? "").slice(0, 10);
+  const todayISO = new Date().toLocaleDateString("en-CA");
+  const billStatus = liabilityBillStatus(billDueRaw, todayISO, false);
+  const creditLimit = Number(f2.creditLimit ?? f2.credit_limit ?? 0) || 0;
+  const utilizationPct = creditLimit > 0 ? Math.min(999, Math.round((Number(f2.balance ?? f2.currentBalance ?? 0) / creditLimit) * 100)) : 0;
 
   // Payments fetch
   const paymentsQuery = useQuery<LiabilityPayment[]>({
@@ -921,45 +936,56 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           </div>
           <div className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
             <p className="text-lg font-semibold tabular-nums">
-              {summary.remainingMonths > 0 ? `${summary.remainingMonths} mo` : "Paid"}
+              {recurringBill
+                ? (BILL_STATUS_META[billStatus].label)
+                : summary.remainingMonths > 0 ? `${summary.remainingMonths} mo` : "Paid"}
             </p>
-            <p className="text-xs text-muted-foreground">Remaining</p>
+            <p className="text-xs text-muted-foreground">{recurringBill ? "Status" : "Remaining"}</p>
           </div>
         </div>
 
-        {/* KPI strip */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
-          <KpiTile
-            label="Current balance"
-            value={fmtUSDShort(summary.currentBalance)}
-            icon={<DollarSign className="w-4 h-4" />}
-            testid="kpi-balance"
-          />
-          <KpiTile
-            label="Monthly payment"
-            value={fmtUSDShort(summary.monthlyPayment)}
-            icon={<CalendarIcon className="w-4 h-4" />}
-            testid="kpi-monthly"
-          />
-          <KpiTile
-            label="APR"
-            value={fmtPct(summary.annualRate)}
-            icon={<Percent className="w-4 h-4" />}
-            testid="kpi-apr"
-          />
-          <KpiTile
-            label="Payoff"
-            value={
-              summary.remainingMonths > 0
-                ? `${summary.remainingMonths} mo`
-                : "Paid off"
-            }
-            sub={summary.remainingMonths > 0 ? fmtDate(summary.payoffDate) : undefined}
-            icon={<TrendingDown className="w-4 h-4" />}
-            testid="kpi-payoff"
-          />
-        </div>
-        {summary.originalBalance > 0 && (
+        {/* KPI strip — type-aware. Amortizing/revolving loans show payoff math;
+            recurring bills show monthly + due + status; one-time debt shows the
+            balance owed. Recurring bills NEVER show APR/payoff (the $0.17 bug). */}
+        {recurringBill ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+            <KpiTile label="Monthly amount" value={fmtUSDShort(billMonthly)} icon={<DollarSign className="w-4 h-4" />} testid="kpi-bill-monthly" />
+            <KpiTile label="Next due" value={billDueRaw ? fmtDate(billDueRaw) : "—"} icon={<CalendarIcon className="w-4 h-4" />} testid="kpi-bill-due" />
+            <KpiTile label="Status" value={BILL_STATUS_META[billStatus].label} icon={<TrendingDown className="w-4 h-4" />} testid="kpi-bill-status" />
+            <KpiTile label="Autopay" value={(f2.autopay || f2.autoRenew) ? "On" : "Off"} icon={<Percent className="w-4 h-4" />} testid="kpi-bill-autopay" />
+          </div>
+        ) : family === "revolving" ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+            <KpiTile label="Balance" value={fmtUSDShort(summary.currentBalance)} icon={<DollarSign className="w-4 h-4" />} testid="kpi-balance" />
+            <KpiTile label="Available" value={creditLimit > 0 ? fmtUSDShort(Math.max(0, creditLimit - summary.currentBalance)) : "—"} icon={<CalendarIcon className="w-4 h-4" />} testid="kpi-available" />
+            <KpiTile label="Utilization" value={creditLimit > 0 ? `${utilizationPct}%` : "—"} icon={<Percent className="w-4 h-4" />} testid="kpi-utilization" />
+            <KpiTile label="Min payment" value={fmtUSDShort(terms.minimumPayment || summary.monthlyPayment)} icon={<TrendingDown className="w-4 h-4" />} testid="kpi-min-payment" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+            <KpiTile
+              label={family === "one_time" ? "Amount owed" : "Current balance"}
+              value={fmtUSDShort(summary.currentBalance)}
+              icon={<DollarSign className="w-4 h-4" />}
+              testid="kpi-balance"
+            />
+            <KpiTile
+              label="Monthly payment"
+              value={amortize && summary.monthlyPayment > 0 ? fmtUSDShort(summary.monthlyPayment) : "—"}
+              icon={<CalendarIcon className="w-4 h-4" />}
+              testid="kpi-monthly"
+            />
+            <KpiTile label="APR" value={summary.annualRate > 0 ? fmtPct(summary.annualRate) : "—"} icon={<Percent className="w-4 h-4" />} testid="kpi-apr" />
+            <KpiTile
+              label="Payoff"
+              value={amortize && summary.remainingMonths > 0 ? `${summary.remainingMonths} mo` : "—"}
+              sub={amortize && summary.remainingMonths > 0 ? fmtDate(summary.payoffDate) : undefined}
+              icon={<TrendingDown className="w-4 h-4" />}
+              testid="kpi-payoff"
+            />
+          </div>
+        )}
+        {!recurringBill && summary.originalBalance > 0 && (
           <div className="mt-3" data-testid="liability-progress">
             <div className="flex justify-between text-xs text-muted-foreground mb-1">
               <span>Paid down</span>
@@ -1274,13 +1300,18 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               </Card>
             </div>
 
-            {/* Section 2: Payoff Calculator */}
+            {/* Section 2: Payoff Calculator — only for amortizing/revolving debt.
+                Recurring bills + generic one-time debt don't have a payoff
+                schedule; showing one produced the $0.17/360-month nonsense. */}
+            {amortize && (
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Payoff Calculator</p>
               <PayoffCalculator terms={terms} baseSummary={summary} />
             </div>
+            )}
 
-            {/* Section 3: Amortization Schedule */}
+            {/* Section 3: Amortization Schedule (amortizing debt only) */}
+            {amortize && (
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Amortization Schedule</p>
               <Card>
@@ -1320,6 +1351,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 </CardContent>
               </Card>
             </div>
+            )}
           </TabsContent>
 
           {/* DOCUMENTS */}

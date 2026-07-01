@@ -15,6 +15,11 @@
 // This module is pure (no I/O, no React, no DB) so it works in both
 // browser and Node contexts without bundler dance.
 
+// liability-types is pure + dependency-free (no import back into this module),
+// so there is no cycle. Used by isNetWorthLiabilityProfile below to exclude
+// recurring service bills from balance-sheet debt.
+import { isRecurringBill } from "./liability-types";
+
 // ---------- parseMoney ----------
 // Mirrors client/src/lib/utils.ts parseMoney and the inline server copy.
 // Handles strings like "$25,000", "40k", "1.2m", numbers, null/undefined.
@@ -164,4 +169,23 @@ export function isAssetProfile(p: any): boolean {
 
 export function isLiabilityProfile(p: any): boolean {
   return !!p && LIABILITY_PROFILE_TYPES.has(String(p.type));
+}
+
+// ---------- Net-worth liability filter ----------
+// A recurring service bill (utility, phone plan, streaming, etc.) is tracked as a
+// liability profile but is NOT balance-sheet debt — it has no permanent balance,
+// only a monthly amount. Those must be excluded from the Net Worth debt total
+// (user decision: "only real debt counts"). We check the fine-grained `type_key`
+// via the behavioral family so a `type: "liability", type_key: "utility"` profile
+// is shown in Bills/Cash Flow but never subtracted from net worth.
+//
+/**
+ * True when a liability profile's balance should count toward the Net Worth
+ * debt total. Excludes recurring service bills. Anything the coarse-type check
+ * already rejects is rejected here too.
+ */
+export function isNetWorthLiabilityProfile(p: any): boolean {
+  if (!isLiabilityProfile(p)) return false;
+  if (isRecurringBill(p?.type_key ?? p?.typeKey)) return false;
+  return true;
 }

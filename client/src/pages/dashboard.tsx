@@ -7,7 +7,7 @@ import { invalidateDomain } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
 import { categoryTheme } from "@/lib/category-theme";
 import { AccentCard } from "@/components/ui/accent-card";
-import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
+import { resolveAssetValue, resolveLiabilityBalance, isNetWorthLiabilityProfile } from "@shared/asset-value";
 import { goalsQueryKey } from "@shared/query-keys";
 import {
   RECUR_PRESETS, parseRecurrence, recurrenceToTags, isRecurring as isRecurringRule,
@@ -664,7 +664,9 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
     [allProfiles, filterMode, filterIds.join(","), assetPartyLinks, liabilityProfileLinks]
   );
   const heroLiabilityProfiles = useMemo(
-    () => (allProfiles || []).filter((p: any) => resolveLiabilityBalance(p) > 0 && matchesProfileFilter(p)),
+    // Recurring service bills are excluded from balance-sheet debt (matches the
+    // server finance snapshot); only real debt counts toward Net Worth.
+    () => (allProfiles || []).filter((p: any) => isNetWorthLiabilityProfile(p) && resolveLiabilityBalance(p) > 0 && matchesProfileFilter(p)),
     [allProfiles, filterMode, filterIds.join(","), assetPartyLinks, liabilityProfileLinks]
   );
   // BUG-20260528-networth-filter-leakage: when a profile filter is active,
@@ -4835,6 +4837,8 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   // tile total and the popup total are always identical. Falls back to the
   // /api/dashboard-enhanced numbers only while profiles are still loading.
   const tileLiabilityProfiles = useMemo(() => (allProfiles || []).filter((p: any) => {
+    // Exclude recurring service bills from balance-sheet debt (server-parity).
+    if (!isNetWorthLiabilityProfile(p)) return false;
     if (resolveLiabilityBalance(p) <= 0) return false;
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     const pParent = p.parentProfileId;
@@ -5098,6 +5102,8 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
           cash-flow, not balance-sheet liabilities. */}
       {(() => {
         const liabilityProfiles = (allProfiles || []).filter((p: any) => {
+          // Recurring service bills are excluded from balance-sheet debt.
+          if (!isNetWorthLiabilityProfile(p)) return false;
           const bal = resolveLiabilityBalance(p);
           if (bal <= 0) return false;
           if (filterMode === "everyone" || filterIds.length === 0) return true;

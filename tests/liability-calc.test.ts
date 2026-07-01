@@ -314,6 +314,15 @@ describe("allocatePayment", () => {
     expect(b.interest).toBeCloseTo(a.interest, 6);
     expect(b.principal).toBeCloseTo(a.principal, 6);
   });
+
+  it("decimal payments reduce the balance by the EXACT cents (user report: $0.17)", () => {
+    // 0% rate so the whole payment is principal — the balance must drop by
+    // exactly the decimal amount, not a float-drifted approximation.
+    expect(allocatePayment(0.17, 60, 0).remainingBalanceAfter).toBe(59.83);
+    expect(allocatePayment(12.34, 100, 0).remainingBalanceAfter).toBe(87.66);
+    expect(allocatePayment(1234.56, 5000, 0).principal).toBe(1234.56);
+    expect(allocatePayment(0.17, 60, 0).principal).toBe(0.17);
+  });
 });
 
 describe("summarizeLiability", () => {
