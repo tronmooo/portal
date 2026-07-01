@@ -72,6 +72,30 @@ both are addressed below.
 - **Duplicate expense allowed** — correct per the agreed policy (duplicates OK
   for everything except person profiles).
 
+## Per-pop-up profile isolation (VERIFIED — "select Pop, see only Pop")
+`tests/audit/verify-popup-isolation.ts` creates a **Pop** profile and an
+identical **Decoy** profile (plus an orphan/self expense), then hits every
+endpoint each dashboard pop-up reads with `?profileIds=<Pop>` and asserts Pop's
+rows appear while the Decoy's and the orphan's never do. **Result: 22/22 pass,
+zero leaks:**
+
+| Pop-up | Endpoint | Pop shown | Decoy hidden | Orphan/self hidden |
+|---|---|---|---|---|
+| Cash Flow / Finance expenses | /api/expenses?profileIds | ✅ | ✅ | ✅ |
+| Cash Flow income | /api/incomes?profileIds | ✅ | ✅ | ✅ |
+| Cash Flow / Bills obligations | /api/obligations?profileIds | ✅ | ✅ | — |
+| Tasks | /api/tasks?profileIds | ✅ | ✅ | — |
+| Habits | /api/habits?profileIds | ✅ | ✅ | — |
+| Calendar events | /api/events?profileIds | ✅ | ✅ | — |
+| Spending | dashboard-enhanced.monthlyExpenseRecords | ✅ | ✅ | ✅ |
+| Net Worth | dashboard-enhanced.assetBreakdown | ✅ | ✅ | — |
+| Net Worth total | totalAssetValue = $5,000 (Pop only, excludes Decoy's $5,000) | ✅ | ✅ | — |
+| Budget | /api/budgets (profileId-aware) | ✅ | — | — |
+
+Confirms the user requirement: **selecting Pop shows only Pop's data in every
+single pop-up.** Backed by the canonical `passesProfileFilter`/`isInScope` rules
+(unit-tested) that both the server and client use.
+
 ## Data integrity & isolation
 - Every created row was read back with its saved fields intact; updates and
   deletes verified.
