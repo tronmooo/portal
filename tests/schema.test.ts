@@ -67,6 +67,12 @@ describe('Schema Validation', () => {
       });
       expect(result.category).toBe('general');
     });
+
+    it('rejects an absurdly large amount (MAX_MONEY cap)', () => {
+      // Audit found the API accepted a $1e15 expense — must be capped.
+      expect(insertExpenseSchema.safeParse({ amount: 1e15, description: 'Huge' }).success).toBe(false);
+      expect(insertExpenseSchema.safeParse({ amount: 1_000_000_000, description: 'Fine' }).success).toBe(true);
+    });
   });
 
   describe('insertHabitSchema', () => {

@@ -481,9 +481,13 @@ export interface ObligationPayment {
   createdAt?: string;
 }
 
+// Sane hard ceiling for money fields — beyond any real transaction, but blocks
+// absurd/overflow values (e.g. a $1e15 expense the API previously accepted).
+export const MAX_MONEY = 1_000_000_000_000; // $1 trillion
+
 export const insertObligationSchema = z.object({
   name: z.string().min(1),
-  amount: z.number().nonnegative("Amount must be 0 or positive"),
+  amount: z.number().nonnegative("Amount must be 0 or positive").max(MAX_MONEY, "Amount is unrealistically large"),
   frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"]).default("monthly"),
   category: z.string().default("general"),
   kind: z.enum(["bill","subscription","loan_payment","medication","maintenance","appointment","habit","doc_expiration","task"]).default("bill"),
@@ -713,7 +717,7 @@ export interface Expense {
 }
 
 export const insertExpenseSchema = z.object({
-  amount: z.number().positive("Amount must be a positive number"),
+  amount: z.number().positive("Amount must be a positive number").max(MAX_MONEY, "Amount is unrealistically large"),
   category: z.string().default("general"),
   description: z.string().min(1, "Description must be non-empty"),
   vendor: z.string().optional(),
@@ -751,7 +755,7 @@ export interface Income {
 
 export const insertIncomeSchema = z.object({
   description: z.string().min(1),
-  amount: z.number().positive(),
+  amount: z.number().positive().max(MAX_MONEY, "Amount is unrealistically large"),
   category: z.string().default("salary"),
   frequency: z.string().default("monthly"),
   date: z.string().optional(),
