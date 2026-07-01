@@ -2790,134 +2790,68 @@ function HeroBriefing({ enhanced, allProfiles, filterIds = [], filterMode = "eve
 function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone" }: { enhanced: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
   const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: incomesRaw } = useQuery<any>({
-    queryKey: ["/api/incomes", filterMode, ...filterIds, "trends"],
-    queryFn: () => apiRequest("GET", `/api/incomes${leading}`).then(r => r.json()).catch(() => []),
+  // Trends is non-finance by design — it surfaces the person's own life data
+  // (health, habits, goals, wellbeing). The only extra fetch is goals; health,
+  // habit, mood, task and journal signals all ride along on `enhanced`/`stats`.
+  const { data: goalsRaw } = useQuery<any>({
+    queryKey: ["/api/goals", filterMode, ...filterIds, "trends"],
+    queryFn: () => apiRequest("GET", `/api/goals${leading}`).then(r => r.json()).catch(() => []),
     staleTime: 60_000,
   });
-  const incomes = Array.isArray(incomesRaw) ? incomesRaw : (incomesRaw?.items || []);
-  const histUrl = leading ? `/api/net-worth/history${leading}&lookbackDays=120` : `/api/net-worth/history?lookbackDays=120`;
-  const { data: nwHistory = [] } = useQuery<any[]>({
-    queryKey: ["/api/net-worth/history", filterMode, ...filterIds, "trends"],
-    queryFn: () => apiRequest("GET", histUrl).then(r => r.json()).catch(() => []),
-    staleTime: 60_000,
-  });
+  const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
 
-  const income = incomes.reduce((s: number, i: any) => s + (Number(i.amount) || 0), 0);
-  const spend = Number(enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0);
-  const net = income - spend;
-  const adherence = Math.min(100, Number(stats?.habitCompletionRate ?? 0));
-
-  const nwSeries = useMemo(() => {
-    const rows = Array.isArray(nwHistory) ? [...nwHistory] : [];
-    rows.sort((a, b) => String(a.snapshotDate).localeCompare(String(b.snapshotDate)));
-    return rows.map((r: any) => Number(r.netWorth) || 0);
-  }, [nwHistory]);
-  const nwTrend = nwSeries.length >= 2 && nwSeries[0] !== 0 ? ((nwSeries[nwSeries.length - 1] - nwSeries[0]) / Math.abs(nwSeries[0])) * 100 : null;
-  const nwPath = useMemo(() => {
-    const s = nwSeries.length >= 2 ? nwSeries : null;
-    if (!s) return null;
-    const min = Math.min(...s), max = Math.max(...s), span = (max - min) || 1;
-    const W = 100, H = 28;
-    return s.map((v, i) => `${i === 0 ? "M" : "L"}${((i / (s.length - 1)) * W).toFixed(1)},${(H - ((v - min) / span) * H).toFixed(1)}`).join(" ");
-  }, [nwSeries]);
-
-  const fmt = (n: number) => `$${Math.round(Math.abs(n)).toLocaleString()}`;
   const fmtVal = (n: number) => Number.isInteger(n) ? n.toLocaleString() : (Math.round(n * 10) / 10).toLocaleString();
 
-  // ── Dynamic, per-person trend pool ────────────────────────────────────────
-  // Instead of three fixed cards, we assemble every trend the person actually
-  // has data for — cash flow, spending momentum, top category, bills, net
-  // worth, habits, streaks, and their own health trackers — score each by how
-  // much real signal it carries for THIS person, then render the strongest
-  // three. Empty domains disappear rather than showing "—" placeholders.
-  const GOOD = "155 60% 48%", BAD = "0 72% 55%", WARN = "43 85% 52%", INFO = "200 80% 55%", VIOLET = "262 70% 62%";
+  // ── Dynamic, per-person trend pool (life data, no finance) ────────────────
+  // The Trends strip surfaces what matters most to THIS person's day-to-day:
+  // the health metrics they log, habit consistency, goal progress, wellbeing
+  // (mood + journaling), and open tasks / renewals. Finance has its own
+  // section and never appears here. Every candidate is gated on real data,
+  // scored by how strong its signal is for this person, and only the three
+  // strongest render — empty domains simply drop out.
+  const GOOD = "155 60% 48%", BAD = "0 72% 55%", WARN = "43 85% 52%", INFO = "200 80% 55%", VIOLET = "262 70% 62%", TEAL = "173 60% 44%";
+  const MOOD_EMOJI: Record<string, string> = { amazing: "🤩", great: "😊", good: "🙂", okay: "😐", neutral: "😶", bad: "😞", awful: "😢", terrible: "😫" };
+  const POSITIVE_MOODS = new Set(["amazing", "great", "good"]);
+  const LOW_MOODS = new Set(["bad", "awful", "terrible"]);
   type TrendCard = { key: string; title: string; accent: string; headline: string; body?: ReactNode; caption: string; href: string; score: number };
-  const finSnap = enhanced?.financeSnapshot || {};
-  const spendByCategory: Record<string, number> = finSnap.spendByCategory || {};
-  const spendTrend = Number(finSnap.spendTrend ?? 0);
-  const lastMonthTotal = Number(finSnap.lastMonthTotal ?? 0);
-  const upcomingBills: any[] = Array.isArray(finSnap.upcomingBills) ? finSnap.upcomingBills : [];
+
+  const adherence = Math.min(100, Number(stats?.habitCompletionRate ?? 0));
   const healthSnap: any[] = Array.isArray(enhanced?.healthSnapshot) ? enhanced.healthSnapshot : [];
   const bestStreak = (Array.isArray(stats?.streaks) ? stats!.streaks : []).reduce(
     (best: { name: string; days: number } | null, s: any) => (Number(s?.days) || 0) > (best?.days ?? 0) ? { name: s.name, days: Number(s.days) } : best, null);
   const journalStreak = Number(stats?.journalStreak ?? 0);
+  const mood = stats?.currentMood;
+  const weeklyEntries = Number(stats?.weeklyEntries ?? 0);
+  const overdueTasks = Array.isArray(enhanced?.overdueTasks) ? enhanced.overdueTasks.length : 0;
+  const activeTasks = Number(stats?.activeTasks ?? 0);
+  const expiringDocs = Array.isArray(enhanced?.expiringDocuments) ? enhanced.expiringDocuments.length : 0;
+  const activeGoals = (Array.isArray(goals) ? goals : []).filter((g: any) => String(g.status || "").toLowerCase() === "active");
 
   const pool: TrendCard[] = [];
 
-  // Cash flow — only meaningful once there's income or spend on record.
-  if (income > 0 || spend > 0) {
-    const noIncome = income <= 0;
+  // Health trackers — the person's own metrics (weight, steps, sleep, water,
+  // BP, mood…). Rank by how actively they log; surface the two strongest so a
+  // tracking-focused user sees their real numbers, with this week's movement.
+  const rankedHealth = [...healthSnap]
+    .filter((h: any) => typeof h.latestValue === "number" && !isNaN(h.latestValue))
+    .sort((a: any, b: any) => (Number(b.entryCount) || 0) - (Number(a.entryCount) || 0));
+  rankedHealth.slice(0, 2).forEach((h: any, idx: number) => {
+    const dir = h.trend === "up" ? "↑" : h.trend === "down" ? "↓" : "→";
+    const val = h.dailyTotal != null ? h.dailyTotal : h.latestValue;
+    const moved = Number(h.trendValue) > 0;
     pool.push({
-      key: "cashflow", title: "Spending vs income", accent: net >= 0 ? GOOD : BAD,
-      headline: `${net >= 0 ? "+" : "−"}${fmt(net)}`,
-      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>In {fmt(income)}</span><span>·</span><span>Out {fmt(spend)}</span></div>,
-      caption: noIncome ? "No income recorded yet — add a source to see true cash flow." : net >= 0 ? "You're cash-flow positive — consider moving the surplus to savings." : "You're spending more than you earn — review top categories.",
-      href: "/dashboard/finance",
-      score: 60 + Math.min(30, Math.abs(net) / 100) + (net < 0 ? 8 : 0),
+      key: `health-${h.trackerId}`, title: h.name, accent: TEAL,
+      headline: `${fmtVal(Number(val))}${h.unit ? ` ${h.unit}` : ""}`,
+      body: <div className="mt-1 text-[10px] text-muted-foreground">{dir} {h.entryCount} log{h.entryCount === 1 ? "" : "s"} · 7-day avg {fmtVal(Number(h.average))}</div>,
+      caption: moved ? `${h.name} ${dir === "↑" ? "rose" : dir === "↓" ? "fell" : "held"} ${fmtVal(Number(h.trendValue))}${h.unit ? ` ${h.unit}` : ""} this week — keep logging.` : `${h.name} steady this week — keep the habit going.`,
+      href: "/dashboard/health",
+      // The primary tracker leads the section; the second only fills a slot
+      // when there aren't enough other live signals.
+      score: (idx === 0 ? 70 : 40) + Math.min(24, (Number(h.entryCount) || 0) * 2),
     });
-  }
+  });
 
-  // Spending momentum — this month vs last (needs a prior month to compare).
-  if (lastMonthTotal > 0 && spend > 0) {
-    const up = spendTrend > 0;
-    pool.push({
-      key: "spend-momentum", title: "Spending momentum", accent: up ? WARN : GOOD,
-      headline: `${up ? "↑" : spendTrend < 0 ? "↓" : ""} ${Math.abs(spendTrend)}%`,
-      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>This mo {fmt(spend)}</span><span>·</span><span>Last {fmt(lastMonthTotal)}</span></div>,
-      caption: up ? "Spending is climbing vs last month — check what changed." : spendTrend < 0 ? "You're spending less than last month — nice restraint." : "Spending is holding steady month over month.",
-      href: "/dashboard/finance",
-      score: 48 + Math.min(24, Math.abs(spendTrend) / 2),
-    });
-  }
-
-  // Top spending category — where the money actually goes.
-  const catEntries = Object.entries(spendByCategory).filter(([, v]) => Number(v) > 0).sort((a, b) => Number(b[1]) - Number(a[1]));
-  if (catEntries.length > 0 && spend > 0) {
-    const [topCat, topAmt] = catEntries[0];
-    const pct = spend > 0 ? Math.round((Number(topAmt) / spend) * 100) : 0;
-    pool.push({
-      key: "top-category", title: "Top category", accent: INFO,
-      headline: fmt(Number(topAmt)),
-      body: <div className="mt-1 text-[10px] text-muted-foreground"><span className="capitalize">{topCat}</span> · {pct}% of spend</div>,
-      caption: pct >= 40 ? `${topCat} dominates your spend — a small cut here goes far.` : `Most of your spend is on ${topCat} this month.`,
-      href: "/dashboard/finance",
-      score: 40 + Math.min(20, pct / 2),
-    });
-  }
-
-  // Upcoming bills — near-term cash commitments.
-  if (upcomingBills.length > 0) {
-    const soon = upcomingBills.filter((b: any) => Number(b.daysUntil) <= 7);
-    const dueTotal = upcomingBills.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
-    const overdue = upcomingBills.filter((b: any) => Number(b.daysUntil) < 0).length;
-    pool.push({
-      key: "bills", title: "Bills ahead", accent: overdue > 0 ? BAD : soon.length > 0 ? WARN : INFO,
-      headline: fmt(dueTotal),
-      body: <div className="mt-1 text-[10px] text-muted-foreground">{upcomingBills.length} due in 30d{soon.length > 0 ? ` · ${soon.length} this week` : ""}</div>,
-      caption: overdue > 0 ? `${overdue} bill${overdue === 1 ? "" : "s"} overdue — clear ${overdue === 1 ? "it" : "them"} to avoid fees.` : soon.length > 0 ? `${soon.length} bill${soon.length === 1 ? "" : "s"} due this week — line up the cash.` : "Bills are scheduled — nothing urgent this week.",
-      href: "/dashboard/finance",
-      score: 44 + (overdue > 0 ? 20 : 0) + soon.length * 4,
-    });
-  }
-
-  // Net worth — only once there are ≥2 snapshots to draw a real trend.
-  if (nwTrend != null && nwPath) {
-    pool.push({
-      key: "networth", title: "Net worth", accent: nwTrend >= 0 ? GOOD : BAD,
-      headline: `${nwTrend >= 0 ? "↑" : "↓"} ${Math.abs(nwTrend).toFixed(1)}%`,
-      body: (
-        <svg viewBox="0 0 100 28" className="mt-1 h-7 w-full" preserveAspectRatio="none">
-          <path d={nwPath} fill="none" stroke={`hsl(${nwTrend >= 0 ? GOOD : BAD})`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      ),
-      caption: nwTrend >= 0 ? "Trending up — keep paying down high-interest debt." : "Trending down — review your largest liabilities.",
-      href: "/dashboard/finance",
-      score: 58 + Math.min(20, Math.abs(nwTrend)),
-    });
-  }
-
-  // Habit adherence — only when the person is actually running habits.
+  // Habit adherence — daily consistency across active habits.
   if (Number(stats?.totalHabits ?? 0) > 0) {
     pool.push({
       key: "habits", title: "Habit adherence", accent: adherence >= 60 ? GOOD : WARN,
@@ -2925,7 +2859,28 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
       body: <div className="mt-1.5 h-1.5 rounded-full bg-muted/60 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${adherence}%`, background: `hsl(${adherence >= 60 ? GOOD : WARN})` }} /></div>,
       caption: adherence >= 60 ? "Strong consistency — keep the streak going." : "Below your target — pick one keystone habit to lock in today.",
       href: "/dashboard/health",
-      score: 56 + adherence / 5,
+      score: 62 + adherence / 5,
+    });
+  }
+
+  // Goal progress — how far along the person is on what they set out to do.
+  if (activeGoals.length > 0) {
+    const pcts = activeGoals.map((g: any) => {
+      const start = Number(g.startValue ?? 0), tgt = Number(g.target ?? 0), cur = Number(g.current ?? 0);
+      const denom = tgt - start;
+      const raw = denom !== 0 ? (cur - start) / denom : (tgt !== 0 ? cur / tgt : 0);
+      return Math.max(0, Math.min(100, raw * 100));
+    });
+    const avg = Math.round(pcts.reduce((s: number, p: number) => s + p, 0) / pcts.length);
+    let leadIdx = 0; pcts.forEach((p: number, i: number) => { if (p > pcts[leadIdx]) leadIdx = i; });
+    const lead = activeGoals[leadIdx];
+    pool.push({
+      key: "goals", title: "Goal progress", accent: avg >= 60 ? GOOD : INFO,
+      headline: `${avg}%`,
+      body: <div className="mt-1.5 h-1.5 rounded-full bg-muted/60 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${avg}%`, background: `hsl(${avg >= 60 ? GOOD : INFO})` }} /></div>,
+      caption: `${activeGoals.length} active goal${activeGoals.length === 1 ? "" : "s"} · “${lead?.title || "goal"}” is furthest along — keep the momentum.`,
+      href: "/goals",
+      score: 60 + avg / 5,
     });
   }
 
@@ -2937,11 +2892,24 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
       body: <div className="mt-1 text-[10px] text-muted-foreground truncate">{bestStreak.name}</div>,
       caption: `${bestStreak.days} days on “${bestStreak.name}” — don't break the chain today.`,
       href: "/dashboard/health",
-      score: 38 + Math.min(20, bestStreak.days),
+      score: 46 + Math.min(24, bestStreak.days),
     });
   }
 
-  // Journal streak — reflective consistency.
+  // Mood — most recent wellbeing check-in.
+  if (mood) {
+    const positive = POSITIVE_MOODS.has(mood), low = LOW_MOODS.has(mood);
+    pool.push({
+      key: "mood", title: "Mood", accent: positive ? GOOD : low ? WARN : INFO,
+      headline: `${MOOD_EMOJI[mood] || "🙂"}`,
+      body: <div className="mt-1 text-[10px] text-muted-foreground capitalize">Feeling {mood}</div>,
+      caption: positive ? "You've been feeling good lately — note what's working." : low ? "A rougher stretch — a short journal entry can help unpack it." : "Steady mood — a quick check-in keeps the trend visible.",
+      href: "/journal",
+      score: 44,
+    });
+  }
+
+  // Journaling streak — reflective consistency.
   if (journalStreak >= 2) {
     pool.push({
       key: "journal-streak", title: "Journaling", accent: VIOLET,
@@ -2949,31 +2917,45 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
       body: <div className="mt-1 text-[10px] text-muted-foreground">days in a row</div>,
       caption: `${journalStreak}-day journaling streak — keep showing up for yourself.`,
       href: "/journal",
-      score: 30 + Math.min(16, journalStreak),
+      score: 38 + Math.min(16, journalStreak),
     });
   }
 
-  // Health trackers — the person's own metrics (weight, steps, water, BP…).
-  // Rank by how actively they log; surface the two strongest so a
-  // health-focused user sees their real data, not a generic placeholder.
-  const rankedHealth = [...healthSnap]
-    .filter((h: any) => typeof h.latestValue === "number" && !isNaN(h.latestValue))
-    .sort((a: any, b: any) => (Number(b.entryCount) || 0) - (Number(a.entryCount) || 0));
-  rankedHealth.slice(0, 2).forEach((h: any, idx: number) => {
-    const dir = h.trend === "up" ? "↑" : h.trend === "down" ? "↓" : "→";
-    const val = h.dailyTotal != null ? h.dailyTotal : h.latestValue;
-    const moved = Number(h.trendValue) > 0;
+  // Task focus — open commitments and anything overdue.
+  if (activeTasks > 0 || overdueTasks > 0) {
     pool.push({
-      key: `health-${h.trackerId}`, title: h.name, accent: INFO,
-      headline: `${fmtVal(Number(val))}${h.unit ? ` ${h.unit}` : ""}`,
-      body: <div className="mt-1 text-[10px] text-muted-foreground">{h.entryCount} log{h.entryCount === 1 ? "" : "s"} · 7-day avg {fmtVal(Number(h.average))}</div>,
-      caption: moved ? `${h.name} ${dir === "↑" ? "rose" : dir === "↓" ? "fell" : "held"} ${fmtVal(Number(h.trendValue))}${h.unit ? ` ${h.unit}` : ""} this week — keep logging.` : `${h.name} steady this week — keep the habit going.`,
-      href: "/dashboard/health",
-      // Primary tracker competes with finance/habits; the second only fills
-      // a slot when higher-signal domains are absent.
-      score: (idx === 0 ? 50 : 26) + Math.min(20, (Number(h.entryCount) || 0) * 2),
+      key: "tasks", title: "Task focus", accent: overdueTasks > 0 ? BAD : INFO,
+      headline: overdueTasks > 0 ? `${overdueTasks} overdue` : `${activeTasks} open`,
+      body: <div className="mt-1 text-[10px] text-muted-foreground">{activeTasks} open task{activeTasks === 1 ? "" : "s"}{overdueTasks > 0 ? ` · ${overdueTasks} overdue` : ""}</div>,
+      caption: overdueTasks > 0 ? `${overdueTasks} task${overdueTasks === 1 ? "" : "s"} overdue — knock ${overdueTasks === 1 ? "it" : "one"} out first.` : "On top of your tasks — pick the next one to move.",
+      href: "/tasks",
+      score: 40 + (overdueTasks > 0 ? 18 : 0) + Math.min(12, activeTasks),
     });
-  });
+  }
+
+  // Weekly tracking activity — how engaged the person has been this week.
+  if (weeklyEntries > 0) {
+    pool.push({
+      key: "activity", title: "This week", accent: INFO,
+      headline: `${weeklyEntries}`,
+      body: <div className="mt-1 text-[10px] text-muted-foreground">entries logged</div>,
+      caption: `${weeklyEntries} log${weeklyEntries === 1 ? "" : "s"} this week — consistent tracking builds the clearest trends.`,
+      href: "/dashboard/health",
+      score: 30 + Math.min(16, weeklyEntries),
+    });
+  }
+
+  // Document renewals — important dates that lapse if ignored.
+  if (expiringDocs > 0) {
+    pool.push({
+      key: "docs", title: "Renewals", accent: WARN,
+      headline: `${expiringDocs}`,
+      body: <div className="mt-1 text-[10px] text-muted-foreground">expiring soon</div>,
+      caption: `${expiringDocs} document${expiringDocs === 1 ? "" : "s"} expiring soon — renew before ${expiringDocs === 1 ? "it lapses" : "they lapse"}.`,
+      href: "/dashboard/documents",
+      score: 34 + Math.min(16, expiringDocs * 4),
+    });
+  }
 
   const cards = pool.sort((a, b) => b.score - a.score).slice(0, 3);
 
@@ -2986,7 +2968,7 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
       {cards.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border/50 bg-card/40 p-4 text-center" data-testid="trend-empty">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">No trends yet</p>
-          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">Log some spending, habits, or a health metric and personalized trends will appear here.</p>
+          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">Log a health metric, check off a habit, or set a goal and personalized trends will appear here.</p>
         </div>
       ) : (
         <div className={`grid grid-cols-1 ${gridCols} gap-2.5`}>
