@@ -2790,170 +2790,104 @@ function HeroBriefing({ enhanced, allProfiles, filterIds = [], filterMode = "eve
 function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone" }: { enhanced: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
   const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  // Trends is non-finance by design — it surfaces the person's own life data
-  // (health, habits, goals, wellbeing). The only extra fetch is goals; health,
-  // habit, mood, task and journal signals all ride along on `enhanced`/`stats`.
-  const { data: goalsRaw } = useQuery<any>({
-    queryKey: ["/api/goals", filterMode, ...filterIds, "trends"],
-    queryFn: () => apiRequest("GET", `/api/goals${leading}`).then(r => r.json()).catch(() => []),
+  // ── Trends = MOVEMENT ONLY ────────────────────────────────────────────────
+  // Every other dashboard section (Hero, Explore, Health, Goals, Now) shows
+  // today's numbers. To avoid repeating any of them, Trends shows the one thing
+  // they don't: change over time. Each card is a week-over-week delta or a
+  // last-7-day trajectory — a direction, never a restated count. We derive the
+  // deltas from the raw habit check-ins and tracker entries (this week vs last)
+  // plus the server's per-metric 7-day trend.
+  const { data: habitsRaw } = useQuery<any>({
+    queryKey: ["/api/habits", filterMode, ...filterIds, "trends"],
+    queryFn: () => apiRequest("GET", `/api/habits${leading}`).then(r => r.json()).catch(() => []),
     staleTime: 60_000,
   });
-  const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
+  const { data: trackersRaw } = useQuery<any>({
+    queryKey: ["/api/trackers", filterMode, ...filterIds, "trends"],
+    queryFn: () => apiRequest("GET", `/api/trackers${leading}`).then(r => r.json()).catch(() => []),
+    staleTime: 60_000,
+  });
+  const habits: any[] = Array.isArray(habitsRaw) ? habitsRaw : (habitsRaw?.items || habitsRaw?.habits || []);
+  const trackers: any[] = Array.isArray(trackersRaw) ? trackersRaw : (trackersRaw?.items || trackersRaw?.trackers || []);
 
-  const fmtVal = (n: number) => Number.isInteger(n) ? n.toLocaleString() : (Math.round(n * 10) / 10).toLocaleString();
-
-  // ── Dynamic, per-person trend pool (life data, no finance) ────────────────
-  // The Trends strip surfaces what matters most to THIS person's day-to-day:
-  // the health metrics they log, habit consistency, goal progress, wellbeing
-  // (mood + journaling), and open tasks / renewals. Finance has its own
-  // section and never appears here. Every candidate is gated on real data,
-  // scored by how strong its signal is for this person, and only the three
-  // strongest render — empty domains simply drop out.
-  const GOOD = "155 60% 48%", BAD = "0 72% 55%", WARN = "43 85% 52%", INFO = "200 80% 55%", VIOLET = "262 70% 62%", TEAL = "173 60% 44%";
-  const MOOD_EMOJI: Record<string, string> = { amazing: "🤩", great: "😊", good: "🙂", okay: "😐", neutral: "😶", bad: "😞", awful: "😢", terrible: "😫" };
-  const POSITIVE_MOODS = new Set(["amazing", "great", "good"]);
-  const LOW_MOODS = new Set(["bad", "awful", "terrible"]);
+  const GOOD = "155 60% 48%", BAD = "0 72% 55%", WARN = "43 85% 52%", TEAL = "173 60% 44%";
   type TrendCard = { key: string; title: string; accent: string; headline: string; body?: ReactNode; caption: string; href: string; score: number };
-
-  const adherence = Math.min(100, Number(stats?.habitCompletionRate ?? 0));
+  const fmtVal = (n: number) => Number.isInteger(n) ? n.toLocaleString() : (Math.round(n * 10) / 10).toLocaleString();
   const healthSnap: any[] = Array.isArray(enhanced?.healthSnapshot) ? enhanced.healthSnapshot : [];
-  const bestStreak = (Array.isArray(stats?.streaks) ? stats!.streaks : []).reduce(
-    (best: { name: string; days: number } | null, s: any) => (Number(s?.days) || 0) > (best?.days ?? 0) ? { name: s.name, days: Number(s.days) } : best, null);
-  const journalStreak = Number(stats?.journalStreak ?? 0);
-  const mood = stats?.currentMood;
-  const weeklyEntries = Number(stats?.weeklyEntries ?? 0);
-  const overdueTasks = Array.isArray(enhanced?.overdueTasks) ? enhanced.overdueTasks.length : 0;
-  const activeTasks = Number(stats?.activeTasks ?? 0);
-  const expiringDocs = Array.isArray(enhanced?.expiringDocuments) ? enhanced.expiringDocuments.length : 0;
-  const activeGoals = (Array.isArray(goals) ? goals : []).filter((g: any) => String(g.status || "").toLowerCase() === "active");
+
+  // Two 7-day windows anchored to local midnight: [today-6 … today] (this week)
+  // and the 7 days before it (last week).
+  const DAY = 86400000;
+  const t0 = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+  const inThis = (ms: number) => !isNaN(ms) && ms >= t0 - 6 * DAY && ms < t0 + DAY;
+  const inLast = (ms: number) => !isNaN(ms) && ms >= t0 - 13 * DAY && ms < t0 - 6 * DAY;
+  const dayMs = (dateStr: string) => new Date(`${String(dateStr).slice(0, 10)}T12:00:00`).getTime();
+  const tsMs = (ts: string) => new Date(ts).getTime();
 
   const pool: TrendCard[] = [];
 
-  // Health trackers — the person's own metrics (weight, steps, sleep, water,
-  // BP, mood…). Rank by how actively they log; surface the two strongest so a
-  // tracking-focused user sees their real numbers, with this week's movement.
-  const rankedHealth = [...healthSnap]
-    .filter((h: any) => typeof h.latestValue === "number" && !isNaN(h.latestValue))
-    .sort((a: any, b: any) => (Number(b.entryCount) || 0) - (Number(a.entryCount) || 0));
-  rankedHealth.slice(0, 2).forEach((h: any, idx: number) => {
-    const dir = h.trend === "up" ? "↑" : h.trend === "down" ? "↓" : "→";
-    const val = h.dailyTotal != null ? h.dailyTotal : h.latestValue;
-    const moved = Number(h.trendValue) > 0;
+  // 1) Habit consistency — this week's adherence vs last week's, in points.
+  //    Hero/Explore show TODAY's %; this is the only place showing whether
+  //    consistency is climbing or slipping week over week.
+  const habitRate = (inWin: (ms: number) => boolean) => {
+    let expected = 0, done = 0;
+    for (const h of habits) {
+      const freq = String(h.frequency || "daily");
+      const per = freq === "weekly" ? 1 : freq === "custom" ? Math.max(1, (h.targetDays?.length || 1)) : 7;
+      expected += per;
+      const days = new Set<string>();
+      for (const c of (h.checkins || [])) { const ms = dayMs(c.date); if (inWin(ms)) days.add(String(c.date).slice(0, 10)); }
+      done += freq === "weekly" ? (days.size > 0 ? 1 : 0) : Math.min(per, days.size);
+    }
+    return { rate: expected > 0 ? Math.round((done / expected) * 100) : null as number | null, expected };
+  };
+  const thisH = habitRate(inThis), lastH = habitRate(inLast);
+  if (habits.length > 0 && thisH.rate != null && lastH.rate != null && (thisH.expected > 0 && lastH.expected > 0)) {
+    const delta = thisH.rate - lastH.rate;
+    const up = delta > 0, flat = delta === 0;
     pool.push({
-      key: `health-${h.trackerId}`, title: h.name, accent: TEAL,
-      headline: `${fmtVal(Number(val))}${h.unit ? ` ${h.unit}` : ""}`,
-      body: <div className="mt-1 text-[10px] text-muted-foreground">{dir} {h.entryCount} log{h.entryCount === 1 ? "" : "s"} · 7-day avg {fmtVal(Number(h.average))}</div>,
-      caption: moved ? `${h.name} ${dir === "↑" ? "rose" : dir === "↓" ? "fell" : "held"} ${fmtVal(Number(h.trendValue))}${h.unit ? ` ${h.unit}` : ""} this week — keep logging.` : `${h.name} steady this week — keep the habit going.`,
+      key: "habit-momentum", title: "Habit consistency", accent: flat ? TEAL : up ? GOOD : BAD,
+      headline: `${flat ? "→" : up ? "↑" : "↓"} ${Math.abs(delta)}%`,
+      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>This wk {thisH.rate}%</span><span>·</span><span>Last {lastH.rate}%</span></div>,
+      caption: up ? "More consistent than last week — keep it climbing." : flat ? "Holding steady with last week's consistency." : "Consistency slipped vs last week — recommit to one habit today.",
       href: "/dashboard/health",
-      // The primary tracker leads the section; the second only fills a slot
-      // when there aren't enough other live signals.
-      score: (idx === 0 ? 70 : 40) + Math.min(24, (Number(h.entryCount) || 0) * 2),
+      score: 70 + Math.min(24, Math.abs(delta)),
+    });
+  }
+
+  // 2) Health metric trajectories — the server's last-7-day change per tracker.
+  //    Only metrics that actually MOVED appear (flat ones add nothing new), and
+  //    we show the delta, not the current value the Health section already has.
+  const movedHealth = [...healthSnap]
+    .filter((h: any) => typeof h.latestValue === "number" && Number(h.trendValue) > 0 && h.trend !== "flat")
+    .sort((a: any, b: any) => (Number(b.entryCount) || 0) - (Number(a.entryCount) || 0));
+  movedHealth.slice(0, 2).forEach((h: any, idx: number) => {
+    const up = h.trend === "up";
+    pool.push({
+      key: `health-move-${h.trackerId}`, title: h.name, accent: TEAL,
+      headline: `${up ? "↑" : "↓"} ${fmtVal(Number(h.trendValue))}${h.unit ? ` ${h.unit}` : ""}`,
+      body: <div className="mt-1 text-[10px] text-muted-foreground">over the last week</div>,
+      caption: `${h.name} ${up ? "rose" : "fell"} ${fmtVal(Number(h.trendValue))}${h.unit ? ` ${h.unit}` : ""} across ${h.entryCount} recent log${h.entryCount === 1 ? "" : "s"} — mind the direction.`,
+      href: "/dashboard/health",
+      score: (idx === 0 ? 60 : 42) + Math.min(12, Number(h.entryCount) || 0),
     });
   });
 
-  // Habit adherence — daily consistency across active habits.
-  if (Number(stats?.totalHabits ?? 0) > 0) {
+  // 3) Logging momentum — how many entries were logged this week vs last, across
+  //    trackers and habits. A pure engagement trend nothing else surfaces.
+  let thisLogs = 0, lastLogs = 0;
+  for (const t of trackers) for (const e of (t.entries || [])) { const ms = tsMs(e.timestamp); if (inThis(ms)) thisLogs++; else if (inLast(ms)) lastLogs++; }
+  for (const h of habits) for (const c of (h.checkins || [])) { const ms = dayMs(c.date); if (inThis(ms)) thisLogs++; else if (inLast(ms)) lastLogs++; }
+  if (thisLogs > 0 || lastLogs > 0) {
+    const delta = thisLogs - lastLogs;
+    const up = delta > 0, flat = delta === 0;
     pool.push({
-      key: "habits", title: "Habit adherence", accent: adherence >= 60 ? GOOD : WARN,
-      headline: `${adherence}%`,
-      body: <div className="mt-1.5 h-1.5 rounded-full bg-muted/60 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${adherence}%`, background: `hsl(${adherence >= 60 ? GOOD : WARN})` }} /></div>,
-      caption: adherence >= 60 ? "Strong consistency — keep the streak going." : "Below your target — pick one keystone habit to lock in today.",
+      key: "logging-momentum", title: "Logging momentum", accent: flat ? TEAL : up ? GOOD : WARN,
+      headline: `${flat ? "→" : up ? "↑" : "↓"} ${Math.abs(delta)}`,
+      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>This wk {thisLogs}</span><span>·</span><span>Last {lastLogs}</span></div>,
+      caption: up ? `${delta} more log${delta === 1 ? "" : "s"} than last week — momentum is building.` : flat ? "Same logging pace as last week — steady tracking." : `${Math.abs(delta)} fewer log${Math.abs(delta) === 1 ? "" : "s"} than last week — a quick entry keeps the trend alive.`,
       href: "/dashboard/health",
-      score: 62 + adherence / 5,
-    });
-  }
-
-  // Goal progress — how far along the person is on what they set out to do.
-  if (activeGoals.length > 0) {
-    const pcts = activeGoals.map((g: any) => {
-      const start = Number(g.startValue ?? 0), tgt = Number(g.target ?? 0), cur = Number(g.current ?? 0);
-      const denom = tgt - start;
-      const raw = denom !== 0 ? (cur - start) / denom : (tgt !== 0 ? cur / tgt : 0);
-      return Math.max(0, Math.min(100, raw * 100));
-    });
-    const avg = Math.round(pcts.reduce((s: number, p: number) => s + p, 0) / pcts.length);
-    let leadIdx = 0; pcts.forEach((p: number, i: number) => { if (p > pcts[leadIdx]) leadIdx = i; });
-    const lead = activeGoals[leadIdx];
-    pool.push({
-      key: "goals", title: "Goal progress", accent: avg >= 60 ? GOOD : INFO,
-      headline: `${avg}%`,
-      body: <div className="mt-1.5 h-1.5 rounded-full bg-muted/60 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${avg}%`, background: `hsl(${avg >= 60 ? GOOD : INFO})` }} /></div>,
-      caption: `${activeGoals.length} active goal${activeGoals.length === 1 ? "" : "s"} · “${lead?.title || "goal"}” is furthest along — keep the momentum.`,
-      href: "/goals",
-      score: 60 + avg / 5,
-    });
-  }
-
-  // Best active streak — momentum worth protecting.
-  if (bestStreak && bestStreak.days >= 2) {
-    pool.push({
-      key: "streak", title: "Best streak", accent: VIOLET,
-      headline: `${bestStreak.days}d`,
-      body: <div className="mt-1 text-[10px] text-muted-foreground truncate">{bestStreak.name}</div>,
-      caption: `${bestStreak.days} days on “${bestStreak.name}” — don't break the chain today.`,
-      href: "/dashboard/health",
-      score: 46 + Math.min(24, bestStreak.days),
-    });
-  }
-
-  // Mood — most recent wellbeing check-in.
-  if (mood) {
-    const positive = POSITIVE_MOODS.has(mood), low = LOW_MOODS.has(mood);
-    pool.push({
-      key: "mood", title: "Mood", accent: positive ? GOOD : low ? WARN : INFO,
-      headline: `${MOOD_EMOJI[mood] || "🙂"}`,
-      body: <div className="mt-1 text-[10px] text-muted-foreground capitalize">Feeling {mood}</div>,
-      caption: positive ? "You've been feeling good lately — note what's working." : low ? "A rougher stretch — a short journal entry can help unpack it." : "Steady mood — a quick check-in keeps the trend visible.",
-      href: "/journal",
-      score: 44,
-    });
-  }
-
-  // Journaling streak — reflective consistency.
-  if (journalStreak >= 2) {
-    pool.push({
-      key: "journal-streak", title: "Journaling", accent: VIOLET,
-      headline: `${journalStreak}d`,
-      body: <div className="mt-1 text-[10px] text-muted-foreground">days in a row</div>,
-      caption: `${journalStreak}-day journaling streak — keep showing up for yourself.`,
-      href: "/journal",
-      score: 38 + Math.min(16, journalStreak),
-    });
-  }
-
-  // Task focus — open commitments and anything overdue.
-  if (activeTasks > 0 || overdueTasks > 0) {
-    pool.push({
-      key: "tasks", title: "Task focus", accent: overdueTasks > 0 ? BAD : INFO,
-      headline: overdueTasks > 0 ? `${overdueTasks} overdue` : `${activeTasks} open`,
-      body: <div className="mt-1 text-[10px] text-muted-foreground">{activeTasks} open task{activeTasks === 1 ? "" : "s"}{overdueTasks > 0 ? ` · ${overdueTasks} overdue` : ""}</div>,
-      caption: overdueTasks > 0 ? `${overdueTasks} task${overdueTasks === 1 ? "" : "s"} overdue — knock ${overdueTasks === 1 ? "it" : "one"} out first.` : "On top of your tasks — pick the next one to move.",
-      href: "/tasks",
-      score: 40 + (overdueTasks > 0 ? 18 : 0) + Math.min(12, activeTasks),
-    });
-  }
-
-  // Weekly tracking activity — how engaged the person has been this week.
-  if (weeklyEntries > 0) {
-    pool.push({
-      key: "activity", title: "This week", accent: INFO,
-      headline: `${weeklyEntries}`,
-      body: <div className="mt-1 text-[10px] text-muted-foreground">entries logged</div>,
-      caption: `${weeklyEntries} log${weeklyEntries === 1 ? "" : "s"} this week — consistent tracking builds the clearest trends.`,
-      href: "/dashboard/health",
-      score: 30 + Math.min(16, weeklyEntries),
-    });
-  }
-
-  // Document renewals — important dates that lapse if ignored.
-  if (expiringDocs > 0) {
-    pool.push({
-      key: "docs", title: "Renewals", accent: WARN,
-      headline: `${expiringDocs}`,
-      body: <div className="mt-1 text-[10px] text-muted-foreground">expiring soon</div>,
-      caption: `${expiringDocs} document${expiringDocs === 1 ? "" : "s"} expiring soon — renew before ${expiringDocs === 1 ? "it lapses" : "they lapse"}.`,
-      href: "/dashboard/documents",
-      score: 34 + Math.min(16, expiringDocs * 4),
+      score: 40 + Math.min(20, Math.abs(delta)),
     });
   }
 
@@ -2967,8 +2901,8 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
     <CollapsibleSection accent="200 80% 55%" icon={Activity} label="Trends" testId="section-trends">
       {cards.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border/50 bg-card/40 p-4 text-center" data-testid="trend-empty">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">No trends yet</p>
-          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">Log a health metric, check off a habit, or set a goal and personalized trends will appear here.</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">No movement yet</p>
+          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">Trends compare this week to last. Keep logging habits and trackers for a couple of weeks and your direction shows up here.</p>
         </div>
       ) : (
         <div className={`grid grid-cols-1 ${gridCols} gap-2.5`}>
