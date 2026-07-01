@@ -14,10 +14,10 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle, MessageCircle, Pencil } from "lucide-react";
+import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle, MessageCircle, Pencil, Search, PenLine } from "lucide-react";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel, Profile } from "@shared/schema";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
@@ -187,6 +187,16 @@ export default function JournalPage() {
   const [makeAmazing, setMakeAmazing] = useState("");
   const [affirmation, setAffirmation] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useState<string>("");
+  // ── Free-form mode (user request): write as much or as little as you want.
+  // Autosaves as a draft entry (POST once, then PATCH), shows a "Saved" stamp,
+  // supports tags, and old free-form entries reopen here for editing.
+  const [entryMode, setEntryMode] = useState<"guided" | "free">("guided");
+  const [freeText, setFreeText] = useState("");
+  const [freeTags, setFreeTags] = useState("");
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const freeSavingRef = useRef(false);
 
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -229,11 +239,72 @@ export default function JournalPage() {
     setMakeAmazing(""); setAffirmation("");
     setSelectedProfileId(activeCreateProfileId || "");
     setEditingEntry(null);
+    setFreeText(""); setFreeTags(""); setDraftId(null); setLastSavedAt(null);
   };
 
+  // Free-write save: POST once, then PATCH the same entry. `finalize` closes
+  // the form. Used by both the debounced autosave and the Save button.
+  const saveFreeEntry = async (finalize = false) => {
+    if (!freeText.trim() || freeSavingRef.current) {
+      if (finalize && !freeText.trim()) toast({ title: "Write something first", variant: "destructive" });
+      return;
+    }
+    freeSavingRef.current = true;
+    try {
+      const tags = freeTags.split(",").map((s) => s.trim()).filter(Boolean);
+      if (draftId) {
+        await apiRequest("PATCH", `/api/journal/${draftId}`, { content: freeText, tags, ...(mood ? { mood } : {}) });
+      } else {
+        const r = await apiRequest("POST", "/api/journal", {
+          content: freeText,
+          mood: mood || "neutral",
+          tags,
+          ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
+        });
+        const j = await r.json();
+        if (j?.id) setDraftId(j.id);
+      }
+      setLastSavedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
+      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
+      if (finalize) {
+        toast({ title: draftId ? "Entry updated" : "Entry saved" });
+        resetForm();
+        setShowCreate(false);
+      }
+    } catch (err: any) {
+      if (finalize) toast({ title: "Couldn't save entry", description: formatApiError(err), variant: "destructive" });
+    } finally {
+      freeSavingRef.current = false;
+    }
+  };
+
+  // Debounced autosave: 2s after the user stops typing in free-write mode.
+  useEffect(() => {
+    if (entryMode !== "free" || !showCreate || !freeText.trim()) return;
+    const t = setTimeout(() => { void saveFreeEntry(false); }, 2000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [freeText, freeTags, entryMode, showCreate]);
+
+  const STRUCTURED_MARKERS = ["I AM GRATEFUL FOR:", "HOW I CAN MAKE TODAY AMAZING:", "DAILY AFFIRMATION:"];
+
   const handleEditEntry = (entry: JournalEntry) => {
+    const raw = entry.content || "";
+    // Free-form entries (no template markers) reopen in the free-write editor
+    // so long text is edited where it was written.
+    if (raw.trim() && !STRUCTURED_MARKERS.some((m) => raw.includes(m))) {
+      setEditingEntry(entry);
+      setEntryMode("free");
+      setFreeText(raw);
+      setFreeTags(((entry as any).tags || []).join(", "));
+      setDraftId(entry.id);
+      setMood(entry.mood);
+      setShowCreate(true);
+      return;
+    }
     // Parse content back into form fields
     setEditingEntry(entry);
+    setEntryMode("guided");
     setMood(entry.mood);
     setEnergy(entry.energy || 3);
     const content = entry.content || "";
@@ -385,17 +456,95 @@ export default function JournalPage() {
         })}
       </div>
 
-      {/* Create form — Sweet Setup 5-Minute AM template */}
+      {/* Create form — guided 5-minute template OR free-form editor */}
       {showCreate && (
         <div className="space-y-3">
           {/* Date header */}
           <div className="text-center py-1">
-            <p className="text-[11px] font-bold tracking-[0.2em] text-muted-foreground uppercase">{editingEntry ? "Edit Journal Entry" : "5 Minute Morning Journal"}</p>
+            <p className="text-[11px] font-bold tracking-[0.2em] text-muted-foreground uppercase">
+              {editingEntry ? "Edit Journal Entry" : entryMode === "free" ? "Journal — Free Write" : "5 Minute Morning Journal"}
+            </p>
             <p className="text-xs text-muted-foreground mt-0.5">
               {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+              {" · "}{new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
             </p>
           </div>
 
+          {/* Mode toggle (hidden while editing — the entry keeps its own format) */}
+          {!editingEntry && (
+            <div className="flex rounded-xl bg-muted/50 p-1 max-w-xs mx-auto">
+              {([["guided", "Guided"], ["free", "Free write"]] as const).map(([key, label]) => (
+                <button key={key} onClick={() => setEntryMode(key)}
+                  className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition-colors ${entryMode === key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                  data-testid={`btn-journal-mode-${key}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {entryMode === "free" ? (
+            <>
+              {/* Free-form editor: no limits, autosaves 2s after you stop typing */}
+              <Card className="overflow-hidden">
+                <div className="px-4 pt-4 pb-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase flex items-center gap-1.5"><PenLine className="h-3 w-3" /> Write freely</p>
+                    <span className="text-[10px] text-muted-foreground" data-testid="journal-autosave-stamp">
+                      {freeSavingRef.current ? "Saving…" : lastSavedAt ? `Saved ${lastSavedAt}` : "Autosaves as you write"}
+                    </span>
+                  </div>
+                  <textarea
+                    value={freeText}
+                    autoFocus
+                    onChange={(e) => setFreeText(e.target.value)}
+                    placeholder="Whatever is on your mind — no length limits."
+                    rows={12}
+                    className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/35 resize-y text-foreground leading-relaxed min-h-[220px]"
+                    data-testid="input-journal-free-text"
+                  />
+                </div>
+              </Card>
+              <Card className="overflow-hidden">
+                <div className="px-4 pt-4 pb-4">
+                  <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-2">Tags <span className="text-muted-foreground font-normal normal-case tracking-normal">(comma separated, optional)</span></p>
+                  <input
+                    type="text"
+                    value={freeTags}
+                    onChange={(e) => setFreeTags(e.target.value)}
+                    placeholder="e.g. work, family, ideas"
+                    className="w-full bg-transparent border-b border-border/60 text-sm py-1.5 outline-none focus:border-blue-500 transition-colors placeholder:text-muted-foreground/35 text-foreground"
+                    data-testid="input-journal-free-tags"
+                  />
+                </div>
+              </Card>
+              {/* Profile + save */}
+              <Card className="overflow-hidden">
+                <div className="px-4 pt-4 pb-4">
+                  <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">Profile</p>
+                  <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
+                    <SelectTrigger className="w-full h-9 text-sm" data-testid="select-journal-free-profile">
+                      <SelectValue placeholder="Select profile" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {profiles.filter(p => ["self", "person", "pet"].includes(p.type)).map(p => (
+                        <SelectItem key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </Card>
+              <Button
+                onClick={() => void saveFreeEntry(true)}
+                disabled={!freeText.trim()}
+                className="w-full h-11 text-sm font-semibold"
+                data-testid="button-save-journal-free"
+              >
+                {editingEntry ? "Update Entry" : "Save Entry"}
+              </Button>
+            </>
+          ) : (
+            <>
           {/* Mood selector */}
           <Card className="overflow-hidden">
             <div className="px-4 pt-4 pb-4">
@@ -524,6 +673,8 @@ export default function JournalPage() {
           >
             {(createMutation.isPending || editMutation.isPending) ? "Saving..." : editingEntry ? "Update Entry" : "Save Morning Entry"}
           </Button>
+            </>
+          )}
         </div>
       )}
 
@@ -543,9 +694,29 @@ export default function JournalPage() {
         <EmptyState icon={MessageCircle} title="No journal entries yet" description="Start your morning journal to track your mood and gratitude." />
       ) : (
         <div className="grid gap-4">
-          {entries.map(entry => (
-            <JournalCard key={entry.id} entry={entry} onEdit={handleEditEntry} />
-          ))}
+          {/* Search across content + tags */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search entries…"
+              className="w-full bg-muted/40 border border-border rounded-xl pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary placeholder:text-muted-foreground/50"
+              data-testid="input-journal-search"
+            />
+          </div>
+          {(() => {
+            const q = searchQuery.trim().toLowerCase();
+            const visible = q
+              ? entries.filter((e: any) =>
+                  (e.content || "").toLowerCase().includes(q) ||
+                  (e.tags || []).some((t: string) => t.toLowerCase().includes(q)))
+              : entries;
+            if (visible.length === 0) return <p className="text-sm text-muted-foreground text-center py-6">No entries match "{searchQuery}".</p>;
+            return visible.map(entry => (
+              <JournalCard key={entry.id} entry={entry} onEdit={handleEditEntry} />
+            ));
+          })()}
         </div>
       )}
     </div>

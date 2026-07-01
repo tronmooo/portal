@@ -3514,6 +3514,69 @@ export class SupabaseStorage implements IStorage {
     return this.rowToObligation(data, (payments || []).map(p => this.rowToPayment(p)));
   }
 
+  // ── Bills-as-liabilities (2026-07-01 user decision) ────────────────────────
+  // Every money-owed obligation maintains its own liability profile — a single
+  // source of truth for "amount owed" that shows up in Net Worth and the
+  // liability pages. Auto-created on create, kept in sync on update/pay,
+  // removed with the obligation. Only liabilities CREATED BY THIS SYNC
+  // (fields.source === "obligation") are ever written or deleted — a user's own
+  // loan liability that a payment obligation merely links to is never touched.
+  private static readonly BILL_LIABILITY_KINDS = new Set(["bill", "subscription", "membership", "loan_payment", "other"]);
+
+  private obligationLiabilityStatus(nextDueDate?: string | null, paid = false): string {
+    if (paid) return "paid";
+    if (!nextDueDate) return "upcoming";
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: this._timezone || "America/Los_Angeles" });
+    const due = String(nextDueDate).slice(0, 10);
+    if (due < today) return "overdue";
+    if (due === today) return "due_today";
+    return "upcoming";
+  }
+
+  private async ensureObligationLiability(ob: Obligation | undefined, opts: { paid?: boolean } = {}): Promise<void> {
+    if (!ob) return;
+    try {
+      const kind = (ob as any).kind || "bill";
+      if (!SupabaseStorage.BILL_LIABILITY_KINDS.has(kind)) return;
+      if ((ob as any).status === "cancelled") return;
+      const amount = Number(ob.amount) || 0;
+      if (amount <= 0) return;
+      const syncFields = {
+        balance: amount,
+        dueDate: ob.nextDueDate,
+        frequency: ob.frequency,
+        status: this.obligationLiabilityStatus(ob.nextDueDate, opts.paid),
+        category: ob.category,
+        ...(ob.notes ? { notes: ob.notes } : {}),
+        source: "obligation",
+        obligationId: ob.id,
+      };
+      const linkedId = (ob as any).linkedLiabilityId;
+      if (linkedId) {
+        const liab = await this.getProfile(linkedId);
+        if (!liab) return;
+        if ((liab.fields as any)?.source !== "obligation") return; // user-owned: hands off
+        await this.updateProfile(liab.id, { name: ob.name, fields: syncFields } as any);
+        return;
+      }
+      // First sync: create the liability record and back-link it.
+      const person = (ob.linkedProfiles || [])[0];
+      const created = await this.createProfile({
+        name: ob.name,
+        type: "liability",
+        ...(person ? { parentProfileId: person } : {}),
+        fields: syncFields,
+        tags: [],
+      } as any);
+      await this.supabase.from("obligations")
+        .update({ linked_liability_id: created.id })
+        .eq("id", ob.id).eq("user_id", this.userId);
+    } catch (e: any) {
+      // Best-effort — a sync failure must never break the obligation write.
+      console.warn("[bills→liability] sync failed (non-fatal):", e?.message || e);
+    }
+  }
+
   async createObligation(data: InsertObligation): Promise<Obligation> {
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -3565,6 +3628,9 @@ export class SupabaseStorage implements IStorage {
     // getCalendarTimeline() — no need to create a stored event here.
     // This avoids duplicate entries on the calendar view.
 
+    const created = (await this.getObligation(id))!;
+    // Bills-as-liabilities: give the new bill its liability record.
+    await this.ensureObligationLiability(created);
     return (await this.getObligation(id))!;
   }
 
@@ -3610,6 +3676,9 @@ export class SupabaseStorage implements IStorage {
         console.error("[obligations] re-materialize failed (non-fatal):", e?.message || e);
       }
     }
+    const updated = await this.getObligation(id);
+    // Bills-as-liabilities: keep the liability record in lockstep.
+    await this.ensureObligationLiability(updated);
     return this.getObligation(id);
   }
 
@@ -3698,14 +3767,31 @@ export class SupabaseStorage implements IStorage {
       }
     }
     this.logActivity("obligation", `Paid ${ob.name}: $${amount}`);
+    // Bills-as-liabilities: reflect the payment on the liability record
+    // (status "paid", dueDate advanced to the new next_due_date).
+    await this.ensureObligationLiability(await this.getObligation(obligationId), { paid: true });
     return { id, amount, date: today, method, confirmationNumber };
   }
 
   async deleteObligation(id: string): Promise<boolean> {
+    // Bills-as-liabilities: read BEFORE delete so we can remove the liability
+    // record this obligation auto-created (never a user-created liability that
+    // a payment obligation merely linked to — those lack source:"obligation").
+    const existing = await this.getObligation(id);
     /* D1: clean up entity_links rows that reference this obligation */
     await this.cleanupEntityLinks("obligation", id);
     await this.supabase.from("obligation_payments").delete().eq("obligation_id", id).eq("user_id", this.userId);
     const { error } = await this.supabase.from("obligations").delete().eq("id", id).eq("user_id", this.userId);
+    if (!error && (existing as any)?.linkedLiabilityId) {
+      try {
+        const liab = await this.getProfile((existing as any).linkedLiabilityId);
+        if (liab && (liab.fields as any)?.source === "obligation") {
+          await this.deleteProfile(liab.id);
+        }
+      } catch (e: any) {
+        console.warn("[bills→liability] cleanup failed (non-fatal):", e?.message || e);
+      }
+    }
     return !error;
   }
 
@@ -4865,11 +4951,24 @@ export class SupabaseStorage implements IStorage {
     const lastMonthExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === lastMonthYM);
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
-    const upcomingBills = allObligations.filter(o => { const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => ({ id: o.id, name: o.name, amount: o.amount, dueDate: o.nextDueDate, daysUntil: Math.ceil((new Date(o.nextDueDate).getTime() - now.getTime()) / 86400000), autopay: o.autopay, category: o.category }));
+    const upcomingBills = allObligations.filter(o => { const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => {
+      const daysUntil = Math.ceil((new Date(o.nextDueDate).getTime() - now.getTime()) / 86400000);
+      return {
+        id: o.id, name: o.name, amount: o.amount, dueDate: o.nextDueDate, daysUntil,
+        autopay: o.autopay, category: o.category,
+        // Bills-as-liabilities: each bill is backed by a liability record; the
+        // Bills popup deep-links to it and shows the lifecycle status.
+        linkedLiabilityId: (o as any).linkedLiabilityId || null,
+        status: daysUntil < 0 ? "overdue" : daysUntil === 0 ? "due_today" : "upcoming",
+      };
+    });
 
     // BUG-20260528-monthly-multipliers: unify to exact 52/12, 26/12 via shared toMonthlyAmount.
+    // Skip paused/cancelled so this matches the Cash Flow popup's recurring-out
+    // (the hero tile now renders Out from this same number — user report: tile
+    // said "Out $0" while the popup said "Out $1,020").
     const monthlyObligationTotal = allObligations.reduce(
-      (s, o) => s + toMonthlyAmount(o.amount, o.frequency),
+      (s, o) => (o.status === "paused" || o.status === "cancelled") ? s : s + toMonthlyAmount(o.amount, o.frequency),
       0,
     );
 

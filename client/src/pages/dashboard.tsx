@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { formatApiError } from "@/lib/formatError";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
@@ -430,6 +431,12 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
       </div>
       <div className="mt-1 relative z-10">
         <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
+        {/* When nothing is logged yet this month, "$0" read as broken (user
+            report on July 1). Show the recurring commitment so the number has
+            context: expenses logged so far + bills/mo still coming. */}
+        {(finSnap?.monthlyObligationTotal ?? 0) > 0 && (
+          <span className="ml-1 text-[9px] text-muted-foreground tabular-nums">+${Math.round(finSnap.monthlyObligationTotal).toLocaleString()}/mo bills</span>
+        )}
       </div>
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
       {/* Mini bar chart */}
@@ -708,7 +715,13 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
   // value cannot flip as the two endpoints race.
   const monthlySpend = enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
   const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
-  const cashFlow = monthlyIncome - monthlySpend;
+  // BUG (user report: tile "Out $0" while the Cash Flow popup said "Out $1,020"):
+  // the tile only counted logged expenses; the popup counts recurring bills too.
+  // Use the SAME definition as the popup: Out = month expenses + monthlyized
+  // active obligations (financeSnapshot.monthlyObligationTotal).
+  const monthlyRecurringOut = enhanced?.financeSnapshot?.monthlyObligationTotal ?? 0;
+  const monthlyOut = monthlySpend + monthlyRecurringOut;
+  const cashFlow = monthlyIncome - monthlyOut;
   const totalBudget = budgetSummary?.totalBudget ?? 0;
   const totalSpent = budgetSummary?.totalSpent ?? 0;
   const budgetPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
@@ -893,7 +906,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
           </div>
           <div className="mt-0.5 flex items-center gap-2.5 text-[11px] text-muted-foreground">
             <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(155 65% 50%)' }} />In {money(monthlyIncome)}</span>
-            <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(0 80% 62%)' }} />Out {money(monthlySpend)}</span>
+            <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(0 80% 62%)' }} />Out {money(monthlyOut)}</span>
           </div>
           <div className="mt-2.5 flex items-end gap-1.5">
             {weekBars.map((b, i) => (
@@ -1276,19 +1289,34 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                 <div className="overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '50vh' }}>
                   <div className="space-y-1.5 py-2">
                     {bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 999) - (b.daysUntil ?? 999)).map((bill: any) => {
-                      // Past-due (daysUntil < 0) and not autopay reads RED; due
-                      // this week (0-7) gets a calm amber; everything else neutral.
-                      const overdue = typeof bill.daysUntil === "number" && bill.daysUntil < 0 && !bill.autopay;
-                      const soon = typeof bill.daysUntil === "number" && bill.daysUntil >= 0 && bill.daysUntil <= 7 && !bill.autopay;
-                      const accent = overdue ? "border-red-500/40 bg-red-500/5" : soon ? "border-amber-500/30 bg-amber-500/5" : "border-border/50";
-                      const textAccent = overdue ? "text-red-500" : soon ? "text-amber-500" : "text-muted-foreground";
+                      // Bills-as-liabilities: every bill is backed by a liability
+                      // record. The row shows the lifecycle status and clicking
+                      // opens the liability's own page (payments, history, notes).
+                      const overdue = bill.status === "overdue" && !bill.autopay;
+                      const dueToday = bill.status === "due_today" && !bill.autopay;
+                      const soon = !overdue && !dueToday && typeof bill.daysUntil === "number" && bill.daysUntil >= 0 && bill.daysUntil <= 7 && !bill.autopay;
+                      const accent = overdue ? "border-red-500/40 bg-red-500/5" : (dueToday || soon) ? "border-amber-500/30 bg-amber-500/5" : "border-border/50";
+                      const textAccent = overdue ? "text-red-500" : (dueToday || soon) ? "text-amber-500" : "text-muted-foreground";
+                      const statusChip = overdue
+                        ? <span className="text-[9px] font-semibold uppercase tracking-wider text-red-500 shrink-0">Overdue</span>
+                        : dueToday
+                          ? <span className="text-[9px] font-semibold uppercase tracking-wider text-amber-500 shrink-0">Due today</span>
+                          : <span className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground/60 shrink-0">Upcoming</span>;
+                      const openLiability = () => {
+                        if (bill.linkedLiabilityId) { setPopup(null); navigate(`/profiles/${bill.linkedLiabilityId}`); }
+                      };
                       return (
                         <div key={bill.id}
-                          className={`flex items-center justify-between p-2 rounded-lg border ${accent}`}>
+                          role={bill.linkedLiabilityId ? "button" : undefined}
+                          tabIndex={bill.linkedLiabilityId ? 0 : undefined}
+                          onClick={openLiability}
+                          onKeyDown={(e) => { if (e.key === "Enter") openLiability(); }}
+                          className={`flex items-center justify-between p-2 rounded-lg border ${accent} ${bill.linkedLiabilityId ? "cursor-pointer hover:bg-muted/40 transition-colors" : ""}`}
+                          data-testid={`bill-row-${bill.id}`}>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
                               <p className="text-xs font-medium truncate">{bill.name}</p>
-                              {overdue && <span className="text-[9px] font-semibold uppercase tracking-wider text-red-500 shrink-0">Overdue</span>}
+                              {statusChip}
                               {bill.category && (
                                 <span className="text-[9px] uppercase tracking-wider text-muted-foreground/60 shrink-0">
                                   {bill.category}
@@ -1301,6 +1329,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                             </p>
                           </div>
                           <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
+                          {bill.linkedLiabilityId && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0 ml-1" />}
                         </div>
                       );
                     })}
@@ -2226,17 +2255,38 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
   // Force refetch when popup opens — prevents stale cache after AI chat mutations
   useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); } }, [open]);
 
+  // BUG (user report: "Add Habit does nothing"): the habit was created WITHOUT
+  // linkedProfiles, so under an active profile filter the new habit was
+  // instantly filtered OUT of the list — created but invisible. Attribute it to
+  // the single selected profile (else self), same rule as every quick-add.
+  const [newHabitFrequency, setNewHabitFrequency] = useState<'daily' | 'weekly'>('daily');
+  const [newHabitProfileId, setNewHabitProfileId] = useState('');
+  const { data: habitProfiles = [] } = useQuery<any[]>({ queryKey: ['/api/profiles'], enabled: open });
+  const habitOwnerId = useMemo(() => {
+    if (newHabitProfileId) return newHabitProfileId;
+    if (filterMode === 'selected' && filterIds.length === 1) return filterIds[0];
+    return (habitProfiles.find((p: any) => p.type === 'self')?.id) || '';
+  }, [newHabitProfileId, filterMode, filterIds, habitProfiles]);
   const createHabitMutation = useMutation({
-    mutationFn: (name: string) => apiRequest('POST', '/api/habits', { name, frequency: 'daily' }),
-    onSuccess: () => {
+    mutationFn: (vars: { name: string; frequency: string; profileId?: string }) =>
+      apiRequest('POST', '/api/habits', {
+        name: vars.name,
+        frequency: vars.frequency,
+        ...(vars.profileId ? { linkedProfiles: [vars.profileId] } : {}),
+      }),
+    onSuccess: (_d, vars) => {
       setNewHabitName(''); setAddingHabit(false);
       queryClient.invalidateQueries({ queryKey: ['/api/habits'] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'] });
       queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
-      toast({ title: 'Habit created' });
+      toast({ title: 'Habit created', description: vars.name });
     },
-    onError: () => toast({ title: 'Failed to create habit', variant: 'destructive' }),
+    onError: (err: any) => toast({ title: 'Failed to create habit', description: formatApiError(err), variant: 'destructive' }),
   });
+  const submitNewHabit = () => {
+    if (!newHabitName.trim() || createHabitMutation.isPending) return;
+    createHabitMutation.mutate({ name: newHabitName.trim(), frequency: newHabitFrequency, profileId: habitOwnerId || undefined });
+  };
 
   const habitsProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   // PERF: isPending (not isLoading) so placeholderData keeps prior habits visible on filter switch.
@@ -2433,9 +2483,9 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
           </div>
         </div>
 
-        {/* Inline add habit form */}
+        {/* Inline add habit form — name + frequency + profile, saves on Enter/Add */}
         {addingHabit && (
-          <div className="px-3 pt-2.5">
+          <div className="px-3 pt-2.5 space-y-2">
             <div className="flex gap-2">
               <input
                 autoFocus
@@ -2444,17 +2494,37 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
                 value={newHabitName}
                 onChange={e => setNewHabitName(e.target.value)}
                 onKeyDown={e => {
-                  if (e.key === 'Enter' && newHabitName.trim()) createHabitMutation.mutate(newHabitName.trim());
+                  if (e.key === 'Enter') submitNewHabit();
                   if (e.key === 'Escape') { setAddingHabit(false); setNewHabitName(''); }
                 }}
+                data-testid="input-new-habit-name"
               />
               <button
-                onClick={() => newHabitName.trim() && createHabitMutation.mutate(newHabitName.trim())}
+                onClick={submitNewHabit}
                 disabled={!newHabitName.trim() || createHabitMutation.isPending}
                 className="px-4 py-2 bg-primary text-primary-foreground rounded-xl text-sm font-semibold disabled:opacity-40 shrink-0"
+                data-testid="btn-new-habit-add"
               >
                 {createHabitMutation.isPending ? '...' : 'Add'}
               </button>
+            </div>
+            <div className="flex gap-2">
+              <Select value={newHabitFrequency} onValueChange={(v) => setNewHabitFrequency(v as 'daily' | 'weekly')}>
+                <SelectTrigger className="h-9 text-xs flex-1" data-testid="select-new-habit-frequency"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={habitOwnerId} onValueChange={setNewHabitProfileId}>
+                <SelectTrigger className="h-9 text-xs flex-1" data-testid="select-new-habit-profile"><SelectValue placeholder="Profile" /></SelectTrigger>
+                <SelectContent>
+                  {habitProfiles
+                    .filter((p: any) => ['self', 'person', 'pet'].includes(p.type))
+                    .sort((a: any, b: any) => (a.type === 'self' ? -1 : b.type === 'self' ? 1 : (a.name || '').localeCompare(b.name || '')))
+                    .map((p: any) => <SelectItem key={p.id} value={p.id}>{p.type === 'self' ? 'Me' : p.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         )}
@@ -4732,7 +4802,9 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   // Falls back to stats?.monthlySpend for the brief window before enhanced data arrives.
   const monthlySpend = data?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
   const monthlyIncome = useMemo(() => (incomes || []).reduce((s, i) => s + (i.amount || 0), 0), [incomes]);
-  const cashFlow = monthlyIncome - monthlySpend;
+  // Same definition as the hero tile + Cash Flow popup: Out includes the
+  // monthlyized recurring obligations, not just logged expenses.
+  const cashFlow = monthlyIncome - monthlySpend - (data?.monthlyObligationTotal ?? 0);
   // Hide synthetic test rows unless the dashboard toggle is on (point 11).
   const showTestData = useShowTestData();
   const hideTest = (e: any) => showTestData || !isTestEntity(e);

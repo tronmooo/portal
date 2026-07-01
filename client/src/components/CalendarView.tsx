@@ -1063,6 +1063,10 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const itemsByDate = useMemo(() => {
     const map: Record<string, CalendarTimelineItem[]> = {};
     for (const item of timelineItems) {
+      // User decision (2026-07-01): financial obligations do NOT belong on the
+      // calendar — they clutter it. Bills live in the Bills Due dashboard and
+      // the obligations manager tab; the calendar shows events + tasks only.
+      if (item.type === "obligation") continue;
       if (filterType !== "all" && normalizeFilter(item.type) !== normalizeFilter(filterType)) continue;
       // PR AC — calendar isolation: when a profile filter is active, an item
       // must be EXPLICITLY linked to one of the selected profiles. Unlike
@@ -1228,7 +1232,8 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       <div className="flex gap-1 flex-wrap">
         {[
           { key: "all", label: "All", activeClass: "bg-primary/20 text-primary border-primary/40" },
-          { key: "obligation", label: "Bills", activeClass: "bg-amber-500/20 text-amber-400 border-amber-500/40" },
+          // "Bills" pill removed — obligations no longer render on the calendar
+          // (user decision 2026-07-01); manage them in the obligations tab.
           { key: "event", label: "Events", activeClass: "bg-blue-500/20 text-blue-400 border-blue-500/40" },
           { key: "task", label: "Tasks", activeClass: "bg-purple-500/20 text-purple-400 border-purple-500/40" },
         ].map(f => (
