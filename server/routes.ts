@@ -47,6 +47,9 @@ import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitiz
 // Best-effort: errors are logged but never block the calling request.
 // ────────────────────────────────────────────────────────────────────
 async function syncLiabilityObligation(profileId: string): Promise<void> {
+  // Obligations retired (2026-07): a liability IS its own bill now — there is no
+  // separate obligation to sync, and `linked_obligation_id` was dropped. No-op.
+  if (profileId) return;
   try {
     const p: any = await storage.getProfile(profileId);
     if (!p) return;
@@ -144,6 +147,9 @@ import { aiDecide, aiPickIndex } from "./ai-decide";
 // (e.g. monthly subscription with a price) so we don't create junk obligations
 // for one-off purchases or already-paid items.
 async function syncAiSuggestedObligation(profileId: string): Promise<void> {
+  // Obligations retired: subscription/utility profiles no longer spawn a backing
+  // obligation. Recurring-bill liabilities carry their own recurrence. No-op.
+  if (profileId) return;
   try {
     const p: any = await storage.getProfile(profileId);
     if (!p) return;
@@ -2826,28 +2832,10 @@ If unsure, return "profile_fact".`,
     // that the SUM>100 DB trigger then split 50/50 — see
     // docs/dashboard-scope-contract.md. Keeping one writer keeps SUM == 100.
 
-    // ---- Auto-bill: create a backing obligation for liabilities ----
-    // If a liability/loan is created with a monthlyPayment, ensure a
-    // matching obligation row exists so the loan appears on bills feeds,
-    // calendar, and the NetWorthStrip's "monthly debt" rollup.
-    if (created.type === "liability" || created.type === "loan") {
-      await syncLiabilityObligation(created.id);
-      bustCache(`profile-detail:${uid_p1}:`);
-    }
-
-    // Wave 2 #6 — AI-suggested obligation for recurring-bill candidates
-    // (subscriptions, insurance, accounts, utilities). Fire-and-forget so it
-    // never blocks the create response — the cache bust on completion will
-    // surface the new obligation on next dashboard fetch.
-    {
-      const obligationCandidates = new Set(["subscription", "insurance", "account", "utility"]);
-      if (obligationCandidates.has(created.type)) {
-        (async () => {
-          await syncAiSuggestedObligation(created.id);
-          bustCache(`obligations:${uid_p1}`); bustCache(`profile-detail:${uid_p1}:`); bustCache(`enhanced:`);
-        })();
-      }
-    }
+    // Obligations retired (2026-07): a liability IS the bill now — the single
+    // source of truth. We no longer create a separate backing obligation for a
+    // liability's monthly payment, nor AI-suggest one for subscription/utility
+    // profiles. Recurring-bill liabilities carry their own recurrence in fields.
 
     // ---- Location auto-attach hook ----
     // If the new profile has a name AND a parentProfileId, look at all siblings
@@ -3000,12 +2988,7 @@ If unsure, return "profile_fact".`,
     // for up to two hours. Empty string is treated as a cache miss in the
     // ai-summary read path (Boolean("") === false).
     try { await storage.setPreference(`profile_ai_${req.params.id}`, ""); } catch (err) { console.warn("[routes:patch-profile] failed to clear ai-summary cache:", err); }
-    // Auto-bill sync: if monthlyPayment was added or changed on a liability,
-    // keep its backing obligation row in step so dashboards stay accurate.
-    if (updated.type === "liability" || updated.type === "loan") {
-      await syncLiabilityObligation(updated.id);
-      bustCache(`profile-detail:${uid_p2}:`);
-    }
+    // Obligations retired: a liability is its own bill; no backing-obligation sync.
     res.json(updated);
   }));
   app.delete("/api/profiles/:id", asyncHandler(async (req, res) => {

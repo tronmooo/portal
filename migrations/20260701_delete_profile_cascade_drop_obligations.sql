@@ -1,0 +1,12 @@
+-- Retire Obligations → remove obligation cleanup from delete_profile_cascade().
+--
+-- The delete_profile_cascade() RPC (called by storage.deleteProfile) had
+-- unguarded `DELETE FROM obligations` / `UPDATE obligations` blocks. After the
+-- obligations tables were dropped these threw "relation obligations does not
+-- exist", failing every profile deletion with a 500. This recreates the function
+-- with the obligation blocks removed. See the applied migration
+-- `delete_profile_cascade_drop_obligations` for the full body (identical to the
+-- previous definition minus the obligations / obligation_occurrences sections).
+--
+-- The canonical definition lives in the Supabase migration history; this file is
+-- a repo-side record that the change happened alongside the obligations drop.

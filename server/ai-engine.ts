@@ -7750,8 +7750,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             await autoLinkToProfiles("obligation", newObligation.id, serviceName, input.forProfile);
             try { await storage.linkProfileTo(newProfile.id, "obligation", newObligation.id); } catch (linkErr: any) { logger.warn("ai", `Failed to link obligation ${newObligation.id} to profile ${newProfile.id}: ${linkErr?.message}`); }
             try { await updateEntityLinkedProfiles("obligation", newObligation.id, newProfile.id); } catch (linkErr: any) { logger.warn("ai", `Failed to update linked profiles for obligation ${newObligation.id}: ${linkErr?.message}`); }
-            // Set linked_obligation_id for subscription/loan dedup (Phase 7)
-            try { await storage.updateProfile(newProfile.id, { linkedObligationId: newObligation.id } as any); } catch (linkErr: any) { logger.warn("ai", `Failed to set linkedObligationId on profile ${newProfile.id}: ${linkErr?.message}`); }
+            // (linked_obligation_id column dropped — obligations retired; no FK to set)
           } catch (e) {
             console.error("Auto-create subscription profile failed:", e);
           }

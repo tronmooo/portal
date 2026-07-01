@@ -544,7 +544,6 @@ export class SupabaseStorage implements IStorage {
       // FIX 2: read ONLY from the `parent_profile_id` column. The legacy JSON
       //   fallback is gone — it allowed a silently divergent shadow.
       parentProfileId: r.parent_profile_id || undefined,
-      linkedObligationId: r.linked_obligation_id || undefined,
       createdAt: r.created_at, updatedAt: r.updated_at,
     };
   }
@@ -756,7 +755,7 @@ export class SupabaseStorage implements IStorage {
   async getProfilesLite(): Promise<Profile[]> {
     const { data, error } = await this.supabase
       .from("profiles")
-      .select("id, type, type_key, name, avatar, parent_profile_id, linked_obligation_id, created_at, updated_at")
+      .select("id, type, type_key, name, avatar, parent_profile_id, created_at, updated_at")
       .eq("user_id", this.userId)
       .is("deleted_at", null);
     if (error) throw error;
@@ -775,7 +774,6 @@ export class SupabaseStorage implements IStorage {
       linkedTasks: [],
       linkedEvents: [],
       parentProfileId: r.parent_profile_id || undefined,
-      linkedObligationId: r.linked_obligation_id || undefined,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
@@ -1223,8 +1221,7 @@ export class SupabaseStorage implements IStorage {
       documents: merged.documents, updated_at: now,
       // JSONB linked_trackers/expenses/tasks/events are deprecated — junction tables are source of truth
     };
-    // Optional FK fields
-    if (data.linkedObligationId !== undefined) updateData.linked_obligation_id = data.linkedObligationId || null;
+    // Optional FK fields (linked_obligation_id column dropped — obligations retired)
     if (data.parentProfileId !== undefined) updateData.parent_profile_id = data.parentProfileId || null;
     if ((data as any).type_key !== undefined) updateData.type_key = (data as any).type_key || null;
     const { error } = await this.supabase.from("profiles").update(updateData).eq("id", id).eq("user_id", this.userId);
