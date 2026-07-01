@@ -5802,7 +5802,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (tracker) {
         const stripNum = (n: string) => n.replace(/\s*\(\d+\)\s*$/, "").trim().toLowerCase();
         const baseKey = stripNum(tracker.name);
-        const family = nameMatches.filter((t: any) => stripNum(t.name) === baseKey);
+        // Consolidate ONLY within the target profile's own trackers (+ orphans).
+        // Never fold across profiles: with clean per-profile names, two people can
+        // each legitimately own a "Calories"/"Running" tracker, and a name-only
+        // family would destroy one of them. (Before clean names, the "- <Profile>"
+        // suffix made cross-profile names differ so this never triggered.)
+        const family = nameMatches.filter((t: any) =>
+          stripNum(t.name) === baseKey &&
+          (!(t.linkedProfiles && t.linkedProfiles.length) ||
+            (!!targetProfileId && t.linkedProfiles.includes(targetProfileId))));
         const hasClean = family.some((t: any) => t.name.trim().toLowerCase() === baseKey);
         if (family.length > 1 && hasClean) {
           const canonical =
@@ -6012,43 +6020,43 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // 9) Productivity.
       else if (["productivity","focus","work","study","learn","task","project","meeting","call","email","pomodoro","deep work","code","write","create"].some(k => nameLC.includes(k))) autoCategory = "productivity";
 
-      // Resolve display name. Per the share-not-clone policy above, when a
-      // same-name tracker already exists (linked to another profile), we
-      // would have shared it above and never gotten here. So if we ARE here
-      // and a same-name tracker exists, it's a soft-deleted or other-user
-      // edge case — fall back to a suffixed name to keep the unique index
-      // happy. Otherwise use the clean name.
-      let trackerDisplayName = input.trackerName || "Custom";
-      const targetProfileForName = profiles.find(p => p.id === targetProfileId);
-      if (targetProfileForName && targetProfileForName.type !== "self") {
-        // A person/pet tracker is ALWAYS namespaced "<Name> - <Profile>" so it
-        // can never collide with — or steal — the self user's clean tracker
-        // name. This is what prevents the self's tracker from being forced to a
-        // "(2)" suffix (the reported "Hockey (2)/Soccer (2)" bug): without it,
-        // whoever logged first (e.g. Lexi's hockey) grabbed the plain "Hockey"
-        // and the self user got "Hockey (2)". Skip if the name already carries
-        // the profile name so we don't double-suffix.
-        if (!trackerDisplayName.toLowerCase().includes(String(targetProfileForName.name).toLowerCase())) {
-          trackerDisplayName = `${trackerDisplayName} - ${targetProfileForName.name}`;
-        }
-      } else {
-        // Self: keep the clean name. If a same-name tracker already exists,
-        // NEVER fabricate "<Name> (2)" — adopt the existing one (link it to the
-        // target and log there). Numbered copies must only ever come from the
-        // user explicitly naming a second tracker. This is the final guard for
-        // the reported "Chess (2)" bug.
-        const conflictTracker = nameMatches.find(t => t.name.toLowerCase() === trackerDisplayName.toLowerCase());
-        if (conflictTracker) {
-          try {
-            if (targetProfileId && !(conflictTracker.linkedProfiles || []).includes(targetProfileId)) {
-              await storage.updateTracker(conflictTracker.id, {
-                linkedProfiles: Array.from(new Set([...(conflictTracker.linkedProfiles || []), targetProfileId])),
-              } as any);
-            }
-          } catch { /* non-fatal */ }
-          const { values: nv } = normalizeTrackerEntry(conflictTracker as any, entryValues);
-          return await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
-        }
+      // Display name: use the tracker name VERBATIM. Every profile owns its OWN
+      // clean-named tracker ("Running", "Calories") — never "Running - Craig".
+      // Ownership is carried by linkedProfiles and the UI already filters by
+      // profile, so stamping the owner into the name was pure noise.
+      //
+      // Bug (2026-07-01, user report — "it should just be F250 … keeps happening
+      // throughout my entire app"): a person/pet's tracker was force-suffixed
+      // "<Name> - <Profile>" whenever a same-name tracker existed on another
+      // profile (e.g. the self user also had "Calories"), so Craig's trackers all
+      // showed up as "Calories - Craig" / "Running - Craig". The trackers table
+      // has NO unique(name) constraint (only habits do — see supabase-migration
+      // .sql), and createTracker dedups per-profile, so same-named trackers across
+      // profiles coexist cleanly with no "(2)" fallback. Drop the suffix entirely.
+      const trackerDisplayName = input.trackerName || "Custom";
+      // Duplicate guard for the SAME owner: if an exact-name tracker is already
+      // owned by the target (or is an unowned orphan), adopt it instead of making
+      // a second copy. Crucially, this must NEVER adopt ANOTHER profile's tracker
+      // — doing so would cross-contaminate their data and violate the per-person
+      // policy (each profile keeps its own tracker). pickTrackerForLog handles the
+      // common owned/orphan cases above; this is the final guard for the loose-
+      // match-vs-exact-name discrepancy, and it was previously masked by the now-
+      // removed suffix (which kept other profiles' names from ever matching).
+      const conflictTracker = nameMatches.find(t =>
+        t.name.toLowerCase() === trackerDisplayName.toLowerCase() &&
+        (!(t.linkedProfiles && t.linkedProfiles.length) ||
+          (!!targetProfileId && t.linkedProfiles.includes(targetProfileId)))
+      );
+      if (conflictTracker) {
+        try {
+          if (targetProfileId && !(conflictTracker.linkedProfiles || []).includes(targetProfileId)) {
+            await storage.updateTracker(conflictTracker.id, {
+              linkedProfiles: Array.from(new Set([...(conflictTracker.linkedProfiles || []), targetProfileId])),
+            } as any);
+          }
+        } catch { /* non-fatal */ }
+        const { values: nv } = normalizeTrackerEntry(conflictTracker as any, entryValues);
+        return await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
       }
 
       // PER-PERSON TRACKERS: each tracker is owned by exactly ONE profile.
