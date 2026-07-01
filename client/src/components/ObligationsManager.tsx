@@ -1767,15 +1767,15 @@ export default function ObligationsManager({ showHeader = true, compact = false,
         <div className="text-center py-12">
           <CreditCard className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
           <h3 className="text-sm font-medium mb-1">
-            {kindFilter === "all" ? "No obligations yet" : `No ${OBLIGATION_KIND_META[kindFilter].label.toLowerCase()} obligations`}
+            {kindFilter === "all" ? "No bills yet" : `No ${OBLIGATION_KIND_META[kindFilter].label.toLowerCase()} bills`}
           </h3>
           <p className="text-xs text-muted-foreground mb-4">
             {kindFilter === "all"
-              ? "Add bills, subscriptions, loan payments, medications, appointments, and more — they'll show up on your calendar automatically."
-              : "Switch back to All to see other obligations, or add one of this type."}
+              ? "Add bills, subscriptions, and recurring payments to track what's due and when."
+              : "Switch back to All to see other bills, or add one of this type."}
           </p>
           <Button size="sm" onClick={() => setAddOpen(true)} data-testid="button-add-obligation-empty">
-            <Plus className="w-4 h-4 mr-1" /> Add Obligation
+            <Plus className="w-4 h-4 mr-1" /> Add Bill
           </Button>
         </div>
       ) : groupBySource && grouped ? (

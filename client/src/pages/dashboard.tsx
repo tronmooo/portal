@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { formatApiError } from "@/lib/formatError";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -1346,7 +1346,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }
                 <Button size="sm" className="w-full mt-1" onClick={() => setQuickAdd("bill")} data-testid="btn-bills-add-bill">
                   <Plus className="h-3.5 w-3.5 mr-1.5" /> Add bill
                 </Button>
-                <ViewPageLink href="/dashboard/obligations" label="View All Obligations" />
+                <ViewPageLink href="/bills" label="View all bills" />
               </>
             );
           })()}
@@ -2790,81 +2790,134 @@ function HeroBriefing({ enhanced, allProfiles, filterIds = [], filterMode = "eve
 function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone" }: { enhanced: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
   const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: incomesRaw } = useQuery<any>({
-    queryKey: ["/api/incomes", filterMode, ...filterIds, "trends"],
-    queryFn: () => apiRequest("GET", `/api/incomes${leading}`).then(r => r.json()).catch(() => []),
+  // ── Trends = MOVEMENT ONLY ────────────────────────────────────────────────
+  // Every other dashboard section (Hero, Explore, Health, Goals, Now) shows
+  // today's numbers. To avoid repeating any of them, Trends shows the one thing
+  // they don't: change over time. Each card is a week-over-week delta or a
+  // last-7-day trajectory — a direction, never a restated count. We derive the
+  // deltas from the raw habit check-ins and tracker entries (this week vs last)
+  // plus the server's per-metric 7-day trend.
+  const { data: habitsRaw } = useQuery<any>({
+    queryKey: ["/api/habits", filterMode, ...filterIds, "trends"],
+    queryFn: () => apiRequest("GET", `/api/habits${leading}`).then(r => r.json()).catch(() => []),
     staleTime: 60_000,
   });
-  const incomes = Array.isArray(incomesRaw) ? incomesRaw : (incomesRaw?.items || []);
-  const histUrl = leading ? `/api/net-worth/history${leading}&lookbackDays=120` : `/api/net-worth/history?lookbackDays=120`;
-  const { data: nwHistory = [] } = useQuery<any[]>({
-    queryKey: ["/api/net-worth/history", filterMode, ...filterIds, "trends"],
-    queryFn: () => apiRequest("GET", histUrl).then(r => r.json()).catch(() => []),
+  const { data: trackersRaw } = useQuery<any>({
+    queryKey: ["/api/trackers", filterMode, ...filterIds, "trends"],
+    queryFn: () => apiRequest("GET", `/api/trackers${leading}`).then(r => r.json()).catch(() => []),
     staleTime: 60_000,
   });
+  const habits: any[] = Array.isArray(habitsRaw) ? habitsRaw : (habitsRaw?.items || habitsRaw?.habits || []);
+  const trackers: any[] = Array.isArray(trackersRaw) ? trackersRaw : (trackersRaw?.items || trackersRaw?.trackers || []);
 
-  const income = incomes.reduce((s: number, i: any) => s + (Number(i.amount) || 0), 0);
-  const spend = Number(enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0);
-  const net = income - spend;
-  const adherence = Math.min(100, Number(stats?.habitCompletionRate ?? 0));
+  const GOOD = "155 60% 48%", BAD = "0 72% 55%", WARN = "43 85% 52%", TEAL = "173 60% 44%";
+  type TrendCard = { key: string; title: string; accent: string; headline: string; body?: ReactNode; caption: string; href: string; score: number };
+  const fmtVal = (n: number) => Number.isInteger(n) ? n.toLocaleString() : (Math.round(n * 10) / 10).toLocaleString();
+  const healthSnap: any[] = Array.isArray(enhanced?.healthSnapshot) ? enhanced.healthSnapshot : [];
 
-  const nwSeries = useMemo(() => {
-    const rows = Array.isArray(nwHistory) ? [...nwHistory] : [];
-    rows.sort((a, b) => String(a.snapshotDate).localeCompare(String(b.snapshotDate)));
-    return rows.map((r: any) => Number(r.netWorth) || 0);
-  }, [nwHistory]);
-  const nwTrend = nwSeries.length >= 2 && nwSeries[0] !== 0 ? ((nwSeries[nwSeries.length - 1] - nwSeries[0]) / Math.abs(nwSeries[0])) * 100 : null;
-  const nwPath = useMemo(() => {
-    const s = nwSeries.length >= 2 ? nwSeries : null;
-    if (!s) return null;
-    const min = Math.min(...s), max = Math.max(...s), span = (max - min) || 1;
-    const W = 100, H = 28;
-    return s.map((v, i) => `${i === 0 ? "M" : "L"}${((i / (s.length - 1)) * W).toFixed(1)},${(H - ((v - min) / span) * H).toFixed(1)}`).join(" ");
-  }, [nwSeries]);
+  // Two 7-day windows anchored to local midnight: [today-6 … today] (this week)
+  // and the 7 days before it (last week).
+  const DAY = 86400000;
+  const t0 = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+  const inThis = (ms: number) => !isNaN(ms) && ms >= t0 - 6 * DAY && ms < t0 + DAY;
+  const inLast = (ms: number) => !isNaN(ms) && ms >= t0 - 13 * DAY && ms < t0 - 6 * DAY;
+  const dayMs = (dateStr: string) => new Date(`${String(dateStr).slice(0, 10)}T12:00:00`).getTime();
+  const tsMs = (ts: string) => new Date(ts).getTime();
 
-  const fmt = (n: number) => `$${Math.round(Math.abs(n)).toLocaleString()}`;
-  const cards = [
-    {
-      key: "cashflow", title: "Spending vs income", accent: net >= 0 ? "155 60% 48%" : "0 72% 55%",
-      headline: `${net >= 0 ? "+" : "−"}${fmt(net)}`,
-      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>In {fmt(income)}</span><span>·</span><span>Out {fmt(spend)}</span></div>,
-      caption: net >= 0 ? "You're cash-flow positive — consider moving the surplus to savings." : "You're spending more than you earn — review top categories.",
-      href: "/dashboard/finance",
-    },
-    {
-      key: "networth", title: "Net worth", accent: (nwTrend ?? 0) >= 0 ? "155 60% 48%" : "0 72% 55%",
-      headline: nwTrend == null ? "—" : `${nwTrend >= 0 ? "↑" : "↓"} ${Math.abs(nwTrend).toFixed(1)}%`,
-      body: nwPath ? (
-        <svg viewBox="0 0 100 28" className="mt-1 h-7 w-full" preserveAspectRatio="none">
-          <path d={nwPath} fill="none" stroke={`hsl(${(nwTrend ?? 0) >= 0 ? "155 60% 48%" : "0 72% 55%"})`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      ) : <p className="mt-1 text-[10px] text-muted-foreground">Tracking — more data soon.</p>,
-      caption: nwTrend == null ? "Snapshots are accumulating; a trend appears within days." : nwTrend >= 0 ? "Trending up — keep paying down high-interest debt." : "Trending down — review your largest liabilities.",
-      href: "/dashboard/finance",
-    },
-    {
-      key: "health", title: "Habit adherence", accent: adherence >= 60 ? "155 60% 48%" : "43 85% 52%",
-      headline: `${adherence}%`,
-      body: <div className="mt-1.5 h-1.5 rounded-full bg-muted/60 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${adherence}%`, background: `hsl(${adherence >= 60 ? "155 60% 48%" : "43 85% 52%"})` }} /></div>,
-      caption: adherence >= 60 ? "Strong consistency — keep the streak going." : "Below your target — pick one keystone habit to lock in today.",
+  const pool: TrendCard[] = [];
+
+  // 1) Habit consistency — this week's adherence vs last week's, in points.
+  //    Hero/Explore show TODAY's %; this is the only place showing whether
+  //    consistency is climbing or slipping week over week.
+  const habitRate = (inWin: (ms: number) => boolean) => {
+    let expected = 0, done = 0;
+    for (const h of habits) {
+      const freq = String(h.frequency || "daily");
+      const per = freq === "weekly" ? 1 : freq === "custom" ? Math.max(1, (h.targetDays?.length || 1)) : 7;
+      expected += per;
+      const days = new Set<string>();
+      for (const c of (h.checkins || [])) { const ms = dayMs(c.date); if (inWin(ms)) days.add(String(c.date).slice(0, 10)); }
+      done += freq === "weekly" ? (days.size > 0 ? 1 : 0) : Math.min(per, days.size);
+    }
+    return { rate: expected > 0 ? Math.round((done / expected) * 100) : null as number | null, expected };
+  };
+  const thisH = habitRate(inThis), lastH = habitRate(inLast);
+  if (habits.length > 0 && thisH.rate != null && lastH.rate != null && (thisH.expected > 0 && lastH.expected > 0)) {
+    const delta = thisH.rate - lastH.rate;
+    const up = delta > 0, flat = delta === 0;
+    pool.push({
+      key: "habit-momentum", title: "Habit consistency", accent: flat ? TEAL : up ? GOOD : BAD,
+      headline: `${flat ? "→" : up ? "↑" : "↓"} ${Math.abs(delta)}%`,
+      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>This wk {thisH.rate}%</span><span>·</span><span>Last {lastH.rate}%</span></div>,
+      caption: up ? "More consistent than last week — keep it climbing." : flat ? "Holding steady with last week's consistency." : "Consistency slipped vs last week — recommit to one habit today.",
       href: "/dashboard/health",
-    },
-  ];
+      score: 70 + Math.min(24, Math.abs(delta)),
+    });
+  }
+
+  // 2) Health metric trajectories — the server's last-7-day change per tracker.
+  //    Only metrics that actually MOVED appear (flat ones add nothing new), and
+  //    we show the delta, not the current value the Health section already has.
+  const movedHealth = [...healthSnap]
+    .filter((h: any) => typeof h.latestValue === "number" && Number(h.trendValue) > 0 && h.trend !== "flat")
+    .sort((a: any, b: any) => (Number(b.entryCount) || 0) - (Number(a.entryCount) || 0));
+  movedHealth.slice(0, 2).forEach((h: any, idx: number) => {
+    const up = h.trend === "up";
+    pool.push({
+      key: `health-move-${h.trackerId}`, title: h.name, accent: TEAL,
+      headline: `${up ? "↑" : "↓"} ${fmtVal(Number(h.trendValue))}${h.unit ? ` ${h.unit}` : ""}`,
+      body: <div className="mt-1 text-[10px] text-muted-foreground">over the last week</div>,
+      caption: `${h.name} ${up ? "rose" : "fell"} ${fmtVal(Number(h.trendValue))}${h.unit ? ` ${h.unit}` : ""} across ${h.entryCount} recent log${h.entryCount === 1 ? "" : "s"} — mind the direction.`,
+      href: "/dashboard/health",
+      score: (idx === 0 ? 60 : 42) + Math.min(12, Number(h.entryCount) || 0),
+    });
+  });
+
+  // 3) Logging momentum — how many entries were logged this week vs last, across
+  //    trackers and habits. A pure engagement trend nothing else surfaces.
+  let thisLogs = 0, lastLogs = 0;
+  for (const t of trackers) for (const e of (t.entries || [])) { const ms = tsMs(e.timestamp); if (inThis(ms)) thisLogs++; else if (inLast(ms)) lastLogs++; }
+  for (const h of habits) for (const c of (h.checkins || [])) { const ms = dayMs(c.date); if (inThis(ms)) thisLogs++; else if (inLast(ms)) lastLogs++; }
+  if (thisLogs > 0 || lastLogs > 0) {
+    const delta = thisLogs - lastLogs;
+    const up = delta > 0, flat = delta === 0;
+    pool.push({
+      key: "logging-momentum", title: "Logging momentum", accent: flat ? TEAL : up ? GOOD : WARN,
+      headline: `${flat ? "→" : up ? "↑" : "↓"} ${Math.abs(delta)}`,
+      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>This wk {thisLogs}</span><span>·</span><span>Last {lastLogs}</span></div>,
+      caption: up ? `${delta} more log${delta === 1 ? "" : "s"} than last week — momentum is building.` : flat ? "Same logging pace as last week — steady tracking." : `${Math.abs(delta)} fewer log${Math.abs(delta) === 1 ? "" : "s"} than last week — a quick entry keeps the trend alive.`,
+      href: "/dashboard/health",
+      score: 40 + Math.min(20, Math.abs(delta)),
+    });
+  }
+
+  const cards = pool.sort((a, b) => b.score - a.score).slice(0, 3);
+
+  // Grid columns follow the number of live cards so 1–2 trends don't leave
+  // awkward empty tracks (a single card shouldn't sit in a 3-wide grid).
+  const gridCols = cards.length >= 3 ? "sm:grid-cols-3" : cards.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-1";
 
   return (
     <CollapsibleSection accent="200 80% 55%" icon={Activity} label="Trends" testId="section-trends">
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-        {cards.map((c) => (
-          <button key={c.key} type="button" onClick={() => navigate(c.href)}
-            className="flex flex-col rounded-2xl border border-border/50 bg-card/60 p-3 text-left card-lift active:scale-[0.98] transition-all"
-            data-testid={`trend-${c.key}`}>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{c.title}</p>
-            <p className="mt-0.5 text-lg font-bold tabular-nums" style={{ color: `hsl(${c.accent})` }}>{c.headline}</p>
-            {c.body}
-            <p className="mt-2 text-[10px] leading-snug text-muted-foreground">{c.caption}</p>
-          </button>
-        ))}
-      </div>
+      {cards.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-border/50 bg-card/40 p-4 text-center" data-testid="trend-empty">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">No movement yet</p>
+          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">Trends compare this week to last. Keep logging habits and trackers for a couple of weeks and your direction shows up here.</p>
+        </div>
+      ) : (
+        <div className={`grid grid-cols-1 ${gridCols} gap-2.5`}>
+          {cards.map((c) => (
+            <button key={c.key} type="button" onClick={() => navigate(c.href)}
+              className="flex flex-col rounded-2xl border border-border/50 bg-card/60 p-3 text-left card-lift active:scale-[0.98] transition-all"
+              data-testid={`trend-${c.key}`}>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{c.title}</p>
+              <p className="mt-0.5 text-lg font-bold tabular-nums" style={{ color: `hsl(${c.accent})` }}>{c.headline}</p>
+              {c.body}
+              <p className="mt-2 text-[10px] leading-snug text-muted-foreground">{c.caption}</p>
+            </button>
+          ))}
+        </div>
+      )}
     </CollapsibleSection>
   );
 }
@@ -3836,7 +3889,7 @@ function ObligationsSection({ data }: { data: any[] }) {
           <BillGroup title="Due This Week" bills={thisWeekBills} color="#f59e0b" />
           <BillGroup title="Due This Month" bills={thisMonthBills} color="#6b7280" />
         </div>
-        <ViewPageLink href="/dashboard/obligations" label="View All Obligations" />
+        <ViewPageLink href="/bills" label="View all bills" />
       </CollapsibleSection>
 
       {/* Obligation Detail Popup */}
