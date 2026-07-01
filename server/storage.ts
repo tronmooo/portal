@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 
 // Per-request storage context — eliminates the global userId race condition (C-1)
 // Auth middleware runs storage within this context so all downstream code
@@ -780,8 +781,24 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Profiles ----
-  async getProfiles() { return Array.from(this.profiles.values()); }
-  async getProfile(id: string) { return this.profiles.get(id); }
+  async getProfiles() {
+    const all = Array.from(this.profiles.values());
+    return all.map(p => this.healProfileName(p, all));
+  }
+  async getProfile(id: string) {
+    const p = this.profiles.get(id);
+    return p ? this.healProfileName(p, Array.from(this.profiles.values())) : p;
+  }
+  // Parity with SupabaseStorage: strip a legacy possessive owner prefix from
+  // child/asset profile names ("Craig's Ford F250" → "Ford F250").
+  private healProfileName(p: Profile, all: Profile[]): Profile {
+    const CHILD_TYPES = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
+    if (!CHILD_TYPES.has(p.type as string)) return p;
+    const parentName = p.parentProfileId ? all.find(x => x.id === p.parentProfileId)?.name : undefined;
+    const personNames = all.filter(x => x.type === "person" || x.type === "self").map(x => x.name);
+    const cleaned = stripOwnerPossessivePrefix(p.name, [parentName, ...personNames]);
+    return cleaned === p.name ? p : { ...p, name: cleaned };
+  }
 
   async getProfileDetail(id: string): Promise<ProfileDetail | undefined> {
     const profile = this.profiles.get(id);
@@ -1023,8 +1040,18 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Trackers ----
-  async getTrackers() { return Array.from(this.trackers.values()); }
-  async getTracker(id: string) { return this.trackers.get(id); }
+  async getTrackers() { return Array.from(this.trackers.values()).map(t => this.healTrackerName(t)); }
+  async getTracker(id: string) { const t = this.trackers.get(id); return t ? this.healTrackerName(t) : t; }
+  // Parity with SupabaseStorage: strip a legacy "<Name> - <Owner>" suffix using
+  // the tracker's own linked profiles' names (display-only in MemStorage).
+  private healTrackerName(t: Tracker): Tracker {
+    const ownerNames = (t.linkedProfiles || [])
+      .map(id => this.profiles.get(id)?.name)
+      .filter(Boolean) as string[];
+    if (!ownerNames.length) return t;
+    const cleaned = stripTrackerOwnerSuffix(t.name, ownerNames);
+    return cleaned === t.name ? t : { ...t, name: cleaned };
+  }
   async createTracker(data: InsertTracker): Promise<Tracker> {
     const tracker: Tracker = { id: randomUUID(), ...data, fields: data.fields || [], entries: [], linkedProfiles: [], createdAt: new Date().toISOString() };
     this.trackers.set(tracker.id, tracker);

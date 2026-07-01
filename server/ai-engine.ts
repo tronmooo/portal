@@ -27,6 +27,7 @@ import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medi
 import { passesProfileFilter } from "@shared/profile-filter";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
+import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -2435,7 +2436,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Profiles ---
   {
     name: "create_profile",
-    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty (subtype auto-detected: high_value_item, bank_account, credit_card, digital_asset, business, collectible, loan_receivable). Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday.\n\n*** DO NOT use type:'loan' OR create profiles for debts/loans/credit cards/mortgages/student loans/HELOC/BNPL/IRS debt with this tool. Use the dedicated `create_liability` tool instead — it sets the correct subtype, structured fields, and unlocks the Payments/Payoff/Schedule/Linked/Docs/Activity tabs. The 'loan' type here is LEGACY and must not be used for new entries. ***\n\nIMPORTANT: When creating a vehicle, asset, subscription, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.",
+    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty (subtype auto-detected: high_value_item, bank_account, credit_card, digital_asset, business, collectible, loan_receivable). Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday.\n\n*** DO NOT use type:'loan' OR create profiles for debts/loans/credit cards/mortgages/student loans/HELOC/BNPL/IRS debt with this tool. Use the dedicated `create_liability` tool instead — it sets the correct subtype, structured fields, and unlocks the Payments/Payoff/Schedule/Linked/Docs/Activity tabs. The 'loan' type here is LEGACY and must not be used for new entries. ***\n\nIMPORTANT: When creating a vehicle, asset, subscription, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.\n\nNAMING: Do NOT put the owner's name in the profile `name`. Name the entity itself — 'Ford F250 2025', NOT 'Craig's Ford F250 2025'; 'Honda Civic', NOT \"Bob's Honda Civic\". Ownership belongs in forProfile, never in the name.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -5144,6 +5145,26 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           };
         }
         intendedParentId = resolution.profile.id;
+      }
+      // ASSET NAMING RULE (2026-07-01, user report): an asset/vehicle/etc. must
+      // NOT carry its owner's name in the name ("Craig's Ford F250 2025" →
+      // "Ford F250 2025"). Ownership is tracked via the parent profile and the UI
+      // filters by profile, so the possessive prefix is redundant. Strip it for
+      // child/asset types using the owner candidates (the named owner, the
+      // resolved parent, and any person/self profile). People/pets keep their
+      // names verbatim. stripOwnerPossessivePrefix only removes a genuine
+      // possessive ("<Owner>'s "), so brands like "Levi's" are left intact.
+      if (isChildType && input.name) {
+        const ownerCandidates = [
+          input.forProfile,
+          intendedParentId ? existingProfiles.find(p => p.id === intendedParentId)?.name : undefined,
+          ...existingProfiles.filter(p => p.type === "person" || p.type === "self").map(p => p.name),
+        ];
+        const cleanedName = stripOwnerPossessivePrefix(input.name, ownerCandidates);
+        if (cleanedName !== input.name) {
+          logger.info("ai", `Asset naming rule: stripped owner prefix "${input.name}" → "${cleanedName}"`);
+          input.name = cleanedName;
+        }
       }
       const existingProfile = existingProfiles.find(p => {
         if (p.name.toLowerCase() !== (input.name || "").toLowerCase().trim()) return false;

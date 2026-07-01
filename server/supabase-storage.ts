@@ -31,6 +31,7 @@ import {
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
 import { isRecurringBill } from "../shared/liability-types";
+import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
@@ -742,8 +743,35 @@ export class SupabaseStorage implements IStorage {
     return this.memo("getProfiles", async () => {
       const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId).is("deleted_at", null);
       if (error) throw error;
-      return (data || []).map(r => this.rowToProfile(r));
+      return this.healOwnerPrefixedProfileNames((data || []).map(r => this.rowToProfile(r)));
     });
+  }
+
+  // Self-heal legacy asset/vehicle names that carried a possessive owner prefix
+  // ("Craig's Ford F250 2025" → "Ford F250 2025"). Only child/asset types are
+  // touched, and only when the possessive owner matches the parent profile or a
+  // known person/self name — people & pets keep their names verbatim, and brand
+  // names ("Levi's") survive. Persists the rename once so the DB heals too.
+  private CHILD_PROFILE_TYPES = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
+  private async healOwnerPrefixedProfileNames(profiles: Profile[]): Promise<Profile[]> {
+    if (!profiles.length) return profiles;
+    const nameById = new Map(profiles.map(p => [p.id, p.name]));
+    const personNames = profiles.filter(p => p.type === "person" || p.type === "self").map(p => p.name);
+    const renames: Array<Promise<any>> = [];
+    const healed = profiles.map(p => {
+      if (!this.CHILD_PROFILE_TYPES.has(p.type as string)) return p;
+      const parentName = p.parentProfileId ? nameById.get(p.parentProfileId) : undefined;
+      const cleaned = stripOwnerPossessivePrefix(p.name, [parentName, ...personNames]);
+      if (cleaned === p.name) return p;
+      renames.push(
+        (async () => { await this.supabase.from("profiles").update({ name: cleaned }).eq("id", p.id).eq("user_id", this.userId); })(),
+      );
+      return { ...p, name: cleaned };
+    });
+    if (renames.length) {
+      try { await Promise.all(renames); } catch { /* display already clean; retry next read */ }
+    }
+    return healed;
   }
 
   /**
@@ -1962,9 +1990,43 @@ export class SupabaseStorage implements IStorage {
       arr.push(e);
       entriesByTracker.set(e.tracker_id, arr);
     }
-    return (trackersResult.data || []).map(r =>
+    const trackers = (trackersResult.data || []).map(r =>
       this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map(e => this.rowToTrackerEntry(e))),
     );
+    return this.healOwnerSuffixedTrackerNames(trackers);
+  }
+
+  // Self-heal legacy "<Name> - <Owner>" tracker names created before the owner
+  // suffix was removed (see server/ai-engine.ts). Strips the owner suffix using
+  // the tracker's OWN linked profiles' names, returns clean names for display,
+  // and persists the rename ONCE (a direct name-column update) so the DB heals
+  // too. After the first heal the suffix is gone, so this becomes a no-op with
+  // no further writes. Never touches a suffix that isn't an owner name.
+  private async healOwnerSuffixedTrackerNames(trackers: Tracker[]): Promise<Tracker[]> {
+    if (!trackers.length) return trackers;
+    let profileNameById: Map<string, string>;
+    try {
+      const profiles = await this.getProfiles();
+      profileNameById = new Map(profiles.map(p => [p.id, p.name]));
+    } catch {
+      return trackers; // never let a heal failure break tracker reads
+    }
+    const renames: Array<Promise<any>> = [];
+    const healed = trackers.map(t => {
+      const ownerNames = (t.linkedProfiles || []).map(id => profileNameById.get(id)).filter(Boolean) as string[];
+      if (!ownerNames.length) return t;
+      const cleaned = stripTrackerOwnerSuffix(t.name, ownerNames);
+      if (cleaned === t.name) return t;
+      // Persist the rename once (awaited in aggregate below).
+      renames.push(
+        (async () => { await this.supabase.from("trackers").update({ name: cleaned }).eq("id", t.id).eq("user_id", this.userId); })(),
+      );
+      return { ...t, name: cleaned };
+    });
+    if (renames.length) {
+      try { await Promise.all(renames); } catch { /* display already clean; retry next read */ }
+    }
+    return healed;
   }
 
   async getTracker(id: string): Promise<Tracker | undefined> {
@@ -1973,10 +2035,11 @@ export class SupabaseStorage implements IStorage {
       this.supabase.from("tracker_entries").select("*").eq("tracker_id", id).eq("user_id", this.userId).is("deleted_at", null).order("timestamp", { ascending: true }),
     ]);
     if (error || !data) return undefined;
-    return this.rowToTracker(
+    const tracker = this.rowToTracker(
       data,
       (entriesResult.data || []).map(e => this.rowToTrackerEntry(e)),
     );
+    return (await this.healOwnerSuffixedTrackerNames([tracker]))[0];
   }
 
   async createTracker(data: InsertTracker): Promise<Tracker> {
