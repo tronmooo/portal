@@ -155,11 +155,10 @@ function MetricPopupShell({ open, onOpenChange, icon: Icon, iconColor, title, de
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-w-md p-0 gap-0 overflow-hidden"
-        style={{ maxHeight: 720 }}
+        className="max-w-md p-0 gap-0 overflow-hidden flex flex-col max-h-[90dvh]"
         data-testid={testId}
       >
-        <DialogHeader className="px-4 pt-4 pb-3 border-b border-border">
+        <DialogHeader className="px-4 pt-4 pb-3 border-b border-border shrink-0">
           <div className="flex items-start gap-3">
             <div className="rounded-lg p-2 shrink-0" style={{ background: `${iconColor}1f` }}>
               <Icon className="h-4 w-4" style={{ color: iconColor }} />
@@ -175,7 +174,9 @@ function MetricPopupShell({ open, onOpenChange, icon: Icon, iconColor, title, de
             )}
           </div>
         </DialogHeader>
-        <div className="overflow-y-auto" style={{ maxHeight: 600 }}>{children}</div>
+        {/* Viewport-relative height so the popup never clips its top/bottom on
+            short screens (was a fixed 720/600px that bled off small viewports). */}
+        <div className="overflow-y-auto min-h-0 flex-1">{children}</div>
       </DialogContent>
     </Dialog>
   );
@@ -651,8 +652,8 @@ export function CashFlowPopup({
             <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={() => setQuickAdd("bill")} data-testid="cash-flow-add-bill">
               <Plus className="h-3 w-3 mr-1.5" /> Add bill
             </Button>
-            <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={() => go("/calendar?tab=obligations")} data-testid="cash-flow-view-obligations">
-              <ExternalLink className="h-3 w-3 mr-1.5" /> Manage obligations
+            <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={() => go("/trackers?tab=liabilities")} data-testid="cash-flow-view-obligations">
+              <ExternalLink className="h-3 w-3 mr-1.5" /> Manage liabilities
             </Button>
           </div>
         </div>

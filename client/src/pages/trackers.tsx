@@ -6,6 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
+import { liabilityFamily } from "@shared/liability-types";
 import { passesProfileFilter } from "@shared/profile-filter";
 import {
   type TrackerMetricDefinition,
@@ -7081,80 +7082,93 @@ export default function TrackersPage() {
               </div>
               {collapsedSections.has("liabilities") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
-            {!collapsedSections.has("liabilities") && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                {liabs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(liab => {
-                  const fields: any = liab.fields || {};
-                  const fin = fields.finance || {};
-                  const isSubscription = liab.type === "subscription";
-                  const balance = toNumLiab(fields.currentBalance ?? fields.remainingBalance ?? fields.loanBalance ?? fields.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance);
-                  // For subscriptions, surface the recurring cost in the
-                  // "Monthly" KPI line so the card still tells you what it
-                  // costs you each month.
-                  const subFreq = String(fields.frequency || "monthly").toLowerCase();
-                  const subCost = toNumLiab(fields.cost ?? fields.amount);
-                  const subMonthly = isSubscription && subCost != null
-                    ? (subFreq.startsWith("y") ? subCost / 12 : subFreq.startsWith("w") ? subCost * 52 / 12 : subFreq.startsWith("q") ? subCost / 3 : subFreq.startsWith("b") ? subCost * 26 / 12 : subCost)
-                    : null;
-                  const monthly = isSubscription ? subMonthly : toNumLiab(fields.monthlyPayment ?? fin.monthlyPayment);
-                  const apr = toNumLiab(fields.annualInterestRate ?? fields.apr ?? fin.annualInterestRate);
-                  const lender = fields.lender || fin.lender || fields.provider || '';
-                  const subtype = liabilitySubcategoryOf(liab);
-                  const original = toNumLiab(fields.originalBalance ?? fin.originalBalance);
-                  const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
-                  return (
-                    // BUG-LT05: navigation goes through wouter's <Link> only.
-                    // Earlier QA reported the global profile filter flipping
-                    // from "Everyone" → the liability owner on card click — we
-                    // could not reproduce a listener that does this in the
-                    // current code, but the symptom is consistent with stale
-                    // localStorage filter state lingering after navigation.
-                    // The route-aware filter reset in BUG-LT03 now clears any
-                    // such carryover on each route change.
-                    <Link key={liab.id} href={`/profiles/${liab.id}`} className="block">
-                      <div
-                        className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col"
-                        style={{ height: 160, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }}
-                        data-testid={`liab-card-${liab.id}`}
-                      >
-                        <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
-                          <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><TrendingDown className="h-3.5 w-3.5" /></div>
-                          <p className="text-[10px] font-bold text-foreground truncate" title={liab.name}>{liab.name}</p>
-                        </div>
-                        <div className="px-2.5 pb-1 flex-1 flex flex-col gap-0.5">
-                          {balance != null && balance > 0 ? (
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-baseline gap-0.5">
-                                <span className="text-xl font-black tabular-nums text-foreground">${Math.round(balance).toLocaleString()}</span>
-                                <span className="text-[9px] text-muted-foreground">bal</span>
-                              </div>
-                              {original && original > 0 && <Donut pct={paidPct} color={ac} size={32} label={`${Math.round(paidPct * 100)}%`} />}
-                            </div>
-                          ) : isSubscription && subCost != null && subCost > 0 ? (
-                            // Subscriptions don't have a payoff balance — show
-                            // the recurring price as the headline number.
-                            <div className="flex items-baseline gap-0.5">
-                              <span className="text-xl font-black tabular-nums text-foreground">${Math.round(subCost).toLocaleString()}</span>
-                              <span className="text-[9px] text-muted-foreground">/{subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo'}</span>
-                            </div>
-                          ) : <span className="text-[10px] text-muted-foreground/50 italic">No balance set</span>}
-                          {/* For subscriptions we already showed the cost as
-                              the headline, so don't repeat it on a Monthly
-                              line unless the freq isn't already monthly. */}
-                          {monthly != null && monthly > 0 && !(isSubscription && subFreq.startsWith('m')) && <KpiLine label="Monthly" value={`$${Math.round(monthly).toLocaleString()}/mo`} />}
-                          {apr != null && apr > 0 && <KpiLine label="APR" value={`${apr < 1 ? (apr * 100).toFixed(2) : apr.toFixed(2)}%`} />}
-                          {lender && <KpiLine label="Lender" value={String(lender).slice(0, 18)} />}
-                        </div>
-                        <div className="px-2.5 pb-2 pt-0.5 flex items-center justify-between">
-                          <span className="text-[7px] font-semibold px-1.5 py-0.5 rounded capitalize" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{subtype}</span>
-                          {original && original > 0 && balance != null && <span className="text-[7px] text-muted-foreground tabular-nums">of ${Math.round(original).toLocaleString()}</span>}
-                        </div>
+            {!collapsedSections.has("liabilities") && (() => {
+              // Photo-4 layout: split into FIXED (amortizing loans — mortgage,
+              // auto, student, personal) vs VARIABLE (revolving cards, one-time
+              // debt, recurring bills) using the shared family classifier, and
+              // render each as a labeled card (Type / Creditor / Balance / Due
+              // Date + payoff progress bar).
+              const sortByName = (a: any, b: any) => (a.name || '').localeCompare(b.name || '');
+              const fixed = liabs.filter(l => liabilityFamily(l.type_key) === 'amortizing').sort(sortByName);
+              const variable = liabs.filter(l => liabilityFamily(l.type_key) !== 'amortizing').sort(sortByName);
+              const fmtMoney = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+              const fmtDue = (raw: any): string | null => {
+                if (!raw) return null;
+                const d = new Date(String(raw).slice(0, 10) + "T00:00:00");
+                return isNaN(d.getTime()) ? null : d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+              };
+              const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-[11px] text-muted-foreground shrink-0">{label}</span>
+                  <span className="text-[11px] font-medium text-foreground text-right truncate">{value}</span>
+                </div>
+              );
+              const renderCard = (liab: any) => {
+                const fields: any = liab.fields || {};
+                const fin = fields.finance || {};
+                const isSubscription = liab.type === "subscription";
+                const balance = toNumLiab(fields.currentBalance ?? fields.remainingBalance ?? fields.loanBalance ?? fields.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance);
+                const subFreq = String(fields.frequency || fields.billingFrequency || "monthly").toLowerCase();
+                const subCost = toNumLiab(fields.cost ?? fields.monthlyAmount ?? fields.amount);
+                const apr = toNumLiab(fields.annualInterestRate ?? fields.apr ?? fin.annualInterestRate);
+                const lender = fields.lender || fin.lender || fields.provider || fields.creditor || fin.creditor || '';
+                const subtype = liabilitySubcategoryOf(liab);
+                const original = toNumLiab(fields.originalBalance ?? fin.originalBalance ?? fields.originalLoanAmount ?? fin.originalLoanAmount ?? fields.creditLimit ?? fin.creditLimit);
+                const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
+                const due = fmtDue(fields.dueDate ?? fields.nextDueDate ?? fields.due_date ?? fin.dueDate);
+                return (
+                  <Link key={liab.id} href={`/profiles/${liab.id}`} className="block">
+                    <div
+                      className="rounded-xl p-3 cursor-pointer transition-all hover:border-[hsl(0_72%_55%/0.45)] active:scale-[0.99]"
+                      style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.10) 0%, hsl(var(--card)) 60%)`, border: `1px solid hsl(${accentHsl} / 0.2)` }}
+                      data-testid={`liab-card-${liab.id}`}
+                    >
+                      <div className="flex items-start gap-2 mb-2">
+                        <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5" style={{ backgroundColor: `hsl(${accentHsl} / 0.18)`, color: ac }}><TrendingDown className="h-3.5 w-3.5" /></div>
+                        <p className="flex-1 min-w-0 text-xs font-bold uppercase tracking-wide text-foreground truncate" title={liab.name}>{liab.name}</p>
+                        <Pencil className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
                       </div>
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
+                      <div className="space-y-1">
+                        <Row label="Type" value={<span className="capitalize">{subtype}</span>} />
+                        {lender && <Row label="Creditor" value={String(lender)} />}
+                        {balance != null && balance > 0 ? (
+                          <Row label="Balance" value={<span className="tabular-nums font-semibold">{fmtMoney(balance)}</span>} />
+                        ) : (isSubscription || liabilityFamily(liab.type_key) === 'recurring') && subCost != null && subCost > 0 ? (
+                          <Row label="Amount" value={<span className="tabular-nums font-semibold">{fmtMoney(subCost)}/{subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo'}</span>} />
+                        ) : (
+                          <Row label="Balance" value={<span className="text-muted-foreground/60 italic">Not set</span>} />
+                        )}
+                        {apr != null && apr > 0 && <Row label="APR" value={`${apr < 1 ? (apr * 100).toFixed(2) : apr.toFixed(2)}%`} />}
+                        {due && <Row label="Due Date" value={due} />}
+                      </div>
+                      {original != null && original > 0 && balance != null && (
+                        <div className="mt-2.5">
+                          <div className="h-1.5 w-full rounded-full overflow-hidden" style={{ background: `hsl(${accentHsl} / 0.12)` }}>
+                            <div className="h-full rounded-full" style={{ width: `${Math.round(paidPct * 100)}%`, background: ac }} />
+                          </div>
+                          <div className="mt-1 flex justify-between text-[9px] text-muted-foreground tabular-nums">
+                            <span>{Math.round(paidPct * 100)}% paid</span>
+                            <span>of {fmtMoney(original)}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </Link>
+                );
+              };
+              const Group = ({ title, items }: { title: string; items: any[] }) => items.length === 0 ? null : (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 px-0.5">{title}</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">{items.map(renderCard)}</div>
+                </div>
+              );
+              return (
+                <div className="space-y-4">
+                  <Group title="Fixed Liabilities" items={fixed} />
+                  <Group title="Variable Liabilities" items={variable} />
+                </div>
+              );
+            })()}
           </div>
         );
       })()}
