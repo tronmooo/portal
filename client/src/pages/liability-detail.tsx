@@ -54,6 +54,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
+import { BillScheduleSection } from "@/components/liability/BillScheduleSection";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1012,6 +1013,11 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
           {/* OVERVIEW */}
           <TabsContent value="overview" className="mt-4 space-y-4">
+            {/* Recurring bills lead with their living Schedule & Calendar —
+                next due, the next 12 occurrences, and per-occurrence + series
+                controls that stay in sync with the calendar and dashboard. */}
+            {recurringBill && <BillScheduleSection liabilityId={profile.id} />}
+
             {/* AI insights card */}
             <AISummaryCard profileId={profile.id} />
 
