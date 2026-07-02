@@ -3953,6 +3953,8 @@ BEHAVIOR:
 - RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
   In your response, mention that both a profile and a bill were created. Example: "Created Spotify subscription profile + $11/month bill — will show on Calendar every month."
   Wording like "$20/mo", "/month", "monthly", or "every month" ALWAYS means recurring: call create_obligation, never create_expense.
+  EXCEPTION — honor an explicit "expense": if the user literally says "expense", "log an expense", "add a ... expense", or "one-time", create_expense EVEN for a subscription-category item (e.g. "add a $19.99 subscription expense for Apple TV" → create_expense, category:"subscription", NOT an obligation). Only route to create_obligation when the user's phrasing for THAT item signals recurrence (/mo, monthly, every month) AND they did not call it an expense.
+  MULTI-ACTION MESSAGES: judge each item on ITS OWN phrasing. A recurring item elsewhere in the message (e.g. a phone bill "every month", a task "every two weeks") does NOT make an unrelated one-time expense ("$47.82 grocery", "$19.99 Apple TV") recurring — still create_expense for those.
 - EXPENSE TO ASSET: When the user says a logged expense is really an asset ("that laptop I expensed is an asset", "track my $1200 camera as an asset"), call convert_expense_to_asset — it moves the purchase price and date onto a new asset profile and removes the duplicate expense. Do NOT call create_profile + delete_expense separately.
 - REFUNDS: When the user gets money back on a prior purchase ("I got refunded $40 for the shoes", "returned the headphones"), call refund_expense with the original expense description and the refund amount (omit amount for a full refund). Do NOT log a new positive expense for a refund.
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
@@ -7245,10 +7247,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "create_expense": {
       logger.info("ai", `create_expense input: desc="${input.description}" forProfile="${input.forProfile}" amount=${input.amount}`);
       // BUG-J: a one-shot expense is the wrong home for a recurring charge. If the
-      // user's phrasing signals recurrence ("$20/mo for parking", "monthly"), bounce
-      // back and tell the model to use create_obligation instead.
-      const expMsg = String((input as any).__userMessage || "");
-      if (/(per month|per year|\/mo\b|\/yr\b|monthly|yearly|every month|each month|every year|\$\d+\s*\/\s*m\b)/i.test(expMsg)) {
+      // phrasing signals recurrence ("$20/mo for parking", "monthly"), bounce back
+      // and tell the model to use create_obligation instead.
+      // FIX (2026-07): this used to test the ENTIRE user message (__userMessage),
+      // so a multi-action message that mentioned a recurring item ANYWHERE — e.g.
+      // "add a $47.82 grocery expense … and a phone bill every month" — poisoned
+      // EVERY expense in the batch (grocery + Apple TV rejected because the phone
+      // bill said "every month"). Scope the recurrence check to THIS expense's own
+      // description/vendor so one recurring item can't block unrelated one-time spends.
+      const expDesc = `${String(input.description || "")} ${String(input.vendor || "")}`;
+      if (/(\/mo\b|\/yr\b|\bper month\b|\bper year\b|\bevery month\b|\beach month\b|\bevery year\b|\bmonthly\b|\byearly\b)/i.test(expDesc)) {
         return { error: "This sounds recurring — use create_obligation instead, or rephrase as a one-time spend." };
       }
       // Validate amount — reject invalid/zero amounts instead of silently logging $0
