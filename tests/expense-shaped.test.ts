@@ -62,4 +62,19 @@ describe("classifyTrackerAutoCreate", () => {
     // "Weight 215" — no $, no money key: must remain a tracker.
     expect(classifyTrackerAutoCreate("Weight", { weight: 215 }, "weight 215").kind).toBe("allow");
   });
+
+  it("does not treat an ambiguous 'amount'/'total' quantity as money (Coffee 2 cups)", () => {
+    // User report: "Coffee 2 cups" logged as {amount: 2} inside a big mixed
+    // message that mentioned dollars elsewhere ($47.82) was wrongly diverted to
+    // a $2 expense. An ambiguous key is money only when THAT figure is a $-amount.
+    expect(classifyTrackerAutoCreate("Coffee", { amount: 2 }, "Coffee 2 cups; grocery $47.82 for Robert").kind).toBe("allow");
+    expect(classifyTrackerAutoCreate("Walking", { total: 8600 }, "Walking 8,600 steps").kind).toBe("allow");
+    expect(classifyTrackerAutoCreate("Water", { amount: 72 }, "Water 72 ounces").kind).toBe("allow");
+  });
+
+  it("still diverts an ambiguous key when the figure is an explicit dollar amount", () => {
+    const v = classifyTrackerAutoCreate("Tip", { amount: 20 }, "gave a $20 tip");
+    expect(v.kind).toBe("divert");
+    if (v.kind === "divert") expect(v.expense.amount).toBe(20);
+  });
 });

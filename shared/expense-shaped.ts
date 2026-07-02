@@ -10,10 +10,20 @@
  * tracker. Pure + dependency-free so the contract test can pin it.
  */
 
-const EXPENSE_NAME_RE = /(expense|spend|spending|cost|purchase|repair|maintenance|payment|bill|fee|charge|shopping|bought)/i;
+// Leading \b so a spending word only matches at a word START — otherwise "fee"
+// matched inside "Cof-fee" and diverted every coffee log to an expense. Leading
+// boundary keeps plurals/gerunds working ("Repairs" still matches \brepair).
+const EXPENSE_NAME_RE = /\b(expense|spend|spending|cost|purchase|repair|maintenance|payment|bill|fee|charge|shopping|bought)/i;
+// Unambiguous money keys — a numeric value under any of these is money, always.
 const MONEY_KEYS = new Set([
-  "cost", "price", "amount", "total", "paid", "spent", "fee", "charge", "expense", "dollars",
+  "cost", "price", "paid", "spent", "fee", "charge", "expense", "dollars",
 ]);
+// Ambiguous quantity words that also name money. "Coffee 2 cups" logged as
+// {amount: 2}, "8,600 steps" as {total: 8600} are NOT money. Treat an
+// ambiguous key as money ONLY when that figure appears as $N in the message,
+// or the tracker name is itself expense-flavored. (User report: "Coffee 2
+// cups" got diverted to a $2 expense because "amount" was an absolute money key.)
+const AMBIGUOUS_MONEY_KEYS = new Set(["amount", "total"]);
 const CURRENCY_IN_MESSAGE_RE = /\$\s?\d|\b\d+(?:\.\d{1,2})?\s*(?:dollars|bucks)\b/i;
 const CURRENCY_AMOUNT_RE = /\$\s?(\d[\d,]*(?:\.\d{1,2})?)/;
 
@@ -54,9 +64,18 @@ export function classifyTrackerAutoCreate(
   const numericVals = Object.entries(vals).filter(
     ([k, v]) => k !== "_notes" && typeof v === "number" && isFinite(v as number) && (v as number) > 0,
   ) as Array<[string, number]>;
-  const moneyKeyVal = numericVals.find(([k]) => MONEY_KEYS.has(k.toLowerCase()));
   const nameIsExpenseFlavored = EXPENSE_NAME_RE.test(name);
   const msgHasCurrency = CURRENCY_IN_MESSAGE_RE.test(msg);
+  let moneyKeyVal = numericVals.find(([k]) => MONEY_KEYS.has(k.toLowerCase()));
+  if (!moneyKeyVal) {
+    const ambVal = numericVals.find(([k]) => AMBIGUOUS_MONEY_KEYS.has(k.toLowerCase()));
+    if (ambVal) {
+      // Only money if this exact figure shows up as $N in the message, or the
+      // tracker name is expense-flavored. Otherwise it's a plain quantity.
+      const figureRe = new RegExp(`\\$\\s?${ambVal[1]}(\\b|\\.|$)`);
+      if (figureRe.test(msg) || nameIsExpenseFlavored) moneyKeyVal = ambVal;
+    }
+  }
 
   let amount: number | undefined;
   if (moneyKeyVal) {
