@@ -31,6 +31,7 @@ import {
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
 import { isRecurringBill } from "../shared/liability-types";
+import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
@@ -2782,10 +2783,58 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    // Obligations retired (2026-07) — recurring bills no longer appear on the
-    // calendar grid (user decision). Bills live on their liability pages and in
-    // the Bills Due / Cash Flow surfaces, not cluttering the calendar. The
-    // per-occurrence emission and the obligation_occurrences table are gone.
+    // Recurring bills as first-class calendar objects (2026-07). Each recurring
+    // liability generates its payment occurrences on the fly (no occurrence
+    // table) and every occurrence in the window lands on the calendar as a
+    // distinct "bill" item, linked back to its liability profile. Per-occurrence
+    // state (paid / skipped / rescheduled) comes from fields.occurrences and the
+    // liability_payments history — see shared/liability-schedule.ts.
+    {
+      const billProfiles = profiles.filter((p: any) =>
+        isRecurringBill(p.type_key ?? p.typeKey) &&
+        matchesProfile(p.parentProfileId ? [p.parentProfileId] : []));
+      // Reuse the payments already fetched for the obligation list (id-aligned).
+      const payByLiab = new Map<string, Array<{ paymentDate?: string; id?: string }>>();
+      for (const ob of allObligations) {
+        payByLiab.set(ob.id, (ob.payments || []).map((pp: any) => ({ paymentDate: pp.date, id: pp.id })));
+      }
+      const todayISO = getUserToday(this._timezone);
+      // Old occurrence status vocabulary the calendar UI already renders.
+      const toUiStatus = (s: ScheduleOccurrence["status"]) =>
+        s === "paid" ? "done" : s === "overdue" ? "late" : s === "skipped" ? "skipped" : "pending";
+      for (const p of billProfiles as any[]) {
+        const occ = generateSchedule(
+          { id: p.id, fields: p.fields },
+          payByLiab.get(p.id) || [],
+          { todayISO, windowStart: startDate, windowEnd: endDate },
+        );
+        const owner = p.parentProfileId ? [p.parentProfileId] : [];
+        const freq = liabilityFrequency({ id: p.id, fields: p.fields });
+        for (const o of occ) {
+          items.push({
+            id: `bill-${p.id}-${o.date}`,
+            type: "obligation",
+            title: p.name,
+            date: o.effectiveDate,
+            allDay: true,
+            color: "#C75B5B",
+            category: "bill",
+            linkedProfiles: owner,
+            sourceId: p.id,
+            completed: o.status === "paid",
+            meta: {
+              kind: "bill",
+              status: toUiStatus(o.status),
+              amount: o.amount,
+              recurrence: freq,
+              occurrenceId: o.occurrenceId,
+              liabilityId: p.id,
+              notes: o.notes,
+            },
+          } as any);
+        }
+      }
+    }
 
     // Habits intentionally NOT emitted as calendar items — they live on their
     // own page and clutter the calendar with repeating noise. Re-enable here
@@ -3646,6 +3695,145 @@ export class SupabaseStorage implements IStorage {
     const p = await this.getProfile(id);
     if (!p) return false;
     return this.deleteProfile(id);
+  }
+
+  // ============================================================
+  // RECURRING LIABILITY SCHEDULE — per-occurrence + series operations.
+  // Occurrences are generated on the fly (shared/liability-schedule.ts); the
+  // only stored state is the fields.occurrences override map + pause flags +
+  // the liability_payments history. No occurrence table, no migration.
+  // ============================================================
+
+  private async _liabilityPayments(id: string): Promise<Array<{ id?: string; paymentDate?: string }>> {
+    const { data } = await this.supabase
+      .from("liability_payments").select("id,payment_date")
+      .eq("user_id", this.userId).eq("liability_profile_id", id)
+      .order("payment_date", { ascending: true });
+    return (data || []).map((r: any) => ({ id: r.id, paymentDate: r.payment_date }));
+  }
+
+  /** Rich schedule for a recurring liability: occurrences window + history + settings. */
+  async getLiabilitySchedule(id: string, months = 12): Promise<any | null> {
+    const p = await this.getProfile(id);
+    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return null;
+    const f: any = p.fields || {};
+    const todayISO = getUserToday(this._timezone);
+    const payments = await this._liabilityPayments(id);
+    const fromISO = new Date(new Date(todayISO + "T00:00:00").setMonth(new Date(todayISO + "T00:00:00").getMonth() - 2)).toLocaleDateString("en-CA");
+    const toISO = new Date(new Date(todayISO + "T00:00:00").setMonth(new Date(todayISO + "T00:00:00").getMonth() + months)).toLocaleDateString("en-CA");
+    const occurrences = generateSchedule({ id: p.id, fields: f }, payments, { todayISO, windowStart: fromISO, windowEnd: toISO });
+    const next = nextDueOccurrence({ id: p.id, fields: f }, payments, todayISO);
+    const paidPayRows = await this.supabase
+      .from("liability_payments").select("*")
+      .eq("user_id", this.userId).eq("liability_profile_id", id)
+      .order("payment_date", { ascending: false });
+    const history = (paidPayRows.data || []).map((r: any) => this.paymentRowToObligationPayment(r));
+    const amount = liabilityAmount({ id: p.id, fields: f });
+    return {
+      id: p.id,
+      name: p.name,
+      typeKey: (p as any).type_key ?? (p as any).typeKey ?? null,
+      amount,
+      frequency: liabilityFrequency({ id: p.id, fields: f }),
+      firstPayment: String(f.firstPaymentDate ?? f.dueDate ?? f.nextDueDate ?? "").slice(0, 10) || null,
+      nextDue: next ? { date: next.date, effectiveDate: next.effectiveDate, amount: next.amount } : null,
+      lastPaid: history[0]?.date ?? f.lastPaidDate ?? null,
+      autopay: f.autopay === true || f.autoPay === true,
+      paused: f.paused === true,
+      pausedUntil: f.pausedUntil ?? null,
+      gracePeriodDays: f.gracePeriodDays ?? null,
+      lateFee: f.lateFee ?? null,
+      reminderLeadDays: f.reminderLeadDays ?? null,
+      annualTotal: Math.round(amount * periodsPerYear({ id: p.id, fields: f }) * 100) / 100,
+      calendarSynced: true,
+      occurrences,
+      payments: history,
+    };
+  }
+
+  /** Merge a per-occurrence override into fields.occurrences (shallow-replaced). */
+  private async _patchOccurrence(id: string, date: string, patch: Record<string, any>): Promise<any> {
+    const p = await this.getProfile(id);
+    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return null;
+    const f: any = p.fields || {};
+    const occ: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
+    const existing = occ[date] || {};
+    const merged = { ...existing, ...patch };
+    // Drop keys explicitly nulled so an override can be cleared.
+    for (const k of Object.keys(merged)) if (merged[k] === null) delete merged[k];
+    occ[date] = merged;
+    await this.updateProfile(id, { fields: { occurrences: occ } } as any);
+    return this.getLiabilitySchedule(id);
+  }
+
+  /** Mark one occurrence paid: writes a payment row + stamps the override. */
+  async payOccurrence(id: string, date: string, opts: { amount?: number; method?: string; paymentDate?: string } = {}): Promise<any> {
+    const p = await this.getProfile(id);
+    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return null;
+    const f: any = p.fields || {};
+    const occDate = String(date).slice(0, 10);
+    const payDate = opts.paymentDate || occDate;
+    const amount = opts.amount != null ? Number(opts.amount)
+      : (f.occurrences?.[occDate]?.amount != null ? Number(f.occurrences[occDate].amount) : liabilityAmount({ id, fields: f }));
+    const payment: any = await this.createLiabilityPayment({
+      liabilityProfileId: id, paymentDate: payDate, amount,
+      principalPortion: amount, interestPortion: 0, fees: 0,
+      paymentType: "standard", sourceAccount: opts.method || null,
+    } as any);
+    // Stamp the override AND, if this was the current due date, advance the series.
+    const occ: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
+    occ[occDate] = { ...(occ[occDate] || {}), status: "paid", paymentId: payment?.id, amount };
+    const patch: any = { occurrences: occ };
+    const curDue = String(f.dueDate ?? f.nextDueDate ?? "").slice(0, 10);
+    if (curDue === occDate) {
+      const nextDue = advanceLiabilityDueDate(f, occDate);
+      patch.dueDate = nextDue; patch.nextDueDate = nextDue; patch.status = "upcoming";
+    }
+    patch.lastPaidDate = payDate;
+    await this.updateProfile(id, { fields: patch } as any);
+    this.logActivity("obligation", `Paid ${p.name} occurrence ${occDate}: $${amount}`);
+    return this.getLiabilitySchedule(id);
+  }
+
+  async skipOccurrence(id: string, date: string): Promise<any> {
+    const occDate = String(date).slice(0, 10);
+    const result = await this._patchOccurrence(id, occDate, { status: "skipped", paymentId: null });
+    // If skipping the current due date, advance so the next occurrence becomes due.
+    const p = await this.getProfile(id);
+    const f: any = p?.fields || {};
+    if (String(f.dueDate ?? f.nextDueDate ?? "").slice(0, 10) === occDate) {
+      const nextDue = advanceLiabilityDueDate(f, occDate);
+      await this.updateProfile(id, { fields: { dueDate: nextDue, nextDueDate: nextDue } } as any);
+      return this.getLiabilitySchedule(id);
+    }
+    return result;
+  }
+
+  async rescheduleOccurrence(id: string, date: string, newDate: string): Promise<any> {
+    return this._patchOccurrence(id, String(date).slice(0, 10), { movedTo: String(newDate).slice(0, 10) });
+  }
+
+  async setOccurrenceFields(id: string, date: string, patch: { amount?: number; notes?: string }): Promise<any> {
+    const clean: Record<string, any> = {};
+    if (patch.amount != null) clean.amount = Number(patch.amount);
+    if (patch.notes !== undefined) clean.notes = patch.notes || null;
+    return this._patchOccurrence(id, String(date).slice(0, 10), clean);
+  }
+
+  async pauseLiability(id: string, until?: string): Promise<any> {
+    const p = await this.getProfile(id);
+    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return null;
+    await this.updateProfile(id, { fields: { paused: true, pausedUntil: until ? String(until).slice(0, 10) : null, status: "paused" } } as any);
+    this.logActivity("obligation", `Paused ${p.name}${until ? ` until ${until}` : ""}`);
+    return this.getLiabilitySchedule(id);
+  }
+
+  async resumeLiability(id: string): Promise<any> {
+    const p = await this.getProfile(id);
+    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return null;
+    await this.updateProfile(id, { fields: { paused: false, pausedUntil: null, status: "upcoming" } } as any);
+    this.logActivity("obligation", `Resumed ${p.name}`);
+    return this.getLiabilitySchedule(id);
   }
 
   // ============================================================
@@ -4804,7 +4992,7 @@ export class SupabaseStorage implements IStorage {
     const lastMonthExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === lastMonthYM);
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
-    const upcomingBills = allObligations.filter(o => { const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => {
+    const upcomingBills = allObligations.filter(o => { if (o.status === "paused" || o.status === "cancelled") return false; const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => {
       const daysUntil = Math.ceil((new Date(o.nextDueDate).getTime() - now.getTime()) / 86400000);
       return {
         id: o.id, name: o.name, amount: o.amount, dueDate: o.nextDueDate, daysUntil,

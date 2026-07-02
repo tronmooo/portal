@@ -11,6 +11,8 @@ import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance }
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill } from "@shared/liability-types";
 import { advanceLiabilityDueDate, readDueDate } from "@shared/liability-recurrence";
+import { generateSchedule, liabilityAmount, liabilityFrequency } from "@shared/liability-schedule";
+import { isRecurringBill as isRecurringBillType } from "@shared/liability-types";
 import { selfIdsFrom } from "@shared/scope";
 import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
@@ -5074,89 +5076,157 @@ Rules:
   // some occurrences marked done, some skipped, some rescheduled, etc.
   // These power the new dashboard "Due today / Overdue / Upcoming" cards
   // and the calendar chips.
-  app.get("/api/obligation-occurrences", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
-    const tz = getTimezone(req);
-    const today = getUserToday(tz);
-    const start = (req.query.start as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.start as string)
-      ? (req.query.start as string)
-      : today;
-    const end = (req.query.end as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.end as string)
-      ? (req.query.end as string)
-      : toLocalDateStr(new Date(Date.now() + 90 * 86400000), tz);
-    const { listOccurrences, backfillLateStatuses } = await import("./obligation-engine");
-    const supabase = (storage as any).supabase;
-    // Cheap maintenance pass — keeps 'pending' rows from looking on-time when
-    // they're already past due. Bounded by index on (user_id,status,due_at).
-    await backfillLateStatuses(supabase, uid);
-    let items = await listOccurrences(supabase, uid, start, end);
-    // Profile filter — each occurrence carries its parent obligation with
-    // linked_profiles. Match parity with /api/obligations.
-    const profileIdsParam = req.query.profileIds as string | undefined;
-    const fp = req.query.profileId as string | undefined;
-    if (profileIdsParam) {
-      const ids = profileIdsParam.split(",").filter(Boolean);
-      if (ids.length > 0) {
-        items = items.filter((occ: any) => {
-          const lp: string[] = occ?.obligation?.linked_profiles || occ?.obligation?.linkedProfiles || [];
-          return lp.some((pid: string) => ids.includes(pid));
-        });
-      }
-    } else if (fp) {
-      const allProfiles = await storage.getProfiles();
-      const isSelf = allProfiles.find(p => p.id === fp)?.type === "self";
-      items = items.filter((occ: any) => {
-        const lp: string[] = occ?.obligation?.linked_profiles || occ?.obligation?.linkedProfiles || [];
-        return lp.includes(fp) || (isSelf && lp.length === 0);
-      });
-    }
-    res.json(items);
-  }));
-
-  app.post("/api/obligations/:id/materialize", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
-    // Wave 17: default horizon is the engine's default (2 years). When the caller
-    // explicitly passes `days`, clamp to [7, 1825] (5 years) so we still bound a
-    // pathological request but allow full-series materialization on demand.
-    const { materializeOccurrences } = await import("./obligation-engine");
-    const supabase = (storage as any).supabase;
-    const requested = Number(req.body?.days);
-    const result = req.body?.days !== undefined && Number.isFinite(requested)
-      ? await materializeOccurrences(supabase, uid, req.params.id, Math.min(1825, Math.max(7, requested)))
-      : await materializeOccurrences(supabase, uid, req.params.id);
-    bustCache(`calendar:${uid}`); bustCache(`enhanced:`);
-    res.json(result);
-  }));
-
-  app.post("/api/obligation-occurrences/:occId/status", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
-    const { status, actualAmount, method, notes } = req.body || {};
-    const allowed = ["done", "skipped", "pending", "late"];
-    if (!allowed.includes(status)) {
-      return res.status(400).json({ error: `status must be one of ${allowed.join(", ")}` });
-    }
-    if (actualAmount !== undefined && (typeof actualAmount !== "number" || actualAmount < 0)) {
-      return res.status(400).json({ error: "actualAmount must be a non-negative number" });
-    }
-    const { markOccurrence } = await import("./obligation-engine");
-    const supabase = (storage as any).supabase;
-    const result = await markOccurrence(supabase, uid, req.params.occId, status, { actualAmount, method, notes });
-    if (!result.ok) return res.status(400).json({ error: result.error });
+  // Bust every finance/calendar surface after a bill or occurrence changes, so
+  // dashboard, cash flow, budget, notifications and the calendar all resync.
+  const bustBillCaches = (uid: string) => {
     bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`enhanced:`);
     bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`);
     bustCache(`notifications:${uid}`); bustCache(`profile-detail:${uid}:`);
-    res.json(result.occurrence);
+  };
+  // Split a synthetic occurrenceId "<liabilityId>:<YYYY-MM-DD>" (UUIDs/dates
+  // carry no colon, so the single colon is unambiguous).
+  const parseOccId = (occId: string): { liabilityId: string; date: string } | null => {
+    const i = String(occId || "").indexOf(":");
+    if (i < 0) return null;
+    const liabilityId = occId.slice(0, i);
+    const date = occId.slice(i + 1).slice(0, 10);
+    if (!liabilityId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    return { liabilityId, date };
+  };
+
+  // Generated occurrences across every recurring bill in a window (no occurrence
+  // table). Used by the legacy occurrence panels; the live calendar reads
+  // /api/calendar-timeline which emits the same occurrences.
+  app.get("/api/obligation-occurrences", asyncHandler(async (req, res) => {
+    const tz = getTimezone(req);
+    const today = getUserToday(tz);
+    const start = (req.query.start as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.start as string)
+      ? (req.query.start as string) : today;
+    const end = (req.query.end as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.end as string)
+      ? (req.query.end as string) : toLocalDateStr(new Date(Date.now() + 90 * 86400000), tz);
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    const fp = req.query.profileId as string | undefined;
+    const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (fp ? [fp] : null);
+    const profiles = await storage.getProfiles();
+    const obligations = await storage.getObligations();
+    const payByLiab = new Map<string, any[]>();
+    for (const ob of obligations) payByLiab.set(ob.id, (ob.payments || []).map((p: any) => ({ paymentDate: p.date, id: p.id })));
+    const selfId = profiles.find(p => p.type === "self")?.id;
+    const items: any[] = [];
+    for (const p of profiles as any[]) {
+      if (!isRecurringBillType(p.type_key ?? p.typeKey)) continue;
+      const owner = p.parentProfileId || selfId;
+      if (ids && !(owner && ids.includes(owner))) continue;
+      const occ = generateSchedule({ id: p.id, fields: p.fields }, payByLiab.get(p.id) || [], { todayISO: today, windowStart: start, windowEnd: end });
+      for (const o of occ) {
+        items.push({
+          id: o.occurrenceId, obligation_id: p.id, due_at: o.effectiveDate,
+          status: o.status === "paid" ? "done" : o.status === "overdue" ? "late" : o.status === "skipped" ? "skipped" : "pending",
+          amount: o.amount, notes: o.notes,
+          obligation: { id: p.id, name: p.name, linked_profiles: owner ? [owner] : [] },
+        });
+      }
+    }
+    items.sort((a, b) => String(a.due_at).localeCompare(String(b.due_at)));
+    res.json(items);
+  }));
+
+  // Materialize is a no-op now — occurrences are generated, never persisted.
+  app.post("/api/obligations/:id/materialize", asyncHandler(async (req, res) => {
+    res.json({ ok: true, generated: true, note: "Occurrences are generated on the fly; nothing to materialize." });
+  }));
+
+  // Back-compat shim: the calendar's Done/Skip buttons POST a synthetic
+  // occurrenceId "<liabilityId>:<date>". Route to pay/skip on the liability.
+  app.post("/api/obligation-occurrences/:occId/status", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const { status, actualAmount, method } = req.body || {};
+    const allowed = ["done", "skipped", "pending", "late"];
+    if (!allowed.includes(status)) return res.status(400).json({ error: `status must be one of ${allowed.join(", ")}` });
+    const parsed = parseOccId(req.params.occId);
+    if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
+    let result;
+    if (status === "done") result = await (storage as any).payOccurrence(parsed.liabilityId, parsed.date, { amount: actualAmount, method });
+    else if (status === "skipped") result = await (storage as any).skipOccurrence(parsed.liabilityId, parsed.date);
+    else result = await (storage as any).getLiabilitySchedule(parsed.liabilityId); // pending/late = no-op read
+    if (!result) return res.status(404).json({ error: "Bill not found" });
+    bustBillCaches(uid);
+    res.json(result);
   }));
 
   app.post("/api/obligation-occurrences/:occId/reschedule", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const { newDueAt } = req.body || {};
-    const { rescheduleOccurrence } = await import("./obligation-engine");
-    const supabase = (storage as any).supabase;
-    const result = await rescheduleOccurrence(supabase, uid, req.params.occId, newDueAt);
-    if (!result.ok) return res.status(400).json({ error: result.error });
-    bustCache(`calendar:${uid}`); bustCache(`enhanced:`); bustCache(`notifications:${uid}`);
-    res.json(result.occurrence);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(newDueAt || ""))) return res.status(400).json({ error: "newDueAt must be YYYY-MM-DD" });
+    const parsed = parseOccId(req.params.occId);
+    if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
+    const result = await (storage as any).rescheduleOccurrence(parsed.liabilityId, parsed.date, newDueAt);
+    if (!result) return res.status(404).json({ error: "Bill not found" });
+    bustBillCaches(uid);
+    res.json(result);
+  }));
+
+  // ---- Recurring-liability schedule & per-occurrence operations ----
+  app.get("/api/liabilities/:id/schedule", asyncHandler(async (req, res) => {
+    const months = Math.min(36, Math.max(1, Number(req.query.months) || 12));
+    const result = await (storage as any).getLiabilitySchedule(req.params.id, months);
+    if (!result) return res.status(404).json({ error: "Recurring liability not found" });
+    res.json(result);
+  }));
+
+  app.post("/api/liabilities/:id/occurrences/:date/pay", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const { amount, method, paymentDate } = req.body || {};
+    if (amount !== undefined && (typeof amount !== "number" || amount < 0)) return res.status(400).json({ error: "amount must be a non-negative number" });
+    const result = await (storage as any).payOccurrence(req.params.id, req.params.date, { amount, method, paymentDate });
+    if (!result) return res.status(404).json({ error: "Recurring liability not found" });
+    bustBillCaches(uid);
+    res.json(result);
+  }));
+
+  app.post("/api/liabilities/:id/occurrences/:date/skip", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const result = await (storage as any).skipOccurrence(req.params.id, req.params.date);
+    if (!result) return res.status(404).json({ error: "Recurring liability not found" });
+    bustBillCaches(uid);
+    res.json(result);
+  }));
+
+  app.patch("/api/liabilities/:id/occurrences/:date", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const { movedTo, amount, notes } = req.body || {};
+    let result;
+    if (movedTo !== undefined) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(movedTo))) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
+      result = await (storage as any).rescheduleOccurrence(req.params.id, req.params.date, movedTo);
+    }
+    if (amount !== undefined || notes !== undefined) {
+      result = await (storage as any).setOccurrenceFields(req.params.id, req.params.date, { amount, notes });
+    }
+    if (!result) return res.status(404).json({ error: "Recurring liability not found (or nothing to change)" });
+    bustBillCaches(uid);
+    res.json(result);
+  }));
+
+  app.post("/api/liabilities/:id/pause", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const { until } = req.body || {};
+    if (until !== undefined && until !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(until))) return res.status(400).json({ error: "until must be YYYY-MM-DD" });
+    const result = await (storage as any).pauseLiability(req.params.id, until || undefined);
+    if (!result) return res.status(404).json({ error: "Recurring liability not found" });
+    bustBillCaches(uid);
+    res.json(result);
+  }));
+
+  app.post("/api/liabilities/:id/resume", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const result = await (storage as any).resumeLiability(req.params.id);
+    if (!result) return res.status(404).json({ error: "Recurring liability not found" });
+    bustBillCaches(uid);
+    res.json(result);
   }));
 
   // ---- Artifacts ----
