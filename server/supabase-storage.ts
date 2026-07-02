@@ -3471,9 +3471,18 @@ export class SupabaseStorage implements IStorage {
   // keep working against the single liability source of truth. No obligation
   // table is ever queried.
 
-  private billTypeKey(kind?: string | null, category?: string | null): string {
+  private billTypeKey(kind?: string | null, category?: string | null, name?: string | null): string {
     const k = String(kind || "").toLowerCase();
     const c = String(category || "").toLowerCase();
+    const n = String(name || "").toLowerCase();
+    // Name-based inference gives the detail page the right fields/layout for
+    // common bills instead of a generic "bill". All of these stay in the
+    // recurring family (excluded from net worth).
+    if (/\b(phone|mobile|cell|wireless|cellular)\b/.test(n)) return "phone_plan";
+    if (/\b(internet|broadband|wifi|fiber)\b/.test(n)) return "internet";
+    if (/\b(electric|electricity|water|gas|sewer|utility|utilities|power)\b/.test(n)) return "utility";
+    if (/\b(netflix|hulu|spotify|disney|hbo|streaming|apple tv|prime video)\b/.test(n)) return "streaming";
+    if (/\b(gym|fitness|membership)\b/.test(n)) return "gym_membership";
     if (k === "subscription" || c === "subscription") return "subscription";
     if (c === "utilities" || c === "utility") return "utility";
     return "bill";
@@ -3551,7 +3560,7 @@ export class SupabaseStorage implements IStorage {
   async createObligation(data: InsertObligation): Promise<Obligation> {
     const kind = (data as any).kind || "bill";
     const category = (data as any).category || "general";
-    const typeKey = this.billTypeKey(kind, category);
+    const typeKey = this.billTypeKey(kind, category, data.name);
     let parent: string | undefined = ((data as any).linkedProfiles || [])[0];
     if (!parent) {
       const self = await this.getSelfProfile();
@@ -3592,9 +3601,16 @@ export class SupabaseStorage implements IStorage {
     if ((data as any).category !== undefined) fieldsPatch.category = (data as any).category;
     if (data.status !== undefined) fieldsPatch.status = data.status;
     if (data.notes !== undefined) fieldsPatch.notes = data.notes;
+    // Ownership reassignment: an obligation is a liability profile whose owner
+    // is its parentProfileId (liabilityToObligation maps linkedProfiles=[parent]).
+    // So PATCH { linkedProfiles: [newOwner] } must move parent_profile_id. Without
+    // this the recurring bill stays under the old owner's profile filter.
+    const linked = (data as any).linkedProfiles;
+    const hasLinked = Array.isArray(linked);
     await this.updateProfile(id, {
       ...(data.name !== undefined ? { name: data.name } : {}),
       ...(Object.keys(fieldsPatch).length > 0 ? { fields: fieldsPatch } : {}),
+      ...(hasLinked ? { parentProfileId: linked[0] || null } : {}),
     } as any);
     return this.getObligation(id);
   }

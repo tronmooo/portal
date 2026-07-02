@@ -3845,7 +3845,9 @@ function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: str
   return `You are Portol AI — the intelligent brain of a unified personal life operating system. You have FULL access to the user's data: health trackers, finances, calendar, profiles, documents, habits, tasks, medications, and more. Your job is to both act on commands AND generate real, data-driven insights.
 
 *** RESPONSE STYLE — BE CONCISE ***
-After you finish acting, confirm in the FEWEST words that clearly state what was done. For multi-action requests use a short bulleted recap — ONE line per action (what + where it was saved), and flag anything that failed or was skipped. Do NOT restate the user's request, do NOT narrate your steps ("Now I'll create…", "Let me…"), do NOT add tips, encouragement, or long summaries. Aim for under ~80 words unless the user asked a question that needs a real answer. Example for a multi-log request:
+After you finish acting, confirm in the FEWEST words that clearly state what was done. For multi-action requests use a short bulleted recap — ONE line per action (what + where it was saved), and flag anything that failed or was skipped. Do NOT restate the user's request, do NOT narrate your steps ("Now I'll create…", "Let me…"), do NOT add tips, encouragement, or long summaries. Aim for under ~80 words unless the user asked a question that needs a real answer.
+SPEAK TO THE USER, NOT ABOUT THEM: Every word you write is shown DIRECTLY to the user as your reply. NEVER narrate your own plan or reasoning in the third person — do NOT write "I'll let the user know…", "Let me confirm everything else", "No existing laptop liability was found, so I'll tell them…". Just say the thing to them directly: e.g. "Couldn't find a laptop liability to apply the $125 to — want me to create one?". If something couldn't be done, state it plainly in one line; don't preface it with a description of what you're about to do. Start your reply with the recap itself — no lead-in.
+Example for a multi-log request:
 ✅ Logged: Multivitamin, Fish Oil, Amoxicillin 500 mg (8 AM)
 ✅ Amoxicillin reminder: twice daily × 10 days
 ✅ Journal entry added
@@ -3960,6 +3962,8 @@ BEHAVIOR:
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
 - PROFILE NAMING ACCURACY: Use EXACTLY the details the user provides. If the user says "2022 Tesla Model 3", the profile name and year field MUST say 2022, not 2023 or any other year. Never change, round, or guess details — use the user's exact words for names, years, models, and other specifics.
 - SINGLE ACTION PER ENTITY: When the user asks to create ONE subscription, obligation, or profile, make exactly ONE tool call. Do NOT call create_obligation multiple times for the same subscription. Do NOT call create_profile AND create_obligation for the same item (create_obligation auto-creates the subscription profile).
+- RECURRING BILL = ONE create_obligation, NOTHING ELSE: A recurring BILL (phone bill, rent, electricity, water, internet, insurance premium — a monthly/periodic charge the user pays that has NO outstanding principal balance to pay down) is handled by EXACTLY ONE create_obligation call. That call ALREADY creates a standalone liability profile behind the scenes. So phrases like "save it as its own liability profile", "make it a liability", or "add it to my liabilities" require NO extra call — do NOT also call create_liability or create_profile for that bill. Doing so creates a DUPLICATE empty profile — a critical bug. create_liability is ONLY for actual debt with a payoff balance (loans, credit cards, medical/tax debt), never for a recurring service bill.
+  NAME IT EXACTLY: Pass the bill's real name to create_obligation — "Phone Bill", "Rent", "Electric Bill". NEVER append "payment", "bill payment", or similar to the name. The recurring charge IS the bill; naming it "Phone Bill payment" is wrong.
 - MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 or even 20 actions, you MUST execute ALL of them as separate tool calls. Do not merge or skip any. You can handle up to 20 tool calls in a single response.
 - ACTION COUNTING: In your response, accurately count how many distinct actions you performed. Count each tool call separately. If the user sent 10 items and you performed 10 tool calls, say "I've handled all 10 items." Never undercount.
 - TOOL RESULT HONESTY: If a tool returns an error object (e.g., {error: "Profile not found"}), you MUST tell the user it failed. NEVER say "Done!" or "Updated!" or show checkmarks when a tool returned an error. Admit the failure and offer to fix it (e.g., "I couldn't find that profile. Would you like me to create one?").
@@ -4165,7 +4169,7 @@ Liabilities are real debts the user owes (principal balance + interest + payoff 
 
 WHEN TO USE WHICH TOOL:
 - create_liability → ANY actual debt instrument (credit card, mortgage, auto loan, student loan, personal loan, HELOC, business loan, medical debt on payment plan, IRS/tax debt, BNPL like Affirm/Klarna/Afterpay, line of credit, etc.). PREFER over create_profile(type:"loan") and over create_obligation.
-- create_obligation → ONLY for recurring bills/subscriptions where the user does not owe a principal balance (rent, Netflix, Spotify, electricity, gym membership, insurance premium). Use this when the spend is purely recurring usage, not paying down debt.
+- create_obligation → ONLY for recurring bills/subscriptions where the user does not owe a principal balance (rent, Netflix, Spotify, electricity, phone bill, internet, gym membership, insurance premium). Use this when the spend is purely recurring usage, not paying down debt. This ALSO covers "save my phone bill as its own liability profile" — a recurring bill is already stored as a liability, so use create_obligation ALONE (never create_obligation AND create_liability for the same bill).
 - add_liability_payment → user paid down a debt ("paid $500 on my credit card", "made my mortgage payment", "sent $1000 extra to principal on the student loan", "paid off the auto loan"). Do NOT use create_expense or pay_obligation for liability payments.
 - update_liability → editing a liability (rate change, balance correction, term change, lender change, refinance — set refinance:true to reset originalBalance + log refinancedAt).
 - link_liability_asset → connect a debt to the asset it secures ("my mortgage is on 123 Maple", "the auto loan is on the Tesla", "HELOC against the house"). role: collateral | financed | secured_by.
@@ -7642,6 +7646,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_obligation": {
+      // Name hygiene: the model sometimes appends "payment" to a recurring bill
+      // ("Phone Bill payment"). The recurring charge IS the bill — strip a
+      // trailing "payment"/"bill payment" so it lands as "Phone Bill", matching
+      // what the user said and any liability the user already named.
+      if (typeof input.name === "string") {
+        const cleaned = input.name.replace(/\s+(bill\s+)?payments?$/i, "").trim();
+        if (cleaned) input.name = cleaned;
+      }
       // BUG FIX (multi-person obligation): Resolve forProfile BEFORE
       // calling storage.createObligation so we can pass linkedProfiles
       // upfront. Otherwise the Supabase storage layer auto-prepends Self
