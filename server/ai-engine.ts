@@ -3965,6 +3965,8 @@ BEHAVIOR:
 - RECURRING BILL = ONE create_obligation, NOTHING ELSE: A recurring BILL (phone bill, rent, electricity, water, internet, insurance premium — a monthly/periodic charge the user pays that has NO outstanding principal balance to pay down) is handled by EXACTLY ONE create_obligation call. That call ALREADY creates a standalone liability profile behind the scenes. So phrases like "save it as its own liability profile", "make it a liability", or "add it to my liabilities" require NO extra call — do NOT also call create_liability or create_profile for that bill. Doing so creates a DUPLICATE empty profile — a critical bug. create_liability is ONLY for actual debt with a payoff balance (loans, credit cards, medical/tax debt), never for a recurring service bill.
   NAME IT EXACTLY: Pass the bill's real name to create_obligation — "Phone Bill", "Rent", "Electric Bill". NEVER append "payment", "bill payment", or similar to the name. The recurring charge IS the bill; naming it "Phone Bill payment" is wrong.
 - MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 or even 20 actions, you MUST execute ALL of them as separate tool calls. Do not merge or skip any. You can handle up to 20 tool calls in a single response.
+- ATTRIBUTION IN BATCHES: When an item says "for <Name>" ("grocery expense $47.82 for Robert", "vet bill for Rex"), you MUST set forProfile:"<Name>" on that tool call. In a long multi-action message it is easy to forget this — do NOT. And NEVER tell the user something was attributed to a person unless you actually passed forProfile for it.
+- LIABILITY PAYMENT — MATCH THE LOAN, DON'T SUBSTITUTE: add_liability_payment must target the SPECIFIC loan the user named. If the user says "car loan payment" and no auto loan exists, do NOT apply it to a mortgage, student loan, or any other loan just because it's "the only one" — that corrupts the wrong balance. Instead report that no matching loan was found and ask whether to create it. Same for "mortgage payment" when only a car loan exists, etc.
 - ACTION COUNTING: In your response, accurately count how many distinct actions you performed. Count each tool call separately. If the user sent 10 items and you performed 10 tool calls, say "I've handled all 10 items." Never undercount.
 - TOOL RESULT HONESTY: If a tool returns an error object (e.g., {error: "Profile not found"}), you MUST tell the user it failed. NEVER say "Done!" or "Updated!" or show checkmarks when a tool returned an error. Admit the failure and offer to fix it (e.g., "I couldn't find that profile. Would you like me to create one?").
 - EVENT CREATION HONESTY (Round-5): For create_event specifically, NEVER say "Scheduled", "Added to calendar", or "Done" unless the tool returned an object with a valid \`id\` AND a valid \`date\`. If validateToolInput rejects the date (e.g. you sent a non-YYYY-MM-DD value, or omitted the date entirely), the result will contain \`{error: ...}\` — you MUST report this exactly: say "I couldn't create that event because I didn't have a valid date for it. What date should I use?" Do not pretend it worked. When the user says "next Monday" / "this Friday" / "tomorrow", you MUST compute the explicit YYYY-MM-DD date (using TODAY shown in the system context) and pass it to create_event. If you cannot resolve the date, ASK — do not call create_event with an invalid date and then claim success.
@@ -6808,6 +6810,33 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return tokens.every((t) => hay.includes(t));
         });
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
+      // WRONG-LOAN GUARD (2026-07, user report): "car loan payment $125" was
+      // applied to the mortgage because it was "the only loan", silently
+      // reducing the wrong balance. If the user's message names a specific loan
+      // TYPE that differs from the liability we resolved, refuse and offer to
+      // create the right one — never mutate an unrelated loan.
+      {
+        const umsg = String((input as any).__userMessage || "").toLowerCase();
+        const wantType = /\b(car|auto|vehicle)\s+(loan|payment|financ)/.test(umsg) || /\bcar loan\b|\bauto loan\b/.test(umsg)
+          ? "auto_loan"
+          : /\bstudent\s+loan/.test(umsg) ? "student_loan"
+          : /\bmortgage\b/.test(umsg) ? "mortgage"
+          : null;
+        const specific = ["auto_loan", "mortgage", "student_loan"];
+        let gotType = String((liability.fields || {}).subtype || (liability as any).type_key || (liability as any).typeKey || "").toLowerCase();
+        // Fixture/legacy liabilities may carry no subtype — infer from the name
+        // so "Smoke Mortgage" still reads as a mortgage for this guard.
+        if (!specific.includes(gotType)) {
+          const gn = String(liability.name || "").toLowerCase();
+          if (/\bmortgage\b/.test(gn)) gotType = "mortgage";
+          else if (/\b(car|auto)\s*loan\b/.test(gn)) gotType = "auto_loan";
+          else if (/\bstudent\s*loan\b/.test(gn)) gotType = "student_loan";
+        }
+        if (wantType && specific.includes(wantType) && gotType && specific.includes(gotType) && wantType !== gotType) {
+          const pretty = (s: string) => s.replace(/_/g, " ");
+          return { error: `You asked to pay your ${pretty(wantType)}, but the only matching loan is "${liability.name}" (a ${pretty(gotType)}). I did NOT apply the $${Number(input.amount) || 0} — that would change the wrong balance. Want me to create a ${pretty(wantType)} first, or apply it to ${liability.name}?` };
+        }
+      }
       const f = liability.fields || {};
       const balance = Number(f.currentBalance) || 0;
       const monthlyRate = (Number(f.annualInterestRate) || 0) / 12;
@@ -7369,6 +7398,33 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const target = profiles.find(p => p.name.toLowerCase() === search)
           || profiles.find(p => wordRe.test(p.name.toLowerCase()));
         if (target) expenseLinkedProfiles.push(target.id);
+      }
+      // ATTRIBUTION SAFETY NET (2026-07, user report: "grocery expense for
+      // Robert" landed on self). In a dense multi-action message the model
+      // sometimes drops forProfile yet still tells the user it attributed the
+      // spend. Recover it: find this expense's amount in the raw message and,
+      // if a "for <Name>" phrase sits right after it AND resolves to an existing
+      // NON-self profile, attribute to that profile. Requiring an existing
+      // profile match keeps this from ever inventing an owner.
+      if (expenseLinkedProfiles.length === 0) {
+        const rawMsg = String((input as any).__userMessage || "");
+        const amtStr = String(parsedAmount).replace(/\.0+$/, "");
+        const idx = rawMsg.indexOf(amtStr);
+        if (idx >= 0) {
+          const window = rawMsg.slice(idx, idx + 70);
+          const m = window.match(/\bfor\s+([A-Z][a-zA-Z'’.-]+(?:\s+[A-Z][a-zA-Z'’.-]+)?)/);
+          if (m) {
+            const cand = m[1].trim().toLowerCase();
+            const profiles2 = await storage.getProfiles();
+            const candRe = new RegExp(`(^|\\b)${cand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\b|$)`);
+            const target2 = profiles2.find(p => p.type !== "self" && p.name.toLowerCase() === cand)
+              || profiles2.find(p => p.type !== "self" && candRe.test(p.name.toLowerCase()));
+            if (target2) {
+              expenseLinkedProfiles.push(target2.id);
+              logger.info("ai", `Attribution safety net: recovered forProfile "${target2.name}" for $${parsedAmount} expense from message context`);
+            }
+          }
+        }
       }
       // Default the expense date to today in the user's timezone, not
       // hard-coded LA time. The chat route stores the user's IANA tz on
