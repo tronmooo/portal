@@ -5794,22 +5794,33 @@ Rules:
         const reminders = await storage.listReminders().catch(() => [] as any[]);
         const nowMs = Date.now();
         const horizonMs = nowMs + 7 * 86400000; // next 7 days
+        // Group by title so a recurring reminder ("twice daily for 10 days")
+        // shows as ONE bell entry (next occurrence + how many upcoming) instead
+        // of flooding the popup with 14 identical rows.
+        const byTitle = new Map<string, { title: string; earliest: number; id: string; count: number }>();
         for (const rem of reminders) {
           const whenMs = rem.fireAt ? new Date(rem.fireAt).getTime() : NaN;
           if (isNaN(whenMs) || whenMs > horizonMs) continue;
-          const overdue = whenMs < nowMs;
-          const whenHuman = new Date(whenMs).toLocaleString("en-US", {
+          const key = (rem.title || "").trim().toLowerCase();
+          const g = byTitle.get(key);
+          if (!g) byTitle.set(key, { title: rem.title, earliest: whenMs, id: rem.id, count: 1 });
+          else { g.count++; if (whenMs < g.earliest) { g.earliest = whenMs; g.id = rem.id; } }
+        }
+        for (const g of byTitle.values()) {
+          const overdue = g.earliest < nowMs;
+          const whenHuman = new Date(g.earliest).toLocaleString("en-US", {
             timeZone: notifTz, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
           });
+          const more = g.count > 1 ? ` · ${g.count} upcoming` : "";
           notifications.push({
-            id: `reminder-${rem.id}`,
+            id: `reminder-${g.id}`,
             type: "reminder",
             severity: overdue ? "warning" : "info",
-            title: rem.title,
-            message: overdue ? "Reminder overdue" : `Reminder · ${whenHuman}`,
-            entityId: rem.id,
+            title: g.title,
+            message: (overdue ? "Overdue" : `Next: ${whenHuman}`) + more,
+            entityId: g.id,
             entityType: "reminder",
-            dueDate: rem.fireAt,
+            dueDate: new Date(g.earliest).toISOString(),
           });
         }
       } catch { /* reminders in the bell are best-effort */ }
