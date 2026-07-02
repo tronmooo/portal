@@ -6161,6 +6161,28 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         return entry;
       } catch (err: any) {
         const msg = err?.message || String(err);
+        // SELF-HEAL on unique-name collision: within one multi-action turn the
+        // model can emit two logs that both auto-create the same new tracker
+        // (e.g. two nutrition items, or logging the same supplement twice). The
+        // second insert loses the race and hits `idx_trackers_name_user`. Rather
+        // than erroring, re-fetch and log into the tracker the first call just
+        // created — the user's directive is "no duplicate trackers, reuse it".
+        if (/duplicate key|unique|idx_trackers_name/i.test(msg)) {
+          try {
+            const fresh = await storage.getTrackers();
+            const existing = fresh.find(t =>
+              t.name.toLowerCase() === trackerDisplayName.toLowerCase() &&
+              (!(t.linkedProfiles && t.linkedProfiles.length) ||
+                (!!targetProfileId && t.linkedProfiles.includes(targetProfileId))));
+            if (existing) {
+              logger.info("ai", `Auto-create raced on "${trackerDisplayName}" — reusing existing tracker ${existing.id} instead of duplicating`);
+              const { values: nv } = normalizeTrackerEntry(existing as any, entryValues);
+              return await storage.logEntry({ trackerId: existing.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+            }
+          } catch (retryErr: any) {
+            logger.warn("ai", `Race-recovery for "${trackerDisplayName}" failed: ${retryErr?.message || retryErr}`);
+          }
+        }
         logger.warn("ai", `Auto-create tracker "${trackerDisplayName}" failed: ${msg}`);
         return { error: `Couldn't create the "${trackerDisplayName}" tracker (${msg}). Nothing was lost — say "retry" and I'll try again.`, __unsaved: { trackerName: trackerDisplayName, values: entryValues } };
       }
