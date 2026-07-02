@@ -3255,14 +3255,18 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "update_obligation",
-    description: "Update a recurring obligation/bill. Find by name (partial match), then apply changes.",
+    description: "Update or manage an EXISTING recurring bill/obligation and its calendar series (never create a new one). Find by name (partial match), then either edit fields via `changes` OR run a series action. Use for: 'move my phone bill to the 18th' (changes.nextDueDate or dueDay), 'increase it to $95' (changes.amount), 'make it quarterly' (changes.frequency), 'skip next month' (skip:'next'), 'pause until January' (pause:true, pauseUntil), 'resume it' (resume:true).",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Name of the obligation (partial match)" },
-        changes: { type: "object", description: "Fields to update — can include 'name', 'amount', 'frequency', 'nextDueDate', 'category', 'autopay', 'notes'" },
+        changes: { type: "object", description: "Fields to update — can include 'name', 'amount', 'frequency' (weekly|biweekly|monthly|quarterly|yearly), 'nextDueDate' (YYYY-MM-DD), 'dueDay' (1-31), 'category', 'autopay', 'notes'" },
+        skip: { type: "string", description: "Skip one occurrence: 'next' for the next due one, or a YYYY-MM (month) / YYYY-MM-DD (exact) date." },
+        pause: { type: "boolean", description: "Pause the recurring payments (stop generating occurrences)." },
+        pauseUntil: { type: "string", description: "Resume automatically on this date (YYYY-MM-DD). Use with pause." },
+        resume: { type: "boolean", description: "Resume a paused bill." },
       },
-      required: ["name", "changes"],
+      required: ["name"],
     },
   },
   {
@@ -3964,6 +3968,11 @@ BEHAVIOR:
 - SINGLE ACTION PER ENTITY: When the user asks to create ONE subscription, obligation, or profile, make exactly ONE tool call. Do NOT call create_obligation multiple times for the same subscription. Do NOT call create_profile AND create_obligation for the same item (create_obligation auto-creates the subscription profile).
 - RECURRING BILL = ONE create_obligation, NOTHING ELSE: A recurring BILL (phone bill, rent, electricity, water, internet, insurance premium — a monthly/periodic charge the user pays that has NO outstanding principal balance to pay down) is handled by EXACTLY ONE create_obligation call. That call ALREADY creates a standalone liability profile behind the scenes. So phrases like "save it as its own liability profile", "make it a liability", or "add it to my liabilities" require NO extra call — do NOT also call create_liability or create_profile for that bill. Doing so creates a DUPLICATE empty profile — a critical bug. create_liability is ONLY for actual debt with a payoff balance (loans, credit cards, medical/tax debt), never for a recurring service bill.
   NAME IT EXACTLY: Pass the bill's real name to create_obligation — "Phone Bill", "Rent", "Electric Bill". NEVER append "payment", "bill payment", or similar to the name. The recurring charge IS the bill; naming it "Phone Bill payment" is wrong.
+- MANAGING AN EXISTING BILL — ALWAYS update_obligation, NEVER create a new one: when the user changes a bill they already have, call update_obligation(name:<bill>) and either pass a changes object or a series action. It edits the existing liability AND its recurring calendar series together:
+  "move my phone bill to the 18th" → changes:{ dueDay: 18 } (or nextDueDate). "increase it to $95" → changes:{ amount: 95 }. "make it quarterly" → changes:{ frequency: "quarterly" }.
+  "skip next month" → skip:"next" (or skip:"2026-09" for a specific month). "pause until January" → pause:true, pauseUntil:"2027-01-01". "resume it" → resume:true.
+  To PAY a specific month's occurrence use pay_obligation with forMonth:"YYYY-MM" or dueDate:"YYYY-MM-DD".
+  Answer informational questions directly from the bill's stored fields: "when is my next phone bill?" → its next due date; "how much am I paying annually?" → amount times periods per year (monthly x12, weekly x52, quarterly x4, yearly x1). Never invent numbers.
 - MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 or even 20 actions, you MUST execute ALL of them as separate tool calls. Do not merge or skip any. You can handle up to 20 tool calls in a single response.
 - ATTRIBUTION IN BATCHES: When an item says "for <Name>" ("grocery expense $47.82 for Robert", "vet bill for Rex"), you MUST set forProfile:"<Name>" on that tool call. In a long multi-action message it is easy to forget this — do NOT. And NEVER tell the user something was attributed to a person unless you actually passed forProfile for it.
 - LIABILITY PAYMENT — MATCH THE LOAN, DON'T SUBSTITUTE: add_liability_payment must target the SPECIFIC loan the user named. If the user says "car loan payment" and no auto loan exists, do NOT apply it to a mortgage, student loan, or any other loan just because it's "the only one" — that corrupts the wrong balance. Instead report that no matching loan was found and ask whether to create it. Same for "mortgage payment" when only a car loan exists, etc.
@@ -7943,43 +7952,26 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const forMonth = input.forMonth ? String(input.forMonth).trim() : undefined;
       const dueDate = input.dueDate ? String(input.dueDate).trim() : undefined;
       if (forMonth || dueDate) {
-        const supabase = (storage as any).supabase;
-        const uid = (storage as any).userId;
-        if (!supabase || !uid) {
-          // MemStorage / no occurrence engine — fall back to default.
-          return storage.payObligation(ob.id, payAmount, input.method, input.confirmationNumber);
-        }
-        const { listOccurrences, markOccurrence, materializeOccurrences } = await import("./obligation-engine");
-        // Make sure the requested window is materialized before we look.
-        await materializeOccurrences(supabase, uid, ob.id, 825).catch(() => {});
-        let start: string, end: string, label: string;
+        // Pay a SPECIFIC occurrence (generated on the fly — no occurrence table).
+        const sched = await (storage as any).getLiabilitySchedule(ob.id, 24);
+        if (!sched) return storage.payObligation(ob.id, payAmount, input.method, input.confirmationNumber);
+        const occs: any[] = sched.occurrences || [];
+        let target: any; let label: string;
         if (dueDate && /^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
-          start = dueDate; end = dueDate; label = dueDate;
+          label = dueDate;
+          target = occs.find(o => (o.date === dueDate || o.effectiveDate === dueDate) && o.status !== "paid" && o.status !== "skipped");
         } else if (forMonth && /^\d{4}-\d{2}$/.test(forMonth)) {
-          start = `${forMonth}-01`;
-          const [yy, mm] = forMonth.split("-").map(Number);
-          const lastDay = new Date(yy, mm, 0).getDate();
-          end = `${forMonth}-${String(lastDay).padStart(2, "0")}`;
           label = forMonth;
+          target = occs.find(o => o.date.slice(0, 7) === forMonth && o.status !== "paid" && o.status !== "skipped");
         } else {
           return { error: `Couldn't read the target date "${forMonth || dueDate}". Use YYYY-MM (month) or YYYY-MM-DD (exact day).` };
         }
-        const occs = (await listOccurrences(supabase, uid, start, end))
-          .filter((o: any) => o.obligation_id === ob.id);
-        const open = occs.filter((o: any) => o.status === "pending" || o.status === "late");
-        if (open.length === 0) {
-          // List open occurrences across a wide window so the error is actionable.
-          const allOpen = (await listOccurrences(supabase, uid, "2000-01-01", "2100-12-31"))
-            .filter((o: any) => o.obligation_id === ob.id && (o.status === "pending" || o.status === "late"))
-            .map((o: any) => String(o.due_at).slice(0, 10))
-            .sort();
-          const list = allOpen.length ? allOpen.join(", ") : "none";
-          return { error: `No unpaid occurrence found for ${ob.name} in ${label}. Open occurrences: ${list}.` };
+        if (!target) {
+          const open = occs.filter(o => o.status !== "paid" && o.status !== "skipped").map(o => o.date);
+          return { error: `No unpaid occurrence found for ${ob.name} in ${label}. Open occurrences: ${open.length ? open.join(", ") : "none"}.` };
         }
-        const target = open.sort((a: any, b: any) => String(a.due_at).localeCompare(String(b.due_at)))[0];
-        const result = await markOccurrence(supabase, uid, target.id, "done", { actualAmount: payAmount, method: input.method });
-        if (!result.ok) return { error: result.error || "Failed to mark occurrence paid" };
-        return { ...result.occurrence, _paidMonth: label };
+        const result = await (storage as any).payOccurrence(ob.id, target.date, { amount: payAmount, method: input.method });
+        return { ...(result || {}), _paidMonth: label };
       }
       return storage.payObligation(ob.id, payAmount, input.method, input.confirmationNumber);
     }
@@ -8341,7 +8333,49 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const obligations = await storage.getObligations();
       const match = obligations.find(o => o.name.toLowerCase().includes(safeLC(input.name)));
       if (!match) return { error: `No obligation found matching "${input.name}"` };
-      const updated = await storage.updateObligation(match.id, input.changes);
+
+      // Series actions operate on the EXISTING bill + its generated calendar
+      // series — they never create a new record.
+      if (input.resume === true) {
+        const r = await (storage as any).resumeLiability(match.id);
+        return { updated: true, action: "resumed", obligation: r };
+      }
+      if (input.pause === true) {
+        const r = await (storage as any).pauseLiability(match.id, input.pauseUntil);
+        return { updated: true, action: "paused", pausedUntil: input.pauseUntil || null, obligation: r };
+      }
+      if (input.skip) {
+        const sched = await (storage as any).getLiabilitySchedule(match.id, 24);
+        const occs: any[] = sched?.occurrences || [];
+        const open = occs.filter(o => o.status !== "paid" && o.status !== "skipped");
+        let target: any;
+        const skipStr = String(input.skip).trim().toLowerCase();
+        if (skipStr === "next") target = open[0];
+        else if (/^\d{4}-\d{2}-\d{2}$/.test(skipStr)) target = open.find(o => o.date === skipStr || o.effectiveDate === skipStr);
+        else if (/^\d{4}-\d{2}$/.test(skipStr)) target = open.find(o => o.date.slice(0, 7) === skipStr);
+        if (!target) return { error: `No upcoming ${match.name} payment to skip${open.length ? ` — next open: ${open.slice(0, 3).map(o => o.date).join(", ")}` : ""}.` };
+        const r = await (storage as any).skipOccurrence(match.id, target.date);
+        return { updated: true, action: "skipped", skipped: target.date, obligation: r };
+      }
+
+      // Field edits. Normalize a few natural inputs the model tends to send.
+      const changes: any = { ...(input.changes || {}) };
+      if (changes.dueDay != null && !changes.nextDueDate) {
+        // "move to the 18th" → set the next due date to the 18th of the current
+        // (or next, if already past) cycle, preserving the day-of-month.
+        const day = Math.max(1, Math.min(31, parseInt(String(changes.dueDay), 10) || 0));
+        const cur = String((match as any).nextDueDate || "").slice(0, 10);
+        if (day && /^\d{4}-\d{2}-\d{2}$/.test(cur)) {
+          const d = new Date(cur + "T00:00:00");
+          const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+          d.setDate(Math.min(day, lastDay));
+          changes.nextDueDate = d.toLocaleDateString("en-CA");
+        }
+        delete changes.dueDay;
+      }
+      const FREQ_ALIASES: Record<string, string> = { annual: "yearly", annually: "yearly", "bi-weekly": "biweekly", "every other week": "biweekly", quarter: "quarterly" };
+      if (changes.frequency) changes.frequency = FREQ_ALIASES[String(changes.frequency).toLowerCase()] || String(changes.frequency).toLowerCase();
+      const updated = await storage.updateObligation(match.id, changes);
       return { updated: true, obligation: updated };
     }
 
