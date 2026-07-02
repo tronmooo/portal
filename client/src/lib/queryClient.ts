@@ -30,7 +30,7 @@ async function throwIfResNotOk(res: Response) {
 
 const DEFAULT_TIMEOUT_MS = 60000; // 60s timeout — long enough for document file fetches (base64 PDFs/images can be MBs) but bounded so a truly hung request can't freeze the UI forever
 const DOC_TIMEOUT_MS = 90000; // 90s for document binary fetches — file_data can be very large
-const CHAT_TIMEOUT_MS = 120000; // 120s for chat (complex multi-action queries need multiple AI rounds)
+const CHAT_TIMEOUT_MS = 170000; // 170s for chat — heavy multi-action queries make several AI rounds. Server function budget (vercel.json maxDuration) is 300s, so the client waits comfortably longer than a typical heavy request instead of aborting at the old 120s while the server was still working.
 
 export async function apiRequest(
   method: string,
