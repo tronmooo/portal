@@ -11010,11 +11010,18 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       }
       if (!response) throw new Error("Failed after retries");
 
-      // Extract text blocks for the reply
-      for (const block of response.content) {
-        if (block.type === "text") {
-          textReply += block.text;
+      // Extract text blocks for the reply. Only the LAST text-bearing round
+      // becomes the user-facing reply — intermediate narration the model emits
+      // between tool calls ("Now let me set up the reminders…") is discarded so
+      // multi-action replies stay short (just the final recap). Previously this
+      // did `textReply += block.text` across every round, gluing all the
+      // step-by-step narration onto the summary and making replies far too long.
+      {
+        let roundText = "";
+        for (const block of response.content) {
+          if (block.type === "text") roundText += block.text;
         }
+        if (roundText.trim()) textReply = roundText;
       }
 
       // Collect tool_use blocks

@@ -22,7 +22,7 @@ import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 
 interface Notification {
   id: string;
-  type: "document_expiring" | "task_overdue" | "task_due_today" | "bill_due" | "habit_at_risk" | "streak_milestone" | "goal_at_risk" | "goal_completed";
+  type: "document_expiring" | "task_overdue" | "task_due_today" | "bill_due" | "habit_at_risk" | "streak_milestone" | "goal_at_risk" | "goal_completed" | "reminder";
   severity: "critical" | "warning" | "info";
   title: string;
   message: string;
@@ -68,6 +68,8 @@ function getIcon(type: Notification["type"]) {
     case "goal_at_risk":
     case "goal_completed":
       return Target;
+    case "reminder":
+      return Bell;
     default:
       return Bell;
   }
@@ -210,6 +212,9 @@ export function NotificationBell() {
           break;
         case "bill_due":
           setLocation("/dashboard/finance");
+          break;
+        case "reminder":
+          setLocation("/calendar");
           break;
         case "habit_at_risk":
           setLocation("/dashboard/habits");

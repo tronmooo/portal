@@ -5506,7 +5506,7 @@ Rules:
 
       interface Notification {
         id: string;
-        type: "document_expiring" | "task_overdue" | "task_due_today" | "bill_due" | "habit_at_risk" | "streak_milestone";
+        type: "document_expiring" | "task_overdue" | "task_due_today" | "bill_due" | "habit_at_risk" | "streak_milestone" | "reminder";
         severity: "critical" | "warning" | "info";
         title: string;
         message: string;
@@ -5784,6 +5784,35 @@ Rules:
           });
         }
       }
+
+      // --- Upcoming reminders (incl. recurring medication reminders) ---
+      // Surface pending reminders in the bell so a scheduled dose/appointment is
+      // visible BEFORE it fires — not only when the cron converts it into a task.
+      // listReminders() returns only un-fired reminders, so nothing here is a
+      // duplicate of an already-fired-and-tasked reminder.
+      try {
+        const reminders = await storage.listReminders().catch(() => [] as any[]);
+        const nowMs = Date.now();
+        const horizonMs = nowMs + 7 * 86400000; // next 7 days
+        for (const rem of reminders) {
+          const whenMs = rem.fireAt ? new Date(rem.fireAt).getTime() : NaN;
+          if (isNaN(whenMs) || whenMs > horizonMs) continue;
+          const overdue = whenMs < nowMs;
+          const whenHuman = new Date(whenMs).toLocaleString("en-US", {
+            timeZone: notifTz, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+          });
+          notifications.push({
+            id: `reminder-${rem.id}`,
+            type: "reminder",
+            severity: overdue ? "warning" : "info",
+            title: rem.title,
+            message: overdue ? "Reminder overdue" : `Reminder · ${whenHuman}`,
+            entityId: rem.id,
+            entityType: "reminder",
+            dueDate: rem.fireAt,
+          });
+        }
+      } catch { /* reminders in the bell are best-effort */ }
 
       // Deduplicate: keep only the most severe notification per entityId
       const severityOrder: Record<string, number> = { critical: 0, warning: 1, info: 2 };
