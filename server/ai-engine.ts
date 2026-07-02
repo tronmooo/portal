@@ -2502,9 +2502,11 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     input_schema: {
       type: "object" as const,
       properties: {
-        title: { type: "string", description: "What to be reminded about (e.g. 'call the dentist')." },
-        fireAt: { type: "string", description: "When the reminder should fire, as a full ISO 8601 datetime (e.g. '2026-06-05T15:00:00'). Resolve relative phrasing like 'tomorrow at 3pm' to an absolute datetime." },
+        title: { type: "string", description: "What to be reminded about (e.g. 'call the dentist', 'take Amoxicillin 500mg')." },
+        fireAt: { type: "string", description: "When the FIRST reminder should fire, as a full ISO 8601 datetime (e.g. '2026-06-05T15:00:00'). Resolve relative phrasing like 'tomorrow at 3pm' to an absolute datetime. For a recurring reminder this is the first occurrence." },
         forProfile: { type: "string", description: "OPTIONAL: name of an EXISTING person/pet profile this reminder is for (e.g. 'Bob', 'Mom'). Omit for the user themselves." },
+        recurrence: { type: "string", enum: ["daily", "twice_daily", "three_times_daily", "weekly", "monthly"], description: "OPTIONAL: set for a REPEATING reminder. 'twice daily for 10 days' → recurrence:'twice_daily'. Omit for a one-time reminder. When set, ALSO set count (total reminders to create)." },
+        count: { type: "number", description: "OPTIONAL (required when recurrence is set): total number of reminder occurrences to schedule. 'twice daily for 10 days' = 20. 'daily for a week' = 7. Capped at 90." },
       },
       required: ["title", "fireAt"],
     },
@@ -2537,7 +2539,7 @@ const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Trackers ---
   {
     name: "log_tracker_entry",
-    description: "Log values to a tracker (health, fitness, habits, metrics — NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries). CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}).\n- Supplements / vitamins / medications (multivitamin, fish oil, vitamin D, creatine, a pill/capsule/softgel, a prescribed drug) → a 'Supplements' tracker (or per-drug like 'Lisinopril' for prescriptions). Use values:{name, dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency}. Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER} (or glasses). Put the numeric amount directly in the ounces field.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
+    description: "Log values to a tracker (health, fitness, habits, metrics — NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries). CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}).\n- Supplements / vitamins / medications → EACH item gets its OWN tracker named EXACTLY after the item: 'Multivitamin', 'Fish Oil', 'Vitamin D', 'Creatine', 'Amoxicillin', 'Lisinopril'. NEVER bucket different items into one generic 'Supplements' (or 'Vitamins'/'Medications') tracker. If the user logs several in one message (e.g. 'multivitamin, fish oil, and amoxicillin'), make a SEPARATE log_tracker_entry call for EACH, one per its own tracker. ALWAYS reuse an existing tracker whose name is that item (an existing 'Multivitamin' tracker → append the entry, do NOT create a new tracker). Use values:{dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency, taken:true} — include dosage+unit whenever the user states OR clearly implies one (do not invent a dosage that wasn't given). Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER} (or glasses). Put the numeric amount directly in the ounces field.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3842,6 +3844,12 @@ function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: str
     : tz.replace(/_/g, ' ');
   return `You are Portol AI — the intelligent brain of a unified personal life operating system. You have FULL access to the user's data: health trackers, finances, calendar, profiles, documents, habits, tasks, medications, and more. Your job is to both act on commands AND generate real, data-driven insights.
 
+*** RESPONSE STYLE — BE CONCISE ***
+After you finish acting, confirm in the FEWEST words that clearly state what was done. For multi-action requests use a short bulleted recap — ONE line per action (what + where it was saved), and flag anything that failed or was skipped. Do NOT restate the user's request, do NOT narrate your steps ("Now I'll create…", "Let me…"), do NOT add tips, encouragement, or long summaries. Aim for under ~80 words unless the user asked a question that needs a real answer. Example for a multi-log request:
+✅ Logged: Multivitamin, Fish Oil, Amoxicillin 500 mg (8 AM)
+✅ Amoxicillin reminder: twice daily × 10 days
+✅ Journal entry added
+
 EXISTING DATA (this is fresh from the database — use it for every answer):
 ${context}
 
@@ -3868,8 +3876,10 @@ When the user asks questions like "how am I doing?", "give me a health summary",
 - Example: instead of "Your spending this month is $X", say "$1,862 spent this month — shopping is 63% ($1,179) which is abnormally high vs your 6-month average of ~$800/month."
 
 MEDICATION TRACKING (separate system from habits):
-- When users mention taking, logging, or tracking medication, prescription drugs, or supplements, use create_tracker with category="medication" if no tracker exists yet
-- Medication tracker fields MUST include: { drug: "Name", dosage: "Xmg", taken: true/false, time: "HH:MM", notes: "..." }
+- Every medication, prescription, vitamin, or supplement gets its OWN tracker named EXACTLY after the item (e.g. "Multivitamin", "Fish Oil", "Amoxicillin", "Metformin"). NEVER create or use a generic "Supplements"/"Vitamins"/"Medications" tracker, and never bucket two different items together.
+- ALWAYS check for an existing tracker of that name first and append to it (log_tracker_entry); only create a new tracker (category="medication") when none exists. Logging "my multivitamin" when a "Multivitamin" tracker already exists MUST append to it — do not spawn a second tracker.
+- When the user logs several items in one message ("multivitamin, fish oil, and amoxicillin 500mg"), make a SEPARATE log_tracker_entry call for each, one per its own tracker.
+- Medication tracker fields MUST include: { drug: "Name", dosage: "Xmg", taken: true/false, time: "HH:MM", notes: "..." }. Capture dosage+unit whenever the user states or clearly implies one; do NOT invent a dosage the user didn't give (e.g. don't assume a multivitamin is 500mg just because a different drug in the same sentence was).
 - Medication adherence = entries where taken=true / total entries × 100%
 - NEVER lump medications into habit check-ins. Medications are structured data, not binary check-offs.
 - If a user says "I took my Metformin 500mg" → log_tracker_entry to the Metformin tracker (or create it) with { drug: "Metformin", dosage: "500mg", taken: true }
@@ -5474,13 +5484,36 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const matched = matchProfileByName(profiles, reminderForProfile);
         if (matched) reminderProfileId = matched.id;
       }
+      // RECURRENCE: "twice daily for 10 days" etc. expands into multiple reminder
+      // rows so each dose fires its own notification. Non-recurring = a single row.
+      const HOUR_MS = 3600000, DAY_MS = 86400000;
+      const firstMs = new Date(input.fireAt).getTime();
+      const recur = String((input as any).recurrence || "").toLowerCase();
+      const occCount = recur ? Math.max(1, Math.min(90, Math.floor(Number((input as any).count) || 1))) : 1;
+      const occ: number[] = [];
+      if (!recur) {
+        occ.push(firstMs);
+      } else if (recur === "twice_daily") {
+        for (let i = 0; i < occCount; i++) { const day = Math.floor(i / 2), slot = i % 2; occ.push(firstMs + day * DAY_MS + slot * 12 * HOUR_MS); }
+      } else if (recur === "three_times_daily") {
+        for (let i = 0; i < occCount; i++) { const day = Math.floor(i / 3), slot = i % 3; occ.push(firstMs + day * DAY_MS + slot * 8 * HOUR_MS); }
+      } else if (recur === "weekly") {
+        for (let i = 0; i < occCount; i++) occ.push(firstMs + i * 7 * DAY_MS);
+      } else if (recur === "monthly") {
+        for (let i = 0; i < occCount; i++) { const d = new Date(firstMs); d.setMonth(d.getMonth() + i); occ.push(d.getTime()); }
+      } else { // "daily" or any other recurring token
+        for (let i = 0; i < occCount; i++) occ.push(firstMs + i * DAY_MS);
+      }
       let reminder;
       try {
-        reminder = await storage.createReminder({
-          title: input.title,
-          fireAt: input.fireAt,
-          profileId: reminderProfileId,
-        });
+        for (let i = 0; i < occ.length; i++) {
+          const rem = await storage.createReminder({
+            title: input.title,
+            fireAt: new Date(occ[i]).toISOString(),
+            profileId: reminderProfileId,
+          });
+          if (i === 0) reminder = rem; // first occurrence drives the calendar mirror + card
+        }
       } catch (e: any) {
         // The reminders table is provisioned by an additive migration. Until it
         // lands, fail soft so chat stays usable instead of throwing a 500.
@@ -5489,6 +5522,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return { error: "Reminders aren't available yet — the reminders table hasn't been provisioned. Try again shortly." };
         }
         throw e;
+      }
+      if (!reminder) {
+        return { error: `I couldn't schedule the reminder "${input.title || ""}". Please try again.` };
       }
       const _remTz = (storage as any)._timezone || DEFAULT_TIMEZONE;
       const fireDate = new Date(reminder.fireAt);
@@ -5551,7 +5587,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         date: calendarEvent?.date,
         time: calendarEvent?.time,
         forProfile: input.forProfile,
-        message: `Reminder set for ${human} and added to your calendar. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
+        message: recur
+          ? `Set ${occ.length} ${recur.replace(/_/g, " ")} reminders starting ${human}.`
+          : `Reminder set for ${human} and added to your calendar. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
         actions: [{ type: "create", category: "reminder", data: reminder }],
       };
     }
