@@ -7098,10 +7098,12 @@ export default function TrackersPage() {
                 const d = new Date(String(raw).slice(0, 10) + "T00:00:00");
                 return isNaN(d.getTime()) ? null : d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
               };
+              // Compact label/value row — tuned to fit the narrow grid boxes
+              // (matches the density of the Assets / Documents boxes on this page).
               const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-[11px] text-muted-foreground shrink-0">{label}</span>
-                  <span className="text-[11px] font-medium text-foreground text-right truncate">{value}</span>
+                <div className="flex items-baseline justify-between gap-1.5">
+                  <span className="text-[9px] text-muted-foreground shrink-0">{label}</span>
+                  <span className="text-[10px] font-medium text-foreground text-right truncate min-w-0">{value}</span>
                 </div>
               );
               const renderCard = (liab: any) => {
@@ -7117,39 +7119,49 @@ export default function TrackersPage() {
                 const original = toNumLiab(fields.originalBalance ?? fin.originalBalance ?? fields.originalLoanAmount ?? fin.originalLoanAmount ?? fields.creditLimit ?? fin.creditLimit);
                 const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
                 const due = fmtDue(fields.dueDate ?? fields.nextDueDate ?? fields.due_date ?? fin.dueDate);
+                const freqUnit = subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo';
+                const isRecurring = isSubscription || liabilityFamily(liab.type_key) === 'recurring';
+                const hasProgress = original != null && original > 0 && balance != null;
                 return (
-                  <Link key={liab.id} href={`/profiles/${liab.id}`} className="block">
+                  <Link key={liab.id} href={`/profiles/${liab.id}`} className="block h-full">
                     <div
-                      className="rounded-xl p-3 cursor-pointer transition-all hover:border-[hsl(0_72%_55%/0.45)] active:scale-[0.99]"
-                      style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.10) 0%, hsl(var(--card)) 60%)`, border: `1px solid hsl(${accentHsl} / 0.2)` }}
+                      className="rounded-xl p-2.5 cursor-pointer transition-all hover:border-[hsl(0_72%_55%/0.45)] active:scale-[0.98] h-full flex flex-col"
+                      style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.12) 0%, hsl(var(--card)) 55%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 14px hsl(${accentHsl} / 0.06)` }}
                       data-testid={`liab-card-${liab.id}`}
                     >
-                      <div className="flex items-start gap-2 mb-2">
-                        <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0 mt-0.5" style={{ backgroundColor: `hsl(${accentHsl} / 0.18)`, color: ac }}><TrendingDown className="h-3.5 w-3.5" /></div>
-                        <p className="flex-1 min-w-0 text-xs font-bold uppercase tracking-wide text-foreground truncate" title={liab.name}>{liab.name}</p>
-                        <Pencil className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
+                      <div className="flex items-start gap-1.5 mb-1.5">
+                        <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.18)`, color: ac }}><TrendingDown className="h-3 w-3" /></div>
+                        <p className="flex-1 min-w-0 text-[10px] font-bold uppercase tracking-wide text-foreground leading-tight line-clamp-2" title={liab.name}>{liab.name}</p>
+                        <Pencil className="h-3 w-3 text-muted-foreground/50 shrink-0" />
                       </div>
-                      <div className="space-y-1">
+                      {/* Headline: current balance (debt) or recurring amount (bills) */}
+                      {balance != null && balance > 0 ? (
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-base font-black tabular-nums text-foreground leading-none">{fmtMoney(balance)}</span>
+                          <span className="text-[8px] text-muted-foreground">bal</span>
+                        </div>
+                      ) : isRecurring && subCost != null && subCost > 0 ? (
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-base font-black tabular-nums text-foreground leading-none">{fmtMoney(subCost)}</span>
+                          <span className="text-[8px] text-muted-foreground">/{freqUnit}</span>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground/50 italic">No balance set</span>
+                      )}
+                      <div className="mt-1.5 space-y-0.5 flex-1">
                         <Row label="Type" value={<span className="capitalize">{subtype}</span>} />
                         {lender && <Row label="Creditor" value={String(lender)} />}
-                        {balance != null && balance > 0 ? (
-                          <Row label="Balance" value={<span className="tabular-nums font-semibold">{fmtMoney(balance)}</span>} />
-                        ) : (isSubscription || liabilityFamily(liab.type_key) === 'recurring') && subCost != null && subCost > 0 ? (
-                          <Row label="Amount" value={<span className="tabular-nums font-semibold">{fmtMoney(subCost)}/{subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo'}</span>} />
-                        ) : (
-                          <Row label="Balance" value={<span className="text-muted-foreground/60 italic">Not set</span>} />
-                        )}
                         {apr != null && apr > 0 && <Row label="APR" value={`${apr < 1 ? (apr * 100).toFixed(2) : apr.toFixed(2)}%`} />}
-                        {due && <Row label="Due Date" value={due} />}
+                        {due && !hasProgress && <Row label="Due" value={due} />}
                       </div>
-                      {original != null && original > 0 && balance != null && (
-                        <div className="mt-2.5">
+                      {hasProgress && (
+                        <div className="mt-1.5">
                           <div className="h-1.5 w-full rounded-full overflow-hidden" style={{ background: `hsl(${accentHsl} / 0.12)` }}>
                             <div className="h-full rounded-full" style={{ width: `${Math.round(paidPct * 100)}%`, background: ac }} />
                           </div>
-                          <div className="mt-1 flex justify-between text-[9px] text-muted-foreground tabular-nums">
+                          <div className="mt-0.5 flex justify-between text-[8px] text-muted-foreground tabular-nums">
                             <span>{Math.round(paidPct * 100)}% paid</span>
-                            <span>of {fmtMoney(original)}</span>
+                            <span>of {fmtMoney(original!)}</span>
                           </div>
                         </div>
                       )}
@@ -7160,7 +7172,7 @@ export default function TrackersPage() {
               const Group = ({ title, items }: { title: string; items: any[] }) => items.length === 0 ? null : (
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 px-0.5">{title}</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">{items.map(renderCard)}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 items-start" style={{ gridAutoRows: 168 }}>{items.map(renderCard)}</div>
                 </div>
               );
               return (
