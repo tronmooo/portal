@@ -125,6 +125,13 @@ export function generateSchedule(
 
   const out: ScheduleOccurrence[] = [];
   let cur = anchor;
+  // Extend the walk backward to the earliest overridden date so a paid or
+  // skipped past occurrence stays visible even after `dueDate` advanced past
+  // it (the anchor moves forward as bills are paid; overrides do not). Override
+  // keys are canonical on-grid dates, so this keeps cadence alignment.
+  for (const d of Object.keys(overrides)) {
+    if (ISO_RE.test(d) && d < cur) cur = d;
+  }
   let guard = 0;
   const maxIter = Math.max(cap * 3, 1500);
 

@@ -84,6 +84,19 @@ describe("generateSchedule", () => {
     expect(next!.date).toBe("2026-08-15");
   });
 
+  it("keeps a paid past occurrence visible after dueDate advanced past it", () => {
+    // Simulates the state right after paying July: dueDate moved to Aug, and
+    // July carries a paid override. July must still appear (not vanish).
+    const s = generateSchedule(
+      bill({ dueDate: "2026-08-15", firstPaymentDate: "2026-07-15", occurrences: { "2026-07-15": { status: "paid", paymentId: "p1" } } }),
+      [{ id: "p1", paymentDate: "2026-07-15" }],
+      { todayISO: TODAY, windowStart: "2026-05-01", months: 6 },
+    );
+    const july = s.find((o) => o.date === "2026-07-15");
+    expect(july).toBeTruthy();
+    expect(july!.status).toBe("paid");
+  });
+
   it("periodsPerYear reflects frequency", () => {
     expect(periodsPerYear(bill({ frequency: "monthly" }))).toBe(12);
     expect(periodsPerYear(bill({ frequency: "yearly" }))).toBe(1);

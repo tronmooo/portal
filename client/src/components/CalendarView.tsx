@@ -545,11 +545,29 @@ function EventDetailDialog({
   onEdit: () => void;
 }) {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const Icon = TYPE_ICONS[item.type] || CalendarIcon;
 
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
   });
+
+  // A bill occurrence action (pay / skip) hits the liability's occurrence
+  // endpoint via the back-compat shim, then resyncs every finance + calendar
+  // surface so the dashboard, cash flow and the bill's own page all update.
+  const billOccurrenceAction = async (status: "done" | "skipped") => {
+    if (!item.meta?.occurrenceId) return;
+    try {
+      await apiRequest("POST", `/api/obligation-occurrences/${item.meta.occurrenceId}/status`, { status });
+      for (const key of ["/api/calendar/timeline", "/api/obligations", "/api/dashboard-enhanced", "/api/profiles", "/api/stats"]) {
+        queryClient.invalidateQueries({ queryKey: [key] });
+      }
+      toast({ title: status === "done" ? "Marked paid" : "Payment skipped", description: item.title });
+      onClose();
+    } catch (e: any) {
+      toast({ title: "Couldn't update the bill", description: e?.message || "Please try again.", variant: "destructive" });
+    }
+  };
 
   const linkedProfileNames = item.linkedProfiles
     .map(id => profiles.find(p => p.id === id)?.name)
@@ -779,39 +797,26 @@ function EventDetailDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          {/* Wave 16: Done/Skip on obligation occurrences directly from calendar */}
-          {item.type === "obligation" && item.meta?.occurrenceId && item.meta?.status === "pending" && (
+          {/* Bill occurrence: pay / skip from the calendar, and jump to the
+              liability's Schedule & Calendar page for reschedule / amount /
+              notes / recurrence / history. Shown for any still-open occurrence
+              (upcoming, due today, or overdue) — not paid or skipped. */}
+          {item.type === "obligation" && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setLocation(`/profile/${item.sourceId}`); onClose(); }}
+              data-testid="btn-occ-open-bill"
+            >
+              <CreditCard className="h-3.5 w-3.5 mr-1" />Open bill
+            </Button>
+          )}
+          {item.type === "obligation" && item.meta?.occurrenceId && (item.meta?.status === "pending" || item.meta?.status === "late") && (
             <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={async () => {
-                  try {
-                    await apiRequest("POST", `/api/obligation-occurrences/${item.meta!.occurrenceId}/status`, { status: "done" });
-                    queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-                    queryClient.invalidateQueries({ queryKey: ["/api/obligation-occurrences"] });
-                    queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-                    onClose();
-                  } catch (e) { console.error(e); }
-                }}
-                data-testid="btn-occ-done"
-              >
-                <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Mark done
+              <Button variant="outline" size="sm" onClick={() => billOccurrenceAction("done")} data-testid="btn-occ-done">
+                <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Mark paid
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={async () => {
-                  try {
-                    await apiRequest("POST", `/api/obligation-occurrences/${item.meta!.occurrenceId}/status`, { status: "skipped" });
-                    queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-                    queryClient.invalidateQueries({ queryKey: ["/api/obligation-occurrences"] });
-                    onClose();
-                  } catch (e) { console.error(e); }
-                }}
-                data-testid="btn-occ-skip"
-              >Skip</Button>
+              <Button variant="ghost" size="sm" onClick={() => billOccurrenceAction("skipped")} data-testid="btn-occ-skip">Skip</Button>
             </>
           )}
           {(item.type === "event" || item.type === "task" || item.type === "obligation") && (

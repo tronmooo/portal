@@ -3626,6 +3626,9 @@ export class SupabaseStorage implements IStorage {
       fields: {
         monthlyAmount: amount, amount,
         frequency: freq, billingFrequency: freq,
+        // Fixed series origin so the generated schedule stays anchored even as
+        // dueDate advances with each payment (see shared/liability-schedule.ts).
+        firstPaymentDate: nextDue,
         dueDate: nextDue, nextDueDate: nextDue,
         autopay: (data as any).autopay || false,
         category,
