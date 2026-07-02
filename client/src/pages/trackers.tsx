@@ -5777,6 +5777,7 @@ export default function TrackersPage() {
   const getRouteDefaultSection = (path: string): "all" | "profiles" | "liabilities" | "documents" | "trackers" => {
     const p = (path || "").toLowerCase();
     if (p.startsWith("/trackers") || p.startsWith("/dashboard/health") || p.startsWith("/health")) return "trackers";
+    if (p.startsWith("/liabilities")) return "liabilities";
     return "all";
   };
   const getQuerySection = (): "all" | "profiles" | "liabilities" | "documents" | "trackers" | null => {

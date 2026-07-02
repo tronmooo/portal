@@ -609,6 +609,7 @@ function AppRouter() {
         <Route path="/dashboard" component={DashboardPage} />
         <Route path="/trackers" component={TrackersPage} />
         <Route path="/linked" component={TrackersPage} />
+        <Route path="/liabilities" component={TrackersPage} />
         <Route path="/profiles" component={ProfilesPage} />
         <Route path="/profiles/:id" component={ProfileDetailPage} />
         <Route path="/documents/:id" component={DocumentDetailPage} />

@@ -652,7 +652,7 @@ export function CashFlowPopup({
             <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={() => setQuickAdd("bill")} data-testid="cash-flow-add-bill">
               <Plus className="h-3 w-3 mr-1.5" /> Add bill
             </Button>
-            <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={() => go("/trackers?tab=liabilities")} data-testid="cash-flow-view-obligations">
+            <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={() => go("/liabilities")} data-testid="cash-flow-view-obligations">
               <ExternalLink className="h-3 w-3 mr-1.5" /> Manage liabilities
             </Button>
           </div>
