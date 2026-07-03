@@ -31,6 +31,7 @@ import {
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
 import { isRecurringBill } from "../shared/liability-types";
+import { collectOwnedAssetExpenses } from "../shared/cost-of-ownership";
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
@@ -1015,9 +1016,32 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
+    // COST OF OWNERSHIP — surface the expenses of the assets this person owns,
+    // WITHOUT duplicating any record. Each asset's costs are linked to the ASSET
+    // (single row/link); we derive them here for the owner's view so they can
+    // see the full cost of ownership. Nothing is written; aggregates that sum
+    // the distinct expense set still count each expense exactly once.
+    let ownedAssetExpenses: any[] = [];
+    if (isPersonLike && childProfiles.length > 0) {
+      try {
+        const ownedAssets = childProfiles.filter((c: any) => ASSET_PROFILE_TYPES.has(c.type));
+        if (ownedAssets.length > 0) {
+          const allExpenses = await this.getExpenses();
+          const directIds = new Set(relatedExpenses.map((e: any) => e.id));
+          ownedAssetExpenses = collectOwnedAssetExpenses(
+            ownedAssets.map((a: any) => ({ id: a.id, name: a.name, type: a.type, _ownershipPercentage: a._ownershipPercentage })),
+            allExpenses as any[],
+            directIds,
+          ).map((r) => ({ ...r.expense, _viaAsset: r.viaAsset, _ownershipPercentage: r.ownershipPercentage }));
+        }
+      } catch (e) {
+        console.warn("getProfileDetail: cost-of-ownership derivation failed:", (e as any)?.message || e);
+      }
+    }
+
     // `relatedJournal` is added to the returned shape so the profile detail
     // page can render a journal section. Existing keys are unchanged.
-    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, relatedJournal, relatedHabits, childProfiles, timeline } as any;
+    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, relatedJournal, relatedHabits, childProfiles, timeline, ownedAssetExpenses } as any;
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {

@@ -1000,6 +1000,11 @@ export interface ProfileDetail extends Profile {
   relatedHabits: Habit[];
   childProfiles: Profile[];  // Nested profiles (assets, subscriptions, loans, etc.)
   timeline: TimelineEntry[];
+  // Cost of ownership: expenses that belong to the assets this person owns,
+  // derived (not duplicated) so the owner sees the full cost. Each entry is the
+  // original Expense row plus `_viaAsset` (source asset) and `_ownershipPercentage`.
+  // Only present on person-like profiles; empty otherwise.
+  ownedAssetExpenses?: (Expense & { _viaAsset?: { id: string; name: string; type?: string }; _ownershipPercentage?: number })[];
 }
 
 export interface TimelineEntry {

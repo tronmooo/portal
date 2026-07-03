@@ -4563,6 +4563,7 @@ function DocumentsTab({
 function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail; profileId: string; onChanged: () => void }) {
   // ── state ──────────────────────────────────────────────────────
   const { toast } = useToast();
+  const [, financesSetLocation] = useLocation();
 
   // ── shared liabilities (person/self only) ──────────────────────
   // Fetches liability_profile_links rows where party_profile_id = this profile.
@@ -4670,6 +4671,27 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 
   // ── summary calculations ────────────────────────────────────────
   const totalSpent = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+  // Cost of ownership — expenses that belong to the assets this person OWNS.
+  // Derived on the server (profile.ownedAssetExpenses); each row is a single
+  // expense (one record) surfaced here for visibility, grouped by its asset.
+  // Kept separate from "Total Spent" so it's clear these are asset costs and
+  // never double-counted into the person's personal spend.
+  const costOfOwnership = useMemo(() => {
+    const rows = ((profile as any).ownedAssetExpenses || []) as any[];
+    const byAsset = new Map<string, { asset: { id: string; name: string; type?: string }; items: any[]; subtotal: number }>();
+    for (const e of rows) {
+      const a = e._viaAsset || { id: "unknown", name: "Asset" };
+      if (!byAsset.has(a.id)) byAsset.set(a.id, { asset: a, items: [], subtotal: 0 });
+      const g = byAsset.get(a.id)!;
+      g.items.push(e);
+      const share = typeof e._ownershipPercentage === "number" ? e._ownershipPercentage / 100 : 1;
+      g.subtotal += (Number(e.amount) || 0) * share;
+    }
+    const groups = Array.from(byAsset.values()).sort((a, b) => b.subtotal - a.subtotal);
+    const total = groups.reduce((s, g) => s + g.subtotal, 0);
+    return { groups, total, count: rows.length };
+  }, [(profile as any).ownedAssetExpenses]);
 
   const now = new Date();
   const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -4996,6 +5018,71 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
           </CardContent>
         </Card>
       </div>
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 1b — Cost of ownership (person profiles)        */}
+      {/* Expenses from the assets this person owns. Single record */}
+      {/* per expense, shown here for the full cost-of-ownership   */}
+      {/* picture — never double-counted into Total Spent above.   */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {costOfOwnership.count > 0 && (
+        <Card data-testid="cost-of-ownership">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2">
+                <Car className="h-4 w-4 text-muted-foreground" /> Cost of ownership
+              </span>
+              <span className="text-sm font-bold tabular-nums">{formatCurrency(costOfOwnership.total)}</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-3">
+            <p className="text-[11px] text-muted-foreground -mt-1">
+              Expenses from assets you own. Each is a single record shown on both the asset and here — counted once in your totals.
+            </p>
+            {costOfOwnership.groups.map((g) => (
+              <div key={g.asset.id} className="rounded-lg border border-border/50" data-testid={`coo-asset-${g.asset.id}`}>
+                <button
+                  type="button"
+                  onClick={() => financesSetLocation(`/profiles/${g.asset.id}`)}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 hover:bg-muted/40 transition-colors rounded-t-lg"
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs font-semibold truncate">{g.asset.name}</span>
+                    {typeof g.items[0]?._ownershipPercentage === "number" && g.items[0]._ownershipPercentage < 100 && (
+                      <span className="text-[10px] text-muted-foreground shrink-0">owns {Math.round(g.items[0]._ownershipPercentage)}%</span>
+                    )}
+                    <span className="text-[10px] text-muted-foreground shrink-0">({g.items.length})</span>
+                  </span>
+                  <span className="flex items-center gap-1 shrink-0">
+                    <span className="text-xs font-bold tabular-nums">{formatCurrency(g.subtotal)}</span>
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                  </span>
+                </button>
+                <div className="divide-y divide-border/40">
+                  {g.items.slice(0, 6).map((e: any) => (
+                    <div key={e.id} className="flex items-center justify-between gap-2 px-3 py-1.5" data-testid={`coo-expense-${e.id}`}>
+                      <span className="text-xs text-muted-foreground truncate">
+                        {e.description}
+                        <span className="text-[10px] ml-1.5 opacity-70">{e.date}</span>
+                      </span>
+                      <span className="text-xs tabular-nums shrink-0">{formatCurrency(Number(e.amount) || 0)}</span>
+                    </div>
+                  ))}
+                  {g.items.length > 6 && (
+                    <button
+                      type="button"
+                      onClick={() => financesSetLocation(`/profiles/${g.asset.id}`)}
+                      className="w-full text-left text-[11px] text-primary hover:underline px-3 py-1.5"
+                    >
+                      +{g.items.length - 6} more on {g.asset.name} →
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* ═══════════════════════════════════════════════════════ */}
       {/* SECTION 2a — By Category                                */}

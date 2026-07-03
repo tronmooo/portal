@@ -26,6 +26,7 @@ export default defineConfig({
       'tests/liability-types.test.ts',
       'tests/liability-recurrence.test.ts',
       'tests/liability-schedule.test.ts',
+      'tests/cost-of-ownership.test.ts',
       'tests/profile-scope.test.ts',
       'tests/useProfileScope.dom.test.tsx',
       'tests/finance-import.test.ts',
