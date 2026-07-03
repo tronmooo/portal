@@ -2497,6 +2497,11 @@ function PartyLinkRow({
 
 function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
   const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const [adding, setAdding] = useState(false);
+  const [childName, setChildName] = useState("");
+  const [childSubtype, setChildSubtype] = useState("other");
+  const [childBalance, setChildBalance] = useState("");
 
   const graphQuery = useQuery<{ rootId?: string; nodes: { id: string; name: string; typeKey: string; type?: string }[]; edges?: { from: string; to: string }[] }>({
     queryKey: [`/api/relationships/graph/${liabilityId}`, "hops2"],
@@ -2565,8 +2570,69 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
     loan: "Loan",
   };
 
+  const createChildMut = useMutation({
+    mutationFn: async () => {
+      const fields: Record<string, any> = {};
+      const bal = parseFloat(childBalance);
+      if (!isNaN(bal)) { fields.currentBalance = bal; fields.originalBalance = bal; }
+      const res = await apiRequest("POST", "/api/profiles", {
+        type: "liability",
+        type_key: childSubtype,
+        name: childName.trim(),
+        parentProfileId: liabilityId,
+        fields,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      setChildName(""); setChildBalance(""); setChildSubtype("other"); setAdding(false);
+      queryClient.invalidateQueries({ queryKey: [`/api/relationships/graph/${liabilityId}`, "hops2"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      toast({ title: "Nested liability added" });
+    },
+    onError: (e: any) => toast({ title: "Couldn't add it", description: formatApiError(e), variant: "destructive" }),
+  });
+
+  const CHILD_SUBTYPES: { value: string; label: string }[] = [
+    { value: "other", label: "Other liability" },
+    { value: "credit_card", label: "Credit card" },
+    { value: "auto_loan", label: "Auto loan" },
+    { value: "personal_loan", label: "Personal loan" },
+    { value: "student_loan", label: "Student loan" },
+    { value: "medical_debt", label: "Medical debt" },
+    { value: "bnpl", label: "Buy now pay later" },
+    { value: "mortgage", label: "Mortgage" },
+  ];
+
   return (
-    <div data-testid="nested-liabilities-card">
+    <div data-testid="nested-liabilities-card" className="space-y-3">
+      {/* Add nested liability — parent/child like nested assets. */}
+      {adding ? (
+        <div className="rounded-lg border p-3 space-y-2" data-testid="add-nested-liability-form">
+          <Input placeholder="Name (e.g. Store Card)" value={childName} onChange={(e) => setChildName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && childName.trim()) createChildMut.mutate(); }} data-testid="input-child-name" />
+          <div className="flex gap-2">
+            <Select value={childSubtype} onValueChange={setChildSubtype}>
+              <SelectTrigger className="flex-1" data-testid="select-child-subtype"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {CHILD_SUBTYPES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Input type="number" step="0.01" placeholder="Balance" className="w-28" value={childBalance}
+              onChange={(e) => setChildBalance(e.target.value)} data-testid="input-child-balance" />
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>Cancel</Button>
+            <Button size="sm" onClick={() => createChildMut.mutate()} disabled={createChildMut.isPending || !childName.trim()} data-testid="btn-create-child-liability">
+              {createChildMut.isPending ? "Adding…" : "Add"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button variant="outline" size="sm" onClick={() => setAdding(true)} data-testid="btn-add-nested-liability">
+          <Plus className="w-4 h-4 mr-1" />Add nested liability
+        </Button>
+      )}
       {graphQuery.isLoading ? (
         <Skeleton className="h-40 w-full" />
       ) : nestedLiabilities.length === 0 ? (

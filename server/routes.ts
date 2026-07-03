@@ -3321,7 +3321,15 @@ Respond ONLY in JSON format:
         medical: "Summarize this medical profile: conditions, medications, appointments, documents, and upcoming care needs.",
       };
 
-      const typePrompt = typePrompts[detail.type] || "Summarize this profile's key information, linked entities, and any action items.";
+      let typePrompt = typePrompts[detail.type] || "Summarize this profile's key information, linked entities, and any action items.";
+      // A recurring bill is NOT an amortizing loan — never describe APR, payoff
+      // timeline, or total interest for it (that fabricates loan terms the row
+      // doesn't have). Summarize the actual recurring schedule from fields only.
+      if (detail.type === "liability" && isRecurringBillType((detail as any).type_key ?? (detail as any).typeKey)) {
+        const rf: any = detail.fields || {};
+        const remaining = rf.count != null ? `${rf.count} total payment(s) configured` : "open-ended (no fixed end)";
+        typePrompt = `This is a RECURRING BILL / subscription, not a loan. Summarize ONLY from the stored fields: amount $${rf.monthlyAmount ?? rf.amount ?? 0} per ${rf.frequency ?? "month"}, next due ${rf.dueDate ?? rf.nextDueDate ?? "unknown"}, ${remaining}${rf.reminderLeadDays != null ? `, reminder ${rf.reminderLeadDays} day(s) before each due date` : ", no reminder set"}${rf.autopay ? ", autopay on" : ""}. Do NOT mention APR, interest, payoff date, amortization, or a principal balance — this bill has none. Do NOT invent a reminder schedule, payment count, or end date that is not in the fields above.`;
+      }
 
       const systemPrompt = `You are the AI engine for Portol, a personal life management app. You analyze profile data to produce a concise, actionable summary.
 
