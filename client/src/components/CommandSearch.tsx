@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
+import { itemMatches } from "@/lib/search-index";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -110,6 +111,54 @@ interface SearchResults {
   journal?: JournalEntry[];
   obligations?: Obligation[];
   artifacts?: Artifact[];
+}
+
+// ─── Client-side search cache & instant narrowing ─────────────────────────────
+// PERF-AUDIT (2026-07-03): every ⌘K query hit /api/search with a ~1s round-trip,
+// even when re-typing "rent" or extending a previous query. The server returns
+// the FULL match set for a term (only link-enrichment is capped), so a longer
+// query's matches are always a strict subset of a shorter one's. We exploit that:
+//   • cache authoritative server results per normalized query (60s TTL), so
+//     repeat / recent-search queries resolve instantly with no round-trip;
+//   • when the current query extends a cached broader query, narrow that cached
+//     superset locally for an instant first paint, then revalidate against the
+//     server in the background (stale-while-revalidate for search).
+
+const SEARCH_CACHE_TTL_MS = 60_000; // reuse the same term's results for 60s
+const SEARCH_CACHE_MAX = 50;        // cap distinct cached queries
+
+// Cached results are only valid for the profile filter they were fetched under
+// (the server scopes /api/search by profileIds), so the filter is part of the
+// cache key. Mirrors exactly what handleQueryChange sends to the server.
+function filterSignature(): string {
+  const f = getProfileFilter();
+  return f.mode === "selected" && f.selectedIds.length > 0
+    ? "s:" + [...f.selectedIds].sort().join(",")
+    : "all";
+}
+type SearchCacheEntry = { raw: any[]; ts: number };
+// Nested cache: filter signature -> (normalized query -> results). Nesting
+// avoids any query/sig delimiter ambiguity and isolates each filter's entries.
+type SearchCache = Map<string, Map<string, SearchCacheEntry>>;
+
+// Group the flat `_type`-tagged array the API returns into SearchResults.
+function groupRaw(raw: any[]): SearchResults {
+  const grouped: SearchResults = {};
+  for (const item of raw) {
+    const t = item._type as string;
+    if (t === "profile") (grouped.profiles ??= []).push(item);
+    else if (t === "tracker") (grouped.trackers ??= []).push(item);
+    else if (t === "task") (grouped.tasks ??= []).push(item);
+    else if (t === "expense") (grouped.expenses ??= []).push(item);
+    else if (t === "event") (grouped.events ??= []).push(item);
+    else if (t === "document") (grouped.documents ??= []).push(item);
+    else if (t === "habit") (grouped.habits ??= []).push(item);
+    else if (t === "journal") (grouped.journal ??= []).push(item);
+    else if (t === "obligation") (grouped.obligations ??= []).push(item);
+    else if (t === "artifact") (grouped.artifacts ??= []).push(item);
+    // memory rows are intentionally not surfaced in the palette
+  }
+  return grouped;
 }
 
 // ─── Quick Actions ─────────────────────────────────────────────────────────────
@@ -200,20 +249,63 @@ export function CommandSearch() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef(0);
+  // Authoritative server results, cached per filter signature then query.
+  const cacheRef = useRef<SearchCache>(new Map());
 
-  // Debounced search with stale-result protection
+  // Find the longest fresh cached query (within the CURRENT filter) that the
+  // current, longer query extends, so we can narrow its result set locally
+  // instead of waiting on the server.
+  const findFreshPrefixSuperset = useCallback((sig: string, norm: string): any[] | null => {
+    const perFilter = cacheRef.current.get(sig);
+    if (!perFilter) return null;
+    let best: { raw: any[]; len: number } | null = null;
+    const now = Date.now();
+    for (const [key, val] of perFilter) {
+      if (key.length >= norm.length) continue;        // must be strictly shorter
+      if (!norm.startsWith(key)) continue;            // …and a prefix of the query
+      if (now - val.ts > SEARCH_CACHE_TTL_MS) continue;
+      if (!best || key.length > best.len) best = { raw: val.raw, len: key.length };
+    }
+    return best?.raw ?? null;
+  }, []);
+
+  // Debounced search with a client cache + instant local narrowing.
   const handleQueryChange = useCallback(
     (value: string) => {
       setQuery(value);
       if (debounceRef.current) clearTimeout(debounceRef.current);
       // Abort any in-flight request
       if (abortRef.current) abortRef.current.abort();
-      if (!value.trim()) {
+      const trimmed = value.trim();
+      if (!trimmed) {
         setResults(null);
         setLoading(false);
         return;
       }
-      setLoading(true);
+      const norm = trimmed.toLowerCase();
+      const sig = filterSignature();
+
+      // 1) Fresh exact cache hit → instant, no server round-trip at all.
+      const exact = cacheRef.current.get(sig)?.get(norm);
+      if (exact && Date.now() - exact.ts <= SEARCH_CACHE_TTL_MS) {
+        requestIdRef.current++; // invalidate any pending stale response
+        setResults(groupRaw(exact.raw));
+        setLoading(false);
+        return;
+      }
+
+      // 2) Prefix narrowing → instant first paint from a cached broader query,
+      //    then revalidate against the server below.
+      const prefixRaw = findFreshPrefixSuperset(sig, norm);
+      if (prefixRaw) {
+        setResults(groupRaw(prefixRaw.filter((it) => itemMatches(it, norm))));
+        setLoading(false); // we already have results to show — no spinner
+      } else {
+        setLoading(true);
+      }
+
+      // 3) Revalidate against the server (source of truth). Debounced + guarded
+      //    against stale responses via requestIdRef.
       debounceRef.current = setTimeout(async () => {
         const thisRequestId = ++requestIdRef.current;
         const controller = new AbortController();
@@ -223,7 +315,7 @@ export function CommandSearch() {
           // truth). The server filters when given profileIds; without this the
           // ⌘K search leaked every profile's records regardless of the filter.
           const filter = getProfileFilter();
-          const params = new URLSearchParams({ q: value.trim() });
+          const params = new URLSearchParams({ q: trimmed });
           if (filter.mode === "selected" && filter.selectedIds.length > 0) {
             params.set("profileIds", filter.selectedIds.join(","));
           }
@@ -231,26 +323,20 @@ export function CommandSearch() {
           // Discard if a newer request was fired
           if (thisRequestId !== requestIdRef.current) return;
           const raw: any[] = await res.json();
-          // API returns flat array with _type field — group into SearchResults
-          const grouped: SearchResults = {};
-          for (const item of raw) {
-            const t = item._type as string;
-            if (t === "profile") (grouped.profiles ??= []).push(item);
-            else if (t === "tracker") (grouped.trackers ??= []).push(item);
-            else if (t === "task") (grouped.tasks ??= []).push(item);
-            else if (t === "expense") (grouped.expenses ??= []).push(item);
-            else if (t === "event") (grouped.events ??= []).push(item);
-            else if (t === "document") (grouped.documents ??= []).push(item);
-            else if (t === "habit") (grouped.habits ??= []).push(item);
-            else if (t === "journal") (grouped.journal ??= []).push(item);
-            else if (t === "obligation") (grouped.obligations ??= []).push(item);
-            else if (t === "artifact") (grouped.artifacts ??= []).push(item);
-            else if (t === "memory") (grouped as any).memories ??= [];
+          // Cache the authoritative result under the filter it was fetched for,
+          // evicting the oldest query in that filter's bucket if over capacity.
+          let perFilter = cacheRef.current.get(sig);
+          if (!perFilter) { perFilter = new Map(); cacheRef.current.set(sig, perFilter); }
+          perFilter.set(norm, { raw, ts: Date.now() });
+          if (perFilter.size > SEARCH_CACHE_MAX) {
+            const oldestKey = perFilter.keys().next().value;
+            if (oldestKey !== undefined) perFilter.delete(oldestKey);
           }
-          setResults(grouped);
+          setResults(groupRaw(raw));
         } catch (err: any) {
-          // Don't clear results on abort
-          if (err?.name !== "AbortError" && thisRequestId === requestIdRef.current) {
+          // Don't clear results on abort, or when we already showed a locally
+          // narrowed set (keep the instant results rather than flashing empty).
+          if (err?.name !== "AbortError" && thisRequestId === requestIdRef.current && !prefixRaw) {
             setResults(null);
           }
         } finally {
@@ -260,7 +346,7 @@ export function CommandSearch() {
         }
       }, 300);
     },
-    []
+    [findFreshPrefixSuperset]
   );
 
   // Reset on close
