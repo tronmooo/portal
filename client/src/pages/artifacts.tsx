@@ -32,6 +32,7 @@ import {
 } from "recharts";
 import type { Artifact } from "@shared/schema";
 import ChartCard from "@/components/ChartCard";
+import { parseChartSpec } from "@/lib/artifact-chart";
 import type { JournalEntry } from "@shared/schema";
 import type { Document } from "@shared/schema";
 import type { Profile } from "@shared/schema";
@@ -241,6 +242,18 @@ function ArtifactRenderer({ artifact, artifactId, isArtifact }: { artifact: any;
         try { const s = JSON.parse(content || ""); return (s && Array.isArray(s.series) && Array.isArray(s.data)) ? s : null; } catch { return null; }
       })();
       if (savedSpec) return <ChartCard spec={savedSpec} defaultOpen />;
+      // Object-shaped spec with a `data` array (no `series`) — ChartRenderer
+      // expects the raw data array, so unwrap `.data` and use the embedded type.
+      const objSpec = parseChartSpec(content);
+      if (objSpec && Array.isArray(objSpec.data)) {
+        return (
+          <ChartRenderer
+            content={JSON.stringify(objSpec.data)}
+            dataBindings={dataBindings}
+            chartType={chartType || objSpec.type}
+          />
+        );
+      }
       return <ChartRenderer content={content || ""} dataBindings={dataBindings} chartType={chartType} />;
     }
 
@@ -282,8 +295,24 @@ function ArtifactRenderer({ artifact, artifactId, isArtifact }: { artifact: any;
       );
     }
 
-    default: // note
+    default: { // note
+      // PERF-AUDIT fix: a note whose content is actually a chart spec (raw JSON
+      // like `{"type":"line","title":"Weight Trend","data":[...]}`) should render
+      // as a chart, not as raw JSON text.
+      const noteSpec = parseChartSpec(content);
+      if (noteSpec) {
+        if (Array.isArray(noteSpec.series) && Array.isArray(noteSpec.data)) {
+          return <ChartCard spec={noteSpec as any} defaultOpen />;
+        }
+        return (
+          <ChartRenderer
+            content={JSON.stringify(noteSpec.data ?? [])}
+            chartType={noteSpec.type}
+          />
+        );
+      }
       return <div className="text-sm whitespace-pre-wrap">{content || ""}</div>;
+    }
   }
 }
 
