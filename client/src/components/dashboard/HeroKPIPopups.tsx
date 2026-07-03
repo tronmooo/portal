@@ -309,8 +309,15 @@ export function NetWorthPopup({
   const nwTrend = useMemo(() => {
     if (nwSeries.length < 2) return null;
     const first = nwSeries[0], last = nwSeries[nwSeries.length - 1];
-    if (!isFinite(first) || first === 0) return null;
-    return { pct: ((last - first) / Math.abs(first)) * 100, up: last >= first, delta: last - first };
+    if (!isFinite(first) || !isFinite(last)) return null;
+    const delta = last - first;
+    // BUG-4: only show a % when the baseline is non-trivial and the series
+    // doesn't cross zero — otherwise a near-zero or sign-flipping baseline
+    // yields a nonsensical percentage (e.g. "-109.9%"). Fall back to the $ delta.
+    const baselineTooSmall = Math.abs(first) < 1;
+    const signFlipped = (first < 0) !== (last < 0);
+    const pct = baselineTooSmall || signFlipped ? null : (delta / Math.abs(first)) * 100;
+    return { pct, up: delta >= 0, delta };
   }, [nwSeries]);
   const nwPath = useMemo(() => {
     const s = nwSeries.length >= 2 ? nwSeries : null;
@@ -348,7 +355,7 @@ export function NetWorthPopup({
             {nwTrend && (
               <div className="text-right" title={`Change since the start of the selected period (${nwSeries.length} days of snapshots)`}>
                 <p className="text-[11px] font-semibold tabular-nums" style={{ color: nwTrend.up ? "hsl(155 60% 44%)" : "hsl(0 80% 60%)" }}>
-                  {nwTrend.up ? "▲" : "▼"} {Math.abs(nwTrend.pct).toFixed(1)}%
+                  {nwTrend.up ? "▲" : "▼"} {nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : `$${fmt(Math.abs(nwTrend.delta))}`}
                 </p>
                 <p className="text-[9px] text-muted-foreground">{nwTrend.delta >= 0 ? "+" : "−"}${fmt(Math.abs(nwTrend.delta))} this period</p>
               </div>

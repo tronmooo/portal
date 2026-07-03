@@ -32,6 +32,7 @@ import {
 } from "recharts";
 import type { Artifact } from "@shared/schema";
 import ChartCard from "@/components/ChartCard";
+import type { ChartSpec2 } from "@/components/ChatChartRenderer";
 import type { JournalEntry } from "@shared/schema";
 import type { Document } from "@shared/schema";
 import type { Profile } from "@shared/schema";
@@ -125,6 +126,51 @@ const MOOD_EMOJI: Record<string, string> = {
   amazing: "🤩", great: "😊", good: "🙂", okay: "😐",
   neutral: "😶", bad: "😞", awful: "😢", terrible: "😫",
 };
+
+// ─── Chart-spec coercion ─────────────────────────────────────
+// BUG-2 fix: some artifacts (e.g. the "Weight Trend" AI Note) store a full
+// chart spec as their `content` JSON but carry a non-"chart" DB type, so the
+// renderer's default branch used to dump the raw `{"type":"line",...}` string
+// on screen. Detect that shape and route it to the same polished ChartCard the
+// chat uses. Falls back to null (→ text summary) when the content isn't a chart.
+const CHART_SPEC_TYPES = new Set(["line", "bar", "area", "pie", "scatter", "composed", "radar"]);
+
+function coerceChartSpec(raw: any): ChartSpec2 | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (!CHART_SPEC_TYPES.has(raw.type)) return null;
+  if (!Array.isArray(raw.data) || raw.data.length === 0) return null;
+  const xAxisKey = raw.xAxisKey || raw.nameKey || "name";
+  let series = Array.isArray(raw.series) ? raw.series : [];
+  // Older/partial specs saved without an explicit series list: synthesize one
+  // from the numeric keys on the first row so the chart still renders.
+  if (series.length === 0 && raw.type !== "pie") {
+    const first = raw.data[0] || {};
+    series = Object.keys(first)
+      .filter(k => k !== xAxisKey && typeof first[k] === "number")
+      .map(k => ({ dataKey: k, name: k }));
+    if (series.length === 0) {
+      const vk = raw.valueKey || "value";
+      series = [{ dataKey: vk, name: vk }];
+    }
+  }
+  return { ...raw, series, xAxisKey, title: raw.title || "Chart" } as ChartSpec2;
+}
+
+function tryParseChartSpec(content: string): ChartSpec2 | null {
+  if (!content) return null;
+  const t = content.trim();
+  if (!t.startsWith("{")) return null;
+  try { return coerceChartSpec(JSON.parse(t)); } catch { return null; }
+}
+
+// Human-readable card preview. For chart-spec notes this yields the chart's
+// title/subtitle instead of the raw JSON blob (BUG-2).
+function previewForContent(content?: string | null): string {
+  if (!content) return "";
+  const spec = tryParseChartSpec(content);
+  if (spec) return [spec.title, spec.subtitle].filter(Boolean).join(" — ").slice(0, 100);
+  return content.slice(0, 100);
+}
 
 // ─── Artifact Renderers ──────────────────────────────────────
 // Round 9 fix: checklist checkboxes were `defaultChecked` with no `onChange`,
@@ -237,9 +283,7 @@ function ArtifactRenderer({ artifact, artifactId, isArtifact }: { artifact: any;
       // `content` — render them with the SAME polished card as the chat, so the
       // saved copy looks identical. Legacy charts fall back to the re-querying
       // ChartRenderer.
-      const savedSpec = (() => {
-        try { const s = JSON.parse(content || ""); return (s && Array.isArray(s.series) && Array.isArray(s.data)) ? s : null; } catch { return null; }
-      })();
+      const savedSpec = tryParseChartSpec(content || "");
       if (savedSpec) return <ChartCard spec={savedSpec} defaultOpen />;
       return <ChartRenderer content={content || ""} dataBindings={dataBindings} chartType={chartType} />;
     }
@@ -282,8 +326,13 @@ function ArtifactRenderer({ artifact, artifactId, isArtifact }: { artifact: any;
       );
     }
 
-    default: // note
+    default: { // note
+      // BUG-2: an AI Note may actually hold a chart spec in its content. Render
+      // it as a chart rather than leaking the raw JSON; fall back to text.
+      const chartSpec = tryParseChartSpec(content || "");
+      if (chartSpec) return <ChartCard spec={chartSpec} defaultOpen />;
       return <div className="text-sm whitespace-pre-wrap">{content || ""}</div>;
+    }
   }
 }
 
@@ -768,7 +817,7 @@ export default function ArtifactsPage() {
           ? (a.content?.replace(/<[^>]+>/g, " ").trim().slice(0, 100) || "")
           : a.type === "sheet"
             ? `${a.sheetData?.rows ?? 0} × ${a.sheetData?.cols ?? 0} grid`
-            : (a.content?.slice(0, 100) || (a.items?.length > 0 ? a.items.map(i => i.text).join(", ").slice(0, 100) : "")),
+            : (previewForContent(a.content) || (a.items?.length > 0 ? a.items.map(i => i.text).join(", ").slice(0, 100) : "")),
         profileName: resolveProfile(a.linkedProfiles),
         source: a,
         pinned: !!a.pinned,

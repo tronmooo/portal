@@ -167,12 +167,19 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
     return "Everyone";
   }, [filter]);
   const selectedCount = filter.selectedIds.length;
+  // Tri-state for the "Everyone" master row: some (but not all-as-everyone)
+  // profiles are actively selected.
+  const someSelected = !isEveryone && selectedCount > 0;
 
   // ── Shared list content ──────────────────────────────────
   const listContent = (
     <div className="space-y-0.5">
       {/* Everyone option — hidden when `hideEveryone` (e.g. Dashboard). */}
       {!hideEveryone && (<>
+      {/* BUG-7: "Everyone" is a tri-state master. Checked = no filter (all).
+          When specific people are selected it shows an indeterminate dash so
+          it's obvious a filter is active (previously it read as fully
+          unchecked, which was indistinguishable from "nothing selected"). */}
       <button
         className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left text-sm transition-all active:scale-[0.97] ${
           isEveryone ? 'bg-primary/10 text-primary font-medium border border-primary/30' : 'hover:bg-accent active:bg-accent border border-transparent'
@@ -180,16 +187,26 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
         onClick={handleEveryone}
         style={{ minHeight: '52px', WebkitTapHighlightColor: 'transparent' }}
         data-testid="filter-everyone"
+        aria-checked={isEveryone ? "true" : (someSelected ? "mixed" : "false")}
+        role="checkbox"
       >
-        <div className={`h-5 w-5 rounded border-2 flex items-center justify-center shrink-0 ${isEveryone ? "bg-primary border-primary" : "border-muted-foreground/30"}`}>
+        <div className={`h-5 w-5 rounded border-2 flex items-center justify-center shrink-0 ${isEveryone || someSelected ? "bg-primary border-primary" : "border-muted-foreground/30"}`}>
           {isEveryone && (
             <svg className="h-3 w-3 text-primary-foreground" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M2 6l3 3 5-5" />
             </svg>
           )}
+          {!isEveryone && someSelected && (
+            <svg className="h-3 w-3 text-primary-foreground" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M2.5 6h7" />
+            </svg>
+          )}
         </div>
         <Users className="h-4 w-4 text-muted-foreground shrink-0" />
         <span className="flex-1">Everyone</span>
+        {someSelected && (
+          <span className="text-[11px] text-muted-foreground shrink-0">{selectedCount} selected</span>
+        )}
       </button>
 
       <div className="h-px bg-border my-1.5 mx-3" />
@@ -241,7 +258,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
               <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
               <span className="truncate max-w-[100px]">{label}</span>
               {selectedCount > 0 && (
-                <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-0.5">{selectedCount}</Badge>
+                <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-1.5">{selectedCount}</Badge>
               )}
               <ChevronDown className="h-3 w-3 text-muted-foreground ml-0.5" />
             </Button>
@@ -282,7 +299,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
           <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
           <span className="truncate max-w-[100px]">{label}</span>
           {selectedCount > 0 && (
-            <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-0.5">{selectedCount}</Badge>
+            <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-1.5">{selectedCount}</Badge>
           )}
           <ChevronDown className="h-3 w-3 text-muted-foreground ml-0.5" />
         </Button>

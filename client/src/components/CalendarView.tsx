@@ -1400,6 +1400,23 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
               );
             })}
           </div>
+
+          {/* Legend — the month grid encodes item type by dot color only, which
+              fails colorblind users and anyone who hasn't memorized the mapping.
+              Spell it out. Mirrors the categoryDotColors used per day cell. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-2 mt-1 text-[11px] text-muted-foreground border-t border-border/40">
+            {[
+              { label: "Event", color: "#3b82f6" },
+              { label: "Task", color: "#8b5cf6" },
+              { label: "Bill", color: "#f59e0b" },
+              { label: "Habit", color: "#10b981" },
+            ].map((l) => (
+              <span key={l.label} className="inline-flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full" style={{ background: l.color }} />
+                {l.label}
+              </span>
+            ))}
+          </div>
       </div>}
       {viewMode === "month" && !timelineLoading && Object.values(itemsByDate).every(arr => arr.length === 0) && (
         <div className="rounded-lg border border-dashed border-border/50 p-6 text-center mt-4">

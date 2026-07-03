@@ -777,8 +777,18 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
   const nwTrend = useMemo(() => {
     if (nwSeries.length < 2) return null;
     const first = nwSeries[0], last = nwSeries[nwSeries.length - 1];
-    if (!isFinite(first) || first === 0) return null;
-    return { pct: ((last - first) / Math.abs(first)) * 100, up: last >= first };
+    if (!isFinite(first) || !isFinite(last)) return null;
+    const delta = last - first;
+    if (delta === 0) return null;
+    // BUG-4: a month-over-month % is only meaningful when the baseline is a
+    // non-trivial amount AND the series doesn't cross zero. A near-zero baseline
+    // divides into an absurd percentage, and a sign flip (e.g. +$1 → -$32k) makes
+    // "% change" nonsensical (it reads as "-109.9%"). In those cases show the
+    // dollar delta instead of a misleading percentage.
+    const baselineTooSmall = Math.abs(first) < 1;
+    const signFlipped = (first < 0) !== (last < 0);
+    const pct = baselineTooSmall || signFlipped ? null : (delta / Math.abs(first)) * 100;
+    return { pct, up: delta >= 0, delta };
   }, [nwSeries]);
   const nwPath = useMemo(() => {
     const s = nwSeries.length >= 2 ? nwSeries : [netWorth, netWorth];
@@ -868,7 +878,9 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
           {nwTrend && (
             <div className="mt-1 flex items-center gap-1 text-[12px] font-medium" style={{ color: nwTrend.up ? 'hsl(155 70% 55%)' : 'hsl(0 85% 68%)' }}>
               {nwTrend.up ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
-              {Math.abs(nwTrend.pct).toFixed(1)}% <span className="font-normal text-white/45">vs last month</span>
+              {nwTrend.pct != null
+                ? <>{Math.abs(nwTrend.pct).toFixed(1)}% <span className="font-normal text-white/45">vs last month</span></>
+                : <>{nwTrend.delta >= 0 ? "+" : "−"}${fmt(Math.abs(nwTrend.delta))} <span className="font-normal text-white/45">vs last month</span></>}
             </div>
           )}
         </div>

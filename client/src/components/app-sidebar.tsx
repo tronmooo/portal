@@ -39,9 +39,13 @@ export function AppSidebar() {
           aria-label="Go to home"
           data-testid="sidebar-home-link"
         >
+          {/* Decorative: the visible "Portol" wordmark beside it already names
+              the brand. An alt of "Portol" here made assistive tech / DOM text
+              read the brand twice ("PortolPortol"). */}
           <img
             src="/portol-logo-clean.png"
-            alt="Portol"
+            alt=""
+            aria-hidden="true"
             className="w-11 h-11 object-contain"
             style={{ filter: 'drop-shadow(0 0 6px rgba(0,200,220,0.5))' }}
           />

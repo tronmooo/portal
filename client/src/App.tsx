@@ -707,7 +707,7 @@ function App() {
                         <SidebarTrigger data-testid="button-sidebar-toggle" />
                       </div>
                       <div className="md:hidden flex items-center gap-2">
-                        <img src="/portol-logo-clean.png" alt="Portol" className="w-12 h-12 object-contain" style={{ filter: 'drop-shadow(0 0 6px rgba(0,200,220,0.45))' }} />
+                        <img src="/portol-logo-clean.png" alt="" aria-hidden="true" className="w-12 h-12 object-contain" style={{ filter: 'drop-shadow(0 0 6px rgba(0,200,220,0.45))' }} />
                         <span className="text-base font-bold tracking-tight text-foreground">Portol</span>
                       </div>
                       {/* Search trigger — centre-right in header */}

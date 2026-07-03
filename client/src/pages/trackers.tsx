@@ -6049,6 +6049,65 @@ export default function TrackersPage() {
   }, [trackers]);
   const countForProfile = (profileId: string) => profileCounts[profileId] || 0;
 
+  // BUG-3: single source of truth for the Linked section counts. Previously the
+  // header showed only trackers+documents ("35 items") while the list/table view
+  // also rendered assets + liabilities (65 rows) and the section chips computed
+  // their own totals — three surfaces, three numbers. Derive the asset and
+  // liability counts once here (identical filtering to the rendered lists) and
+  // bind the header, the "All" chip total, and the per-section chips to them.
+  const {
+    filteredAssetCount,
+    filteredLiabilityCount,
+    allItemsCount,
+  } = useMemo(() => {
+    const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
+    const isShowAll = filterMode === "everyone";
+    const byId = new Map<string, any>();
+    (profiles || []).forEach(p => byId.set(p.id, p));
+    const hasAssetAncestor = (p: any): boolean => {
+      let cur: any = p;
+      for (let i = 0; i < 32 && cur; i++) {
+        const pid = cur.parentProfileId;
+        if (!pid) return false;
+        const par = byId.get(pid);
+        if (!par) return false;
+        if (childTypeSet.has(par.type)) return true;
+        cur = par;
+      }
+      return false;
+    };
+    const labelForType = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
+    const assets = (profiles || []).filter(p => {
+      if (!childTypeSet.has(p.type)) return false;
+      const pParent = p.parentProfileId;
+      const parentIsAsset = hasAssetAncestor(p);
+      const inScope = isShowAll || isAssetVisible(p.id, pParent as string | null | undefined);
+      if (!inScope) return false;
+      if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForType(p.type) !== assetTypeFilter) return false;
+      const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
+      if (nestingFilter === "all" || nestingFilter === "topLevel") {
+        if (parentIsAsset) return false;
+      } else if (nestingFilter === "hasChildren") {
+        const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.parentProfileId) === p.id);
+        if (!hasAssetChild) return false;
+      } else if (nestingFilter === "nested") {
+        if (!parentIsAsset) return false;
+      }
+      return true;
+    }).length;
+    const liabilities = (profiles || []).filter(p => {
+      if (!isLiabilityLikeProfile(p)) return false;
+      if (hasAssetAncestor(p)) return false;
+      if (isShowAll) return true;
+      return isLiabilityVisible(p.id, p.parentProfileId);
+    }).length;
+    return {
+      filteredAssetCount: assets,
+      filteredLiabilityCount: liabilities,
+      allItemsCount: filteredTrackers.length + filteredDocuments.length + assets + liabilities,
+    };
+  }, [profiles, filterMode, sectionFilter, assetTypeFilter, assetNestingFilter, filteredTrackers, filteredDocuments]);
+
   // Skeleton loading state — MUST be after all hooks
   if (showTrackerSkeleton && !trackers && isPending) {
     return (
@@ -6075,7 +6134,7 @@ export default function TrackersPage() {
           <span className="text-xs text-muted-foreground">
             {sectionFilter === "trackers" ? `${filteredTrackers.length} trackers`
              : sectionFilter === "documents" ? `${filteredDocuments.length} documents`
-             : sectionFilter === "all" ? `${filteredTrackers.length + filteredDocuments.length} items`
+             : sectionFilter === "all" ? `${allItemsCount} items`
              : sectionFilter === "liabilities" ? "liabilities"
              : sectionFilter === "profiles" ? "assets"
              : `${filteredTrackers.length} trackers`}
@@ -6167,67 +6226,13 @@ export default function TrackersPage() {
           <div className="h-4 w-px bg-border" />
           {/* Section filter pills */}
           {(() => {
-            // Compute filtered asset/subscription counts using the SAME filter logic as the sections
-            const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
-            const isShowAllForCounts = filterMode === "everyone";
-            // BUG-A02: the chip count must use IDENTICAL filtering to the rendered
-            // asset list — otherwise the user sees e.g. "Assets (3)" in the chip but
-            // 5 cards below (or vice versa) depending on the nesting filter selected
-            // on the Assets tab. Mirror the list's filter logic exactly, including
-            // the assetNestingFilter modes.
-            const labelForTypeCount = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
-            // Walk full parent chain so chip count matches list (nested-at-any-depth hidden)
-            const _profileByIdChip = new Map<string, any>();
-            (profiles || []).forEach(p => _profileByIdChip.set(p.id, p));
-            const _hasAssetAncestorChip = (p: any): boolean => {
-              let cur: any = p;
-              for (let i = 0; i < 32 && cur; i++) {
-                const pid = cur.parentProfileId;
-                if (!pid) return false;
-                const par = _profileByIdChip.get(pid);
-                if (!par) return false;
-                if (childTypeSet.has(par.type)) return true;
-                cur = par;
-              }
-              return false;
-            };
-            const filteredAssetCount = (profiles || []).filter(p => {
-              if (!childTypeSet.has(p.type)) return false;
-              const pParent = p.parentProfileId;
-              const parentIsAsset = _hasAssetAncestorChip(p);
-              // Profile-filter scope — include co-owners via asset_party_links.
-              const inScope = isShowAllForCounts || isAssetVisible(p.id, pParent as string | null | undefined);
-              if (!inScope) return false;
-              // Asset type chip filter — only applies on the Assets tab
-              if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForTypeCount(p.type) !== assetTypeFilter) return false;
-              // Nesting filter — must match the list view exactly
-              const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
-              if (nestingFilter === "all" || nestingFilter === "topLevel") {
-                if (parentIsAsset) return false;
-              } else if (nestingFilter === "hasChildren") {
-                const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.parentProfileId) === p.id);
-                if (!hasAssetChild) return false;
-              } else if (nestingFilter === "nested") {
-                if (!parentIsAsset) return false;
-              }
-              return true;
-            }).length;
-            // Liabilities count — includes "liability" (canonical), legacy "loan",
-            // AND "subscription" (recurring bills are liabilities too — Netflix,
-            // rent, utilities all behave like recurring debts you owe).
-            const filteredLiabilityCount = (profiles || []).filter(p => {
-              if (!isLiabilityLikeProfile(p)) return false;
-              // Exclude liabilities nested under an asset — they live inside
-              // the parent asset's detail page, not at top-level Linked.
-              if (_hasAssetAncestorChip(p)) return false;
-              if (isShowAllForCounts) return true;
-              const pParent = p.parentProfileId;
-              return isLiabilityVisible(p.id, pParent);
-            }).length;
+            // Counts come from the hoisted single source of truth (see BUG-3
+            // above) so the chips, the header "N items", and the rendered lists
+            // can never disagree.
             return (["all", "trackers", "documents", "profiles", "liabilities"] as const).map(s => {
             const labels: Record<string, string> = { all: "All", trackers: "Trackers", documents: "Documents", profiles: "Assets", liabilities: "Liabilities" };
             const counts: Record<string, number> = {
-              all: filteredTrackers.length + filteredDocuments.length + filteredLiabilityCount + filteredAssetCount,
+              all: allItemsCount,
               trackers: filteredTrackers.length,
               documents: filteredDocuments.length,
               profiles: filteredAssetCount,
