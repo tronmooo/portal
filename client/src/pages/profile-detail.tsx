@@ -272,7 +272,6 @@ import { getUserToday, toLocalDateStr } from "@shared/timezone";
 import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import EditableTitle from "@/components/EditableTitle";
 import { LinkedSheetView, LinkedViewToggle, useLinkedView, type SheetColumn } from "@/components/LinkedSheetView";
@@ -2051,6 +2050,15 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     },
     enabled: !!profileId,
     retry: false,
+    // PERF: the summary takes a few seconds to generate. Cache it per-profile on
+    // the client (stale-while-revalidate) so re-opening a profile in the same
+    // session shows the previous summary instantly instead of regenerating on
+    // every mount. Edits still refresh it (the profileUpdatedAt effect + the
+    // mutation invalidations below), and the Refresh button forces a fresh gen.
+    staleTime: 10 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   // When the underlying profile changes (any field edit, AI write, etc) refetch
@@ -2215,37 +2223,18 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     );
   }
 
-  // Loading skeleton
+  // Loading — deliberately compact and clearly SECONDARY. The real profile data
+  // (net worth, assets, liabilities, and every tab) renders immediately below
+  // this card; the AI summary is not on the critical path, so while it generates
+  // we show only a small inline spinner instead of a tall skeleton that made the
+  // whole Overview read as "still loading" for a few seconds. renderShell keeps
+  // the header actions (Refresh / Look up value) reachable throughout.
   if (isLoading) {
-    // Asset-like types still get the action buttons while the summary generates.
-    if (canLookupValue) {
-      return renderShell(
-        <>
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-3/4" />
-        </>
-      );
-    }
-    return (
-      <Card className="overflow-hidden" data-testid="card-ai-summary-loading">
-        <div className={`h-1 bg-gradient-to-r ${profileGradient(profileType).replace(/\/20/g, '/60').replace(/\/5/g, '/30')}`} />
-        <CardHeader className="pb-2">
-          <div className="flex items-center gap-2">
-            <Skeleton className="h-4 w-4 rounded" />
-            <Skeleton className="h-4 w-24" />
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-3/4" />
-          <div className="flex gap-2 mt-3">
-            <Skeleton className="h-14 flex-1 rounded-lg" />
-            <Skeleton className="h-14 flex-1 rounded-lg" />
-            <Skeleton className="h-14 flex-1 rounded-lg" />
-          </div>
-          <Skeleton className="h-4 w-1/2 mt-2" />
-        </CardContent>
-      </Card>
+    return renderShell(
+      <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="ai-summary-generating">
+        <RefreshCw className="h-3 w-3 animate-spin" />
+        Generating summary…
+      </div>
     );
   }
 
@@ -12672,7 +12661,14 @@ export default function ProfileDetailPage() {
       return flattenProfile(raw);
     },
     enabled: !!id,
-    refetchOnMount: true,
+    // PERF: keep the detail in cache so re-opening a profile renders the header
+    // and body from cache instantly instead of showing the full-page skeleton on
+    // every visit. Mutations here invalidate this key explicitly, so a short
+    // staleTime never serves stale data after an edit; it just avoids the
+    // redundant cold refetch when navigating back to a profile you just saw.
+    staleTime: 30 * 1000,
+    gcTime: 10 * 60 * 1000,
+    refetchOnMount: false,
   });
 
   // Page-level all-profiles — powers the new breadcrumb + summary + tree.
