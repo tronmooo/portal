@@ -1068,10 +1068,9 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const itemsByDate = useMemo(() => {
     const map: Record<string, CalendarTimelineItem[]> = {};
     for (const item of timelineItems) {
-      // User decision (2026-07-01): financial obligations do NOT belong on the
-      // calendar — they clutter it. Bills live in the Bills Due dashboard and
-      // the obligations manager tab; the calendar shows events + tasks only.
-      if (item.type === "obligation") continue;
+      // Liability due dates (bills, loan/card payments) DO belong on the
+      // calendar (user reversed the earlier "hide obligations" decision) — each
+      // occurrence shows as a distinct chip and opens its pay/skip actions.
       if (filterType !== "all" && normalizeFilter(item.type) !== normalizeFilter(filterType)) continue;
       // PR AC — calendar isolation: when a profile filter is active, an item
       // must be EXPLICITLY linked to one of the selected profiles. Unlike

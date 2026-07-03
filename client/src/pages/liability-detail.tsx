@@ -1169,10 +1169,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <NestedLiabilitiesCard liabilityId={profile.id} />
             </section>
 
-            {/* Recurring bills lead their money story with the Schedule & Calendar
-                (relocated here, at the bottom, directly below the AI summary +
-                overview per the profile layout). */}
-            {recurringBill && <BillScheduleSection liabilityId={profile.id} />}
+            {/* EVERY liability gets a Schedule & Calendar (bills, loans, cards
+                all look the same) — payment dates on a month calendar plus the
+                per-payment list. Placed at the bottom, below the AI summary. */}
+            <BillScheduleSection liabilityId={profile.id} />
           </TabsContent>
 
           {/* DETAILS */}

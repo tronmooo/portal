@@ -14,6 +14,7 @@
 
 import { freqToUnit, advance, type RecurrenceRule } from "./recurrence";
 import { liabilityBillStatus, type BillStatus } from "./liability-status";
+import { liabilityFamily } from "./liability-types";
 
 export type OccurrenceStatus = BillStatus | "skipped";
 
@@ -65,6 +66,59 @@ function addMonthsISO(iso: string, n: number): string {
   const d = new Date(iso + "T00:00:00");
   d.setMonth(d.getMonth() + n);
   return d.toLocaleDateString("en-CA");
+}
+
+/**
+ * Normalize ANY liability into the fields the schedule generator understands,
+ * so loans, credit cards, and one-time debts get a payment schedule too — not
+ * just recurring bills. Recurring bills pass through unchanged; amortizing /
+ * revolving / one-time debts derive a monthly payment series from their
+ * monthly payment, due day, and remaining term.
+ */
+export function deriveScheduleFields(
+  fields: Record<string, any> | null | undefined,
+  typeKey: string | null | undefined,
+  todayISO: string,
+): Record<string, any> {
+  const f = fields || {};
+  const fam = liabilityFamily(typeKey);
+  if (fam === "recurring") return f;
+
+  const amount = Number(f.monthlyPayment ?? f.minimumPayment ?? f.amount ?? f.monthlyAmount ?? 0) || 0;
+  // Next payment date: an explicit date, else the due day this/next month.
+  let due = clip(f.nextPaymentDate ?? f.dueDate ?? f.nextDueDate ?? f.firstPaymentDate);
+  if (!ISO_RE.test(due)) {
+    const day = parseInt(String(f.dueDay ?? ""), 10);
+    if (day >= 1 && day <= 31) {
+      const d = new Date(todayISO + "T00:00:00");
+      let mo = d.getMonth() + (d.getDate() > day ? 1 : 0);
+      const yr = d.getFullYear() + (mo > 11 ? 1 : 0);
+      mo = ((mo % 12) + 12) % 12;
+      const last = new Date(yr, mo + 1, 0).getDate();
+      due = new Date(yr, mo, Math.min(day, last)).toLocaleDateString("en-CA");
+    }
+  }
+  if (!ISO_RE.test(due)) due = todayISO;
+
+  let count: number | null = null;
+  if (fam === "one_time") count = 1;
+  else if (fam === "amortizing") {
+    const rt = parseInt(String(f.remainingTermMonths ?? f.termMonths ?? ""), 10);
+    if (rt > 0) count = rt;
+    else {
+      const bal = Number(f.currentBalance ?? f.originalBalance ?? 0);
+      if (amount > 0 && bal > 0) count = Math.min(600, Math.ceil(bal / amount));
+    }
+  }
+  // revolving (credit card / line of credit) → open-ended monthly minimum.
+  return {
+    ...f,
+    frequency: fam === "one_time" ? "once" : "monthly",
+    monthlyAmount: amount, amount,
+    dueDate: due, nextDueDate: due,
+    firstPaymentDate: ISO_RE.test(clip(f.firstPaymentDate)) ? clip(f.firstPaymentDate) : due,
+    ...(count != null ? { count } : {}),
+  };
 }
 
 /** The recurrence frequency token for a liability, from either field alias. */

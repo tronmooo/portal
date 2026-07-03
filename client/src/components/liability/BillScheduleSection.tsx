@@ -18,6 +18,7 @@ interface Occ {
 }
 interface Schedule {
   id: string; name: string; amount: number; frequency: string;
+  family?: string; isRecurring?: boolean;
   firstPayment: string | null; nextDue: { date: string; effectiveDate: string; amount: number } | null;
   lastPaid: string | null; autopay: boolean; paused: boolean; pausedUntil: string | null;
   gracePeriodDays: number | null; lateFee: number | null; reminderLeadDays: number | null;
@@ -104,6 +105,7 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <CardTitle className="text-base flex items-center gap-2"><CalendarClock className="w-4 h-4" />Schedule &amp; Calendar</CardTitle>
+          {data.isRecurring && (
           <div className="flex items-center gap-2">
             {data.paused ? (
               <Button size="sm" variant="outline" onClick={() => act(() => apiRequest("POST", `/api/liabilities/${liabilityId}/resume`), "Bill resumed")} data-testid="btn-resume">
@@ -120,6 +122,7 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
               </Popover>
             )}
           </div>
+          )}
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -148,7 +151,8 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
           <Fact label="Payments made" value={String(data.payments?.length ?? 0)} />
         </div>
 
-        {/* Change recurrence */}
+        {/* Change recurrence — bills only (a loan's cadence is fixed). */}
+        {data.isRecurring && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-muted-foreground">Recurrence:</span>
           {FREQS.map((fr) => (
@@ -157,6 +161,7 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
               data-testid={`btn-freq-${fr}`}>{fr}</Button>
           ))}
         </div>
+        )}
 
         {/* Collapsible month calendar — every due date + reminder plotted. */}
         <div className="border-t pt-3">

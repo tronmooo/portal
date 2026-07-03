@@ -31,7 +31,8 @@ import {
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
 import { isRecurringBill } from "../shared/liability-types";
-import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, type ScheduleOccurrence } from "../shared/liability-schedule";
+import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
+import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
@@ -2789,27 +2790,37 @@ export class SupabaseStorage implements IStorage {
     // distinct "bill" item, linked back to its liability profile. Per-occurrence
     // state (paid / skipped / rescheduled) comes from fields.occurrences and the
     // liability_payments history — see shared/liability-schedule.ts.
+    // EVERY liability — recurring bills AND loans / credit cards / one-time
+    // debts — puts its payment due dates on the calendar (user: "all the
+    // liabilities should look similar; do it for all, not just subscriptions").
+    // Non-recurring families derive a monthly payment series from their terms.
     {
-      const billProfiles = profiles.filter((p: any) =>
-        isRecurringBill(p.type_key ?? p.typeKey) &&
+      const liabProfiles = profiles.filter((p: any) =>
+        (p.type === "liability" || p.type === "loan") &&
         matchesProfile(p.parentProfileId ? [p.parentProfileId] : []));
-      // Reuse the payments already fetched for the obligation list (id-aligned).
+      // One query for all liability payments, grouped, so paid status is exact.
       const payByLiab = new Map<string, Array<{ paymentDate?: string; id?: string }>>();
-      for (const ob of allObligations) {
-        payByLiab.set(ob.id, (ob.payments || []).map((pp: any) => ({ paymentDate: pp.date, id: pp.id })));
+      const liabIds = liabProfiles.map((p: any) => p.id);
+      if (liabIds.length > 0) {
+        const { data: payRows } = await this.supabase
+          .from("liability_payments").select("id,payment_date,liability_profile_id")
+          .eq("user_id", this.userId).in("liability_profile_id", liabIds);
+        for (const r of payRows || []) {
+          const arr = payByLiab.get(r.liability_profile_id) || [];
+          arr.push({ paymentDate: r.payment_date, id: r.id });
+          payByLiab.set(r.liability_profile_id, arr);
+        }
       }
       const todayISO = getUserToday(this._timezone);
-      // Old occurrence status vocabulary the calendar UI already renders.
       const toUiStatus = (s: ScheduleOccurrence["status"]) =>
         s === "paid" ? "done" : s === "overdue" ? "late" : s === "skipped" ? "skipped" : "pending";
-      for (const p of billProfiles as any[]) {
-        const occ = generateSchedule(
-          { id: p.id, fields: p.fields },
-          payByLiab.get(p.id) || [],
-          { todayISO, windowStart: startDate, windowEnd: endDate },
-        );
+      for (const p of liabProfiles as any[]) {
+        const typeKey = p.type_key ?? p.typeKey;
+        const sf = deriveScheduleFields(p.fields || {}, typeKey, todayISO);
+        const occ = generateSchedule({ id: p.id, fields: sf }, payByLiab.get(p.id) || [], { todayISO, windowStart: startDate, windowEnd: endDate });
         const owner = p.parentProfileId ? [p.parentProfileId] : [];
-        const freq = liabilityFrequency({ id: p.id, fields: p.fields });
+        const fam = liabilityFamily(typeKey);
+        const freq = liabilityFrequency({ id: p.id, fields: sf });
         for (const o of occ) {
           items.push({
             id: `bill-${p.id}-${o.date}`,
@@ -2823,7 +2834,7 @@ export class SupabaseStorage implements IStorage {
             sourceId: p.id,
             completed: o.status === "paid",
             meta: {
-              kind: "bill",
+              kind: fam === "recurring" ? "bill" : "payment",
               status: toUiStatus(o.status),
               amount: o.amount,
               recurrence: freq,
@@ -3758,12 +3769,17 @@ export class SupabaseStorage implements IStorage {
     return (data || []).map((r: any) => ({ id: r.id, paymentDate: r.payment_date }));
   }
 
-  /** Rich schedule for a recurring liability: occurrences window + history + settings. */
+  /** Rich payment schedule for ANY liability (recurring bill, loan, credit card,
+   *  one-time debt): occurrences window + history + settings. Non-recurring
+   *  families derive a monthly payment series from their terms. */
   async getLiabilitySchedule(id: string, months = 12): Promise<any | null> {
     const p = await this.getProfile(id);
-    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return null;
-    const f: any = p.fields || {};
+    const typeKey = (p as any)?.type_key ?? (p as any)?.typeKey ?? null;
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const todayISO = getUserToday(this._timezone);
+    // Normalize every family into schedule-ready fields (bills pass through).
+    const f: any = deriveScheduleFields(p.fields || {}, typeKey, todayISO);
+    const isBill = isRecurringBill(typeKey);
     const payments = await this._liabilityPayments(id);
     const fromISO = new Date(new Date(todayISO + "T00:00:00").setMonth(new Date(todayISO + "T00:00:00").getMonth() - 2)).toLocaleDateString("en-CA");
     const toISO = new Date(new Date(todayISO + "T00:00:00").setMonth(new Date(todayISO + "T00:00:00").getMonth() + months)).toLocaleDateString("en-CA");
@@ -3779,7 +3795,9 @@ export class SupabaseStorage implements IStorage {
     return {
       id: p.id,
       name: p.name,
-      typeKey: (p as any).type_key ?? (p as any).typeKey ?? null,
+      typeKey,
+      family: liabilityFamily(typeKey),
+      isRecurring: isBill,
       amount,
       frequency: liabilityFrequency({ id: p.id, fields: f }),
       firstPayment: String(f.firstPaymentDate ?? f.dueDate ?? f.nextDueDate ?? "").slice(0, 10) || null,
@@ -3806,7 +3824,7 @@ export class SupabaseStorage implements IStorage {
   /** Merge a per-occurrence override into fields.occurrences (shallow-replaced). */
   private async _patchOccurrence(id: string, date: string, patch: Record<string, any>): Promise<any> {
     const p = await this.getProfile(id);
-    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return null;
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const f: any = p.fields || {};
     const occ: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
     const existing = occ[date] || {};
@@ -3821,12 +3839,14 @@ export class SupabaseStorage implements IStorage {
   /** Mark one occurrence paid: writes a payment row + stamps the override. */
   async payOccurrence(id: string, date: string, opts: { amount?: number; method?: string; paymentDate?: string } = {}): Promise<any> {
     const p = await this.getProfile(id);
-    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return null;
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const f: any = p.fields || {};
     const occDate = String(date).slice(0, 10);
     const payDate = opts.paymentDate || occDate;
+    // Derived fields carry the per-occurrence amount for loans/cards too.
+    const df = deriveScheduleFields(f, (p as any).type_key ?? (p as any).typeKey, getUserToday(this._timezone));
     const amount = opts.amount != null ? Number(opts.amount)
-      : (f.occurrences?.[occDate]?.amount != null ? Number(f.occurrences[occDate].amount) : liabilityAmount({ id, fields: f }));
+      : (f.occurrences?.[occDate]?.amount != null ? Number(f.occurrences[occDate].amount) : liabilityAmount({ id, fields: df }));
     const payment: any = await this.createLiabilityPayment({
       liabilityProfileId: id, paymentDate: payDate, amount,
       principalPortion: amount, interestPortion: 0, fees: 0,

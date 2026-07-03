@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateSchedule, nextDueOccurrence, periodsPerYear, scheduleCounts } from "../shared/liability-schedule";
+import { generateSchedule, nextDueOccurrence, periodsPerYear, scheduleCounts, deriveScheduleFields } from "../shared/liability-schedule";
 
 const TODAY = "2026-07-02";
 
@@ -115,6 +115,25 @@ describe("generateSchedule", () => {
 
   it("open-ended bill has null remaining", () => {
     expect(scheduleCounts(bill({ dueDate: "2026-08-15" }), [], TODAY).remainingPayments).toBeNull();
+  });
+
+  it("deriveScheduleFields turns an amortizing loan into a monthly payment series", () => {
+    // Auto loan: $500/mo, 24 months remaining, due the 10th — no bill fields.
+    const f = deriveScheduleFields({ monthlyPayment: 500, remainingTermMonths: 24, dueDay: 10, currentBalance: 12000 }, "auto_loan", TODAY);
+    expect(f.frequency).toBe("monthly");
+    expect(f.amount).toBe(500);
+    expect(/-10$/.test(f.dueDate)).toBe(true);
+    expect(f.count).toBe(24);
+    const s = generateSchedule({ id: "loan", fields: f }, [], { todayISO: TODAY, months: 12 });
+    expect(s.length).toBe(12);
+    expect(s.every((o) => o.amount === 500)).toBe(true);
+  });
+
+  it("deriveScheduleFields leaves a recurring bill untouched, and a one-time debt gets a single occurrence", () => {
+    const bf = deriveScheduleFields({ monthlyAmount: 9.99, frequency: "monthly", dueDate: "2026-08-15", count: 10 }, "streaming", TODAY);
+    expect(bf.count).toBe(10);
+    const one = deriveScheduleFields({ currentBalance: 1200, monthlyPayment: 1200, dueDate: "2026-09-01" }, "medical_debt", TODAY);
+    expect(one.count).toBe(1);
   });
 
   it("periodsPerYear reflects frequency", () => {
