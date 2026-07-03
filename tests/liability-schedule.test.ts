@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateSchedule, nextDueOccurrence, periodsPerYear } from "../shared/liability-schedule";
+import { generateSchedule, nextDueOccurrence, periodsPerYear, scheduleCounts } from "../shared/liability-schedule";
 
 const TODAY = "2026-07-02";
 
@@ -95,6 +95,26 @@ describe("generateSchedule", () => {
     const july = s.find((o) => o.date === "2026-07-15");
     expect(july).toBeTruthy();
     expect(july!.status).toBe("paid");
+  });
+
+  it("honors a finite count — generates exactly N occurrences and reports remaining", () => {
+    const b = bill({ dueDate: "2026-08-15", firstPaymentDate: "2026-08-15", count: 10, amount: 9.99 });
+    const s = generateSchedule(b, [], { todayISO: TODAY, windowStart: "2026-08-01", windowEnd: "2028-12-31" });
+    expect(s.length).toBe(10);
+    expect(s[9].date).toBe("2027-05-15");
+    const c0 = scheduleCounts(b, [], TODAY);
+    expect(c0).toEqual({ totalPayments: 10, paidCount: 0, remainingPayments: 10 });
+    const c1 = scheduleCounts(b, [{ id: "p", paymentDate: "2026-08-15" }], TODAY);
+    expect(c1.remainingPayments).toBe(9);
+  });
+
+  it("honors recurrenceEnd as a hard stop", () => {
+    const s = generateSchedule(bill({ dueDate: "2026-08-15", recurrenceEnd: "2026-11-15" }), [], { todayISO: TODAY, months: 24 });
+    expect(s.map((o) => o.date)).toEqual(["2026-08-15", "2026-09-15", "2026-10-15", "2026-11-15"]);
+  });
+
+  it("open-ended bill has null remaining", () => {
+    expect(scheduleCounts(bill({ dueDate: "2026-08-15" }), [], TODAY).remainingPayments).toBeNull();
   });
 
   it("periodsPerYear reflects frequency", () => {

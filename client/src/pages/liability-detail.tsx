@@ -1013,11 +1013,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
           {/* OVERVIEW */}
           <TabsContent value="overview" className="mt-4 space-y-4">
-            {/* Recurring bills lead with their living Schedule & Calendar —
-                next due, the next 12 occurrences, and per-occurrence + series
-                controls that stay in sync with the calendar and dashboard. */}
-            {recurringBill && <BillScheduleSection liabilityId={profile.id} />}
-
             {/* AI insights card */}
             <AISummaryCard profileId={profile.id} />
 
@@ -1067,6 +1062,13 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               onJumpLinked={() => setTab("payments")}
             />
 
+            {/* Payment mechanics + payoff math belong to DEBT (amortizing /
+                one-time), not recurring bills. A bill pays through its Schedule &
+                Calendar (below) and has no interest / payoff / amortization, so
+                hide this whole block for recurring bills — it must never show
+                Cost-of-borrowing, "360 months remaining", or a Recent-payments
+                card on a subscription. */}
+            {!recurringBill && (<>
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base">Quick actions</CardTitle>
@@ -1159,12 +1161,18 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 )}
               </CardContent>
             </Card>
+            </>)}
 
             {/* Nested sections — mirroring asset Overview layout (Linked Assets is now surfaced near the top) */}
             <section className="mt-6">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Nested Liabilities</p>
               <NestedLiabilitiesCard liabilityId={profile.id} />
             </section>
+
+            {/* Recurring bills lead their money story with the Schedule & Calendar
+                (relocated here, at the bottom, directly below the AI summary +
+                overview per the profile layout). */}
+            {recurringBill && <BillScheduleSection liabilityId={profile.id} />}
           </TabsContent>
 
           {/* DETAILS */}

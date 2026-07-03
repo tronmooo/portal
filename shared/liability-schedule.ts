@@ -123,8 +123,14 @@ export function generateSchedule(
   const inPausedSpan = (dISO: string) =>
     paused && dISO >= today && (!pausedUntil || dISO < pausedUntil);
 
+  // Finite term: a fixed number of payments and/or a hard end date. Series
+  // occurrences past either bound are not generated.
+  const seriesEnd = ISO_RE.test(clip(f.recurrenceEnd)) ? clip(f.recurrenceEnd) : null;
+  const maxCount = f.count != null ? Math.max(1, parseInt(String(f.count), 10) || 0) : null;
+
   const out: ScheduleOccurrence[] = [];
   let cur = anchor;
+  let seriesIndex = 0; // occurrences counted from the anchor (for maxCount)
   // Extend the walk backward to the earliest overridden date so a paid or
   // skipped past occurrence stays visible even after `dueDate` advanced past
   // it (the anchor moves forward as bills are paid; overrides do not). Override
@@ -137,6 +143,10 @@ export function generateSchedule(
 
   while (guard++ < maxIter) {
     if (cur > windowEnd) break;
+    // Stop at the finite bounds (count of payments and/or hard end date).
+    if (seriesEnd && cur > seriesEnd) break;
+    if (maxCount != null && cur >= anchor && seriesIndex >= maxCount) break;
+    if (cur >= anchor) seriesIndex++;
 
     const ov = overrides[cur] || null;
     const effectiveDate = ov && ISO_RE.test(clip(ov.movedTo)) ? clip(ov.movedTo) : cur;
@@ -184,6 +194,24 @@ export function nextDueOccurrence(
     if (o.status !== "paid" && o.status !== "skipped") return o;
   }
   return null;
+}
+
+/** Finite-term counts: total payments (if bounded), how many are paid, and how
+ *  many remain. remainingPayments is null for an open-ended bill. */
+export function scheduleCounts(
+  liability: Liabilityish,
+  payments: Paymentish[],
+  todayISO: string,
+): { totalPayments: number | null; paidCount: number; remainingPayments: number | null } {
+  const f = liability.fields || {};
+  const maxCount = f.count != null ? Math.max(1, parseInt(String(f.count), 10) || 0) : null;
+  const full = generateSchedule(liability, payments, { todayISO, windowStart: "2000-01-01", windowEnd: "2100-01-01" });
+  const paidCount = full.filter((o) => o.status === "paid").length;
+  return {
+    totalPayments: maxCount,
+    paidCount,
+    remainingPayments: maxCount != null ? Math.max(0, maxCount - paidCount) : null,
+  };
 }
 
 /** Number of billing periods per year for the annual-total question. */

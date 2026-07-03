@@ -3015,6 +3015,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         frequency: { type: "string", enum: ["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"], description: "Payment frequency" },
         nextDueDate: { type: "string", description: "Next due date as an ISO date string (YYYY-MM-DD). Convert natural language like 'the 30th', 'on the 15th of each month', 'next Friday', 'June 30' into an exact YYYY-MM-DD. Example: 'due on the 30th of each month' when today is 2026-06-16 → nextDueDate: '2026-06-30'. If the named day already passed this month, use NEXT month (e.g. today is the 20th and user says 'the 5th' → use NEXT month's 5th)." },
         recurrenceEnd: { type: "string", description: "Optional ISO date (YYYY-MM-DD) when the recurrence ENDS. Pass this when the user gives a time-bounded duration like 'for the next year' (→ today + 12 months), 'for 6 months', 'until December', 'through 2027'. If omitted, the obligation recurs indefinitely. Example: today is 2026-06-16, user says 'for the next year' → recurrenceEnd: '2027-06-16'." },
+        count: { type: "integer", description: "Total number of payments when the user gives a FINITE count: 'for 10 months', 'for the next 10 payments', '12 installments', 'stops after the final payment'. When set, the bill terminates after this many occurrences and the profile shows remaining payments (10 → 9 → …). Omit for an open-ended recurring bill." },
+        reminderLeadDays: { type: "integer", description: "Days before each due date to remind the user, ONLY when they explicitly ask ('remind me 3 days before' → 3). NEVER invent this — omit it entirely if the user did not request a reminder." },
         category: { type: "string", description: "Category (rent, utilities, insurance, subscription, loan, phone, internet, etc.)" },
         autopay: { type: "boolean", description: "Whether this is on autopay" },
         forProfile: { type: "string", description: "Name of the person/pet this obligation belongs to (e.g. 'Max', 'Mom', 'Luna'). The auto-created subscription profile will be nested under this person/pet. ALWAYS set this when the user mentions a specific person or pet." },
@@ -3966,7 +3968,9 @@ BEHAVIOR:
 - EVENT NAMING: ALWAYS include the full detail in event titles. "Meeting with Dr. Chan" not "Meeting". "Tesla Model 3 Oil Change" not "Oil Change". Preserve names, entities, and context in all titles.
 - PROFILE NAMING ACCURACY: Use EXACTLY the details the user provides. If the user says "2022 Tesla Model 3", the profile name and year field MUST say 2022, not 2023 or any other year. Never change, round, or guess details — use the user's exact words for names, years, models, and other specifics.
 - SINGLE ACTION PER ENTITY: When the user asks to create ONE subscription, obligation, or profile, make exactly ONE tool call. Do NOT call create_obligation multiple times for the same subscription. Do NOT call create_profile AND create_obligation for the same item (create_obligation auto-creates the subscription profile).
-- RECURRING BILL = ONE create_obligation, NOTHING ELSE: A recurring BILL (phone bill, rent, electricity, water, internet, insurance premium — a monthly/periodic charge the user pays that has NO outstanding principal balance to pay down) is handled by EXACTLY ONE create_obligation call. That call ALREADY creates a standalone liability profile behind the scenes. So phrases like "save it as its own liability profile", "make it a liability", or "add it to my liabilities" require NO extra call — do NOT also call create_liability or create_profile for that bill. Doing so creates a DUPLICATE empty profile — a critical bug. create_liability is ONLY for actual debt with a payoff balance (loans, credit cards, medical/tax debt), never for a recurring service bill.
+- RECURRING BILL = ONE create_obligation, NOTHING ELSE: A recurring BILL (phone bill, rent, electricity, water, internet, insurance premium — a monthly/periodic charge the user pays that has NO outstanding principal balance to pay down) is handled by EXACTLY ONE create_obligation call. That call ALREADY creates a standalone liability profile behind the scenes. So phrases like "save it as its own liability profile", "make it a liability", "create a liability for Spotify", or "add it to my liabilities" require NO extra call — do NOT also call create_liability or create_profile for that bill, and do NOT call create_obligation twice. Doing so creates DUPLICATE profiles (one bill → 2-3 rows) — a critical bug. create_liability is ONLY for actual debt with a payoff balance (loans, credit cards, medical/tax debt), never for a recurring service bill. Even when the user literally says "liability", a monthly/periodic charge with a due date is a create_obligation.
+  FINITE TERM: "for 10 months", "10 payments", "12 installments", "stops after the final payment" → pass count:10 (the bill terminates after N and shows remaining payments). "for the next year", "until December" → recurrenceEnd.
+  REMINDERS — NEVER INVENT: only pass reminderLeadDays (and only create reminders) when the user EXPLICITLY asks ("remind me 3 days before" → reminderLeadDays:3). If they say nothing about reminders, pass NO reminderLeadDays and create NO reminder — do not assume a default date.
   NAME IT EXACTLY: Pass the bill's real name to create_obligation — "Phone Bill", "Rent", "Electric Bill". NEVER append "payment", "bill payment", or similar to the name. The recurring charge IS the bill; naming it "Phone Bill payment" is wrong.
 - MANAGING AN EXISTING BILL — ALWAYS update_obligation, NEVER create a new one: when the user changes a bill they already have, call update_obligation(name:<bill>) and either pass a changes object or a series action. It edits the existing liability AND its recurring calendar series together:
   "move my phone bill to the 18th" → changes:{ dueDay: 18 } (or nextDueDate). "increase it to $95" → changes:{ amount: 95 }. "make it quarterly" → changes:{ frequency: "quarterly" }.
@@ -6422,6 +6426,44 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         else if (has("personal loan", "marcus", "sofi", "upstart", "lightstream", "prosper", "lending club", "best egg", "upgrade")) input.subtype = "personal_loan";
         else input.subtype = "other";
       }
+      // RECURRING-BILL REDIRECT — one liability = one profile. A recurring
+      // service bill the user happened to call a "liability" ("create a Water
+      // Bill liability, $90.50/month, due the 15th") must NOT become a debt
+      // shell; route it to the single create_obligation path. Signal: a
+      // bill/subscription-flavored name, no owed balance, and not a real debt
+      // subtype. This was a primary source of duplicate profiles.
+      {
+        const noBalance = (input.currentBalance == null || Number(input.currentBalance) === 0)
+          && (input.originalBalance == null || Number(input.originalBalance) === 0);
+        const RECUR_BILL_NAME = /\b(bill|rent|utilit(?:y|ies)|electric(?:ity)?|water|sewer|trash|garbage|internet|wi-?fi|broadband|cable|phone|mobile|wireless|netflix|spotify|hulu|disney|hbo|prime|paramount|peacock|youtube|streaming|subscription|membership|gym)\b/i;
+        const debtSubtype = ["credit_card", "mortgage", "auto_loan", "student_loan", "personal_loan", "heloc", "business_loan", "medical_debt", "tax_debt", "bnpl"].includes(String(input.subtype || ""));
+        if (noBalance && !debtSubtype && RECUR_BILL_NAME.test(String(input.name || ""))) {
+          const billAmount = Number(input.monthlyPayment) || Number(input.minimumPayment) || Number((input as any).amount) || 0;
+          let dueDate: string | undefined = input.firstPaymentDate || undefined;
+          if (!dueDate && input.dueDay != null) {
+            const day = Math.max(1, Math.min(31, Number(input.dueDay) || 0));
+            if (day) {
+              const d = new Date();
+              let m = d.getMonth() + (d.getDate() > day ? 1 : 0);
+              const y = d.getFullYear() + (m > 11 ? 1 : 0);
+              m = m % 12;
+              const last = new Date(y, m + 1, 0).getDate();
+              dueDate = new Date(y, m, Math.min(day, last)).toLocaleDateString("en-CA");
+            }
+          }
+          logger.info("ai", `create_liability → redirecting recurring bill "${input.name}" to create_obligation (no balance, bill-flavored name)`);
+          return await executeTool("create_obligation", {
+            name: input.name,
+            amount: billAmount,
+            frequency: "monthly",
+            ...(dueDate ? { nextDueDate: dueDate } : {}),
+            ...(input.forProfile ? { forProfile: input.forProfile } : {}),
+            ...((input as any).count != null ? { count: (input as any).count } : {}),
+            ...((input as any).reminderLeadDays != null ? { reminderLeadDays: (input as any).reminderLeadDays } : {}),
+            __userMessage: (input as any).__userMessage,
+          }, userId);
+        }
+      }
       // Resolve parent (forProfile)
       const forProfileProvided = !!(input.forProfile && String(input.forProfile).trim());
       let parentProfileId: string | undefined;
@@ -7851,88 +7893,54 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // PR AB: recurrenceEnd is forwarded when the AI passes it (e.g. user
       // said "for the next year" → today + 12 months). materializeOccurrences
       // honors recurrence_end and stops expanding past that date.
+      const resolvedDue = input.nextDueDate || inferredDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      // Finite term: "for 10 months / 10 payments / stops after the final one".
+      const finiteCount = input.count != null ? Math.max(1, parseInt(String(input.count), 10) || 0) : undefined;
+      const reminderLead = input.reminderLeadDays != null ? Math.max(0, parseInt(String(input.reminderLeadDays), 10) || 0) : undefined;
+      // When a count is given (and no explicit end), the series ends on the Nth
+      // occurrence: first due advanced (count-1) periods.
+      let derivedEnd: string | undefined = input.recurrenceEnd || undefined;
+      if (!derivedEnd && finiteCount && finiteCount > 1) {
+        const d = new Date(resolvedDue + "T00:00:00");
+        const n = finiteCount - 1;
+        if (normalizedFrequency === "weekly") d.setDate(d.getDate() + 7 * n);
+        else if (normalizedFrequency === "biweekly") d.setDate(d.getDate() + 14 * n);
+        else if (normalizedFrequency === "quarterly") d.setMonth(d.getMonth() + 3 * n);
+        else if (normalizedFrequency === "yearly") d.setFullYear(d.getFullYear() + n);
+        else d.setMonth(d.getMonth() + n);
+        derivedEnd = d.toLocaleDateString("en-CA");
+      }
       const obligationPayload = validateAiPayload(insertObligationSchema, {
         name: input.name,
         amount: parseFloat(input.amount) || 0,
         frequency: normalizedFrequency,
         category: input.category || "general",
-        nextDueDate: input.nextDueDate || inferredDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+        nextDueDate: resolvedDue,
         autopay: input.autopay ?? false,
-        recurrenceEnd: input.recurrenceEnd || undefined,
+        recurrenceEnd: derivedEnd,
         linkedProfiles: preResolvedTargetProfileId ? [preResolvedTargetProfileId] : [],
       }, "obligation");
       if (!obligationPayload.ok) return { error: obligationPayload.error };
-      const newObligation = await storage.createObligation(obligationPayload.data);
+      // Finite terms ride alongside the validated payload (createObligation reads
+      // them from `fields`); only set when the user actually specified them.
+      const newObligation = await storage.createObligation({
+        ...obligationPayload.data,
+        ...(derivedEnd ? { recurrenceEnd: derivedEnd } : {}),
+        ...(finiteCount != null ? { count: finiteCount } : {}),
+        ...(reminderLead != null ? { reminderLeadDays: reminderLead } : {}),
+      } as any);
 
       // DIRECT link to profile (idempotent — already in linkedProfiles
       // when preResolvedTargetProfileId was set, but still registers
       // the junction-table link).
       await directLinkToProfile("obligation", newObligation.id, oblForProfile);
 
-      // Auto-create subscription profile if this looks like a subscription/service
-      // and no matching profile already exists
-      const isSubscriptionLike = (input.category === "subscription") ||
-        (normalizedFrequency === "monthly" || normalizedFrequency === "yearly" || normalizedFrequency === "quarterly") ||
-        /subscription|premium|plus|pro|membership|plan/i.test(input.name || "");
-      if (isSubscriptionLike) {
-        const profiles = await storage.getProfiles();
-        const obNameLower = (input.name || "").toLowerCase();
-        // Extract the service name (strip common suffixes like "subscription", "premium", "payment")
-        // Use word boundaries (\b) so we don't accidentally strip parts of words (e.g. "Planet" contains "plan")
-        const serviceName = (input.name || "").replace(/\b(subscription|premium|plus|pro|payment|bill|membership|plan|monthly|annual|yearly)\b/gi, "").replace(/\s{2,}/g, " ").trim() || input.name || "";
-        const serviceNameLower = serviceName.toLowerCase();
-        // When creating for a specific person, only match existing profiles owned by THAT person
-        let targetParentId: string | undefined;
-        if (input.forProfile) {
-          const targetProfile = matchProfileByName(profiles, input.forProfile);
-          if (targetProfile) targetParentId = targetProfile.id;
-        }
-        const existingProfile = profiles.find(p => {
-          const pName = p.name.toLowerCase();
-          const nameMatch = pName === serviceNameLower || pName.includes(serviceNameLower) || serviceNameLower.includes(pName) ||
-            pName === obNameLower || obNameLower.includes(pName);
-          if (!nameMatch) return false;
-          // If creating for a specific person, only match profiles belonging to that person
-          if (targetParentId) {
-            return p.parentProfileId === targetParentId;
-          }
-          return true;
-        });
-        if (!existingProfile && serviceName.length > 0) {
-          try {
-            // Determine parent: use forProfile's profile if specified, otherwise self
-            const selfProfile = profiles.find(p => p.type === "self");
-            const parentId = targetParentId || selfProfile?.id;
-            // P0.3a: validate with the shared insert schema before writing.
-            const subProfilePayload = validateAiPayload(insertProfileSchema, {
-              type: "subscription",
-              name: serviceName,
-              fields: {
-                cost: parseFloat(input.amount) || 0,
-                frequency: input.frequency || "monthly",
-                provider: serviceName,
-                renewalDate: input.nextDueDate || "",
-              },
-              tags: ["subscription"],
-              notes: `${input.frequency || "monthly"} subscription — $${input.amount}`,
-              parentProfileId: parentId,
-            }, "subscription profile");
-            if (!subProfilePayload.ok) throw new Error(subProfilePayload.error);
-            const newProfile = await storage.createProfile(subProfilePayload.data);
-            // Link the obligation to the new profile + set the FK for dedup
-            // Pass the forProfile so autoLink knows NOT to also link to self
-            await autoLinkToProfiles("obligation", newObligation.id, serviceName, input.forProfile);
-            try { await storage.linkProfileTo(newProfile.id, "obligation", newObligation.id); } catch (linkErr: any) { logger.warn("ai", `Failed to link obligation ${newObligation.id} to profile ${newProfile.id}: ${linkErr?.message}`); }
-            try { await updateEntityLinkedProfiles("obligation", newObligation.id, newProfile.id); } catch (linkErr: any) { logger.warn("ai", `Failed to update linked profiles for obligation ${newObligation.id}: ${linkErr?.message}`); }
-            // (linked_obligation_id column dropped — obligations retired; no FK to set)
-          } catch (e) {
-            console.error("Auto-create subscription profile failed:", e);
-          }
-        } else if (!oblForProfile) {
-          // Link to existing profile only if directLink didn't already handle it
-          await autoLinkToProfiles("obligation", newObligation.id, input.name || "", input.forProfile);
-        }
-      } else if (!oblForProfile) {
+      // A recurring bill IS its own liability profile (created just above by
+      // storage.createObligation). We must NEVER also spin up a second
+      // "subscription" profile — that was a primary source of duplicate
+      // profiles (user report: one "Water Bill" → three profiles). Just make
+      // sure the single bill is linked to its owner when no forProfile was set.
+      if (!oblForProfile) {
         await autoLinkToProfiles("obligation", newObligation.id, input.name || "", input.forProfile);
       }
 

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarClock, CheckCircle2, SkipForward, Pause, Play, Pencil, Clock } from "lucide-react";
+import { CalendarClock, CheckCircle2, SkipForward, Pause, Play, Pencil, Clock, ChevronDown, ChevronRight, ChevronLeft, Bell } from "lucide-react";
 import { BILL_STATUS_META, type BillStatus } from "@shared/liability-status";
 
 type OccStatus = BillStatus | "skipped";
@@ -21,6 +21,7 @@ interface Schedule {
   firstPayment: string | null; nextDue: { date: string; effectiveDate: string; amount: number } | null;
   lastPaid: string | null; autopay: boolean; paused: boolean; pausedUntil: string | null;
   gracePeriodDays: number | null; lateFee: number | null; reminderLeadDays: number | null;
+  totalPayments: number | null; paidCount: number; remainingPayments: number | null; recurrenceEnd: string | null;
   annualTotal: number; calendarSynced: boolean; occurrences: Occ[];
   payments: { id: string; amount: number; date: string }[];
 }
@@ -53,6 +54,7 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
   const { toast } = useToast();
   const [filter, setFilter] = useState<Filter>("upcoming");
   const [pauseUntil, setPauseUntil] = useState("");
+  const [calOpen, setCalOpen] = useState(false);
   const scheduleKey = ["/api/liabilities", liabilityId, "schedule"];
 
   const { data, isLoading } = useQuery<Schedule>({
@@ -132,6 +134,9 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
           <Fact label="Next due" value={data.nextDue ? dt(data.nextDue.effectiveDate) : "—"} />
           <Fact label="Amount due" value={usd(data.nextDue?.amount ?? data.amount)} />
           <Fact label="Frequency" value={<span className="capitalize">{data.frequency}</span>} />
+          <Fact label="Remaining" value={data.remainingPayments != null
+            ? `${data.remainingPayments} of ${data.totalPayments} payment${data.totalPayments === 1 ? "" : "s"}`
+            : "Ongoing"} />
           <Fact label="Annual total" value={usd(data.annualTotal)} />
           <Fact label="First payment" value={dt(data.firstPayment)} />
           <Fact label="Last paid" value={dt(data.lastPaid)} />
@@ -151,6 +156,29 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
               onClick={() => data.frequency !== fr && act(() => apiRequest("PATCH", `/api/obligations/${liabilityId}`, { frequency: fr }), `Now ${fr}`)}
               data-testid={`btn-freq-${fr}`}>{fr}</Button>
           ))}
+        </div>
+
+        {/* Collapsible month calendar — every due date + reminder plotted. */}
+        <div className="border-t pt-3">
+          <button
+            type="button"
+            onClick={() => setCalOpen((v) => !v)}
+            className="flex items-center gap-1.5 text-sm font-medium hover:text-foreground text-muted-foreground"
+            data-testid="btn-toggle-calendar"
+          >
+            {calOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+            Calendar view
+            <span className="text-xs text-muted-foreground font-normal">
+              — {data.reminderLeadDays != null ? `due dates + reminders (${data.reminderLeadDays}d before)` : "all due dates"}
+            </span>
+          </button>
+          {calOpen && (
+            <MiniMonthCalendar
+              occurrences={occ}
+              reminderLeadDays={data.reminderLeadDays}
+              onPickDay={() => setFilter("all")}
+            />
+          )}
         </div>
 
         {/* Filters */}
@@ -236,6 +264,90 @@ function OccurrenceRow({
             </div>
           </PopoverContent>
         </Popover>
+      </div>
+    </div>
+  );
+}
+
+// ─── Month-grid mini calendar ──────────────────────────────────────────────
+// Plots every occurrence (colored by status) and, when a reminder lead is set,
+// a reminder dot `reminderLeadDays` before each due date. Prev/next month nav.
+const DOW = ["S", "M", "T", "W", "T", "F", "S"];
+const statusDot: Record<string, string> = {
+  paid: "bg-green-600", overdue: "bg-red-600", due_today: "bg-amber-500",
+  upcoming: "bg-muted-foreground/60", skipped: "bg-muted-foreground/30",
+};
+const isoAdd = (iso: string, days: number) => {
+  const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() - days);
+  return d.toLocaleDateString("en-CA");
+};
+
+function MiniMonthCalendar({
+  occurrences, reminderLeadDays, onPickDay,
+}: {
+  occurrences: Occ[]; reminderLeadDays: number | null; onPickDay: (date: string) => void;
+}) {
+  const firstOcc = occurrences[0]?.effectiveDate;
+  const initial = (firstOcc || new Date().toLocaleDateString("en-CA")).slice(0, 7);
+  const [ym, setYm] = useState(initial);
+  const [y, m] = ym.split("-").map(Number);
+
+  // Map each day → its occurrence + whether it's a reminder day.
+  const byDay = new Map<string, Occ>();
+  const reminderDays = new Set<string>();
+  for (const o of occurrences) {
+    byDay.set(o.effectiveDate, o);
+    if (reminderLeadDays != null && reminderLeadDays > 0) reminderDays.add(isoAdd(o.effectiveDate, reminderLeadDays));
+  }
+
+  const firstDow = new Date(y, m - 1, 1).getDay();
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const cells: (string | null)[] = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(`${ym}-${String(d).padStart(2, "0")}`);
+
+  const shift = (delta: number) => {
+    const d = new Date(y, m - 1 + delta, 1);
+    setYm(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+  const monthLabel = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  return (
+    <div className="mt-3 rounded-lg border p-3" data-testid="bill-mini-calendar">
+      <div className="flex items-center justify-between mb-2">
+        <button type="button" onClick={() => shift(-1)} className="p-1 rounded hover:bg-muted" aria-label="Previous month"><ChevronLeft className="w-4 h-4" /></button>
+        <span className="text-sm font-medium">{monthLabel}</span>
+        <button type="button" onClick={() => shift(1)} className="p-1 rounded hover:bg-muted" aria-label="Next month"><ChevronRight className="w-4 h-4" /></button>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-center">
+        {DOW.map((d, i) => <div key={i} className="text-[10px] uppercase text-muted-foreground py-1">{d}</div>)}
+        {cells.map((iso, i) => {
+          if (!iso) return <div key={i} />;
+          const occ = byDay.get(iso);
+          const isReminder = reminderDays.has(iso);
+          const day = Number(iso.slice(8));
+          return (
+            <button
+              key={i}
+              type="button"
+              disabled={!occ}
+              onClick={() => occ && onPickDay(iso)}
+              className={`relative aspect-square rounded-md text-xs flex items-center justify-center ${occ ? "hover:ring-1 hover:ring-primary cursor-pointer font-medium" : "text-muted-foreground/50"}`}
+              data-testid={occ ? `cal-day-${iso}` : undefined}
+              title={occ ? `${occ.status} — ${usd(occ.amount)}` : isReminder ? "Reminder" : undefined}
+            >
+              {day}
+              {occ && <span className={`absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full ${statusDot[occ.status] || "bg-muted-foreground"}`} />}
+              {isReminder && !occ && <Bell className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 text-amber-500" />}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex items-center gap-3 mt-2 flex-wrap text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60" />Upcoming</span>
+        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-600" />Paid</span>
+        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-600" />Overdue</span>
+        {reminderLeadDays != null && reminderLeadDays > 0 && <span className="flex items-center gap-1"><Bell className="w-2.5 h-2.5 text-amber-500" />Reminder</span>}
       </div>
     </div>
   );

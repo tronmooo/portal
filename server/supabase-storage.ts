@@ -31,7 +31,7 @@ import {
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
 import { isRecurringBill } from "../shared/liability-types";
-import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, type ScheduleOccurrence } from "../shared/liability-schedule";
+import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
@@ -3606,10 +3606,31 @@ export class SupabaseStorage implements IStorage {
     return this.liabilityToObligation(p, (payRows || []).map(r => this.paymentRowToObligationPayment(r)));
   }
 
+  /** Normalize a liability/bill name for identity: drop a trailing "payment"
+   *  suffix, collapse whitespace, lowercase. "Water Bill payment" ≡ "Water Bill". */
+  private normLiabilityName(n: string): string {
+    return String(n || "").toLowerCase().replace(/\s+(bill\s+)?payments?$/i, "").replace(/\s+/g, " ").trim();
+  }
+
+  /** Find an existing liability profile that IS this one (same normalized name,
+   *  same owner) so create becomes an idempotent upsert — one liability = one
+   *  profile, no matter how many times / ways it's created. */
+  private async resolveExistingLiability(name: string, ownerId: string | undefined, all?: Profile[]): Promise<Profile | undefined> {
+    const target = this.normLiabilityName(name);
+    if (!target) return undefined;
+    const profiles = all || await this.getProfiles();
+    const isLiab = (p: any) => p.type === "liability" || p.type === "loan";
+    // Same owner first; then a self/orphan-owned shell of the same name.
+    const selfId = profiles.find(p => p.type === "self")?.id;
+    return profiles.find((p: any) => isLiab(p) && this.normLiabilityName(p.name) === target && p.parentProfileId === ownerId)
+      || profiles.find((p: any) => isLiab(p) && this.normLiabilityName(p.name) === target && (p.parentProfileId == null || p.parentProfileId === selfId));
+  }
+
   async createObligation(data: InsertObligation): Promise<Obligation> {
     const kind = (data as any).kind || "bill";
     const category = (data as any).category || "general";
-    const typeKey = this.billTypeKey(kind, category, data.name);
+    const rawName = String(data.name || "").trim();
+    const typeKey = this.billTypeKey(kind, category, rawName);
     let parent: string | undefined = ((data as any).linkedProfiles || [])[0];
     if (!parent) {
       const self = await this.getSelfProfile();
@@ -3618,27 +3639,49 @@ export class SupabaseStorage implements IStorage {
     const amount = Number(data.amount) || 0;
     const freq = data.frequency || "monthly";
     const nextDue = String((data as any).nextDueDate || getUserToday(this._timezone)).slice(0, 10);
+    const billFields: Record<string, any> = {
+      monthlyAmount: amount, amount,
+      frequency: freq, billingFrequency: freq,
+      // Fixed series origin so the generated schedule stays anchored even as
+      // dueDate advances with each payment (see shared/liability-schedule.ts).
+      firstPaymentDate: nextDue,
+      dueDate: nextDue, nextDueDate: nextDue,
+      autopay: (data as any).autopay || false,
+      category,
+      status: "upcoming",
+      source: "obligation",
+      // Finite terms — only when explicitly provided (never invented).
+      ...((data as any).count != null ? { count: Math.max(1, parseInt(String((data as any).count), 10) || 0) } : {}),
+      ...((data as any).reminderLeadDays != null ? { reminderLeadDays: Math.max(0, parseInt(String((data as any).reminderLeadDays), 10) || 0) } : {}),
+      ...((data as any).recurrenceEnd ? { recurrenceEnd: String((data as any).recurrenceEnd).slice(0, 10) } : {}),
+      ...(data.notes ? { notes: data.notes } : {}),
+    };
+
+    // IDEMPOTENT UPSERT — one liability = one profile. If a liability with this
+    // normalized name already exists for the owner (a create_liability shell, a
+    // prior create, or a re-run), UPDATE it into this recurring bill and return
+    // it instead of inserting a duplicate.
+    const existing = await this.resolveExistingLiability(rawName, parent);
+    if (existing) {
+      await this.updateProfile(existing.id, {
+        name: rawName,
+        type: "liability",
+        type_key: typeKey,
+        fields: { ...(existing.fields || {}), ...billFields },
+      } as any);
+      this.logActivity("obligation", `Updated bill: ${rawName}`);
+      return (await this.getObligation(existing.id))!;
+    }
+
     const created = await this.createProfile({
-      name: data.name,
+      name: rawName,
       type: "liability",
       type_key: typeKey,
       ...(parent ? { parentProfileId: parent } : {}),
-      fields: {
-        monthlyAmount: amount, amount,
-        frequency: freq, billingFrequency: freq,
-        // Fixed series origin so the generated schedule stays anchored even as
-        // dueDate advances with each payment (see shared/liability-schedule.ts).
-        firstPaymentDate: nextDue,
-        dueDate: nextDue, nextDueDate: nextDue,
-        autopay: (data as any).autopay || false,
-        category,
-        status: "upcoming",
-        source: "obligation",
-        ...(data.notes ? { notes: data.notes } : {}),
-      },
+      fields: billFields,
       tags: [],
     } as any);
-    this.logActivity("obligation", `Created bill: ${data.name}`);
+    this.logActivity("obligation", `Created bill: ${rawName}`);
     return (await this.getObligation(created.id))!;
   }
 
@@ -3732,6 +3775,7 @@ export class SupabaseStorage implements IStorage {
       .order("payment_date", { ascending: false });
     const history = (paidPayRows.data || []).map((r: any) => this.paymentRowToObligationPayment(r));
     const amount = liabilityAmount({ id: p.id, fields: f });
+    const counts = scheduleCounts({ id: p.id, fields: f }, payments, todayISO);
     return {
       id: p.id,
       name: p.name,
@@ -3747,6 +3791,11 @@ export class SupabaseStorage implements IStorage {
       gracePeriodDays: f.gracePeriodDays ?? null,
       lateFee: f.lateFee ?? null,
       reminderLeadDays: f.reminderLeadDays ?? null,
+      // Finite term (null when open-ended): total, paid so far, and remaining.
+      totalPayments: counts.totalPayments,
+      paidCount: counts.paidCount,
+      remainingPayments: counts.remainingPayments,
+      recurrenceEnd: f.recurrenceEnd ?? null,
       annualTotal: Math.round(amount * periodsPerYear({ id: p.id, fields: f }) * 100) / 100,
       calendarSynced: true,
       occurrences,
