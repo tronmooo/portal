@@ -176,6 +176,8 @@ const fmtDate = (iso?: string | null) => {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 };
 
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
 // Read a liability term consistently — data lives across many key shapes:
 //   * camelCase keys written by LiabilityProfilePage / older flows
 //     (currentBalance, monthlyPayment, annualInterestRate)
@@ -680,6 +682,51 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     [payments],
   );
 
+  // Canonical derived schedule — the SAME source the Schedule & Calendar section
+  // and the main Calendar read. Drives the recurring-bill header + Details card
+  // so "next due", "status", "remaining term", and "progress" are computed one
+  // way everywhere and never contradict each other. (Shares the query key with
+  // <BillScheduleSection> so React Query dedupes to a single request.)
+  const scheduleQuery = useQuery<any>({
+    queryKey: ["/api/liabilities", profile.id, "schedule"],
+    queryFn: async () =>
+      (await apiRequest("GET", `/api/liabilities/${profile.id}/schedule?months=12`)).json(),
+    enabled: !!profile.id,
+  });
+  const schedule = scheduleQuery.data;
+  // Derived recurring-bill facts (all from the schedule, not amortization math).
+  const scheduleOccs: any[] = schedule?.occurrences || [];
+  const missedCount = scheduleOccs.filter((o) => o.status === "overdue").length;
+  const seriesComplete =
+    recurringBill && schedule && schedule.remainingPayments === 0 && (schedule.totalPayments ?? 0) > 0;
+  // The header shows the next *scheduled* date (rolled forward to today or
+  // later) — a passed due date rolls to the next cycle instead of turning the
+  // whole bill "Overdue". Genuinely missed occurrences surface separately in the
+  // Schedule section (and via missedCount), keeping date and status distinct.
+  const nextFutureOcc = scheduleOccs.find(
+    (o) => o.effectiveDate >= todayISO && o.status !== "paid" && o.status !== "skipped",
+  );
+  const billNextDueEff = nextFutureOcc?.effectiveDate
+    || schedule?.nextDue?.effectiveDate
+    || billDueRaw
+    || null;
+  // Status for the header/KPI: complete → Paid; otherwise upcoming/due-today
+  // computed from the rolled-forward date (never spuriously overdue).
+  const billStatusEff: typeof billStatus = seriesComplete
+    ? "paid"
+    : recurringBill
+      ? liabilityBillStatus(billNextDueEff, todayISO, false)
+      : billStatus;
+  const billTotalTerm: number | null = schedule?.totalPayments ?? null;
+  const billPaidCount: number = schedule?.paidCount ?? payments.length;
+  const billRemainingTerm: number | null = schedule?.remainingPayments ?? null;
+  const billProgressPct =
+    billTotalTerm && billTotalTerm > 0
+      ? Math.min(100, Math.round((billPaidCount / billTotalTerm) * 100))
+      : 0;
+  const billReminderLead: number | null = schedule?.reminderLeadDays ?? null;
+  const billFrequencyLabel: string = schedule?.frequency || String(f2.frequency || "monthly");
+
   // Summary + amortization
   const summary = useMemo(
     () =>
@@ -938,7 +985,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           <div className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
             <p className="text-lg font-semibold tabular-nums">
               {recurringBill
-                ? (BILL_STATUS_META[billStatus].label)
+                ? (seriesComplete ? "Complete" : BILL_STATUS_META[billStatusEff].label)
                 : summary.remainingMonths > 0 ? `${summary.remainingMonths} mo` : "Paid"}
             </p>
             <p className="text-xs text-muted-foreground">{recurringBill ? "Status" : "Remaining"}</p>
@@ -950,9 +997,21 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             balance owed. Recurring bills NEVER show APR/payoff (the $0.17 bug). */}
         {recurringBill ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
-            <KpiTile label="Monthly amount" value={fmtUSDShort(billMonthly)} icon={<DollarSign className="w-4 h-4" />} testid="kpi-bill-monthly" />
-            <KpiTile label="Next due" value={billDueRaw ? fmtDate(billDueRaw) : "—"} icon={<CalendarIcon className="w-4 h-4" />} testid="kpi-bill-due" />
-            <KpiTile label="Status" value={BILL_STATUS_META[billStatus].label} icon={<TrendingDown className="w-4 h-4" />} testid="kpi-bill-status" />
+            <KpiTile label={`${cap(billFrequencyLabel)} amount`} value={fmtUSDShort(schedule?.amount ?? billMonthly)} icon={<DollarSign className="w-4 h-4" />} testid="kpi-bill-monthly" />
+            <KpiTile
+              label={seriesComplete ? "Ended" : "Next due"}
+              value={seriesComplete ? "Complete" : (billNextDueEff ? fmtDate(billNextDueEff) : "—")}
+              sub={billStatusEff === "due_today" ? "today" : undefined}
+              icon={<CalendarIcon className="w-4 h-4" />}
+              testid="kpi-bill-due"
+            />
+            <KpiTile
+              label="Remaining"
+              value={billRemainingTerm != null ? `${billRemainingTerm} of ${billTotalTerm}` : "Ongoing"}
+              sub={billRemainingTerm != null ? "payments" : "no end date"}
+              icon={<TrendingDown className="w-4 h-4" />}
+              testid="kpi-bill-remaining"
+            />
             <KpiTile label="Autopay" value={(f2.autopay || f2.autoRenew) ? "On" : "Off"} icon={<Percent className="w-4 h-4" />} testid="kpi-bill-autopay" />
           </div>
         ) : family === "revolving" ? (
@@ -993,6 +1052,17 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <span>{summary.payoffProgressPct.toFixed(1)}%</span>
             </div>
             <Progress value={summary.payoffProgressPct} className="h-2" />
+          </div>
+        )}
+        {/* Recurring bill with a finite term — show progress toward completion
+            (paid of total), never amortizing payoff. Open-ended bills omit it. */}
+        {recurringBill && billTotalTerm != null && billTotalTerm > 0 && (
+          <div className="mt-3" data-testid="bill-term-progress">
+            <div className="flex justify-between text-xs text-muted-foreground mb-1">
+              <span>{billPaidCount} of {billTotalTerm} payments{missedCount > 0 ? ` · ${missedCount} missed` : ""}</span>
+              <span>{billProgressPct}%</span>
+            </div>
+            <Progress value={billProgressPct} className="h-2" />
           </div>
         )}
       </div>
@@ -1177,7 +1247,32 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
           {/* DETAILS */}
           <TabsContent value="details" className="mt-4">
-            {editingTerms ? (
+            {recurringBill ? (
+              <Card data-testid="bill-details-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Bill details</CardTitle>
+                </CardHeader>
+                <CardContent className="grid md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                  <Row label="Type" value={subtypeLabel} />
+                  <Row label="Recurring amount" value={fmtUSD(schedule?.amount ?? billMonthly)} />
+                  <Row label="Frequency" value={cap(billFrequencyLabel)} />
+                  <Row label="Next scheduled due" value={seriesComplete ? "Complete" : fmtDate(billNextDueEff)} />
+                  <Row label="Payment status" value={seriesComplete ? "Complete" : BILL_STATUS_META[billStatusEff].label} />
+                  <Row label="First payment" value={fmtDate(schedule?.firstPayment ?? terms.firstPaymentDate)} />
+                  {/* Total obligation term + remaining, so the duration is always
+                      explicit and consistent with the header + schedule. Recurring
+                      bills NEVER show amortizing months / projected payoff. */}
+                  <Row label="Total term" value={billTotalTerm != null ? `${billTotalTerm} payment${billTotalTerm === 1 ? "" : "s"}` : "Ongoing (no end date)"} />
+                  <Row label="Remaining" value={billRemainingTerm != null ? `${billRemainingTerm} of ${billTotalTerm} payments` : "Ongoing"} />
+                  <Row label="Payments made" value={String(billPaidCount)} />
+                  {missedCount > 0 && <Row label="Missed" value={`${missedCount}`} />}
+                  <Row label="Annual total" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : "—"} />
+                  <Row label="Reminder" value={billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : "None"} />
+                  <Row label="Ends" value={schedule?.recurrenceEnd ? fmtDate(schedule.recurrenceEnd) : "No end date"} />
+                  <Row label="Autopay" value={(f2.autopay || f2.autoRenew) ? "On" : "Off"} />
+                </CardContent>
+              </Card>
+            ) : editingTerms ? (
               <Card>
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Edit loan terms</CardTitle>

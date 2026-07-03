@@ -7640,7 +7640,16 @@ No emojis. No prose outside the JSON.`,
 
   // ---- Party ↔ liability links ----
   app.get("/api/liabilities/:id/parties", asyncHandler(async (req, res) => {
-    const rows = await storage.getLiabilityProfileLinks(req.params.id);
+    let rows = await storage.getLiabilityProfileLinks(req.params.id);
+    // Self-heal: older recurring bills that resolved to an existing shell (or
+    // predate the auto-ownership hook) never got an owner link, so the profile
+    // showed "No linked people" / "Ownership not set" even though it's clearly
+    // owned by the person it's filed under. Backfill the implied owner once, on
+    // first read, so ownership is saved + displayed consistently.
+    if (!rows || rows.length === 0) {
+      await storage.ensureLiabilityOwnerLink(req.params.id).catch(() => {});
+      rows = await storage.getLiabilityProfileLinks(req.params.id);
+    }
     // Enrich with linked party profile names + types so the UI can avoid "Unknown".
     const partyIds = Array.from(new Set((rows || []).map((r: any) => r.partyProfileId).filter(Boolean)));
     const partyById: Record<string, any> = {};

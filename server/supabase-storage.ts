@@ -1064,57 +1064,71 @@ export class SupabaseStorage implements IStorage {
 
     // ---- Default-ownership hook ----
     // For new asset/liability profiles with no explicit ownership, auto-link the
-    // OWNING party at 100%. The owner is resolved from the parent chain
-    // (resolveAutoOwner): a non-Self person parent means that person owns it; a
-    // Self parent (or no parent) means Self owns it. Linking Self unconditionally
-    // was the Jane Doe bug — it claimed every person's asset for Self (net worth
-    // $0) and, once a competing person link was added, the SUM>100 DB trigger
-    // (migrations/20260511_ownership_invariant.sql) split both to 50/50.
+    // OWNING party at 100%. See ensureAutoOwnerLink for the resolution rules.
     // Best-effort — must not break the create response if it fails.
+    await this.ensureAutoOwnerLink(id, data.type, parentProfileId ?? null);
+
+    return (await this.getProfile(id))!;
+  }
+
+  /**
+   * Ensure an asset/liability profile carries an OWNER party link at 100% when
+   * it has no explicit ownership yet. The owner is resolved from the parent
+   * chain (resolveAutoOwner): a non-Self person parent means that person owns
+   * it; a Self parent (or no parent) means Self owns it. Linking Self
+   * unconditionally was the Jane Doe bug — it claimed every person's asset for
+   * Self (net worth $0) and, once a competing person link was added, the
+   * SUM>100 DB trigger split both to 50/50.
+   *
+   * Idempotent + best-effort: safe to call on create, on the createObligation
+   * upsert path, and as a lazy self-heal when a profile's parties are read
+   * (older bills that resolved to an existing shell never got a link). Returns
+   * the party id that was linked (or already present), or null.
+   */
+  private async ensureAutoOwnerLink(
+    id: string,
+    type: string,
+    parentProfileId: string | null,
+  ): Promise<string | null> {
     try {
       const assetTypes = new Set(["asset", "vehicle", "property"]);
       const liabilityTypes = new Set(["liability", "loan"]);
-      const isAsset = assetTypes.has(data.type);
-      const isLiability = liabilityTypes.has(data.type);
-      if (isAsset || isLiability) {
-        const selfProfile = await this.getSelfProfile();
-        const allProfiles = await this.getProfiles().catch(() => [] as any[]);
-        const ownerProfileId = resolveAutoOwner(parentProfileId, allProfiles as any, selfProfile?.id ?? null);
-        if (ownerProfileId && ownerProfileId !== id) {
-          if (isAsset) {
-            const existing = await this.getAssetPartyLinks(id).catch(() => [] as any[]);
-            const already = (existing || []).some((l: any) => l.partyProfileId === ownerProfileId);
-            if (!already) {
-              await this.createAssetPartyLink({
-                assetProfileId: id,
-                partyProfileId: ownerProfileId,
-                ownershipPercentage: 100,
-                role: "owner",
-              } as any).catch((e: any) => {
-                console.warn("[auto-ownership/storage] asset link failed:", e?.message || e);
-              });
-            }
-          } else if (isLiability) {
-            const existing = await this.getLiabilityProfileLinks(id).catch(() => [] as any[]);
-            const already = (existing || []).some((l: any) => l.partyProfileId === ownerProfileId);
-            if (!already) {
-              await this.createLiabilityProfileLink({
-                liabilityProfileId: id,
-                partyProfileId: ownerProfileId,
-                ownershipPercentage: 100,
-                role: "owner",
-              } as any).catch((e: any) => {
-                console.warn("[auto-ownership/storage] liability link failed:", e?.message || e);
-              });
-            }
-          }
-        }
+      const isAsset = assetTypes.has(type);
+      const isLiability = liabilityTypes.has(type);
+      if (!isAsset && !isLiability) return null;
+      // If a parent wasn't supplied (upsert/heal path), read it off the row.
+      let parent = parentProfileId;
+      if (parent == null) {
+        const self = await this.getProfile(id).catch(() => null as any);
+        parent = (self as any)?.parentProfileId ?? null;
       }
+      const selfProfile = await this.getSelfProfile();
+      const allProfiles = await this.getProfiles().catch(() => [] as any[]);
+      const ownerProfileId = resolveAutoOwner(parent, allProfiles as any, selfProfile?.id ?? null);
+      if (!ownerProfileId || ownerProfileId === id) return null;
+      if (isAsset) {
+        const existing = await this.getAssetPartyLinks(id).catch(() => [] as any[]);
+        if ((existing || []).length > 0) return (existing[0] as any)?.partyProfileId ?? null;
+        await this.createAssetPartyLink({
+          assetProfileId: id, partyProfileId: ownerProfileId, ownershipPercentage: 100, role: "owner",
+        } as any).catch((e: any) => console.warn("[auto-ownership] asset link failed:", e?.message || e));
+      } else {
+        const existing = await this.getLiabilityProfileLinks(id).catch(() => [] as any[]);
+        if ((existing || []).length > 0) return (existing[0] as any)?.partyProfileId ?? null;
+        await this.createLiabilityProfileLink({
+          liabilityProfileId: id, partyProfileId: ownerProfileId, ownershipPercentage: 100, role: "owner",
+        } as any).catch((e: any) => console.warn("[auto-ownership] liability link failed:", e?.message || e));
+      }
+      return ownerProfileId;
     } catch (autoOwnErr: any) {
-      console.warn("[auto-ownership/storage] hook failed:", autoOwnErr?.message || autoOwnErr);
+      console.warn("[auto-ownership] hook failed:", autoOwnErr?.message || autoOwnErr);
+      return null;
     }
+  }
 
-    return (await this.getProfile(id))!;
+  /** Public self-heal used by the parties route to backfill legacy rows. */
+  async ensureLiabilityOwnerLink(id: string): Promise<void> {
+    await this.ensureAutoOwnerLink(id, "liability", null);
   }
 
   /** Auto-create calendar events for profile date fields */
@@ -3680,6 +3694,9 @@ export class SupabaseStorage implements IStorage {
         type_key: typeKey,
         fields: { ...(existing.fields || {}), ...billFields },
       } as any);
+      // The upsert path skips createProfile, so ensure the owner link exists
+      // (an existing shell may never have gotten one).
+      await this.ensureAutoOwnerLink(existing.id, "liability", (existing as any).parentProfileId ?? parent ?? null);
       this.logActivity("obligation", `Updated bill: ${rawName}`);
       return (await this.getObligation(existing.id))!;
     }

@@ -559,7 +559,10 @@ function EventDetailDialog({
     if (!item.meta?.occurrenceId) return;
     try {
       await apiRequest("POST", `/api/obligation-occurrences/${item.meta.occurrenceId}/status`, { status });
-      for (const key of ["/api/calendar/timeline", "/api/obligations", "/api/dashboard-enhanced", "/api/profiles", "/api/stats"]) {
+      // Invalidate every surface that reads this occurrence — including the
+      // liability's own Schedule & Calendar section (/api/liabilities/:id/
+      // schedule) so an action taken here stays in sync with the profile page.
+      for (const key of ["/api/calendar/timeline", "/api/obligations", "/api/liabilities", "/api/dashboard-enhanced", "/api/profiles", "/api/stats"]) {
         queryClient.invalidateQueries({ queryKey: [key] });
       }
       toast({ title: status === "done" ? "Marked paid" : "Payment skipped", description: item.title });
@@ -580,7 +583,16 @@ function EventDetailDialog({
       } else if (item.type === "task") {
         await apiRequest("DELETE", `/api/tasks/${item.sourceId}`);
       } else if (item.type === "obligation") {
-        await apiRequest("DELETE", `/api/obligations/${item.sourceId}`);
+        // A bill occurrence is ONE date in a recurring series — deleting it here
+        // must remove just that calendar entry (skip it), not wipe the entire
+        // liability. Skipping goes through the same store the profile's Schedule
+        // & Calendar reads, so both views stay in sync. Only a whole-series item
+        // (no occurrenceId) deletes the obligation itself.
+        if (item.meta?.occurrenceId) {
+          await apiRequest("POST", `/api/obligation-occurrences/${item.meta.occurrenceId}/status`, { status: "skipped" });
+        } else {
+          await apiRequest("DELETE", `/api/obligations/${item.sourceId}`);
+        }
       }
     },
     onMutate: async () => {
@@ -591,27 +603,38 @@ function EventDetailDialog({
       await queryClient.cancelQueries({ queryKey: [entityKey] });
       const prevTimeline = queryClient.getQueriesData({ queryKey: ["/api/calendar/timeline"] });
       const prevEntity = queryClient.getQueriesData({ queryKey: [entityKey] });
-      const dropFromTimeline = (it: any) => it && it.sourceId !== item.sourceId;
+      // For a single occurrence, drop only that dated entry; otherwise drop
+      // every timeline row sourced from the deleted entity.
+      const occId = item.type === "obligation" ? item.meta?.occurrenceId : undefined;
+      const dropFromTimeline = (it: any) =>
+        it && (occId ? it.meta?.occurrenceId !== occId : it.sourceId !== item.sourceId);
       queryClient.setQueriesData<any>({ queryKey: ["/api/calendar/timeline"] }, (old: any) => {
         if (!old) return old;
         if (Array.isArray(old)) return old.filter(dropFromTimeline);
         if (Array.isArray(old.items)) return { ...old, items: old.items.filter(dropFromTimeline) };
         return old;
       });
-      queryClient.setQueriesData<any[]>({ queryKey: [entityKey] }, (old) =>
-        Array.isArray(old) ? old.filter((e: any) => e.id !== item.sourceId) : old
-      );
+      // Skipping a single occurrence must NOT remove the parent obligation from
+      // the list — only a full delete does.
+      if (!occId) {
+        queryClient.setQueriesData<any[]>({ queryKey: [entityKey] }, (old) =>
+          Array.isArray(old) ? old.filter((e: any) => e.id !== item.sourceId) : old
+        );
+      }
       return { prevTimeline, prevEntity, entityKey };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/events"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      // Keep the liability's Schedule & Calendar (/api/liabilities/:id/schedule)
+      // in lock-step with a delete/skip performed from the main calendar.
+      queryClient.invalidateQueries({ queryKey: ["/api/liabilities"] });
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      toast({ title: `"${item?.title || "Item"}" deleted` });
+      toast({ title: item.type === "obligation" && item.meta?.occurrenceId ? `Removed ${item?.title || "occurrence"} on ${fmtDateFull(item.date)}` : `"${item?.title || "Item"}" deleted` });
     },
     onError: (err: Error, _v, ctx) => {
       if (ctx?.prevTimeline) { for (const [k, d] of ctx.prevTimeline) queryClient.setQueryData(k, d); }
@@ -847,7 +870,11 @@ function EventDetailDialog({
               data-testid="btn-delete-event-detail"
             >
               <Trash2 className="h-3.5 w-3.5 mr-1" />
-              {deleteMutation.isPending ? "Deleting\u2026" : "Delete"}
+              {deleteMutation.isPending
+                ? "Removing\u2026"
+                : item.type === "obligation" && item.meta?.occurrenceId
+                  ? "Remove this date"
+                  : "Delete"}
             </Button>
           )}
         </DialogFooter>
@@ -1163,6 +1190,45 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const selectedDateItems = itemsByDate[selectedDate] || [];
   const filteredAgenda = selectedDateItems;
 
+  // Agenda panel for the selected day — everything scheduled that day
+  // (liabilities/bills, tasks, reminders, events, recurring items). In month
+  // mode this sits to the RIGHT of the grid; in week/agenda modes it stacks
+  // below. Defined once so both placements stay in sync.
+  const agendaPanel = (
+    <div className="rounded-lg border border-border/40 bg-card/50 lg:min-h-[320px]" data-testid="section-day-agenda">
+      <div className="px-3 pt-2.5 pb-1.5 flex items-center justify-between border-b border-border/40">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-semibold truncate">{fmtDateFull(selectedDate)}</span>
+          <span className="text-[11px] text-muted-foreground shrink-0">
+            {filteredAgenda.length} item{filteredAgenda.length !== 1 ? "s" : ""}
+          </span>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 text-xs gap-1 px-2 shrink-0"
+          onClick={() => { setQuickAddDate(selectedDate); setAddOpen(true); }}
+          data-testid="btn-agenda-add"
+        >
+          <Plus className="h-2.5 w-2.5" /> Add
+        </Button>
+      </div>
+      {filteredAgenda.length === 0 ? (
+        <div className="p-6 text-center" data-testid="section-day-agenda-empty">
+          <CalendarIcon className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1.5" />
+          <p className="text-xs text-muted-foreground">Nothing scheduled</p>
+          <p className="text-[11px] text-muted-foreground/70 mt-0.5">
+            Liabilities, tasks, reminders, events &amp; recurring items for this day show up here.
+          </p>
+        </div>
+      ) : (
+        <div className="px-2 py-2">
+          <DayAgenda date={selectedDate} items={filteredAgenda} onItemClick={setDetailItem} />
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="space-y-2" data-testid="calendar-view">
       {/* Header */}
@@ -1278,7 +1344,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           ))}
         </div>
       )}
-      {viewMode === "month" && !(timelineLoading && timelineItems.length === 0) && <div className="rounded-lg border border-border/40 overflow-hidden">
+      {viewMode === "month" && (
+      <div className="lg:grid lg:grid-cols-3 lg:gap-3 lg:items-start" data-testid="calendar-month-layout">
+      {/* Left column: the month grid */}
+      <div className="lg:col-span-2 min-w-0 space-y-2">
+      {!(timelineLoading && timelineItems.length === 0) && <div className="rounded-lg border border-border/40 overflow-hidden">
           {/* Weekday header */}
           <div className="grid grid-cols-7 border-b border-border">
             {WEEKDAYS.map(d => (
@@ -1418,12 +1488,19 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             ))}
           </div>
       </div>}
-      {viewMode === "month" && !timelineLoading && Object.values(itemsByDate).every(arr => arr.length === 0) && (
+      {!timelineLoading && Object.values(itemsByDate).every(arr => arr.length === 0) && (
         <div className="rounded-lg border border-dashed border-border/50 p-6 text-center mt-4">
           <CalendarIcon className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground mb-1">No events this month</p>
           <p className="text-xs text-muted-foreground/70">Tell the AI: "Doctor appointment Friday at 2pm" or "Rex vet checkup next week"</p>
         </div>
+      )}
+      </div>{/* /left column */}
+      {/* Right column: agenda for the selected day */}
+      <aside className="mt-2 lg:mt-0 lg:col-span-1 lg:sticky lg:top-2" data-testid="calendar-agenda-panel">
+        {agendaPanel}
+      </aside>
+      </div>
       )}
 
       {/* Week View — Time-Blocked Layout */}
@@ -1644,32 +1721,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
         );
       })()}
 
-      {/* Day detail — only shows when user explicitly clicks a day (selected != today never auto-opens) */}
-      {/* BUG-CAL-005: Hide this summary block when the main view is already
-          a day-mode list, otherwise items are rendered twice (time grid above
-          + summary panel below). */}
-      {viewMode !== "day" && filteredAgenda.length === 0 && selectedDate && (
-        <div className="rounded-lg border border-dashed border-border/40 bg-card/50 p-6 text-center" data-testid="section-day-agenda-empty">
-          <CalendarIcon className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1.5" />
-          <p className="text-xs text-muted-foreground">No items on {fmtDateFull(selectedDate)}</p>
-        </div>
-      )}
-      {viewMode !== "day" && filteredAgenda.length > 0 && (
-        <div className="rounded-lg border border-border/40 bg-card/50" data-testid="section-day-agenda">
-          <div className="px-3 pt-2.5 pb-1 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold">{fmtDateFull(selectedDate)}</span>
-              <span className="text-[11px] text-muted-foreground">{filteredAgenda.length} item{filteredAgenda.length !== 1 ? 's' : ''}</span>
-            </div>
-            <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 px-2" onClick={() => setAddOpen(true)}>
-              <Plus className="h-2.5 w-2.5" /> Add
-            </Button>
-          </div>
-          <div className="px-2 pb-2">
-            <DayAgenda date={selectedDate} items={filteredAgenda} onItemClick={setDetailItem} />
-          </div>
-        </div>
-      )}
+      {/* Selected-day agenda for week + agenda modes. In MONTH mode the agenda
+          lives in the right-hand panel next to the grid (see above); in DAY mode
+          the day view already lists everything, so we skip it to avoid double
+          rendering (BUG-CAL-005). */}
+      {(viewMode === "week" || viewMode === "agenda") && selectedDate && agendaPanel}
 
       {/* Add Event Dialog */}
       {addOpen && (

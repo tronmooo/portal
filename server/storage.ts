@@ -241,6 +241,7 @@ export interface IStorage {
   createLiabilityProfileLink(data: import("@shared/schema").InsertLiabilityProfileLink): Promise<import("@shared/schema").LiabilityProfileLink>;
   updateLiabilityProfileLink(id: string, patch: Partial<import("@shared/schema").InsertLiabilityProfileLink>): Promise<import("@shared/schema").LiabilityProfileLink | undefined>;
   deleteLiabilityProfileLink(id: string): Promise<boolean>;
+  ensureLiabilityOwnerLink(id: string): Promise<void>;
 
   getLiabilityPayments(liabilityProfileId: string): Promise<import("@shared/schema").LiabilityPayment[]>;
   createLiabilityPayment(data: import("@shared/schema").InsertLiabilityPayment): Promise<import("@shared/schema").LiabilityPayment>;
@@ -2248,6 +2249,7 @@ export class MemStorage implements IStorage {
   async createLiabilityProfileLink(_data: any): Promise<any> { throw new Error("MemStorage: liability links not implemented"); }
   async updateLiabilityProfileLink(_id: string, _patch: any): Promise<any> { return undefined; }
   async deleteLiabilityProfileLink(_id: string) { return false; }
+  async ensureLiabilityOwnerLink(_id: string) { /* MemStorage: no-op */ }
   async getAssetPartyLinks(_id?: string) { return []; }
   async getAssetPartyLinksForParty(_id: string) { return []; }
   async getProfileAssetValue(_profileId: string) { return { assetValue: 0, liabilityValue: 0, netValue: 0, assets: [], liabilities: [] }; }
