@@ -13336,6 +13336,15 @@ export default function ProfileDetailPage() {
                       <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                     </section>
                   )}
+                  {/* Expenses for THIS asset — the running cost of ownership
+                      (gas, repairs, registration, …). Lives at the bottom of
+                      Financials so a "$50 gas for my truck" logged via chat is
+                      visible right where the user looks. Same expenses UI as a
+                      person's Finance tab, scoped to this asset's own expenses. */}
+                  <section data-testid="asset-expenses">
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Expenses</p>
+                    <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                  </section>
                 </TabsContent>
               )}
 

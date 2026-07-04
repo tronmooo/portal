@@ -2924,7 +2924,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         date: { type: "string", description: "Date of the expense in YYYY-MM-DD format. Use today's date if not specified. Use the actual date the expense occurred if the user says 'yesterday', 'last Tuesday', etc." },
         vendor: { type: "string", description: "Store or vendor name" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
-        forProfile: { type: "string", description: "REQUIRED when expense is for a specific entity. Set to the EXACT profile name. Examples: 'Mom', 'Rex', 'Honda CR-V 2021', 'iPhone 17 Pro Max', 'Tesla Model S'. ALWAYS set this for expenses tied to any person, pet, vehicle, asset, or subscription. If the user says 'bought X for my iPhone', forProfile MUST be 'iPhone 17 Pro Max' (the full profile name)." },
+        forProfile: { type: "string", description: "REQUIRED when expense is for a specific entity. Set to the profile name the user referenced. Examples: 'Mom', 'Rex', 'Honda CR-V 2021', 'iPhone 17 Pro Max', 'Tesla Model S'. ALWAYS set this for expenses tied to any person, pet, vehicle, asset, or subscription. If the user says 'bought X for my iPhone', forProfile MUST be 'iPhone 17 Pro Max' (the full profile name). MATCHING: the server links to the closest existing profile by name — pass what the user said (e.g. 'Ford F150') and it will match 'Ford F150 2025'. NEVER invent a make/model/year the user didn't say, and NEVER rename their asset in your reply (do not turn 'Ford F150' into 'Ford F250'). ALWAYS create the expense even if you're unsure which asset — link to the closest match and, only if genuinely ambiguous, add a brief note; NEVER withhold the expense to ask a question first." },
       },
       required: ["amount", "description"],
     },
@@ -4148,6 +4148,8 @@ PROFILE CONTEXT INHERITANCE: If the user sets a profile context ("Joe completed.
 apply forProfile:"Joe" to ALL subsequent actions in the same message until profile changes.
 
 MULTI-ACTION EXPENSE PRESERVATION (CRITICAL): When a message mixes an expense with other actions (e.g. "spent $40 at the vet for Max AND schedule a checkup next week"), you MUST emit a SEPARATE create_expense tool call for the money portion — never merge it into the event/task/note. The amount, vendor, and description from the expense clause must be preserved verbatim in create_expense; do not replace the expense with a generic task or summary. If you cannot tell which clause is the expense, emit create_expense with the most specific dollar amount + description from the message and ask a clarifying question only AFTER the expense is saved.
+
+EXPENSE-FOR-AN-ASSET (CRITICAL — save first, never invent a name): When the user logs a spend for a named asset/vehicle/person ("$50 gas for my Ford F150"), you MUST call create_expense and persist it. Set forProfile to what the user said; the server links to the closest existing profile automatically. NEVER refuse or defer the save to ask which asset they meant — always save it (linked to the closest match), and only THEN, if truly ambiguous, add one short clarifying sentence. NEVER invent or alter the asset's make/model/year: if their profile is "Ford F150 2025" do NOT say "Ford F250" or any name they didn't use. Only claim you logged an expense when you actually called create_expense and it succeeded — never describe a save you didn't perform.
 
 ━━━ AMBIGUITY RESOLUTION ━━━
 If "delete Joe's running thing" could match habit OR tracker OR event:

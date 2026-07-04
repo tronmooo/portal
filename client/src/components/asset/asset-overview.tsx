@@ -629,6 +629,32 @@ export function FinancialsBreakdown({
   const descendants = flattenTree(treeData);
   const rollup = computeAssetRollup(profile as any, descendants as any);
 
+  // Linked liabilities secured by this asset (e.g. an auto loan) live in the
+  // liability_asset_links junction, NOT in the asset's own fields — so
+  // computeAssetRollup (which only reads fields) can't see them and the Liab.
+  // column would read "—". Fold the secured balances into the breakdown here so
+  // Net reflects real equity. Display-only: the shared rollup is untouched.
+  const { data: assetLiabLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/assets", (profile as any).id, "liabilities"],
+    queryFn: () => apiRequest("GET", `/api/assets/${(profile as any).id}/liabilities`).then((r) => r.json()),
+    enabled: !!(profile as any).id,
+  });
+  const { data: allProfilesForLiab = [] } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then((r) => r.json()),
+  });
+  const linkedLiabRows = (assetLiabLinks || []).map((link: any) => {
+    const lp = (allProfilesForLiab || []).find((p: any) => p.id === link.liabilityProfileId);
+    if (!lp) return null;
+    const f = lp.fields || {}; const fin = f.finance || {};
+    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    const pct = Number(link.ownershipPercentage ?? 100);
+    return { id: lp.id, name: lp.name || "Liability", secured: (bal * pct) / 100 };
+  }).filter(Boolean) as Array<{ id: string; name: string; secured: number }>;
+  const linkedLiabTotal = linkedLiabRows.reduce((s, r) => s + r.secured, 0);
+  const grandLiab = rollup.totalLoans + linkedLiabTotal;
+  const grandNet = rollup.netValue - linkedLiabTotal;
+
   return (
     <Card data-testid="card-financials-breakdown">
       <CardHeader className="pb-2">
@@ -689,24 +715,48 @@ export function FinancialsBreakdown({
                   </td>
                 </tr>
               ))}
+              {/* Linked liabilities (loans this asset secures) — not in the
+                  asset tree, so surfaced as their own rows and folded into the
+                  totals below. */}
+              {linkedLiabRows.map((r) => (
+                <tr key={r.id} className="border-b last:border-0 hover:bg-muted/30" data-testid={`breakdown-liab-${r.id}`}>
+                  <td className="py-2">
+                    <button
+                      className="flex items-center gap-1 hover:underline text-left"
+                      onClick={() => setLocation(`/profiles/${r.id}`)}
+                    >
+                      <span className="opacity-40">⛓</span>
+                      <span className="truncate">{r.name}</span>
+                      <span className="text-[10px] text-muted-foreground">(loan)</span>
+                    </button>
+                  </td>
+                  <td className="py-2 text-right tabular-nums">—</td>
+                  <td className="py-2 text-right tabular-nums text-red-500">
+                    {r.secured > 0 ? `-${formatCurrency(r.secured)}` : "—"}
+                  </td>
+                  <td className="py-2 text-right tabular-nums font-medium text-red-500">
+                    {r.secured > 0 ? `-${formatCurrency(r.secured)}` : "—"}
+                  </td>
+                </tr>
+              ))}
               <tr className="font-bold border-t-2">
                 <td className="pt-2">Total</td>
                 <td className="pt-2 text-right tabular-nums text-green-600 dark:text-green-400">
                   {formatCurrency(rollup.totalValue)}
                 </td>
                 <td className="pt-2 text-right tabular-nums text-red-500">
-                  {rollup.totalLoans > 0
-                    ? `-${formatCurrency(rollup.totalLoans)}`
+                  {grandLiab > 0
+                    ? `-${formatCurrency(grandLiab)}`
                     : "—"}
                 </td>
                 <td
                   className={`pt-2 text-right tabular-nums ${
-                    rollup.netValue >= 0
+                    grandNet >= 0
                       ? "text-green-600 dark:text-green-400"
                       : "text-red-500"
                   }`}
                 >
-                  {formatCurrency(rollup.netValue)}
+                  {formatCurrency(grandNet)}
                 </td>
               </tr>
             </tbody>
