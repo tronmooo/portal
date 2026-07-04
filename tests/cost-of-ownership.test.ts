@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { collectOwnedAssetExpenses, ownedAssetExpenseTotal } from "../shared/cost-of-ownership";
+import { collectOwnedAssetExpenses, ownedAssetExpenseTotal, ownedAssetIds } from "../shared/cost-of-ownership";
 
 const asset = (id: string, name: string, extra: any = {}) => ({ id, name, type: "vehicle", ...extra });
 const exp = (id: string, amount: number, owner?: string, extra: any = {}) => ({
@@ -55,6 +55,37 @@ describe("collectOwnedAssetExpenses", () => {
 
   it("returns nothing when the person owns no assets", () => {
     expect(collectOwnedAssetExpenses([], [exp("e1", 50, "car")])).toEqual([]);
+  });
+});
+
+describe("ownedAssetIds", () => {
+  const profiles = [
+    { id: "self", type: "self", parentProfileId: null },
+    { id: "car", type: "vehicle", parentProfileId: "self" },      // nested under self
+    { id: "tires", type: "asset", parentProfileId: "car" },        // nested 2 deep
+    { id: "boat", type: "vehicle", parentProfileId: null },        // owned via link
+    { id: "friendcar", type: "vehicle", parentProfileId: "friend" },
+    { id: "friend", type: "person", parentProfileId: null },
+  ];
+
+  it("includes assets nested under a selected person (any depth)", () => {
+    const ids = ownedAssetIds(["self"], profiles);
+    expect(ids.has("car")).toBe(true);
+    expect(ids.has("tires")).toBe(true);
+  });
+
+  it("includes assets owned via asset_party_links", () => {
+    const ids = ownedAssetIds(["self"], profiles, [{ assetProfileId: "boat", partyProfileId: "self" }]);
+    expect(ids.has("boat")).toBe(true);
+  });
+
+  it("excludes assets belonging to other people", () => {
+    const ids = ownedAssetIds(["self"], profiles);
+    expect(ids.has("friendcar")).toBe(false);
+  });
+
+  it("returns empty for no selection", () => {
+    expect(ownedAssetIds([], profiles).size).toBe(0);
   });
 });
 

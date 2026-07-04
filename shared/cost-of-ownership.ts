@@ -75,6 +75,63 @@ export function collectOwnedAssetExpenses<E extends ExpenseLike>(
   return out;
 }
 
+export interface ProfileNode {
+  id: string;
+  type?: string;
+  parentProfileId?: string | null;
+}
+export interface AssetPartyLinkLike {
+  assetProfileId?: string;
+  partyProfileId?: string;
+}
+
+const ASSET_TYPES = new Set(["vehicle", "asset", "investment", "property", "account"]);
+
+/**
+ * Given a set of selected person profile ids, return the ids of the ASSET
+ * profiles those people own or contain — so a person-scoped financial view can
+ * include the cost of ownership of their assets. An asset qualifies when:
+ *   - it is nested (parentProfileId chain) under a selected person, OR
+ *   - it is owned by a selected person via an asset_party_links row.
+ *
+ * Pure + cycle-safe. Used to widen the expense scope for the dashboard so a
+ * "$50 gas for my truck" (linked to the truck) still counts in the owner's
+ * monthly spend / cash flow — while every aggregate still sums distinct
+ * expense rows, so nothing is double-counted.
+ */
+export function ownedAssetIds(
+  selectedIds: string[],
+  allProfiles: ProfileNode[],
+  assetPartyLinks: AssetPartyLinkLike[] = [],
+): Set<string> {
+  const out = new Set<string>();
+  if (!selectedIds || selectedIds.length === 0) return out;
+  const persons = new Set(selectedIds);
+  const byId = new Map(allProfiles.map((p) => [p.id, p] as const));
+
+  // 1) Nested assets: walk each asset's parent chain up to a selected person.
+  for (const p of allProfiles) {
+    if (!p || !ASSET_TYPES.has(String(p.type))) continue;
+    let cur: ProfileNode | undefined = p;
+    const seen = new Set<string>();
+    while (cur && cur.parentProfileId && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      if (persons.has(cur.parentProfileId)) { out.add(p.id); break; }
+      cur = byId.get(cur.parentProfileId);
+    }
+  }
+
+  // 2) Owned assets: asset_party_links where the party is a selected person.
+  for (const l of assetPartyLinks || []) {
+    if (!l || !l.assetProfileId || !l.partyProfileId) continue;
+    if (persons.has(l.partyProfileId)) {
+      const a = byId.get(l.assetProfileId);
+      if (!a || ASSET_TYPES.has(String(a.type))) out.add(l.assetProfileId);
+    }
+  }
+  return out;
+}
+
 /**
  * Total cost of ownership across owned-asset expenses. When a share is known
  * (co-owned asset), the person's allocated portion is used; otherwise the full

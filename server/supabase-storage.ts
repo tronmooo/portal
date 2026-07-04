@@ -31,7 +31,7 @@ import {
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
 import { isRecurringBill } from "../shared/liability-types";
-import { collectOwnedAssetExpenses } from "../shared/cost-of-ownership";
+import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-ownership";
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
@@ -4781,7 +4781,22 @@ export class SupabaseStorage implements IStorage {
     const matchesProfile = (linkedProfiles: string[]) =>
       passesProfileFilter(linkedProfiles, filterCtxStats);
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
-    const expenses = allExpenses.filter(e => matchesProfile(e.linkedProfiles));
+    // COST OF OWNERSHIP in the person-scoped dashboard: an expense linked to an
+    // asset ("$50 gas for my truck") must count in the OWNER's monthly spend /
+    // cash flow, not just under the asset. Widen the expense scope to include
+    // assets the selected person owns/contains. Each expense is still a single
+    // row counted once. Only widens when a person filter is active.
+    const ownedAssetSet = (fpIds && fpIds.length)
+      ? ownedAssetIds(fpIds, allProfiles as any, await this.getAssetPartyLinks().catch(() => [] as any[]))
+      : new Set<string>();
+    const expenseScopeIds = (fpIds && ownedAssetSet.size > 0)
+      ? Array.from(new Set([...fpIds, ...ownedAssetSet]))
+      : fpIds;
+    const filterCtxExpense = { selectedIds: expenseScopeIds || [], allProfiles };
+    // When the scope widened we need every expense row (the pushdown fetch may
+    // have excluded asset-linked ones); expenses are small + bounded per user.
+    const expenseSource = (fpIds && ownedAssetSet.size > 0) ? await this.getExpenses() : allExpenses;
+    const expenses = expenseSource.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpense));
     const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
     const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
@@ -5023,7 +5038,19 @@ export class SupabaseStorage implements IStorage {
     const matchesProfileEnhanced = (linkedProfiles: string[]) =>
       passesProfileFilter(linkedProfiles, filterCtx);
     const allTrackers = rawTrackers.filter(t => matchesProfileEnhanced(t.linkedProfiles));
-    const allExpenses = rawExpenses.filter(e => matchesProfileEnhanced(e.linkedProfiles));
+    // COST OF OWNERSHIP: include expenses from assets the selected person owns
+    // (e.g. "$50 gas for my truck") in their monthly spend + cash flow. Reuses
+    // allAssetLinks (already fetched) so no extra query. Single row per expense
+    // → counted once. Only widens when a person filter is active.
+    const ownedAssetSetEnh = (fpIds && fpIds.length)
+      ? ownedAssetIds(fpIds, allProfiles as any, allAssetLinks as any[])
+      : new Set<string>();
+    const expenseScopeIdsEnh = (fpIds && ownedAssetSetEnh.size > 0)
+      ? Array.from(new Set([...fpIds, ...ownedAssetSetEnh]))
+      : fpIds;
+    const filterCtxExpenseEnh = { selectedIds: expenseScopeIdsEnh || [], allProfiles };
+    const expenseSourceEnh = (fpIds && ownedAssetSetEnh.size > 0) ? await this.getExpenses() : rawExpenses;
+    const allExpenses = expenseSourceEnh.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpenseEnh));
     const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
     const allTasks = rawTasks.filter(t => matchesProfileEnhanced(t.linkedProfiles));
     const allEvents = rawEvents.filter(e => matchesProfileEnhanced(e.linkedProfiles));
