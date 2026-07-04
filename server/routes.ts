@@ -6,6 +6,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { ownedAssetIds } from "@shared/cost-of-ownership";
 import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "@shared/ownership-model";
 import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
@@ -4208,7 +4209,20 @@ Rules:
       ? profileIdsParam.split(",").filter(Boolean)
       : (req.query.profileId && typeof req.query.profileId === "string" ? [req.query.profileId as string] : []);
     if (expenseFilterIds.length > 0) {
-      items = await filterByProfileScope(items, expenseFilterIds, uid);
+      // COST OF OWNERSHIP: when filtering expenses by a PERSON, also include the
+      // expenses of the assets that person owns/contains (e.g. "$50 gas for my
+      // truck" is linked to the truck, not the person). Widen the scope with the
+      // owned-asset ids so the Finance page, the Spending-Breakdown popup and the
+      // dashboard all show the same set. Each expense is still one row counted
+      // once. Filtering by an ASSET id adds nothing (ownedAssetIds only expands
+      // person selections).
+      const allProfilesExp = getCached(`profiles:${uid}`) || await storage.getProfiles();
+      const assetLinksExp = await storage.getAssetPartyLinks().catch(() => [] as any[]);
+      const ownedExp = ownedAssetIds(expenseFilterIds, allProfilesExp as any, assetLinksExp as any[]);
+      const scopeExp = ownedExp.size > 0
+        ? Array.from(new Set([...expenseFilterIds, ...ownedExp]))
+        : expenseFilterIds;
+      items = await filterByProfileScope(items, scopeExp, uid);
     }
     if (req.query.from && typeof req.query.from === "string") {
       items = items.filter((e: any) => e.date >= (req.query.from as string));
