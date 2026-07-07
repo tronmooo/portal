@@ -27,6 +27,7 @@ import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medi
 import { passesProfileFilter } from "@shared/profile-filter";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
+import { matchHabitByName } from "@shared/habit-match";
 import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
@@ -937,7 +938,7 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   if (habitCheckinMatch) {
     const habitName = habitCheckinMatch[1].trim();
     const habits = await storage.getHabits();
-    const habit = habits.find(h => h.name.toLowerCase().includes(habitName));
+    const habit = matchHabitByName(habits, habitName);
     if (habit) {
       const checkin = await storage.checkinHabit(habit.id);
       actions.push({ type: "checkin_habit", category: "habit", data: { habitName: habit.name } });
@@ -2977,7 +2978,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- CRUD: Habits ---
   {
     name: "create_habit",
-    description: "Create a new habit to track.",
+    description: "Create a new habit to track. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -2985,6 +2986,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         frequency: { type: "string", enum: ["daily", "weekly", "custom"], description: "Frequency" },
         icon: { type: "string", description: "Emoji icon" },
         color: { type: "string", description: "Color hex" },
+        timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "bedtime", "anytime"], description: "When during the day the habit should occur. Infer from phrasing like 'in the morning', 'after lunch' (afternoon), 'this evening', 'before bed' (bedtime)." },
+        scheduledTime: { type: "string", description: "Optional precise time in 24h HH:MM (e.g. '08:00', '21:30') when the user gives a specific time." },
         forProfile: { type: "string", description: "Name of the profile this habit belongs to. ALWAYS set when the user mentions a specific person or pet." },
       },
       required: ["name"],
@@ -3273,12 +3276,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "update_habit",
-    description: "Update a habit. Find by name (partial match), then apply changes.",
+    description: "Update a habit. Find by name (partial match), then apply changes. Use this to reschedule a habit — e.g. 'move my lisinopril to the evening' → changes: { timeOfDay: 'evening' }.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name (partial match)" },
-        changes: { type: "object", description: "Fields to update — can include 'name', 'icon', 'color', 'frequency', 'targetDays'" },
+        changes: { type: "object", description: "Fields to update — can include 'name', 'icon', 'color', 'frequency', 'targetDays', 'timeOfDay' (morning|afternoon|evening|bedtime|anytime), 'scheduledTime' (HH:MM 24h)." },
       },
       required: ["name", "changes"],
     },
@@ -7729,11 +7732,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
 
       // P0.3a: validate with the shared insert schema before writing.
+      const habitTimeOfDay = input.timeOfDay === "night" ? "bedtime" : input.timeOfDay;
       const habitPayload = validateAiPayload(insertHabitSchema, {
         name: habitName,
         frequency: input.frequency || "daily",
         icon: input.icon,
         color: input.color,
+        ...(habitTimeOfDay ? { timeOfDay: habitTimeOfDay } : {}),
+        ...(input.scheduledTime ? { scheduledTime: input.scheduledTime } : {}),
       }, "habit");
       if (!habitPayload.ok) return { error: habitPayload.error };
       // P0.3b: write ownership in the create itself (createHabit accepts
@@ -7755,7 +7761,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "checkin_habit": {
       const habits = await storage.getHabits();
-      const nameQuery = (input.name || "").toLowerCase();
       // Filter by profile if specified
       let eligible = habits;
       if (input.forProfile) {
@@ -7770,8 +7775,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           if (selfHabits.length > 0) eligible = selfHabits;
         }
       }
-      const habit = eligible.find(h => h.name.toLowerCase().includes(nameQuery))
-        ?? habits.find(h => h.name.toLowerCase().includes(nameQuery)); // fallback to any
+      // Fuzzy, stem-aware match so "I pooped" resolves the "POOP" habit and
+      // "did my running" resolves "Run". Falls back to the full habit list when
+      // the profile-scoped list has no match.
+      const habit = matchHabitByName(eligible, input.name || "")
+        ?? matchHabitByName(habits, input.name || "");
       if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
       return storage.checkinHabit(habit.id);
     }
@@ -8190,11 +8198,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const found = trackers.find(t => t.name.toLowerCase().includes(trackerId.toLowerCase()));
         trackerId = found?.id || undefined;
       }
-      // Resolve habit name to ID
+      // Resolve habit name to ID (stem-aware, so "running" links a "Run" habit)
       let habitId = input.habitId;
       if (habitId) {
         const habits = await storage.getHabits();
-        const found = habits.find(h => h.name.toLowerCase().includes(habitId.toLowerCase()));
+        const found = matchHabitByName(habits, habitId);
         habitId = found?.id || undefined;
       }
       // P0.3a: validate with the shared insert schema before writing. Unknown
@@ -8392,8 +8400,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "update_habit": {
       const habits = await storage.getHabits();
       const uhResult = safeMatchEntity(habits, input.name || "", h => h.name);
-      if (!uhResult.match) return { error: uhResult.error || "Habit not found", candidates: uhResult.candidates };
-      const updated = await storage.updateHabit(uhResult.match.id, input.changes);
+      // Fall back to the stem-aware matcher so "update my running habit" resolves
+      // a habit named "Run" even when the substring matcher misses.
+      const uhMatch = uhResult.match ?? matchHabitByName(habits, input.name || "");
+      if (!uhMatch) return { error: uhResult.error || "Habit not found", candidates: uhResult.candidates };
+      // Whitelist the fields a habit update may touch (the model passes a free-form
+      // `changes` object). This lets time-of-day scheduling flow through while
+      // ignoring stray keys.
+      const rawChanges = (input.changes || {}) as Record<string, any>;
+      const allowed: (keyof typeof rawChanges)[] = ["name", "icon", "color", "frequency", "targetDays", "targetPerDay", "timeOfDay", "scheduledTime"];
+      const changes: Record<string, any> = {};
+      for (const k of allowed) if (rawChanges[k] !== undefined) changes[k] = rawChanges[k];
+      // Normalize a bare "night" alias the model may emit for bedtime.
+      if (changes.timeOfDay === "night") changes.timeOfDay = "bedtime";
+      const updated = await storage.updateHabit(uhMatch.id, changes);
       return { updated: true, habit: updated };
     }
 
@@ -8425,7 +8445,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "uncomplete_habit": {
       const habits = await storage.getHabits();
-      const nameQ = (input.name || "").toLowerCase();
       let eligible = habits;
       if (input.forProfile) {
         const profs = await storage.getProfiles();
@@ -8435,7 +8454,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
         if (selfProf) { const sh = habits.filter(h => (h.linkedProfiles||[]).includes(selfProf.id)); if (sh.length > 0) eligible = sh; }
       }
-      const habit = eligible.find(h => h.name.toLowerCase().includes(nameQ)) ?? habits.find(h => h.name.toLowerCase().includes(nameQ));
+      const habit = matchHabitByName(eligible, input.name || "") ?? matchHabitByName(habits, input.name || "");
       if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
       const targetDate = input.date || new Date().toLocaleDateString('en-CA');
       // Find and delete today's checkin

@@ -362,6 +362,12 @@ export type InsertTrackerEntry = z.infer<typeof insertTrackerEntrySchema>;
 
 export type HabitFrequency = "daily" | "weekly" | "custom";
 
+// When during the day a habit is meant to happen. "custom" pairs with
+// scheduledTime (HH:MM); "anytime" means no particular slot. This drives the
+// Morning/Afternoon/Evening/Night grouping on the Habits screen instead of
+// inferring the slot from the last check-in timestamp.
+export type HabitTimeOfDay = "morning" | "afternoon" | "evening" | "bedtime" | "anytime";
+
 export interface Habit {
   id: string;
   name: string;
@@ -370,6 +376,8 @@ export interface Habit {
   frequency: HabitFrequency;
   targetDays?: number[]; // 0=Sun..6=Sat for custom frequency
   targetPerDay: number; // How many times per day (default 1, e.g., 3 for "brush teeth 3x daily")
+  timeOfDay?: HabitTimeOfDay; // Scheduled slot; editable from the habit profile
+  scheduledTime?: string; // "HH:MM" (24h) when timeOfDay is "custom" or a precise time is set
   currentStreak: number;
   longestStreak: number;
   checkins: HabitCheckin[];
@@ -392,6 +400,10 @@ export const insertHabitSchema = z.object({
   frequency: z.enum(["daily", "weekly", "custom"]).default("daily"),
   targetDays: z.array(z.number().min(0).max(6)).optional(),
   targetPerDay: z.number().min(1).max(10).default(1),
+  // Nullable so a PATCH can explicitly clear a habit's schedule (send null),
+  // not just leave it unset (undefined).
+  timeOfDay: z.enum(["morning", "afternoon", "evening", "bedtime", "anytime"]).nullable().optional(),
+  scheduledTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM (24h)").nullable().optional(),
 });
 
 export type InsertHabit = z.input<typeof insertHabitSchema>;

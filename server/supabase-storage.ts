@@ -625,6 +625,8 @@ export class SupabaseStorage implements IStorage {
       id: r.id, name: r.name, icon: r.icon || undefined, color: r.color || undefined,
       frequency: r.frequency, targetDays: r.target_days || undefined,
       targetPerDay: r.target_per_day || 1,
+      timeOfDay: r.time_of_day || undefined,
+      scheduledTime: r.scheduled_time || undefined,
       currentStreak: r.current_streak || 0, longestStreak: r.longest_streak || 0,
       linkedProfiles: r.linked_profiles || [],
       checkins, createdAt: r.created_at,
@@ -3465,6 +3467,8 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, name: data.name, icon: data.icon || null,
       color: data.color || null, frequency: data.frequency || "daily",
       target_days: data.targetDays || null, target_per_day: data.targetPerDay || 1,
+      time_of_day: (data as any).timeOfDay || null,
+      scheduled_time: (data as any).scheduledTime || null,
       current_streak: 0, longest_streak: 0,
       linked_profiles: linkedProfiles,
       created_at: now,
@@ -3530,6 +3534,8 @@ export class SupabaseStorage implements IStorage {
       name: merged.name, icon: merged.icon || null, color: merged.color || null,
       frequency: merged.frequency, target_days: merged.targetDays || null,
       target_per_day: merged.targetPerDay || existing.targetPerDay || 1,
+      time_of_day: merged.timeOfDay || null,
+      scheduled_time: merged.scheduledTime || null,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a

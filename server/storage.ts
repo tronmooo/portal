@@ -1424,7 +1424,7 @@ export class MemStorage implements IStorage {
   async getHabits() { return Array.from(this.habits.values()); }
   async getHabit(id: string) { return this.habits.get(id); }
   async createHabit(data: InsertHabit): Promise<Habit> {
-    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", targetPerDay: data.targetPerDay || 1, currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
+    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", targetPerDay: data.targetPerDay || 1, timeOfDay: data.timeOfDay ?? undefined, scheduledTime: data.scheduledTime ?? undefined, currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
     this.habits.set(habit.id, habit);
     this.logActivity("habit", `Created habit: ${habit.name}`);
     return habit;
