@@ -2274,7 +2274,10 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
   // instantly filtered OUT of the list — created but invisible. Attribute it to
   // the single selected profile (else self), same rule as every quick-add.
   const [newHabitFrequency, setNewHabitFrequency] = useState<'daily' | 'weekly'>('daily');
+  const [newHabitTimeOfDay, setNewHabitTimeOfDay] = useState<'anytime' | 'morning' | 'afternoon' | 'evening' | 'bedtime'>('anytime');
   const [newHabitProfileId, setNewHabitProfileId] = useState('');
+  // Which habit row has its inline schedule editor open (the "habit profile" edit).
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const { data: habitProfiles = [] } = useQuery<any[]>({ queryKey: ['/api/profiles'], enabled: open });
   const habitOwnerId = useMemo(() => {
     if (newHabitProfileId) return newHabitProfileId;
@@ -2282,10 +2285,11 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
     return (habitProfiles.find((p: any) => p.type === 'self')?.id) || '';
   }, [newHabitProfileId, filterMode, filterIds, habitProfiles]);
   const createHabitMutation = useMutation({
-    mutationFn: (vars: { name: string; frequency: string; profileId?: string }) =>
+    mutationFn: (vars: { name: string; frequency: string; profileId?: string; timeOfDay?: string }) =>
       apiRequest('POST', '/api/habits', {
         name: vars.name,
         frequency: vars.frequency,
+        ...(vars.timeOfDay ? { timeOfDay: vars.timeOfDay } : {}),
         ...(vars.profileId ? { linkedProfiles: [vars.profileId] } : {}),
       }),
     onSuccess: (_d, vars) => {
@@ -2299,7 +2303,13 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
   });
   const submitNewHabit = () => {
     if (!newHabitName.trim() || createHabitMutation.isPending) return;
-    createHabitMutation.mutate({ name: newHabitName.trim(), frequency: newHabitFrequency, profileId: habitOwnerId || undefined });
+    createHabitMutation.mutate({
+      name: newHabitName.trim(),
+      frequency: newHabitFrequency,
+      profileId: habitOwnerId || undefined,
+      ...(newHabitTimeOfDay !== 'anytime' ? { timeOfDay: newHabitTimeOfDay } : {}),
+    });
+    setNewHabitTimeOfDay('anytime');
   };
 
   const habitsProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -2382,6 +2392,35 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
     onSettled: () => { invalidateDomain("habits"); },
   });
 
+  // Edit a habit's schedule (time-of-day / precise time) from its profile row.
+  const updateHabitMutation = useMutation({
+    mutationFn: ({ id, changes }: { id: string; changes: Record<string, any> }) =>
+      apiRequest('PATCH', `/api/habits/${id}`, changes),
+    onMutate: async ({ id, changes }) => {
+      await queryClient.cancelQueries({ queryKey: ['/api/habits'] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ['/api/habits'] });
+      queryClient.setQueriesData<any[]>({ queryKey: ['/api/habits'] }, (old) =>
+        (old || []).map((h: any) => h.id === id ? { ...h, ...changes } : h));
+      return { prev };
+    },
+    onError: (_e: any, _v: any, ctx: any) => {
+      if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
+      toast({ title: 'Failed to update schedule', variant: 'destructive' });
+    },
+    onSettled: () => { invalidateDomain('habits'); },
+  });
+  const setHabitSchedule = (h: any, timeOfDay: string, scheduledTime?: string | null) => {
+    updateHabitMutation.mutate({
+      id: h.id,
+      changes: {
+        timeOfDay,
+        // Clear a precise time when switching to a named slot; keep/replace it
+        // for custom. Send null to unset so the server column is cleared.
+        scheduledTime: scheduledTime === undefined ? (h.scheduledTime || null) : scheduledTime,
+      },
+    });
+  };
+
   const active = useMemo(() => habits.filter((h: any) => !h.archivedAt), [habits]);
   const VIVID = ['#6C5CE7','#E84393','#E55353','#F6A623','#2ECC71','#3498DB','#E67E22','#9B59B6','#1ABC9C','#E74C3C'];
 
@@ -2406,9 +2445,15 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
     if (cid) deleteCheckinMutation.mutate({ id: h.id, checkinId: cid });
     else checkinMutation.mutate({ id: h.id });
   };
-  // Time-of-day bucket derived from the habit's most recent check-in timestamp
-  // (there's no time field on a Habit, so we infer it from real check-in data).
+  // Time-of-day bucket. Prefer the habit's EXPLICIT schedule (editable from the
+  // habit profile); fall back to inferring the slot from the most recent
+  // check-in timestamp only when no schedule is set.
+  const TOD_TO_BUCKET: Record<string, string | null> = {
+    morning: 'morning', afternoon: 'afternoon', evening: 'evening',
+    bedtime: 'night', anytime: null,
+  };
   const bucketOf = (h: any): string | null => {
+    if (h.timeOfDay) return TOD_TO_BUCKET[h.timeOfDay] ?? null;
     const cs = h.checkins || []; if (!cs.length) return null;
     const last = cs[cs.length - 1];
     const hr = new Date(last.timestamp || `${last.date}T12:00:00`).getHours();
@@ -2416,6 +2461,22 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
     if (hr >= 12 && hr < 17) return 'afternoon';
     if (hr >= 17 && hr < 21) return 'evening';
     return 'night';
+  };
+  // Human label for a habit's scheduled slot, shown on each row.
+  const TOD_LABEL: Record<string, string> = {
+    morning: '☀️ Morning', afternoon: '🌤️ Afternoon', evening: '🌆 Evening',
+    bedtime: '🌙 Bedtime', anytime: 'Anytime',
+  };
+  const fmtTime = (t?: string) => {
+    if (!t || !/^\d{2}:\d{2}$/.test(t)) return '';
+    const [hStr, m] = t.split(':'); let h = parseInt(hStr, 10);
+    const ampm = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12;
+    return `${h}:${m} ${ampm}`;
+  };
+  const schedLabel = (h: any): string | null => {
+    if (h.scheduledTime && /^\d{2}:\d{2}$/.test(h.scheduledTime)) return `⏰ ${fmtTime(h.scheduledTime)}`;
+    if (h.timeOfDay) return TOD_LABEL[h.timeOfDay] || null;
+    return null;
   };
   const getEmoji = (name: string) => {
     const n = (name || '').toLowerCase();
@@ -2540,6 +2601,21 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
                 </SelectContent>
               </Select>
             </div>
+            {/* When during the day this habit should occur */}
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground/70 mb-1 flex items-center gap-1">
+                <Clock className="h-3 w-3" /> When?
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {(['anytime', 'morning', 'afternoon', 'evening', 'bedtime'] as const).map((slot) => (
+                  <button key={slot} type="button" onClick={() => setNewHabitTimeOfDay(slot)}
+                    data-testid={`new-habit-tod-${slot}`}
+                    className={`rounded-full px-2.5 py-1 text-xs font-medium capitalize transition-colors ${newHabitTimeOfDay === slot ? 'bg-primary text-primary-foreground' : 'bg-muted/50 text-muted-foreground hover:bg-muted'}`}>
+                    {slot === 'bedtime' ? 'Bedtime' : slot}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 
@@ -2603,42 +2679,91 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
                 const done = isDone(h, today);
                 const streak = h.currentStreak || 0;
                 const emoji = h.icon || getEmoji(h.name);
-                const sub = (h.targetPerDay || 1) > 1 ? `${h.targetPerDay}× daily` : (h.frequency === 'weekly' ? 'Weekly' : 'Daily');
+                const freqLabel = (h.targetPerDay || 1) > 1 ? `${h.targetPerDay}× daily` : (h.frequency === 'weekly' ? 'Weekly' : 'Daily');
+                const sLabel = schedLabel(h);
+                const editing = editingScheduleId === h.id;
                 return (
-                  <div key={h.id} className="flex items-center gap-3 rounded-2xl border border-border/50 bg-card/60 px-3 py-2.5">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg"
-                      style={{ background: `${color}22`, border: `1px solid ${color}55` }}>
-                      <span>{emoji}</span>
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold truncate">{h.name}</p>
-                      <p className="text-[11px] text-muted-foreground truncate">{sub}</p>
-                      <div className="mt-1.5 flex gap-1">
-                        {last7.map((dk) => (
-                          <span key={dk} className="h-2 w-2 rounded-full" title={dk}
-                            style={{ background: isDone(h, dk) ? 'hsl(155 60% 48%)' : 'hsl(var(--muted))' }} />
-                        ))}
+                  <div key={h.id} className="rounded-2xl border border-border/50 bg-card/60">
+                    <div className="flex items-center gap-3 px-3 py-2.5">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg"
+                        style={{ background: `${color}22`, border: `1px solid ${color}55` }}>
+                        <span>{emoji}</span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold truncate">{h.name}</p>
+                        <p className="text-[11px] text-muted-foreground truncate">
+                          {freqLabel}{sLabel ? ` · ${sLabel}` : ''}
+                        </p>
+                        <div className="mt-1.5 flex gap-1">
+                          {last7.map((dk) => (
+                            <span key={dk} className="h-2 w-2 rounded-full" title={dk}
+                              style={{ background: isDone(h, dk) ? 'hsl(155 60% 48%)' : 'hsl(var(--muted))' }} />
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        <button onClick={() => setEditingScheduleId(editing ? null : h.id)}
+                          aria-label="Edit schedule" data-testid={`habit-edit-schedule-${h.id}`}
+                          className={`flex h-6 w-6 items-center justify-center rounded-full transition-colors ${editing ? 'bg-primary/20 text-primary' : 'text-muted-foreground/60 hover:text-foreground hover:bg-muted'}`}>
+                          <Clock className="h-3.5 w-3.5" />
+                        </button>
+                        <span className="flex items-center gap-0.5 text-[11px] font-semibold tabular-nums leading-none"
+                          style={{ color: streak > 0 ? 'hsl(28 90% 55%)' : 'hsl(var(--muted-foreground))' }}>
+                          {streak} {streak > 0 ? '🔥' : ''}
+                        </span>
+                        <span className="text-[8px] uppercase tracking-wide text-muted-foreground/70 leading-none">day streak</span>
+                        <button onClick={() => toggleToday(h)} disabled={togglePending}
+                          aria-label={done ? 'Mark not done today' : 'Mark done today'}
+                          className="touch-manipulation active:scale-90 transition-transform mt-0.5"
+                          style={{ minWidth: 40, minHeight: 40 }}>
+                          <div className="flex h-7 w-7 items-center justify-center rounded-full border-2 transition-all"
+                            style={{
+                              background: done ? 'hsl(262 70% 58%)' : 'transparent',
+                              borderColor: done ? 'hsl(262 70% 58%)' : 'hsl(var(--muted-foreground) / 0.5)',
+                            }}>
+                            {done && <Check className="h-4 w-4 text-white" strokeWidth={3} />}
+                          </div>
+                        </button>
                       </div>
                     </div>
-                    <div className="flex flex-col items-end gap-1 shrink-0">
-                      <span className="flex items-center gap-0.5 text-[11px] font-semibold tabular-nums leading-none"
-                        style={{ color: streak > 0 ? 'hsl(28 90% 55%)' : 'hsl(var(--muted-foreground))' }}>
-                        {streak} {streak > 0 ? '🔥' : ''}
-                      </span>
-                      <span className="text-[8px] uppercase tracking-wide text-muted-foreground/70 leading-none">day streak</span>
-                      <button onClick={() => toggleToday(h)} disabled={togglePending}
-                        aria-label={done ? 'Mark not done today' : 'Mark done today'}
-                        className="touch-manipulation active:scale-90 transition-transform mt-0.5"
-                        style={{ minWidth: 40, minHeight: 40 }}>
-                        <div className="flex h-7 w-7 items-center justify-center rounded-full border-2 transition-all"
-                          style={{
-                            background: done ? 'hsl(262 70% 58%)' : 'transparent',
-                            borderColor: done ? 'hsl(262 70% 58%)' : 'hsl(var(--muted-foreground) / 0.5)',
-                          }}>
-                          {done && <Check className="h-4 w-4 text-white" strokeWidth={3} />}
+                    {/* Inline schedule editor — the editable "habit profile" schedule */}
+                    {editing && (
+                      <div className="border-t border-border/50 px-3 py-2.5 space-y-2">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Scheduled for</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(['anytime', 'morning', 'afternoon', 'evening', 'bedtime'] as const).map((slot) => {
+                            const activeSlot = (h.timeOfDay || 'anytime') === slot && !h.scheduledTime;
+                            return (
+                              <button key={slot} type="button"
+                                onClick={() => setHabitSchedule(h, slot, null)}
+                                disabled={updateHabitMutation.isPending}
+                                data-testid={`habit-tod-${slot}-${h.id}`}
+                                className={`rounded-full px-2.5 py-1 text-xs font-medium capitalize transition-colors ${activeSlot ? 'bg-primary text-primary-foreground' : 'bg-muted/50 text-muted-foreground hover:bg-muted'}`}>
+                                {slot === 'bedtime' ? 'Bedtime' : slot}
+                              </button>
+                            );
+                          })}
                         </div>
-                      </button>
-                    </div>
+                        <div className="flex items-center gap-2 pt-0.5">
+                          <span className="text-[11px] text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> Custom time</span>
+                          <input type="time" value={h.scheduledTime || ''}
+                            data-testid={`habit-custom-time-${h.id}`}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              // Derive the slot from the chosen hour so the row still
+                              // groups sensibly, and store the precise time.
+                              const hr = v ? parseInt(v.split(':')[0], 10) : NaN;
+                              const slot = isNaN(hr) ? 'anytime' : hr < 12 ? 'morning' : hr < 17 ? 'afternoon' : hr < 21 ? 'evening' : 'bedtime';
+                              setHabitSchedule(h, slot, v || null);
+                            }}
+                            className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-primary" />
+                          {h.scheduledTime && (
+                            <button onClick={() => setHabitSchedule(h, h.timeOfDay || 'anytime', null)}
+                              className="text-[11px] text-muted-foreground hover:text-foreground underline">Clear</button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}

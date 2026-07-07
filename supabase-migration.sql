@@ -126,6 +126,8 @@ CREATE TABLE IF NOT EXISTS habits (
   color TEXT,
   frequency TEXT DEFAULT 'daily' CHECK (frequency IN ('daily','weekly','custom')),
   target_days JSONB DEFAULT '[]'::jsonb,
+  time_of_day TEXT CHECK (time_of_day IS NULL OR time_of_day IN ('morning','afternoon','evening','bedtime','anytime')),
+  scheduled_time TEXT, -- 'HH:MM' 24h, paired with time_of_day
   current_streak INTEGER DEFAULT 0,
   longest_streak INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT now()
