@@ -29,6 +29,9 @@ import {
   CommandSearchTrigger,
 } from "@/components/CommandSearch";
 import { NotificationBell } from "@/components/NotificationBell";
+import { HubShell } from "@/components/hub/HubShell";
+import { HubChromeContext } from "@/components/hub/hub-context";
+import { isHubRoute, isHubLocationForNav } from "@/components/hub/hub-routes";
 
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { InstallPrompt } from "@/components/InstallPrompt";
@@ -349,7 +352,9 @@ function SwipeNav() {
   const startTime = useRef<number>(0);
   const didMove = useRef(false);
 
-  const TAB_ORDER = ['/', '/dashboard', '/linked', '/calendar', '/artifacts'];
+  // Hub consolidation (2026-07): 4 tabs — any hub route (dashboard, linked,
+  // trackers, profiles, finance, ...) counts as the /dashboard swipe slot.
+  const TAB_ORDER = ['/', '/dashboard', '/calendar', '/artifacts'];
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
     // Don't intercept if touch started on an interactive element
@@ -377,7 +382,9 @@ function SwipeNav() {
     startY.current = null;
     // Require: horizontal > 80px, clearly horizontal (3:1 ratio), completed in < 600ms
     if (Math.abs(dx) < 80 || Math.abs(dx) < Math.abs(dy) * 3 || elapsed > 600) return;
-    const currentTab = TAB_ORDER.find(t => t === location || (t !== '/' && location.startsWith(t))) || '/';
+    const currentTab = isHubLocationForNav(location)
+      ? '/dashboard'
+      : TAB_ORDER.find(t => t === location || (t !== '/' && location.startsWith(t))) || '/';
     const idx = TAB_ORDER.indexOf(currentTab);
     if (dx < 0 && idx < TAB_ORDER.length - 1) navigate(TAB_ORDER[idx + 1]);
     if (dx > 0 && idx > 0) navigate(TAB_ORDER[idx - 1]);
@@ -600,6 +607,25 @@ function PointerEventsGuard() {
   return null;
 }
 
+// Hub consolidation (2026-07): the unified hub chrome (KPI strip + profile
+// switcher + tab chips) mounts ONCE here — outside AppRouter's <Suspense> —
+// so it persists across tab switches while lazy page chunks stream in. Pages
+// under a hub route read HubChromeContext to hide their duplicate headers.
+function HubArea() {
+  const [location] = useLocation();
+  const isHub = isHubRoute(location);
+  return (
+    <>
+      {isHub && <HubShell />}
+      <div className="flex-1 min-h-0">
+        <HubChromeContext.Provider value={isHub}>
+          <AppRouter />
+        </HubChromeContext.Provider>
+      </div>
+    </>
+  );
+}
+
 function AppRouter() {
   return (
     <SectionErrorBoundary name="app">
@@ -723,10 +749,8 @@ function App() {
                         <ProfileButton />
                       </div>
                     </header>
-                    <main id="main-content" className="flex-1 min-w-0 overflow-hidden pb-[var(--mobile-nav-height)] md:pb-0">
-                      <div className="h-full">
-                        <AppRouter />
-                      </div>
+                    <main id="main-content" className="flex-1 min-w-0 overflow-hidden pb-[var(--mobile-nav-height)] md:pb-0 flex flex-col">
+                      <HubArea />
                     </main>
                   </div>
                 </div>

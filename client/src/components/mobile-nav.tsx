@@ -1,10 +1,11 @@
 import { useLocation } from "wouter";
-import { MessageSquare, LayoutDashboard, Link2, Archive, Calendar } from "lucide-react";
+import { MessageSquare, LayoutDashboard, Archive, Calendar } from "lucide-react";
+import { isHubLocationForNav } from "@/components/hub/hub-routes";
 
+// Hub consolidation (2026-07): Linked merged into the Dashboard hub (4 tabs).
 const TABS = [
   { label: "Chat",      href: "/",          icon: MessageSquare,  accent: "188 50% 52%" },
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard,accent: "262 65% 62%" },
-  { label: "Linked",    href: "/linked",    icon: Link2,          accent: "155 60% 44%" },
   { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
   { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
 ];
@@ -21,7 +22,9 @@ export function MobileBottomNav() {
     >
       <div className="flex items-center justify-around h-[var(--mobile-nav-height)] px-1">
         {TABS.map((tab) => {
-          const isActive = location === tab.href || (tab.href !== "/" && location.startsWith(tab.href));
+          const isActive = tab.href === "/dashboard"
+            ? isHubLocationForNav(location)
+            : location === tab.href || (tab.href !== "/" && location.startsWith(tab.href));
           const Icon = tab.icon;
           const color = `hsl(${tab.accent})`;
           return (

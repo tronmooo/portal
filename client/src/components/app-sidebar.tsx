@@ -10,13 +10,17 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
-import { MessageSquare, LayoutDashboard, Link2, Archive, Settings, Calendar, Circle } from "lucide-react";
+import { MessageSquare, LayoutDashboard, Archive, Settings, Calendar, Circle } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { isHubLocationForNav } from "@/components/hub/hub-routes";
 
+// Hub consolidation (2026-07): the Linked tab merged into the Dashboard hub —
+// its content lives on the hub's Trackers/Assets/Liabilities/Documents chips.
+// All old routes (/linked, /trackers, /profiles, ...) still work and light up
+// the Dashboard item via isHubLocationForNav.
 const NAV_ITEMS = [
   { label: "Chat",      href: "/",          icon: MessageSquare,  accent: "188 55% 50%" },
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard,accent: "262 65% 62%" },
-  { label: "Linked",    href: "/linked",    icon: Link2,          accent: "155 60% 44%" },
   { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
   { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
 ];
@@ -61,7 +65,9 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {NAV_ITEMS.map((item) => {
-                const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
+                const isActive = item.href === "/dashboard"
+                  ? isHubLocationForNav(location)
+                  : location === item.href || (item.href !== "/" && location.startsWith(item.href));
                 const Icon = item.icon;
                 return (
                   <SidebarMenuItem key={item.href}>
