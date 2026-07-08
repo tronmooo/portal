@@ -14,6 +14,10 @@ import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { useToast } from "@/hooks/use-toast";
 import { HeartPulse } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import type { Tracker, Profile, Obligation, Document as Doc, CalendarEvent } from "@shared/schema";
 import {
   extractVitals, readMetric, computeWellnessScore, countWellnessTrackers,
@@ -108,7 +112,7 @@ export default function WellnessPage() {
     },
   });
 
-  // ── Quick-log +8oz water: shared tracker-entry mutation → propagates ──
+  // ── Quick-log tracker entry: shared tracker-entry mutation → propagates ──
   const quickLog = useMutation({
     mutationFn: async ({ trackerId, field, amount }: { trackerId: string; field: string; amount: number }) =>
       apiRequest("POST", `/api/trackers/${trackerId}/entries`, { values: { [field]: amount } }),
@@ -120,6 +124,30 @@ export default function WellnessPage() {
     },
     onError: () => toast({ title: "Couldn't log entry", variant: "destructive" }),
   });
+
+  // ── Medication mark-taken: POST the obligation's pay endpoint to record a
+  // payment dated today (untoggle deletes the latest). Invalidates obligations
+  // + stats + enhanced so the dashboard "N due today" and bills feed match. ──
+  const [togglingMedId, setTogglingMedId] = useState<string | null>(null);
+  const toggleMed = useMutation({
+    mutationFn: async ({ id, next }: { id: string; next: boolean }) => {
+      if (next) await apiRequest("POST", `/api/obligations/${id}/pay`, { date: today });
+      else await apiRequest("DELETE", `/api/obligations/${id}/last-payment`, {});
+    },
+    onMutate: ({ id }) => setTogglingMedId(id),
+    onError: () => toast({ title: "Couldn't update medication", variant: "destructive" }),
+    onSettled: () => {
+      setTogglingMedId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
+  });
+
+  // ── Inline quick-log dialog for point-in-time metrics (weight / mood /
+  // sleep / steps) that need a value, not a fixed increment. ──
+  const [logKind, setLogKind] = useState<null | "weight" | "mood" | "sleep" | "steps">(null);
+  const [logValue, setLogValue] = useState("");
 
   // ── Derive everything from the shared data ──
   const vitals = extractVitals(trackers);
@@ -269,13 +297,48 @@ export default function WellnessPage() {
   if (hydration.value != null && hydration.value < HYDRATION_GOAL) reminders.push(`Drink ${HYDRATION_GOAL - Math.round(hydration.value)} more oz of water.`);
   if (appointments.length > 0) reminders.push(`${appointments.length} upcoming appointment${appointments.length > 1 ? "s" : ""}.`);
 
+  // The matched tracker metric behind each quick-log kind.
+  const metricForKind = (kind: "weight" | "mood" | "sleep" | "steps") =>
+    kind === "weight" ? vitals.weight : kind === "mood" ? vitals.mood : kind === "sleep" ? sleep : steps;
+  const logMeta: Record<"weight" | "mood" | "sleep" | "steps", { label: string; unit: string; step: string; placeholder: string }> = {
+    weight: { label: "Weight", unit: vitals.weightUnit, step: "0.1", placeholder: "176.5" },
+    mood: { label: "Mood", unit: "/ 10", step: "1", placeholder: "8" },
+    sleep: { label: "Sleep", unit: "hours", step: "0.1", placeholder: "7.5" },
+    steps: { label: "Steps", unit: "steps", step: "1", placeholder: "8000" },
+  };
+
   const onQuickLog = (kind: "hydration" | "weight" | "mood" | "sleep" | "steps") => {
-    if (kind === "hydration" && hydration.trackerId && hydration.primaryField) {
-      quickLog.mutate({ trackerId: hydration.trackerId, field: hydration.primaryField, amount: 8 });
+    if (kind === "hydration") {
+      // Fast +8oz — no value prompt needed for an additive metric.
+      if (hydration.trackerId && hydration.primaryField) {
+        quickLog.mutate({ trackerId: hydration.trackerId, field: hydration.primaryField, amount: 8 });
+      } else {
+        toast({ title: "No hydration tracker yet", description: "Ask the AI in chat to start one." });
+      }
       return;
     }
-    // Everything else opens the deep tracker view (where the entry form lives).
-    hashNavigate("/trackers?cat=health");
+    // Point-in-time metrics open an inline value dialog.
+    const m = metricForKind(kind);
+    if (!m.trackerId) {
+      toast({ title: `No ${logMeta[kind].label.toLowerCase()} tracker yet`, description: "Ask the AI in chat to start one." });
+      hashNavigate("/trackers");
+      return;
+    }
+    setLogValue(m.value != null ? String(m.value) : "");
+    setLogKind(kind);
+  };
+
+  const submitQuickLog = () => {
+    if (!logKind) return;
+    const m = metricForKind(logKind);
+    const amount = parseFloat(logValue);
+    if (!m.trackerId || !m.primaryField || !Number.isFinite(amount)) {
+      toast({ title: "Enter a number", variant: "destructive" });
+      return;
+    }
+    quickLog.mutate({ trackerId: m.trackerId, field: m.primaryField, amount });
+    setLogKind(null);
+    setLogValue("");
   };
 
   return (
@@ -313,6 +376,8 @@ export default function WellnessPage() {
         togglingHabitId={togglingHabitId}
         schedule={schedule}
         medications={medications}
+        onToggleMed={(id, next) => toggleMed.mutate({ id, next })}
+        togglingMedId={togglingMedId}
         vitals={vitalRows}
         sleep={{ hours: sleep.value ?? null }}
         nutrition={{ calories: calories.value, caloriesGoal: CALORIE_GOAL }}
@@ -329,6 +394,36 @@ export default function WellnessPage() {
         weightUnit={vitals.weightUnit}
         onQuickLog={onQuickLog}
       />
+
+      {/* Inline quick-log dialog for weight / mood / sleep / steps. */}
+      <Dialog open={logKind != null} onOpenChange={(o) => { if (!o) { setLogKind(null); setLogValue(""); } }}>
+        <DialogContent className="max-w-xs" data-testid="wellness-quicklog-dialog">
+          <DialogHeader>
+            <DialogTitle>Log {logKind ? logMeta[logKind].label : ""}</DialogTitle>
+          </DialogHeader>
+          {logKind && (
+            <div className="space-y-2">
+              <Label htmlFor="wellness-log-input" className="text-xs">{logMeta[logKind].label} ({logMeta[logKind].unit})</Label>
+              <Input
+                id="wellness-log-input" type="number" inputMode="decimal" autoFocus
+                step={logMeta[logKind].step} placeholder={logMeta[logKind].placeholder}
+                value={logValue} onChange={(e) => setLogValue(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") submitQuickLog(); }}
+                data-testid="wellness-log-input"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Logs to your {metricForKind(logKind).trackerName || logMeta[logKind].label} tracker — updates everywhere.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => { setLogKind(null); setLogValue(""); }}>Cancel</Button>
+            <Button size="sm" onClick={submitQuickLog} disabled={quickLog.isPending || !logValue.trim()} data-testid="wellness-log-submit">
+              {quickLog.isPending ? "Logging…" : "Log"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

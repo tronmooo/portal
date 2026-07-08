@@ -99,6 +99,16 @@ function SectionCard({ title, icon: Icon, tone, badge, viewAllHref, onViewAll, c
 
 const Empty = ({ text }: { text: string }) => <p className="text-xs text-muted-foreground">{text}</p>;
 
+// A "+ Log X" quick-log button (renders only when a handler is wired).
+function LogButton({ label, onClick, testId }: { label: string; onClick?: () => void; testId: string }) {
+  if (!onClick) return null;
+  return (
+    <Button size="sm" variant="outline" className="h-7 text-xs mt-3" onClick={onClick} data-testid={testId}>
+      <Plus className="w-3 h-3 mr-1" /> {label}
+    </Button>
+  );
+}
+
 function trendIcon(change: number | null | undefined) {
   if (change == null) return null;
   return change >= 0 ? <TrendingUp className="w-3 h-3 text-emerald-500" /> : <TrendingDown className="w-3 h-3 text-red-500" />;
@@ -140,6 +150,7 @@ export interface WellnessOverviewProps {
   schedule: WellnessEvent[];
   medications: WellnessMed[];
   onToggleMed?: (id: string, next: boolean) => void;
+  togglingMedId?: string | null;
 
   vitals: WellnessVital[];
   sleep?: { hours: number | null; deep?: number; light?: number; rem?: number; efficiency?: number };
@@ -171,7 +182,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
     wellnessScore, wellnessScoreLabel, sleepHours, sleepSeries, steps, stepsSeries,
     restingHr, restingHrSeries, hydrationOz, hydrationGoal, calories, caloriesGoal, streak,
     insights, habits, habitsCompleted, onToggleHabit, togglingHabitId,
-    schedule, medications, onToggleMed, vitals, sleep, nutrition, mood, activity,
+    schedule, medications, onToggleMed, togglingMedId, vitals, sleep, nutrition, mood, activity,
     appointments, reminders, labs, supplements, documents, conditions, allergies,
     recentActivity, weightUnit = "lbs", onQuickLog,
   } = props;
@@ -252,7 +263,9 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             <ul className="space-y-1.5">
               {medications.slice(0, 6).map((m) => (
                 <li key={m.id} className="flex items-center gap-2 text-sm" data-testid={`wellness-med-${m.id}`}>
-                  <button onClick={() => onToggleMed?.(m.id, !m.taken)} disabled={!onToggleMed} aria-label="toggle taken">
+                  <button onClick={() => onToggleMed?.(m.id, !m.taken)} disabled={!onToggleMed || togglingMedId === m.id}
+                    className="disabled:opacity-50" aria-label={m.taken ? "mark not taken" : "mark taken"}
+                    data-testid={`wellness-med-toggle-${m.id}`}>
                     {m.taken
                       ? <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: `hsl(${T.green})` }} />
                       : <Circle className="w-4 h-4 shrink-0 text-red-500" />}
@@ -281,10 +294,10 @@ export function WellnessOverview(props: WellnessOverviewProps) {
               ))}
             </ul>
           )}
+          <LogButton label="Log weight" onClick={onQuickLog && (() => onQuickLog("weight"))} testId="wellness-log-weight" />
         </SectionCard>
 
-        <SectionCard testId="wellness-sleep" title="Sleep Summary" icon={Moon} tone={T.purple}
-          onViewAll={() => onQuickLog?.("sleep")}>
+        <SectionCard testId="wellness-sleep" title="Sleep Summary" icon={Moon} tone={T.purple} viewAllHref="/trackers">
           {sleep?.hours == null ? <Empty text="No sleep logged." /> : (
             <div className="flex items-center gap-4">
               <div>
@@ -298,6 +311,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
               </ul>
             </div>
           )}
+          <LogButton label="Log sleep" onClick={onQuickLog && (() => onQuickLog("sleep"))} testId="wellness-log-sleep" />
         </SectionCard>
 
         <SectionCard testId="wellness-nutrition" title="Nutrition Summary" icon={Flame} tone={T.orange}>
@@ -314,8 +328,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
           )}
         </SectionCard>
 
-        <SectionCard testId="wellness-hydration" title="Hydration" icon={Droplet} tone={T.cyan}
-          onViewAll={() => onQuickLog?.("hydration")}>
+        <SectionCard testId="wellness-hydration" title="Hydration" icon={Droplet} tone={T.cyan} viewAllHref="/trackers">
           <div className="flex items-center gap-4">
             <Ring value={hydrationOz || 0} max={hydrationGoal} color={T.cyan} label="oz" unit="oz" />
             <div className="flex-1">
@@ -336,16 +349,17 @@ export function WellnessOverview(props: WellnessOverviewProps) {
               {activity.caloriesBurned != null && <li className="flex items-center gap-2"><Flame className="w-3.5 h-3.5" style={{ color: `hsl(${T.green})` }} /><span className="text-muted-foreground">Calories burned</span><span className="ml-auto tabular-nums font-semibold">{fmt(activity.caloriesBurned)}</span></li>}
             </ul>
           )}
+          <LogButton label="Log steps" onClick={onQuickLog && (() => onQuickLog("steps"))} testId="wellness-log-steps" />
         </SectionCard>
 
-        <SectionCard testId="wellness-mood" title="Mood & Wellness" icon={Brain} tone={T.pink}
-          onViewAll={() => onQuickLog?.("mood")}>
+        <SectionCard testId="wellness-mood" title="Mood & Wellness" icon={Brain} tone={T.pink} viewAllHref="/trackers">
           {mood?.value == null ? <Empty text="No mood logged." /> : (
             <div>
               <div className="text-2xl font-bold tabular-nums" style={{ color: `hsl(${T.pink})` }}>{fmt(mood.value, 1)}<span className="text-sm text-muted-foreground"> / 10</span></div>
               {mood.series.length >= 2 && <div className="mt-2"><Spark series={mood.series} color={T.pink} /></div>}
             </div>
           )}
+          <LogButton label="Log mood" onClick={onQuickLog && (() => onQuickLog("mood"))} testId="wellness-log-mood" />
         </SectionCard>
       </div>
 

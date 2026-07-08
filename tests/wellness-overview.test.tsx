@@ -86,11 +86,43 @@ describe("WellnessOverview", () => {
     expect(screen.getByTestId("wellness-allergies").textContent).toContain("Pollen");
   });
 
-  it("fires quick-log for hydration", () => {
+  it("fires quick-log for hydration, weight, sleep, mood, steps", () => {
     const onQuickLog = vi.fn();
     render(<WellnessOverview {...base} onQuickLog={onQuickLog} />);
     fireEvent.click(screen.getByTestId("wellness-log-hydration"));
     expect(onQuickLog).toHaveBeenCalledWith("hydration");
+    fireEvent.click(screen.getByTestId("wellness-log-weight"));
+    expect(onQuickLog).toHaveBeenCalledWith("weight");
+    fireEvent.click(screen.getByTestId("wellness-log-sleep"));
+    expect(onQuickLog).toHaveBeenCalledWith("sleep");
+    fireEvent.click(screen.getByTestId("wellness-log-mood"));
+    expect(onQuickLog).toHaveBeenCalledWith("mood");
+    fireEvent.click(screen.getByTestId("wellness-log-steps"));
+    expect(onQuickLog).toHaveBeenCalledWith("steps");
+  });
+
+  it("toggles medication taken state via callback", () => {
+    const onToggleMed = vi.fn();
+    render(<WellnessOverview {...base} onToggleMed={onToggleMed} />);
+    // m2 (Metformin) is not taken → clicking marks it taken (next=true)
+    fireEvent.click(screen.getByTestId("wellness-med-toggle-m2"));
+    expect(onToggleMed).toHaveBeenCalledWith("m2", true);
+    // m1 (Lisinopril) is taken → clicking un-marks it (next=false)
+    fireEvent.click(screen.getByTestId("wellness-med-toggle-m1"));
+    expect(onToggleMed).toHaveBeenCalledWith("m1", false);
+  });
+
+  it("disables the med toggle that is mid-flight", () => {
+    const onToggleMed = vi.fn();
+    render(<WellnessOverview {...base} onToggleMed={onToggleMed} togglingMedId="m1" />);
+    expect((screen.getByTestId("wellness-med-toggle-m1") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId("wellness-med-toggle-m2") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("hides quick-log buttons when no handler is wired", () => {
+    render(<WellnessOverview {...base} onQuickLog={undefined} />);
+    expect(screen.queryByTestId("wellness-log-weight")).toBeNull();
+    expect(screen.queryByTestId("wellness-log-sleep")).toBeNull();
   });
 
   it("shows honest empty states when data is missing", () => {
