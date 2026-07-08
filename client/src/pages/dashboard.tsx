@@ -6825,8 +6825,12 @@ export default function DashboardPage() {
 
       {/* Focus mode switcher (Phase 5) — reweights which sections show + order.
           Hidden in Everyone/Household scope, where the layout is fixed and the
-          modes would be inert ("these buttons don't work"). */}
-      {filterMode !== "everyone" && (
+          modes would be inert ("these buttons don't work").
+          Hub-embedded (2026-07-08, user request): hidden — it read as a
+          duplicate of the hub tab row right above it, and the hub's
+          Finance/Health tabs cover the focused views. Still available when
+          the dashboard renders standalone. */}
+      {!hubEmbedded && filterMode !== "everyone" && (
       <div className="flex items-center gap-1 overflow-x-auto no-scrollbar -mx-0.5 px-0.5" data-testid="dashboard-mode-switcher">
         {(["executive", "finance", "health", "daily"] as DashMode[]).map((m) => (
           <button

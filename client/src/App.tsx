@@ -1,5 +1,6 @@
 import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
+import { parse as parseRoutePattern } from "regexparam";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
@@ -689,6 +690,25 @@ const sidebarStyle = {
   "--sidebar-width-icon": "3rem",
 };
 
+// ── Query-tolerant route matching (BUG 2026-07-08: hub tabs 404) ─────────────
+// With useHashLocation the query string lives INSIDE the hash, so wouter's
+// location is e.g. "/linked?tab=assets". The default regexparam patterns are
+// anchored ("^\/linked\/?$") and therefore DON'T match once a query is
+// present — every query-carrying link (hub Assets/Documents chips,
+// /tasks?new=1, /finance?new=expense, /dashboard/journal?new=1) fell through
+// the Switch to the "Page not found" route, and "/profiles/:id?x=1" captured
+// the query INTO the id param. This parser keeps regexparam's semantics but
+// lets an optional "?..." suffix ride along, and stops param captures at "?".
+// Verified: "/linked" matches "/linked?tab=assets"; "/profiles/:id" on
+// "/profiles/abc?x=1" captures "abc"; "/linkedextra" still does NOT match.
+function queryTolerantParser(route: string, loose?: boolean) {
+  const { pattern, keys } = parseRoutePattern(route, loose);
+  let src = pattern.source;
+  if (src.endsWith("\\/?$")) src = src.slice(0, -4) + "\\/?(?:\\?.*)?$";
+  src = src.replace("(?=$|\\/)", "(?=$|\\/|\\?)"); // loose (nested) form
+  return { pattern: new RegExp(src, pattern.flags), keys };
+}
+
 // Detect new deploys and force reload — prevents stale UI after deployments
 // Version check REMOVED — was causing 30-second freeze on iOS.
 // BUILD_VERSION changed on every Vercel cold start, triggering window.location.reload()
@@ -706,7 +726,7 @@ function App() {
         <AuthProvider>
         <TooltipProvider>
           <ErrorBoundary>
-          <Router hook={useHashLocation}>
+          <Router hook={useHashLocation} parser={queryTolerantParser}>
             <ScrollToTop />
             <PointerEventsGuard />
             <RouteTitle />
