@@ -4773,11 +4773,15 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   // preview, projects, activity, notes. Every row opens its module's
   // EXISTING popup. The legacy card sections stay registered below (hidden)
   // so Customize can re-enable any of them.
-  { id: "hero-briefing",    label: "Briefing",             icon: Sparkles,     visible: true, column: "full" },
-  { id: "quick-actions",    label: "Quick Actions",        icon: Zap,          visible: true, column: "full" },
   { id: "exec-briefing",    label: "Daily Briefing",       icon: ListChecks,   visible: true, column: "full" },
 
   // ── Hidden by default (available via Customize) ──────────────────────────
+  // 2026-07-08 (user request): the greeting/attention hero card and the
+  // quick-action pill row are removed from the Executive default — the
+  // briefing's stat tiles + AI Executive Brief replace them. Both remain
+  // one toggle away in Customize.
+  { id: "hero-briefing",    label: "Briefing",             icon: Sparkles,     visible: false, column: "full" },
+  { id: "quick-actions",    label: "Quick Actions",        icon: Zap,          visible: false, column: "full" },
   { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: false, column: "full" },
   { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: false, column: "full" },
   { id: "now-queue",        label: "Now",                  icon: Flame,        visible: false, column: "full" },
@@ -4804,7 +4808,7 @@ const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: s
   { key: "more",       label: "More", emoji: "🗂️", ids: ["finance"] },
 ];
 
-const LAYOUT_VERSION = 15; // Dense Executive daily briefing (exec-briefing leads; legacy sections via Customize)
+const LAYOUT_VERSION = 16; // Briefing-only Executive: hero card + quick actions removed from defaults (user request)
 
 // ── Dashboard v2 Phase 5: Focus modes ───────────────────────────────────────
 // A mode reweights WHICH sections show and in WHAT order — Portol is too broad
@@ -5692,6 +5696,11 @@ export default function DashboardPage() {
           const g = groupOf(sectionId);
           if (!g || emitted.has(g.key)) return null;
           emitted.add(g.key);
+          // 2026-07-08 (user request): the "⚡ NOW / 📈 Trajectory" swimlane
+          // labels are gone — the dense briefing's own colored section headers
+          // carry the structure now. Group headers only appear for sections
+          // the user re-enables via Customize BEYOND the default briefing.
+          if (g.key === "now") return null;
           return (
             <div className="flex items-center gap-2 mt-3 mb-1 px-0.5" data-testid={`swimlane-${g.key}`}>
               <span className="text-base leading-none" aria-hidden="true">{g.emoji}</span>

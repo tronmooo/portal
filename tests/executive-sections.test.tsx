@@ -77,6 +77,12 @@ describe("ExecutiveBriefing", () => {
     for (const id of ["brief-agenda", "brief-tasks", "brief-habits", "brief-reminders", "brief-dates", "brief-docs", "brief-bills", "brief-calendar", "brief-projects", "brief-activity", "brief-notes"]) {
       expect(screen.getByTestId(id), id).toBeTruthy();
     }
+    // Photo-2 stat tile row + AI Executive Brief render.
+    expect(screen.getByTestId("brief-stat-row")).toBeTruthy();
+    for (const id of ["brief-stat-score", "brief-stat-tasks", "brief-stat-habits", "brief-stat-bills", "brief-stat-docs", "brief-stat-events", "brief-stat-projects"]) {
+      expect(screen.getByTestId(id), id).toBeTruthy();
+    }
+    expect(screen.getByTestId("brief-ai")).toBeTruthy();
     // Bills row + Pay button render from enhanced data (no fetch needed).
     expect(screen.getByTestId("brief-bills").textContent).toContain("Phone");
     expect(screen.getByTestId("brief-pay-b1")).toBeTruthy();
