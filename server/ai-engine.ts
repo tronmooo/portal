@@ -2373,7 +2373,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
 // ANTHROPIC TOOL DEFINITIONS
 // ============================================================
 
-const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
+export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- Data Query Tools ---
   {
     name: "search",
@@ -11721,59 +11721,116 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   }
 }
 
-// Map tool names to legacy ParsedAction types for backwards compatibility
+// Read-only tools — deliberately surface as the generic "retrieve" action.
+// Kept in lockstep with the readOnlyToolNames lists in processMessage; the
+// tests/ai-tool-registry.test.ts guard fails if any WRITE tool is missing from
+// TOOL_ACTION_MAP below (i.e. would fall through to "retrieve").
+export const READ_ONLY_TOOLS = new Set<string>([
+  "search", "get_summary", "get_profile_data", "recall_actions", "get_goal_progress",
+  "get_related", "get_relationships", "get_liability_summary", "get_cashflow",
+  "get_budget_summary", "query_net_worth_history", "get_loan_schedule", "query_calendar",
+  "query_expenses", "query_tasks", "spending_analytics", "get_asset_rollup",
+  "search_documents", "retrieve_document", "open_document", "navigate",
+  "generate_chart", "generate_table", "generate_report", "refresh_ai_summary",
+]);
+
+// Every WRITE tool → a typed ParsedAction so the chat UI shows it as a real
+// action (creates/logs are undoable; the generic buckets at least label the
+// change) instead of the opaque "retrieve" fallback it used before 2026-07.
+export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
+  recall_memory: "recall_memory",
+  // Profiles / assets
+  create_profile: "create_profile",
+  update_profile: "update_profile",
+  delete_profile: "delete_entity",
+  revalue_asset: "revalue_asset",
+  convert_expense_to_asset: "revalue_asset",
+  // Tasks
+  create_task: "create_task",
+  update_task: "update_entity",
+  complete_task: "complete_task",
+  bulk_complete_tasks: "complete_task",
+  delete_task: "delete_task",
+  create_reminder: "create_reminder",
+  // Trackers
+  log_tracker_entry: "log_entry",
+  create_tracker: "create_tracker",
+  update_tracker: "update_entity",
+  delete_tracker: "delete_entity",
+  delete_tracker_entry: "delete_tracker_entry",
+  update_tracker_entry: "update_tracker_entry",
+  // Expenses / income / paychecks
+  create_expense: "log_expense",
+  update_expense: "update_entity",
+  delete_expense: "delete_entity",
+  refund_expense: "log_expense",
+  log_income: "log_income",
+  log_expected_paycheck: "log_paycheck",
+  confirm_paycheck_received: "log_paycheck",
+  // Budgets
+  create_budget: "set_budget",
+  set_budget: "set_budget",
+  update_budget: "set_budget",
+  delete_budget: "set_budget",
+  // Liabilities / ownership links
+  create_liability: "create_liability",
+  update_liability: "update_entity",
+  add_liability_payment: "add_liability_payment",
+  link_liability_asset: "link_entities",
+  link_liability_owner: "link_entities",
+  link_asset_to_liability: "link_entities",
+  unlink_asset_from_liability: "link_entities",
+  move_liability_to_asset: "update_entity",
+  link_asset_owner: "link_entities",
+  split_ownership: "link_entities",
+  link_entities: "link_entities",
+  // Events / calendar
+  create_event: "create_event",
+  update_event: "update_entity",
+  delete_event: "delete_entity",
+  complete_event: "complete_event",
+  sync_calendar: "update_entity",
+  schedule_medication_refills: "create_event",
+  // Habits
+  create_habit: "create_habit",
+  checkin_habit: "checkin_habit",
+  uncomplete_habit: "uncomplete_habit",
+  update_habit: "update_entity",
+  delete_habit: "delete_habit",
+  // Obligations
+  create_obligation: "create_obligation",
+  pay_obligation: "pay_obligation",
+  update_obligation: "update_entity",
+  delete_obligation: "delete_entity",
+  // Journal
+  journal_entry: "journal_entry",
+  update_journal: "update_entity",
+  delete_journal: "delete_entity",
+  // Goals
+  create_goal: "create_goal",
+  update_goal: "update_entity",
+  delete_goal: "delete_entity",
+  // Artifacts / notes
+  create_artifact: "create_artifact",
+  update_artifact: "update_entity",
+  delete_artifact: "delete_entity",
+  // Memory
+  save_memory: "save_memory",
+  delete_memory: "delete_entity",
+  // Documents
+  create_document: "manage_document",
+  upload_document: "manage_document",
+  manage_document: "manage_document",
+  // Domains
+  create_domain: "manage_domain",
+  update_domain: "manage_domain",
+  delete_domain: "manage_domain",
+};
+
+// Map tool names to ParsedAction types (read-only tools + anything
+// unrecognized fall through to "retrieve").
 function mapToolToActionType(toolName: string): ParsedAction["type"] {
-  const mapping: Record<string, ParsedAction["type"]> = {
-    search: "retrieve",
-    get_summary: "retrieve",
-    get_profile_data: "retrieve",
-    recall_memory: "recall_memory",
-    create_profile: "create_profile",
-    update_profile: "update_profile",
-    delete_profile: "retrieve",
-    create_task: "create_task",
-    complete_task: "complete_task",
-    delete_task: "delete_task",
-    log_tracker_entry: "log_entry",
-    create_tracker: "create_tracker",
-    create_expense: "log_expense",
-    delete_expense: "log_expense",
-    create_event: "create_event",
-    update_event: "create_event",
-    create_reminder: "create_reminder",
-    create_habit: "create_habit",
-    checkin_habit: "checkin_habit",
-    create_obligation: "create_obligation",
-    pay_obligation: "pay_obligation",
-    journal_entry: "journal_entry",
-    create_artifact: "create_artifact",
-    save_memory: "save_memory",
-    open_document: "retrieve",
-    navigate: "retrieve",
-    link_entities: "retrieve",
-    get_related: "retrieve",
-    create_goal: "create_goal",
-    update_goal: "create_goal",
-    delete_goal: "create_goal",
-    uncomplete_habit: "checkin_habit",
-    complete_event: "complete_event",
-    delete_tracker_entry: "log_entry",
-    update_tracker_entry: "log_entry",
-    retrieve_document: "retrieve",
-    generate_chart: "retrieve",
-    generate_table: "retrieve",
-    generate_report: "retrieve",
-    query_calendar: "retrieve",
-    query_expenses: "retrieve",
-    query_tasks: "retrieve",
-    spending_analytics: "retrieve",
-    log_income: "log_expense",
-    manage_document: "retrieve",
-    schedule_medication_refills: "create_event",
-    get_asset_rollup: "retrieve",
-    search_documents: "retrieve",
-  };
-  return mapping[toolName] || "retrieve";
+  return TOOL_ACTION_MAP[toolName] || "retrieve";
 }
 
 // Fallback rule-based parsing when AI is unavailable

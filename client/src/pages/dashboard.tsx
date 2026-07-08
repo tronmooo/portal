@@ -3774,19 +3774,19 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
       {/* LEFT: KPIs + budget */}
       <div className="space-y-2">
         <div className="grid grid-cols-2 gap-2">
-          <button onClick={() => setDrill("spending")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+          <button data-testid="fw-drill-spending" onClick={() => setDrill("spending")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-xs text-muted-foreground">Spending</p>
             {/* Color discipline: spending = amber, never red. Red is reserved for
                 overdue/breach states only. */}
             <p className="text-sm font-bold tabular-nums text-amber-500">${monthlySpend.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">{monthExpenses.length} this month</p>
           </button>
-          <button onClick={() => setDrill("income")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+          <button data-testid="fw-drill-income" onClick={() => setDrill("income")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-xs text-muted-foreground">Income</p>
             <p className="text-sm font-bold tabular-nums text-green-500">${monthlyIncome.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">{(incomes || []).length} sources</p>
           </button>
-          <button onClick={() => setDrill("cashflow")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+          <button data-testid="fw-drill-cashflow" onClick={() => setDrill("cashflow")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-xs text-muted-foreground">Cash Flow</p>
             {/* Negative cash flow uses amber (warning), not red (overdue). */}
             <p className={`text-sm font-bold tabular-nums ${cashFlow >= 0 ? "text-green-500" : "text-amber-500"}`}>
@@ -3794,7 +3794,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
             </p>
             <p className="text-xs-tight text-muted-foreground">income - spending</p>
           </button>
-          <button onClick={() => setDrill("networth")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+          <button data-testid="fw-drill-networth" onClick={() => setDrill("networth")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
             <p className="text-xs text-muted-foreground">Net Worth</p>
             <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
