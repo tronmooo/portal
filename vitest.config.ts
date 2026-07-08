@@ -69,6 +69,7 @@ export default defineConfig({
       'tests/query-key-hygiene.test.ts',
       'tests/ai-tool-registry.test.ts',
       'tests/ai-button-parity.test.ts',
+      'tests/dashboard-buttons.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

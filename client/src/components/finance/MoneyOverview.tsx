@@ -360,7 +360,7 @@ export function MoneyOverview(props: {
               <div className="divide-y divide-border/60">
                 {assetBreakdown.slice(0, 8).map(a => (
                   <Link key={a.id} href={`/profiles/${a.id}`}>
-                    <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1">
+                    <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-asset-${a.id}`}>
                       <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 shrink-0">{a.type}</span>
                       <span className="flex-1 text-sm truncate">{a.name}</span>
                       <span className="text-sm font-semibold tabular-nums">{money(a.value)}</span>
@@ -378,7 +378,7 @@ export function MoneyOverview(props: {
               <div className="divide-y divide-border/60">
                 {liabilityBreakdown.slice(0, 8).map(l => (
                   <Link key={l.id} href={`/profiles/${l.id}`}>
-                    <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1">
+                    <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-liability-${l.id}`}>
                       <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 shrink-0">{l.type}</span>
                       <span className="flex-1 text-sm truncate">{l.name}</span>
                       <span className="text-sm font-semibold tabular-nums text-red-500">{money(l.value)}</span>
