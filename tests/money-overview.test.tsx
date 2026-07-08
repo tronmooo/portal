@@ -120,6 +120,9 @@ describe("MoneyOverview", () => {
     expect(bs).toContain("$57,450");
     expect(screen.getByTestId("money-assets").textContent).toContain("Brokerage — Vanguard");
     expect(screen.getByTestId("money-liabilities").textContent).toContain("Visa — Chase");
+    // Asset/liability rows are individually addressable (navigate to profile).
+    expect(screen.getByTestId("money-asset-a1")).toBeTruthy();
+    expect(screen.getByTestId("money-liability-l1")).toBeTruthy();
   });
 
   it("hides budgets card when there are no budgets", () => {
