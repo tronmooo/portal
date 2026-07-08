@@ -1034,6 +1034,36 @@ export default function FinancePage() {
         const soonBill = bills14.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
         if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling $${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
 
+        // Multi-month cash-flow trend (last 6 months) from real expenses. Outflow
+        // is summed per calendar month; inflow uses the current monthly income
+        // (no per-month income history yet — honest flat baseline); net = in−out.
+        const now = new Date();
+        const monthKeys: Array<{ key: string; label: string }> = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          monthKeys.push({
+            key: `${d.getFullYear()}-${d.getMonth()}`,
+            label: d.toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }),
+          });
+        }
+        const outByMonth: Record<string, number> = {};
+        for (const e of (Array.isArray(expenses) ? expenses : [])) {
+          const raw = (e as any).date || (e as any).createdAt;
+          if (!raw) continue;
+          const d = new Date(raw);
+          if (isNaN(d.getTime())) continue;
+          const k = `${d.getFullYear()}-${d.getMonth()}`;
+          outByMonth[k] = (outByMonth[k] || 0) + (Number((e as any).amount) || 0);
+        }
+        const cashTrend = monthKeys.map(m => {
+          const outflow = Math.round(outByMonth[m.key] || 0);
+          return { month: m.label, inflow: Math.round(monthlyIncome), outflow, net: Math.round(monthlyIncome) - outflow };
+        });
+        // Per-KPI mini-chart series.
+        const spendSeries = cashTrend.map(c => c.outflow);
+        const incomeSeries = cashTrend.map(c => c.inflow);
+        const billsSeries = bills14.map((b: any) => Number(b.amount) || 0);
+
         return (
           <MoneyOverview
             netWorth={netWorth}
@@ -1049,6 +1079,10 @@ export default function FinancePage() {
             budgets={budgetRows}
             bills={bills14}
             spendByCategory={spendByCat}
+            cashTrend={cashTrend}
+            spendSeries={spendSeries}
+            incomeSeries={incomeSeries}
+            billsSeries={billsSeries}
             alerts={alerts}
             assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
             liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map((l: any) => ({ id: l.id, name: l.name, type: l.type, value: Number(l.value ?? l.grossValue ?? 0) })) : []}

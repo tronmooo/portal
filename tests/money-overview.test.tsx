@@ -16,6 +16,10 @@ vi.mock("wouter", () => ({
   Link: ({ children }: any) => <>{children}</>,
 }));
 
+// recharts' ResponsiveContainer needs ResizeObserver, absent in jsdom.
+class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
+(globalThis as any).ResizeObserver = (globalThis as any).ResizeObserver || ResizeObserverStub;
+
 afterEach(cleanup);
 
 const baseProps = {
@@ -126,5 +130,30 @@ describe("MoneyOverview", () => {
   it("shows a negative net worth in red without crashing", () => {
     render(<MoneyOverview {...baseProps} netWorth={-22086} assets={0} liabilities={22086} />);
     expect(screen.getByTestId("money-networth").textContent).toContain("$22,086");
+  });
+
+  it("renders the multi-month cash-flow trend chart when given >=2 months", () => {
+    render(<MoneyOverview {...baseProps} cashTrend={[
+      { month: "Feb", inflow: 8000, outflow: 5200, net: 2800 },
+      { month: "Mar", inflow: 8000, outflow: 6100, net: 1900 },
+      { month: "Apr", inflow: 8000, outflow: 4800, net: 3200 },
+    ]} />);
+    expect(screen.getByTestId("money-cashflow-trend")).toBeTruthy();
+    expect(screen.getByTestId("money-cashflow-trend").textContent).toContain("Cash Flow Trend");
+  });
+
+  it("omits the cash-flow trend chart with fewer than 2 months", () => {
+    render(<MoneyOverview {...baseProps} cashTrend={[{ month: "Apr", inflow: 8000, outflow: 4800, net: 3200 }]} />);
+    expect(screen.queryByTestId("money-cashflow-trend")).toBeNull();
+  });
+
+  it("renders the balance sheet as assets-vs-liabilities bars", () => {
+    render(<MoneyOverview {...baseProps} />);
+    const bs = screen.getByTestId("money-balance-sheet").textContent || "";
+    expect(bs).toContain("Assets");
+    expect(bs).toContain("Liabilities");
+    expect(bs).toContain("$342,100");
+    expect(bs).toContain("$57,450");
+    expect(bs).toContain("Net worth");
   });
 });

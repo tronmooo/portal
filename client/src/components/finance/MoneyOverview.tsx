@@ -7,6 +7,10 @@
 import { Link } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  ComposedChart, Bar, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, Cell,
+} from "recharts";
+import { ShoppingCart, Utensils, Car, HeartPulse, Home, Zap, Film, CreditCard, Package } from "lucide-react";
 
 export interface MoneyBill {
   id: string; name: string; amount: number; dueDate?: string;
@@ -41,12 +45,27 @@ function budgetTone(pct: number): { bar: string; text: string; ring: string } {
   return { bar: "bg-emerald-500", text: "text-emerald-500", ring: "border-emerald-500/30 bg-emerald-500/5" };
 }
 
-// One compact KPI card: label, big value, trend %, sparkline, color, click.
-function KpiCard({ label, value, trend, tone, series, sub, onClick, testId }: {
+// Mini bar chart for KPI cards (spend / income / bills) — matches the
+// reference's per-card mini charts.
+function MiniBars({ series, color }: { series: number[]; color: string }) {
+  if (!series || series.length === 0) return null;
+  const max = Math.max(...series, 1);
+  return (
+    <div className="flex items-end gap-[2px] h-8 mt-1.5" aria-hidden="true">
+      {series.map((v, i) => (
+        <div key={i} className="flex-1 rounded-[1px]" style={{ height: `${Math.max(8, (v / max) * 100)}%`, background: `hsl(${color} / ${0.45 + 0.55 * (v / max)})` }} />
+      ))}
+    </div>
+  );
+}
+
+// One compact KPI card: label, big value, trend %, mini chart, color, click.
+function KpiCard({ label, value, trend, tone, series, chartKind = "line", sub, onClick, testId }: {
   label: string; value: string; trend?: string; tone: "pos" | "neg" | "warn" | "neutral";
-  series?: number[]; sub?: string; onClick: () => void; testId: string;
+  series?: number[]; chartKind?: "line" | "bars"; sub?: string; onClick: () => void; testId: string;
 }) {
   const color = tone === "pos" ? "155 65% 45%" : tone === "neg" ? "0 72% 58%" : tone === "warn" ? "38 96% 54%" : "213 90% 62%";
+  const hasChart = series && series.length >= 2;
   return (
     <button onClick={onClick} data-testid={testId}
       className="text-left rounded-xl border bg-card/40 p-3 hover:bg-muted/30 transition-colors min-w-[8.5rem] flex-1"
@@ -54,10 +73,23 @@ function KpiCard({ label, value, trend, tone, series, sub, onClick, testId }: {
       <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">{label}</div>
       <div className="text-xl font-bold tabular-nums mt-0.5" style={{ color: `hsl(${color})` }}>{value}</div>
       {trend && <div className="text-[10px] font-mono mt-0.5" style={{ color: `hsl(${color})` }}>{trend}</div>}
-      {series && series.length >= 2 ? <div className="mt-1.5"><Sparkline series={series} /></div>
-        : sub ? <div className="text-[10px] font-mono text-muted-foreground mt-1.5 truncate">{sub}</div> : null}
+      {sub && <div className="text-[10px] font-mono text-muted-foreground mt-1 truncate">{sub}</div>}
+      {hasChart && (chartKind === "bars"
+        ? <MiniBars series={series!} color={color} />
+        : <div className="mt-1.5"><Sparkline series={series!} /></div>)}
     </button>
   );
+}
+
+// Category → icon for the Budget Progress list (reference has these).
+const CAT_ICON: Record<string, any> = {
+  groceries: ShoppingCart, food: Utensils, dining: Utensils, "food & dining": Utensils,
+  transport: Car, vehicle: Car, health: HeartPulse, medical: HeartPulse,
+  housing: Home, rent: Home, utilities: Zap, entertainment: Film,
+  subscriptions: CreditCard, shopping: ShoppingCart,
+};
+function catIcon(name: string): any {
+  return CAT_ICON[name.toLowerCase()] || Package;
 }
 
 // Donut ring (inflow vs outflow) for the Cash Flow Overview.
@@ -91,6 +123,12 @@ export function MoneyOverview(props: {
   budgets: Array<{ category: string; limit: number; spent: number }>;
   bills: MoneyBill[];             // already filtered to the next N days
   spendByCategory?: Record<string, number>;
+  // Multi-month cash-flow trend for the trend chart (oldest→newest).
+  cashTrend?: Array<{ month: string; inflow: number; outflow: number; net: number }>;
+  // Small per-card mini-chart series (oldest→newest) for the KPI cards.
+  spendSeries?: number[];
+  incomeSeries?: number[];
+  billsSeries?: number[];
   alerts?: Array<{ id: string; text: string; tone: "pos" | "neg" | "warn"; onClick?: () => void }>;
   assetBreakdown: Breakdown[];
   liabilityBreakdown: Breakdown[];
@@ -107,6 +145,7 @@ export function MoneyOverview(props: {
     netWorth, assets, liabilities, momPct, nwSeries, cashIn, cashOut, spendMtd,
     spendTrendPct, incomeMtd = 0, budgets, bills, spendByCategory = {}, alerts = [],
     assetBreakdown, liabilityBreakdown, monthLabel,
+    cashTrend = [], spendSeries, incomeSeries, billsSeries,
     onAddExpense, onPayBill, payingId,
     onOpenNetWorth, onOpenCashFlow, onOpenBudget, onCategoryClick,
   } = props;
@@ -137,11 +176,14 @@ export function MoneyOverview(props: {
         <KpiCard label="Spend · MTD" value={money(spendMtd)} tone="warn"
           trend={spendTrendPct != null ? `${spendTrendPct >= 0 ? "▲" : "▼"} ${Math.abs(spendTrendPct).toFixed(0)}% mo` : undefined}
           sub={worstBudget ? `${worstBudget.category} ${worstPct}%` : undefined}
+          series={spendSeries} chartKind="bars"
           onClick={() => onCategoryClick?.("all")} testId="money-spend" />
         <KpiCard label="Income · MTD" value={money(incomeMtd)} tone="pos" sub="this month"
+          series={incomeSeries} chartKind="bars"
           onClick={() => onOpenCashFlow?.()} testId="money-income" />
         <KpiCard label="Bills Due" value={String(bills.length)} tone={bills.some(b => b.status === "overdue") ? "neg" : "warn"}
-          sub={`${money(billsTotal)} upcoming`} onClick={() => onOpenCashFlow?.()} testId="money-bills-kpi" />
+          sub={`${money(billsTotal)} upcoming`} series={billsSeries} chartKind="bars"
+          onClick={() => onOpenCashFlow?.()} testId="money-bills-kpi" />
         <KpiCard label="Savings Rate" value={savingsRate != null ? `${savingsRate}%` : "—"}
           tone={savingsRate != null && savingsRate >= 15 ? "pos" : savingsRate != null && savingsRate < 0 ? "neg" : "neutral"}
           sub="income − spend" onClick={() => onOpenCashFlow?.()} testId="money-savings" />
@@ -189,6 +231,35 @@ export function MoneyOverview(props: {
         </Card>
       </div>
 
+      {/* Cash Flow Trend — multi-month inflow/outflow bars + net line. */}
+      {cashTrend.length >= 2 && (
+        <Card className="p-4" data-testid="money-cashflow-trend">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Cash Flow Trend</span>
+            <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500" />In</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-red-500" />Out</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-sky-400" />Net</span>
+            </div>
+          </div>
+          <div className="h-48 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={cashTrend} margin={{ top: 6, right: 4, left: -18, bottom: 0 }}>
+                <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} stroke="hsl(var(--muted-foreground))" />
+                <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} stroke="hsl(var(--muted-foreground))"
+                  tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v))} />
+                <RTooltip
+                  contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
+                  formatter={(v: number, n: string) => [money(Number(v)), n]} />
+                <Bar dataKey="inflow" name="In" fill="hsl(155 60% 45%)" radius={[2, 2, 0, 0]} maxBarSize={22} />
+                <Bar dataKey="outflow" name="Out" fill="hsl(0 72% 58%)" radius={[2, 2, 0, 0]} maxBarSize={22} />
+                <Line dataKey="net" name="Net" type="monotone" stroke="hsl(199 89% 60%)" strokeWidth={2} dot={{ r: 2 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
       {/* Budgets */}
       {budgets.length > 0 && (
         <Card className="p-4" data-testid="money-budgets">
@@ -199,17 +270,25 @@ export function MoneyOverview(props: {
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onAddExpense} data-testid="money-add-expense">+ Expense</Button>
             </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
             {budgets.map(b => {
               const pct = Math.round((b.spent / (b.limit || 1)) * 100);
               const tone = budgetTone(pct);
+              const Icon = catIcon(b.category);
               return (
-                <div key={b.category} className={`rounded-lg border p-2.5 ${tone.ring}`} data-testid={`money-budget-${b.category}`}>
-                  <div className="text-xs font-semibold capitalize truncate">{b.category}</div>
-                  <div className={`text-lg font-bold tabular-nums ${tone.text}`}>{pct}%</div>
-                  <div className="text-[10px] text-muted-foreground tabular-nums">{money2(b.spent)} / {money2(b.limit)}</div>
-                  <div className="mt-1.5 h-1 rounded-full bg-muted overflow-hidden">
-                    <div className={`h-full ${tone.bar}`} style={{ width: `${Math.min(100, pct)}%` }} />
+                <div key={b.category} className="flex items-center gap-3" data-testid={`money-budget-${b.category}`}>
+                  <span className={`shrink-0 w-8 h-8 rounded-lg border flex items-center justify-center ${tone.ring}`}>
+                    <Icon className={`w-4 h-4 ${tone.text}`} />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-xs font-semibold capitalize truncate">{b.category}</span>
+                      <span className={`ml-auto text-sm font-bold tabular-nums ${tone.text}`}>{pct}%</span>
+                    </div>
+                    <div className="mt-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className={`h-full ${tone.bar}`} style={{ width: `${Math.min(100, pct)}%` }} />
+                    </div>
+                    <div className="text-[10px] text-muted-foreground tabular-nums mt-0.5">{money2(b.spent)} / {money2(b.limit)}</div>
                   </div>
                 </div>
               );
@@ -248,14 +327,25 @@ export function MoneyOverview(props: {
         </Card>
 
         <Card className="p-4" data-testid="money-balance-sheet">
-          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-3">Balance Sheet</div>
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Assets</span><span className="tabular-nums">{money(assets)}</span></div>
-            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Liabilities</span><span className="tabular-nums text-red-500">-{money(liabilities)}</span></div>
-            <div className="border-t border-border pt-2 flex justify-between text-sm font-bold">
-              <span>Net worth</span><span className={`tabular-nums ${netWorth < 0 ? "text-red-500" : "text-emerald-500"}`}>{money(netWorth)}</span>
-            </div>
-          </div>
+          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-3">Balance Sheet · Assets vs Liabilities</div>
+          {(() => {
+            const scale = Math.max(assets, liabilities, 1);
+            return (
+              <div className="space-y-3">
+                <div>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Assets</span><span className="tabular-nums font-semibold text-emerald-500">{money(assets)}</span></div>
+                  <div className="h-2.5 rounded-full bg-muted overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${(assets / scale) * 100}%` }} /></div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Liabilities</span><span className="tabular-nums font-semibold text-red-500">-{money(liabilities)}</span></div>
+                  <div className="h-2.5 rounded-full bg-muted overflow-hidden"><div className="h-full bg-red-500" style={{ width: `${(liabilities / scale) * 100}%` }} /></div>
+                </div>
+                <div className="border-t border-border pt-2 flex justify-between text-sm font-bold">
+                  <span>Net worth</span><span className={`tabular-nums ${netWorth < 0 ? "text-red-500" : "text-emerald-500"}`}>{money(netWorth)}</span>
+                </div>
+              </div>
+            );
+          })()}
         </Card>
       </div>
 
