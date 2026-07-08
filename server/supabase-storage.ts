@@ -883,8 +883,15 @@ export class SupabaseStorage implements IStorage {
     const obligationIds = (obligationsRes as any[]).map((r: any) => r.id);
     const habitIds = (habitsRes as any[]).map((r: any) => r.id);
     const [trackerEntryRows, obligationPaymentRows, habitCheckinRows] = await Promise.all([
+      // PERF 2026-07-08: cap at the 1000 most recent entries. This fetch was
+      // unbounded — a profile with a dense tracker (e.g. daily weight for
+      // years) shipped every row on every profile open, dominating both the
+      // query time and the JSON payload. Newest-first ordering means the cap
+      // drops only the oldest history; the profile page's charts/timeline
+      // show recent activity, and full history stays available through the
+      // trackers page's own paginated fetches.
       trackerIds.length > 0
-        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).is("deleted_at", null).order("timestamp", { ascending: false }).then(r => r.data || [])
+        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).is("deleted_at", null).order("timestamp", { ascending: false }).limit(1000).then(r => r.data || [])
         : Promise.resolve([] as any[]),
       // Obligations retired — no separate obligation payment feed on the timeline.
       Promise.resolve([] as any[]),

@@ -12623,6 +12623,24 @@ export default function ProfileDetailPage() {
           if (b.profiles) queryClient.setQueryData(["/api/profiles"], b.profiles);
           if (b.assetPartyLinks) queryClient.setQueryData(["/api/asset-party-links"], b.assetPartyLinks);
           if (b.liabilityProfileLinks) queryClient.setQueryData(["/api/liability-profile-links"], b.liabilityProfileLinks);
+          // Type-specific extras (PERF 2026-07-08): pre-seed the queries the
+          // asset/liability pages fire right after the detail resolves, so
+          // opening those profiles costs ONE round-trip instead of 5-6. Key
+          // shapes must match the consumers exactly — liability-detail.tsx
+          // uses both the array form ["/api/liabilities", id, "parties"] and
+          // the template-string form [`/api/liabilities/${id}/parties`] for
+          // parties, so both slots are seeded.
+          if (b.assetParties) queryClient.setQueryData(["/api/assets", id, "parties"], b.assetParties);
+          if (b.liabilityExtras && typeof b.liabilityExtras === "object") {
+            const ex = b.liabilityExtras;
+            if (ex.payments) queryClient.setQueryData([`/api/liabilities/${id}/payments`], ex.payments);
+            if (ex.schedule) queryClient.setQueryData(["/api/liabilities", id, "schedule"], ex.schedule);
+            if (ex.parties) {
+              queryClient.setQueryData(["/api/liabilities", id, "parties"], ex.parties);
+              queryClient.setQueryData([`/api/liabilities/${id}/parties`], ex.parties);
+            }
+            if (ex.assets) queryClient.setQueryData([`/api/liabilities/${id}/assets`], ex.assets);
+          }
           // Flatten nested storage paths (fields.vehicles.*, fields.insurance.*,
           // fields.housing.*, fields.other.*, fields.finance.*) up to top level
           // so every reader (`f.licensePlate`, `f.currentValue`, `f.year`, etc.)

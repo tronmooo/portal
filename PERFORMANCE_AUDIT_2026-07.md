@@ -154,53 +154,68 @@ request memo — the same proven pattern as `/api/stats`.
 
 ---
 
+### 7. Unbounded `tracker_entries` fetch in `getProfileDetail` — FIXED (round 2)
+
+Fetched ALL entries for every linked tracker with `select *`. A dense tracker
+(daily weight for 3 years ≈ 1,100 rows) dominated both query time and JSON
+payload on every profile open. Now capped at the **1000 most recent entries**
+(newest-first, so only the oldest history is dropped from the profile view;
+full history remains available via the trackers page's own fetches).
+
+### 8. Liability/asset profile follow-up queries folded into bootstrap — FIXED (round 2)
+
+After the detail landed, a liability page fired parties + payments + schedule
++ linked-assets (and an asset page fired its parties query) as separate
+serverless invocations. `/api/profile-bootstrap/:id` now returns
+`liabilityExtras` (payments, 12-month schedule, enriched parties incl. the
+owner-link self-heal, linked assets) for liability/loan profiles and
+`assetParties` for asset-type profiles — party enrichment reuses the
+already-fetched profile list, costing zero extra round-trips. The client
+seeds every consumer cache key (both key shapes used by liability-detail.tsx),
+so opening a liability profile is now ~1 round-trip instead of 5-6.
+
+### 9. Slow-request logging — ADDED (round 2)
+
+`server/routes.ts` now logs `[slow-request] METHOD path → status in Nms` for
+any API request over 1s (warn-level, visible in Vercel function logs). This is
+the measurement hook for confirming each fix in production and catching
+regressions.
+
+### 10. DB indexes — VERIFIED PRESENT (no action needed)
+
+Checked live Supabase (`pg_indexes`): GIN indexes on `linked_profiles` already
+exist for trackers, expenses, tasks, events, documents, habits, and
+journal_entries; `tracker_entries` has `(tracker, time)` composite indexes;
+both ownership link tables are indexed by user/party/asset; profiles has
+parent/user/deleted_at indexes. The JSONB containment scans on the profile
+hot path are index-backed.
+
+---
+
 ## Remaining plan (prioritized, not yet done)
 
 ### P1 — biggest wins still on the table
 
-1. **Bound `tracker_entries` in `getProfileDetail`**
-   (`server/supabase-storage.ts` ~line 886): fetches ALL entries for every
-   linked tracker with `select *`. For a dense tracker (daily weight for 3
-   years ≈ 1,100 rows) this dominates the payload and the timeline build.
-   Plan: `limit(500)` newest-first per profile-detail call + a dedicated
-   paginated `/api/trackers/:id/entries` for the full-history chart view.
-   Deferred here because it changes data semantics (charts/timeline depth)
-   and deserves its own verification pass.
-2. **`getProfiles()` returns `select *`** including heavy JSONB (`fields`,
+1. **`getProfiles()` returns `select *`** including heavy JSONB (`fields`,
    `documents`, `linked_*`) everywhere. Most consumers (tree build, breadcrumb,
    owner pickers, filter chips) need only
    `id/type/name/avatar/parent_profile_id/fields->currentValue-ish numbers`.
    `getProfilesLite()` already exists — migrate the tree endpoint, bootstrap
    `profiles` payload, and picker queries to it (needs a field-usage audit of
    `profiles.fields` readers first).
-3. **DB indexes** (verify in Supabase, add via migration if missing):
-   - GIN index on `linked_profiles` for `trackers`, `expenses`, `tasks`,
-     `events`, `documents`, `habits` (JSONB `@>` containment is a full scan
-     without it — this is the hot path for every profile open).
-   - GIN on `journal_entries.linked_profiles` (text[]).
-   - B-tree on `(user_id, tracker_id, timestamp desc)` for `tracker_entries`;
-     `(user_id, parent_profile_id)` and `(user_id, deleted_at)` for `profiles`;
-     `(user_id, party_profile_id)` + `(user_id, asset_profile_id)` on the two
-     link tables.
-   Run `EXPLAIN ANALYZE` on the containment queries before/after.
-4. **Liability profile sub-queries → fold into bootstrap:** the liability page
-   still fires parties/payments/schedule/assets/graph/documents as separate
-   invocations after the detail lands. Extend `/api/profile-bootstrap/:id` to
-   include `liabilityExtras` when the profile type is liability/loan
-   (payments + schedule + parties + linked assets), seeded the same way.
 
 ### P2 — frontend render hygiene
 
-5. **Split the mega-pages.** `profile-detail.tsx` (13.7k lines),
+2. **Split the mega-pages.** `profile-detail.tsx` (13.7k lines),
    `trackers.tsx` (7.8k), `dashboard.tsx` (7k) each compile to one chunk and
    define dozens of components in one module scope. Split by tab/section
    (Overview/Financials/Documents/Timeline) with `lazy()` so editing state in
    one section doesn't re-render the whole tree, and memoize section props.
-6. **Popup audit:** dashboard popups already read from seeded caches; verify
+3. **Popup audit:** dashboard popups already read from seeded caches; verify
    with React Profiler that none fetch-on-open more than one lazy detail
    query, and add `placeholderData: keepPreviousData` only where pagination
    wants it (global default already fixed).
-7. **Mutation invalidation fan-out in profile-detail:** most mutations
+4. **Mutation invalidation fan-out in profile-detail:** most mutations
    invalidate detail + profiles + dashboard-enhanced + stats (4+ refetches per
    edit, though now only when active). Consider optimistic cache writes plus
    marking dashboards stale-only (they refetch on next visit) — halves
@@ -208,32 +223,35 @@ request memo — the same proven pattern as `/api/stats`.
 
 ### P3 — measurement & regression protection
 
-8. **Server timing:** add a tiny middleware that logs
-   `route → totalMs, dbCalls` (the storage memo layer can count fetches per
-   request) and a `Server-Timing` response header, so slow endpoints show up
-   in the browser DevTools waterfall in production.
-9. **Client marks:** `performance.mark` around auth-restore, first dashboard
+5. **Client marks:** `performance.mark` around auth-restore, first dashboard
    paint, and profile-open → detail-rendered; report to `/api/client-errors`
-   style endpoint (or console in dev).
-10. **Perf smoke test:** extend `tests/smoke` with a scripted pass that hits
-    `dashboard-bootstrap`, `profile-bootstrap/:id`, `calendar/timeline` and
-    asserts response-time budgets against the live deployment
-    (`npm run smoke:post-deploy`).
+   style endpoint (or console in dev). (Server-side slow-request logging
+   shipped in round 2 — see fix 9.)
+6. **Perf smoke test:** extend `tests/smoke` with a scripted pass that hits
+   `dashboard-bootstrap`, `profile-bootstrap/:id`, `calendar/timeline` and
+   asserts response-time budgets against the live deployment
+   (`npm run smoke:post-deploy`).
 
 ---
 
-## Verification of this pass
+## Verification
 
 - `npx tsc --noEmit` — clean.
 - `npm test` — 48 files, 548 tests, all passing.
+- Pre-push regression contract suite (runs live against production) —
+  101/101 passing.
 - Request-count accounting (the thing this pass optimizes) by code path:
-  - Profile open: 4 heavy invocations → **1** (plus per-section queries on
-    liability pages).
+  - Asset profile open: 5 invocations → **1**; liability profile open:
+    ~8 invocations → **1** (+ graph/documents cards, which stay lazy).
   - Server work per profile-bootstrap: `getProfiles` 2× → 1×; link tables
-    up to 4× → 1× each; detail aggregation 2× → 1×.
+    up to 4× → 1× each; detail aggregation 2× → 1×; tracker entries capped
+    at the 1000 most recent rows (was unbounded).
   - Chat command: refetch of *every* cached query slot → refetch of visible
     queries only (typically 2–5), rest marked stale.
   - Calendar: 4 table scans per scroll → cached 30s, deduped, memoized.
+- Production observability: requests >1s now log `[slow-request]` warnings in
+  Vercel function logs — use these for before/after comparisons on the live
+  deployment.
 - Behavior-preserving by construction: cache keys unchanged (all existing
   invalidations still hit), bootstrap payload identical to what the removed
   fire-and-forget effect seeded, link-table dedupe returns the same rows the

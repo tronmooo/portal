@@ -544,6 +544,19 @@ export async function registerRoutes(
   // Clear server cache on any mutation so changes are reflected immediately
   app.use(cacheBustMiddleware);
 
+  // PERF observability (2026-07-08): log any API request that takes >1s so
+  // slow endpoints are visible in production logs (Vercel function logs)
+  // without extra tooling. Deliberately warn-only and threshold-gated — this
+  // must never add per-request noise or overhead on the fast path.
+  app.use((req, res, next) => {
+    const t0 = Date.now();
+    res.on("finish", () => {
+      const ms = Date.now() - t0;
+      if (ms > 1000) log.warn(`[slow-request] ${req.method} ${req.path} → ${res.statusCode} in ${ms}ms`);
+    });
+    next();
+  });
+
   // CORS — allow requests from the app's own domain and Capacitor
   app.use((req, res, next) => {
     const allowedOrigins = [
@@ -2703,10 +2716,66 @@ If unsure, return "profile_fact".`,
         storage.getAssetPartyLinks ? storage.getAssetPartyLinks().catch(() => [] as any[]) : Promise.resolve([] as any[]),
         storage.getLiabilityProfileLinks ? storage.getLiabilityProfileLinks().catch(() => [] as any[]) : Promise.resolve([] as any[]),
       ]);
-      try { (storage as any).disableRequestMemo?.(); } catch {}
-      if (!detail) return null;
+      if (!detail) {
+        try { (storage as any).disableRequestMemo?.(); } catch {}
+        return null;
+      }
       // S1: ownership guard — storage filters by user_id but be defensive.
-      if ((detail as any).userId && (detail as any).userId !== userId) return null;
+      if ((detail as any).userId && (detail as any).userId !== userId) {
+        try { (storage as any).disableRequestMemo?.(); } catch {}
+        return null;
+      }
+
+      // PERF 2026-07-08: type-specific extras so the liability/asset profile
+      // pages don't fire 4-5 follow-up serverless invocations after the
+      // bootstrap lands. Party enrichment reuses the already-fetched
+      // allProfiles list — zero extra round-trips for it.
+      const profileType = String((detail as any).type || "");
+      const enrichParties = (rows: any[]) => (rows || []).map((r: any) => {
+        const p = allProfiles.find(x => x.id === r.partyProfileId);
+        return { ...r, party: p ? { id: p.id, name: p.name, type: p.type } : null };
+      });
+
+      // Mirrors client/src/pages/profile-detail.tsx isAssetProfile — the set of
+      // types whose page reads ["/api/assets", id, "parties"].
+      const ASSET_PAGE_TYPES = new Set(["vehicle", "asset", "subscription", "loan", "investment", "property", "insurance", "medical", "account"]);
+      let assetParties: any[] | undefined;
+      if (ASSET_PAGE_TYPES.has(profileType)) {
+        assetParties = enrichParties((assetPartyLinks as any[]).filter((l: any) => l?.assetProfileId === profileId));
+      }
+
+      let liabilityExtras: any;
+      if (profileType === "liability" || profileType === "loan") {
+        // Same self-heal as GET /api/liabilities/:id/parties: older bills that
+        // predate the auto-ownership hook have no owner link — backfill once.
+        let partyRows = (liabilityProfileLinks as any[]).filter((l: any) => l?.liabilityProfileId === profileId);
+        if (partyRows.length === 0 && (storage as any).ensureLiabilityOwnerLink) {
+          try {
+            await (storage as any).ensureLiabilityOwnerLink(profileId);
+            partyRows = await storage.getLiabilityProfileLinks(profileId);
+          } catch { /* best-effort — page still renders without owner rows */ }
+        }
+        const [payments, schedule, assetLinks] = await Promise.all([
+          (storage as any).getLiabilityPayments
+            ? (storage as any).getLiabilityPayments(profileId).catch(() => [] as any[])
+            : Promise.resolve([] as any[]),
+          (storage as any).getLiabilitySchedule
+            ? (storage as any).getLiabilitySchedule(profileId, 12).catch(() => null)
+            : Promise.resolve(null),
+          (storage as any).getLiabilityAssetLinks
+            ? (storage as any).getLiabilityAssetLinks(profileId).catch(() => [] as any[])
+            : Promise.resolve([] as any[]),
+        ]);
+        liabilityExtras = {
+          payments,
+          // schedule is null for non-recurring liabilities (the standalone
+          // endpoint 404s there); the client only seeds it when present.
+          schedule: schedule || null,
+          parties: enrichParties(partyRows),
+          assets: assetLinks,
+        };
+      }
+      try { (storage as any).disableRequestMemo?.(); } catch {}
 
       // Build the tree in-process from the already-fetched allProfiles list
       // (no extra DB round-trip, no duplicate getProfiles call).
@@ -2744,6 +2813,8 @@ If unsure, return "profile_fact".`,
         profiles: allProfiles,
         assetPartyLinks,
         liabilityProfileLinks,
+        ...(assetParties !== undefined ? { assetParties } : {}),
+        ...(liabilityExtras !== undefined ? { liabilityExtras } : {}),
       };
     });
 
