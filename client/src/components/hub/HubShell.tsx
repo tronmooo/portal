@@ -9,13 +9,17 @@
 // no page state, and removing it reverts the app to the pre-hub behavior.
 import { useLocation } from "wouter";
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
+// hashNavigate (NOT wouter navigate) — tab routes carry queries ("/linked?tab=assets")
+// and wouter's hash navigate hoists the query OUT of the hash ("?tab=assets#/linked"),
+// where trackers.tsx getQuerySection would never see it on subsequent in-hash navs.
+import { hashNavigate } from "@/lib/hashNavigate";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { HUB_TABS, activeHubTab, infoTabRoute } from "./hub-routes";
 import { HubKpiStrip } from "./HubKpiStrip";
 import { HubProfileSwitcher } from "./HubProfileSwitcher";
 
 export function HubShell() {
-  const [location, navigate] = useLocation();
+  const [location] = useLocation();
   const scope = useProfileScope();
   const active = activeHubTab(location, [...scope.selectedIds]);
 
@@ -39,7 +43,7 @@ export function HubShell() {
               role="tab"
               aria-selected={isActive}
               data-testid={`hub-tab-${tab.id}`}
-              onClick={() => navigate(tab.id === "info" ? infoTabRoute([...scope.selectedIds]) : tab.route)}
+              onClick={() => hashNavigate(tab.id === "info" ? infoTabRoute([...scope.selectedIds]) : tab.route)}
               className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors ${
                 isActive
                   ? "bg-primary text-primary-foreground"

@@ -12,8 +12,10 @@
 // /api/trackers (not bootstrap-seeded): the HEALTH chip shows "—" until it
 // lands, and its key/URL match the trackers page exactly so the cache is
 // shared with the Trackers tab.
-import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+// hashNavigate handles query-carrying targets ("/linked?tab=documents") correctly
+// under hash routing (see HubShell.tsx note).
+import { hashNavigate } from "@/lib/hashNavigate";
 import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { computeHealthScore } from "@/lib/tracker-health";
@@ -48,7 +50,7 @@ function StatChip({ label, value, accent, sub, subTone, onClick, testId }: {
 }
 
 export function HubKpiStrip() {
-  const [, navigate] = useLocation();
+  const navigate = hashNavigate;
   const scope = useProfileScope();
   const mode = scope.mode;
   const ids = scope.selectedIds;
