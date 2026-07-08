@@ -26,10 +26,20 @@ import type { DashboardStats, Tracker } from "@shared/schema";
 // every stat opens its existing popup; never duplicate one). Lazy-loaded:
 // the strip is in the eager bundle and HeroKPIPopups drags recharts along
 // (~500KB), so the chunks download on first chip click, not on app boot.
-const NetWorthPopup = lazy(() => import("@/components/dashboard/HeroKPIPopups").then(m => ({ default: m.NetWorthPopup })));
-const CashFlowPopup = lazy(() => import("@/components/dashboard/HeroKPIPopups").then(m => ({ default: m.CashFlowPopup })));
-const TasksPopup = lazy(() => import("@/components/dashboard/TaskHabitPopups").then(m => ({ default: m.TasksPopup })));
-const HabitsPopup = lazy(() => import("@/components/dashboard/TaskHabitPopups").then(m => ({ default: m.HabitsPopup })));
+// FAIL-SAFE: if the chunk fetch fails (typical cause: a stale cached
+// index.html referencing renamed chunk files right after a deploy), we
+// navigate to the module's page instead of silently doing nothing.
+function lazyPopup<T>(load: () => Promise<T>, pick: (m: T) => React.ComponentType<any>, fallbackRoute: string): React.ComponentType<any> {
+  return lazy(() =>
+    load().then(m => ({ default: pick(m) })).catch(() => ({
+      default: (() => { hashNavigate(fallbackRoute); return null; }) as React.ComponentType<any>,
+    })),
+  );
+}
+const NetWorthPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopups"), m => m.NetWorthPopup, "/dashboard/finance");
+const CashFlowPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopups"), m => m.CashFlowPopup, "/dashboard/finance");
+const TasksPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.TasksPopup, "/tasks");
+const HabitsPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.HabitsPopup, "/habits");
 
 function fmtMoney(n: number): string {
   return Math.round(Math.abs(n)).toLocaleString("en-US");
@@ -172,8 +182,8 @@ export function HubKpiStrip() {
       {/* Drill-down popups — the exact components the dashboard KPI tiles use.
           Mounted only while open so the lazy chunk loads on first click. */}
       <Suspense fallback={null}>
-        {popup === "networth" && <NetWorthPopup open onOpenChange={(o) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
-        {popup === "cashflow" && <CashFlowPopup open onOpenChange={(o) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
+        {popup === "networth" && <NetWorthPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
+        {popup === "cashflow" && <CashFlowPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
         {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
         {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       </Suspense>
