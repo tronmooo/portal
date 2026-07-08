@@ -15,6 +15,7 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { MoneyOverview } from "@/components/finance/MoneyOverview";
+import { NetWorthPopup, CashFlowPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -227,6 +228,8 @@ export default function FinancePage() {
   // schedules, cashflow grid) collapse below the Money overview so the tab
   // leads with the snapshot. Default collapsed.
   const [showMore, setShowMore] = useState(false);
+  // Command-center drill-down popups (the SAME dashboard popups — reused).
+  const [financePopup, setFinancePopup] = useState<"networth" | "cashflow" | "budget" | null>(null);
 
   // ── Cashflow entry state ─────────────────────────────────────────────────
   const [addCashflowOpen, setAddCashflowOpen] = useState(false);
@@ -1003,6 +1006,7 @@ export default function FinancePage() {
           (s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const cashOut = spendMtd + Number(snap.monthlyObligationTotal || 0);
+        const savingsRate = monthlyIncome > 0 ? Math.round(((monthlyIncome - spendMtd) / monthlyIncome) * 100) : null;
 
         // Budgets: limit from /api/budgets, spent from snapshot.spendByCategory.
         const spendByCat: Record<string, number> = snap.spendByCategory || {};
@@ -1020,6 +1024,16 @@ export default function FinancePage() {
 
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
 
+        // Financial alerts & insights — derived, honest, each deep-links.
+        const alerts: Array<{ id: string; text: string; tone: "pos" | "neg" | "warn"; onClick?: () => void }> = [];
+        const overdue = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : []).filter((b: any) => b.status === "overdue");
+        if (overdue.length > 0) alerts.push({ id: "overdue", tone: "neg", text: `You have ${overdue.length} overdue bill${overdue.length > 1 ? "s" : ""} totaling $${overdue.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
+        const breached = budgetRows.filter(b => b.spent > b.limit);
+        for (const b of breached.slice(0, 2)) alerts.push({ id: `budget-${b.category}`, tone: "warn", text: `${b.category[0].toUpperCase()}${b.category.slice(1)} spending is over budget (${Math.round((b.spent / b.limit) * 100)}%).`, onClick: () => setFinancePopup("budget") });
+        if (savingsRate != null && savingsRate >= 15) alerts.push({ id: "savings", tone: "pos", text: `Great job — you're saving ${savingsRate}% of income this month.` });
+        const soonBill = bills14.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
+        if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling $${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
+
         return (
           <MoneyOverview
             netWorth={netWorth}
@@ -1030,15 +1044,38 @@ export default function FinancePage() {
             cashIn={monthlyIncome}
             cashOut={cashOut}
             spendMtd={spendMtd}
+            spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
+            incomeMtd={monthlyIncome}
             budgets={budgetRows}
             bills={bills14}
+            spendByCategory={spendByCat}
+            alerts={alerts}
             assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
             liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map((l: any) => ({ id: l.id, name: l.name, type: l.type, value: Number(l.value ?? l.grossValue ?? 0) })) : []}
             monthLabel={monthLabel}
             onAddExpense={() => setAddOpen(true)}
             onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
             payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null}
+            onOpenNetWorth={() => setFinancePopup("networth")}
+            onOpenCashFlow={() => setFinancePopup("cashflow")}
+            onOpenBudget={() => setFinancePopup("budget")}
+            onCategoryClick={(cat) => { setFilterCategory(cat); setSearchQuery(""); }}
           />
+        );
+      })()}
+
+      {/* Command-center drill-down popups — the SAME components the dashboard
+          KPI tiles use, mounted here so every Finance card/KPI opens a real,
+          detailed pop-up (Net Worth breakdown, Cash Flow, Budget manager). */}
+      {(() => {
+        const fc: "all" | "selected" | "everyone" = (filterMode === "selected" ? "selected" : "everyone");
+        const monthlyIncome = (incomes || []).reduce((s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
+        return (
+          <>
+            <NetWorthPopup open={financePopup === "networth"} onOpenChange={(o) => !o && setFinancePopup(null)} filterMode={fc} filterIds={filterIds} />
+            <CashFlowPopup open={financePopup === "cashflow"} onOpenChange={(o) => !o && setFinancePopup(null)} filterMode={fc} filterIds={filterIds} />
+            <BudgetPopup open={financePopup === "budget"} onOpenChange={(o) => !o && setFinancePopup(null)} filterMode={fc} filterIds={filterIds} monthlyIncome={monthlyIncome} />
+          </>
         );
       })()}
 
