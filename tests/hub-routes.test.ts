@@ -8,7 +8,7 @@ import {
 describe("HUB_TABS", () => {
   it("has the 8 mockup tabs in order", () => {
     expect(HUB_TABS.map(t => t.id)).toEqual([
-      "executive", "trackers", "finance", "health", "assets", "liabilities", "documents", "info",
+      "executive", "trackers", "finance", "wellness", "assets", "liabilities", "documents", "info",
     ]);
   });
 
@@ -26,8 +26,9 @@ describe("activeHubTab", () => {
     expect(activeHubTab("/trackers")).toBe("trackers");
     expect(activeHubTab("/dashboard/finance")).toBe("finance");
     expect(activeHubTab("/finance")).toBe("finance");
-    expect(activeHubTab("/health")).toBe("health");
-    expect(activeHubTab("/dashboard/health")).toBe("health");
+    expect(activeHubTab("/wellness")).toBe("wellness");
+    expect(activeHubTab("/health")).toBe("wellness");
+    expect(activeHubTab("/dashboard/health")).toBe("wellness");
     expect(activeHubTab("/liabilities")).toBe("liabilities");
     expect(activeHubTab("/profiles")).toBe("info");
   });
@@ -73,7 +74,7 @@ describe("isHubRoute / isHubLocationForNav", () => {
   it("covers all hub locations incl. profile detail pages", () => {
     for (const loc of [
       "/dashboard", "/dashboard/finance", "/dashboard/health", "/finance",
-      "/trackers", "/linked", "/linked?tab=assets", "/liabilities", "/health",
+      "/trackers", "/linked", "/linked?tab=assets", "/liabilities", "/health", "/wellness",
       "/profiles", "/profiles/some-id", "/profile/legacy-id", "/profiles/some-id/info",
     ]) {
       expect(isHubRoute(loc), loc).toBe(true);

@@ -13,7 +13,7 @@ export type HubTabId =
   | "executive"
   | "trackers"
   | "finance"
-  | "health"
+  | "wellness"
   | "assets"
   | "liabilities"
   | "documents"
@@ -31,7 +31,7 @@ export const HUB_TABS: HubTab[] = [
   { id: "executive",   label: "Executive",   route: "/dashboard" },
   { id: "trackers",    label: "Trackers",    route: "/trackers" },
   { id: "finance",     label: "Finance",     route: "/dashboard/finance" },
-  { id: "health",      label: "Health",      route: "/health" },
+  { id: "wellness",    label: "Wellness",    route: "/wellness" },
   { id: "assets",      label: "Assets",      route: "/linked?tab=assets" },
   { id: "liabilities", label: "Liabilities", route: "/liabilities" },
   { id: "documents",   label: "Documents",   route: "/linked?tab=documents" },
@@ -61,7 +61,7 @@ export function activeHubTab(location: string, selectedIds: string[] = []): HubT
   if (path === "/dashboard") return "executive";
   if (path === "/trackers") return "trackers";
   if (path === "/dashboard/finance" || path === "/finance") return "finance";
-  if (path === "/health" || path === "/dashboard/health") return "health";
+  if (path === "/wellness" || path === "/health" || path === "/dashboard/health") return "wellness";
   if (path === "/liabilities") return "liabilities";
   if (path === "/profiles") return "info";
 
@@ -101,6 +101,7 @@ export function isHubRoute(location: string): boolean {
     path === "/linked" ||
     path === "/liabilities" ||
     path === "/health" ||
+    path === "/wellness" ||
     path === "/profiles"
   ) return true;
   // Profile detail pages (people, assets, liabilities) + the lightweight Info
