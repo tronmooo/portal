@@ -3890,7 +3890,7 @@ MEDICATION TRACKING (separate system from habits):
 - Every medication, prescription, vitamin, or supplement gets its OWN tracker named EXACTLY after the item (e.g. "Multivitamin", "Fish Oil", "Amoxicillin", "Metformin"). NEVER create or use a generic "Supplements"/"Vitamins"/"Medications" tracker, and never bucket two different items together.
 - ALWAYS check for an existing tracker of that name first and append to it (log_tracker_entry); only create a new tracker (category="medication") when none exists. Logging "my multivitamin" when a "Multivitamin" tracker already exists MUST append to it — do not spawn a second tracker.
 - When the user logs several items in one message ("multivitamin, fish oil, and amoxicillin 500mg"), make a SEPARATE log_tracker_entry call for each, one per its own tracker.
-- Medication tracker fields MUST include: { drug: "Name", dosage: "Xmg", taken: true/false, time: "HH:MM", notes: "..." }. Capture dosage+unit whenever the user states or clearly implies one; do NOT invent a dosage the user didn't give (e.g. don't assume a multivitamin is 500mg just because a different drug in the same sentence was).
+- Medication tracker fields MUST include: { drug: "Name", dosage: "Xmg", taken: true/false, time: "HH:MM", notes: "..." }. Capture dosage+unit whenever the user states or clearly implies one. If the user does NOT state a dose ("log that I took my Amoxicillin"), OMIT the dosage/dose field entirely — do NOT put a placeholder like 1. The system will fill in that medication's usual dose from its own history. NEVER borrow a dose from a DIFFERENT drug mentioned in the same sentence (don't assume a multivitamin is 500mg because another pill was).
 - Medication adherence = entries where taken=true / total entries × 100%
 - NEVER lump medications into habit check-ins. Medications are structured data, not binary check-offs.
 - If a user says "I took my Metformin 500mg" → log_tracker_entry to the Metformin tracker (or create it) with { drug: "Metformin", dosage: "500mg", taken: true }
@@ -5930,6 +5930,54 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const entryValues = { ...input.values };
       if (input.notes) entryValues._notes = input.notes;
       if (tracker) {
+        // ── MEDICATION DOSE DEFAULTING (user report 2026-07) ──────────────
+        // Logging "I took my Amoxicillin" with no dose used to store a stray
+        // value (it showed as "1 mg"). A medication's dose is a stable
+        // standard — when the user doesn't restate it, reuse the tracker's
+        // usual (most-recent) dose instead of a guessed/blank one. Anything the
+        // user explicitly states wins: if they named a dose in this message (or
+        // a number that matches the logged dose), we leave it untouched.
+        try {
+          const isMed = tracker.category === "medication"
+            || /\b(medication|prescri|\brx\b)\b/i.test(tracker.name || "");
+          if (isMed) {
+            const numFields = (tracker.fields || []).filter((f: any) => f.type === "number");
+            const doseField = numFields.find((f: any) => /dos|amount|strength|mg|mcg|\bml\b|\biu\b|units?|pills?|tablets?/i.test(f.name)) || numFields[0];
+            if (doseField) {
+              const dfName = String(doseField.name);
+              const doseKeyRe = new RegExp(`^(${dfName}|dose|dosage|amount|value|strength|mg|mcg)$`, "i");
+              // The dose number (if any) the model put on this log.
+              let modelDose: number | undefined;
+              for (const [k, v] of Object.entries(entryValues)) {
+                if (k === "_notes" || !doseKeyRe.test(k)) continue;
+                const n = typeof v === "number" ? v : parseFloat(String(v));
+                if (isFinite(n)) { modelDose = n; break; }
+              }
+              // Did the USER explicitly state a dose in their message? A dose
+              // token (number + med unit), or a number that matches what the
+              // model logged, both count as explicit intent.
+              const rawMsg = String((input as any).__userMessage || "");
+              const explicitDose =
+                /\d+(?:\.\d+)?\s*(mg|mcg|g|ml|iu|units?|pills?|tablets?|tabs?|caps?|capsules?|puffs?|drops?|sprays?)\b/i.test(rawMsg)
+                || (modelDose !== undefined && new RegExp(`\\b${modelDose}\\b`).test(rawMsg));
+              if (!explicitDose) {
+                const usual = [...(tracker.entries || [])]
+                  .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                  .map((e: any) => e.values?.[dfName])
+                  .find((v: any) => typeof v === "number" && isFinite(v) && v > 0);
+                if (typeof usual === "number") {
+                  // Drop the guessed dose and apply the tracker's standard dose.
+                  for (const k of Object.keys(entryValues)) {
+                    if (doseKeyRe.test(k) && k !== "_notes") delete entryValues[k];
+                  }
+                  entryValues[dfName] = usual;
+                  logger.info("ai", `Medication ${tracker.name}: no dose stated — defaulted to usual ${usual}${tracker.unit || ""}`);
+                }
+              }
+            }
+          }
+        } catch { /* never block a log on dose inference */ }
+
         // Dedup: check if nearly identical entry was logged in the last 2 minutes
         const twoMinAgo = Date.now() - 120000;
         const recentDup = tracker.entries.find((e: any) => {
