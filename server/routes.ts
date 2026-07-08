@@ -343,6 +343,28 @@ function clearAllCache(): void {
   responseCache.clear();
 }
 
+// Every per-user TTL cache-key prefix (non-version-stamped). Version-stamped
+// keys self-invalidate via the DB data-version bump, so they are NOT listed
+// here. Kept in sync with the write-bust middleware's inline list; INCLUDES
+// bootstrap/profile-bootstrap which that list omits (they were only ever
+// cleared by the global wipe this scoped bust replaces).
+const USER_CACHE_PREFIXES = [
+  "stats:", "enhanced:", "bootstrap:", "profile-bootstrap:", "profile-detail:",
+  "profiles:", "trackers:", "tasks:", "expenses:", "events:", "habits:",
+  "obligations:", "journal:", "documents:", "goals:", "insights:",
+  "insights-data:", "activity:", "ai-digest:", "artifacts:", "notifications:",
+  "cashflow:", "calendar:",
+];
+
+// Scoped cache-bust: drop only the MUTATING user's cached responses instead of
+// wiping every user's cache on the warm instance (the old clearAllCache did the
+// latter, so one write cold-started the 60s stats/enhanced/bootstrap caches for
+// everyone). Per-user only — all cached data is per-user, so there is nothing
+// shared to invalidate across users.
+function bustUserCaches(uid: string): void {
+  for (const prefix of USER_CACHE_PREFIXES) bustCache(`${prefix}${uid}`);
+}
+
 // Verify a client-supplied entity id belongs to the current user.
 // Returns true if owned, false if not owned or unknown entity type.
 async function verifyEntityOwnership(entityType: string, entityId: string): Promise<boolean> {
@@ -390,16 +412,22 @@ function cacheBustMiddleware(req: any, res: any, next: any) {
   const isMutation = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
   const isAiMutator = req.path === '/api/chat' || req.path.startsWith('/api/upload') || req.path === '/api/chat/confirm-extraction';
   if (isMutation || isAiMutator) {
-    // Bug fix: bust BEFORE the handler runs as well as on finish.
-    // Previously only the res.on('finish') bust existed, which races with the
-    // client's invalidate-then-refetch: the GET /api/stats that fires immediately
-    // after onSuccess() could still hit a warm cache entry because 'finish' fires
-    // asynchronously AFTER the response has been sent.  Clearing synchronously here
-    // ensures any in-flight read that arrives while the mutation handler is executing
-    // will miss the cache and go to the DB instead.
-    clearAllCache();
+    // Bust BEFORE the handler runs as well as on finish. The pre-handler bust
+    // prevents a GET racing mid-handler from re-caching pre-write data; the
+    // finish bust catches long writes (AI chat) that mutate during the handler.
+    //
+    // PERF (2026-07): scope the bust to the MUTATING user instead of
+    // clearAllCache()'s global wipe — a single write used to cold-start the 60s
+    // stats/enhanced/bootstrap caches for every user on the warm instance. All
+    // cached data is per-user, so there is nothing shared to clear. authMiddleware
+    // runs before this (index.ts), so req.userId is populated on /api writes; the
+    // rare no-user case (unauthenticated mutating path) falls back to a full clear.
+    const uid = (req as any).userId as string | undefined;
+    if (uid) bustUserCaches(uid); else clearAllCache();
     res.on('finish', () => {
-      if (res.statusCode >= 200 && res.statusCode < 400) clearAllCache();
+      if (res.statusCode >= 200 && res.statusCode < 400) {
+        if (uid) bustUserCaches(uid); else clearAllCache();
+      }
     });
   }
   next();
