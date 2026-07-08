@@ -49,6 +49,7 @@ const _dashImport = () => import("@/pages/dashboard");
 const _trackImport = () => import("@/pages/trackers");
 const _profImport  = () => import("@/pages/profiles");
 const _profDImport = () => import("@/pages/profile-detail");
+const _profInfoImport = () => import("@/pages/profile-info");
 const _docDImport  = () => import("@/pages/document-detail");
 const _authImport  = () => import("@/pages/auth");
 const _resetImport = () => import("@/pages/reset-password");
@@ -71,6 +72,7 @@ const DashboardPage    = lazy(_dashImport);
 const TrackersPage     = lazy(_trackImport);
 const ProfilesPage     = lazy(_profImport);
 const ProfileDetailPage = lazy(_profDImport);
+const ProfileInfoPage  = lazy(_profInfoImport);
 const DocumentDetailPage = lazy(_docDImport);
 const AuthPage         = lazy(_authImport);
 const ResetPasswordPage = lazy(_resetImport);
@@ -638,6 +640,9 @@ function AppRouter() {
         <Route path="/linked" component={TrackersPage} />
         <Route path="/liabilities" component={TrackersPage} />
         <Route path="/profiles" component={ProfilesPage} />
+        {/* Lightweight Info page — MUST precede /profiles/:id so the more
+            specific pattern wins under the query-tolerant matcher. */}
+        <Route path="/profiles/:id/info" component={ProfileInfoPage} />
         <Route path="/profiles/:id" component={ProfileDetailPage} />
         <Route path="/documents/:id" component={DocumentDetailPage} />
         <Route path="/calendar" component={CalendarPage} />

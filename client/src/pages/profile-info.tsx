@@ -1,0 +1,388 @@
+// ── Info tab: lightweight, editable quick reference for one profile ──────────
+// Hub Info tab → /profiles/:id/info. This is the "quick reference" the user
+// asked for — identity/contact fields, notes, tags, emergency contact, plus a
+// small recent-activity peek and latest journal entry. The deep per-profile
+// data (assets, liabilities, trackers, documents) lives on the other hub tabs
+// (scoped by the switcher) and the full profile page stays at /profiles/:id.
+//
+// Data comes from /api/profile-bootstrap/:id under the SAME cache key the
+// detail page uses (["/api/profiles", id, "detail"]), so it's instant when
+// you've already visited the profile and edits here reflect there too.
+import { useState, useRef, useEffect } from "react";
+import { useRoute, useLocation, Link } from "wouter";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { flattenProfile } from "@/lib/flattenProfile";
+import { infoFieldsForType, readField, computeAge } from "@/lib/profile-fields";
+import { useToast } from "@/hooks/use-toast";
+import { formatApiError } from "@/lib/formatError";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Plus, Check, X, Camera, Pencil, BookOpen, Activity as ActivityIcon, ArrowLeft } from "lucide-react";
+
+function timeAgo(ts: string | undefined): string {
+  if (!ts) return "";
+  const d = new Date(ts).getTime();
+  if (isNaN(d)) return "";
+  const s = Math.max(0, Date.now() - d) / 1000;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+function fieldLabel(key: string): string {
+  return key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
+}
+
+export default function ProfileInfoPage() {
+  const [, params] = useRoute("/profiles/:id/info");
+  const [, navigate] = useLocation();
+  const id = (params as { id?: string } | null)?.id || "";
+  const { toast } = useToast();
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [addingField, setAddingField] = useState(false);
+  const [newKey, setNewKey] = useState("");
+  const [newVal, setNewVal] = useState("");
+
+  const { data: profile, isLoading, error } = useQuery<any>({
+    queryKey: ["/api/profiles", id, "detail"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profile-bootstrap/${id}`);
+      const b = await res.json();
+      if (b?.detail) {
+        if (b.profiles) queryClient.setQueryData(["/api/profiles"], b.profiles);
+        return flattenProfile(b.detail);
+      }
+      const r2 = await apiRequest("GET", `/api/profiles/${id}/detail`);
+      return flattenProfile(await r2.json());
+    },
+    enabled: !!id,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (profile?.name) document.title = `${profile.name} · Info — Portol`;
+  }, [profile?.name]);
+
+  // Single PATCH mutation for every field/notes/tags edit — merges into the
+  // existing fields object so we never clobber sibling keys (same shape the
+  // detail page uses).
+  const patch = useMutation({
+    mutationFn: async (body: any) => { await apiRequest("PATCH", `/api/profiles/${id}`, body); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    },
+    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  const saveField = (key: string, value: string) =>
+    patch.mutate({ fields: { ...(profile?.fields || {}), [key]: value } });
+  const removeField = (key: string) => {
+    const next = { ...(profile?.fields || {}) };
+    delete next[key];
+    patch.mutate({ fields: next });
+  };
+
+  const avatarMutation = useMutation({
+    mutationFn: async (payload: { fileData: string; mimeType: string }) => {
+      await apiRequest("POST", `/api/profiles/${id}/photo`, payload);
+    },
+    onSuccess: () => {
+      toast({ title: "Photo updated" });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+    },
+    onError: (err: Error) => toast({ title: "Failed to update photo", description: formatApiError(err), variant: "destructive" }),
+  });
+  const onAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast({ title: "Image too large", description: "Choose an image under 5MB", variant: "destructive" }); return; }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      avatarMutation.mutate({ fileData: result.includes(",") ? result.split(",")[1] : result, mimeType: file.type || "image/jpeg" });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="p-4 md:p-6 space-y-4" data-testid="page-profile-info">
+        <div className="h-16 w-48 rounded skeleton-shimmer" />
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {[...Array(6)].map((_, i) => <div key={i} className="h-16 rounded-lg skeleton-shimmer" />)}
+        </div>
+      </div>
+    );
+  }
+  if (error || !profile) {
+    return (
+      <div className="p-6 text-center" data-testid="page-profile-info">
+        <p className="text-sm text-destructive mb-2">Profile not found</p>
+        <Link href="/profiles" className="text-xs text-primary underline">Back to profiles</Link>
+      </div>
+    );
+  }
+
+  const fields = profile.fields || {};
+  const defs = infoFieldsForType(profile.type);
+  const shownKeys = new Set(defs.map(d => d.key.toLowerCase()));
+  // Identity fields that have a value, in declared order.
+  const rows: Array<{ key: string; label: string; value: string }> = [];
+  const age = computeAge(readField(fields, "birthday"));
+  if (age) rows.push({ key: "__age", label: "Age", value: age });
+  for (const d of defs) {
+    const v = readField(fields, d.key);
+    if (v === undefined || v === null || v === "") continue;
+    rows.push({ key: d.key, label: d.label, value: String(v) });
+  }
+  // Custom fields the user added that aren't in the identity whitelist and
+  // aren't nested storage groups — surfaced so "+ Add field" values show up.
+  const NESTED = new Set(["vehicles","insurance","housing","other","finance","subscriptions","utilities","personal","identity","health","contact","emergency","pets","pet"]);
+  for (const [k, v] of Object.entries(fields)) {
+    if (shownKeys.has(k.toLowerCase()) || NESTED.has(k)) continue;
+    if (v === undefined || v === null || v === "" || typeof v === "object") continue;
+    if (["dateofbirth","dob"].includes(k.toLowerCase())) continue;
+    rows.push({ key: k, label: fieldLabel(k), value: String(v) });
+  }
+
+  const timeline: any[] = Array.isArray(profile.timeline) ? profile.timeline.slice(0, 6) : [];
+  const journal: any[] = Array.isArray(profile.relatedJournal) ? profile.relatedJournal : [];
+  const latestJournal = journal[0];
+  const initial = (profile.name || "?").charAt(0).toUpperCase();
+
+  return (
+    <div className="p-4 md:p-6 space-y-5 overflow-y-auto h-full pb-24" data-testid="page-profile-info">
+      {/* Header */}
+      <div className="flex items-center gap-4">
+        <button
+          onClick={() => avatarInputRef.current?.click()}
+          className="relative w-16 h-16 rounded-2xl overflow-hidden shrink-0 group"
+          style={{ background: "linear-gradient(135deg, hsl(188 55% 40%), hsl(262 65% 45%))" }}
+          aria-label="Change photo"
+          data-testid="info-avatar"
+        >
+          {profile.avatar
+            ? <img src={profile.avatar} alt="" className="w-full h-full object-cover" />
+            : <span className="w-full h-full flex items-center justify-center text-2xl font-bold text-white">{initial}</span>}
+          <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+            <Camera className="h-4 w-4 text-white" />
+          </span>
+        </button>
+        <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={onAvatarChange} />
+        <div className="min-w-0 flex-1">
+          <h1 className="text-lg font-bold truncate" data-testid="info-name">{profile.name}</h1>
+          <p className="text-xs text-muted-foreground capitalize">{profile.type}</p>
+        </div>
+        <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAddingField(v => !v)} data-testid="info-add-field">
+          <Plus className="h-3.5 w-3.5" /> Add field
+        </Button>
+      </div>
+
+      {/* Add-field inline form */}
+      {addingField && (
+        <Card className="p-3 flex flex-wrap items-end gap-2" data-testid="info-add-field-form">
+          <div className="flex-1 min-w-[120px]">
+            <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Field</label>
+            <Input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="e.g. Nickname" className="h-8 text-xs" data-testid="info-new-key" />
+          </div>
+          <div className="flex-1 min-w-[120px]">
+            <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Value</label>
+            <Input value={newVal} onChange={e => setNewVal(e.target.value)} placeholder="Value" className="h-8 text-xs" data-testid="info-new-val" />
+          </div>
+          <Button
+            size="sm" className="h-8 text-xs"
+            disabled={!newKey.trim() || !newVal.trim()}
+            onClick={() => { saveField(newKey.trim(), newVal.trim()); setNewKey(""); setNewVal(""); setAddingField(false); }}
+            data-testid="info-new-save"
+          >Add</Button>
+        </Card>
+      )}
+
+      {/* Identity field grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2" data-testid="info-fields">
+        {rows.map(r => (
+          <FieldCell
+            key={r.key}
+            label={r.label}
+            value={r.value}
+            editable={r.key !== "__age"}
+            onSave={r.key !== "__age" ? (v) => saveField(r.key, v) : undefined}
+            onRemove={r.key !== "__age" && !["birthday"].includes(r.key) ? () => removeField(r.key) : undefined}
+          />
+        ))}
+        {rows.length === 0 && (
+          <p className="col-span-full text-xs text-muted-foreground py-4 text-center">No details yet — tap “Add field”.</p>
+        )}
+      </div>
+
+      {/* Notes + Tags */}
+      <NotesTags
+        notes={profile.notes || ""}
+        tags={profile.tags || []}
+        onSaveNotes={(notes) => patch.mutate({ notes })}
+        onSaveTags={(tags) => patch.mutate({ tags })}
+      />
+
+      {/* Activity + Journal */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <Card className="p-4" data-testid="info-activity">
+          <div className="flex items-center gap-2 mb-3">
+            <ActivityIcon className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Activity · {profile.name}</span>
+          </div>
+          {timeline.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No recent activity.</p>
+          ) : (
+            <div className="space-y-2">
+              {timeline.map((t: any) => (
+                <div key={t.id} className="flex items-baseline gap-3 text-sm">
+                  <span className="text-[10px] font-mono text-muted-foreground w-8 shrink-0">{timeAgo(t.timestamp)}</span>
+                  <span className="truncate">{t.title}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card className="p-4 flex flex-col" data-testid="info-journal">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Journal</span>
+            </div>
+            {latestJournal && <span className="text-[10px] text-muted-foreground">Last {timeAgo(latestJournal.date || latestJournal.createdAt)} ago</span>}
+          </div>
+          {latestJournal ? (
+            <p className="text-sm italic text-foreground/90 flex-1">"{String(latestJournal.content || "").slice(0, 140)}…"</p>
+          ) : (
+            <p className="text-xs text-muted-foreground flex-1">No journal entries yet.</p>
+          )}
+          <Button size="sm" className="mt-3 self-start h-8 text-xs" onClick={() => navigate("/journal?new=1")} data-testid="info-write-entry">
+            <Pencil className="h-3.5 w-3.5 mr-1.5" /> Write entry
+          </Button>
+        </Card>
+      </div>
+
+      <div className="text-center">
+        <Link href={`/profiles/${id}`} className="text-xs text-muted-foreground hover:text-foreground underline" data-testid="info-full-profile">
+          Open full profile →
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// ── Single editable identity cell ────────────────────────────────────────────
+function FieldCell({ label, value, editable, onSave, onRemove }: {
+  label: string;
+  value: string;
+  editable: boolean;
+  onSave?: (v: string) => void;
+  onRemove?: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+
+  if (editing && editable) {
+    return (
+      <Card className="p-2.5">
+        <label className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</label>
+        <div className="flex items-center gap-1 mt-1">
+          <Input value={draft} onChange={e => setDraft(e.target.value)} className="h-7 text-xs" autoFocus
+            onKeyDown={e => { if (e.key === "Enter") { onSave?.(draft); setEditing(false); } if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
+            data-testid={`info-edit-${label}`} />
+          <button onClick={() => { onSave?.(draft); setEditing(false); }} className="text-emerald-500" aria-label="Save"><Check className="h-4 w-4" /></button>
+          <button onClick={() => { setDraft(value); setEditing(false); }} className="text-muted-foreground" aria-label="Cancel"><X className="h-4 w-4" /></button>
+        </div>
+      </Card>
+    );
+  }
+  return (
+    <Card
+      className={`p-2.5 group relative ${editable ? "cursor-pointer hover:border-primary/50" : ""}`}
+      onClick={() => editable && setEditing(true)}
+      data-testid={`info-cell-${label}`}
+    >
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-sm font-medium truncate mt-0.5">{value}</div>
+      {onRemove && (
+        <button
+          onClick={e => { e.stopPropagation(); onRemove(); }}
+          className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+          aria-label={`Remove ${label}`}
+        ><X className="h-3 w-3" /></button>
+      )}
+    </Card>
+  );
+}
+
+// ── Notes + tags editor ──────────────────────────────────────────────────────
+function NotesTags({ notes, tags, onSaveNotes, onSaveTags }: {
+  notes: string;
+  tags: string[];
+  onSaveNotes: (v: string) => void;
+  onSaveTags: (v: string[]) => void;
+}) {
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [draft, setDraft] = useState(notes);
+  const [tagInput, setTagInput] = useState("");
+  useEffect(() => { setDraft(notes); }, [notes]);
+
+  const addTag = () => {
+    const t = tagInput.trim();
+    if (!t || tags.includes(t)) { setTagInput(""); return; }
+    onSaveTags([...tags, t]);
+    setTagInput("");
+  };
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <Card className="p-4" data-testid="info-notes">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Notes</span>
+          {!editingNotes && <button onClick={() => setEditingNotes(true)} className="text-muted-foreground hover:text-foreground" aria-label="Edit notes"><Pencil className="h-3.5 w-3.5" /></button>}
+        </div>
+        {editingNotes ? (
+          <div className="space-y-2">
+            <Textarea value={draft} onChange={e => setDraft(e.target.value)} rows={3} className="text-xs" placeholder="Add notes…" data-testid="info-notes-input" />
+            <div className="flex gap-2">
+              <Button size="sm" className="h-7 text-xs" onClick={() => { onSaveNotes(draft); setEditingNotes(false); }}>Save</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setDraft(notes); setEditingNotes(false); }}>Cancel</Button>
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground whitespace-pre-wrap min-h-[1.5rem]">{notes || "No notes."}</p>
+        )}
+      </Card>
+
+      <Card className="p-4" data-testid="info-tags">
+        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Tags</span>
+        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+          {tags.map(tag => (
+            <Badge key={tag} variant="secondary" className="gap-1 text-xs">
+              {tag}
+              <button onClick={() => onSaveTags(tags.filter(t => t !== tag))} aria-label={`Remove ${tag}`}><X className="h-3 w-3" /></button>
+            </Badge>
+          ))}
+          <Input
+            value={tagInput}
+            onChange={e => setTagInput(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }}
+            onBlur={addTag}
+            placeholder="+ tag"
+            className="h-6 w-20 text-xs border-dashed"
+            data-testid="info-tag-input"
+          />
+        </div>
+      </Card>
+    </div>
+  );
+}
