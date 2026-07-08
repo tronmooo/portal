@@ -2,6 +2,11 @@ import { defineConfig } from 'vitest/config';
 import path from 'path';
 
 export default defineConfig({
+  // Use the automatic JSX runtime so components under test don't need an
+  // explicit `import React` (matches the Vite app build). Without this,
+  // jsdom component tests hit "React is not defined" for any component that
+  // relies on the automatic runtime.
+  esbuild: { jsx: 'automatic' },
   test: {
     globals: true,
     environment: 'node',
@@ -57,6 +62,7 @@ export default defineConfig({
       'tests/tracker-health.test.ts',
       'tests/hub-routes.test.ts',
       'tests/profile-fields.test.ts',
+      'tests/money-overview.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
