@@ -42,12 +42,18 @@ describe("activeHubTab", () => {
     expect(activeHubTab("/linked")).toBeNull();
   });
 
-  it("Info is active on the SELECTED profile's detail page only", () => {
-    expect(activeHubTab("/profiles/abc", ["abc"])).toBe("info");
-    expect(activeHubTab("/profile/abc", ["abc"])).toBe("info"); // legacy singular alias
-    expect(activeHubTab("/profiles/other", ["abc"])).toBeNull();
-    expect(activeHubTab("/profiles/abc", [])).toBeNull();            // everyone
-    expect(activeHubTab("/profiles/abc", ["abc", "def"])).toBeNull(); // multi-select
+  it("Info is active on the SELECTED profile's Info page only", () => {
+    expect(activeHubTab("/profiles/abc/info", ["abc"])).toBe("info");
+    expect(activeHubTab("/profiles/other/info", ["abc"])).toBeNull();
+    expect(activeHubTab("/profiles/abc/info", [])).toBeNull();            // everyone
+    expect(activeHubTab("/profiles/abc/info", ["abc", "def"])).toBeNull(); // multi-select
+  });
+
+  it("the deep detail page (/profiles/:id) is NOT the Info chip", () => {
+    // Full profile page shows the shell but no chip lit — Info now points at
+    // the lightweight /profiles/:id/info page.
+    expect(activeHubTab("/profiles/abc", ["abc"])).toBeNull();
+    expect(activeHubTab("/profile/abc", ["abc"])).toBeNull();
   });
 
   it("ignores query strings and trailing slashes on path matches", () => {
@@ -68,7 +74,7 @@ describe("isHubRoute / isHubLocationForNav", () => {
     for (const loc of [
       "/dashboard", "/dashboard/finance", "/dashboard/health", "/finance",
       "/trackers", "/linked", "/linked?tab=assets", "/liabilities", "/health",
-      "/profiles", "/profiles/some-id", "/profile/legacy-id",
+      "/profiles", "/profiles/some-id", "/profile/legacy-id", "/profiles/some-id/info",
     ]) {
       expect(isHubRoute(loc), loc).toBe(true);
       expect(isHubLocationForNav(loc), loc).toBe(true);
@@ -89,8 +95,8 @@ describe("isHubRoute / isHubLocationForNav", () => {
 });
 
 describe("infoTabRoute", () => {
-  it("targets the selected profile only when exactly one is selected", () => {
-    expect(infoTabRoute(["abc"])).toBe("/profiles/abc");
+  it("targets the selected profile's Info page only when exactly one is selected", () => {
+    expect(infoTabRoute(["abc"])).toBe("/profiles/abc/info");
     expect(infoTabRoute([])).toBe("/profiles");
     expect(infoTabRoute(["a", "b"])).toBe("/profiles");
   });

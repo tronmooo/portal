@@ -38,10 +38,12 @@ export const HUB_TABS: HubTab[] = [
   { id: "info",        label: "Info",        route: "/profiles" },
 ];
 
-/** Info tab target: the selected profile's own page when exactly one profile
- *  is selected; otherwise the People grid. (User decision 2026-07-08.) */
+/** Info tab target: the selected profile's lightweight Info page when exactly
+ *  one profile is selected; otherwise the People grid. (User decision
+ *  2026-07-08: Info is a quick reference, distinct from the deep /profiles/:id
+ *  page.) */
 export function infoTabRoute(selectedIds: string[]): string {
-  return selectedIds.length === 1 ? `/profiles/${selectedIds[0]}` : "/profiles";
+  return selectedIds.length === 1 ? `/profiles/${selectedIds[0]}/info` : "/profiles";
 }
 
 function splitLocation(location: string): { path: string; query: URLSearchParams } {
@@ -63,6 +65,12 @@ export function activeHubTab(location: string, selectedIds: string[] = []): HubT
   if (path === "/liabilities") return "liabilities";
   if (path === "/profiles") return "info";
 
+  // Lightweight Info page for a specific profile.
+  const infoMatch = path.match(/^\/profiles\/([^/]+)\/info$/);
+  if (infoMatch) {
+    return selectedIds.length === 1 && infoMatch[1] === selectedIds[0] ? "info" : null;
+  }
+
   if (path === "/linked") {
     // trackers.tsx getQuerySection contract: ?tab= selects the section.
     const tab = (query.get("tab") || "").toLowerCase();
@@ -73,11 +81,9 @@ export function activeHubTab(location: string, selectedIds: string[] = []): HubT
     return null; // plain /linked = the legacy "All" view — no chip active
   }
 
-  const detail = path.match(/^\/profiles?\/([^/]+)$/);
-  if (detail) {
-    return selectedIds.length === 1 && detail[1] === selectedIds[0] ? "info" : null;
-  }
-
+  // The deep profile page (/profiles/:id, /profile/:id) shows the hub shell but
+  // lights NO chip — the Info chip points at the lightweight /profiles/:id/info
+  // page handled above.
   return null;
 }
 
@@ -97,9 +103,9 @@ export function isHubRoute(location: string): boolean {
     path === "/health" ||
     path === "/profiles"
   ) return true;
-  // Profile detail pages (people, assets, liabilities) keep the hub chrome so
-  // every profile feels like its own dashboard.
-  return /^\/profiles?\/[^/]+$/.test(path);
+  // Profile detail pages (people, assets, liabilities) + the lightweight Info
+  // page keep the hub chrome so every profile feels like its own dashboard.
+  return /^\/profiles?\/[^/]+(\/info)?$/.test(path);
 }
 
 /** Nav active-state helper: the single "Dashboard" nav item lights up for any

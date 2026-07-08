@@ -56,6 +56,7 @@ export default defineConfig({
       'tests/search-index.test.ts',
       'tests/tracker-health.test.ts',
       'tests/hub-routes.test.ts',
+      'tests/profile-fields.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
