@@ -2729,13 +2729,22 @@ function HabitsPopup({ open, onClose, filterIds = [], filterMode = "everyone" }:
                     {/* Inline schedule editor — the editable "habit profile" schedule */}
                     {editing && (
                       <div className="border-t border-border/50 px-3 py-2.5 space-y-2">
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Scheduled for</p>
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Scheduled for</p>
+                          <button type="button" onClick={() => setEditingScheduleId(null)}
+                            data-testid={`habit-schedule-done-${h.id}`}
+                            className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold text-primary hover:bg-primary/10 transition-colors">
+                            <Check className="h-3 w-3" /> Done
+                          </button>
+                        </div>
                         <div className="flex flex-wrap gap-1.5">
                           {(['anytime', 'morning', 'afternoon', 'evening', 'bedtime'] as const).map((slot) => {
                             const activeSlot = (h.timeOfDay || 'anytime') === slot && !h.scheduledTime;
                             return (
                               <button key={slot} type="button"
-                                onClick={() => setHabitSchedule(h, slot, null)}
+                                // Apply the slot and collapse the editor — picking a
+                                // named slot is a complete edit, so close right away.
+                                onClick={() => { setHabitSchedule(h, slot, null); setEditingScheduleId(null); }}
                                 disabled={updateHabitMutation.isPending}
                                 data-testid={`habit-tod-${slot}-${h.id}`}
                                 className={`rounded-full px-2.5 py-1 text-xs font-medium capitalize transition-colors ${activeSlot ? 'bg-primary text-primary-foreground' : 'bg-muted/50 text-muted-foreground hover:bg-muted'}`}>
