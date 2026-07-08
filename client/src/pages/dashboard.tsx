@@ -40,6 +40,7 @@ import {
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { useHubChrome } from "@/components/hub/hub-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -6424,6 +6425,9 @@ function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton }: {
 export default function DashboardPage() {
   useEffect(() => { document.title = "Dashboard — Portol"; }, []);
   const { toast } = useToast();
+  // Hub consolidation (2026-07): under the hub shell the date + profile
+  // filter are owned by the shell; this page keeps only its kebab menu.
+  const hubEmbedded = useHubChrome();
   const [, navigate] = useLocation();
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -6762,9 +6766,12 @@ export default function DashboardPage() {
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 md:p-4 space-y-3 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
-      {/* Header */}
+      {/* Header — hub-embedded: date + profile filter live in the hub shell
+          (HubShell/HubProfileSwitcher write the same profileFilter store this
+          page subscribes to), so only the kebab menu remains. */}
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
+          {!hubEmbedded && (
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-semibold text-foreground/90 tracking-tight">
               {/* Part D: render the header date in the user's timezone, not the
@@ -6778,6 +6785,7 @@ export default function DashboardPage() {
               compact
             />
           </div>
+          )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <DropdownMenu>

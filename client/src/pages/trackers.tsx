@@ -16,6 +16,7 @@ import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/t
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { useHubChrome } from "@/components/hub/hub-context";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
 import { CreateProfileDialog } from "@/pages/profiles";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -5419,6 +5420,9 @@ const PROFILE_TYPE_ICONS: Record<string, any> = {
 };
 
 export default function TrackersPage() {
+  // Hub consolidation (2026-07): true when rendered under the hub shell,
+  // which then owns the profile switcher + section navigation.
+  const hubEmbedded = useHubChrome();
   // Title reflects the actual route the user landed on. Both /trackers and
   // /linked render this same component. The app uses wouter path-based routing,
   // so we read window.location.pathname (NOT hash, which is always empty here).
@@ -5958,9 +5962,12 @@ export default function TrackersPage() {
     <div className="px-2 py-2 md:p-4 space-y-2 overflow-y-auto h-full pb-24" data-testid="page-trackers">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
+          {/* Hub-embedded: the shell owns navigation — hide the back arrow. */}
+          {!hubEmbedded && (
           <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-7 h-7 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back">
             <ArrowLeft className="w-3.5 h-3.5" />
           </Link>
+          )}
 
           <span className="text-xs text-muted-foreground">
             {sectionFilter === "trackers" ? `${filteredTrackers.length} trackers`
@@ -6045,18 +6052,25 @@ export default function TrackersPage() {
         </div>
       </div>
 
-      {/* ── Filter Bar ── */}
+      {/* ── Filter Bar ──
+          Hub-embedded (2026-07): the shell owns the profile switcher and the
+          section tabs (Trackers/Assets/Liabilities/Documents chips navigate
+          here with the right route/?tab=), so both are hidden — EXCEPT the
+          section pills on the legacy "All" view (plain /linked deep links),
+          where they're the only way to move between sections. */}
       <div className="space-y-2" data-testid="filter-bar">
         {/* Profile filter (page level) + Section pills */}
         <div className="flex flex-wrap items-center gap-2 pb-1">
+          {!hubEmbedded && (<>
           {/* Profile filter */}
           <MultiProfileFilter
             onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
             compact
           />
           <div className="h-4 w-px bg-border" />
+          </>)}
           {/* Section filter pills */}
-          {(() => {
+          {(!hubEmbedded || sectionFilter === "all") && (() => {
             // Counts come from the hoisted single source of truth (see BUG-3
             // above) so the chips, the header "N items", and the rendered lists
             // can never disagree.

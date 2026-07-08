@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { useHubChrome } from "@/components/hub/hub-context";
 import {
   Dialog,
   DialogContent,
@@ -1327,6 +1328,8 @@ function ProfileCard({ profile, onDelete }: { profile: Profile; onDelete: (id: s
 export default function ProfilesPage() {
   useEffect(() => { document.title = "Profiles — Portol"; }, []);
   const { toast } = useToast();
+  // Hub consolidation (2026-07): shell owns navigation when embedded.
+  const hubEmbedded = useHubChrome();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -1459,6 +1462,8 @@ export default function ProfilesPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
+          {/* Hub-embedded (2026-07): the shell owns navigation — no back arrow. */}
+          {!hubEmbedded && (
           <div className="flex items-center gap-3 mb-2">
             {/* BUG-P02: use history.back() so the button mirrors browser back behavior. */}
             <button
@@ -1477,6 +1482,7 @@ export default function ProfilesPage() {
               <ArrowLeft className="w-4 h-4" />
             </button>
           </div>
+          )}
           <p className="text-sm text-muted-foreground">
             {(profiles || []).length === 0
               ? "You haven't added any profiles yet"
