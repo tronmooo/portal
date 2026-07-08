@@ -2881,6 +2881,13 @@ export default function ChatPage() {
                       'complete_task', 'complete_event', 'pay_obligation',
                       'delete_task', 'delete_habit', 'delete_tracker_entry',
                       'update_tracker_entry', 'uncomplete_habit', 'save_memory',
+                      // 2026-07: the ~40 previously-unmapped write tools now
+                      // surface as typed action cards (undo only where an
+                      // endpoint is wired in undoEndpoints below).
+                      'create_liability', 'add_liability_payment', 'log_income',
+                      'log_paycheck', 'update_entity', 'delete_entity',
+                      'link_entities', 'set_budget', 'revalue_asset',
+                      'manage_domain', 'manage_document',
                     ].includes(a.type)).map((action, i) => {
                       const entityId = action.data?._entityId;
                       const isUndone = action.data?._undone;
@@ -2901,6 +2908,7 @@ export default function ChatPage() {
                         create_artifact: "artifacts",
                         create_tracker: "trackers",
                         log_entry: "tracker-entries",      // log_tracker_entry maps to log_entry
+                        log_income: "incomes",             // DELETE /api/incomes/:id exists
                         // Also by raw tool name (fallback)
                         log_tracker_entry: "tracker-entries",
                         add_tracker_entry: "tracker-entries",

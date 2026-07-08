@@ -54,7 +54,22 @@ export interface AIAction {
 
 // Legacy compat
 export interface ParsedAction {
-  type: "create_profile" | "create_tracker" | "log_entry" | "create_task" | "complete_task" | "delete_task" | "log_expense" | "create_event" | "create_reminder" | "complete_event" | "update_profile" | "create_goal" | "create_habit" | "checkin_habit" | "uncomplete_habit" | "delete_habit" | "create_obligation" | "pay_obligation" | "journal_entry" | "create_artifact" | "save_memory" | "recall_memory" | "retrieve" | "delete_tracker_entry" | "update_tracker_entry" | "unknown";
+  type:
+    // Creates / logs (undoable in the chat UI)
+    | "create_profile" | "create_tracker" | "log_entry" | "create_task" | "log_expense"
+    | "create_event" | "create_reminder" | "create_goal" | "create_habit" | "create_obligation"
+    | "journal_entry" | "create_artifact" | "save_memory" | "create_liability"
+    | "add_liability_payment" | "log_income" | "log_paycheck"
+    // State changes
+    | "complete_task" | "delete_task" | "complete_event" | "checkin_habit" | "uncomplete_habit"
+    | "delete_habit" | "pay_obligation" | "update_profile" | "delete_tracker_entry"
+    | "update_tracker_entry" | "recall_memory"
+    // Generic write buckets (2026-07: cover the ~40 tools that used to fall
+    // through to "retrieve" so every write surfaces as a typed action)
+    | "update_entity" | "delete_entity" | "link_entities" | "set_budget"
+    | "revalue_asset" | "manage_domain" | "manage_document"
+    // Reads
+    | "retrieve" | "unknown";
   category: string;
   data: Record<string, any>;
   confirmed?: boolean;
