@@ -64,3 +64,28 @@ describe("WeeklySummarySection", () => {
     expect(container.querySelector('[data-testid="section-weekly-summary"]')).toBeNull();
   });
 });
+
+describe("ExecutiveBriefing", () => {
+  it("renders every dense briefing section with collapse arrows", async () => {
+    const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
+    const stats: any = { recentActivity: [{ type: "habit", description: "Completed Workout", timestamp: new Date().toISOString() }] };
+    const enhanced: any = {
+      financeSnapshot: { upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: 0, status: "due_today" }] },
+      expiringDocuments: [{ documentId: "d1", name: "Passport", expirationDate: "2026-10-01", daysUntil: 85 }],
+    };
+    wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
+    for (const id of ["brief-agenda", "brief-tasks", "brief-habits", "brief-reminders", "brief-dates", "brief-docs", "brief-bills", "brief-calendar", "brief-projects", "brief-activity", "brief-notes"]) {
+      expect(screen.getByTestId(id), id).toBeTruthy();
+    }
+    // Bills row + Pay button render from enhanced data (no fetch needed).
+    expect(screen.getByTestId("brief-bills").textContent).toContain("Phone");
+    expect(screen.getByTestId("brief-pay-b1")).toBeTruthy();
+    // Docs row renders with days-left.
+    expect(screen.getByTestId("brief-docs").textContent).toContain("Passport");
+    // Sections collapse on header click.
+    const header = screen.getByTestId("brief-bills").querySelector("button[aria-expanded]") as HTMLElement;
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+  });
+});

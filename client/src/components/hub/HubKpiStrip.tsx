@@ -12,6 +12,7 @@
 // /api/trackers (not bootstrap-seeded): the HEALTH chip shows "—" until it
 // lands, and its key/URL match the trackers page exactly so the cache is
 // shared with the Trackers tab.
+import { useState, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 // hashNavigate handles query-carrying targets ("/linked?tab=documents") correctly
 // under hash routing (see HubShell.tsx note).
@@ -20,6 +21,15 @@ import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { computeHealthScore } from "@/lib/tracker-health";
 import type { DashboardStats, Tracker } from "@shared/schema";
+
+// Drill-down popups — the SAME components the dashboard uses (user rule:
+// every stat opens its existing popup; never duplicate one). Lazy-loaded:
+// the strip is in the eager bundle and HeroKPIPopups drags recharts along
+// (~500KB), so the chunks download on first chip click, not on app boot.
+const NetWorthPopup = lazy(() => import("@/components/dashboard/HeroKPIPopups").then(m => ({ default: m.NetWorthPopup })));
+const CashFlowPopup = lazy(() => import("@/components/dashboard/HeroKPIPopups").then(m => ({ default: m.CashFlowPopup })));
+const TasksPopup = lazy(() => import("@/components/dashboard/TaskHabitPopups").then(m => ({ default: m.TasksPopup })));
+const HabitsPopup = lazy(() => import("@/components/dashboard/TaskHabitPopups").then(m => ({ default: m.HabitsPopup })));
 
 function fmtMoney(n: number): string {
   return Math.round(Math.abs(n)).toLocaleString("en-US");
@@ -51,6 +61,7 @@ function StatChip({ label, value, accent, sub, subTone, onClick, testId }: {
 
 export function HubKpiStrip() {
   const navigate = hashNavigate;
+  const [popup, setPopup] = useState<"networth" | "cashflow" | "tasks" | "habits" | null>(null);
   const scope = useProfileScope();
   const mode = scope.mode;
   const ids = scope.selectedIds;
@@ -116,14 +127,14 @@ export function HubKpiStrip() {
         label="Net Worth"
         value={netWorth == null ? "—" : `${netWorth < 0 ? "-" : ""}${fmtMoney(netWorth)}`}
         accent={netWorth != null && netWorth < 0 ? "neg" : undefined}
-        onClick={() => navigate("/dashboard/finance")}
+        onClick={() => setPopup("networth")}
         testId="hub-kpi-networth"
       />
       <StatChip
         label="Cash Flow"
         value={cashFlow == null ? "—" : `${cashFlow >= 0 ? "+" : "-"}${fmtMoney(cashFlow)}`}
         accent={cashFlow == null ? undefined : cashFlow >= 0 ? "pos" : "neg"}
-        onClick={() => navigate("/dashboard/finance")}
+        onClick={() => setPopup("cashflow")}
         testId="hub-kpi-cashflow"
       />
       <StatChip
@@ -138,7 +149,7 @@ export function HubKpiStrip() {
         value={streak == null ? "—" : `${streak}D`}
         sub={streak != null && streak > 0 ? "★" : undefined}
         subTone="warn"
-        onClick={() => navigate("/habits")}
+        onClick={() => setPopup("habits")}
         testId="hub-kpi-streak"
       />
       <StatChip
@@ -146,7 +157,7 @@ export function HubKpiStrip() {
         value={tasksDue == null ? "—" : String(tasksDue)}
         sub={tasksLate > 0 ? `${tasksLate} late` : undefined}
         subTone="neg"
-        onClick={() => navigate("/tasks")}
+        onClick={() => setPopup("tasks")}
         testId="hub-kpi-tasks"
       />
       <StatChip
@@ -157,6 +168,15 @@ export function HubKpiStrip() {
         onClick={() => navigate("/linked?tab=documents")}
         testId="hub-kpi-docs"
       />
+
+      {/* Drill-down popups — the exact components the dashboard KPI tiles use.
+          Mounted only while open so the lazy chunk loads on first click. */}
+      <Suspense fallback={null}>
+        {popup === "networth" && <NetWorthPopup open onOpenChange={(o) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
+        {popup === "cashflow" && <CashFlowPopup open onOpenChange={(o) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
+        {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
+        {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
+      </Suspense>
     </div>
   );
 }
