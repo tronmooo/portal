@@ -4813,9 +4813,12 @@ export class SupabaseStorage implements IStorage {
       ? Array.from(new Set([...fpIds, ...ownedAssetSet]))
       : fpIds;
     const filterCtxExpense = { selectedIds: expenseScopeIds || [], allProfiles };
-    // When the scope widened we need every expense row (the pushdown fetch may
-    // have excluded asset-linked ones); expenses are small + bounded per user.
-    const expenseSource = (fpIds && ownedAssetSet.size > 0) ? await this.getExpenses() : allExpenses;
+    // When the scope widened (person filter + owned assets), the person-only
+    // pushdown (allExpenses) excluded asset-linked rows. PERF (2026-07): fetch
+    // the WIDENED set via the same GIN pushdown + request-memo instead of the
+    // whole expense table — bounded to the relevant rows, and shared with the
+    // getDashboardEnhanced call in the same request.
+    const expenseSource = (fpIds && ownedAssetSet.size > 0) ? await this.getExpenses(expenseScopeIds) : allExpenses;
     const expenses = expenseSource.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpense));
     const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
     const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
@@ -5069,7 +5072,9 @@ export class SupabaseStorage implements IStorage {
       ? Array.from(new Set([...fpIds, ...ownedAssetSetEnh]))
       : fpIds;
     const filterCtxExpenseEnh = { selectedIds: expenseScopeIdsEnh || [], allProfiles };
-    const expenseSourceEnh = (fpIds && ownedAssetSetEnh.size > 0) ? await this.getExpenses() : rawExpenses;
+    // PERF (2026-07): fetch the WIDENED scope via GIN pushdown + memo, not the
+    // full expense table (see the matching comment in getStats).
+    const expenseSourceEnh = (fpIds && ownedAssetSetEnh.size > 0) ? await this.getExpenses(expenseScopeIdsEnh) : rawExpenses;
     const allExpenses = expenseSourceEnh.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpenseEnh));
     const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
     const allTasks = rawTasks.filter(t => matchesProfileEnhanced(t.linkedProfiles));

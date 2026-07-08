@@ -190,7 +190,12 @@ export const queryClient = new QueryClient({
          long lists not keyed by profile filter) can opt back in explicitly
          with `placeholderData: keepPreviousData`. */
       placeholderData: undefined,
-      staleTime: 30_000,                 // 30s — chat writes must surface fast; window-focus refetch still keeps idle tabs fresh
+      // 60s — matches the server's stats/enhanced/bootstrap cache TTL, so a
+      // window-focus/mount refetch of the ~25 active dashboard queries can't
+      // out-run the server cache anyway. Chat writes and mutations surface via
+      // predicate INVALIDATION (which ignores staleTime), so this does not
+      // delay data propagation — it only halves the idle focus-refetch wave.
+      staleTime: 60_000,
       gcTime: 60 * 60_000,               // Keep unused data for 60 min
       networkMode: "always",             // Don't hang on flaky network
       retry: (failureCount, error) => {
