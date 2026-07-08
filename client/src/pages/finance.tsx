@@ -9,12 +9,21 @@ import { formatMoney, formatListDate } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount } from "@shared/obligation-windows";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { MoneyOverview } from "@/components/finance/MoneyOverview";
+import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
+import { hashNavigate } from "@/lib/hashNavigate";
+
+// Money-card drill-downs (2026-07): every card on the Money overview opens the
+// SAME popup the dashboard hero tiles use (user rule: never duplicate a popup).
+// Lazy so the recharts-heavy chunk loads on first card click, not page mount.
+const NetWorthPopup = lazy(() => import("@/components/dashboard/HeroKPIPopups").then(m => ({ default: m.NetWorthPopup })));
+const CashFlowPopup = lazy(() => import("@/components/dashboard/HeroKPIPopups").then(m => ({ default: m.CashFlowPopup })));
+const BudgetPopup = lazy(() => import("@/components/dashboard/HeroKPIPopups").then(m => ({ default: m.BudgetPopup })));
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -227,6 +236,11 @@ export default function FinancePage() {
   // schedules, cashflow grid) collapse below the Money overview so the tab
   // leads with the snapshot. Default collapsed.
   const [showMore, setShowMore] = useState(false);
+
+  // Money-card drill-downs: which dashboard popup is open, plus the quick-add
+  // dialog behind the "+ Bill" button on the Bills card.
+  const [moneyPopup, setMoneyPopup] = useState<"networth" | "cashflow" | "budget" | null>(null);
+  const [quickAddKind, setQuickAddKind] = useState<QuickAddKind | null>(null);
 
   // ── Cashflow entry state ─────────────────────────────────────────────────
   const [addCashflowOpen, setAddCashflowOpen] = useState(false);
@@ -769,6 +783,11 @@ export default function FinancePage() {
     </div>
   );
 
+  // Monthly income (recurring streams, monthlyized) — powers the Cash Flow
+  // card and the BudgetPopup's %-of-income budgeting mode.
+  const monthlyIncome = (incomes || []).reduce(
+    (s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
+
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
       <div>
@@ -999,8 +1018,6 @@ export default function FinancePage() {
           : (typeof snap.spendTrend === "number" ? null : null);
 
         // Cash flow: monthly income vs (month spend + monthlyized bills).
-        const monthlyIncome = (incomes || []).reduce(
-          (s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const cashOut = spendMtd + Number(snap.monthlyObligationTotal || 0);
 
@@ -1020,6 +1037,27 @@ export default function FinancePage() {
 
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
 
+        // MTD spend by category → the mini strip on the Spend card.
+        const spendCats = Object.entries(spendByCat).map(([name, v]) => ({ name, amount: Number(v) || 0 }));
+
+        // Subscriptions summary card (full list stays in the card further down).
+        const subsMonthly = subscriptions.reduce((s: number, sub: any) =>
+          s + toMonthlyAmount(Number(sub.fields?.cost ?? sub.fields?.amount ?? 0), sub.fields?.frequency || "monthly"), 0);
+
+        // Recent transactions: merged expenses (−) + incomes (+), newest first.
+        const recentTxns = [
+          ...profileFiltered.map(e => ({
+            id: e.id, date: (e.date || "").slice(0, 10),
+            name: e.description, category: e.category || "general",
+            amount: -Math.abs(Number(e.amount) || 0),
+          })),
+          ...(incomes || []).filter((i: any) => showTestData || !isTestEntity(i)).map((i: any) => ({
+            id: i.id, date: (i.date || "").slice(0, 10),
+            name: i.description || "Income", category: "income",
+            amount: Math.abs(Number(i.amount) || 0),
+          })),
+        ].filter(t => t.date).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+
         return (
           <MoneyOverview
             netWorth={netWorth}
@@ -1038,6 +1076,28 @@ export default function FinancePage() {
             onAddExpense={() => setAddOpen(true)}
             onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
             payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null}
+            onOpenNetWorth={() => setMoneyPopup("networth")}
+            onOpenCashFlow={() => setMoneyPopup("cashflow")}
+            onOpenSpend={() => setMoneyPopup("budget")}
+            onAddBudget={() => setMoneyPopup("budget")}
+            onAddBill={() => setQuickAddKind("bill")}
+            spendCats={spendCats}
+            subs={{ count: subscriptions.length, monthlyTotal: subsMonthly }}
+            onViewSubs={() => {
+              const el = document.querySelector('[data-testid="subscriptions-card"]');
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+              else hashNavigate("/editor/new/subscription");
+            }}
+            onAddSub={() => hashNavigate("/editor/new/subscription")}
+            transactions={recentTxns}
+            onTransactionClick={(id) => {
+              const exp = (expenses || []).find(e => e.id === id);
+              if (exp) { setEditingExpense(exp); return; }
+              const inc = (incomes || []).find((i: any) => i.id === id);
+              // The Edit Income dialog lives inside the collapsible "More"
+              // section — expand it so the dialog can mount.
+              if (inc) { setShowMore(true); setEditingIncome(inc); }
+            }}
           />
         );
       })()}
@@ -1921,6 +1981,25 @@ export default function FinancePage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Money-card drill-downs — the SAME popups the dashboard hero tiles
+          open: full net worth (assets/liabilities CRUD + trend), full cash
+          flow (income / recurring / one-time), full budget + spending
+          breakdown (donut, category details, budget CRUD). */}
+      <Suspense fallback={null}>
+        {moneyPopup === "networth" && (
+          <NetWorthPopup open onOpenChange={(o) => { if (!o) setMoneyPopup(null); }} filterMode={filterMode as any} filterIds={filterIds} />
+        )}
+        {moneyPopup === "cashflow" && (
+          <CashFlowPopup open onOpenChange={(o) => { if (!o) setMoneyPopup(null); }} filterMode={filterMode as any} filterIds={filterIds} />
+        )}
+        {moneyPopup === "budget" && (
+          <BudgetPopup open onOpenChange={(o) => { if (!o) setMoneyPopup(null); }} filterMode={filterMode as any} filterIds={filterIds} monthlyIncome={monthlyIncome} />
+        )}
+      </Suspense>
+      {quickAddKind && (
+        <QuickAddDialog open kind={quickAddKind} ownerProfileId={selfProfile?.id || ""} onClose={() => setQuickAddKind(null)} />
+      )}
     </div>
   );
 }

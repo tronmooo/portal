@@ -90,4 +90,81 @@ describe("MoneyOverview", () => {
     render(<MoneyOverview {...baseProps} netWorth={-22086} assets={0} liabilities={22086} />);
     expect(screen.getByTestId("money-networth").textContent).toContain("$22,086");
   });
+
+  // ── Drill-downs (2026-07): every card opens its existing dashboard popup ──
+  it("clicking the snapshot cards fires the drill-down handlers", () => {
+    const onOpenNetWorth = vi.fn();
+    const onOpenCashFlow = vi.fn();
+    const onOpenSpend = vi.fn();
+    render(<MoneyOverview {...baseProps}
+      onOpenNetWorth={onOpenNetWorth} onOpenCashFlow={onOpenCashFlow} onOpenSpend={onOpenSpend} />);
+    fireEvent.click(screen.getByTestId("money-networth"));
+    fireEvent.click(screen.getByTestId("money-cashflow"));
+    fireEvent.click(screen.getByTestId("money-spend"));
+    expect(onOpenNetWorth).toHaveBeenCalledTimes(1);
+    expect(onOpenCashFlow).toHaveBeenCalledTimes(1);
+    expect(onOpenSpend).toHaveBeenCalledTimes(1);
+  });
+
+  it("balance sheet and budget chips drill into their popups", () => {
+    const onOpenNetWorth = vi.fn();
+    const onOpenSpend = vi.fn();
+    render(<MoneyOverview {...baseProps} onOpenNetWorth={onOpenNetWorth} onOpenSpend={onOpenSpend} />);
+    fireEvent.click(screen.getByTestId("money-balance-sheet"));
+    expect(onOpenNetWorth).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId("money-budget-dining"));
+    expect(onOpenSpend).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the subscriptions summary with View all / + Sub actions", () => {
+    const onViewSubs = vi.fn();
+    const onAddSub = vi.fn();
+    render(<MoneyOverview {...baseProps}
+      subs={{ count: 12, monthlyTotal: 186 }} onViewSubs={onViewSubs} onAddSub={onAddSub} />);
+    const card = screen.getByTestId("money-subs");
+    expect(card.textContent).toContain("$186/mo");
+    expect(card.textContent).toContain("12 active");
+    fireEvent.click(screen.getByTestId("money-view-subs"));
+    expect(onViewSubs).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId("money-add-sub"));
+    expect(onAddSub).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders recent transactions with signed amounts and row clicks", () => {
+    const onTransactionClick = vi.fn();
+    render(<MoneyOverview {...baseProps}
+      transactions={[
+        { id: "t1", date: "2026-07-07", name: "Whole Foods", category: "groceries", amount: -86.4 },
+        { id: "t2", date: "2026-07-06", name: "Paycheck — Acme Co", category: "income", amount: 4210 },
+      ]}
+      onTransactionClick={onTransactionClick} />);
+    const card = screen.getByTestId("money-transactions");
+    expect(card.textContent).toContain("Whole Foods");
+    expect(card.textContent).toContain("+$4,210.00");
+    expect(card.textContent).toContain("−$86.40");
+    fireEvent.click(screen.getByTestId("money-txn-t1"));
+    expect(onTransactionClick).toHaveBeenCalledWith("t1");
+  });
+
+  it("shows the spend category strip and + Budget / + Bill buttons when wired", () => {
+    const onAddBudget = vi.fn();
+    const onAddBill = vi.fn();
+    render(<MoneyOverview {...baseProps}
+      spendCats={[{ name: "dining", amount: 368 }, { name: "groceries", amount: 408 }]}
+      onAddBudget={onAddBudget} onAddBill={onAddBill} />);
+    expect(screen.getByTestId("money-spend-strip").textContent).toContain("groceries");
+    fireEvent.click(screen.getByTestId("money-add-budget"));
+    expect(onAddBudget).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId("money-add-bill"));
+    expect(onAddBill).toHaveBeenCalledTimes(1);
+  });
+
+  it("collapses the whole section from the MONEY header toggle", () => {
+    render(<MoneyOverview {...baseProps} />);
+    expect(screen.queryByTestId("money-networth")).not.toBeNull();
+    fireEvent.click(screen.getByTestId("money-collapse"));
+    expect(screen.queryByTestId("money-networth")).toBeNull();
+    fireEvent.click(screen.getByTestId("money-collapse"));
+    expect(screen.queryByTestId("money-networth")).not.toBeNull();
+  });
 });
