@@ -3102,7 +3102,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Memory ---
   {
     name: "save_memory",
-    description: "Save a fact or piece of information about the user for later recall. Use when user says 'remember that...' or states a personal fact.",
+    description: "Save an ABSTRACT preference or piece of context that does NOT belong to a specific profile — e.g. 'I prefer window seats', 'I'm vegetarian', 'remind me gently'. Do NOT use this for concrete attributes of a person (sizes, measurements, physical traits, IDs, contact details) or any 'save this to my info' request — those are profile-level data and MUST use update_profile with a fields entry so they appear in the Info tab.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -4288,9 +4288,11 @@ NEVER:
 CRITICAL ROUTING RULES (NEVER VIOLATE):
 - "X owes me $Y" or "collect $Y from X" or "X owes me $Y for Z" → ALWAYS create_task with title like "Collect $Y from X for Z" and forProfile: "X". NEVER EVER use save_memory for debts/money owed. This applies to ALL variations: "owes me", "owes us", "I lent X $Y", "X hasn't paid me back".
 - "My blood type is X" or personal health info (allergies, height, weight, etc.) → ALWAYS update_profile on the self/Me profile with fields: { bloodType: "O+" } (or the appropriate field). NEVER use save_memory for profile-level data. Same for any profile: "Mom's blood type", "Max's breed".
+- ANY concrete personal ATTRIBUTE of a person (self or a named person) → ALWAYS update_profile on that profile with a fields entry, NEVER save_memory. This includes sizes and measurements (shoe/foot size, shirt/pant/dress/ring/hat sizes, height, weight, inseam, waist, chest), physical attributes (eye color, hair color), IDs/numbers (license, passport, SSN-last4, member numbers), and contact/identity details. Examples: "I have size 12 feet" → update_profile name:"Me" changes:{ fields:{ shoeSize: "12" } }; "my shirt size is L" → fields:{ shirtSize: "L" }; "my ring size is 9" → fields:{ ringSize: "9" }. Pick a short, clear camelCase field key that matches the attribute.
+- EXPLICIT "save to my info" — when the user says "save this to my info", "add this to my info tab", "put this in my info", "keep this in my profile", or similar → ALWAYS update_profile with a fields entry on the referenced profile (default to self/Me when unspecified). NEVER use save_memory for these; the Info tab reads profile fields.
 - "X's birthday is Y" → ALWAYS do BOTH: (1) update_profile with name: "X" and changes: { fields: { birthday: "Y" } } — if the profile doesn't exist, it will be auto-created. (2) create_event with title: "🎂 X's Birthday", date: Y (with correct year), recurrence: "yearly". Do NOT ask for confirmation. Just do it.
-- save_memory is ONLY for abstract facts/preferences, NOT for concrete data that belongs in a profile field, task, expense, or event.
-- save_memory should ONLY be used for abstract preferences, facts, or context that doesn't fit any structured data type (e.g., "Remember that I prefer window seats", "I'm vegetarian").
+- save_memory is ONLY for abstract facts/preferences, NOT for concrete data that belongs in a profile field, task, expense, or event. If a fact is a concrete attribute of a person (a size, measurement, number, physical trait, contact detail), it is profile-level data → use update_profile, not save_memory.
+- save_memory should ONLY be used for abstract preferences, facts, or context that doesn't fit any structured data type AND is not an attribute of a specific profile (e.g., "Remember that I prefer window seats", "I'm vegetarian", "I like to be reminded gently").
 
 ASSET & SUBSCRIPTION CRUD via chat:
 - WARRANTY CLAIMS: "Filed a warranty claim for my MacBook" → create_expense with category: "warranty", description: "Warranty claim - MacBook", forProfile: "MacBook" (or the asset name)

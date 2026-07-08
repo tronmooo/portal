@@ -47,8 +47,7 @@ import ChatPage from "@/pages/chat";
 // Lazy load heavy pages
 const _dashImport = () => import("@/pages/dashboard");
 const _trackImport = () => import("@/pages/trackers");
-const _profImport  = () => import("@/pages/profiles");
-const _profDImport = () => import("@/pages/profile-detail");
+const _profDispatchImport = () => import("@/pages/profile-route-dispatch");
 const _profInfoImport = () => import("@/pages/profile-info");
 const _docDImport  = () => import("@/pages/document-detail");
 const _authImport  = () => import("@/pages/auth");
@@ -71,8 +70,7 @@ const _shareViewImport = () => import("@/pages/share-view");
 
 const DashboardPage    = lazy(_dashImport);
 const TrackersPage     = lazy(_trackImport);
-const ProfilesPage     = lazy(_profImport);
-const ProfileDetailPage = lazy(_profDImport);
+const ProfileRouteDispatch = lazy(_profDispatchImport);
 const ProfileInfoPage  = lazy(_profInfoImport);
 const DocumentDetailPage = lazy(_docDImport);
 const AuthPage         = lazy(_authImport);
@@ -100,7 +98,7 @@ const ShareViewPage    = lazy(_shareViewImport);
 const MAIN_TAB_IMPORTS = [
   _dashImport,
   _trackImport,
-  _profImport,
+  _profInfoImport,
   _settImport,
   _calImport,
   _artImport,
@@ -642,11 +640,15 @@ function AppRouter() {
         <Route path="/trackers" component={TrackersPage} />
         <Route path="/linked" component={TrackersPage} />
         <Route path="/liabilities" component={TrackersPage} />
-        <Route path="/profiles" component={ProfilesPage} />
-        {/* Lightweight Info page — MUST precede /profiles/:id so the more
+        {/* Info tab. No id → the combined "everyone" Info view (replaces the
+            retired profiles grid). */}
+        <Route path="/profiles" component={ProfileInfoPage} />
+        {/* Single-profile Info — MUST precede /profiles/:id so the more
             specific pattern wins under the query-tolerant matcher. */}
         <Route path="/profiles/:id/info" component={ProfileInfoPage} />
-        <Route path="/profiles/:id" component={ProfileDetailPage} />
+        {/* Dispatcher: people redirect to their dashboard + Info; every other
+            profile type still renders the per-type detail page. */}
+        <Route path="/profiles/:id" component={ProfileRouteDispatch} />
         <Route path="/documents/:id" component={DocumentDetailPage} />
         <Route path="/calendar" component={CalendarPage} />
         <Route path="/settings" component={SettingsPage} />
@@ -657,9 +659,9 @@ function AppRouter() {
         <Route path="/dashboard/documents" component={ArtifactsPage} />
         {/* Legacy alias: QuickCreateFab + trackers page navigate to /dashboard/artifacts. */}
         <Route path="/dashboard/artifacts" component={ArtifactsPage} />
-        {/* Legacy singular alias: anywhere /profile/:id was bookmarked, route it to the
-            real /profiles/:id detail page so we never 404 on a real profile UUID. */}
-        <Route path="/profile/:id" component={ProfileDetailPage} />
+        {/* Legacy singular alias: anywhere /profile/:id was bookmarked, route it
+            through the dispatcher (normalizes to /profiles/:id) so we never 404. */}
+        <Route path="/profile/:id" component={ProfileRouteDispatch} />
         <Route path="/editor/new/:type" component={EditorPage} />
         <Route path="/editor/:id" component={EditorPage} />
         <Route path="/insights" component={InsightsPage} />
@@ -769,7 +771,7 @@ function App() {
                       {/* Search trigger — centre-right in header */}
                       <div className="flex items-center gap-1 sm:gap-2 flex-1 justify-end mr-1">
                         <CommandSearchTrigger />
-                        <Button variant="ghost" size="icon" onClick={() => hashNavigate("/profiles")} className="h-8 w-8" title="Profiles" aria-label="Open profiles" data-testid="button-profiles-header">
+                        <Button variant="ghost" size="icon" onClick={() => hashNavigate("/profiles")} className="h-8 w-8" title="Info" aria-label="Open info" data-testid="button-profiles-header">
                           <Users className="h-4 w-4" />
                         </Button>
                         <NotificationBell />

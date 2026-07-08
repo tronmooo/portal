@@ -96,7 +96,7 @@ export function HubProfileSwitcher() {
         ))}
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => navigate("/profiles")} data-testid="hub-switch-manage">
-          Manage profiles…
+          View everyone’s info…
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

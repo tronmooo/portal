@@ -18,7 +18,7 @@ import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
-import { CreateProfileDialog } from "@/pages/profiles";
+import { CreateProfileDialog } from "@/components/CreateProfileDialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";

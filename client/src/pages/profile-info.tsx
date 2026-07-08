@@ -1,9 +1,15 @@
-// ── Info tab: lightweight, editable quick reference for one profile ──────────
-// Hub Info tab → /profiles/:id/info. This is the "quick reference" the user
-// asked for — identity/contact fields, notes, tags, emergency contact, plus a
-// small recent-activity peek and latest journal entry. The deep per-profile
-// data (assets, liabilities, trackers, documents) lives on the other hub tabs
-// (scoped by the switcher) and the full profile page stays at /profiles/:id.
+// ── Info tab: the home for everything about a person ─────────────────────────
+// Hub Info tab. Two modes:
+//   • /profiles/:id/info  → one profile's Info (identity fields, notes, tags,
+//     documents, chat-saved facts, recent activity, latest journal).
+//   • /profiles           → "Everyone combined" — a per-person Info summary for
+//     all people plus the shared chat-saved facts.
+//
+// This is the canonical place where ALL data that doesn't fit a tracker shows
+// up: profile `fields` (edited here or written by chat's update_profile),
+// uploaded documents linked to the profile, and free-form "remembered" facts
+// from chat (the memories store). The deep per-type data (assets, liabilities,
+// finance) lives on the other hub tabs.
 //
 // Data comes from /api/profile-bootstrap/:id under the SAME cache key the
 // detail page uses (["/api/profiles", id, "detail"]), so it's instant when
@@ -16,12 +22,13 @@ import { flattenProfile } from "@/lib/flattenProfile";
 import { infoFieldsForType, readField, computeAge } from "@/lib/profile-fields";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
+import { DocumentViewerDialog } from "@/components/DocumentViewer";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Check, X, Camera, Pencil, BookOpen, Activity as ActivityIcon, ArrowLeft } from "lucide-react";
+import { Plus, Check, X, Camera, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Users } from "lucide-react";
 
 function timeAgo(ts: string | undefined): string {
   if (!ts) return "";
@@ -37,10 +44,25 @@ function fieldLabel(key: string): string {
   return key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
 }
 
+// Nested storage groups on a profile's `fields`. We no longer hide these — they
+// render as labeled sub-sections so nothing the user (or chat) saved is buried.
+const NESTED_GROUP_KEYS = new Set([
+  "vehicles", "insurance", "housing", "other", "finance", "subscriptions",
+  "utilities", "personal", "identity", "health", "contact", "emergency",
+  "pets", "pet",
+]);
+
+// ── Route dispatcher: single-profile Info vs. combined "everyone" Info ─────────
 export default function ProfileInfoPage() {
-  const [, params] = useRoute("/profiles/:id/info");
+  const [singleMatch, singleParams] = useRoute("/profiles/:id/info");
+  const id = singleMatch ? ((singleParams as { id?: string } | null)?.id || "") : "";
+  if (id) return <SingleProfileInfo id={id} />;
+  return <CombinedInfo />;
+}
+
+// ── One profile's Info ────────────────────────────────────────────────────────
+function SingleProfileInfo({ id }: { id: string }) {
   const [, navigate] = useLocation();
-  const id = (params as { id?: string } | null)?.id || "";
   const { toast } = useToast();
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [addingField, setAddingField] = useState(false);
@@ -125,7 +147,7 @@ export default function ProfileInfoPage() {
     return (
       <div className="p-6 text-center" data-testid="page-profile-info">
         <p className="text-sm text-destructive mb-2">Profile not found</p>
-        <Link href="/profiles" className="text-xs text-primary underline">Back to profiles</Link>
+        <Link href="/profiles" className="text-xs text-primary underline">Back to Info</Link>
       </div>
     );
   }
@@ -142,20 +164,32 @@ export default function ProfileInfoPage() {
     if (v === undefined || v === null || v === "") continue;
     rows.push({ key: d.key, label: d.label, value: String(v) });
   }
-  // Custom fields the user added that aren't in the identity whitelist and
-  // aren't nested storage groups — surfaced so "+ Add field" values show up.
-  const NESTED = new Set(["vehicles","insurance","housing","other","finance","subscriptions","utilities","personal","identity","health","contact","emergency","pets","pet"]);
+  // Custom scalar fields the user (or chat) added that aren't in the identity
+  // whitelist and aren't nested storage groups — surfaced so "+ Add field" AND
+  // anything saved from chat via update_profile shows up.
+  const nestedGroups: Array<{ key: string; entries: Array<[string, any]> }> = [];
   for (const [k, v] of Object.entries(fields)) {
-    if (shownKeys.has(k.toLowerCase()) || NESTED.has(k)) continue;
-    if (v === undefined || v === null || v === "" || typeof v === "object") continue;
-    if (["dateofbirth","dob"].includes(k.toLowerCase())) continue;
+    if (shownKeys.has(k.toLowerCase())) continue;
+    if (["dateofbirth", "dob"].includes(k.toLowerCase())) continue;
+    if (v === undefined || v === null || v === "") continue;
+    if (typeof v === "object") {
+      // Render nested groups (and known group keys) as their own sub-section.
+      const entries = Array.isArray(v)
+        ? v.map((item, i) => [String(i + 1), typeof item === "object" ? JSON.stringify(item) : item] as [string, any])
+        : Object.entries(v).filter(([, vv]) => vv !== undefined && vv !== null && vv !== "" && typeof vv !== "object");
+      if (entries.length > 0) nestedGroups.push({ key: k, entries });
+      continue;
+    }
+    if (NESTED_GROUP_KEYS.has(k)) continue; // group key holding a scalar — skip label noise
     rows.push({ key: k, label: fieldLabel(k), value: String(v) });
   }
 
   const timeline: any[] = Array.isArray(profile.timeline) ? profile.timeline.slice(0, 6) : [];
   const journal: any[] = Array.isArray(profile.relatedJournal) ? profile.relatedJournal : [];
   const latestJournal = journal[0];
+  const documents: any[] = Array.isArray(profile.relatedDocuments) ? profile.relatedDocuments : [];
   const initial = (profile.name || "?").charAt(0).toUpperCase();
+  const isSelf = profile.type === "self";
 
   return (
     <div className="p-4 md:p-6 space-y-5 overflow-y-auto h-full pb-24" data-testid="page-profile-info">
@@ -222,6 +256,21 @@ export default function ProfileInfoPage() {
         )}
       </div>
 
+      {/* Nested field groups (e.g. finance, health, credentials) */}
+      {nestedGroups.map(g => (
+        <Card className="p-4" key={g.key} data-testid={`info-group-${g.key}`}>
+          <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{fieldLabel(g.key)}</span>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mt-2">
+            {g.entries.map(([k, v]) => (
+              <div key={k} className="min-w-0">
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{fieldLabel(k)}</div>
+                <div className="text-sm font-medium truncate">{String(v)}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ))}
+
       {/* Notes + Tags */}
       <NotesTags
         notes={profile.notes || ""}
@@ -229,6 +278,12 @@ export default function ProfileInfoPage() {
         onSaveNotes={(notes) => patch.mutate({ notes })}
         onSaveTags={(tags) => patch.mutate({ tags })}
       />
+
+      {/* Documents linked to this profile */}
+      <DocumentsSection documents={documents} />
+
+      {/* Chat-saved facts (the memories store) — user-level, shown on Self */}
+      {isSelf && <MemoriesSection />}
 
       {/* Activity + Journal */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -269,13 +324,186 @@ export default function ProfileInfoPage() {
           </Button>
         </Card>
       </div>
-
-      <div className="text-center">
-        <Link href={`/profiles/${id}`} className="text-xs text-muted-foreground hover:text-foreground underline" data-testid="info-full-profile">
-          Open full profile →
-        </Link>
-      </div>
     </div>
+  );
+}
+
+// ── Combined "Everyone" Info ──────────────────────────────────────────────────
+// Shown at /profiles (no single person selected): a per-person Info summary for
+// all people plus the shared chat-saved facts.
+function CombinedInfo() {
+  useEffect(() => { document.title = "Info — Portol"; }, []);
+  const { data: profiles, isLoading } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: async () => (await apiRequest("GET", "/api/profiles")).json(),
+    staleTime: 30_000,
+  });
+
+  const people = (profiles || []).filter((p: any) => ["self", "person", "pet"].includes(p.type));
+
+  return (
+    <div className="p-4 md:p-6 space-y-5 overflow-y-auto h-full pb-24" data-testid="page-profile-info-all">
+      <div className="flex items-center gap-2">
+        <Users className="h-4 w-4 text-muted-foreground" />
+        <h1 className="text-lg font-bold">Info</h1>
+        <span className="text-xs text-muted-foreground">· everyone</span>
+      </div>
+
+      {isLoading && (
+        <div className="space-y-3">
+          {[...Array(3)].map((_, i) => <div key={i} className="h-24 rounded-lg skeleton-shimmer" />)}
+        </div>
+      )}
+
+      {!isLoading && people.length === 0 && (
+        <p className="text-sm text-muted-foreground py-8 text-center">No people yet. Create one from the + button.</p>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {people.map((p: any) => <PersonSummaryCard key={p.id} profile={p} />)}
+      </div>
+
+      {/* Shared chat-saved facts (user-level) */}
+      <MemoriesSection />
+    </div>
+  );
+}
+
+function PersonSummaryCard({ profile }: { profile: any }) {
+  const fields = profile.fields || {};
+  const defs = infoFieldsForType(profile.type);
+  const rows: Array<{ label: string; value: string }> = [];
+  const age = computeAge(readField(fields, "birthday"));
+  if (age) rows.push({ label: "Age", value: age });
+  for (const d of defs) {
+    const v = readField(fields, d.key);
+    if (v === undefined || v === null || v === "") continue;
+    rows.push({ label: d.label, value: String(v) });
+  }
+  // A few custom scalar fields too.
+  const shown = new Set(defs.map(d => d.key.toLowerCase()));
+  for (const [k, v] of Object.entries(fields)) {
+    if (rows.length >= 8) break;
+    if (shown.has(k.toLowerCase()) || NESTED_GROUP_KEYS.has(k)) continue;
+    if (["dateofbirth", "dob"].includes(k.toLowerCase())) continue;
+    if (v === undefined || v === null || v === "" || typeof v === "object") continue;
+    rows.push({ label: fieldLabel(k), value: String(v) });
+  }
+  const docCount = Array.isArray(profile.documents) ? profile.documents.length : 0;
+  const initial = (profile.name || "?").charAt(0).toUpperCase();
+
+  return (
+    <Card className="p-4" data-testid={`info-person-${profile.id}`}>
+      <div className="flex items-center gap-3 mb-3">
+        <span className="w-9 h-9 rounded-xl overflow-hidden flex items-center justify-center text-sm font-bold text-white shrink-0" style={{ background: "linear-gradient(135deg, hsl(188 55% 40%), hsl(262 65% 45%))" }}>
+          {profile.avatar ? <img src={profile.avatar} alt="" className="w-full h-full object-cover" /> : initial}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="font-semibold truncate">{profile.type === "self" ? `${profile.name} (me)` : profile.name}</div>
+          <div className="text-[10px] text-muted-foreground capitalize">{profile.type}{docCount ? ` · ${docCount} doc${docCount > 1 ? "s" : ""}` : ""}</div>
+        </div>
+        <Link href={`/profiles/${profile.id}/info`} className="text-xs text-primary hover:underline shrink-0" data-testid={`info-open-${profile.id}`}>Open →</Link>
+      </div>
+      {rows.length > 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {rows.map((r, i) => (
+            <div key={i} className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{r.label}</div>
+              <div className="text-sm font-medium truncate">{r.value}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">No details yet.</p>
+      )}
+      {profile.notes && <p className="text-xs text-muted-foreground whitespace-pre-wrap mt-3 line-clamp-3">{profile.notes}</p>}
+    </Card>
+  );
+}
+
+// ── Documents section ─────────────────────────────────────────────────────────
+function DocumentsSection({ documents }: { documents: any[] }) {
+  const [viewing, setViewing] = useState<any | null>(null);
+  if (!documents || documents.length === 0) return null;
+  return (
+    <Card className="p-4" data-testid="info-documents">
+      <div className="flex items-center gap-2 mb-3">
+        <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Documents</span>
+        <span className="text-[10px] text-muted-foreground">· {documents.length}</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {documents.map((d: any) => (
+          <button
+            key={d.id}
+            onClick={() => setViewing(d)}
+            className="flex items-center gap-2 p-2.5 rounded-lg border hover:border-primary/50 text-left min-w-0"
+            data-testid={`info-doc-${d.id}`}
+          >
+            <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium truncate">{d.name}</span>
+              <span className="block text-[10px] text-muted-foreground truncate">{d.type || d.mimeType}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+      {viewing && (
+        <DocumentViewerDialog
+          open={!!viewing}
+          onOpenChange={() => setViewing(null)}
+          id={viewing.id}
+          name={viewing.name}
+          mimeType={viewing.mimeType}
+          data={viewing.fileData || ""}
+        />
+      )}
+    </Card>
+  );
+}
+
+// ── Chat-saved facts (memories store) ─────────────────────────────────────────
+function MemoriesSection() {
+  const { toast } = useToast();
+  const { data: memories } = useQuery<any[]>({
+    queryKey: ["/api/memories"],
+    queryFn: async () => (await apiRequest("GET", "/api/memories")).json(),
+    staleTime: 30_000,
+  });
+
+  const update = useMutation({
+    mutationFn: async ({ id, value }: { id: string; value: string }) => { await apiRequest("PATCH", `/api/memories/${id}`, { value }); },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/memories"] }),
+    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
+  });
+  const remove = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/memories/${id}`); },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/memories"] }),
+    onError: (err: Error) => toast({ title: "Failed to remove", description: formatApiError(err), variant: "destructive" }),
+  });
+
+  if (!memories || memories.length === 0) return null;
+
+  return (
+    <Card className="p-4" data-testid="info-memories">
+      <div className="flex items-center gap-2 mb-3">
+        <Brain className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Facts from chat</span>
+        <span className="text-[10px] text-muted-foreground">· {memories.length}</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {memories.map((m: any) => (
+          <FieldCell
+            key={m.id}
+            label={fieldLabel(m.key || m.category || "note")}
+            value={String(m.value ?? "")}
+            editable
+            onSave={(v) => update.mutate({ id: m.id, value: v })}
+            onRemove={() => remove.mutate(m.id)}
+          />
+        ))}
+      </div>
+    </Card>
   );
 }
 

@@ -42,8 +42,6 @@ const ALLOWED_PATHS = new Set<string>([
   // `parentProfileId || fields?._parentProfileId` is what this guard prevents.
   "server/routes.ts",
   "server/supabase-storage.ts",
-  // UI safety list — hides stale keys from the manual field editor:
-  "client/src/pages/profiles.tsx",
   // Comment-only mentions in storage layer and dashboard popups (the guard
   // matches on the literal token; if a future commit re-introduces a real
   // read these comments still pass but the new read will fail the lint).
