@@ -1520,7 +1520,7 @@ function HeroBriefing({ enhanced, allProfiles, filterIds = [], filterMode = "eve
     queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
   });
   const { data: goalsRaw } = useQuery<any>({
-    queryKey: ["/api/goals", filterMode, ...filterIds],
+    queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
   });
   const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
@@ -1737,7 +1737,7 @@ function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filte
     queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
   });
   const { data: goalsRaw } = useQuery<any>({
-    queryKey: ["/api/goals", filterMode, ...filterIds],
+    queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
   });
   const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
@@ -1801,7 +1801,7 @@ function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyo
     queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
   });
   const { data: goalsRaw } = useQuery<any>({
-    queryKey: ["/api/goals", filterMode, ...filterIds],
+    queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
   });
   const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
@@ -2363,18 +2363,36 @@ function KeyFindingRow({ finding }: { finding: KeyFinding }) {
 
 function KeyFindingsSection({
   filterIds,
+  filterMode = "everyone",
 }: {
   filterIds: string[];
+  filterMode?: string;
 }) {
-  // Data: pull from existing dashboard endpoints. None of these are new
-  // requests — react-query dedupes by key, so this is free.
-  const { data: trackers = [] } = useQuery<any[]>({ queryKey: ["/api/trackers"] });
-  const { data: obligations = [] } = useQuery<any[]>({ queryKey: ["/api/obligations"] });
-  const { data: habits = [] } = useQuery<any[]>({ queryKey: ["/api/habits"] });
-  const { data: enhancedData } = useQuery<any>({ queryKey: ["/api/dashboard-enhanced"] });
+  // Data: pull from the SAME scoped keys the rest of the dashboard uses so this
+  // section respects the active profile filter (BUG G3 — these were bare keys
+  // that silently rendered Everyone data while a single profile was selected).
+  // They resolve from the bootstrap seed / sibling queries on the happy path;
+  // the queryFns are the fallback when this section mounts first.
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: trackers = [] } = useQuery<any[]>({
+    queryKey: ["/api/trackers", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/trackers${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const { data: obligations = [] } = useQuery<any[]>({
+    queryKey: ["/api/obligations", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const { data: habits = [] } = useQuery<any[]>({
+    queryKey: ["/api/habits", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/habits${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const { data: enhancedData } = useQuery<any>({
+    queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}`).then(r => r.json()).catch(() => null),
+  });
   const { data: networthHistory = [] } = useQuery<any[]>({
-    queryKey: ["/api/net-worth/history"],
-    queryFn: () => apiRequest("GET", "/api/net-worth/history?lookbackDays=120").then(r => r.json()).catch(() => []),
+    queryKey: ["/api/net-worth/history", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/net-worth/history?lookbackDays=120${profileParam ? `&profileIds=${filterIds.join(",")}` : ""}`).then(r => r.json()).catch(() => []),
   });
 
   // PR M — When scoped to specific profile(s), the cross-profile aggregates
@@ -4494,7 +4512,7 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone" }: { filterId
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
   const { data: goals = [] } = useQuery<any[]>({
-    queryKey: ["/api/goals", filterMode, ...filterIds],
+    queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
   });
 
@@ -5492,7 +5510,7 @@ export default function DashboardPage() {
         content = stats ? <ActionRequiredSection stats={stats} enhanced={enhanced} profileId={resolvedFilterId} /> : null;
         break;
       case "key-findings":
-        content = <KeyFindingsSection filterIds={filterIds} />;
+        content = <KeyFindingsSection filterIds={filterIds} filterMode={filterMode} />;
         break;
       case "goals":
         content = <GoalsSection profileId={resolvedFilterId} profileIds={filterIds} />;
