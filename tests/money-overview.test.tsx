@@ -45,15 +45,52 @@ const baseProps = {
 };
 
 describe("MoneyOverview", () => {
-  it("renders the snapshot row (net worth, MoM, cash flow, spend + worst budget)", () => {
-    render(<MoneyOverview {...baseProps} />);
+  it("renders the KPI card row (net worth, cash flow, spend, income, bills, savings)", () => {
+    render(<MoneyOverview {...baseProps} incomeMtd={8420} spendByCategory={{ dining: 368, shopping: 312 }} />);
     expect(screen.getByTestId("money-networth").textContent).toContain("$284,650");
-    expect(screen.getByTestId("money-networth").textContent).toContain("1.8% MO");
+    expect(screen.getByTestId("money-networth").textContent).toContain("1.8% mo");
     // cash flow +$2,270 (8420 - 6150)
     expect(screen.getByTestId("money-cashflow").textContent).toContain("$2,270");
     expect(screen.getByTestId("money-cashflow").textContent).toContain("IN $8,420");
-    // worst budget = shopping 104%
-    expect(screen.getByTestId("money-spend").textContent).toContain("SHOPPING 104% BUDGET");
+    // spend KPI shows worst-budget hint
+    expect(screen.getByTestId("money-spend").textContent).toContain("shopping 104%");
+    // new KPI cards
+    expect(screen.getByTestId("money-income").textContent).toContain("$8,420");
+    expect(screen.getByTestId("money-bills-kpi")).toBeTruthy();
+    // savings rate = (8420-1384)/8420 ≈ 84%
+    expect(screen.getByTestId("money-savings").textContent).toContain("84%");
+  });
+
+  it("renders the cash-flow overview donut and sorted category breakdown", () => {
+    const onCategoryClick = vi.fn();
+    render(<MoneyOverview {...baseProps} incomeMtd={8420}
+      spendByCategory={{ dining: 368, shopping: 312, groceries: 74 }} onCategoryClick={onCategoryClick} />);
+    expect(screen.getByTestId("money-cashflow-overview").textContent).toContain("Inflow");
+    const cats = screen.getByTestId("money-categories");
+    expect(cats.textContent).toContain("dining");
+    // sorted highest-first → dining before groceries
+    expect(cats.textContent!.indexOf("dining")).toBeLessThan(cats.textContent!.indexOf("groceries"));
+    fireEvent.click(screen.getByTestId("money-cat-dining"));
+    expect(onCategoryClick).toHaveBeenCalledWith("dining");
+  });
+
+  it("KPI cards and budgets open their drill-down popups", () => {
+    const onOpenNetWorth = vi.fn(), onOpenCashFlow = vi.fn(), onOpenBudget = vi.fn();
+    render(<MoneyOverview {...baseProps} onOpenNetWorth={onOpenNetWorth} onOpenCashFlow={onOpenCashFlow} onOpenBudget={onOpenBudget} />);
+    fireEvent.click(screen.getByTestId("money-networth"));
+    expect(onOpenNetWorth).toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("money-cashflow"));
+    expect(onOpenCashFlow).toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("money-budgets-header"));
+    expect(onOpenBudget).toHaveBeenCalled();
+  });
+
+  it("renders financial alerts that deep-link", () => {
+    const onClick = vi.fn();
+    render(<MoneyOverview {...baseProps} alerts={[{ id: "a1", text: "2 overdue bills", tone: "neg", onClick }]} />);
+    expect(screen.getByTestId("money-alerts").textContent).toContain("2 overdue bills");
+    fireEvent.click(screen.getByTestId("money-alert-a1"));
+    expect(onClick).toHaveBeenCalled();
   });
 
   it("renders budget chips with correct percentages", () => {

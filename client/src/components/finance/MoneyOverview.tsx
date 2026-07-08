@@ -41,6 +41,42 @@ function budgetTone(pct: number): { bar: string; text: string; ring: string } {
   return { bar: "bg-emerald-500", text: "text-emerald-500", ring: "border-emerald-500/30 bg-emerald-500/5" };
 }
 
+// One compact KPI card: label, big value, trend %, sparkline, color, click.
+function KpiCard({ label, value, trend, tone, series, sub, onClick, testId }: {
+  label: string; value: string; trend?: string; tone: "pos" | "neg" | "warn" | "neutral";
+  series?: number[]; sub?: string; onClick: () => void; testId: string;
+}) {
+  const color = tone === "pos" ? "155 65% 45%" : tone === "neg" ? "0 72% 58%" : tone === "warn" ? "38 96% 54%" : "213 90% 62%";
+  return (
+    <button onClick={onClick} data-testid={testId}
+      className="text-left rounded-xl border bg-card/40 p-3 hover:bg-muted/30 transition-colors min-w-[8.5rem] flex-1"
+      style={{ borderColor: `hsl(${color} / 0.28)` }}>
+      <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">{label}</div>
+      <div className="text-xl font-bold tabular-nums mt-0.5" style={{ color: `hsl(${color})` }}>{value}</div>
+      {trend && <div className="text-[10px] font-mono mt-0.5" style={{ color: `hsl(${color})` }}>{trend}</div>}
+      {series && series.length >= 2 ? <div className="mt-1.5"><Sparkline series={series} /></div>
+        : sub ? <div className="text-[10px] font-mono text-muted-foreground mt-1.5 truncate">{sub}</div> : null}
+    </button>
+  );
+}
+
+// Donut ring (inflow vs outflow) for the Cash Flow Overview.
+function DonutRing({ inflow, outflow, net }: { inflow: number; outflow: number; net: number }) {
+  const total = inflow + outflow || 1;
+  const inPct = inflow / total;
+  const r = 42, c = 2 * Math.PI * r;
+  return (
+    <svg viewBox="0 0 120 120" className="w-28 h-28">
+      <circle cx="60" cy="60" r={r} fill="none" stroke="hsl(0 72% 55%)" strokeWidth="12" />
+      <circle cx="60" cy="60" r={r} fill="none" stroke="hsl(155 60% 48%)" strokeWidth="12"
+        strokeDasharray={`${(c * inPct).toFixed(1)} ${c.toFixed(1)}`} strokeLinecap="round"
+        transform="rotate(-90 60 60)" />
+      <text x="60" y="56" textAnchor="middle" className="fill-foreground" style={{ fontSize: 15, fontWeight: 700 }}>{money(Math.abs(net))}</text>
+      <text x="60" y="72" textAnchor="middle" className="fill-muted-foreground" style={{ fontSize: 8 }}>NET · MONTH</text>
+    </svg>
+  );
+}
+
 export function MoneyOverview(props: {
   netWorth: number;
   assets: number;
@@ -50,51 +86,104 @@ export function MoneyOverview(props: {
   cashIn: number;
   cashOut: number;
   spendMtd: number;
+  spendTrendPct?: number | null;  // spend vs last month %
+  incomeMtd?: number;
   budgets: Array<{ category: string; limit: number; spent: number }>;
   bills: MoneyBill[];             // already filtered to the next N days
+  spendByCategory?: Record<string, number>;
+  alerts?: Array<{ id: string; text: string; tone: "pos" | "neg" | "warn"; onClick?: () => void }>;
   assetBreakdown: Breakdown[];
   liabilityBreakdown: Breakdown[];
   monthLabel: string;
   onAddExpense: () => void;
   onPayBill: (bill: MoneyBill) => void;
   payingId?: string | null;
+  onOpenNetWorth?: () => void;
+  onOpenCashFlow?: () => void;
+  onOpenBudget?: () => void;
+  onCategoryClick?: (category: string) => void;
 }) {
   const {
     netWorth, assets, liabilities, momPct, nwSeries, cashIn, cashOut, spendMtd,
-    budgets, bills, assetBreakdown, liabilityBreakdown, monthLabel,
+    spendTrendPct, incomeMtd = 0, budgets, bills, spendByCategory = {}, alerts = [],
+    assetBreakdown, liabilityBreakdown, monthLabel,
     onAddExpense, onPayBill, payingId,
+    onOpenNetWorth, onOpenCashFlow, onOpenBudget, onCategoryClick,
   } = props;
   const cashFlow = cashIn - cashOut;
   const worstBudget = budgets.slice().sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1)))[0];
   const worstPct = worstBudget ? Math.round((worstBudget.spent / (worstBudget.limit || 1)) * 100) : 0;
+  const savingsRate = incomeMtd > 0 ? Math.round(((incomeMtd - spendMtd) / incomeMtd) * 100) : null;
+  const billsTotal = bills.reduce((s, b) => s + (Number(b.amount) || 0), 0);
+  // Sorted category breakdown with % of total spend.
+  const catTotal = Object.values(spendByCategory).reduce((s, v) => s + (Number(v) || 0), 0) || 1;
+  const categories = Object.entries(spendByCategory)
+    .map(([name, amt]) => ({ name, amount: Number(amt) || 0, pct: (Number(amt) || 0) / catTotal }))
+    .filter(c => c.amount > 0)
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 8);
+  const CAT_COLORS = ["199 89% 60%", "155 65% 45%", "38 96% 54%", "262 80% 66%", "330 80% 62%", "173 60% 44%", "0 72% 58%", "240 10% 60%"];
 
   return (
     <div className="space-y-3" data-testid="money-overview">
-      {/* Snapshot row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <Card className="p-4" data-testid="money-networth">
-          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Net Worth</div>
-          <div className={`text-2xl font-bold tabular-nums mt-1 ${netWorth < 0 ? "text-red-500" : ""}`}>{money(netWorth)}</div>
-          {momPct != null && (
-            <div className={`text-xs font-mono mt-0.5 ${momPct >= 0 ? "text-emerald-500" : "text-red-500"}`}>
-              {momPct >= 0 ? "+" : ""}{momPct.toFixed(1)}% MO
-            </div>
-          )}
-          <div className="mt-2"><Sparkline series={nwSeries} /></div>
-        </Card>
-        <Card className="p-4" data-testid="money-cashflow">
-          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Cash Flow · {monthLabel}</div>
-          <div className={`text-2xl font-bold tabular-nums mt-1 ${cashFlow >= 0 ? "text-emerald-500" : "text-red-500"}`}>
-            {cashFlow >= 0 ? "+" : "-"}{money(Math.abs(cashFlow))}
+      {/* Top KPI cards — each opens a drill-down popup or filters. */}
+      <div className="flex flex-wrap gap-2">
+        <KpiCard label="Net Worth" value={money(netWorth)} tone={netWorth < 0 ? "neg" : "pos"}
+          trend={momPct != null ? `${momPct >= 0 ? "▲" : "▼"} ${Math.abs(momPct).toFixed(1)}% mo` : undefined}
+          series={nwSeries} onClick={() => onOpenNetWorth?.()} testId="money-networth" />
+        <KpiCard label={`Cash Flow · ${monthLabel}`} value={`${cashFlow >= 0 ? "+" : "-"}${money(Math.abs(cashFlow))}`}
+          tone={cashFlow >= 0 ? "pos" : "neg"} sub={`IN ${money(cashIn)} · OUT ${money(cashOut)}`}
+          onClick={() => onOpenCashFlow?.()} testId="money-cashflow" />
+        <KpiCard label="Spend · MTD" value={money(spendMtd)} tone="warn"
+          trend={spendTrendPct != null ? `${spendTrendPct >= 0 ? "▲" : "▼"} ${Math.abs(spendTrendPct).toFixed(0)}% mo` : undefined}
+          sub={worstBudget ? `${worstBudget.category} ${worstPct}%` : undefined}
+          onClick={() => onCategoryClick?.("all")} testId="money-spend" />
+        <KpiCard label="Income · MTD" value={money(incomeMtd)} tone="pos" sub="this month"
+          onClick={() => onOpenCashFlow?.()} testId="money-income" />
+        <KpiCard label="Bills Due" value={String(bills.length)} tone={bills.some(b => b.status === "overdue") ? "neg" : "warn"}
+          sub={`${money(billsTotal)} upcoming`} onClick={() => onOpenCashFlow?.()} testId="money-bills-kpi" />
+        <KpiCard label="Savings Rate" value={savingsRate != null ? `${savingsRate}%` : "—"}
+          tone={savingsRate != null && savingsRate >= 15 ? "pos" : savingsRate != null && savingsRate < 0 ? "neg" : "neutral"}
+          sub="income − spend" onClick={() => onOpenCashFlow?.()} testId="money-savings" />
+      </div>
+
+      {/* Cash Flow Overview + Spending by Category */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <Card className="p-4" data-testid="money-cashflow-overview">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Cash Flow Overview</span>
+            <button className="text-[10px] font-mono text-primary hover:underline" onClick={() => onOpenCashFlow?.()} data-testid="money-view-cashflow">View →</button>
           </div>
-          <div className="text-xs font-mono text-muted-foreground mt-2">IN {money(cashIn)} · OUT {money(cashOut)}</div>
+          <div className="flex items-center gap-4">
+            <DonutRing inflow={cashIn} outflow={cashOut} net={cashFlow} />
+            <div className="space-y-1.5 text-sm">
+              <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500" /><span className="text-muted-foreground">Inflow</span><span className="ml-auto tabular-nums font-semibold">{money(cashIn)}</span></div>
+              <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500" /><span className="text-muted-foreground">Outflow</span><span className="ml-auto tabular-nums font-semibold text-red-500">{money(cashOut)}</span></div>
+              <div className="flex items-center gap-2 border-t border-border/50 pt-1.5"><span className="text-muted-foreground">Net</span><span className={`ml-auto tabular-nums font-bold ${cashFlow >= 0 ? "text-emerald-500" : "text-red-500"}`}>{cashFlow >= 0 ? "+" : "-"}{money(Math.abs(cashFlow))}</span></div>
+            </div>
+          </div>
         </Card>
-        <Card className="p-4" data-testid="money-spend">
-          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Spend · MTD</div>
-          <div className="text-2xl font-bold tabular-nums mt-1">{money(spendMtd)}</div>
-          {worstBudget && (
-            <div className={`text-xs font-mono mt-2 ${budgetTone(worstPct).text}`}>
-              {worstBudget.category.toUpperCase()} {worstPct}% BUDGET
+
+        <Card className="p-4" data-testid="money-categories">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Spending by Category · MTD</span>
+          </div>
+          {categories.length === 0 ? <p className="text-xs text-muted-foreground">No spending this month.</p> : (
+            <div className="space-y-1.5">
+              {categories.map((c, i) => (
+                <button key={c.name} onClick={() => onCategoryClick?.(c.name)}
+                  className="w-full text-left group" data-testid={`money-cat-${c.name}`}>
+                  <div className="flex items-baseline gap-2 text-xs">
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: `hsl(${CAT_COLORS[i % CAT_COLORS.length]})` }} />
+                    <span className="capitalize truncate group-hover:text-foreground">{c.name}</span>
+                    <span className="ml-auto tabular-nums font-semibold">{money(c.amount)}</span>
+                    <span className="tabular-nums text-muted-foreground w-10 text-right">{(c.pct * 100).toFixed(1)}%</span>
+                  </div>
+                  <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
+                    <div className="h-full" style={{ width: `${Math.min(100, c.pct * 100)}%`, background: `hsl(${CAT_COLORS[i % CAT_COLORS.length]})` }} />
+                  </div>
+                </button>
+              ))}
             </div>
           )}
         </Card>
@@ -104,8 +193,11 @@ export function MoneyOverview(props: {
       {budgets.length > 0 && (
         <Card className="p-4" data-testid="money-budgets">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Budgets · MTD vs limit</span>
-            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onAddExpense} data-testid="money-add-expense">+ Expense</Button>
+            <button className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground hover:text-foreground" onClick={() => onOpenBudget?.()} data-testid="money-budgets-header">Budgets · MTD vs limit →</button>
+            <div className="flex gap-1.5">
+              {onOpenBudget && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onOpenBudget} data-testid="money-manage-budgets">+ Budget</Button>}
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onAddExpense} data-testid="money-add-expense">+ Expense</Button>
+            </div>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
             {budgets.map(b => {
@@ -207,6 +299,23 @@ export function MoneyOverview(props: {
             </Card>
           )}
         </div>
+      )}
+
+      {/* Financial Alerts & Insights — derived, each row deep-links. */}
+      {alerts.length > 0 && (
+        <Card className="p-4" data-testid="money-alerts">
+          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">Financial Alerts & Insights</div>
+          <div className="space-y-1">
+            {alerts.map(a => (
+              <button key={a.id} onClick={a.onClick} disabled={!a.onClick}
+                className={`w-full flex items-start gap-2 py-1 px-1 text-left text-xs rounded-sm ${a.onClick ? "hover:bg-muted/40" : ""} ${a.tone === "neg" ? "text-red-500" : a.tone === "warn" ? "text-amber-500" : "text-emerald-500"}`}
+                data-testid={`money-alert-${a.id}`}>
+                <span className="mt-[2px]">{a.tone === "neg" ? "⚠" : a.tone === "warn" ? "!" : "✓"}</span>
+                <span className="flex-1">{a.text}</span>
+              </button>
+            ))}
+          </div>
+        </Card>
       )}
     </div>
   );
