@@ -2113,17 +2113,23 @@ export default function ChatPage() {
 
   function invalidateAll() {
     // After a chat write the server has already busted its response cache, so
-    // we must refetch EVERY data query — not a hand-maintained subset — or a
-    // logged entry won't appear until the user manually refreshes. A predicate
-    // over all "/api/*" keys (excluding heavy binary file fetches) with
-    // refetchType:"all" refreshes active AND inactive queries, so the data is
-    // fresh whether the user stays on /chat or navigates to /trackers next.
+    // every data query must be marked stale — not a hand-maintained subset —
+    // or a logged entry won't appear until the user manually refreshes.
     const isData = (q: any) => {
       const k = String(q.queryKey?.[0] || "");
       return k.startsWith("/api/") && !k.includes("/file");
     };
-    // Pass 1 — refetch everything (active + inactive) so any page is fresh.
-    queryClient.invalidateQueries({ predicate: isData, refetchType: "all" });
+    // Pass 1 — refetch what's ON SCREEN now (refetchType "active", the
+    // default); everything else is only marked stale. The global
+    // refetchOnMount:true then refreshes any stale query in the background
+    // the moment the user navigates to its page, so the data is fresh either
+    // way. PERF (2026-07-08): this used refetchType:"all", which re-fired
+    // every cached query slot — dozens of dashboard/calendar/profile/tracker
+    // variants accumulated over the session — after EVERY chat command. That
+    // storm saturated the serverless backend (each request pays auth +
+    // Supabase round-trips) and was the single biggest reason chat saves and
+    // the pages right after them felt slow.
+    queryClient.invalidateQueries({ predicate: isData });
     // Pass 2 — the chat handler finalizes its cross-instance cache-version bump
     // right as the response is sent, so an instant refetch can race it and read
     // pre-write data. A short, light follow-up over only the VISIBLE queries

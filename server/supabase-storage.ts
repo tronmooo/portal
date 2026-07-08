@@ -930,12 +930,22 @@ export class SupabaseStorage implements IStorage {
     const directChildren = allProfiles.filter(p => p.parentProfileId === id);
     const childProfiles: any[] = [...directChildren];
     const isPersonLike = profile.type === "self" || profile.type === "person" || profile.type === "pet";
+    // PERF 2026-07-08: fetch each ownership link table ONCE and reuse it for
+    // both the co-owner child derivation here and the ownership-share
+    // annotation below. Previously this method queried asset_party_links and
+    // liability_profile_links twice each (a ForParty query + an unfiltered
+    // one). The full-table variants are also request-memoized, so the
+    // profile-bootstrap route's own link fetch shares the same round-trip.
+    let allAssetLinks: any[] = [];
+    let allLiabLinks: any[] = [];
     if (isPersonLike) {
+      [allAssetLinks, allLiabLinks] = await Promise.all([
+        this.getAssetPartyLinks().catch(() => [] as any[]),
+        this.getLiabilityProfileLinks().catch(() => [] as any[]),
+      ]);
       try {
-        const [assetLinks, liabLinks] = await Promise.all([
-          this.getAssetPartyLinksForParty(id).catch(() => [] as any[]),
-          this.getLiabilityProfileLinksForParty(id).catch(() => [] as any[]),
-        ]);
+        const assetLinks = allAssetLinks.filter((l: any) => l?.partyProfileId === id);
+        const liabLinks = allLiabLinks.filter((l: any) => l?.partyProfileId === id);
         const seen = new Set(directChildren.map(p => p.id));
         for (const l of assetLinks || []) {
           const aid = (l as any).assetProfileId;
@@ -988,10 +998,7 @@ export class SupabaseStorage implements IStorage {
     // don't sprout a confusing "0%". Only meaningful for person-like profiles.
     if (isPersonLike && childProfiles.length > 0) {
       try {
-        const [allAssetLinks, allLiabLinks] = await Promise.all([
-          this.getAssetPartyLinks().catch(() => [] as any[]),
-          this.getLiabilityProfileLinks().catch(() => [] as any[]),
-        ]);
+        // Reuses the link tables fetched once above — no extra round-trips.
         const selfId2 = allProfiles.find(p => p.type === "self")?.id || null;
         const assetLinksByItem = new Map<string, OwnershipLink[]>();
         for (const l of (allAssetLinks as any[]) || []) {
