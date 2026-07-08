@@ -883,8 +883,15 @@ export class SupabaseStorage implements IStorage {
     const obligationIds = (obligationsRes as any[]).map((r: any) => r.id);
     const habitIds = (habitsRes as any[]).map((r: any) => r.id);
     const [trackerEntryRows, obligationPaymentRows, habitCheckinRows] = await Promise.all([
+      // PERF 2026-07-08: cap at the 1000 most recent entries. This fetch was
+      // unbounded — a profile with a dense tracker (e.g. daily weight for
+      // years) shipped every row on every profile open, dominating both the
+      // query time and the JSON payload. Newest-first ordering means the cap
+      // drops only the oldest history; the profile page's charts/timeline
+      // show recent activity, and full history stays available through the
+      // trackers page's own paginated fetches.
       trackerIds.length > 0
-        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).is("deleted_at", null).order("timestamp", { ascending: false }).then(r => r.data || [])
+        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).is("deleted_at", null).order("timestamp", { ascending: false }).limit(1000).then(r => r.data || [])
         : Promise.resolve([] as any[]),
       // Obligations retired — no separate obligation payment feed on the timeline.
       Promise.resolve([] as any[]),
@@ -930,12 +937,22 @@ export class SupabaseStorage implements IStorage {
     const directChildren = allProfiles.filter(p => p.parentProfileId === id);
     const childProfiles: any[] = [...directChildren];
     const isPersonLike = profile.type === "self" || profile.type === "person" || profile.type === "pet";
+    // PERF 2026-07-08: fetch each ownership link table ONCE and reuse it for
+    // both the co-owner child derivation here and the ownership-share
+    // annotation below. Previously this method queried asset_party_links and
+    // liability_profile_links twice each (a ForParty query + an unfiltered
+    // one). The full-table variants are also request-memoized, so the
+    // profile-bootstrap route's own link fetch shares the same round-trip.
+    let allAssetLinks: any[] = [];
+    let allLiabLinks: any[] = [];
     if (isPersonLike) {
+      [allAssetLinks, allLiabLinks] = await Promise.all([
+        this.getAssetPartyLinks().catch(() => [] as any[]),
+        this.getLiabilityProfileLinks().catch(() => [] as any[]),
+      ]);
       try {
-        const [assetLinks, liabLinks] = await Promise.all([
-          this.getAssetPartyLinksForParty(id).catch(() => [] as any[]),
-          this.getLiabilityProfileLinksForParty(id).catch(() => [] as any[]),
-        ]);
+        const assetLinks = allAssetLinks.filter((l: any) => l?.partyProfileId === id);
+        const liabLinks = allLiabLinks.filter((l: any) => l?.partyProfileId === id);
         const seen = new Set(directChildren.map(p => p.id));
         for (const l of assetLinks || []) {
           const aid = (l as any).assetProfileId;
@@ -988,10 +1005,7 @@ export class SupabaseStorage implements IStorage {
     // don't sprout a confusing "0%". Only meaningful for person-like profiles.
     if (isPersonLike && childProfiles.length > 0) {
       try {
-        const [allAssetLinks, allLiabLinks] = await Promise.all([
-          this.getAssetPartyLinks().catch(() => [] as any[]),
-          this.getLiabilityProfileLinks().catch(() => [] as any[]),
-        ]);
+        // Reuses the link tables fetched once above — no extra round-trips.
         const selfId2 = allProfiles.find(p => p.type === "self")?.id || null;
         const assetLinksByItem = new Map<string, OwnershipLink[]>();
         for (const l of (allAssetLinks as any[]) || []) {
