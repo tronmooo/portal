@@ -3,6 +3,7 @@ import { formatApiError } from "@/lib/formatError";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { useAuth } from "@/lib/auth";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
 import { categoryTheme } from "@/lib/category-theme";
@@ -82,6 +83,7 @@ import {
   CalendarDays, Pin, PinOff, Filter as FilterIcon, Sparkle,
   Lightbulb, Repeat, Flag, User,
   Pause, Play, SkipForward, Tag as TagIcon, AlarmClock, ListChecks, Timer, ChevronsUpDown, FlaskConical,
+  Zap, Receipt, StickyNote, ArrowDownToLine,
 } from "lucide-react";
 import { useShowTestData, toggleShowTestData } from "@/lib/showTestData";
 import { isTestEntity } from "@shared/test-data";
@@ -6000,55 +6002,168 @@ interface DashboardSection {
 // TRAJECTORY (am I improving) → EXPLORE (where do I go next). Each section
 // appears once; the legacy duplicates are kept in code but hidden by default
 // (still toggleable via Customize and reachable on their own pages).
-const DEFAULT_SECTIONS: DashboardSection[] = [
-  // ── NOW ─────────────────────────────────────────────────────────────────
-  // Hub Executive layout (2026-07, LAYOUT_VERSION 13): matches the hub
-  // mockup's order — AI briefing → Needs attention → Today → ranked queue.
-  // Greeting + one AI state + one action (Phase 2). Replaces the long AI Summary.
-  { id: "hero-briefing",    label: "Briefing",             icon: Sparkles,     visible: true, column: "full" },
-  // Urgent items with actions (overdue bills, expiring docs) — promoted from
-  // hidden to match the mockup's "Needs Attention" list.
-  { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "full" },
-  // Today's schedule row (events / appts / tasks / habits) — promoted.
-  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "full" },
-  // The single urgency surface (Phase 1) — merges Action Required, Bills,
-  // Today's Schedule, Upcoming, and overdue Goals into one ranked list.
-  { id: "now-queue",        label: "Now",                  icon: Flame,        visible: true, column: "full" },
-  // ── TRAJECTORY ──────────────────────────────────────────────────────────
-  // Hero finance metrics (Net Worth / Cash Flow / Budget). Hidden by default
-  // since the hub KPI strip now owns the hero metrics; re-enable via
-  // Customize when running the dashboard standalone.
-  { id: "hero-kpis",        label: "Hero Metrics",         icon: Sparkles,     visible: false, column: "full" },
-  // Secondary metric chip row (6 tiles) — kept visible: it owns the
-  // Tasks/Spending/Bills/Docs/Habits popups.
-  { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
-  // Captioned trend modules (Phase 3) — replaces static Key Findings snippets.
-  { id: "trends",           label: "Trends",               icon: Activity,     visible: true, column: "full" },
-  // Health snapshot — top health/fitness trackers (latest + trend).
-  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "full" },
-  // ── EXPLORE ─────────────────────────────────────────────────────────────
-  // Compact domain navigation cards (Phase 4).
-  { id: "domain-hubs",      label: "Explore",              icon: BarChart3,    visible: true, column: "full" },
-  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "full" },
-  // Log-style data lives at the BOTTOM, collapsed by default (Phase 4).
-  { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
+// ── Executive command-center sections (2026-07) ──────────────────────────────
 
-  // ── Hidden by default (superseded; available via Customize) ──────────────
-  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: false, column: "full" },
+// One-tap create row. Wraps the existing QuickAddDialog so a new record lands
+// on the active profile (kpiOwnerId-style resolution via the scope).
+export function QuickActionsSection({ filterMode, filterIds }: { filterMode: string; filterIds: string[] }) {
+  const [kind, setKind] = useState<QuickAddKind | null>(null);
+  const { data: profiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  const ownerId = useMemo(() => {
+    if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
+    return (profiles.find((p: any) => p.type === "self")?.id) || "";
+  }, [filterMode, filterIds, profiles]);
+  const actions: Array<{ k: QuickAddKind; label: string; icon: any }> = [
+    { k: "expense", label: "Expense", icon: Receipt },
+    { k: "income", label: "Income", icon: ArrowDownToLine },
+    { k: "bill", label: "Bill", icon: CreditCard },
+    { k: "note", label: "Note", icon: StickyNote },
+    { k: "reminder", label: "Reminder", icon: Bell },
+  ];
+  return (
+    <div className="flex flex-wrap gap-2" data-testid="section-quick-actions">
+      {actions.map(a => (
+        <Button key={a.k} variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setKind(a.k)} data-testid={`quick-action-${a.k}`}>
+          <a.icon className="h-3.5 w-3.5" /> {a.label}
+        </Button>
+      ))}
+      {kind && <QuickAddDialog open kind={kind} ownerProfileId={ownerId} onClose={() => setKind(null)} />}
+    </div>
+  );
+}
+
+// Recent notifications feed (expiring docs, overdue/ due tasks, bills, streaks).
+// Reuses the /api/notifications endpoint the bell already consumes.
+export function NotificationsSection({ filterMode, filterIds }: { filterMode: string; filterIds: string[] }) {
+  const [, navigate] = useLocation();
+  const param = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: notifications = [] } = useQuery<any[]>({
+    queryKey: ["/api/notifications", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()).catch(() => []),
+    staleTime: 60_000,
+  });
+  const items = (Array.isArray(notifications) ? notifications : []).filter((n: any) => !n.dismissed).slice(0, 6);
+  if (items.length === 0) return null;
+  const dot = (sev: string) => sev === "critical" ? "bg-red-500" : sev === "warning" ? "bg-amber-500" : "bg-sky-500";
+  return (
+    <CollapsibleSection label="Notifications" icon={Bell} testId="section-notifications">
+      <div className="space-y-1.5">
+        {items.map((n: any) => (
+          <button
+            key={n.id}
+            onClick={() => { if (n.entityType === "document") navigate(`/documents/${n.entityId}`); else if (n.entityType === "profile") navigate(`/profiles/${n.entityId}`); }}
+            className="w-full flex items-start gap-2.5 py-1.5 text-left hover:bg-muted/40 rounded px-1"
+            data-testid={`notification-${n.id}`}
+          >
+            <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${dot(n.severity)}`} />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm truncate">{n.title}</div>
+              <div className="text-xs text-muted-foreground truncate">{n.message}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </CollapsibleSection>
+  );
+}
+
+// This-week progress snapshot (from stats, no extra fetch) + a button to
+// generate the full weekly review artifact.
+export function WeeklySummarySection({ stats, filterIds }: { stats: DashboardStats | undefined; filterIds: string[] }) {
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const { getAuthHeader } = useAuth();
+  const [generating, setGenerating] = useState(false);
+  if (!stats) return null;
+  const topStreak = Math.max(0, ...(stats.streaks || []).map(s => s.days || 0), stats.journalStreak || 0);
+  const cells: Array<{ label: string; value: string }> = [
+    { label: "Entries this week", value: String(stats.weeklyEntries ?? 0) },
+    { label: "Active tasks", value: String(stats.activeTasks ?? 0) },
+    { label: "Best streak", value: `${topStreak}d` },
+    { label: "Habit completion", value: `${Math.round(stats.habitCompletionRate ?? 0)}%` },
+  ];
+  const generate = async () => {
+    setGenerating(true);
+    try {
+      const qs = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+      const res = await fetch(`/api/weekly-review/generate${qs}`, { method: "POST", headers: getAuthHeader() });
+      const data = await res.json();
+      if (data?.artifactId) { toast({ title: "Weekly review ready" }); navigate(`/editor/${data.artifactId}`); }
+      else toast({ title: "Weekly review generated" });
+    } catch { toast({ title: "Couldn't generate review", variant: "destructive" }); }
+    finally { setGenerating(false); }
+  };
+  return (
+    <CollapsibleSection label="Weekly Summary" icon={TrendingUp} testId="section-weekly-summary">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+        {cells.map(c => (
+          <div key={c.label} className="rounded-lg border p-2.5">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{c.label}</div>
+            <div className="text-lg font-bold tabular-nums mt-0.5">{c.value}</div>
+          </div>
+        ))}
+      </div>
+      <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={generate} disabled={generating} data-testid="weekly-generate">
+        <Sparkles className="h-3.5 w-3.5" /> {generating ? "Generating…" : "Generate full weekly review"}
+      </Button>
+    </CollapsibleSection>
+  );
+}
+
+const DEFAULT_SECTIONS: DashboardSection[] = [
+  // ── NOW — "what should I do today?" ───────────────────────────────────────
+  // Executive command center (2026-07, LAYOUT_VERSION 14): AI briefing →
+  // quick actions → needs-attention → today's agenda → ranked queue →
+  // notifications, then trajectory / explore / summary lanes.
+  { id: "hero-briefing",    label: "Briefing",             icon: Sparkles,     visible: true, column: "full" },
+  // NEW: one-tap create row (expense / income / bill / task / note / reminder).
+  { id: "quick-actions",    label: "Quick Actions",        icon: Zap,          visible: true, column: "full" },
+  // Urgent items with actions (overdue bills, expiring docs).
+  { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "full" },
+  // Today's schedule row (events / appts / tasks / habits).
+  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "full" },
+  // The single urgency surface (Phase 1) — merges bills, tasks, schedule,
+  // upcoming, and overdue goals into one ranked list.
+  { id: "now-queue",        label: "Now",                  icon: Flame,        visible: true, column: "full" },
+  // NEW: recent notifications feed (expiring docs, overdue tasks, bills, streaks).
+  { id: "notifications",    label: "Notifications",        icon: Bell,         visible: true, column: "full" },
+  // Upcoming birthdays, anniversaries, renewals, maintenance, medication, and
+  // document/license/registration expirations across ALL profiles.
+  { id: "upcoming-dates",   label: "Upcoming",             icon: CalendarDays, visible: true, column: "full" },
+  // Bills & subscriptions with pay actions.
+  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: true, column: "full" },
+  // ── TRAJECTORY — "how am I doing?" ────────────────────────────────────────
+  // Hero finance metrics hidden — the hub KPI strip owns them (re-enable via
+  // Customize when running the dashboard standalone).
+  { id: "hero-kpis",        label: "Hero Metrics",         icon: Sparkles,     visible: false, column: "full" },
+  // Secondary metric chip row — owns the Tasks/Spending/Bills/Docs/Habits popups.
+  { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
+  // NEW: this-week progress snapshot + generate full weekly review.
+  { id: "weekly-summary",   label: "Weekly Summary",       icon: TrendingUp,   visible: true, column: "full" },
+  // Captioned trend modules.
+  { id: "trends",           label: "Trends",               icon: Activity,     visible: true, column: "full" },
+  // Health snapshot — top health/fitness trackers.
+  { id: "health",           label: "Health",               icon: HeartPulse,   visible: true, column: "full" },
+  { id: "goals",            label: "Goals",                icon: Target,       visible: true, column: "full" },
+  // AI recommendations / productivity insights.
+  { id: "key-findings",     label: "Key Findings",         icon: Lightbulb,    visible: true, column: "full" },
+  // ── EXPLORE — "where do I go next?" ───────────────────────────────────────
+  { id: "domain-hubs",      label: "Explore",              icon: BarChart3,    visible: true, column: "full" },
+  { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: true, column: "full" },
+  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: true, column: "full" },
+
+  // ── Hidden by default (available via Customize) ──────────────────────────
   { id: "finance",          label: "Finance",              icon: DollarSign,   visible: false, column: "full" },
-  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: false, column: "full" },
-  { id: "key-findings",     label: "Key Findings",         icon: Lightbulb,    visible: false, column: "full" },
-  { id: "upcoming-dates",   label: "Upcoming",             icon: CalendarDays, visible: false, column: "full" },
 ];
 // Swimlane groups (id sets) — render small group header chips during layout
 const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: string[] }> = [
-  { key: "now",        label: "Now",        emoji: "⚡", ids: ["hero-briefing", "needs-attention", "today", "now-queue"] },
-  { key: "trajectory", label: "Trajectory", emoji: "📈", ids: ["hero-kpis", "kpis", "trends", "health"] },
-  { key: "explore",    label: "Explore",    emoji: "🧭", ids: ["domain-hubs", "goals", "activity"] },
-  { key: "more",       label: "More (legacy)", emoji: "🗂️", ids: ["ai-summary", "finance", "obligations", "key-findings", "upcoming-dates"] },
+  { key: "now",        label: "Now",        emoji: "⚡", ids: ["hero-briefing", "quick-actions", "needs-attention", "today", "now-queue", "notifications", "upcoming-dates", "obligations"] },
+  { key: "trajectory", label: "Trajectory", emoji: "📈", ids: ["hero-kpis", "kpis", "weekly-summary", "trends", "health", "goals", "key-findings"] },
+  { key: "explore",    label: "Explore",    emoji: "🧭", ids: ["domain-hubs", "activity", "ai-summary"] },
+  { key: "more",       label: "More", emoji: "🗂️", ids: ["finance"] },
 ];
 
-const LAYOUT_VERSION = 13; // Hub Executive layout (needs-attention + today promoted; hero-kpis → strip)
+const LAYOUT_VERSION = 14; // Executive command center (quick-actions/notifications/weekly-summary + rich sections on)
 
 // ── Dashboard v2 Phase 5: Focus modes ───────────────────────────────────────
 // A mode reweights WHICH sections show and in WHAT order — Portol is too broad
@@ -6761,6 +6876,15 @@ export default function DashboardPage() {
         break;
       case "upcoming-dates":
         content = <UpcomingSection filterIds={filterIds} filterMode={filterMode} />;
+        break;
+      case "quick-actions":
+        content = <QuickActionsSection filterMode={filterMode} filterIds={filterIds} />;
+        break;
+      case "notifications":
+        content = <NotificationsSection filterMode={filterMode} filterIds={filterIds} />;
+        break;
+      case "weekly-summary":
+        content = <WeeklySummarySection stats={stats} filterIds={filterIds} />;
         break;
       default:
         content = null;

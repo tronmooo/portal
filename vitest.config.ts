@@ -63,6 +63,7 @@ export default defineConfig({
       'tests/hub-routes.test.ts',
       'tests/profile-fields.test.ts',
       'tests/money-overview.test.tsx',
+      'tests/executive-sections.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
