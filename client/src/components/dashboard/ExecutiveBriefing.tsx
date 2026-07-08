@@ -1,11 +1,11 @@
-// ── Executive briefing (2026-07-08) ──────────────────────────────────────────
-// The dense, spreadsheet-style daily briefing the Executive tab leads with:
-// compact rows, thin dividers, mono headers, no big cards or charts. Every
-// section is collapsible; every row opens the EXISTING popup/surface for its
-// module (TasksPopup, HabitsPopup, documents, calendar, finance…) — nothing
-// here duplicates functionality. Data comes from the same profile-scoped
-// query keys the dashboard already uses, so on the happy path this renders
-// from cache.
+// ── Executive briefing (2026-07-08, v2 multi-column) ─────────────────────────
+// Dense, colorful command-center layout: compact spreadsheet-like sections in
+// a responsive masonry (1/2/3 columns), each with a colored accent dot, thin
+// dividers, mono headers, minimal whitespace. Every section is collapsible and
+// every row opens the EXISTING popup/surface for its module — TasksPopup and
+// HabitsPopup are the same components the dashboard KPI tiles always used
+// (extracted to TaskHabitPopups.tsx), documents/bills/calendar/journal rows
+// deep-link to their existing surfaces. Nothing here duplicates functionality.
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -17,20 +17,47 @@ import type { DashboardStats } from "@shared/schema";
 
 type PopupKind = "tasks" | "habits" | null;
 
-function Section({ title, count, children, defaultOpen = true, testId }: {
-  title: string; count?: number; children: React.ReactNode; defaultOpen?: boolean; testId: string;
+// Per-section accent colors (HSL) — the "colorful, visually organized" pass.
+const ACCENTS: Record<string, string> = {
+  agenda:        "199 89% 60%",  // sky
+  overdue:       "0 72% 58%",    // red
+  tasks:         "217 91% 65%",  // blue
+  priority:      "25 95% 58%",   // orange
+  habits:        "155 65% 45%",  // emerald
+  reminders:     "43 96% 56%",   // amber
+  birthdays:     "330 80% 62%",  // pink
+  appointments:  "262 80% 66%",  // violet
+  dates:         "187 80% 50%",  // cyan
+  docs:          "0 72% 58%",    // red
+  bills:         "48 96% 53%",   // yellow
+  calendar:      "239 84% 67%",  // indigo
+  notifications: "350 85% 62%",  // rose
+  projects:      "142 70% 45%",  // green
+  alerts:        "280 75% 62%",  // purple
+  activity:      "173 60% 44%",  // teal
+  notes:         "240 10% 60%",  // stone
+};
+
+function Section({ id, title, count, children, defaultOpen = true, testId }: {
+  id: string; title: string; count?: number; children: React.ReactNode;
+  defaultOpen?: boolean; testId: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const accent = ACCENTS[id] || "240 10% 60%";
   return (
-    <div className="border-b border-border/40 pb-1.5" data-testid={testId}>
+    <div
+      className="break-inside-avoid mb-2 rounded-lg border border-border/50 bg-card/40 px-2 pt-0.5 pb-1.5"
+      data-testid={testId}
+    >
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-2 py-1.5 text-left group"
+        className="w-full flex items-center gap-1.5 py-1.5 text-left group"
         aria-expanded={open}
       >
+        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
         <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-muted-foreground group-hover:text-foreground transition-colors">{title}</span>
         {typeof count === "number" && count > 0 && (
-          <span className="text-[10px] font-mono px-1.5 rounded-full bg-muted text-muted-foreground">{count}</span>
+          <span className="text-[10px] font-mono px-1.5 rounded-full" style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}>{count}</span>
         )}
         <ChevronDown className={`h-3 w-3 ml-auto text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
       </button>
@@ -39,25 +66,26 @@ function Section({ title, count, children, defaultOpen = true, testId }: {
   );
 }
 
-function Row({ cells, onClick, testId, urgent }: {
-  cells: React.ReactNode[]; onClick?: () => void; testId?: string; urgent?: boolean;
+function Row({ cells, onClick, testId, urgent, valueTone }: {
+  cells: React.ReactNode[]; onClick?: () => void; testId?: string;
+  urgent?: boolean; valueTone?: "pos" | "neg" | "warn";
 }) {
+  const toneCls = valueTone === "pos" ? "text-emerald-500" : valueTone === "neg" ? "text-red-500" : valueTone === "warn" ? "text-amber-500" : "";
   return (
     <button
       onClick={onClick}
       data-testid={testId}
-      className={`w-full grid items-baseline gap-2 py-[3px] px-1 text-left text-xs hover:bg-muted/40 rounded-sm ${urgent ? "text-red-500" : ""}`}
-      style={{ gridTemplateColumns: `5rem 1fr ${cells.length > 2 ? "auto" : ""} ${cells.length > 3 ? "auto" : ""}`.trim() }}
+      className={`w-full flex items-baseline gap-2 py-[3px] px-1 text-left text-xs hover:bg-muted/40 rounded-sm ${urgent ? "text-red-500" : ""}`}
     >
-      {cells.map((c, i) => (
-        <span key={i} className={i === 0 ? "font-mono text-[10px] uppercase text-muted-foreground truncate" : i === 1 ? "truncate" : "font-mono text-[11px] tabular-nums text-right shrink-0"}>{c}</span>
-      ))}
+      <span className="font-mono text-[10px] uppercase text-muted-foreground w-16 shrink-0 truncate">{cells[0]}</span>
+      <span className="flex-1 truncate">{cells[1]}</span>
+      {cells.length > 2 && <span className={`font-mono text-[11px] tabular-nums text-right shrink-0 ${toneCls}`}>{cells[2]}</span>}
     </button>
   );
 }
 
 const Empty = ({ label }: { label: string }) => (
-  <p className="text-[11px] text-muted-foreground py-1 px-1">{label}</p>
+  <p className="text-[11px] text-muted-foreground py-0.5 px-1">{label}</p>
 );
 
 function dayLabel(dateStr: string, todayStr: string): string {
@@ -69,6 +97,9 @@ function dayLabel(dateStr: string, todayStr: string): string {
   if (diff > 1 && diff < 7) return d.toLocaleDateString("en-US", { weekday: "long" });
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
+
+const BIRTHDAY_RE = /birthday|anniversar|🎂|🎉/i;
+const APPT_RE = /appt|appointment|doctor|dentist|dental|vet\b|exam|check[- ]?up|physical|therapy/i;
 
 export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   filterMode: string; filterIds: string[];
@@ -82,6 +113,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
   const amp = param ? "&" : "?";
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+  const in45 = new Date(Date.now() + 45 * 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
   const in14 = new Date(Date.now() + 14 * 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
 
   const { data: tasks = [] } = useQuery<any[]>({
@@ -94,9 +126,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     queryFn: () => apiRequest("GET", `/api/habits${param}`).then(r => r.json()),
     staleTime: 30_000,
   });
+  // 45-day window: agenda + calendar preview slice ≤14d from it; birthdays /
+  // appointments / important dates get the longer horizon. One fetch.
   const { data: timeline = [] } = useQuery<any[]>({
-    queryKey: ["/api/calendar/timeline", todayStr, in14, mode, ...ids],
-    queryFn: () => apiRequest("GET", `/api/calendar/timeline${param}${amp}start=${todayStr}&end=${in14}`).then(r => r.json()),
+    queryKey: ["/api/calendar/timeline", todayStr, in45, mode, ...ids],
+    queryFn: () => apiRequest("GET", `/api/calendar/timeline${param}${amp}start=${todayStr}&end=${in45}`).then(r => r.json()),
     staleTime: 60_000,
   });
   const { data: reminders = [] } = useQuery<any[]>({
@@ -114,6 +148,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     queryFn: () => apiRequest("GET", `/api/journal${param}`).then(r => r.json()).catch(() => []),
     staleTime: 60_000,
   });
+  const { data: notifications = [] } = useQuery<any[]>({
+    queryKey: ["/api/notifications", mode, ...ids],
+    queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()).catch(() => []),
+    staleTime: 60_000,
+  });
 
   const payBill = useMutation({
     mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
@@ -125,190 +164,282 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     onError: () => toast({ title: "Payment failed", variant: "destructive" }),
   });
 
-  // ── Derivations (all from data above) ──────────────────────────────────────
+  // ── Derivations ─────────────────────────────────────────────────────────────
   const pending = (tasks || []).filter((t: any) => t.status !== "done");
-  const agendaTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) <= todayStr);
-  const todayItems = (timeline || []).filter((i: any) => (i.date || "").slice(0, 10) === todayStr);
+  const overdueTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) < todayStr)
+    .sort((a: any, b: any) => (a.dueDate || "").localeCompare(b.dueDate || "")).slice(0, 10);
+  const highPriority = pending.filter((t: any) => ["high", "urgent"].includes(String(t.priority || "").toLowerCase()) && !(t.dueDate && t.dueDate.slice(0, 10) < todayStr)).slice(0, 8);
+  const agendaTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) === todayStr);
   const upcomingTasks = pending
-    .slice()
-    .sort((a: any, b: any) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999"))
-    .slice(0, 15);
+    .filter((t: any) => !t.dueDate || t.dueDate.slice(0, 10) >= todayStr)
+    .sort((a: any, b: any) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999")).slice(0, 12);
+
+  const tl = (timeline || []).filter((i: any) => (i.date || "").slice(0, 10) >= todayStr);
+  const todayItems = tl.filter((i: any) => (i.date || "").slice(0, 10) === todayStr);
+  const events = tl.filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) > todayStr);
+  const birthdays = events.filter((i: any) => BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
+  const appointments = events.filter((i: any) => APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
+  const importantDates = events.filter((i: any) => !BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`) && !APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 10);
+
   const habitRows = (habits || []).slice(0, 12).map((h: any) => {
     const doneToday = (h.checkins || []).some((c: any) => (c.date || "").slice(0, 10) === todayStr);
     return { id: h.id, name: h.name, doneToday, streak: h.currentStreak ?? h.streak ?? 0 };
   });
+  const missedCount = habitRows.filter(h => !h.doneToday).length;
+
   const bills = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil <= 21).slice(0, 10);
   const docs = (enhanced?.expiringDocuments || []).slice(0, 10);
-  const importantDates = (timeline || [])
-    .filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) > todayStr)
-    .slice(0, 10);
+
   const calendarDays: Array<{ day: string; items: any[] }> = [];
-  for (const item of timeline || []) {
+  for (const item of tl) {
     const d = (item.date || "").slice(0, 10);
-    if (!d) continue;
+    if (!d || d > in14) continue;
     const label = dayLabel(d, todayStr);
     const bucket = calendarDays.find(b => b.day === label);
     if (bucket) { if (bucket.items.length < 4) bucket.items.push(item); }
     else if (calendarDays.length < 7) calendarDays.push({ day: label, items: [item] });
   }
+
   const projects = (goals || []).filter((g: any) => g.status === "active" || !g.status).slice(0, 8);
   const activity = (stats?.recentActivity || []).slice(0, 8);
   const notes = (journal || []).slice(0, 4);
   const activeReminders = (Array.isArray(reminders) ? reminders : []).filter((r: any) => !r.completed && !r.dismissed).slice(0, 8);
+  const notifs = (Array.isArray(notifications) ? notifications : []).filter((n: any) => !n.dismissed);
+  const alerts = notifs.filter((n: any) => n.severity === "critical").slice(0, 6);
+  const infoNotifs = notifs.filter((n: any) => n.severity !== "critical").slice(0, 6);
 
   const daysLeft = (dateStr: string) => Math.max(0, Math.round((new Date(dateStr + "T00:00:00").getTime() - new Date(todayStr + "T00:00:00").getTime()) / 86400000));
+  const goNotif = (n: any) => {
+    if (n.entityType === "document" && n.entityId) navigate(`/documents/${n.entityId}`);
+    else if (n.entityType === "profile" && n.entityId) navigate(`/profiles/${n.entityId}`);
+    else if (n.entityType === "task") setPopup("tasks");
+    else if (n.entityType === "habit") setPopup("habits");
+    else navigate("/calendar");
+  };
 
   return (
-    <div className="space-y-1" data-testid="executive-briefing">
-      <Section title="Today's Agenda" count={todayItems.length + agendaTasks.length} testId="brief-agenda">
-        {todayItems.length + agendaTasks.length === 0 ? <Empty label="Nothing scheduled today." /> : (
-          <div className="divide-y divide-border/30">
-            {todayItems.map((i: any) => (
-              <Row key={i.id} testId={`brief-agenda-${i.id}`}
-                cells={[i.time || (i.allDay ? "all day" : "today"), i.title, i.type]}
-                urgent={i.type === "bill" || i.type === "obligation"}
-                onClick={() => i.type === "task" ? setPopup("tasks") : navigate("/calendar")} />
-            ))}
-            {agendaTasks.map((t: any) => (
-              <Row key={t.id} testId={`brief-agenda-task-${t.id}`}
-                cells={[t.dueDate?.slice(0, 10) < todayStr ? "overdue" : "today", t.title, t.priority || "—"]}
-                urgent={t.dueDate?.slice(0, 10) < todayStr}
-                onClick={() => setPopup("tasks")} />
-            ))}
-          </div>
-        )}
-      </Section>
+    <div data-testid="executive-briefing">
+      <div className="md:columns-2 xl:columns-3 gap-2">
+        <Section id="agenda" title="Today's Agenda" count={todayItems.length + agendaTasks.length} testId="brief-agenda">
+          {todayItems.length + agendaTasks.length === 0 ? <Empty label="Nothing scheduled today." /> : (
+            <div className="divide-y divide-border/30">
+              {todayItems.map((i: any) => (
+                <Row key={i.id} testId={`brief-agenda-${i.id}`}
+                  cells={[i.time || (i.allDay ? "all day" : "today"), i.title, i.type]}
+                  urgent={i.type === "bill" || i.type === "obligation"}
+                  onClick={() => i.type === "task" ? setPopup("tasks") : navigate("/calendar")} />
+              ))}
+              {agendaTasks.map((t: any) => (
+                <Row key={t.id} testId={`brief-agenda-task-${t.id}`}
+                  cells={["today", t.title, t.priority || "—"]}
+                  onClick={() => setPopup("tasks")} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      <Section title="Upcoming Tasks" count={upcomingTasks.length} testId="brief-tasks">
-        {upcomingTasks.length === 0 ? <Empty label="No open tasks." /> : (
-          <div className="divide-y divide-border/30">
-            {upcomingTasks.map((t: any) => (
-              <Row key={t.id} cells={[t.dueDate ? dayLabel(t.dueDate.slice(0, 10), todayStr) : "—", t.title, t.priority || "—"]}
-                urgent={!!t.dueDate && t.dueDate.slice(0, 10) < todayStr}
-                onClick={() => setPopup("tasks")} />
-            ))}
-          </div>
-        )}
-      </Section>
+        <Section id="overdue" title="Overdue" count={overdueTasks.length} testId="brief-overdue" defaultOpen={overdueTasks.length > 0}>
+          {overdueTasks.length === 0 ? <Empty label="Nothing overdue. 🎉" /> : (
+            <div className="divide-y divide-border/30">
+              {overdueTasks.map((t: any) => (
+                <Row key={t.id} cells={[dayLabel(t.dueDate.slice(0, 10), todayStr), t.title, t.priority || "—"]}
+                  urgent onClick={() => setPopup("tasks")} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      <Section title="Habits" count={habitRows.length} testId="brief-habits">
-        {habitRows.length === 0 ? <Empty label="No habits yet." /> : (
-          <div className="divide-y divide-border/30">
-            {habitRows.map(h => (
-              <Row key={h.id} cells={[h.doneToday ? "✓ done" : "✗ due", h.name, `${h.streak}🔥`]}
-                urgent={!h.doneToday}
-                onClick={() => setPopup("habits")} />
-            ))}
-          </div>
-        )}
-      </Section>
+        <Section id="tasks" title="Upcoming Tasks" count={upcomingTasks.length} testId="brief-tasks">
+          {upcomingTasks.length === 0 ? <Empty label="No open tasks." /> : (
+            <div className="divide-y divide-border/30">
+              {upcomingTasks.map((t: any) => (
+                <Row key={t.id} cells={[t.dueDate ? dayLabel(t.dueDate.slice(0, 10), todayStr) : "—", t.title, t.priority || "—"]}
+                  onClick={() => setPopup("tasks")} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      <Section title="Reminders" count={activeReminders.length} testId="brief-reminders" defaultOpen={activeReminders.length > 0}>
-        {activeReminders.length === 0 ? <Empty label="No reminders." /> : (
-          <div className="divide-y divide-border/30">
-            {activeReminders.map((r: any) => (
-              <Row key={r.id} cells={[r.dueDate ? dayLabel(String(r.dueDate).slice(0, 10), todayStr) : "—", r.title || r.message || r.content]}
-                onClick={() => navigate("/calendar")} />
-            ))}
-          </div>
-        )}
-      </Section>
+        <Section id="priority" title="High Priority" count={highPriority.length} testId="brief-priority" defaultOpen={highPriority.length > 0}>
+          {highPriority.length === 0 ? <Empty label="No high-priority items." /> : (
+            <div className="divide-y divide-border/30">
+              {highPriority.map((t: any) => (
+                <Row key={t.id} cells={[t.dueDate ? dayLabel(t.dueDate.slice(0, 10), todayStr) : "—", t.title, "high"]}
+                  valueTone="warn" onClick={() => setPopup("tasks")} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      <Section title="Important Dates" count={importantDates.length} testId="brief-dates">
-        {importantDates.length === 0 ? <Empty label="Nothing in the next two weeks." /> : (
-          <div className="divide-y divide-border/30">
-            {importantDates.map((i: any) => (
-              <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
-                onClick={() => navigate("/calendar")} />
-            ))}
-          </div>
-        )}
-      </Section>
+        <Section id="habits" title={missedCount > 0 ? `Habits · ${missedCount} due` : "Habits"} count={habitRows.length} testId="brief-habits">
+          {habitRows.length === 0 ? <Empty label="No habits yet." /> : (
+            <div className="divide-y divide-border/30">
+              {habitRows.map(h => (
+                <Row key={h.id} cells={[h.doneToday ? "✓ done" : "✗ due", h.name, `${h.streak}🔥`]}
+                  urgent={!h.doneToday} valueTone={h.streak > 0 ? "warn" : undefined}
+                  onClick={() => setPopup("habits")} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      <Section title="Document Expirations" count={docs.length} testId="brief-docs">
-        {docs.length === 0 ? <Empty label="Nothing expiring soon." /> : (
-          <div className="divide-y divide-border/30">
-            {docs.map((d: any) => (
-              <Row key={d.documentId || d.id}
-                cells={[d.expirationDate?.slice(5, 10) || "—", d.name || d.fieldName || "Document", `${d.daysUntil}d`]}
-                urgent={typeof d.daysUntil === "number" && d.daysUntil <= 21}
-                onClick={() => d.documentId && navigate(`/documents/${d.documentId}`)} />
-            ))}
-          </div>
-        )}
-      </Section>
+        <Section id="reminders" title="Reminders" count={activeReminders.length} testId="brief-reminders" defaultOpen={activeReminders.length > 0}>
+          {activeReminders.length === 0 ? <Empty label="No reminders." /> : (
+            <div className="divide-y divide-border/30">
+              {activeReminders.map((r: any) => (
+                <Row key={r.id} cells={[r.dueDate ? dayLabel(String(r.dueDate).slice(0, 10), todayStr) : "—", r.title || r.message || r.content]}
+                  onClick={() => navigate("/calendar")} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      <Section title="Bills & Obligations" count={bills.length} testId="brief-bills">
-        {bills.length === 0 ? <Empty label="No bills due soon." /> : (
-          <div className="divide-y divide-border/30">
-            {bills.map((b: any) => (
-              <div key={b.id} className="flex items-baseline gap-2">
-                <div className="flex-1 min-w-0">
-                  <Row
-                    cells={[b.status === "overdue" ? "overdue" : b.daysUntil === 0 ? "today" : `${b.daysUntil}d`, b.name, `$${Number(b.amount).toLocaleString()}`]}
-                    urgent={b.status === "overdue" || b.daysUntil === 0}
-                    onClick={() => b.linkedLiabilityId ? navigate(`/profiles/${b.linkedLiabilityId}`) : navigate("/dashboard/finance")} />
+        <Section id="birthdays" title="Birthdays & Anniversaries" count={birthdays.length} testId="brief-birthdays" defaultOpen={birthdays.length > 0}>
+          {birthdays.length === 0 ? <Empty label="None in the next 45 days." /> : (
+            <div className="divide-y divide-border/30">
+              {birthdays.map((i: any) => (
+                <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
+                  onClick={() => navigate("/calendar")} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="appointments" title="Appointments" count={appointments.length} testId="brief-appointments" defaultOpen={appointments.length > 0}>
+          {appointments.length === 0 ? <Empty label="No upcoming appointments." /> : (
+            <div className="divide-y divide-border/30">
+              {appointments.map((i: any) => (
+                <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
+                  onClick={() => navigate("/calendar")} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="dates" title="Important Dates" count={importantDates.length} testId="brief-dates">
+          {importantDates.length === 0 ? <Empty label="Nothing coming up." /> : (
+            <div className="divide-y divide-border/30">
+              {importantDates.map((i: any) => (
+                <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
+                  onClick={() => navigate("/calendar")} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="docs" title="Document Expirations" count={docs.length} testId="brief-docs">
+          {docs.length === 0 ? <Empty label="Nothing expiring soon." /> : (
+            <div className="divide-y divide-border/30">
+              {docs.map((d: any) => (
+                <Row key={d.documentId || d.id}
+                  cells={[d.expirationDate?.slice(5, 10) || "—", d.name || d.fieldName || "Document", `${d.daysUntil}d`]}
+                  urgent={typeof d.daysUntil === "number" && d.daysUntil <= 21}
+                  valueTone={typeof d.daysUntil === "number" && d.daysUntil <= 45 ? "warn" : undefined}
+                  onClick={() => d.documentId && navigate(`/documents/${d.documentId}`)} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="bills" title="Bills & Obligations" count={bills.length} testId="brief-bills">
+          {bills.length === 0 ? <Empty label="No bills due soon." /> : (
+            <div className="divide-y divide-border/30">
+              {bills.map((b: any) => (
+                <div key={b.id} className="flex items-baseline gap-1">
+                  <div className="flex-1 min-w-0">
+                    <Row
+                      cells={[b.status === "overdue" ? "overdue" : b.daysUntil === 0 ? "today" : `${b.daysUntil}d`, b.name, `$${Number(b.amount).toLocaleString()}`]}
+                      urgent={b.status === "overdue" || b.daysUntil === 0}
+                      valueTone="pos"
+                      onClick={() => b.linkedLiabilityId ? navigate(`/profiles/${b.linkedLiabilityId}`) : navigate("/dashboard/finance")} />
+                  </div>
+                  <button
+                    onClick={() => payBill.mutate(b.id)}
+                    disabled={payBill.isPending}
+                    className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded border border-border hover:bg-muted shrink-0"
+                    data-testid={`brief-pay-${b.id}`}
+                  >Pay</button>
                 </div>
-                <button
-                  onClick={() => payBill.mutate(b.id)}
-                  disabled={payBill.isPending}
-                  className="text-[10px] font-mono uppercase px-2 py-0.5 rounded border border-border hover:bg-muted shrink-0"
-                  data-testid={`brief-pay-${b.id}`}
-                >Pay</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
+              ))}
+            </div>
+          )}
+        </Section>
 
-      <Section title="Calendar · Next 14d" count={calendarDays.length} testId="brief-calendar">
-        {calendarDays.length === 0 ? <Empty label="Nothing scheduled." /> : (
-          <div className="space-y-1">
-            {calendarDays.map(d => (
-              <div key={d.day}>
-                <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground px-1 pt-1">{d.day}</div>
-                {d.items.map((i: any) => (
-                  <Row key={i.id} cells={[i.time || "", i.title]} onClick={() => navigate("/calendar")} />
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
+        <Section id="calendar" title="Calendar · Next 14d" count={calendarDays.length} testId="brief-calendar">
+          {calendarDays.length === 0 ? <Empty label="Nothing scheduled." /> : (
+            <div className="space-y-0.5">
+              {calendarDays.map(d => (
+                <div key={d.day}>
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground px-1 pt-1">{d.day}</div>
+                  {d.items.map((i: any) => (
+                    <Row key={i.id} cells={[i.time || "", i.title]} onClick={() => navigate("/calendar")} />
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
 
-      <Section title="Open Projects" count={projects.length} testId="brief-projects" defaultOpen={projects.length > 0}>
-        {projects.length === 0 ? <Empty label="No active goals." /> : (
-          <div className="divide-y divide-border/30">
-            {projects.map((g: any) => (
-              <Row key={g.id}
-                cells={["goal", g.title, g.target ? `${Math.round(((g.current ?? 0) / g.target) * 100)}%` : ""]}
-                onClick={() => navigate("/goals")} />
-            ))}
-          </div>
-        )}
-      </Section>
+        <Section id="alerts" title="AI Alerts" count={alerts.length} testId="brief-alerts" defaultOpen={alerts.length > 0}>
+          {alerts.length === 0 ? <Empty label="No critical alerts." /> : (
+            <div className="divide-y divide-border/30">
+              {alerts.map((n: any) => (
+                <Row key={n.id} cells={["⚠", n.title]} urgent onClick={() => goNotif(n)} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      <Section title="Recent Activity" count={activity.length} testId="brief-activity" defaultOpen={false}>
-        {activity.length === 0 ? <Empty label="No recent activity." /> : (
-          <div className="divide-y divide-border/30">
-            {activity.map((a: any, i: number) => (
-              <Row key={i} cells={["✓", a.description]} />
-            ))}
-          </div>
-        )}
-      </Section>
+        <Section id="notifications" title="Notifications" count={infoNotifs.length} testId="brief-notifications" defaultOpen={false}>
+          {infoNotifs.length === 0 ? <Empty label="All caught up." /> : (
+            <div className="divide-y divide-border/30">
+              {infoNotifs.map((n: any) => (
+                <Row key={n.id} cells={[n.severity === "warning" ? "!" : "·", n.title]}
+                  valueTone={n.severity === "warning" ? "warn" : undefined}
+                  onClick={() => goNotif(n)} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      <Section title="Quick Notes" count={notes.length} testId="brief-notes" defaultOpen={false}>
-        {notes.length === 0 ? <Empty label="No notes." /> : (
-          <div className="divide-y divide-border/30">
-            {notes.map((n: any) => (
-              <Row key={n.id} cells={[String(n.date || n.createdAt || "").slice(5, 10), String(n.content || "").slice(0, 90)]}
-                onClick={() => navigate("/journal")} />
-            ))}
-          </div>
-        )}
-      </Section>
+        <Section id="projects" title="Open Projects" count={projects.length} testId="brief-projects" defaultOpen={projects.length > 0}>
+          {projects.length === 0 ? <Empty label="No active goals." /> : (
+            <div className="divide-y divide-border/30">
+              {projects.map((g: any) => (
+                <Row key={g.id}
+                  cells={["goal", g.title, g.target ? `${Math.round(((g.current ?? 0) / g.target) * 100)}%` : ""]}
+                  valueTone="pos"
+                  onClick={() => navigate("/goals")} />
+              ))}
+            </div>
+          )}
+        </Section>
 
+        <Section id="activity" title="Recently Added" count={activity.length} testId="brief-activity" defaultOpen={false}>
+          {activity.length === 0 ? <Empty label="No recent activity." /> : (
+            <div className="divide-y divide-border/30">
+              {activity.map((a: any, i: number) => (
+                <Row key={i} cells={["✓", a.description]} valueTone="pos" />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="notes" title="Quick Notes" count={notes.length} testId="brief-notes" defaultOpen={false}>
+          {notes.length === 0 ? <Empty label="No notes." /> : (
+            <div className="divide-y divide-border/30">
+              {notes.map((n: any) => (
+                <Row key={n.id} cells={[String(n.date || n.createdAt || "").slice(5, 10), String(n.content || "").slice(0, 90)]}
+                  onClick={() => navigate("/journal")} />
+              ))}
+            </div>
+          )}
+        </Section>
+      </div>
+
+      {/* The SAME popups the dashboard KPI tiles use — statically imported here
+          (part of the dashboard chunk), so a row click always opens them even
+          if a lazy chunk fetch would have failed. */}
       {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
     </div>

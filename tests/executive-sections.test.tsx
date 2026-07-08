@@ -89,3 +89,20 @@ describe("ExecutiveBriefing", () => {
     expect(header.getAttribute("aria-expanded")).toBe("false");
   });
 });
+
+describe("extracted TasksPopup / HabitsPopup still render (regression: 'popups destroyed')", () => {
+  it("TasksPopup mounts open with its dialog content", async () => {
+    const { TasksPopup } = await import("../client/src/components/dashboard/TaskHabitPopups");
+    wrap(<TasksPopup open onClose={() => {}} filterMode="everyone" filterIds={[]} />);
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog, "tasks dialog mounts").not.toBeNull();
+    expect((dialog!.textContent || "").length).toBeGreaterThan(0);
+  });
+  it("HabitsPopup mounts open with its dialog content", async () => {
+    const { HabitsPopup } = await import("../client/src/components/dashboard/TaskHabitPopups");
+    wrap(<HabitsPopup open onClose={() => {}} filterMode="everyone" filterIds={[]} />);
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog, "habits dialog mounts").not.toBeNull();
+    expect((dialog!.textContent || "").length).toBeGreaterThan(0);
+  });
+});
