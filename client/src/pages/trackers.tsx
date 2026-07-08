@@ -16,6 +16,7 @@ import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/t
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { useHubChrome } from "@/components/hub/hub-context";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
 import { CreateProfileDialog } from "@/pages/profiles";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -225,104 +226,12 @@ export function getCategoryAccent(category: string): string {
   return _categoryTheme(category).hsl;
 }
 
-// ── Canonical Category Groups ──────────────────────────────────────────────────
-// Map raw DB categories → canonical display groups
-const CANONICAL_GROUP_MAP: Record<string, string> = {
-  // Health (body vitals, medical, sleep, nutrition, mental, lab work)
-  health:       "Health",
-  sleep:        "Health",
-  nutrition:    "Health",
-  mental:       "Mental & Wellness",
-  medical:      "Health",
-  vitals:       "Health",
-  hydration:    "Health",
-  diet:         "Health",
-  mood:         "Mental & Wellness",
-  physical:     "Health",
-  // Lab panels / blood work / clinical results all roll up into Health
-  "metabolic panel":      "Health",
-  "complete blood count": "Health",
-  "lipid panel":          "Health",
-  "lipid profile":        "Health",
-  "thyroid panel":        "Health",
-  "liver panel":          "Health",
-  "kidney panel":         "Health",
-  "basic metabolic":      "Health",
-  "comprehensive metabolic": "Health",
-  "cbc":                  "Health",
-  "bmp":                  "Health",
-  "cmp":                  "Health",
-  "lab":                  "Health",
-  "labs":                 "Health",
-  "lab results":          "Health",
-  "lab work":             "Health",
-  "blood":                "Health",
-  "blood work":           "Health",
-  "cholesterol":          "Health",
-  "glucose":              "Health",
-  "hormone":              "Health",
-  "hormones":             "Health",
-  "hormone panel":        "Health",
-  "vitamin":              "Health",
-  "vitamins":             "Health",
-  "urinalysis":           "Health",
-  "endocrine":            "Health",
-  "immunology":           "Health",
-  "hematology":           "Health",
-  "chemistry":            "Health",
-  // Fitness (movement, exercise, performance)
-  fitness:      "Fitness",
-  exercise:     "Fitness",
-  workout:      "Fitness",
-  sport:        "Fitness",
-  running:      "Fitness",
-  cardio:       "Fitness",
-  strength:     "Fitness",
-  steps:        "Fitness",
-  activity:     "Fitness",
-  weight:       "Fitness",
-  // Finance
-  finance:      "Finance",
-  budget:       "Finance",
-  savings:      "Finance",
-  investment:   "Finance",
-  // Habits & Routines
-  habit:        "Habits & Routines",
-  routine:      "Habits & Routines",
-  daily:        "Habits & Routines",
-  // Productivity
-  productivity: "Productivity",
-  work:         "Productivity",
-  education:    "Productivity",
-  // Medication
-  medication:   "Medication",
-  prescription: "Medication",
-  supplement:   "Medication",
-  drug:         "Medication",
-  // Mental & Wellness
-  meditation:   "Mental & Wellness",
-  mindfulness:  "Mental & Wellness",
-  anxiety:      "Mental & Wellness",
-  stress:       "Mental & Wellness",
-  journal:      "Mental & Wellness",
-  // Lifestyle
-  lifestyle:    "Lifestyle",
-  pet:          "Lifestyle",
-  plant:        "Lifestyle",
-  social:       "Lifestyle",
-  screen:       "Lifestyle",
-  reading:      "Lifestyle",
-  // Gaming/entertainment exact-match (added 2026-05-21 — see PR for Gaming
-  // tracker mis-bucketing bug).
-  gaming:       "Lifestyle",
-  game:         "Lifestyle",
-  entertainment:"Lifestyle",
-  leisure:      "Lifestyle",
-  hobby:        "Lifestyle",
-  // Other
-  custom:       "Other",
-  general:      "Other",
-};
+// ── Canonical Category Groups ────────────────────────────────────────────────
+// CANONICAL_GROUP_MAP + getCanonicalGroup + computeHealthScore live in
+// @/lib/tracker-health (extracted 2026-07-08) so the eagerly-loaded hub KPI
+// strip can classify trackers without pulling this page chunk. Only the
+// icon/accent presentation metadata (CANONICAL_GROUPS below) stays here.
+import { getCanonicalGroup, computeHealthScore } from "@/lib/tracker-health";
 
 // Canonical group definitions with icons and accents
 const CANONICAL_GROUPS: Record<string, {
@@ -343,33 +252,6 @@ const CANONICAL_GROUPS: Record<string, {
   "Other":              { icon: Box,        accent: "240 20% 60%", description: "Custom and uncategorized",          order: 7 },
 };
 
-function getCanonicalGroup(category: string): string {
-  const c = (category || "").toLowerCase().trim();
-  if (!c) return "Other";
-  // Exact match first
-  const exact = CANONICAL_GROUP_MAP[c];
-  if (exact) return exact;
-  // Keyword fallback — categories like "Metabolic Panel - Fasting" or
-  // "Vitals (morning)" should still land in Health.
-  const healthKw = ["panel", "blood", "lab", "vital", "metabolic", "cbc", "bmp", "cmp", "glucose", "cholesterol", "hormone", "thyroid", "vitamin", "medical", "clinical", "health", "diet", "nutrition", "sleep", "hydration"];
-  if (healthKw.some(k => c.includes(k))) return "Health";
-  const fitnessKw = ["workout", "exercise", "run", "cardio", "strength", "sport", "steps", "gym", "yoga", "hike"];
-  if (fitnessKw.some(k => c.includes(k))) return "Fitness";
-  const financeKw = ["finance", "money", "budget", "saving", "invest", "spend", "income"];
-  if (financeKw.some(k => c.includes(k))) return "Finance";
-  const medKw = ["med", "prescription", "supplement", "drug", "dose"];
-  if (medKw.some(k => c.includes(k))) return "Medication";
-  const mentalKw = ["mood", "anxiety", "stress", "meditation", "journal", "therapy"];
-  if (mentalKw.some(k => c.includes(k))) return "Mental & Wellness";
-  const habitKw = ["habit", "routine", "daily"];
-  if (habitKw.some(k => c.includes(k))) return "Habits & Routines";
-  // Lifestyle keyword fallback — gaming/leisure/entertainment trackers
-  // were silently bucketed into "Other" before this branch was added
-  // (reported 2026-05-21: AI logged a Gaming tracker the user couldn’t find).
-  const lifestyleKw = ["gaming","game","console","playstation","xbox","nintendo","steam","leisure","entertainment","hobby","screen","reading","book","social","tv","movie","streaming","netflix","pet ","plant"];
-  if (lifestyleKw.some(k => c.includes(k))) return "Lifestyle";
-  return "Other";
-}
 
 // Emoji icon for each canonical category group
 const CATEGORY_GROUP_EMOJI: Record<string, string> = {
@@ -4014,56 +3896,6 @@ function computeBestStreak(trackers: Tracker[]): { name: string; streak: number 
   return best;
 }
 
-function computeHealthScore(trackers: Tracker[]): number | null {
-  const healthTrackers = trackers.filter((t) => getCanonicalGroup(t.category) === "Health" || getCanonicalGroup(t.category) === "Fitness");
-  if (healthTrackers.length === 0) return null;
-
-  let score = 0;
-  let factors = 0;
-
-  for (const t of healthTrackers) {
-    if (t.entries.length === 0) continue;
-    const last = t.entries[t.entries.length - 1];
-
-    // BMI score
-    if (last.computed?.bmi) {
-      const bmi = last.computed.bmi;
-      const bmiScore = bmi >= 18.5 && bmi <= 25 ? 100
-        : bmi > 25 && bmi <= 30 ? 70
-        : bmi > 30 ? 40
-        : 50; // underweight
-      score += bmiScore;
-      factors++;
-    }
-
-    // Sleep quality
-    if (last.computed?.sleepQuality) {
-      const q = last.computed.sleepQuality;
-      const qScore = q === "excellent" ? 100 : q === "good" ? 80 : q === "fair" ? 55 : 30;
-      score += qScore;
-      factors++;
-    }
-
-    // Blood pressure
-    if (last.computed?.bloodPressureCategory) {
-      const c = last.computed.bloodPressureCategory;
-      const bpScore = c === "normal" ? 100 : c === "elevated" ? 70 : c === "high_stage1" ? 45 : c === "high_stage2" ? 25 : 10;
-      score += bpScore;
-      factors++;
-    }
-
-    // Activity (any entry in last 3 days = bonus)
-    const threeDaysAgo = Date.now() - 3 * 86400000;
-    const recentEntry = t.entries.some((e) => new Date(e.timestamp).getTime() > threeDaysAgo);
-    if (recentEntry) {
-      score += 75;
-      factors++;
-    }
-  }
-
-  return factors > 0 ? Math.round(score / factors) : null;
-}
-
 function TrackerSummary({ trackers, profiles, onTrackerClick }: { trackers: Tracker[]; profiles?: { id: string; name: string }[]; onTrackerClick?: (trackerId: string) => void }) {
   if (trackers.length === 0) return null;
 
@@ -5588,6 +5420,9 @@ const PROFILE_TYPE_ICONS: Record<string, any> = {
 };
 
 export default function TrackersPage() {
+  // Hub consolidation (2026-07): true when rendered under the hub shell,
+  // which then owns the profile switcher + section navigation.
+  const hubEmbedded = useHubChrome();
   // Title reflects the actual route the user landed on. Both /trackers and
   // /linked render this same component. The app uses wouter path-based routing,
   // so we read window.location.pathname (NOT hash, which is always empty here).
@@ -6127,9 +5962,12 @@ export default function TrackersPage() {
     <div className="px-2 py-2 md:p-4 space-y-2 overflow-y-auto h-full pb-24" data-testid="page-trackers">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
+          {/* Hub-embedded: the shell owns navigation — hide the back arrow. */}
+          {!hubEmbedded && (
           <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-7 h-7 hover:bg-muted transition-colors" data-testid="button-back" aria-label="Back">
             <ArrowLeft className="w-3.5 h-3.5" />
           </Link>
+          )}
 
           <span className="text-xs text-muted-foreground">
             {sectionFilter === "trackers" ? `${filteredTrackers.length} trackers`
@@ -6214,18 +6052,25 @@ export default function TrackersPage() {
         </div>
       </div>
 
-      {/* ── Filter Bar ── */}
+      {/* ── Filter Bar ──
+          Hub-embedded (2026-07): the shell owns the profile switcher and the
+          section tabs (Trackers/Assets/Liabilities/Documents chips navigate
+          here with the right route/?tab=), so both are hidden — EXCEPT the
+          section pills on the legacy "All" view (plain /linked deep links),
+          where they're the only way to move between sections. */}
       <div className="space-y-2" data-testid="filter-bar">
         {/* Profile filter (page level) + Section pills */}
         <div className="flex flex-wrap items-center gap-2 pb-1">
+          {!hubEmbedded && (<>
           {/* Profile filter */}
           <MultiProfileFilter
             onChange={({ mode, selectedIds }) => { setFilterMode(mode); setFilterIds(selectedIds); }}
             compact
           />
           <div className="h-4 w-px bg-border" />
+          </>)}
           {/* Section filter pills */}
-          {(() => {
+          {(!hubEmbedded || sectionFilter === "all") && (() => {
             // Counts come from the hoisted single source of truth (see BUG-3
             // above) so the chips, the header "N items", and the rendered lists
             // can never disagree.

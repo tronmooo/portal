@@ -40,6 +40,7 @@ import {
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { useHubChrome } from "@/components/hub/hub-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -6001,15 +6002,25 @@ interface DashboardSection {
 // (still toggleable via Customize and reachable on their own pages).
 const DEFAULT_SECTIONS: DashboardSection[] = [
   // ── NOW ─────────────────────────────────────────────────────────────────
+  // Hub Executive layout (2026-07, LAYOUT_VERSION 13): matches the hub
+  // mockup's order — AI briefing → Needs attention → Today → ranked queue.
   // Greeting + one AI state + one action (Phase 2). Replaces the long AI Summary.
   { id: "hero-briefing",    label: "Briefing",             icon: Sparkles,     visible: true, column: "full" },
+  // Urgent items with actions (overdue bills, expiring docs) — promoted from
+  // hidden to match the mockup's "Needs Attention" list.
+  { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: true, column: "full" },
+  // Today's schedule row (events / appts / tasks / habits) — promoted.
+  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: true, column: "full" },
   // The single urgency surface (Phase 1) — merges Action Required, Bills,
   // Today's Schedule, Upcoming, and overdue Goals into one ranked list.
   { id: "now-queue",        label: "Now",                  icon: Flame,        visible: true, column: "full" },
   // ── TRAJECTORY ──────────────────────────────────────────────────────────
-  // Hero finance metrics (Net Worth / Cash Flow / Budget).
-  { id: "hero-kpis",        label: "Hero Metrics",         icon: Sparkles,     visible: true, column: "full" },
-  // Secondary metric chip row (6 tiles).
+  // Hero finance metrics (Net Worth / Cash Flow / Budget). Hidden by default
+  // since the hub KPI strip now owns the hero metrics; re-enable via
+  // Customize when running the dashboard standalone.
+  { id: "hero-kpis",        label: "Hero Metrics",         icon: Sparkles,     visible: false, column: "full" },
+  // Secondary metric chip row (6 tiles) — kept visible: it owns the
+  // Tasks/Spending/Bills/Docs/Habits popups.
   { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: true, column: "full" },
   // Captioned trend modules (Phase 3) — replaces static Key Findings snippets.
   { id: "trends",           label: "Trends",               icon: Activity,     visible: true, column: "full" },
@@ -6026,20 +6037,18 @@ const DEFAULT_SECTIONS: DashboardSection[] = [
   { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: false, column: "full" },
   { id: "finance",          label: "Finance",              icon: DollarSign,   visible: false, column: "full" },
   { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: false, column: "full" },
-  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: false, column: "left" },
-  { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: false, column: "right" },
   { id: "key-findings",     label: "Key Findings",         icon: Lightbulb,    visible: false, column: "full" },
   { id: "upcoming-dates",   label: "Upcoming",             icon: CalendarDays, visible: false, column: "full" },
 ];
 // Swimlane groups (id sets) — render small group header chips during layout
 const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: string[] }> = [
-  { key: "now",        label: "Now",        emoji: "⚡", ids: ["hero-briefing", "now-queue"] },
+  { key: "now",        label: "Now",        emoji: "⚡", ids: ["hero-briefing", "needs-attention", "today", "now-queue"] },
   { key: "trajectory", label: "Trajectory", emoji: "📈", ids: ["hero-kpis", "kpis", "trends", "health"] },
   { key: "explore",    label: "Explore",    emoji: "🧭", ids: ["domain-hubs", "goals", "activity"] },
-  { key: "more",       label: "More (legacy)", emoji: "🗂️", ids: ["ai-summary", "finance", "obligations", "today", "needs-attention", "key-findings", "upcoming-dates"] },
+  { key: "more",       label: "More (legacy)", emoji: "🗂️", ids: ["ai-summary", "finance", "obligations", "key-findings", "upcoming-dates"] },
 ];
 
-const LAYOUT_VERSION = 12; // Add Health section to the default v2 layout
+const LAYOUT_VERSION = 13; // Hub Executive layout (needs-attention + today promoted; hero-kpis → strip)
 
 // ── Dashboard v2 Phase 5: Focus modes ───────────────────────────────────────
 // A mode reweights WHICH sections show and in WHAT order — Portol is too broad
@@ -6424,6 +6433,9 @@ function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton }: {
 export default function DashboardPage() {
   useEffect(() => { document.title = "Dashboard — Portol"; }, []);
   const { toast } = useToast();
+  // Hub consolidation (2026-07): under the hub shell the date + profile
+  // filter are owned by the shell; this page keeps only its kebab menu.
+  const hubEmbedded = useHubChrome();
   const [, navigate] = useLocation();
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -6762,9 +6774,12 @@ export default function DashboardPage() {
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 md:p-4 space-y-3 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
-      {/* Header */}
+      {/* Header — hub-embedded: date + profile filter live in the hub shell
+          (HubShell/HubProfileSwitcher write the same profileFilter store this
+          page subscribes to), so only the kebab menu remains. */}
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
+          {!hubEmbedded && (
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-semibold text-foreground/90 tracking-tight">
               {/* Part D: render the header date in the user's timezone, not the
@@ -6778,6 +6793,7 @@ export default function DashboardPage() {
               compact
             />
           </div>
+          )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <DropdownMenu>

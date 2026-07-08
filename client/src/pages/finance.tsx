@@ -13,6 +13,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { useHubChrome } from "@/components/hub/hub-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -100,6 +101,8 @@ function ExpandableRow({
 export default function FinancePage() {
   useEffect(() => { document.title = "Finance — Portol"; }, []);
   const { toast } = useToast();
+  // Hub consolidation (2026-07): shell owns back-nav + profile switcher.
+  const hubEmbedded = useHubChrome();
   // PROFILE-CONTEXT FIX: read the active scope reactively from the single source
   // of truth. The old code only resynced on the window `focus` event, so a
   // filter change made elsewhere (or by the chip on this page) left Finance
@@ -737,6 +740,8 @@ export default function FinancePage() {
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
       <div>
         <div className="flex items-center gap-3 mb-4">
+          {/* Hub-embedded (2026-07): shell owns back-nav + profile switcher. */}
+          {!hubEmbedded && (<>
           {/* Round-6 fix (BUG-014): previously rendered a wouter <Link href="/dashboard"/>
               which navigates but does not pop history. On some platforms (mobile back
               gesture, dashboard → finance → expense detail → back) this could end up
@@ -764,6 +769,7 @@ export default function FinancePage() {
             onChange={() => {}}
             compact
           />
+          </>)}
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
