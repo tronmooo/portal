@@ -66,6 +66,7 @@ export default defineConfig({
       'tests/executive-sections.test.tsx',
       'tests/wellness-metrics.test.ts',
       'tests/wellness-overview.test.tsx',
+      'tests/query-key-hygiene.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
