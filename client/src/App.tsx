@@ -57,6 +57,7 @@ const _settImport  = () => import("@/pages/settings");
 const _calImport   = () => import("@/pages/calendar-page");
 const _artImport   = () => import("@/pages/artifacts");
 const _finImport   = () => import("@/pages/finance");
+const _wellImport  = () => import("@/pages/wellness");
 const _habImport   = () => import("@/pages/habits");
 const _jourImport  = () => import("@/pages/journal");
 const _oblImport   = () => import("@/pages/obligations");
@@ -80,6 +81,7 @@ const SettingsPage     = lazy(_settImport);
 const CalendarPage     = lazy(_calImport);
 const ArtifactsPage    = lazy(_artImport);
 const FinancePage      = lazy(_finImport);
+const WellnessPage     = lazy(_wellImport);
 const HabitsPage       = lazy(_habImport);
 const JournalPage      = lazy(_jourImport);
 const ObligationsPage  = lazy(_oblImport);
@@ -437,8 +439,9 @@ function RouteTitle() {
       "/dashboard/tasks": "Tasks — Portol",
       "/dashboard/documents": "Documents — Portol",
       "/dashboard/artifacts": "Artifacts — Portol",
-      "/dashboard/health": "Health — Portol",
-      "/health": "Health — Portol",
+      "/dashboard/health": "Wellness — Portol",
+      "/health": "Wellness — Portol",
+      "/wellness": "Wellness — Portol",
       "/trackers": "Trackers — Portol",
       "/linked": "Linked — Portol",
       "/profiles": "Profiles — Portol",
@@ -678,11 +681,13 @@ function AppRouter() {
         <Route path="/journal" component={JournalPage} />
         <Route path="/habits" component={HabitsPage} />
         <Route path="/bills" component={ObligationsPage} />
-        {/* Health dashboard alias: the dashboard has a Health section but no dedicated
-            sub-route existed. Route /dashboard/health and /health to TrackersPage,
-            which is where health trackers (weight, BP, etc.) live. */}
-        <Route path="/dashboard/health" component={TrackersPage} />
-        <Route path="/health" component={TrackersPage} />
+        {/* Wellness tab (Health→Wellness redesign): a health command center that
+            reads the same tracker/habit/stats data as everything else. The deep
+            tracker grid still lives under /trackers. /health + /dashboard/health
+            stay as aliases so old links land on the new overview. */}
+        <Route path="/wellness" component={WellnessPage} />
+        <Route path="/dashboard/health" component={WellnessPage} />
+        <Route path="/health" component={WellnessPage} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>

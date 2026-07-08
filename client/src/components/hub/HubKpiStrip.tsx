@@ -148,10 +148,10 @@ export function HubKpiStrip() {
         testId="hub-kpi-cashflow"
       />
       <StatChip
-        label="Health"
+        label="Wellness"
         value={health == null ? "—" : String(health)}
         accent={health != null && health >= 70 ? "pos" : health != null && health < 45 ? "warn" : undefined}
-        onClick={() => navigate("/health")}
+        onClick={() => navigate("/wellness")}
         testId="hub-kpi-health"
       />
       <StatChip
