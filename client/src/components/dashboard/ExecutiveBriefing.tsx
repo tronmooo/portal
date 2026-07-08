@@ -38,15 +38,16 @@ const ACCENTS: Record<string, string> = {
   notes:         "240 10% 60%",  // stone
 };
 
-function Section({ id, title, count, children, defaultOpen = true, testId }: {
-  id: string; title: string; count?: number; children: React.ReactNode;
+function Section({ id, title, count, summary, children, defaultOpen = true, testId }: {
+  id: string; title: string; count?: number; summary?: string; children: React.ReactNode;
   defaultOpen?: boolean; testId: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const accent = ACCENTS[id] || "240 10% 60%";
   return (
     <div
-      className="break-inside-avoid mb-2 rounded-lg border border-border/50 bg-card/40 px-2 pt-0.5 pb-1.5"
+      className="break-inside-avoid mb-2 rounded-lg border bg-card/40 px-2 pt-0.5 pb-1.5"
+      style={{ borderColor: `hsl(${accent} / 0.25)` }}
       data-testid={testId}
     >
       <button
@@ -59,10 +60,33 @@ function Section({ id, title, count, children, defaultOpen = true, testId }: {
         {typeof count === "number" && count > 0 && (
           <span className="text-[10px] font-mono px-1.5 rounded-full" style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}>{count}</span>
         )}
-        <ChevronDown className={`h-3 w-3 ml-auto text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
+        {summary && <span className="ml-auto mr-1 text-[10px] font-mono tabular-nums" style={{ color: `hsl(${accent})` }}>{summary}</span>}
+        <ChevronDown className={`h-3 w-3 ${summary ? "" : "ml-auto"} text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
       </button>
       {open && children}
     </div>
+  );
+}
+
+// Photo-2-style top stat tile — big count, small sub-line, clickable.
+function StatTile({ label, value, sub, accent, onClick, testId }: {
+  label: string; value: string; sub?: string; accent: string;
+  onClick: () => void; testId: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      data-testid={testId}
+      className="flex-1 min-w-[7.5rem] rounded-lg border bg-card/40 px-2.5 py-2 text-left hover:bg-muted/40 transition-colors"
+      style={{ borderColor: `hsl(${accent} / 0.3)` }}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
+        <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-muted-foreground">{label}</span>
+      </div>
+      <div className="text-xl font-bold tabular-nums mt-0.5" style={{ color: `hsl(${accent})` }}>{value}</div>
+      {sub && <div className="text-[10px] font-mono text-muted-foreground truncate">{sub}</div>}
+    </button>
   );
 }
 
@@ -217,9 +241,57 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     else navigate("/calendar");
   };
 
+  // ── Executive Score (transparent derivation, presentation-only): start at
+  // 100, subtract for overdue tasks / missed habits / overdue bills.
+  const overdueBillCount = bills.filter((b: any) => b.status === "overdue").length;
+  const score = Math.max(40, Math.min(100,
+    100 - Math.min(40, overdueTasks.length * 8) - Math.min(20, missedCount * 4) - Math.min(30, overdueBillCount * 10)));
+  const scoreLabel = score >= 90 ? "Excellent" : score >= 75 ? "Good" : "Needs attention";
+  const billsUpcomingTotal = bills.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
+  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
+
+  // AI Executive Brief — honest, instant bullets derived from the data above
+  // (no per-load AI call). The AI chat can still create/modify any of the
+  // underlying records; these lines just reflect the current state.
+  const aiBrief: Array<{ text: string; tone?: "pos" | "neg" | "warn"; go?: () => void }> = [];
+  if (overdueTasks.length === 0) aiBrief.push({ text: "No overdue tasks.", tone: "pos" });
+  else aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => setPopup("tasks") });
+  const soonestDoc = docs.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+  if (soonestDoc) aiBrief.push({ text: `${soonestDoc.name || soonestDoc.fieldName || "A document"} expires in ${soonestDoc.daysUntil} days.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => soonestDoc.documentId && navigate(`/documents/${soonestDoc.documentId}`) });
+  if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => setPopup("habits") });
+  const soonestBill = bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) due ${soonestBill.daysUntil === 0 ? "today" : `in ${soonestBill.daysUntil}d`}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => navigate("/dashboard/finance") });
+  for (const n of alerts.slice(0, 2)) aiBrief.push({ text: n.title, tone: "neg", go: () => goNotif(n) });
+  if (birthdays[0]) aiBrief.push({ text: `${birthdays[0].title} in ${daysLeft(birthdays[0].date.slice(0, 10))} days.`, tone: "warn", go: () => navigate("/calendar") });
+
   return (
     <div data-testid="executive-briefing">
+      {/* Top stat tiles (photo-2 style) — every tile drills into its module. */}
+      <div className="flex flex-wrap gap-2 mb-2" data-testid="brief-stat-row">
+        <StatTile label="Score" value={String(score)} sub={`${scoreLabel} · ${overdueTasks.length} critical`} accent={score >= 90 ? "155 65% 45%" : score >= 75 ? "43 96% 56%" : "0 72% 58%"} onClick={() => setPopup("tasks")} testId="brief-stat-score" />
+        <StatTile label="Tasks" value={String(pending.length)} sub={`${agendaTasks.length} today · ${overdueTasks.length} overdue`} accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
+        <StatTile label="Habits" value={`${habitRows.length - missedCount}/${habitRows.length}`} sub={missedCount > 0 ? `${missedCount} still due` : "all done"} accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
+        <StatTile label="Bills" value={String(bills.length)} sub={`$${Math.round(billsUpcomingTotal).toLocaleString()} upcoming`} accent={ACCENTS.bills} onClick={() => navigate("/dashboard/finance")} testId="brief-stat-bills" />
+        <StatTile label="Docs" value={String(docs.length)} sub={docs.length ? "expiring soon" : "all good"} accent={ACCENTS.docs} onClick={() => navigate("/linked?tab=documents")} testId="brief-stat-docs" />
+        <StatTile label="Events" value={String(tl.length)} sub="next 14 days" accent={ACCENTS.calendar} onClick={() => navigate("/calendar")} testId="brief-stat-events" />
+        <StatTile label="Projects" value={String(projects.length)} sub={`${doneToday} done today`} accent={ACCENTS.projects} onClick={() => navigate("/goals")} testId="brief-stat-projects" />
+      </div>
+
       <div className="md:columns-2 xl:columns-3 gap-2">
+        <Section id="alerts" title="AI Executive Brief" count={aiBrief.length} testId="brief-ai" defaultOpen>
+          {aiBrief.length === 0 ? <Empty label="All clear." /> : (
+            <div className="space-y-0.5 pb-0.5">
+              {aiBrief.map((b, i) => (
+                <button key={i} onClick={b.go} disabled={!b.go}
+                  className={`w-full flex items-start gap-1.5 py-[3px] px-1 text-left text-xs rounded-sm ${b.go ? "hover:bg-muted/40" : ""} ${b.tone === "neg" ? "text-red-500" : b.tone === "warn" ? "text-amber-500" : b.tone === "pos" ? "text-emerald-500" : ""}`}>
+                  <span className="mt-[3px]" style={{ color: "hsl(280 75% 66%)" }}>✦</span>
+                  <span className="flex-1">{b.text}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </Section>
+
         <Section id="agenda" title="Today's Agenda" count={todayItems.length + agendaTasks.length} testId="brief-agenda">
           {todayItems.length + agendaTasks.length === 0 ? <Empty label="Nothing scheduled today." /> : (
             <div className="divide-y divide-border/30">
@@ -380,21 +452,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
           )}
         </Section>
 
-        <Section id="alerts" title="AI Alerts" count={alerts.length} testId="brief-alerts" defaultOpen={alerts.length > 0}>
-          {alerts.length === 0 ? <Empty label="No critical alerts." /> : (
+        <Section id="notifications" title="Notifications" count={notifs.length} testId="brief-notifications" defaultOpen={alerts.length > 0}>
+          {notifs.length === 0 ? <Empty label="All caught up." /> : (
             <div className="divide-y divide-border/30">
-              {alerts.map((n: any) => (
-                <Row key={n.id} cells={["⚠", n.title]} urgent onClick={() => goNotif(n)} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="notifications" title="Notifications" count={infoNotifs.length} testId="brief-notifications" defaultOpen={false}>
-          {infoNotifs.length === 0 ? <Empty label="All caught up." /> : (
-            <div className="divide-y divide-border/30">
-              {infoNotifs.map((n: any) => (
-                <Row key={n.id} cells={[n.severity === "warning" ? "!" : "·", n.title]}
+              {[...alerts, ...infoNotifs].map((n: any) => (
+                <Row key={n.id} cells={[n.severity === "critical" ? "⚠" : n.severity === "warning" ? "!" : "·", n.title]}
+                  urgent={n.severity === "critical"}
                   valueTone={n.severity === "warning" ? "warn" : undefined}
                   onClick={() => goNotif(n)} />
               ))}
