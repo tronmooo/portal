@@ -252,6 +252,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   const score = Math.max(40, Math.min(100,
     100 - Math.min(40, overdueTasks.length * 8) - Math.min(20, missedCount * 4) - Math.min(30, overdueBillCount * 10)));
   const scoreLabel = score >= 90 ? "Excellent" : score >= 75 ? "Good" : "Needs attention";
+  // Only show a score when there is actually something to evaluate. A brand-new
+  // or empty profile has no tasks / habits / bills, so a "100 · Excellent" tile
+  // reads as fake/leaked data (BUG-20260709: empty profile looked populated).
+  // With no inputs, show an em dash instead.
+  const hasScoreInputs = pending.length > 0 || habitRows.length > 0 || bills.length > 0;
   const billsUpcomingTotal = bills.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
   const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
 
@@ -273,7 +278,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     <div data-testid="executive-briefing">
       {/* Top stat tiles (photo-2 style) — every tile drills into its module. */}
       <div className="flex flex-wrap gap-2 mb-2" data-testid="brief-stat-row">
-        <StatTile label="Score" value={String(score)} sub={`${scoreLabel} · ${overdueTasks.length} critical`} accent={score >= 90 ? "155 65% 45%" : score >= 75 ? "43 96% 56%" : "0 72% 58%"} onClick={() => setPopup("tasks")} testId="brief-stat-score" />
+        <StatTile label="Score" value={hasScoreInputs ? String(score) : "—"} sub={hasScoreInputs ? `${scoreLabel} · ${overdueTasks.length} critical` : "No data yet"} accent={!hasScoreInputs ? "240 10% 60%" : score >= 90 ? "155 65% 45%" : score >= 75 ? "43 96% 56%" : "0 72% 58%"} onClick={() => setPopup("tasks")} testId="brief-stat-score" />
         <StatTile label="Tasks" value={String(pending.length)} sub={`${agendaTasks.length} today · ${overdueTasks.length} overdue`} accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
         <StatTile label="Habits" value={`${habitRows.length - missedCount}/${habitRows.length}`} sub={missedCount > 0 ? `${missedCount} still due` : "all done"} accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
         <StatTile label="Bills" value={String(bills.length)} sub={`$${Math.round(billsUpcomingTotal).toLocaleString()} upcoming`} accent={ACCENTS.bills} onClick={() => navigate("/dashboard/finance")} testId="brief-stat-bills" />

@@ -3032,6 +3032,26 @@ export class SupabaseStorage implements IStorage {
     for (const profile of profiles) {
       const f = profile.fields || {};
 
+      // PROFILE-SCOPE FIX (BUG-20260709-virtual-event-leak): every virtual event
+      // below (birthday, subscription renewal, vehicle service, vet visit,
+      // warranty/insurance expiry, loan payment…) was pushed via addVirtualEvent
+      // WITHOUT any profile-filter check — the one timeline source that skipped
+      // matchesProfile entirely. That is why "Car Insurance — Renewal" (a
+      // subscription nested under Self) persisted on EVERY profile's calendar and
+      // Important Dates (Bill, Bob, Jim…), regardless of the isolation policy —
+      // no policy change could fix a path that never filtered at all.
+      //
+      // Scope this profile's virtual events to the profile itself, plus its
+      // PARENT for child profiles (a subscription/vehicle/asset/loan is owned by
+      // the person it is nested under), using the SAME matchesProfile rule the
+      // stored-events / tasks / obligations / liability paths already use. When a
+      // filter is active and this profile is out of scope, emit none of its
+      // virtual events; unfiltered ("Everyone") still shows everything.
+      const vevScope = profile.parentProfileId
+        ? [profile.id, profile.parentProfileId]
+        : [profile.id];
+      if (!matchesProfile(vevScope)) continue;
+
       // Person / Self → birthday (yearly)
       if ((profile.type === "person" || profile.type === "self") && f.birthday) {
         const bday = f.birthday.slice(0, 10); // YYYY-MM-DD

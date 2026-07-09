@@ -44,6 +44,7 @@ export default defineConfig({
       'tests/ownership-model.test.ts',
       'tests/scope.test.ts',
       'tests/reminder-scope.test.ts',
+      'tests/calendar-virtual-event-scope.test.ts',
       'tests/ownership.test.ts',
       'tests/asset-rollup.test.ts',
       'tests/asset-classification.test.ts',
