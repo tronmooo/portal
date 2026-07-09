@@ -28,7 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Check, X, Camera, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain } from "lucide-react";
+import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain } from "lucide-react";
 
 function timeAgo(ts: string | undefined): string {
   if (!ts) return "";
@@ -222,25 +222,23 @@ function SingleProfileInfo({ id }: { id: string }) {
 
   return (
     <div className="p-4 md:p-6 space-y-5 overflow-y-auto h-full pb-24" data-testid="page-profile-info">
-      {/* Header */}
-      <div className="flex items-center gap-4">
+      {/* Header — info-focused, compact identity chip (avatar de-emphasized). */}
+      <div className="flex items-center gap-3">
         <button
           onClick={() => avatarInputRef.current?.click()}
-          className="relative w-16 h-16 rounded-2xl overflow-hidden shrink-0 group"
-          style={{ background: "linear-gradient(135deg, hsl(188 55% 40%), hsl(262 65% 45%))" }}
+          className="relative w-9 h-9 rounded-xl overflow-hidden shrink-0 flex items-center justify-center"
+          style={{ background: "hsl(213 90% 62% / 0.15)" }}
           aria-label="Change photo"
           data-testid="info-avatar"
+          title="Change photo"
         >
           {profile.avatar
             ? <img src={profile.avatar} alt="" className="w-full h-full object-cover" />
-            : <span className="w-full h-full flex items-center justify-center text-2xl font-bold text-white">{initial}</span>}
-          <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-            <Camera className="h-4 w-4 text-white" />
-          </span>
+            : <span className="text-sm font-bold" style={{ color: "hsl(213 90% 62%)" }}>{initial}</span>}
         </button>
         <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={onAvatarChange} />
         <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-bold truncate" data-testid="info-name">{profile.name}</h1>
+          <h1 className="text-lg font-semibold leading-tight truncate" data-testid="info-name">{profile.name}</h1>
           <p className="text-xs text-muted-foreground capitalize">{profile.type}</p>
         </div>
         <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAddingField(v => !v)} data-testid="info-add-field">
