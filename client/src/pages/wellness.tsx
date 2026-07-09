@@ -79,9 +79,15 @@ export default function WellnessPage() {
     queryKey: ["/api/events", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then((r) => r.json()).catch(() => []),
   });
+  // BUG-20260709-wellness-doc-leak: the Wellness hub renders under the global
+  // profile filter, but this read hit the bare /api/documents and `healthDocs`
+  // below filters only by category — so one person's medical/insurance/lab
+  // documents surfaced on another person's Wellness hub. Scope it like the
+  // events query above (server filters /api/documents by profileIds; orphans
+  // fall through to the self profile only).
   const { data: documents = [] } = useQuery<Doc[]>({
-    queryKey: ["/api/documents"],
-    queryFn: () => apiRequest("GET", "/api/documents").then((r) => r.json()).catch(() => []),
+    queryKey: ["/api/documents", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/documents${profileParam}`).then((r) => r.json()).catch(() => []),
   });
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
