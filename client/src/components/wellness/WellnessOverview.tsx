@@ -57,13 +57,14 @@ function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, test
   series?: number[]; icon: any; ring?: { value: number; max: number }; testId: string;
 }) {
   return (
-    <Card className="p-3 min-w-[8.5rem] flex-1" data-testid={testId} style={{ borderColor: `hsl(${tone} / 0.28)` }}>
+    <Card className="p-3 min-w-[8.5rem] flex-1 card-lift transition-all" data-testid={testId}
+      style={{ borderColor: `hsl(${tone} / 0.30)`, background: `linear-gradient(135deg, hsl(${tone} / 0.12) 0%, hsl(var(--card)) 75%)` }}>
       <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         <Icon className="w-3 h-3" style={{ color: `hsl(${tone})` }} /> {label}
       </div>
       <div className="flex items-end justify-between mt-1">
         <div>
-          <div className="text-2xl font-bold tabular-nums leading-none" style={{ color: `hsl(${tone})` }}>{value}</div>
+          <div className="metric-value text-2xl leading-none" style={{ color: `hsl(${tone})` }}>{value}</div>
           {unit && <div className="text-[10px] text-muted-foreground mt-0.5">{unit}</div>}
         </div>
         {ring && <Ring value={ring.value} max={ring.max} color={tone} label="" />}
