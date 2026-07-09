@@ -10,7 +10,10 @@ import { MetricCard } from "../client/src/components/ui/metric-card";
 import { ModalShell, PopupSection, ModalState } from "../client/src/components/ui/modal-shell";
 import { FilterChip, StatusBadge, CollapseArrow, IconButton, DashboardCard, DataTable } from "../client/src/components/ui/kit";
 import { EmptyState } from "../client/src/components/ui/empty-state";
-import { Activity, Plus } from "lucide-react";
+import { PageContainer, PageHeader } from "../client/src/components/ui/page-shell";
+import { Activity, Plus, Target } from "lucide-react";
+
+vi.mock("wouter", () => ({ Link: ({ children }: any) => <>{children}</> }));
 
 afterEach(cleanup);
 
@@ -83,6 +86,24 @@ describe("design kit", () => {
   it("DashboardCard renders children", () => {
     render(<DashboardCard testId="dc">neutral-card</DashboardCard>);
     expect(screen.getByTestId("dc").textContent).toContain("neutral-card");
+  });
+
+  it("PageHeader renders title + subtitle + back button + actions", () => {
+    const onBack = vi.fn();
+    render(
+      <PageHeader title="Goals" subtitle="Track your targets" icon={Target} accent="262 70% 62%"
+        onBack={onBack} actions={<button data-testid="hdr-action">+ New</button>} testId="ph" />,
+    );
+    expect(screen.getByTestId("ph").textContent).toContain("Goals");
+    expect(screen.getByTestId("ph").textContent).toContain("Track your targets");
+    expect(screen.getByTestId("hdr-action")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("button-back"));
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  it("PageContainer renders its children in one scroll frame", () => {
+    render(<PageContainer width="5xl" testId="pc"><div>page-body</div></PageContainer>);
+    expect(screen.getByTestId("pc").textContent).toContain("page-body");
   });
 
   it("DataTable renders rows and fires onRowClick; shows empty slot when no rows", () => {

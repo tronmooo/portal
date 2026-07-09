@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import { ArrowLeft, Target, AlertTriangle, Flame, CheckCircle2 } from "lucide-react";
-import { Link } from "wouter";
+import { Target, AlertTriangle, Flame, CheckCircle2 } from "lucide-react";
+import { PageContainer, PageHeader } from "@/components/ui/page-shell";
 import { useQuery } from "@tanstack/react-query";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -48,22 +48,9 @@ export default function GoalsPage() {
   ];
 
   return (
-    <div className="p-4 md:p-6 space-y-4 overflow-y-auto h-full pb-24" data-testid="page-goals">
-      {/* v2 header */}
-      <div className="flex items-center gap-3">
-        <Link href="/dashboard">
-          <button
-            type="button"
-            className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors"
-            aria-label="Back"
-            data-testid="button-back"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-        </Link>
-        <h1 className="text-lg font-semibold flex-1">Goals</h1>
-        <MultiProfileFilter onChange={() => {}} compact />
-      </div>
+    <PageContainer width="5xl" testId="page-goals">
+      <PageHeader title="Goals" icon={Target} accent="262 70% 62%" backHref="/dashboard"
+        actions={<MultiProfileFilter onChange={() => {}} compact />} />
 
       {/* v2 summary header — overall progress + status breakdown */}
       <div className="rounded-2xl border border-border/50 bg-card/60 p-3">
@@ -86,6 +73,6 @@ export default function GoalsPage() {
       </div>
 
       <GoalsSection profileIds={ids} />
-    </div>
+    </PageContainer>
   );
 }
