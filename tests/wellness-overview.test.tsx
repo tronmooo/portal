@@ -125,6 +125,30 @@ describe("WellnessOverview", () => {
     expect(screen.queryByTestId("wellness-log-sleep")).toBeNull();
   });
 
+  it("renders Missed Habits, Mental Wellness, and Recovery sections", () => {
+    render(<WellnessOverview {...base}
+      missedHabits={[{ id: "h2", name: "Meditate", done: false }]}
+      meditationMin={15} recoveryScore={null} />);
+    // Missed habits list the un-done habit and check it in on click
+    const onToggleHabit = vi.fn();
+    cleanup();
+    render(<WellnessOverview {...base}
+      missedHabits={[{ id: "h2", name: "Meditate", done: false }]}
+      meditationMin={15} recoveryScore={72} onToggleHabit={onToggleHabit} />);
+    expect(screen.getByTestId("wellness-missed-habits").textContent).toContain("Meditate");
+    fireEvent.click(screen.getByTestId("wellness-missed-h2"));
+    expect(onToggleHabit).toHaveBeenCalledWith("h2", true);
+    expect(screen.getByTestId("wellness-mental").textContent).toContain("15 min");
+    expect(screen.getByTestId("wellness-recovery")).toBeTruthy();
+  });
+
+  it("Mental Wellness / Recovery / Missed show empty states with no data", () => {
+    render(<WellnessOverview {...base} missedHabits={[]} meditationMin={null} recoveryScore={null} />);
+    expect(screen.getByTestId("wellness-missed-habits").textContent).toContain("on track");
+    expect(screen.getByTestId("wellness-mental").textContent).toContain("No mindfulness");
+    expect(screen.getByTestId("wellness-recovery").textContent).toContain("No recovery");
+  });
+
   it("shows honest empty states when data is missing", () => {
     render(<WellnessOverview {...base}
       habits={[]} medications={[]} labs={[]} supplements={[]}

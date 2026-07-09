@@ -170,6 +170,12 @@ export default function WellnessPage() {
     done: (h.checkins || []).some((c: any) => c.date === today),
   }));
   const habitsCompleted = habitCards.filter((h) => h.done).length;
+  // Missed habits = active habits not yet checked in today.
+  const missedHabits = habitCards.filter((h) => !h.done);
+
+  // Mental wellness = today's meditation/mindfulness minutes if a tracker exists.
+  const meditation = readMetric(trackers, [/meditat|mindful/], { unit: "min" });
+  const meditationMin = meditation.trackerId ? (meditation.value ?? null) : null;
 
   // Today's schedule (calendar events dated today).
   const schedule = (Array.isArray(events) ? events : [])
@@ -374,6 +380,9 @@ export default function WellnessPage() {
         habitsCompleted={habitsCompleted}
         onToggleHabit={(id, next) => toggleHabit.mutate({ id, next })}
         togglingHabitId={togglingHabitId}
+        missedHabits={missedHabits}
+        meditationMin={meditationMin}
+        recoveryScore={null}
         schedule={schedule}
         medications={medications}
         onToggleMed={(id, next) => toggleMed.mutate({ id, next })}
