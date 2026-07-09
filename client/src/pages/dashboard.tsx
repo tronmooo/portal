@@ -18,7 +18,6 @@ import {
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
-import { computeNetWorth } from "@shared/net-worth";
 import { computeNowItems, type NowItem } from "@shared/now-rank";
 import {
   aggregateUpcomingDates,
@@ -5018,195 +5017,12 @@ function CustomizeDialog({
 }
 
 // ─── Main Dashboard ──────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HOUSEHOLD DASHBOARD ("Everyone" scope)
-//
-// The "Everyone" scope renders a DISTINCT aggregate dashboard — NOT a person's
-// personal dashboard summed up. It deliberately OMITS per-person widgets
-// (habits, journal, personal goals, personal budgets, health trackers) because
-// those are only meaningful for a single individual. Instead it surfaces
-// household-wide analytics: combined net worth, a per-profile summary +
-// ownership breakdown, shared/upcoming bills, the household schedule,
-// cross-profile insights, and a recent-activity feed across everyone.
-//
-// Selecting any profile (one or many) flips back to the personal dashboard
-// (the section grid), scoped to that selection. See the render branch in
-// DashboardPage.
-// ─────────────────────────────────────────────────────────────────────────────
-const fmtUSD0 = (n: number) => `${n < 0 ? "-" : ""}$${Math.round(Math.abs(n)).toLocaleString()}`;
-
-// Deterministic accent color per profile so a person reads with the same hue
-// wherever they appear (household cards, avatars). Small fixed HSL palette,
-// hashed by id+name so it's stable across renders.
-const PROFILE_ACCENTS = [
-  "199 89% 48%", "152 60% 44%", "262 83% 62%", "25 95% 53%",
-  "330 81% 60%", "199 89% 60%", "174 72% 41%", "350 89% 60%",
-];
-function profileAccent(seed: string): string {
-  let h = 0;
-  for (let i = 0; i < (seed || "").length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  return PROFILE_ACCENTS[h % PROFILE_ACCENTS.length];
-}
-function profileInitials(name: string): string {
-  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
-function HouseholdGroupHeader({ icon: Icon, label }: { icon: any; label: string }) {
-  return (
-    <div className="flex items-center gap-2 mt-3 mb-1 px-0.5">
-      <Icon className="h-4 w-4 text-muted-foreground/80" aria-hidden="true" />
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">{label}</span>
-      <div className="flex-1 h-px bg-border/40" />
-    </div>
-  );
-}
-
-// #1 Household hero — one combined Net Worth headline with an assets-vs-
-// liabilities split bar. Distinct from the personal dashboard's KPI tiles so
-// "Everyone" reads as an aggregate view at a glance. Uses computeNetWorth (the
-// single source of truth) so it agrees with the per-profile cards + personal
-// dashboards to the dollar.
-function HouseholdHero({ allProfiles }: { allProfiles: any[] }) {
-  const { assets, liabilities, netWorth } = useMemo(
-    () => computeNetWorth(allProfiles || [], { mode: "everyone", selectedIds: [] }),
-    [allProfiles],
-  );
-  const total = assets + liabilities;
-  const assetPct = total > 0 ? Math.round((assets / total) * 100) : (assets > 0 ? 100 : 0);
-  const peopleCount = (allProfiles || []).filter((p: any) => p.type === "self" || p.type === "person").length;
-  return (
-    <div className="rounded-2xl border border-border bg-gradient-to-br from-primary/[0.08] to-transparent p-4" data-testid="household-hero">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          <Users className="h-3.5 w-3.5" /> Household net worth
-        </div>
-        {peopleCount > 0 && <span className="text-[11px] text-muted-foreground">{peopleCount} {peopleCount === 1 ? "person" : "people"}</span>}
-      </div>
-      <p className={`mt-1 text-3xl font-black tabular-nums ${netWorth >= 0 ? "text-foreground" : "text-rose-500"}`}>{fmtUSD0(netWorth)}</p>
-      <div className="mt-3 h-2.5 w-full rounded-full overflow-hidden bg-rose-500/70 flex" title={`${assetPct}% assets`}>
-        <div className="h-full bg-emerald-500" style={{ width: `${assetPct}%` }} />
-      </div>
-      <div className="mt-2 flex items-center justify-between text-xs">
-        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
-          <TrendingUp className="h-3.5 w-3.5" />{fmtUSD0(assets)} <span className="text-muted-foreground/70 font-normal">assets</span>
-        </span>
-        <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-medium">
-          <span className="text-muted-foreground/70 font-normal">debt</span> {fmtUSD0(liabilities)} <TrendingDown className="h-3.5 w-3.5" />
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// #2 Per-profile summary cards = profile summaries + asset/liability ownership
-// breakdown + each person's share of household net worth. Net worth per person
-// comes from the SINGLE source of truth (computeNetWorth). Clicking a card
-// switches scope to that profile's personal dashboard.
-function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
-  const cards = useMemo(() => {
-    const people = (allProfiles || []).filter((p: any) => p.type === "self" || p.type === "person" || p.type === "pet");
-    return people
-      .map((p: any) => {
-        const nw = computeNetWorth(allProfiles, { mode: "selected", selectedIds: [p.id] });
-        return {
-          id: p.id,
-          name: p.name || "Unnamed",
-          type: p.type as string,
-          netWorth: nw.netWorth,
-          assets: nw.assets,
-          liabilities: nw.liabilities,
-          assetCount: nw.assetProfiles.length,
-          liabilityCount: nw.liabilityProfiles.length,
-        };
-      })
-      .sort((a: any, b: any) => b.netWorth - a.netWorth);
-  }, [allProfiles]);
-
-  const totalPositiveNW = useMemo(() => cards.reduce((s: number, c: any) => s + Math.max(0, c.netWorth), 0), [cards]);
-
-  if (cards.length === 0) {
-    return (
-      <div className="rounded-xl border border-dashed border-border bg-card/50 p-6 text-center">
-        <Users className="h-7 w-7 text-muted-foreground/40 mx-auto mb-2" />
-        <p className="text-sm text-muted-foreground">No people or pets yet</p>
-        <p className="text-xs text-muted-foreground/70 mt-0.5">Add a profile to see household totals here</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-      {cards.map((c: any) => {
-        const accent = profileAccent(c.id + c.name);
-        const share = totalPositiveNW > 0 ? (Math.max(0, c.netWorth) / totalPositiveNW) * 100 : 0;
-        return (
-          <button
-            key={c.id}
-            onClick={() => setFilterSelected([c.id], [c.name])}
-            className="text-left rounded-xl border border-border bg-card hover:bg-muted/20 transition-colors p-3"
-            style={{ borderLeft: `3px solid hsl(${accent})` }}
-            data-testid={`household-profile-${c.id}`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div
-                  className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-xs font-bold"
-                  style={{ background: `hsl(${accent} / 0.18)`, color: `hsl(${accent})` }}
-                >
-                  {c.type === "pet" ? <Heart className="h-4 w-4" /> : profileInitials(c.name)}
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold truncate">{c.type === "self" ? `${c.name} (You)` : c.name}</p>
-                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{c.type}</p>
-                </div>
-              </div>
-              <div className="text-right shrink-0">
-                <p className={`text-sm font-bold tabular-nums ${c.netWorth >= 0 ? "text-foreground" : "text-rose-500"}`}>{fmtUSD0(c.netWorth)}</p>
-                <p className="text-[10px] text-muted-foreground">{share >= 1 ? `${share.toFixed(0)}% of household` : "net worth"}</p>
-              </div>
-            </div>
-            {/* share-of-household bar */}
-            <div className="mt-2 h-1.5 w-full rounded-full overflow-hidden bg-muted">
-              <div className="h-full rounded-full" style={{ width: `${Math.max(share, c.netWorth > 0 ? 2 : 0)}%`, background: `hsl(${accent})` }} />
-            </div>
-            <div className="mt-1.5 flex items-center gap-3 text-[11px] text-muted-foreground">
-              <span className="inline-flex items-center gap-1"><TrendingUp className="h-3 w-3 text-emerald-500" />{fmtUSD0(c.assets)} <span className="text-muted-foreground/60">· {c.assetCount} {c.assetCount === 1 ? "asset" : "assets"}</span></span>
-              <span className="inline-flex items-center gap-1"><TrendingDown className="h-3 w-3 text-rose-500" />{fmtUSD0(c.liabilities)} <span className="text-muted-foreground/60">· {c.liabilityCount} {c.liabilityCount === 1 ? "debt" : "debts"}</span></span>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton }: {
-  enhanced: any;
-  stats: any;
-  allProfiles: any[];
-  showSkeleton?: boolean;
-}) {
-  if (showSkeleton) return <SkeletonGrid cols={3} rows={2} h="h-14" />;
-  return (
-    <div className="space-y-3" data-testid="household-dashboard">
-      {/* Everyone scope = the standard dashboard overview aggregated across all
-          profiles, WITHOUT the Budget card (budget is per-person and lives on
-          the personal dashboard). Net Worth + Cash Flow hero, then the KPI
-          tiles, then the shared/household sections. */}
-      <HeroKPISection enhanced={enhanced} stats={stats} filterMode="everyone" filterIds={[]} refetching={false} hideBudget />
-      {stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={[]} filterMode="everyone" /> : null}
-      {stats ? <ActionRequiredSection stats={stats} enhanced={enhanced} profileId={undefined} /> : null}
-      <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />
-      <TodaySection enhanced={enhanced} stats={stats} />
-      <AISummaryWidget stats={stats} enhanced={enhanced} filterMode="everyone" filterIds={[]} scopeLabel="Everyone" />
-      {stats ? <ActivitySection activities={stats.recentActivity} /> : null}
-    </div>
-  );
-}
+// Tombstone (2026-07-09): the HOUSEHOLD DASHBOARD block that used to live here
+// (HouseholdDashboard, HouseholdHero, ProfileSummaryGrid, HouseholdGroupHeader
+// and their fmtUSD0/profileAccent/profileInitials helpers) was removed. The
+// "Everyone" scope now renders the SAME section grid / Executive Daily
+// Briefing as every other scope (user request) — the briefing's queries
+// aggregate across all profiles when no profileIds param is sent.
 
 export default function DashboardPage() {
   useEffect(() => { document.title = "Dashboard — Portol"; }, []);
@@ -5614,13 +5430,13 @@ export default function DashboardPage() {
       </div>
 
       {/* Focus mode switcher (Phase 5) — reweights which sections show + order.
-          Hidden in Everyone/Household scope, where the layout is fixed and the
-          modes would be inert ("these buttons don't work").
+          Shown in every scope (2026-07-09): Everyone now renders the same
+          section grid as any selected profile, so the modes work there too.
           Hub-embedded (2026-07-08, user request): hidden — it read as a
           duplicate of the hub tab row right above it, and the hub's
           Finance/Health tabs cover the focused views. Still available when
           the dashboard renders standalone. */}
-      {!hubEmbedded && filterMode !== "everyone" && (
+      {!hubEmbedded && (
       <div className="flex items-center gap-1 overflow-x-auto no-scrollbar -mx-0.5 px-0.5" data-testid="dashboard-mode-switcher">
         {(["executive", "finance", "health", "daily"] as DashMode[]).map((m) => (
           <button
@@ -5690,15 +5506,14 @@ export default function DashboardPage() {
 
       {/* Render sections in order: full-width before grid, then 2-col grid, then full-width after grid.
           Swimlane group headers (💰 Money / 📅 Today / ❤️ Health) are emitted before the first
-          section of each group, so the page visually segments into related clusters. */}
-      {filterMode === "everyone" ? (
-        <HouseholdDashboard
-          enhanced={enhanced}
-          stats={stats}
-          allProfiles={allProfiles}
-          showSkeleton={showDashSkeleton && !stats}
-        />
-      ) : (() => {
+          section of each group, so the page visually segments into related clusters.
+          2026-07-09 (user request): the "Everyone" scope no longer renders the
+          legacy HouseholdDashboard stack — every scope, Everyone included, goes
+          through the same section grid so the Executive tab shows the dense
+          Daily Briefing layout regardless of the profile filter. The briefing's
+          queries already aggregate across all profiles when filterMode is
+          "everyone" (no profileIds param). */}
+      {(() => {
         const afterGridIds = new Set(["activity"]);
         const beforeGrid = fullWidthSections.filter(s => !afterGridIds.has(s.id));
         const afterGrid = fullWidthSections.filter(s => afterGridIds.has(s.id));

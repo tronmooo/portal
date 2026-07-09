@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 //
-// Runtime proof for the Executive command-center sections. The no-backend dev
-// server defaults the profile filter to "Everyone" (HouseholdDashboard branch)
-// and never enters the section-grid path, so this jsdom mount is where we
-// actually exercise the new sections with live React + providers.
+// Runtime proof for the Executive command-center sections. This jsdom mount is
+// where we exercise the sections with live React + providers (the no-backend
+// dev server can't). Since 2026-07-09 the "Everyone" scope renders the same
+// section grid as any selected profile, so these sections cover every scope.
 import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";

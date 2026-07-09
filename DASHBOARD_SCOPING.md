@@ -6,59 +6,40 @@
 
 | Scope | What it shows |
 |---|---|
-| **A profile is selected** (one or many) | **Personal dashboard** — only that selection's data, including per-person widgets. |
-| **"Everyone"** | **Household dashboard** — a *distinct* aggregate layout. No per-person widgets. |
+| **A profile is selected** (one or many) | **Section-grid dashboard** — only that selection's data. |
+| **"Everyone"** | The **same section-grid dashboard** (Executive Daily Briefing etc.), aggregated across all profiles. |
 | **Default (first load)** | The **primary user** = the single `self` profile. Falls back to "Everyone" only if no `self` profile exists. |
 
-> Profile filter → only that profile's data. Everyone → aggregate analytics. No mixed data, no exceptions.
+> Profile filter → only that profile's data. Everyone → the same layout with
+> aggregate data. No mixed data, no exceptions.
 
-## Why two different dashboards
+## One layout, every scope (2026-07-09)
 
-Person-level concepts (habits, journal streaks, personal goals, personal budgets,
-health trackers) are only meaningful for **one** individual. Summing or averaging
-them across people produces nonsense ("household journal streak"). So the
-aggregate view is a **different dashboard**, not a person dashboard with bigger
-numbers.
+The "Everyone" scope used to render a *distinct* `HouseholdDashboard` layout
+(Net Worth hero, Today's Schedule, AI Summary stack). Per user request that
+component was removed: every scope, Everyone included, now goes through the
+same section grid so the Executive tab shows the dense Daily Briefing layout
+regardless of the profile filter. Scoping is purely a **data** concern:
 
-## The three shapes
+1. **Selected (one or many profiles)** — every widget's queries pass
+   `?profileIds=…` and show only that selection's data.
 
-1. **Personal dashboard** — default (your `self`), or any single person/pet selected.
-   Net-worth share, assets, liabilities, budgets, **habits, journal, trackers,
-   health, goals**, tasks, calendar, personal insights. (The existing section grid.)
-
-2. **Household dashboard** — the "Everyone" scope. `HouseholdDashboard` in
-   `client/src/pages/dashboard.tsx`. Shows ONLY aggregate surfaces:
-   - Combined net worth / total assets / total liabilities (`HeroKPISection`).
-   - **Per-profile summary cards** with each person's net worth + asset/liability
-     counts (`ProfileSummaryGrid`) — this is the profile summary **and** the
-     asset/liability ownership breakdown. Click a card → that person's personal dashboard.
-   - Household needs-attention + upcoming/shared bills + today's schedule.
-   - Cross-profile AI insights + a recent-activity feed across everyone.
-   - **Deliberately omits:** habits, journal, personal goals, personal budgets,
-     health trackers, and the per-person KPI tiles.
-
-3. **Multi-select (2+ profiles)** — renders the **personal** dashboard merged
-   across the selected people (their habits/journal/goals combined). Per product
-   decision: "more than one person but not Everyone" = merged personal view.
+2. **Everyone** — the same widgets omit the `profileIds` param and the server
+   returns aggregates across all profiles.
 
 ## Data isolation
 
 - **Single source of truth for scope:** `passesProfileFilter()`
   (`shared/profile-filter.ts`) on the server (`/api/stats`,
   `/api/dashboard-enhanced`, `/api/insights`) and `computeNetWorth()`
-  (`shared/net-worth.ts`) for net-worth math. The household per-profile cards
-  reuse `computeNetWorth` so they agree with the personal dashboard to the dollar.
+  (`shared/net-worth.ts`) for net-worth math.
 - **Default seeding:** `initDefaultProfileFilter()` (`client/src/lib/profileFilter.ts`)
   seeds the `self` profile on first load and is idempotent — it never overrides a
   user's explicit choice (including an explicit "Everyone").
-- **No personal-widget leakage in aggregate is structural:** the household view
-  simply does not render the personal components, so there is no path for a
-  habit/journal/goal to appear in "Everyone".
 
 ## Invariants (regression targets)
 
-- Fresh user with a `self` profile lands on the personal dashboard (not Everyone).
-- "Everyone" renders `data-testid="household-dashboard"` and contains **no**
-  habits / journal / personal-goals / health widgets.
-- A record linked only to Jane never appears under Bob's scope, and no
-  per-person record appears in "Everyone".
+- Fresh user with a `self` profile lands on their own scope (not Everyone).
+- "Everyone" renders the same section grid as any other scope, with every
+  widget's data aggregated across all profiles (no `profileIds` param).
+- A record linked only to Jane never appears under Bob's scope.
