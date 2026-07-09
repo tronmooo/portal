@@ -147,6 +147,12 @@ export interface WellnessOverviewProps {
   habitsCompleted: number;
   onToggleHabit?: (id: string, next: boolean) => void;
   togglingHabitId?: string | null;
+  /** Active habits not yet checked in today. */
+  missedHabits?: WellnessHabit[];
+  /** Mental-wellness signal (meditation minutes today) — null → empty state. */
+  meditationMin?: number | null;
+  /** Recovery signal (0–100) — null → empty state (no source yet). */
+  recoveryScore?: number | null;
 
   schedule: WellnessEvent[];
   medications: WellnessMed[];
@@ -183,6 +189,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
     wellnessScore, wellnessScoreLabel, sleepHours, sleepSeries, steps, stepsSeries,
     restingHr, restingHrSeries, hydrationOz, hydrationGoal, calories, caloriesGoal, streak,
     insights, habits, habitsCompleted, onToggleHabit, togglingHabitId,
+    missedHabits = [], meditationMin, recoveryScore,
     schedule, medications, onToggleMed, togglingMedId, vitals, sleep, nutrition, mood, activity,
     appointments, reminders, labs, supplements, documents, conditions, allergies,
     recentActivity, weightUnit = "lbs", onQuickLog,
@@ -238,6 +245,24 @@ export function WellnessOverview(props: WellnessOverviewProps) {
                       ? <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: `hsl(${T.green})` }} />
                       : <Circle className="w-4 h-4 shrink-0 text-muted-foreground" />}
                     <span className={h.done ? "line-through text-muted-foreground" : ""}>{h.name}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+
+        <SectionCard testId="wellness-missed-habits" title="Missed Habits" icon={AlertTriangle} tone={T.amber}
+          badge={missedHabits.length ? `${missedHabits.length} to do` : undefined} viewAllHref="/habits">
+          {missedHabits.length === 0 ? <Empty text="All habits on track today. ✓" /> : (
+            <ul className="space-y-1.5">
+              {missedHabits.slice(0, 7).map((h) => (
+                <li key={h.id}>
+                  <button className="w-full flex items-center gap-2 text-left text-sm disabled:opacity-60"
+                    disabled={togglingHabitId === h.id}
+                    onClick={() => onToggleHabit?.(h.id, true)} data-testid={`wellness-missed-${h.id}`}>
+                    <Circle className="w-4 h-4 shrink-0 text-amber-500" />
+                    <span>{h.name}</span>
                   </button>
                 </li>
               ))}
@@ -361,6 +386,29 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             </div>
           )}
           <LogButton label="Log mood" onClick={onQuickLog && (() => onQuickLog("mood"))} testId="wellness-log-mood" />
+        </SectionCard>
+
+        <SectionCard testId="wellness-mental" title="Mental Wellness" icon={Brain} tone={T.purple} viewAllHref="/trackers">
+          {meditationMin == null ? (
+            <Empty text="No mindfulness logged. Ask the AI to start a meditation tracker." />
+          ) : (
+            <div className="flex items-center gap-2 text-sm">
+              <Brain className="w-3.5 h-3.5" style={{ color: `hsl(${T.purple})` }} />
+              <span className="text-muted-foreground">Mindfulness today</span>
+              <span className="ml-auto metric-value text-lg" style={{ color: `hsl(${T.purple})` }}>{fmt(meditationMin)} min</span>
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard testId="wellness-recovery" title="Recovery" icon={Activity} tone={T.teal}>
+          {recoveryScore == null ? (
+            <Empty text="No recovery data. Log sleep + resting HR, or connect a wearable." />
+          ) : (
+            <div className="flex items-center gap-4">
+              <Ring value={recoveryScore} max={100} color={T.teal} label="score" unit="score" />
+              <div className="text-sm text-muted-foreground">Readiness based on sleep + resting HR.</div>
+            </div>
+          )}
         </SectionCard>
       </div>
 
