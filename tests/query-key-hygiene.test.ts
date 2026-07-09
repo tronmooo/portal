@@ -1,47 +1,135 @@
-// Guard against the "bare-key unscoped read" connectedness bug (G3).
+// Structural guard against the profile-data-leak bug class (BUG-20260709).
 //
-// The scoped hub pages (dashboard/finance/wellness) render under the global
-// profile filter. If one of them reads a profile-filterable endpoint with a
-// BARE key — `useQuery({ queryKey: ["/api/trackers"] })` instead of
-// `["/api/trackers", filterMode, ...filterIds]` — it lands in a different
-// cache slot from the rest of the app and silently shows Everyone data while a
-// single profile is selected (the KeyFindingsSection bug). This test fails if
-// such a read reappears.
+// WHY THIS EXISTS — the root cause of the recurring "other profiles' data shows
+// up" bugs: profile scoping is applied BY HAND at every read site. A component
+// that reads a profile-filterable endpoint must (a) put the active filter in its
+// query KEY — ["/api/x", filterMode, ...filterIds] — and (b) append ?profileIds=
+// in its query FN. Miss either and the read lands in the global ("Everyone")
+// cache slot and silently shows every profile's data while one profile is
+// selected. That is exactly how INCOME·MTD (/api/incomes), the reminders card
+// (/api/reminders) and the wellness health docs (/api/documents) all leaked.
 //
-// NOTE: this targets READ keys only. `invalidateQueries` / `setQueriesData` /
-// `cancelQueries` with a bare key are CORRECT (prefix-match reconciles every
-// scoped slot) and end with `})`, so the read-only regex below never matches
-// them. Dedicated single-entity pages (profile-detail, CalendarManagerPanel)
-// intentionally fetch the full list to filter client-side and are out of scope.
+// The previous guard only scanned 3 pages and 7 endpoints, so those reads sailed
+// past CI. This version scans EVERY page and component for a bare read of ANY
+// profile-filterable endpoint. The only permitted exceptions are listed — and
+// documented — in ALLOWLIST below. Adding a new bare read anywhere else fails
+// this test; the fix is to scope the read, not to extend the allowlist without
+// cause.
 import { describe, it, expect } from "vitest";
 import fs from "fs";
 import path from "path";
 
-const HUB_PAGES = ["dashboard.tsx", "finance.tsx", "wellness.tsx"];
-// Endpoints that MUST carry [endpoint, filterMode, ...filterIds] on the hub pages.
-const FILTERABLE = ["trackers", "obligations", "habits", "events", "dashboard-enhanced", "net-worth/history", "goals"];
+// Every endpoint whose rows carry per-profile ownership (linkedProfiles / a
+// profileId) and are filtered server-side by ?profileIds=. A bare read of any
+// of these on a profile-scoped surface leaks other profiles' data.
+const FILTERABLE = [
+  "incomes", "expenses", "obligations", "tasks", "habits", "trackers",
+  "events", "goals", "journal", "reminders", "paychecks", "documents",
+  "notifications", "memories", "dashboard-enhanced", "net-worth/history",
+  "budgets/summary", "stats", "insights", "ai-digest", "activity",
+];
 
-describe("query-key hygiene (connectedness guard G3)", () => {
+// INTENTIONAL exceptions — a bare read here is CORRECT, with the reason.
+// Two legitimate shapes:
+//   1. GLOBAL/account pages that do NOT render under the profile filter
+//      (settings, profile-info) — there is no active profile to scope to.
+//   2. "Fetch-all-then-filter-locally" surfaces that pull the whole list and
+//      apply passesProfileFilter / a route-profile id in-component, so the
+//      network read is intentionally unscoped (profile-detail, trackers,
+//      artifacts, the global CalendarManagerPanel).
+// Key shape: "<relpath from client/src>::<endpoint>".
+const ALLOWLIST = new Set<string>([
+  // Global calendar manager — a management tool that intentionally shows the
+  // full set across all profiles.
+  "components/CalendarManagerPanel.tsx::documents",
+  "components/CalendarManagerPanel.tsx::obligations",
+  "components/CalendarManagerPanel.tsx::events",
+  "components/CalendarManagerPanel.tsx::tasks",
+  // Artifacts library — reads all docs, then applies passesProfileFilter into
+  // `profileFiltered` before rendering (see artifacts.tsx).
+  "pages/artifacts.tsx::documents",
+  // A single profile's detail page — fetches the full list and filters to the
+  // route's profile id client-side.
+  "pages/profile-detail.tsx::events",
+  "pages/profile-detail.tsx::journal",
+  "pages/profile-detail.tsx::documents",
+  "pages/profile-detail.tsx::trackers",
+  // Account / settings pages — global, not rendered under the profile filter.
+  "pages/profile-info.tsx::memories",
+  "pages/settings.tsx::stats",
+  "pages/settings.tsx::documents",
+  // Trackers hub — reads all docs, then filters into `profileFilteredDocs`
+  // (passesProfileFilter) before any display; the combined feed also filters.
+  "pages/trackers.tsx::documents",
+]);
+
+function walk(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...walk(p));
+    else if (/\.(tsx?|ts)$/.test(e.name)) out.push(p);
+  }
+  return out;
+}
+
+describe("query-key hygiene — profile-scope leak guard (repo-wide)", () => {
+  const root = path.resolve(__dirname, "../client/src");
   const eps = FILTERABLE.map((e) => e.replace("/", "\\/")).join("|");
-  // Match a `useQuery(...)` whose queryKey is a BARE filterable key
-  // `["/api/<ep>"]` — no `filterMode`/ids after it. `[^;]*?` keeps the match
-  // inside a single useQuery statement (they contain no `;`), so
-  // invalidateQueries/setQueriesData/cancelQueries (no `useQuery` prefix) and
-  // scoped keys (a comma + more elements before `]`) never match. `s` flag lets
-  // the match span the multi-line `useQuery({ ... })` form.
+  // A `useQuery({ ... queryKey: ["/api/<ep>"] ... })` whose key is BARE — the
+  // endpoint string is immediately followed by `]` (no filterMode/ids). `[^;]*?`
+  // keeps the match inside the single useQuery statement, so invalidateQueries /
+  // setQueriesData / cancelQueries (no `useQuery(` prefix) never match, and a
+  // scoped key ["/api/x", ...] has a comma before `]` and never matches.
   const bareReadRe = new RegExp(
-    `useQuery[^;]*?queryKey:\\s*\\[\\s*["']\\/api\\/(?:${eps})["']\\s*\\]`,
+    `useQuery\\s*(?:<[^>]*>)?\\s*\\(\\s*\\{[^;]*?queryKey:\\s*\\[\\s*["']\\/api\\/(?:${eps})["']\\s*\\]`,
     "gs",
   );
 
-  for (const page of HUB_PAGES) {
-    it(`${page} has no bare profile-filterable read keys`, () => {
-      const file = path.resolve(__dirname, "../client/src/pages", page);
-      const src = fs.readFileSync(file, "utf8");
-      const matches = src.match(bareReadRe) || [];
-      // Report a short snippet per offender for a readable failure.
-      const offenders = matches.map((m) => m.replace(/\s+/g, " ").slice(0, 80));
-      expect(offenders, `bare filterable reads in ${page}`).toEqual([]);
-    });
+  const offenders: string[] = [];
+  for (const file of walk(root)) {
+    const src = fs.readFileSync(file, "utf8");
+    let m: RegExpExecArray | null;
+    bareReadRe.lastIndex = 0;
+    while ((m = bareReadRe.exec(src)) !== null) {
+      const ep = /\/api\/([^"']+)/.exec(m[0])![1];
+      const rel = path.relative(root, file).split(path.sep).join("/");
+      const key = `${rel}::${ep}`;
+      if (!ALLOWLIST.has(key)) {
+        const line = src.slice(0, m.index).split("\n").length;
+        offenders.push(`${rel}:${line} bare read of /api/${ep}`);
+      }
+    }
   }
+
+  it("no unscoped read of a profile-filterable endpoint outside the allowlist", () => {
+    expect(
+      offenders,
+      "A read below hits a profile-scoped endpoint with a BARE query key, so it " +
+        "shows every profile's data while one profile is selected. Scope it with " +
+        "[endpoint, filterMode, ...filterIds] + ?profileIds= in the queryFn. Only " +
+        "add to ALLOWLIST if the read is genuinely global or filtered locally.",
+    ).toEqual([]);
+  });
+
+  it("guards a meaningful surface (sanity: endpoints + files are actually scanned)", () => {
+    // Guardrail on the guard: if the regex silently stops matching (e.g. a
+    // refactor changes useQuery call shape), this catches it by asserting the
+    // allowlisted reads are still SEEN by the scanner.
+    const seen = new Set<string>();
+    for (const file of walk(root)) {
+      const src = fs.readFileSync(file, "utf8");
+      let m: RegExpExecArray | null;
+      bareReadRe.lastIndex = 0;
+      while ((m = bareReadRe.exec(src)) !== null) {
+        const ep = /\/api\/([^"']+)/.exec(m[0])![1];
+        const rel = path.relative(root, file).split(path.sep).join("/");
+        seen.add(`${rel}::${ep}`);
+      }
+    }
+    // Every allowlisted entry must still be found — otherwise the allowlist is
+    // stale (the read was scoped/removed) OR the scanner broke.
+    const missing = [...ALLOWLIST].filter((k) => !seen.has(k));
+    expect(missing, "stale ALLOWLIST entries (remove them) or scanner regex broke").toEqual([]);
+  });
 });

@@ -1662,12 +1662,12 @@ function KpiTile({
   testid?: string;
 }) {
   return (
-    <div className="rounded-lg border p-3 bg-card" data-testid={testid}>
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+    <div className="rounded-xl border border-card-border p-3 bg-card card-lift transition-all" data-testid={testid}>
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {icon}
         <span>{label}</span>
       </div>
-      <div className="text-lg font-semibold mt-1 leading-tight">{value}</div>
+      <div className="metric-value text-lg mt-1 leading-tight">{value}</div>
       {sub ? <div className="text-xs text-muted-foreground mt-0.5">{sub}</div> : null}
     </div>
   );

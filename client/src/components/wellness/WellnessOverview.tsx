@@ -57,19 +57,20 @@ function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, test
   series?: number[]; icon: any; ring?: { value: number; max: number }; testId: string;
 }) {
   return (
-    <Card className="p-3 min-w-[8.5rem] flex-1" data-testid={testId} style={{ borderColor: `hsl(${tone} / 0.28)` }}>
-      <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
+    <Card className="p-3 min-w-[8.5rem] flex-1 card-lift transition-all" data-testid={testId}
+      style={{ borderColor: `hsl(${tone} / 0.30)`, background: `linear-gradient(135deg, hsl(${tone} / 0.12) 0%, hsl(var(--card)) 75%)` }}>
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         <Icon className="w-3 h-3" style={{ color: `hsl(${tone})` }} /> {label}
       </div>
       <div className="flex items-end justify-between mt-1">
         <div>
-          <div className="text-2xl font-bold tabular-nums leading-none" style={{ color: `hsl(${tone})` }}>{value}</div>
+          <div className="metric-value text-2xl leading-none" style={{ color: `hsl(${tone})` }}>{value}</div>
           {unit && <div className="text-[10px] text-muted-foreground mt-0.5">{unit}</div>}
         </div>
         {ring && <Ring value={ring.value} max={ring.max} color={tone} label="" />}
       </div>
       {series && series.length >= 2 && <div className="mt-1.5"><Spark series={series} color={tone} /></div>}
-      {sub && <div className="text-[10px] font-mono text-muted-foreground mt-1">{sub}</div>}
+      {sub && <div className="text-[10px] text-muted-foreground mt-1">{sub}</div>}
     </Card>
   );
 }
@@ -82,16 +83,16 @@ function SectionCard({ title, icon: Icon, tone, badge, viewAllHref, onViewAll, c
   return (
     <Card className="p-4 flex flex-col" data-testid={testId} style={{ borderColor: `hsl(${tone} / 0.22)` }}>
       <div className="flex items-center justify-between mb-3">
-        <span className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-widest" style={{ color: `hsl(${tone})` }}>
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider" style={{ color: `hsl(${tone})` }}>
           <Icon className="w-3.5 h-3.5" /> {title}
         </span>
-        {badge && <span className="text-[10px] font-mono text-muted-foreground">{badge}</span>}
+        {badge && <span className="text-[10px] text-muted-foreground">{badge}</span>}
       </div>
       <div className="flex-1">{children}</div>
       {(viewAllHref || onViewAll) && (
         viewAllHref
-          ? <Link href={viewAllHref}><span className="mt-3 inline-block text-[11px] font-mono hover:underline cursor-pointer" style={{ color: `hsl(${tone})` }} data-testid={`${testId}-viewall`}>View all →</span></Link>
-          : <button className="mt-3 text-left text-[11px] font-mono hover:underline" style={{ color: `hsl(${tone})` }} onClick={onViewAll} data-testid={`${testId}-viewall`}>View all →</button>
+          ? <Link href={viewAllHref}><span className="mt-3 inline-block text-[11px] hover:underline cursor-pointer" style={{ color: `hsl(${tone})` }} data-testid={`${testId}-viewall`}>View all →</span></Link>
+          : <button className="mt-3 text-left text-[11px] hover:underline" style={{ color: `hsl(${tone})` }} onClick={onViewAll} data-testid={`${testId}-viewall`}>View all →</button>
       )}
     </Card>
   );
@@ -146,6 +147,12 @@ export interface WellnessOverviewProps {
   habitsCompleted: number;
   onToggleHabit?: (id: string, next: boolean) => void;
   togglingHabitId?: string | null;
+  /** Active habits not yet checked in today. */
+  missedHabits?: WellnessHabit[];
+  /** Mental-wellness signal (meditation minutes today) — null → empty state. */
+  meditationMin?: number | null;
+  /** Recovery signal (0–100) — null → empty state (no source yet). */
+  recoveryScore?: number | null;
 
   schedule: WellnessEvent[];
   medications: WellnessMed[];
@@ -182,6 +189,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
     wellnessScore, wellnessScoreLabel, sleepHours, sleepSeries, steps, stepsSeries,
     restingHr, restingHrSeries, hydrationOz, hydrationGoal, calories, caloriesGoal, streak,
     insights, habits, habitsCompleted, onToggleHabit, togglingHabitId,
+    missedHabits = [], meditationMin, recoveryScore,
     schedule, medications, onToggleMed, togglingMedId, vitals, sleep, nutrition, mood, activity,
     appointments, reminders, labs, supplements, documents, conditions, allergies,
     recentActivity, weightUnit = "lbs", onQuickLog,
@@ -244,12 +252,30 @@ export function WellnessOverview(props: WellnessOverviewProps) {
           )}
         </SectionCard>
 
+        <SectionCard testId="wellness-missed-habits" title="Missed Habits" icon={AlertTriangle} tone={T.amber}
+          badge={missedHabits.length ? `${missedHabits.length} to do` : undefined} viewAllHref="/habits">
+          {missedHabits.length === 0 ? <Empty text="All habits on track today. ✓" /> : (
+            <ul className="space-y-1.5">
+              {missedHabits.slice(0, 7).map((h) => (
+                <li key={h.id}>
+                  <button className="w-full flex items-center gap-2 text-left text-sm disabled:opacity-60"
+                    disabled={togglingHabitId === h.id}
+                    onClick={() => onToggleHabit?.(h.id, true)} data-testid={`wellness-missed-${h.id}`}>
+                    <Circle className="w-4 h-4 shrink-0 text-amber-500" />
+                    <span>{h.name}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+
         <SectionCard testId="wellness-schedule" title="Today's Schedule" icon={CalendarClock} tone={T.blue} viewAllHref="/calendar">
           {schedule.length === 0 ? <Empty text="Nothing scheduled today." /> : (
             <ul className="space-y-2">
               {schedule.slice(0, 6).map((e) => (
                 <li key={e.id} className="flex items-center gap-3 text-sm" data-testid={`wellness-event-${e.id}`}>
-                  <span className="text-[11px] font-mono text-muted-foreground w-16 shrink-0">{e.time}</span>
+                  <span className="text-[11px] text-muted-foreground w-16 shrink-0">{e.time}</span>
                   <span className="truncate">{e.title}</span>
                 </li>
               ))}
@@ -271,8 +297,8 @@ export function WellnessOverview(props: WellnessOverviewProps) {
                       : <Circle className="w-4 h-4 shrink-0 text-red-500" />}
                   </button>
                   <span className="flex-1 truncate">{m.name}{m.dose ? ` ${m.dose}` : ""}</span>
-                  {m.time && <span className="text-[11px] font-mono text-muted-foreground">{m.time}</span>}
-                  <span className={`text-[10px] font-mono ${m.taken ? "text-emerald-500" : "text-red-500"}`}>{m.taken ? "Taken" : "Due"}</span>
+                  {m.time && <span className="text-[11px] text-muted-foreground">{m.time}</span>}
+                  <span className={`text-[10px] ${m.taken ? "text-emerald-500" : "text-red-500"}`}>{m.taken ? "Taken" : "Due"}</span>
                 </li>
               ))}
             </ul>
@@ -361,6 +387,29 @@ export function WellnessOverview(props: WellnessOverviewProps) {
           )}
           <LogButton label="Log mood" onClick={onQuickLog && (() => onQuickLog("mood"))} testId="wellness-log-mood" />
         </SectionCard>
+
+        <SectionCard testId="wellness-mental" title="Mental Wellness" icon={Brain} tone={T.purple} viewAllHref="/trackers">
+          {meditationMin == null ? (
+            <Empty text="No mindfulness logged. Ask the AI to start a meditation tracker." />
+          ) : (
+            <div className="flex items-center gap-2 text-sm">
+              <Brain className="w-3.5 h-3.5" style={{ color: `hsl(${T.purple})` }} />
+              <span className="text-muted-foreground">Mindfulness today</span>
+              <span className="ml-auto metric-value text-lg" style={{ color: `hsl(${T.purple})` }}>{fmt(meditationMin)} min</span>
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard testId="wellness-recovery" title="Recovery" icon={Activity} tone={T.teal}>
+          {recoveryScore == null ? (
+            <Empty text="No recovery data. Log sleep + resting HR, or connect a wearable." />
+          ) : (
+            <div className="flex items-center gap-4">
+              <Ring value={recoveryScore} max={100} color={T.teal} label="score" unit="score" />
+              <div className="text-sm text-muted-foreground">Readiness based on sleep + resting HR.</div>
+            </div>
+          )}
+        </SectionCard>
       </div>
 
       {/* ── Row: appointments · reminders · labs · supplements ── */}
@@ -371,7 +420,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             <ul className="space-y-2 text-sm">
               {appointments.slice(0, 5).map((a) => (
                 <li key={a.id} className="flex items-center gap-2" data-testid={`wellness-appt-${a.id}`}>
-                  <span className="text-[11px] font-mono text-muted-foreground w-24 shrink-0">{a.date}{a.time ? ` ${a.time}` : ""}</span>
+                  <span className="text-[11px] text-muted-foreground w-24 shrink-0">{a.date}{a.time ? ` ${a.time}` : ""}</span>
                   <span className="truncate">{a.title}</span>
                 </li>
               ))}
@@ -396,8 +445,8 @@ export function WellnessOverview(props: WellnessOverviewProps) {
               {labs.slice(0, 5).map((l) => (
                 <li key={l.id} className="flex items-center gap-2" data-testid={`wellness-lab-${l.id}`}>
                   <span className="truncate flex-1">{l.name}</span>
-                  {l.date && <span className="text-[10px] font-mono text-muted-foreground">{l.date}</span>}
-                  {l.status && <span className="text-[10px] font-mono" style={{ color: `hsl(${T.green})` }}>{l.status}</span>}
+                  {l.date && <span className="text-[10px] text-muted-foreground">{l.date}</span>}
+                  {l.status && <span className="text-[10px]" style={{ color: `hsl(${T.green})` }}>{l.status}</span>}
                 </li>
               ))}
             </ul>
@@ -412,7 +461,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
                 <li key={s.id} className="flex items-center gap-2" data-testid={`wellness-supp-${s.id}`}>
                   <Leaf className="w-3 h-3 shrink-0" style={{ color: `hsl(${T.green})` }} />
                   <span className="flex-1 truncate">{s.name}{s.dose ? ` ${s.dose}` : ""}</span>
-                  {s.schedule && <span className="text-[10px] font-mono text-muted-foreground">{s.schedule}</span>}
+                  {s.schedule && <span className="text-[10px] text-muted-foreground">{s.schedule}</span>}
                 </li>
               ))}
             </ul>
@@ -430,7 +479,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
                 <li key={d.id} className="flex items-center gap-2" data-testid={`wellness-doc-${d.id}`}>
                   <FileText className="w-3 h-3 shrink-0 text-muted-foreground" />
                   <span className="flex-1 truncate">{d.name}</span>
-                  {d.date && <span className="text-[10px] font-mono text-muted-foreground">{d.date}</span>}
+                  {d.date && <span className="text-[10px] text-muted-foreground">{d.date}</span>}
                 </li>
               ))}
             </ul>
@@ -472,7 +521,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
                 <li key={r.id} className="flex items-center gap-2" data-testid={`wellness-activity-${r.id}`}>
                   <CheckCircle2 className="w-3 h-3 shrink-0" style={{ color: `hsl(${T.teal})` }} />
                   <span className="flex-1 truncate">{r.text}</span>
-                  {r.when && <span className="text-[10px] font-mono text-muted-foreground shrink-0">{r.when}</span>}
+                  {r.when && <span className="text-[10px] text-muted-foreground shrink-0">{r.when}</span>}
                 </li>
               ))}
             </ul>

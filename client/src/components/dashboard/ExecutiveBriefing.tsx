@@ -56,11 +56,11 @@ function Section({ id, title, count, summary, children, defaultOpen = true, test
         aria-expanded={open}
       >
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
-        <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-muted-foreground group-hover:text-foreground transition-colors">{title}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-foreground transition-colors">{title}</span>
         {typeof count === "number" && count > 0 && (
-          <span className="text-[10px] font-mono px-1.5 rounded-full" style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}>{count}</span>
+          <span className="text-[10px] px-1.5 rounded-full" style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}>{count}</span>
         )}
-        {summary && <span className="ml-auto mr-1 text-[10px] font-mono tabular-nums" style={{ color: `hsl(${accent})` }}>{summary}</span>}
+        {summary && <span className="ml-auto mr-1 text-[10px] tabular-nums" style={{ color: `hsl(${accent})` }}>{summary}</span>}
         <ChevronDown className={`h-3 w-3 ${summary ? "" : "ml-auto"} text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
       </button>
       {open && children}
@@ -77,15 +77,15 @@ function StatTile({ label, value, sub, accent, onClick, testId }: {
     <button
       onClick={onClick}
       data-testid={testId}
-      className="flex-1 min-w-[7.5rem] rounded-lg border bg-card/40 px-2.5 py-2 text-left hover:bg-muted/40 transition-colors"
-      style={{ borderColor: `hsl(${accent} / 0.3)` }}
+      className="flex-1 min-w-[7.5rem] rounded-xl border px-2.5 py-2 text-left card-lift transition-all"
+      style={{ borderColor: `hsl(${accent} / 0.30)`, background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, hsl(var(--card)) 75%)` }}
     >
       <div className="flex items-center gap-1.5">
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
-        <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-muted-foreground">{label}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
       </div>
-      <div className="text-xl font-bold tabular-nums mt-0.5" style={{ color: `hsl(${accent})` }}>{value}</div>
-      {sub && <div className="text-[10px] font-mono text-muted-foreground truncate">{sub}</div>}
+      <div className="metric-value text-xl mt-0.5" style={{ color: `hsl(${accent})` }}>{value}</div>
+      {sub && <div className="text-[10px] text-muted-foreground truncate">{sub}</div>}
     </button>
   );
 }
@@ -101,9 +101,9 @@ function Row({ cells, onClick, testId, urgent, valueTone }: {
       data-testid={testId}
       className={`w-full flex items-baseline gap-2 py-[3px] px-1 text-left text-xs hover:bg-muted/40 rounded-sm ${urgent ? "text-red-500" : ""}`}
     >
-      <span className="font-mono text-[10px] uppercase text-muted-foreground w-16 shrink-0 truncate">{cells[0]}</span>
+      <span className="text-[10px] uppercase text-muted-foreground w-16 shrink-0 truncate">{cells[0]}</span>
       <span className="flex-1 truncate">{cells[1]}</span>
-      {cells.length > 2 && <span className={`font-mono text-[11px] tabular-nums text-right shrink-0 ${toneCls}`}>{cells[2]}</span>}
+      {cells.length > 2 && <span className={`text-[11px] tabular-nums text-right shrink-0 ${toneCls}`}>{cells[2]}</span>}
     </button>
   );
 }
@@ -157,9 +157,14 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     queryFn: () => apiRequest("GET", `/api/calendar/timeline${param}${amp}start=${todayStr}&end=${in45}`).then(r => r.json()),
     staleTime: 60_000,
   });
+  // Reminders are profile-scoped like every other briefing section — pass the
+  // active filter so a selected profile shows only its own reminders (the
+  // server enforces strict isolation; unlinked reminders appear only in the
+  // unfiltered "Everyone" view). Keying on mode/ids makes switching profiles
+  // refetch instead of showing another profile's cached reminders.
   const { data: reminders = [] } = useQuery<any[]>({
-    queryKey: ["/api/reminders"],
-    queryFn: () => apiRequest("GET", "/api/reminders").then(r => r.json()).catch(() => []),
+    queryKey: ["/api/reminders", mode, ...ids],
+    queryFn: () => apiRequest("GET", `/api/reminders${param}`).then(r => r.json()).catch(() => []),
     staleTime: 60_000,
   });
   const { data: goals = [] } = useQuery<any[]>({
@@ -247,6 +252,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   const score = Math.max(40, Math.min(100,
     100 - Math.min(40, overdueTasks.length * 8) - Math.min(20, missedCount * 4) - Math.min(30, overdueBillCount * 10)));
   const scoreLabel = score >= 90 ? "Excellent" : score >= 75 ? "Good" : "Needs attention";
+  // Only show a score when there is actually something to evaluate. A brand-new
+  // or empty profile has no tasks / habits / bills, so a "100 · Excellent" tile
+  // reads as fake/leaked data (BUG-20260709: empty profile looked populated).
+  // With no inputs, show an em dash instead.
+  const hasScoreInputs = pending.length > 0 || habitRows.length > 0 || bills.length > 0;
   const billsUpcomingTotal = bills.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
   const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
 
@@ -268,7 +278,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     <div data-testid="executive-briefing">
       {/* Top stat tiles (photo-2 style) — every tile drills into its module. */}
       <div className="flex flex-wrap gap-2 mb-2" data-testid="brief-stat-row">
-        <StatTile label="Score" value={String(score)} sub={`${scoreLabel} · ${overdueTasks.length} critical`} accent={score >= 90 ? "155 65% 45%" : score >= 75 ? "43 96% 56%" : "0 72% 58%"} onClick={() => setPopup("tasks")} testId="brief-stat-score" />
+        <StatTile label="Score" value={hasScoreInputs ? String(score) : "—"} sub={hasScoreInputs ? `${scoreLabel} · ${overdueTasks.length} critical` : "No data yet"} accent={!hasScoreInputs ? "240 10% 60%" : score >= 90 ? "155 65% 45%" : score >= 75 ? "43 96% 56%" : "0 72% 58%"} onClick={() => setPopup("tasks")} testId="brief-stat-score" />
         <StatTile label="Tasks" value={String(pending.length)} sub={`${agendaTasks.length} today · ${overdueTasks.length} overdue`} accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
         <StatTile label="Habits" value={`${habitRows.length - missedCount}/${habitRows.length}`} sub={missedCount > 0 ? `${missedCount} still due` : "all done"} accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
         <StatTile label="Bills" value={String(bills.length)} sub={`$${Math.round(billsUpcomingTotal).toLocaleString()} upcoming`} accent={ACCENTS.bills} onClick={() => navigate("/dashboard/finance")} testId="brief-stat-bills" />
@@ -428,7 +438,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
                   <button
                     onClick={() => payBill.mutate(b.id)}
                     disabled={payBill.isPending}
-                    className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded border border-border hover:bg-muted shrink-0"
+                    className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded border border-border hover:bg-muted shrink-0"
                     data-testid={`brief-pay-${b.id}`}
                   >Pay</button>
                 </div>
@@ -442,7 +452,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
             <div className="space-y-0.5">
               {calendarDays.map(d => (
                 <div key={d.day}>
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground px-1 pt-1">{d.day}</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-1">{d.day}</div>
                   {d.items.map((i: any) => (
                     <Row key={i.id} cells={[i.time || "", i.title]} onClick={() => navigate("/calendar")} />
                   ))}

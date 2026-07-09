@@ -80,3 +80,94 @@ describe("SupabaseStorage.createTracker — universal, schema-error-proof", () =
     expect(captured.inserts[1].name).toBe("Custom");
   });
 });
+
+// BUG-20260709-tracker-dupkey — the trackers table has a UNIQUE (user_id, name)
+// index, so creating a same-named tracker for a SECOND profile threw a raw
+// duplicate-key error ("Bill ate a chicken sandwich and ran 2 miles" → both
+// entries failed because a "Calories"/"Running" tracker already existed for
+// Self). createTracker must disambiguate the name per profile and never let a
+// name collision hard-fail a log.
+function makeStorageDup(opts: {
+  existing: Array<{ name: string; linkedProfiles: string[] }>;
+  profiles?: Record<string, { id: string; name: string }>;
+  enforceUnique?: boolean; // simulate the DB UNIQUE(user_id,name) constraint
+}) {
+  const captured: { inserts: any[] } = { inserts: [] };
+  const committedNames = new Set(opts.existing.map((t) => t.name.toLowerCase()));
+  const client: any = {
+    from: (table: string) => ({
+      insert: (row: any) => {
+        if (table !== "trackers") return Promise.resolve({ error: null });
+        captured.inserts.push(row);
+        if (opts.enforceUnique && committedNames.has(String(row.name).toLowerCase())) {
+          return Promise.resolve({ error: { code: "23505", message: `duplicate key value violates unique constraint "idx_trackers_name_user"` } });
+        }
+        committedNames.add(String(row.name).toLowerCase());
+        return Promise.resolve({ error: null });
+      },
+    }),
+  };
+  const storage: any = Object.create(SupabaseStorage.prototype);
+  storage.userId = "user-1";
+  storage.supabase = client;
+  storage.getTrackers = async () => opts.existing.map((t, i) => ({ id: `ex-${i}`, name: t.name, linkedProfiles: t.linkedProfiles, fields: [] }));
+  storage.getSelfProfile = async () => ({ id: "self-1", type: "self" });
+  storage.getProfile = async (id: string) => opts.profiles?.[id] ?? null;
+  storage.linkProfileTo = async () => undefined;
+  storage.logActivity = () => undefined;
+  storage.getTracker = async () => ({ id: "new", name: captured.inserts[captured.inserts.length - 1]?.name, fields: [], entries: [] });
+  return { storage, captured };
+}
+
+describe("createTracker — per-profile name disambiguation (dup-key fix)", () => {
+  it("suffixes the profile name when the bare name is taken by another profile", async () => {
+    const { storage, captured } = makeStorageDup({
+      existing: [{ name: "Calories", linkedProfiles: ["self-1"] }],
+      profiles: { "bill-1": { id: "bill-1", name: "Bill" } },
+      enforceUnique: true,
+    });
+    const t = await storage.createTracker({ name: "Calories", category: "nutrition", fields: [{ name: "value", type: "number" }], linkedProfiles: ["bill-1"] } as any);
+    // Must NOT insert the bare "Calories" (would violate the unique index).
+    expect(captured.inserts.every((r) => r.name !== "Calories")).toBe(true);
+    expect(captured.inserts[captured.inserts.length - 1].name).toBe("Calories - Bill");
+    expect(t.name).toBe("Calories - Bill");
+  });
+
+  it("reuses the existing tracker when the SAME profile already has that name", async () => {
+    const { storage, captured } = makeStorageDup({
+      existing: [{ name: "Calories", linkedProfiles: ["bill-1"] }],
+      profiles: { "bill-1": { id: "bill-1", name: "Bill" } },
+    });
+    const t = await storage.createTracker({ name: "Calories", category: "nutrition", fields: [], linkedProfiles: ["bill-1"] } as any);
+    expect(captured.inserts.length).toBe(0); // dedup → no insert
+    expect(t.name).toBe("Calories");
+  });
+
+  it("reuses the per-profile tracker when the bare name is passed but 'Name - Profile' exists", async () => {
+    const { storage, captured } = makeStorageDup({
+      existing: [
+        { name: "Calories", linkedProfiles: ["self-1"] },
+        { name: "Calories - Bob", linkedProfiles: ["bob-1"] },
+      ],
+      profiles: { "bob-1": { id: "bob-1", name: "Bob" } },
+      enforceUnique: true,
+    });
+    const t = await storage.createTracker({ name: "Calories", category: "nutrition", fields: [], linkedProfiles: ["bob-1"] } as any);
+    expect(captured.inserts.length).toBe(0); // reused, nothing inserted
+    expect(t.name).toBe("Calories - Bob");
+  });
+
+  it("backstops a residual collision with a unique suffix instead of throwing", async () => {
+    // getTrackers is stubbed empty so the pre-check can't catch it, but the DB
+    // still rejects the bare name — the insert must retry with a unique suffix.
+    const { storage } = makeStorageDup({
+      existing: [],
+      profiles: { "bill-1": { id: "bill-1", name: "Bill" } },
+      enforceUnique: true,
+    });
+    await storage.createTracker({ name: "Running", category: "fitness", fields: [], linkedProfiles: ["bill-1"] } as any); // commits "Running" at the DB
+    const t = await storage.createTracker({ name: "Running", category: "fitness", fields: [], linkedProfiles: ["bill-1"] } as any);
+    expect(t.name).not.toBe("Running");
+    expect(t.name.startsWith("Running")).toBe(true);
+  });
+});

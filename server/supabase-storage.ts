@@ -2118,6 +2118,49 @@ export class SupabaseStorage implements IStorage {
       const selfProfile = await this.getSelfProfile();
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
+
+    // NAME DISAMBIGUATION (BUG-20260709-tracker-dupkey): the `trackers` table has
+    // a UNIQUE (user_id, name) index (idx_trackers_name_user WHERE deleted_at IS
+    // NULL). Trackers are keyed by name PER USER, not per profile — so inserting
+    // a tracker whose bare name is already used by ANOTHER profile fails with a
+    // Postgres duplicate-key error (23505). That is exactly what broke logging
+    // "Bill ran 2 miles" / "Bill ate a chicken sandwich": a "Running"/"Calories"
+    // tracker already existed for the Self profile, and createTracker inserted
+    // the bare name instead of a per-profile one. The dedup above already reused
+    // a same-name tracker that belongs to the SAME profile; reaching here means
+    // the name collides with a DIFFERENT profile's tracker. Match the app's
+    // existing convention ("Calories - Bob") by suffixing the target profile's
+    // name, then a numeric counter, until the name is free for this user.
+    const takenNames = new Set(existing.map(t => t.name.toLowerCase()));
+    let finalName = data.name;
+    if (takenNames.has(finalName.toLowerCase())) {
+      let profileSuffix = "";
+      const targetPid = requestedProfiles[0] || linkedProfiles[0];
+      if (targetPid) {
+        try {
+          const p = await this.getProfile(targetPid);
+          if (p?.name) profileSuffix = ` - ${p.name}`;
+        } catch { /* fall through to numeric suffix */ }
+      }
+      const suffixedName = `${data.name}${profileSuffix}`;
+      // If the per-profile tracker already exists for THIS profile (e.g. the AI
+      // passed the bare "Calories" for Bob but "Calories - Bob" already exists),
+      // reuse it instead of spawning "Calories - Bob 2" — the dedup at the top
+      // only compared the bare name, so it missed the suffixed form.
+      if (profileSuffix && targetPid) {
+        const existingForProfile = existing.find(t =>
+          t.name.toLowerCase() === suffixedName.toLowerCase() &&
+          (t.linkedProfiles || []).includes(targetPid));
+        if (existingForProfile) return existingForProfile;
+      }
+      let candidate = suffixedName;
+      let n = 2;
+      while (takenNames.has(candidate.toLowerCase())) {
+        candidate = `${data.name}${profileSuffix} ${n++}`;
+        if (n > 100) { candidate = `${data.name} ${id.slice(0, 4)}`; break; }
+      }
+      finalName = candidate;
+    }
     // UNIVERSAL ENGINE: never reject a tracker over field shape. Coerce every
     // field to the canonical {name, type} so an AI-supplied field with an odd
     // type ("time", "string", missing) can't fail the insert. Unknown types
@@ -2138,29 +2181,42 @@ export class SupabaseStorage implements IStorage {
     // (metric_definition) are added only when actually supplied, so a
     // deployment that hasn't run that migration never sees a "column does not
     // exist" schema error on a brand-new tracker.
-    const baseRow: any = {
-      id, user_id: this.userId, name: data.name, category: data.category || "custom",
-      unit: data.unit || null, icon: data.icon || null, fields: safeFields,
-      linked_profiles: linkedProfiles, created_at: now,
+    // Insert helper — builds the row for a given name and retries WITHOUT the
+    // optional metric_definition column if a deployment hasn't migrated it.
+    const insertWithName = async (nm: string): Promise<{ error: any }> => {
+      const base: any = {
+        id, user_id: this.userId, name: nm, category: data.category || "custom",
+        unit: data.unit || null, icon: data.icon || null, fields: safeFields,
+        linked_profiles: linkedProfiles, created_at: now,
+      };
+      const full = (data as any).metricDefinition
+        ? { ...base, metric_definition: (data as any).metricDefinition }
+        : base;
+      let err = (await this.supabase.from("trackers").insert(full)).error;
+      if (err && full !== base &&
+          /metric_definition|column .* does not exist|schema cache|could not find/i.test(err.message || "")) {
+        console.warn(`[createTracker] optional column rejected (${err.message}); retrying with base columns`);
+        err = (await this.supabase.from("trackers").insert(base)).error;
+      }
+      return { error: err };
     };
-    const fullRow = (data as any).metricDefinition
-      ? { ...baseRow, metric_definition: (data as any).metricDefinition }
-      : baseRow;
 
-    let insertErr = (await this.supabase.from("trackers").insert(fullRow)).error;
-    // Resilience: if an OPTIONAL column is missing on this deployment, retry
-    // with the base columns only rather than failing the whole save.
-    if (insertErr && fullRow !== baseRow &&
-        /metric_definition|column .* does not exist|schema cache|could not find/i.test(insertErr.message || "")) {
-      console.warn(`[createTracker] optional column rejected (${insertErr.message}); retrying with base columns`);
-      insertErr = (await this.supabase.from("trackers").insert(baseRow)).error;
+    let insertErr = (await insertWithName(finalName)).error;
+    // BACKSTOP for the UNIQUE (user_id, name) constraint: if the name still
+    // collided (a race, or a soft-deleted row the pre-check missed), retry once
+    // with a guaranteed-unique suffix so a user's log never hard-fails with a
+    // raw "duplicate key" error. Pre-emptive disambiguation above handles the
+    // common case; this guarantees forward progress.
+    if (insertErr && /duplicate key|23505|idx_trackers_name_user|already exists/i.test(insertErr.message || insertErr.code || "")) {
+      finalName = `${finalName} ${id.slice(0, 4)}`;
+      insertErr = (await insertWithName(finalName)).error;
     }
     if (insertErr) throw insertErr;
     // Link to profiles via junction table
     for (const pId of linkedProfiles) {
       await this.linkProfileTo(pId, "tracker", id);
     }
-    this.logActivity("tracker", `Created tracker: ${data.name}`);
+    this.logActivity("tracker", `Created tracker: ${finalName}`);
     return (await this.getTracker(id))!;
   }
 
@@ -2745,16 +2801,17 @@ export class SupabaseStorage implements IStorage {
     const [allEvents, allTasks, allObligations, profiles] = await Promise.all([
       this.getEvents(), this.getTasks(), this.getObligations(), this.getProfiles(),
     ]);
-    // Profile filtering (PR AC — calendar isolation):
-    // When a profile filter is active, an item must be EXPLICITLY linked to
-    // one of the selected profiles. Orphan items (linkedProfiles = []) are
-    // hidden from every individual-profile calendar, including Self — per the
-    // explicit user rule "If an event is not assigned to a profile, it should
-    // not appear in individual profile calendars." This is stricter than the
-    // shared `passesProfileFilter` default (which falls orphans through to
-    // Self) because the calendar is the one surface where leaked, untargeted
-    // items dominate the visual layout and erase any sense of per-profile
-    // ownership. Other surfaces (finance / dashboard) keep the soft rule.
+    // Profile filtering (calendar isolation):
+    // When a profile filter is active, an item shows if it is linked to one of
+    // the selected profiles. Orphan items (linkedProfiles = []) fall through to
+    // the SELF (default) profile — per the user rule "unassigned stuff should
+    // always go to the primary person's profile by default." So an unassigned
+    // event/task/obligation appears on the primary person's calendar, never on
+    // a different person/pet/asset calendar. This is the same soft-orphan rule
+    // (`belongs_to_self`) that finance, the dashboard, and every list endpoint
+    // apply, so the whole app now scopes unassigned data one consistent way.
+    // (This intentionally supersedes the earlier stricter calendar rule that
+    // hid orphans from every individual calendar.)
     const filterActive = !!(profileIds && profileIds.length > 0);
     const _selfIds = selfIdsFrom(profiles);
     const matchesProfile = (linked: string[] | null | undefined) => {
@@ -2762,7 +2819,7 @@ export class SupabaseStorage implements IStorage {
       return isInScope(
         Array.isArray(linked) ? linked : [],
         { selectedIds: profileIds!, selfIds: _selfIds },
-        "out_of_scope",
+        "belongs_to_self",
       );
     };
     // PR AC: reminders do NOT belong on the calendar. They have their own
@@ -3030,6 +3087,26 @@ export class SupabaseStorage implements IStorage {
     };
     for (const profile of profiles) {
       const f = profile.fields || {};
+
+      // PROFILE-SCOPE FIX (BUG-20260709-virtual-event-leak): every virtual event
+      // below (birthday, subscription renewal, vehicle service, vet visit,
+      // warranty/insurance expiry, loan payment…) was pushed via addVirtualEvent
+      // WITHOUT any profile-filter check — the one timeline source that skipped
+      // matchesProfile entirely. That is why "Car Insurance — Renewal" (a
+      // subscription nested under Self) persisted on EVERY profile's calendar and
+      // Important Dates (Bill, Bob, Jim…), regardless of the isolation policy —
+      // no policy change could fix a path that never filtered at all.
+      //
+      // Scope this profile's virtual events to the profile itself, plus its
+      // PARENT for child profiles (a subscription/vehicle/asset/loan is owned by
+      // the person it is nested under), using the SAME matchesProfile rule the
+      // stored-events / tasks / obligations / liability paths already use. When a
+      // filter is active and this profile is out of scope, emit none of its
+      // virtual events; unfiltered ("Everyone") still shows everything.
+      const vevScope = profile.parentProfileId
+        ? [profile.id, profile.parentProfileId]
+        : [profile.id];
+      if (!matchesProfile(vevScope)) continue;
 
       // Person / Self → birthday (yearly)
       if ((profile.type === "person" || profile.type === "self") && f.birthday) {

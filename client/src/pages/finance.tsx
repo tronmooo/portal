@@ -326,8 +326,13 @@ export default function FinancePage() {
   });
 
   // ── ALL hooks MUST be above early returns (React Rules of Hooks) ──
-  // Paychecks
-  const { data: paychecks = [] } = useQuery<any[]>({ queryKey: ["/api/paychecks"] });
+  // Paychecks — profile-scoped like every other query here (BUG-20260709):
+  // the bare query leaked all profiles' paychecks into the "Expected Paychecks"
+  // list under every profile. Server filters /api/paychecks by profileIds.
+  const { data: paychecks = [] } = useQuery<any[]>({
+    queryKey: ["/api/paychecks", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/paychecks${profileParam}`).then(r => r.json()),
+  });
   // RACE FIX: payload passed as variables — see addExpenseMutation comment.
   // (User hit "400: source is required" because the form was reset before the
   // mutation read it.)
@@ -455,7 +460,18 @@ export default function FinancePage() {
   });
 
   // ── Incomes (separate from paychecks: recurring income streams) ──────────
-  const { data: incomes = [] } = useQuery<any[]>({ queryKey: ["/api/incomes"] });
+  // PROFILE-SCOPE FIX (BUG-20260709-income-leak): this query MUST send the
+  // active profile filter, like every other query on this page. Without the
+  // explicit queryFn + scoped key it hit the bare /api/incomes and summed ALL
+  // incomes into `monthlyIncome` — so INCOME · MTD and CASH FLOW showed the
+  // same total (e.g. $32,700) under EVERY profile, including brand-new ones
+  // that have no income. The server already scopes /api/incomes by profileIds
+  // (orphans fall through to the self profile only), so passing the param is
+  // all that's needed; keying on mode/ids makes switching profiles refetch.
+  const { data: incomes = [] } = useQuery<any[]>({
+    queryKey: ["/api/incomes", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/incomes${profileParam}`).then(r => r.json()),
+  });
 
   // RACE FIX: payload passed as variables — see addExpenseMutation comment.
   type NewIncomeVars = { description: string; amount: number; category: string; frequency: string; date?: string; profileId?: string };

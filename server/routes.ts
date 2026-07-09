@@ -5075,8 +5075,37 @@ Rules:
   // Previously reminders were ONLY created by the AI / cron; the dashboard
   // "Add reminder" quick-action needs a plain REST create. listReminders /
   // createReminder already exist on IStorage (used by the cron firer).
-  app.get("/api/reminders", asyncHandler(async (_req, res) => {
-    const reminders = await storage.listReminders();
+  app.get("/api/reminders", asyncHandler(async (req, res) => {
+    let reminders = await storage.listReminders();
+    // Profile isolation (BUG-20260709-reminder-leak): reminders carry a scalar
+    // `profileId`, but this endpoint previously returned EVERY reminder for the
+    // user regardless of the active profile filter — so medication / refill /
+    // appointment reminders (many created with no profile) leaked into EVERY
+    // profile's dashboard REMINDERS card. This was the ONE list endpoint that
+    // bypassed the canonical scope rule that /api/tasks, /api/obligations,
+    // /api/expenses, etc. all apply.
+    //
+    // Apply the app-wide default rule ("belongs_to_self"): unassigned items
+    // default to the primary person. When a profile filter is active a reminder
+    // shows if it is linked to a selected profile; an UNLINKED reminder falls
+    // through only when the selection includes the self (default) profile — so
+    // it appears on the primary person's dashboard, never on a different
+    // person/pet/asset profile. This matches passesProfileFilter used by every
+    // sibling endpoint, so reminders now scope identically to tasks/incomes/etc.
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    const fp = req.query.profileId as string | undefined;
+    const reminderFilterIds = profileIdsParam
+      ? profileIdsParam.split(",").filter(Boolean)
+      : (fp ? [fp] : []);
+    if (reminderFilterIds.length > 0) {
+      const allProfiles = await storage.getProfiles();
+      reminders = reminders.filter((r) =>
+        passesProfileFilter(
+          r.profileId ? [r.profileId] : [],
+          { selectedIds: reminderFilterIds, allProfiles },
+        ),
+      );
+    }
     res.json(reminders);
   }));
   app.post("/api/reminders", asyncHandler(async (req, res) => {

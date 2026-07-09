@@ -2756,11 +2756,11 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   return (
     <div
       data-testid={`card-tracker-${tracker.id}`}
-      className="rounded-2xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col relative"
+      className="rounded-xl overflow-hidden cursor-pointer card-lift transition-all flex flex-col relative"
       style={{
         height: cardHeight,
-        background: `linear-gradient(160deg, hsl(${catAccent} / 0.14) 0%, hsl(var(--card)) 45%)`,
-        border: `1px solid hsl(${catAccent} / 0.2)`,
+        background: `linear-gradient(135deg, hsl(${catAccent} / 0.12) 0%, hsl(var(--card)) 75%)`,
+        border: `1px solid hsl(${catAccent} / 0.30)`,
         boxShadow: `0 2px 16px hsl(${catAccent} / 0.07), inset 0 1px 0 hsl(${catAccent} / 0.1)`,
       }}
       onClick={() => onOpenDetail?.(tracker.id)}
@@ -3327,11 +3327,11 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
   const series = [sample * 0.92, sample * 0.97, sample, sample * 1.01, sample * 0.99, sample];
   return (
     <div
-      className="rounded-2xl overflow-hidden flex flex-col relative"
+      className="rounded-xl overflow-hidden flex flex-col relative"
       style={{
         height: 150,
-        background: `linear-gradient(160deg, hsl(${catAccent} / 0.16) 0%, hsl(var(--card)) 48%)`,
-        border: `1px solid hsl(${catAccent} / 0.25)`,
+        background: `linear-gradient(135deg, hsl(${catAccent} / 0.12) 0%, hsl(var(--card)) 75%)`,
+        border: `1px solid hsl(${catAccent} / 0.30)`,
         boxShadow: `0 2px 16px hsl(${catAccent} / 0.08), inset 0 1px 0 hsl(${catAccent} / 0.12)`,
       }}
     >
@@ -6672,6 +6672,9 @@ export default function TrackersPage() {
 
         return (
           <div className="space-y-1.5">
+            {/* Hub single-section view: the active tab chip already names this
+                section, so its redundant title/toggle is hidden (frees space). */}
+            {!(hubEmbedded && sectionFilter !== "all") && (
             <button onClick={() => toggleSection("profiles")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: 'linear-gradient(135deg, hsl(262 60% 62% / 0.06) 0%, transparent 50%)' }} data-testid="section-toggle-profiles">
               <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'hsl(262 60% 62% / 0.15)' }}>
                 <Car className="h-4 w-4" style={{ color: 'hsl(262 60% 62%)' }} />
@@ -6685,7 +6688,8 @@ export default function TrackersPage() {
               </div>
               {collapsedSections.has("profiles") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
-            {!collapsedSections.has("profiles") && (
+            )}
+            {(!collapsedSections.has("profiles") || (hubEmbedded && sectionFilter !== "all")) && (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 items-start" style={{ gridAutoRows: 160 }}>
                 {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
                   const Icon = typeIcons[child.type] || Star;
@@ -6918,6 +6922,7 @@ export default function TrackersPage() {
         const ac = `hsl(${accentHsl})`;
         return (
           <div className="space-y-2">
+            {!(hubEmbedded && sectionFilter !== "all") && (
             <button onClick={() => toggleSection("liabilities")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: `linear-gradient(135deg, hsl(${accentHsl} / 0.06) 0%, transparent 50%)` }} data-testid="section-toggle-liabilities">
               <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: `hsl(${accentHsl} / 0.15)` }}>
                 <TrendingDown className="h-4 w-4" style={{ color: ac }} />
@@ -6933,7 +6938,8 @@ export default function TrackersPage() {
               </div>
               {collapsedSections.has("liabilities") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
-            {!collapsedSections.has("liabilities") && (() => {
+            )}
+            {(!collapsedSections.has("liabilities") || (hubEmbedded && sectionFilter !== "all")) && (() => {
               // Photo-4 layout: split into FIXED (amortizing loans — mortgage,
               // auto, student, personal) vs VARIABLE (revolving cards, one-time
               // debt, recurring bills) using the shared family classifier, and
@@ -7039,6 +7045,7 @@ export default function TrackersPage() {
       {/* Documents Section */}
       {viewMode === "cards" && (sectionFilter === "all" || sectionFilter === "documents") && <div className="space-y-2">
         <div className="flex items-center justify-between">
+          {!(hubEmbedded && sectionFilter !== "all") && (
           <button onClick={() => toggleSection("documents")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: 'linear-gradient(135deg, hsl(25 80% 54% / 0.06) 0%, transparent 50%)' }} data-testid="section-toggle-documents">
               <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'hsl(25 80% 54% / 0.15)' }}>
                 <FileText className="h-4 w-4" style={{ color: 'hsl(25 80% 54%)' }} />
@@ -7052,6 +7059,7 @@ export default function TrackersPage() {
               </div>
               {collapsedSections.has("documents") ? <ChevronDown className="h-4 w-4 text-muted-foreground/60 shrink-0" /> : <ChevronUp className="h-4 w-4 text-muted-foreground/60 shrink-0" />}
             </button>
+            )}
           <div className="flex items-center gap-2">
             {/* Profile selector for upload — link doc to a specific profile */}
             <Select value={uploadProfileId} onValueChange={setUploadProfileId}>
@@ -7095,7 +7103,7 @@ export default function TrackersPage() {
             </Button>
           </div>
         </div>
-        {!collapsedSections.has("documents") && (
+        {(!collapsedSections.has("documents") || (hubEmbedded && sectionFilter !== "all")) && (
           <div className="space-y-2">
             {allDocuments.length > 3 && (
               <input
@@ -7135,7 +7143,7 @@ export default function TrackersPage() {
             )}
           </div>
         )}
-        {!collapsedSections.has("documents") && (filteredDocuments.length === 0 ? (
+        {(!collapsedSections.has("documents") || (hubEmbedded && sectionFilter !== "all")) && (filteredDocuments.length === 0 ? (
           <div className="rounded-lg border bg-card p-6 text-center">
             <FileText className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">{allDocuments.length === 0 ? "No documents yet" : "No documents match your search"}</p>
