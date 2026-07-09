@@ -56,11 +56,11 @@ function Section({ id, title, count, summary, children, defaultOpen = true, test
         aria-expanded={open}
       >
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
-        <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-muted-foreground group-hover:text-foreground transition-colors">{title}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-foreground transition-colors">{title}</span>
         {typeof count === "number" && count > 0 && (
-          <span className="text-[10px] font-mono px-1.5 rounded-full" style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}>{count}</span>
+          <span className="text-[10px] px-1.5 rounded-full" style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}>{count}</span>
         )}
-        {summary && <span className="ml-auto mr-1 text-[10px] font-mono tabular-nums" style={{ color: `hsl(${accent})` }}>{summary}</span>}
+        {summary && <span className="ml-auto mr-1 text-[10px] tabular-nums" style={{ color: `hsl(${accent})` }}>{summary}</span>}
         <ChevronDown className={`h-3 w-3 ${summary ? "" : "ml-auto"} text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
       </button>
       {open && children}
@@ -82,10 +82,10 @@ function StatTile({ label, value, sub, accent, onClick, testId }: {
     >
       <div className="flex items-center gap-1.5">
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
-        <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-muted-foreground">{label}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
       </div>
       <div className="text-xl font-bold tabular-nums mt-0.5" style={{ color: `hsl(${accent})` }}>{value}</div>
-      {sub && <div className="text-[10px] font-mono text-muted-foreground truncate">{sub}</div>}
+      {sub && <div className="text-[10px] text-muted-foreground truncate">{sub}</div>}
     </button>
   );
 }
@@ -101,9 +101,9 @@ function Row({ cells, onClick, testId, urgent, valueTone }: {
       data-testid={testId}
       className={`w-full flex items-baseline gap-2 py-[3px] px-1 text-left text-xs hover:bg-muted/40 rounded-sm ${urgent ? "text-red-500" : ""}`}
     >
-      <span className="font-mono text-[10px] uppercase text-muted-foreground w-16 shrink-0 truncate">{cells[0]}</span>
+      <span className="text-[10px] uppercase text-muted-foreground w-16 shrink-0 truncate">{cells[0]}</span>
       <span className="flex-1 truncate">{cells[1]}</span>
-      {cells.length > 2 && <span className={`font-mono text-[11px] tabular-nums text-right shrink-0 ${toneCls}`}>{cells[2]}</span>}
+      {cells.length > 2 && <span className={`text-[11px] tabular-nums text-right shrink-0 ${toneCls}`}>{cells[2]}</span>}
     </button>
   );
 }
@@ -428,7 +428,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
                   <button
                     onClick={() => payBill.mutate(b.id)}
                     disabled={payBill.isPending}
-                    className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded border border-border hover:bg-muted shrink-0"
+                    className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded border border-border hover:bg-muted shrink-0"
                     data-testid={`brief-pay-${b.id}`}
                   >Pay</button>
                 </div>
@@ -442,7 +442,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
             <div className="space-y-0.5">
               {calendarDays.map(d => (
                 <div key={d.day}>
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground px-1 pt-1">{d.day}</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-1">{d.day}</div>
                   {d.items.map((i: any) => (
                     <Row key={i.id} cells={[i.time || "", i.title]} onClick={() => navigate("/calendar")} />
                   ))}
