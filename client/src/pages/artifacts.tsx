@@ -918,20 +918,20 @@ export default function ArtifactsPage() {
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4 pb-24">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold">Artifacts</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {profileFiltered.length} items · Documents, notes & AI reports in one place
+      {/* Header — shared icon-chip page-header language. */}
+      <div className="flex items-center gap-3">
+        <span className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: "hsl(262 70% 62% / 0.15)" }}>
+          <Archive className="h-4 w-4" style={{ color: "hsl(262 70% 62%)" }} />
+        </span>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-semibold leading-tight">Artifacts</h1>
+          <p className="text-xs text-muted-foreground truncate">
+            {profileFiltered.length} items · Documents, notes &amp; AI reports in one place
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="shrink-0 flex items-center gap-2">
           <SmartFillTrigger />
-          <MultiProfileFilter
-            onChange={() => {}}
-            compact
-          />
+          <MultiProfileFilter onChange={() => {}} compact />
         </div>
       </div>
 
@@ -947,9 +947,10 @@ export default function ArtifactsPage() {
           { label: "Artifacts", value: profileFiltered.filter(i => i.isArtifact).length, color: "262 70% 62%" },
           { label: "Showing", value: profileFiltered.length, color: "155 60% 48%" },
         ].map(s => (
-          <div key={s.label} className="rounded-xl border border-border/50 bg-card/60 p-2.5 text-center">
-            <p className="text-lg font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
-            <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</p>
+          <div key={s.label} className="rounded-xl border p-2.5 text-center card-lift transition-all"
+            style={{ borderColor: `hsl(${s.color} / 0.30)`, background: `linear-gradient(135deg, hsl(${s.color} / 0.12) 0%, hsl(var(--card)) 75%)` }}>
+            <p className="metric-value text-lg leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
+            <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</p>
           </div>
         ))}
       </div>
