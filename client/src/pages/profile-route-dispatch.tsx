@@ -13,7 +13,6 @@ import { useRoute, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
-import { setFilterSelected } from "@/lib/profileFilter";
 
 const ProfileDetailPage = lazy(() => import("@/pages/profile-detail"));
 
@@ -48,8 +47,12 @@ export default function ProfileRouteDispatch() {
     if (!id) return;
     // Normalize the legacy singular alias to the plural path, then re-dispatch.
     if (singularMatch && !pluralMatch) { navigate(`/profiles/${id}`, { replace: true }); return; }
+    // Redirect to the person's Info tab WITHOUT touching the global dashboard
+    // scope — the Info page loads this person by id on its own, and silently
+    // repointing the whole dashboard/finance/trackers scope to whoever you last
+    // opened made the dashboard "stick" to a sparse profile and look empty.
+    // Scope only changes via the explicit hub switcher now.
     if (isPerson && profile) {
-      setFilterSelected([profile.id], [profile.name]);
       navigate(`/profiles/${profile.id}/info`, { replace: true });
     }
   }, [id, singularMatch, pluralMatch, isPerson, profile?.id]);
