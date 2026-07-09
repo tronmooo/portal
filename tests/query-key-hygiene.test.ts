@@ -19,7 +19,12 @@ import path from "path";
 
 const HUB_PAGES = ["dashboard.tsx", "finance.tsx", "wellness.tsx"];
 // Endpoints that MUST carry [endpoint, filterMode, ...filterIds] on the hub pages.
-const FILTERABLE = ["trackers", "obligations", "habits", "events", "dashboard-enhanced", "net-worth/history", "goals"];
+// BUG-20260709-income-leak: `incomes`, `paychecks` and `expenses` were NOT in
+// this list, so finance.tsx read `/api/incomes` and `/api/paychecks` with bare
+// keys — summing EVERY profile's income into INCOME · MTD / CASH FLOW, which
+// then showed the same total (e.g. $32,700) under every profile, including
+// brand-new ones. They are now guarded like the rest.
+const FILTERABLE = ["trackers", "obligations", "habits", "events", "dashboard-enhanced", "net-worth/history", "goals", "incomes", "paychecks", "expenses"];
 
 describe("query-key hygiene (connectedness guard G3)", () => {
   const eps = FILTERABLE.map((e) => e.replace("/", "\\/")).join("|");
