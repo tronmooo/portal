@@ -673,7 +673,7 @@ export default function TasksPage() {
         <>
           {(tabFilter === "all" || tabFilter === "open") && (
             <div className="space-y-2">
-              <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+              <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                 Active ({activeTasks.length})
               </h2>
               {activeTasks.length === 0 ? (
@@ -727,7 +727,7 @@ export default function TasksPage() {
           )}
           {(tabFilter === "all" || tabFilter === "completed") && (
             <div className="space-y-2">
-              <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+              <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                 Completed ({completedTasks.length})
               </h2>
               {completedTasks.length === 0 ? (
