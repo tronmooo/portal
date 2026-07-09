@@ -14,7 +14,7 @@ import { isRecurringBill } from "@shared/liability-types";
 import { advanceLiabilityDueDate, readDueDate } from "@shared/liability-recurrence";
 import { generateSchedule, liabilityAmount, liabilityFrequency } from "@shared/liability-schedule";
 import { isRecurringBill as isRecurringBillType } from "@shared/liability-types";
-import { selfIdsFrom } from "@shared/scope";
+import { selfIdsFrom, isInScope } from "@shared/scope";
 import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
@@ -5075,8 +5075,38 @@ Rules:
   // Previously reminders were ONLY created by the AI / cron; the dashboard
   // "Add reminder" quick-action needs a plain REST create. listReminders /
   // createReminder already exist on IStorage (used by the cron firer).
-  app.get("/api/reminders", asyncHandler(async (_req, res) => {
-    const reminders = await storage.listReminders();
+  app.get("/api/reminders", asyncHandler(async (req, res) => {
+    let reminders = await storage.listReminders();
+    // Profile isolation (BUG-20260709-reminder-leak): reminders carry a scalar
+    // `profileId`, but this endpoint previously returned EVERY reminder for the
+    // user regardless of the active profile filter — so medication / refill /
+    // appointment reminders (many created with no profile) leaked into EVERY
+    // profile's dashboard REMINDERS card. This was the ONE list endpoint that
+    // bypassed the canonical scope rule that /api/tasks, /api/obligations,
+    // /api/expenses, /api/calendar/timeline, etc. all apply.
+    //
+    // Match the calendar's STRICT isolation policy ("out_of_scope"): when a
+    // profile filter is active, a reminder shows only if it is explicitly
+    // linked to a selected profile. Unlinked reminders never fall through to
+    // an individual profile — they only appear in the unfiltered "Everyone"
+    // view. This is the isolation the user requires: every profile displays
+    // only its own data.
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    const fp = req.query.profileId as string | undefined;
+    const reminderFilterIds = profileIdsParam
+      ? profileIdsParam.split(",").filter(Boolean)
+      : (fp ? [fp] : []);
+    if (reminderFilterIds.length > 0) {
+      const allProfiles = await storage.getProfiles();
+      const selfIds = selfIdsFrom(allProfiles);
+      reminders = reminders.filter((r) =>
+        isInScope(
+          r.profileId ? [r.profileId] : [],
+          { selectedIds: reminderFilterIds, selfIds },
+          "out_of_scope",
+        ),
+      );
+    }
     res.json(reminders);
   }));
   app.post("/api/reminders", asyncHandler(async (req, res) => {

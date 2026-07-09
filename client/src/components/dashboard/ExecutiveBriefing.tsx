@@ -157,9 +157,14 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     queryFn: () => apiRequest("GET", `/api/calendar/timeline${param}${amp}start=${todayStr}&end=${in45}`).then(r => r.json()),
     staleTime: 60_000,
   });
+  // Reminders are profile-scoped like every other briefing section — pass the
+  // active filter so a selected profile shows only its own reminders (the
+  // server enforces strict isolation; unlinked reminders appear only in the
+  // unfiltered "Everyone" view). Keying on mode/ids makes switching profiles
+  // refetch instead of showing another profile's cached reminders.
   const { data: reminders = [] } = useQuery<any[]>({
-    queryKey: ["/api/reminders"],
-    queryFn: () => apiRequest("GET", "/api/reminders").then(r => r.json()).catch(() => []),
+    queryKey: ["/api/reminders", mode, ...ids],
+    queryFn: () => apiRequest("GET", `/api/reminders${param}`).then(r => r.json()).catch(() => []),
     staleTime: 60_000,
   });
   const { data: goals = [] } = useQuery<any[]>({
