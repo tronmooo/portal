@@ -28,7 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Check, X, Camera, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Users } from "lucide-react";
+import { Plus, Check, X, Camera, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain } from "lucide-react";
 
 function timeAgo(ts: string | undefined): string {
   if (!ts) return "";
@@ -52,12 +52,41 @@ const NESTED_GROUP_KEYS = new Set([
   "pets", "pet",
 ]);
 
-// ── Route dispatcher: single-profile Info vs. combined "everyone" Info ─────────
+// ── Route dispatcher: single-profile Info, else redirect to Self's Info ───────
+// There is no standalone "everyone" Info page — /profiles resolves to the Self
+// profile's Info tab (the hub switcher is how you change whose Info you view).
 export default function ProfileInfoPage() {
   const [singleMatch, singleParams] = useRoute("/profiles/:id/info");
   const id = singleMatch ? ((singleParams as { id?: string } | null)?.id || "") : "";
   if (id) return <SingleProfileInfo id={id} />;
-  return <CombinedInfo />;
+  return <InfoSelfRedirect />;
+}
+
+// When no single person is selected, send the Info tab to the Self profile.
+function InfoSelfRedirect() {
+  const [, navigate] = useLocation();
+  const { data: profiles, isLoading } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: async () => (await apiRequest("GET", "/api/profiles")).json(),
+    staleTime: 30_000,
+  });
+  const self = (profiles || []).find((p: any) => p.type === "self");
+  useEffect(() => {
+    if (self?.id) navigate(`/profiles/${self.id}/info`, { replace: true });
+  }, [self?.id]);
+
+  if (isLoading || self?.id) {
+    return (
+      <div className="p-6 flex items-center justify-center h-full" data-testid="page-profile-info">
+        <div className="h-16 w-48 rounded skeleton-shimmer" />
+      </div>
+    );
+  }
+  return (
+    <div className="p-6 text-center" data-testid="page-profile-info">
+      <p className="text-sm text-muted-foreground">No profile to show yet.</p>
+    </div>
+  );
 }
 
 // ── One profile's Info ────────────────────────────────────────────────────────
@@ -325,99 +354,6 @@ function SingleProfileInfo({ id }: { id: string }) {
         </Card>
       </div>
     </div>
-  );
-}
-
-// ── Combined "Everyone" Info ──────────────────────────────────────────────────
-// Shown at /profiles (no single person selected): a per-person Info summary for
-// all people plus the shared chat-saved facts.
-function CombinedInfo() {
-  useEffect(() => { document.title = "Info — Portol"; }, []);
-  const { data: profiles, isLoading } = useQuery<any[]>({
-    queryKey: ["/api/profiles"],
-    queryFn: async () => (await apiRequest("GET", "/api/profiles")).json(),
-    staleTime: 30_000,
-  });
-
-  const people = (profiles || []).filter((p: any) => ["self", "person", "pet"].includes(p.type));
-
-  return (
-    <div className="p-4 md:p-6 space-y-5 overflow-y-auto h-full pb-24" data-testid="page-profile-info-all">
-      <div className="flex items-center gap-2">
-        <Users className="h-4 w-4 text-muted-foreground" />
-        <h1 className="text-lg font-bold">Info</h1>
-        <span className="text-xs text-muted-foreground">· everyone</span>
-      </div>
-
-      {isLoading && (
-        <div className="space-y-3">
-          {[...Array(3)].map((_, i) => <div key={i} className="h-24 rounded-lg skeleton-shimmer" />)}
-        </div>
-      )}
-
-      {!isLoading && people.length === 0 && (
-        <p className="text-sm text-muted-foreground py-8 text-center">No people yet. Create one from the + button.</p>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        {people.map((p: any) => <PersonSummaryCard key={p.id} profile={p} />)}
-      </div>
-
-      {/* Shared chat-saved facts (user-level) */}
-      <MemoriesSection />
-    </div>
-  );
-}
-
-function PersonSummaryCard({ profile }: { profile: any }) {
-  const fields = profile.fields || {};
-  const defs = infoFieldsForType(profile.type);
-  const rows: Array<{ label: string; value: string }> = [];
-  const age = computeAge(readField(fields, "birthday"));
-  if (age) rows.push({ label: "Age", value: age });
-  for (const d of defs) {
-    const v = readField(fields, d.key);
-    if (v === undefined || v === null || v === "") continue;
-    rows.push({ label: d.label, value: String(v) });
-  }
-  // A few custom scalar fields too.
-  const shown = new Set(defs.map(d => d.key.toLowerCase()));
-  for (const [k, v] of Object.entries(fields)) {
-    if (rows.length >= 8) break;
-    if (shown.has(k.toLowerCase()) || NESTED_GROUP_KEYS.has(k)) continue;
-    if (["dateofbirth", "dob"].includes(k.toLowerCase())) continue;
-    if (v === undefined || v === null || v === "" || typeof v === "object") continue;
-    rows.push({ label: fieldLabel(k), value: String(v) });
-  }
-  const docCount = Array.isArray(profile.documents) ? profile.documents.length : 0;
-  const initial = (profile.name || "?").charAt(0).toUpperCase();
-
-  return (
-    <Card className="p-4" data-testid={`info-person-${profile.id}`}>
-      <div className="flex items-center gap-3 mb-3">
-        <span className="w-9 h-9 rounded-xl overflow-hidden flex items-center justify-center text-sm font-bold text-white shrink-0" style={{ background: "linear-gradient(135deg, hsl(188 55% 40%), hsl(262 65% 45%))" }}>
-          {profile.avatar ? <img src={profile.avatar} alt="" className="w-full h-full object-cover" /> : initial}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="font-semibold truncate">{profile.type === "self" ? `${profile.name} (me)` : profile.name}</div>
-          <div className="text-[10px] text-muted-foreground capitalize">{profile.type}{docCount ? ` · ${docCount} doc${docCount > 1 ? "s" : ""}` : ""}</div>
-        </div>
-        <Link href={`/profiles/${profile.id}/info`} className="text-xs text-primary hover:underline shrink-0" data-testid={`info-open-${profile.id}`}>Open →</Link>
-      </div>
-      {rows.length > 0 ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {rows.map((r, i) => (
-            <div key={i} className="min-w-0">
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{r.label}</div>
-              <div className="text-sm font-medium truncate">{r.value}</div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground">No details yet.</p>
-      )}
-      {profile.notes && <p className="text-xs text-muted-foreground whitespace-pre-wrap mt-3 line-clamp-3">{profile.notes}</p>}
-    </Card>
   );
 }
 

@@ -19,7 +19,7 @@ import { initErrorReporter } from "@/lib/errorReporter";
 initErrorReporter();
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Sun, Moon, Settings, Calendar, Lock, LogOut, Users } from "lucide-react";
+import { Sun, Moon, Settings, Calendar, Lock, LogOut } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -771,9 +771,6 @@ function App() {
                       {/* Search trigger — centre-right in header */}
                       <div className="flex items-center gap-1 sm:gap-2 flex-1 justify-end mr-1">
                         <CommandSearchTrigger />
-                        <Button variant="ghost" size="icon" onClick={() => hashNavigate("/profiles")} className="h-8 w-8" title="Info" aria-label="Open info" data-testid="button-profiles-header">
-                          <Users className="h-4 w-4" />
-                        </Button>
                         <NotificationBell />
                         {/* Top-right dark/light toggle — always visible on every screen size. */}
                         <ThemeToggle />
