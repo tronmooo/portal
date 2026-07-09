@@ -1063,6 +1063,18 @@ export class SupabaseStorage implements IStorage {
   async createProfile(data: InsertProfile): Promise<Profile> {
     const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "liability", "investment", "property", "account", "insurance", "medical"]);
     if (data.type && !validProfileTypes.has(data.type)) data.type = "person";
+    // NAME NORMALIZATION (BUG-20260709-double-profile): strip a leading
+    // "a/an/the/my [new] <type> named/called " descriptor that the model
+    // sometimes passes as the literal name ("a person named Mike" → "Mike").
+    // Done HERE — the single chokepoint every create path funnels through — so
+    // the AI tool executor, the REST route, and the dedup below all see the
+    // clean name. Without this the junk-named twin dodged the same-name dedup.
+    if (typeof data.name === "string" && data.name.trim()) {
+      data.name = data.name
+        .replace(/^\s*(?:a|an|the|my)\s+(?:new\s+)?(?:person|people|pet|dog|cat|animal|profile|vehicle|car|truck|asset|property|house|home|account|subscription|loan|liability)?\s*(?:named|called)\s+/i, "")
+        .replace(/^\s*(?:named|called)\s+/i, "")
+        .trim();
+    }
     // DEDUP people/pets (BUG-20260709-double-profile): the AI chat path calls
     // this directly (bypassing the REST route's findBlockingDuplicateProfile),
     // and the model sometimes emits TWO create_profile calls for one request —
@@ -1071,12 +1083,20 @@ export class SupabaseStorage implements IStorage {
     // (case-insensitive, trimmed) name for the same user. Assets/vehicles/etc CAN
     // legitimately repeat (two "Samsung TV"s), so this only guards person/pet.
     if ((data.type === "person" || data.type === "pet") && typeof data.name === "string" && data.name.trim()) {
-      const wanted = data.name.trim().toLowerCase();
-      const existingProfiles = await this.getProfiles().catch(() => [] as Profile[]);
-      const dupe = existingProfiles.find(
-        p => p.type === data.type && typeof p.name === "string" && p.name.trim().toLowerCase() === wanted,
-      );
-      if (dupe) return dupe;
+      // Query the DB DIRECTLY (not the request-memoized getProfiles) so that a
+      // second create_profile in the SAME chat turn sees the row the first one
+      // just inserted — otherwise a stale memo lets the twin slip through.
+      const { data: rows } = await this.supabase
+        .from("profiles")
+        .select("id")
+        .eq("user_id", this.userId)
+        .eq("type", data.type)
+        .ilike("name", data.name.trim())
+        .limit(1);
+      if (rows && rows.length > 0) {
+        const existing = await this.getProfile(rows[0].id);
+        if (existing) return existing;
+      }
     }
     const now = new Date().toISOString();
     const id = randomUUID();

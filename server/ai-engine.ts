@@ -771,6 +771,35 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     };
   }
 
+  // ┌─ DASHBOARD SCOPE FAST-PATH ──────────────────────────────────────────────┐
+  // Deterministically route "show me <Name>'s dashboard only" / "switch to
+  // Everyone" to set_dashboard_scope. The LLM sometimes misrouted these to
+  // profile/document disambiguation (BUG-20260709). Anchored on dashboard/
+  // executive/everyone so it can't hijack unrelated messages.
+  {
+    const everyoneScope = /\b(?:switch|change|set|go)\s+(?:to\s+)?(?:the\s+)?everyone(?:\s+(?:view|mode|dashboard))?\b/i.test(message)
+      || /\bshow\s+(?:me\s+)?(?:everyone|all\s+profiles|the\s+household)\b/i.test(message)
+      || /\beveryone\s+(?:view|dashboard)\b/i.test(message);
+    const scopeAnchor = /\b(dashboard|executive|scope|filter|only\s+\w+'s|profile\s+filter)\b/i.test(message);
+    let nameScope: string | null = null;
+    if (!everyoneScope) {
+      const m = message.match(/\bshow\s+(?:me\s+)?(?:only\s+)?([A-Z][\w' -]{0,40}?)(?:'s|s')\s+(?:executive\s+)?dashboard\b/i)
+        || message.match(/\b(?:switch|scope|filter|limit)\s+(?:the\s+)?(?:dashboard|executive|view)\s+to\s+([A-Z][\w' -]{0,40}?)\b/i)
+        || message.match(/\bshow\s+(?:me\s+)?only\s+([A-Z][\w' -]{0,40}?)(?:'s|s')\s+(?:data|tasks|events|dashboard)\b/i);
+      if (m) nameScope = m[1].trim();
+    }
+    if (everyoneScope && (scopeAnchor || /everyone/i.test(message))) {
+      return { matched: true, reply: "Switched the dashboard to Everyone (all profiles).", actions: [{ type: "set_dashboard_scope", category: "ai", data: { everyone: true } } as any], results: [{ scope: { mode: "everyone" } }] };
+    }
+    if (nameScope) {
+      const profiles = await storage.getProfiles().catch(() => [] as any[]);
+      const match = matchProfileByName(profiles, nameScope);
+      if (match) {
+        return { matched: true, reply: `Dashboard now scoped to ${match.name} only. Every Executive section shows just ${match.name}'s data.`, actions: [{ type: "set_dashboard_scope", category: "ai", data: { profileName: match.name } } as any], results: [{ scope: { mode: "selected", profileId: match.id, profileName: match.name } }] };
+      }
+    }
+  }
+
   // ┌─ JOURNAL FAST-PATH (runs BEFORE multi-intent guard) ─────────────────────┐
   // This bypasses the AI entirely for journal entries because the AI
   // persistently hallucinates that profiles "already have entries."
