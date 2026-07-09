@@ -2756,11 +2756,11 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   return (
     <div
       data-testid={`card-tracker-${tracker.id}`}
-      className="rounded-2xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col relative"
+      className="rounded-xl overflow-hidden cursor-pointer card-lift transition-all flex flex-col relative"
       style={{
         height: cardHeight,
-        background: `linear-gradient(160deg, hsl(${catAccent} / 0.14) 0%, hsl(var(--card)) 45%)`,
-        border: `1px solid hsl(${catAccent} / 0.2)`,
+        background: `linear-gradient(135deg, hsl(${catAccent} / 0.12) 0%, hsl(var(--card)) 75%)`,
+        border: `1px solid hsl(${catAccent} / 0.30)`,
         boxShadow: `0 2px 16px hsl(${catAccent} / 0.07), inset 0 1px 0 hsl(${catAccent} / 0.1)`,
       }}
       onClick={() => onOpenDetail?.(tracker.id)}
@@ -3327,11 +3327,11 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
   const series = [sample * 0.92, sample * 0.97, sample, sample * 1.01, sample * 0.99, sample];
   return (
     <div
-      className="rounded-2xl overflow-hidden flex flex-col relative"
+      className="rounded-xl overflow-hidden flex flex-col relative"
       style={{
         height: 150,
-        background: `linear-gradient(160deg, hsl(${catAccent} / 0.16) 0%, hsl(var(--card)) 48%)`,
-        border: `1px solid hsl(${catAccent} / 0.25)`,
+        background: `linear-gradient(135deg, hsl(${catAccent} / 0.12) 0%, hsl(var(--card)) 75%)`,
+        border: `1px solid hsl(${catAccent} / 0.30)`,
         boxShadow: `0 2px 16px hsl(${catAccent} / 0.08), inset 0 1px 0 hsl(${catAccent} / 0.12)`,
       }}
     >
