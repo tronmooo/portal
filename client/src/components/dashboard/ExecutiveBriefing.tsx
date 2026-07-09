@@ -209,6 +209,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   const birthdays = events.filter((i: any) => BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
   const appointments = events.filter((i: any) => APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
   const importantDates = events.filter((i: any) => !BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`) && !APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 10);
+  // EVENTS count (top tile) must count only real calendar EVENTS in the next
+  // 14 days — not tasks / bills / obligations that also live in the timeline.
+  // Counting `tl.length` made the tile read "3 events" for a profile whose only
+  // timeline items were a mortgage bill and a task (BUG-20260709: "3 events even
+  // when Mike has no events"). Every timeline item is already profile-scoped by
+  // the server, so this is purely a count-semantics fix.
+  const eventCount = tl.filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) <= in14).length;
 
   const habitRows = (habits || []).slice(0, 12).map((h: any) => {
     const doneToday = (h.checkins || []).some((c: any) => (c.date || "").slice(0, 10) === todayStr);
@@ -283,7 +290,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
         <StatTile label="Habits" value={`${habitRows.length - missedCount}/${habitRows.length}`} sub={missedCount > 0 ? `${missedCount} still due` : "all done"} accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
         <StatTile label="Bills" value={String(bills.length)} sub={`$${Math.round(billsUpcomingTotal).toLocaleString()} upcoming`} accent={ACCENTS.bills} onClick={() => navigate("/dashboard/finance")} testId="brief-stat-bills" />
         <StatTile label="Docs" value={String(docs.length)} sub={docs.length ? "expiring soon" : "all good"} accent={ACCENTS.docs} onClick={() => navigate("/linked?tab=documents")} testId="brief-stat-docs" />
-        <StatTile label="Events" value={String(tl.length)} sub="next 14 days" accent={ACCENTS.calendar} onClick={() => navigate("/calendar")} testId="brief-stat-events" />
+        <StatTile label="Events" value={String(eventCount)} sub="next 14 days" accent={ACCENTS.calendar} onClick={() => navigate("/calendar")} testId="brief-stat-events" />
         <StatTile label="Projects" value={String(projects.length)} sub={`${doneToday} done today`} accent={ACCENTS.projects} onClick={() => navigate("/goals")} testId="brief-stat-projects" />
       </div>
 
