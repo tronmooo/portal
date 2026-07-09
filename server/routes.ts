@@ -774,12 +774,52 @@ export async function registerRoutes(
     idempotencyCache.set(idemKey(userId, key), entry);
     setTimeout(() => idempotencyCache.delete(idemKey(userId, key)), IDEM_TTL_MS + 1000);
   }
+  /* QA 2026-07-09 #5: the in-memory cache above only protects retries that land
+     on the SAME serverless instance. On Vercel a client retry after a timeout
+     almost always hits a different warm instance, so the whole chat re-ran and
+     every action double-logged (the "duplicate expenses/subscriptions
+     everywhere" report). chat_idempotency (migration 20260709) persists the
+     same pending/done state machine in Postgres so every instance sees it.
+     The in-memory map stays as a zero-latency fast path. All DB failures
+     degrade silently to the old behavior — idempotency is best-effort, chat
+     must never break because of it. */
+  async function getIdemDb(userId: string, key: string): Promise<IdempotencyEntry | undefined> {
+    try {
+      const sb = (storage as any).supabase;
+      if (!sb) return undefined;
+      const { data } = await sb.from("chat_idempotency")
+        .select("status,result,created_at")
+        .eq("user_id", userId).eq("idem_key", key).maybeSingle();
+      if (!data) return undefined;
+      const createdMs = new Date(data.created_at).getTime();
+      if (!isFinite(createdMs) || Date.now() - createdMs > IDEM_TTL_MS) return undefined;
+      return { status: data.status === "done" ? "done" : "pending", result: data.result || undefined, expires: createdMs + IDEM_TTL_MS };
+    } catch { return undefined; }
+  }
+  async function setIdemDb(userId: string, key: string, status: "pending" | "done", result?: any): Promise<void> {
+    try {
+      const sb = (storage as any).supabase;
+      if (!sb) return;
+      await sb.from("chat_idempotency").upsert(
+        { user_id: userId, idem_key: key, status, result: result ?? null, created_at: new Date().toISOString() },
+        { onConflict: "user_id,idem_key" },
+      );
+    } catch { /* best-effort */ }
+  }
+  async function clearIdemDb(userId: string, key: string): Promise<void> {
+    try {
+      const sb = (storage as any).supabase;
+      if (!sb) return;
+      await sb.from("chat_idempotency").delete().eq("user_id", userId).eq("idem_key", key);
+    } catch { /* best-effort */ }
+  }
 
   app.post("/api/chat", asyncHandler(async (req, res) => {
     const userId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
     if (rateLimit(`chat:${userId}`, 20)) {
       return res.status(429).json({ error: "Too many requests. Please wait a moment." });
     }
+    let idemUsed = ""; // visible to the catch so a failed run can release its pending idempotency slot
     try {
       const { message, history } = req.body;
       if (!message || typeof message !== "string") {
@@ -799,8 +839,11 @@ export async function registerRoutes(
          generated UUID) is responsible for uniqueness per logical action. */
       const rawIdem = (req.headers["idempotency-key"] || req.headers["x-idempotency-key"] || "") as string;
       const idem = typeof rawIdem === "string" && /^[A-Za-z0-9._:\-]{8,128}$/.test(rawIdem) ? rawIdem : "";
+      idemUsed = idem;
       if (idem) {
-        const existing = getIdem(userId, idem);
+        // Fast path: same-instance memory. Fallback: the cross-instance DB row
+        // (QA #5 — retries after a client timeout land on other instances).
+        const existing = getIdem(userId, idem) || await getIdemDb(userId, idem);
         if (existing?.status === "done" && existing.result) {
           // Replay the prior successful response. Adding a header so the
           // client can observe that the body came from cache (useful for
@@ -816,6 +859,7 @@ export async function registerRoutes(
           return res.status(409).json({ error: "In-flight request with the same Idempotency-Key. Retry in a moment." });
         }
         setIdem(userId, idem, { status: "pending", expires: Date.now() + IDEM_TTL_MS });
+        await setIdemDb(userId, idem, "pending");
       }
 
       // Pass user's timezone to AI engine so all date operations use the correct local date
@@ -848,7 +892,10 @@ export async function registerRoutes(
           return null;
         })),
       ]);
-      if (idem) setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
+      if (idem) {
+        setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
+        await setIdemDb(userId, idem, "done", result);
+      }
 
       // ─── Universal Capture (PR Y + Z) ──────────────────────────────
       // Record this message as a Capture so we never lose user input,
@@ -949,6 +996,12 @@ export async function registerRoutes(
     } catch (err: any) {
       const msg = err?.message || "unknown error";
       log.error("[Chat]", msg);
+      // Release the pending idempotency slot so the client's retry (same key)
+      // isn't stuck behind a dead "pending" row for the full TTL.
+      if (idemUsed) {
+        idempotencyCache.delete(idemKey(userId, idemUsed));
+        void clearIdemDb(userId, idemUsed);
+      }
       // Provide actionable error messages based on error type
       const status = err?.status || err?.error?.status || 500;
       if (status === 529 || status === 503 || msg.includes('overloaded')) {
@@ -4374,6 +4427,7 @@ Rules:
     }
     req.body.description = sanitize(req.body.description);
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
+    if (req.body.paymentMethod) req.body.paymentMethod = sanitize(String(req.body.paymentMethod)).slice(0, 80);
 
     // Wave 1 #1 — AI categorize when caller didn't provide a meaningful category.
     // Only fires for missing / "other" / "general" so we don't override deliberate picks.

@@ -1219,7 +1219,7 @@ export default function FinancePage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm truncate">{expense.description}</p>
-                        <span className="text-xs text-muted-foreground">{formatListDate(expense.date)}</span>
+                        <span className="text-xs text-muted-foreground">{formatListDate(expense.date)}{expense.vendor ? ` · ${expense.vendor}` : ""}</span>
                       </div>
                       <span className="text-sm font-semibold tabular-nums shrink-0">{formatMoney(expense.amount)}</span>
                     </>
@@ -1229,6 +1229,7 @@ export default function FinancePage() {
                       <div className="flex flex-wrap items-center gap-2 text-xs">
                         <Badge variant="secondary" className="capitalize">{expense.category}</Badge>
                         {expense.vendor && <span className="text-muted-foreground">{expense.vendor}</span>}
+                        {(expense as any).paymentMethod && <span className="text-muted-foreground">via {(expense as any).paymentMethod}</span>}
                         <span className="text-muted-foreground">
                           {new Date((expense.date?.slice(0, 10) || "") + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "long", day: "numeric", year: "numeric" })}
                         </span>

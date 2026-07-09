@@ -5428,9 +5428,15 @@ export default function TrackersPage() {
   // so we read window.location.pathname (NOT hash, which is always empty here).
   const [pageLoc] = useLocation();
   useEffect(() => {
+    // QA 2026-07-09 #14: this component serves /trackers, /linked AND
+    // /liabilities — title must reflect the actual route (the tab used to read
+    // "Trackers — Portol" while showing Liabilities content). Under hash
+    // routing the query lives inside the hash, so read it from the location.
     const path = pageLoc || window.location.pathname || '';
-    const isLinkedRoute = path.startsWith('/linked');
-    document.title = isLinkedRoute ? "Linked — Portol" : "Trackers — Portol";
+    const tab = (path.includes('?') ? new URLSearchParams(path.split('?')[1]).get('tab') : null) || '';
+    document.title = path.startsWith('/liabilities') ? "Liabilities — Portol"
+      : path.startsWith('/linked') ? (tab === 'assets' ? "Assets — Portol" : tab === 'documents' ? "Documents — Portol" : "Linked — Portol")
+      : "Trackers — Portol";
   }, [pageLoc]);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);

@@ -1893,6 +1893,17 @@ export default function ChatPage() {
     }
   }, [profiles, selectedProfileId]);
 
+  // QA 2026-07-09 #5: idempotency for chat sends. The server honors an
+  // Idempotency-Key header (routes.ts /api/chat, DB-backed so it works across
+  // serverless instances) but the client never sent one, so re-sending a
+  // message after a timeout re-ran every action and double-logged everything.
+  // Key policy: a fresh UUID per NEW message; if the user re-sends text
+  // identical to the last message AND that attempt failed (timeout/network),
+  // the SAME key is reused so the server replays the finished result instead
+  // of executing the actions again. A repeat send after a SUCCESS is treated
+  // as deliberate ("log another coffee") and gets a fresh key.
+  const lastSendRef = useRef<{ text: string; key: string; failed: boolean } | null>(null);
+
   const chatMutation = useMutation({
     mutationFn: async (message: string) => {
       // Build conversation history for multi-step context.
@@ -1907,11 +1918,14 @@ export default function ChatPage() {
       // Scope the AI to the active profile selection (empty array ⇒ household/
       // everyone, which the server treats as unscoped). See chatScopeRef above.
       const profileFilterIds = chatScopeRef.current;
+      const prior = lastSendRef.current;
+      const idemKey = (prior && prior.failed && prior.text === message) ? prior.key : crypto.randomUUID();
+      lastSendRef.current = { text: message, key: idemKey, failed: false };
       const res = await apiRequest("POST", "/api/chat", {
         message,
         history,
         ...(profileFilterIds.length > 0 ? { profileFilterIds } : {}),
-      });
+      }, { headers: { "Idempotency-Key": idemKey } });
       return res.json();
     },
     onSuccess: (data) => {
@@ -1930,9 +1944,12 @@ export default function ChatPage() {
         artifact: data.artifact,
       };
       setMessages((prev: any) => [...prev, assistantMsg]);
-      invalidateAll();
+      invalidateAll(data.actions);
     },
     onError: (err: Error) => {
+      // Mark the attempt failed so an identical re-send reuses the same
+      // Idempotency-Key (see lastSendRef above) instead of double-executing.
+      if (lastSendRef.current) lastSendRef.current.failed = true;
       setMessages((prev) => [
         ...prev,
         {
@@ -2111,7 +2128,7 @@ export default function ChatPage() {
     },
   });
 
-  function invalidateAll() {
+  function invalidateAll(actions?: Array<{ type?: string }>) {
     // After a chat write the server has already busted its response cache, so
     // every data query must be marked stale — not a hand-maintained subset —
     // or a logged entry won't appear until the user manually refreshes.
@@ -2130,6 +2147,59 @@ export default function ChatPage() {
     // Supabase round-trips) and was the single biggest reason chat saves and
     // the pages right after them felt slow.
     queryClient.invalidateQueries({ predicate: isData });
+    // Pass 1.5 (QA 2026-07-09 #1) — stale-marking alone proved unreliable for
+    // pages the user visits NEXT: hub tabs keep pages mounted (no remount ⇒ no
+    // refetchOnMount) and a silently failed background refetch leaves the old
+    // list rendered with no error. When the chat actually WROTE something,
+    // force-refetch the endpoints that store that entity type — including
+    // unmounted cache slots — so e.g. a chat-logged expense is guaranteed to be
+    // in the Finance page's cache before the user opens it. Bounded to the
+    // touched endpoints (not every /api/* slot), so this is not the old storm.
+    if (actions && actions.length > 0) {
+      const touched = new Set<string>(["/api/stats", "/api/dashboard-enhanced", "/api/dashboard-bootstrap"]);
+      const endpointsByAction: Record<string, string[]> = {
+        log_expense: ["/api/expenses"],
+        log_income: ["/api/incomes"],
+        log_paycheck: ["/api/paychecks", "/api/incomes"],
+        set_budget: ["/api/budgets"],
+        create_obligation: ["/api/obligations"],
+        pay_obligation: ["/api/obligations"],
+        create_event: ["/api/events"],
+        complete_event: ["/api/events"],
+        create_reminder: ["/api/events", "/api/tasks"],
+        create_task: ["/api/tasks"],
+        complete_task: ["/api/tasks"],
+        create_habit: ["/api/habits"],
+        checkin_habit: ["/api/habits"],
+        uncomplete_habit: ["/api/habits"],
+        delete_habit: ["/api/habits"],
+        log_entry: ["/api/trackers"],
+        create_tracker: ["/api/trackers"],
+        delete_tracker_entry: ["/api/trackers"],
+        update_tracker_entry: ["/api/trackers"],
+        create_profile: ["/api/profiles"],
+        update_profile: ["/api/profiles"],
+        create_liability: ["/api/profiles", "/api/obligations"],
+        add_liability_payment: ["/api/profiles"],
+        link_entities: ["/api/profiles", "/api/asset-party-links", "/api/liability-profile-links"],
+        journal_entry: ["/api/journal"],
+        create_goal: ["/api/goals"],
+        manage_document: ["/api/documents"],
+        create_artifact: ["/api/chat-artifacts"],
+      };
+      // Generic update/delete actions don't say which entity they touched —
+      // refresh the core lists rather than guessing wrong.
+      const generic = ["/api/expenses", "/api/obligations", "/api/profiles", "/api/trackers", "/api/tasks", "/api/events", "/api/habits"];
+      for (const a of actions) {
+        const t = String(a?.type || "");
+        const eps = endpointsByAction[t] || (t === "update_entity" || t === "delete_entity" ? generic : []);
+        for (const ep of eps) touched.add(ep);
+      }
+      queryClient.invalidateQueries({
+        predicate: (q) => touched.has(String(q.queryKey?.[0] || "")),
+        refetchType: "all",
+      });
+    }
     // Pass 2 — the chat handler finalizes its cross-instance cache-version bump
     // right as the response is sent, so an instant refetch can race it and read
     // pre-write data. A short, light follow-up over only the VISIBLE queries

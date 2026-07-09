@@ -36,6 +36,7 @@ export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
+  options?: { headers?: Record<string, string> },
 ): Promise<Response> {
   const timeoutMs = (url.includes('/api/chat') || url.includes('/api/upload') || url.includes('/api/smart-fill')) ? CHAT_TIMEOUT_MS
     : (url.includes('/api/documents/')) ? DOC_TIMEOUT_MS
@@ -43,7 +44,7 @@ export async function apiRequest(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const headers: Record<string, string> = { "X-Timezone": BROWSER_TIMEZONE };
+    const headers: Record<string, string> = { "X-Timezone": BROWSER_TIMEZONE, ...(options?.headers || {}) };
     if (data) headers["Content-Type"] = "application/json";
     const res = await fetch(`${API_BASE}${url}`, {
       method,

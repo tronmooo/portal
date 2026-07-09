@@ -442,6 +442,7 @@ function RouteTitle() {
       "/wellness": "Wellness — Portol",
       "/trackers": "Trackers — Portol",
       "/linked": "Linked — Portol",
+      "/liabilities": "Liabilities — Portol",
       "/profiles": "Profiles — Portol",
       "/calendar": "Calendar — Portol",
       "/settings": "Settings — Portol",

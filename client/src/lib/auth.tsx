@@ -5,7 +5,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef, ty
 import { apiRequest } from "./queryClient";
 import { queryClient, clearAllClientCaches, resetQueryCacheForUserSwitch } from "./queryClient";
 import { clearChatCache } from "@/pages/chat";
-import { setActiveUserForFilter, clearProfileFilterForUser } from "@/lib/profileFilter";
+import { setActiveUserForFilter } from "@/lib/profileFilter";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -205,9 +205,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } catch { /* localStorage unavailable — ignore */ }
       setActiveUserForFilter(user.id);
-    } else {
-      clearProfileFilterForUser();
     }
+    // BUG (QA 2026-07-09 #10/#11): do NOT clearProfileFilterForUser() when
+    // `user` is merely null. `user` is null on every cold load before auth
+    // resolves, and goes transiently null when a background query 401s and
+    // the portol:auth-cleared handler fires while the session recovers via
+    // token refresh. Both cases DELETED the user's saved profile selection
+    // from localStorage and broadcast "everyone" — which is why clicking a
+    // hub tab (fresh queries → occasional 401 race) silently flipped the
+    // active profile to Everyone. Explicit sign-out still clears the filter
+    // via signOut() → clearAllClientCaches(), and the per-user namespacing
+    // (portol_profile_filter_v5:<uid>) prevents cross-account leakage.
   }, [user?.id]);
 
   // Background token refresh — renew 5 minutes before expiry to prevent silent 401s

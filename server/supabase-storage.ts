@@ -584,7 +584,8 @@ export class SupabaseStorage implements IStorage {
   private rowToExpense(r: any): Expense {
     return {
       id: r.id, amount: Number(r.amount) || 0, category: r.category, description: r.description,
-      vendor: r.vendor || undefined, isRecurring: r.is_recurring || undefined,
+      vendor: r.vendor || undefined, paymentMethod: r.payment_method || undefined,
+      isRecurring: r.is_recurring || undefined,
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [],
       date: r.date, createdAt: r.created_at,
     };
@@ -2587,6 +2588,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("expenses").insert({
       id, user_id: this.userId, amount: data.amount, category: data.category || "general",
       description: data.description, vendor: data.vendor || null,
+      payment_method: (data as any).paymentMethod || null,
       is_recurring: data.isRecurring || false, linked_profiles: [],
       tags: data.tags || [], date: data.date || now,
       source: (data as any).source || "manual", created_at: now,
@@ -2614,7 +2616,8 @@ export class SupabaseStorage implements IStorage {
     const merged = { ...existing, ...data };
     const { error } = await this.supabase.from("expenses").update({
       amount: merged.amount, category: merged.category, description: merged.description,
-      vendor: merged.vendor || null, is_recurring: merged.isRecurring || false,
+      vendor: merged.vendor || null, payment_method: merged.paymentMethod || null,
+      is_recurring: merged.isRecurring || false,
       tags: merged.tags, date: merged.date,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
@@ -5272,15 +5275,37 @@ export class SupabaseStorage implements IStorage {
     // someone else's, which is the intended behavior. To attribute an item to
     // another person, give it an explicit owner. Selecting the asset/liability
     // profile itself = full value.
+    // QA 2026-07-09 #4: nesting parents count as implicit owners. Mike's House
+    // (parent_profile_id → Mike, no explicit owner links) must roll into Mike's
+    // net worth — shared/net-worth.ts's isProfileInNetWorthScope already treats
+    // parentProfileId as an owner candidate, so the Assets/Liabilities TABS
+    // showed the house under Mike while this total said 0/—. Explicit owner
+    // links still win outright (a 50% co-owner setup is not overridden by
+    // nesting); the parent chain is only consulted when no links exist.
+    const profilesById = new Map(allProfiles.map(p => [p.id, p]));
+    const parentChainSelected = (p: any): boolean => {
+      const seen = new Set<string>();
+      let cur: string | undefined = p?.parentProfileId;
+      while (cur && !seen.has(cur)) {
+        if (fpIds!.includes(cur)) return true;
+        seen.add(cur);
+        cur = (profilesById.get(cur) as any)?.parentProfileId;
+      }
+      return false;
+    };
     const shareForAsset = (p: any): number => {
       if (noFilterBreak) return 100;
       if (fpIds!.includes(p.id)) return 100;
-      return shareForParties(fpIds!, assetLinksByAsset.get(p.id), selfId);
+      const links = assetLinksByAsset.get(p.id);
+      if ((!links || links.length === 0) && parentChainSelected(p)) return 100;
+      return shareForParties(fpIds!, links, selfId);
     };
     const shareForLiability = (p: any): number => {
       if (noFilterBreak) return 100;
       if (fpIds!.includes(p.id)) return 100;
-      return shareForParties(fpIds!, liabLinksByLiability.get(p.id), selfId);
+      const links = liabLinksByLiability.get(p.id);
+      if ((!links || links.length === 0) && parentChainSelected(p)) return 100;
+      return shareForParties(fpIds!, links, selfId);
     };
     const assetBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
@@ -6309,9 +6334,26 @@ export class SupabaseStorage implements IStorage {
     // This profile's ownership share of an item: the item itself = 100%; else
     // the profile's explicit ownership %, or 100% if it's Self and the item has
     // no explicit owners.
+    // QA 2026-07-09 #4: nesting parents count as implicit owners when an item
+    // has no explicit owner links (same rule as getDashboardEnhanced and
+    // shared/net-worth.ts isProfileInNetWorthScope) — a house parented to Mike
+    // must appear in Mike's per-profile financial rollup.
+    const profilesByIdRollup = new Map(allProfiles.map(p => [p.id, p]));
+    const parentChainHasProfile = (p: any): boolean => {
+      const seen = new Set<string>();
+      let cur: string | undefined = p?.parentProfileId;
+      while (cur && !seen.has(cur)) {
+        if (cur === profileId) return true;
+        seen.add(cur);
+        cur = (profilesByIdRollup.get(cur) as any)?.parentProfileId;
+      }
+      return false;
+    };
     const shareForItem = (p: any, links: Map<string, OwnershipLink[]>): number => {
       if (p.id === profileId) return 100;
-      return shareForParties([profileId], links.get(p.id), selfId);
+      const itemLinks = links.get(p.id);
+      if ((!itemLinks || itemLinks.length === 0) && parentChainHasProfile(p)) return 100;
+      return shareForParties([profileId], itemLinks, selfId);
     };
     const assets: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {

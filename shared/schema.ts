@@ -736,6 +736,7 @@ export interface Expense {
   category: string;
   description: string;
   vendor?: string;
+  paymentMethod?: string;
   isRecurring?: boolean;
   linkedProfiles: string[];
   tags: string[];
@@ -748,6 +749,7 @@ export const insertExpenseSchema = z.object({
   category: z.string().default("general"),
   description: z.string().min(1, "Description must be non-empty"),
   vendor: z.string().optional(),
+  paymentMethod: z.string().max(80).optional(),
   isRecurring: z.boolean().optional(),
   date: z.string().optional(),
   tags: z.array(z.string()).optional().default([]),

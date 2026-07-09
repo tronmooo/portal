@@ -2923,7 +2923,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         description: { type: "string", description: "What was purchased" },
         category: { type: "string", description: "Category. MUST be one of: food, transport, health, pet, vehicle, entertainment, shopping, utilities, housing, insurance, subscription, education, personal, general. You MUST infer the best category from context — NEVER default to 'general' if ANY other category fits. Examples: groceries/restaurant/coffee → food, uber/gas/parking → transport, vet/pet food/grooming → pet, oil change/tires/car wash → vehicle, gym/doctor/pharmacy → health, Netflix/Spotify → subscription, rent/mortgage → housing, electric/water/internet → utilities, Amazon/clothes/electronics → shopping, movies/games/concerts → entertainment." },
         date: { type: "string", description: "Date of the expense in YYYY-MM-DD format. Use today's date if not specified. Use the actual date the expense occurred if the user says 'yesterday', 'last Tuesday', etc." },
-        vendor: { type: "string", description: "Store or vendor name" },
+        vendor: { type: "string", description: "Store or vendor/merchant name. ALWAYS set when the user names where the money was spent (e.g. 'at Trader Joe's' → vendor: \"Trader Joe's\")." },
+        paymentMethod: { type: "string", description: "How it was paid, when the user says so — a card name ('Chase Sapphire', 'Amex Gold'), 'cash', 'debit', 'Venmo', etc. Capture the user's exact wording." },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
         forProfile: { type: "string", description: "REQUIRED when expense is for a specific entity. Set to the profile name the user referenced. Examples: 'Mom', 'Rex', 'Honda CR-V 2021', 'iPhone 17 Pro Max', 'Tesla Model S'. ALWAYS set this for expenses tied to any person, pet, vehicle, asset, or subscription. If the user says 'bought X for my iPhone', forProfile MUST be 'iPhone 17 Pro Max' (the full profile name). MATCHING: the server links to the closest existing profile by name — pass what the user said (e.g. 'Ford F150') and it will match 'Ford F150 2025'. NEVER invent a make/model/year the user didn't say, and NEVER rename their asset in your reply (do not turn 'Ford F150' into 'Ford F250'). ALWAYS create the expense even if you're unsure which asset — link to the closest match and, only if genuinely ambiguous, add a brief note; NEVER withhold the expense to ask a question first." },
       },
@@ -7505,6 +7506,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           || profiles.find(p => wordRe.test(p.name.toLowerCase()));
         if (target) expenseLinkedProfiles.push(target.id);
       }
+      // ACTIVE-PROFILE DEFAULT (QA 2026-07-09 #2): when the chat is scoped to a
+      // single non-self profile (the hub switcher shows e.g. "Mike") and neither
+      // the model nor the message named an owner, the new expense belongs to the
+      // ACTIVE profile — not to self. The chat route threads the UI selection in
+      // as __activeProfileId (see the tool loop). Runs before the "for <Name>"
+      // text recovery below so an explicit mention still wins over the default.
+      if (expenseLinkedProfiles.length === 0 && !input.forProfile && typeof (input as any).__activeProfileId === "string" && (input as any).__activeProfileId) {
+        expenseLinkedProfiles.push((input as any).__activeProfileId);
+        logger.info("ai", `Active-profile default: linking $${parsedAmount} expense to active profile ${(input as any).__activeProfileId.slice(0, 8)}`);
+      }
       // ATTRIBUTION SAFETY NET (2026-07, user report: "grocery expense for
       // Robert" landed on self). In a dense multi-action message the model
       // sometimes drops forProfile yet still tells the user it attributed the
@@ -7545,6 +7556,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         description: input.description || "Expense",
         date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: userTz }),
         vendor: input.vendor,
+        paymentMethod: typeof input.paymentMethod === "string" && input.paymentMethod.trim() ? input.paymentMethod.trim().slice(0, 80) : undefined,
         tags: input.tags || [],
         linkedProfiles: expenseLinkedProfiles,
       }, "expense");
@@ -10942,7 +10954,24 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // unscoped profile list, so surfacing every name here lets the AI route the
   // expense to the right profile. The bounded rich snapshot below stays scoped.
   const profileNameIndex = `Profile Name Index (${allProfiles.length}, complete list — every profile owned by user):\n${allProfiles.map((p: any) => `- ${p.name} (${p.type}, id:${p.id.slice(0,8)})`).join("\n") || "  (none)"}`;
+  // QA 2026-07-09 #2: when the UI is scoped to exactly ONE non-self profile
+  // (the hub switcher shows e.g. "Mike"), that profile is the default owner
+  // for anything created this turn. Two layers enforce it: this context line
+  // steers the model to set forProfile, and __activeProfileId (threaded into
+  // every tool call below) deterministically backstops create_expense when
+  // the model still omits the owner.
+  let activeDefaultOwner: { id: string; name: string } | null = null;
+  if (profileFilterIds.length === 1) {
+    const sel = allProfiles.find((p: any) => p.id === profileFilterIds[0]);
+    if (sel && sel.type !== "self") activeDefaultOwner = { id: sel.id, name: sel.name };
+  }
+  const activeScopeLine = activeDefaultOwner
+    ? `ACTIVE PROFILE: The user currently has "${activeDefaultOwner.name}" selected in the app. When this message creates records (expenses, tasks, events, habits, tracker entries) WITHOUT naming a different owner, set forProfile: "${activeDefaultOwner.name}" — do NOT default to the account owner.`
+    : (profileFilterIds.length > 1
+      ? `ACTIVE PROFILE FILTER: the user has ${profileFilterIds.length} profiles selected. Attribute new records to whichever of them the message names; ask only if genuinely ambiguous.`
+      : "");
   const context = (await Promise.all([
+    activeScopeLine,
     profileNameIndex,
     `Profile Details (showing up to 60 of ${profiles.length}): ${profiles.slice(0, 60).map(p => {
       const fields = p.fields || {};
@@ -11202,10 +11231,17 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       let response;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
+          // PERF (QA 2026-07-09 #8): cache_control on the system block caches the
+          // entire static prefix (105 tool definitions + ~80KB system prompt +
+          // user context ≈ 50k tokens) at Anthropic. Every loop iteration after
+          // the first — and every follow-up chat within the 5-min TTL — reads the
+          // prefix from cache instead of re-processing it, which is the single
+          // biggest latency lever for multi-action messages (up to 15 round-trips
+          // per message, each of which previously re-ingested the full prompt).
           response = await getClient().messages.create({
             model: chatModel,
             max_tokens: 4096,
-            system: systemPrompt,
+            system: [{ type: "text" as const, text: systemPrompt, cache_control: { type: "ephemeral" as const } }],
             tools: TOOL_DEFINITIONS,
             messages,
           });
@@ -11302,7 +11338,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // Round-5 fabrication guard: thread the original user message so
           // create_profile (and any other guarded tool) can compare requested
           // fields against what the user actually said.
-          const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
+          const inputWithCtx = { ...validation.normalized, __userMessage: userMessage, __activeProfileId: activeDefaultOwner?.id };
           const result = await executeTool(toolUse.name, inputWithCtx, userId);
           
           // Invalidate context cache after any write operation
