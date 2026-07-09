@@ -5,7 +5,7 @@ import { hashNavigate } from "@/lib/hashNavigate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { EmptyState } from "@/components/EmptyState";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import {
   Dialog, DialogContent, DialogTitle,
@@ -1077,8 +1077,8 @@ export default function ArtifactsPage() {
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={search ? Search : Archive}
-          title={search ? "No results found" : "No artifacts yet"}
-          description={
+          label={search ? "No results found" : "No artifacts yet"}
+          hint={
             search
               ? `Nothing matches "${search}". Try a different search term.`
               : "Upload documents, write journal entries, or chat with AI to generate reports."

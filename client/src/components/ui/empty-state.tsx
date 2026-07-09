@@ -15,10 +15,10 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={`flex flex-col items-center justify-center text-center gap-2 py-8 px-4 ${className}`}>
+    <div className={`flex flex-col items-center justify-center text-center gap-2 py-8 px-4 ${className}`} role="status" data-testid="empty-state">
       {Icon && <Icon className="h-9 w-9 text-muted-foreground/40" />}
-      <p className="text-sm text-muted-foreground">{label}</p>
-      {hint && <p className="text-xs text-muted-foreground/70">{hint}</p>}
+      <p className="text-sm text-muted-foreground" data-testid="empty-state-title">{label}</p>
+      {hint && <p className="text-xs text-muted-foreground/70" data-testid="empty-state-description">{hint}</p>}
       {ctaLabel && onCta && (
         <Button size="sm" variant="outline" className="mt-1" onClick={onCta} data-testid="empty-state-cta">
           {ctaLabel}

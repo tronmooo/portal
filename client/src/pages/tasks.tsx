@@ -1,6 +1,6 @@
 import { formatApiError } from "@/lib/formatError";
 import { stopProp } from "@/lib/event-utils";
-import { EmptyState } from "@/components/EmptyState";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -677,7 +677,7 @@ export default function TasksPage() {
                 Active ({activeTasks.length})
               </h2>
               {activeTasks.length === 0 ? (
-                <EmptyState icon={ListTodo} title="No active tasks" description="All tasks are completed or create a new one." />
+                <EmptyState icon={ListTodo} label="No active tasks" hint="All tasks are completed or create a new one." />
               ) : (
                 activeTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(task => (
                   <SwipeableItem
@@ -731,7 +731,7 @@ export default function TasksPage() {
                 Completed ({completedTasks.length})
               </h2>
               {completedTasks.length === 0 ? (
-                <EmptyState icon={CheckCircle2} title="No completed tasks" description="Complete a task to see it here." />
+                <EmptyState icon={CheckCircle2} label="No completed tasks" hint="Complete a task to see it here." />
               ) : (
                 completedTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(task => (
                   <SwipeableItem
