@@ -244,6 +244,7 @@ export function CommandSearch() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults | null>(null);
   const [loading, setLoading] = useState(false);
+  const [searchError, setSearchError] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -280,8 +281,10 @@ export function CommandSearch() {
       if (!trimmed) {
         setResults(null);
         setLoading(false);
+        setSearchError(false);
         return;
       }
+      setSearchError(false);
       const norm = trimmed.toLowerCase();
       const sig = filterSignature();
 
@@ -336,8 +339,12 @@ export function CommandSearch() {
         } catch (err: any) {
           // Don't clear results on abort, or when we already showed a locally
           // narrowed set (keep the instant results rather than flashing empty).
+          // A real failure (timeout / 500) surfaces an explicit error state so
+          // the user sees "search failed — retry" instead of a silent spinner
+          // that reads as a hang, or an empty list that reads as "no data".
           if (err?.name !== "AbortError" && thisRequestId === requestIdRef.current && !prefixRaw) {
             setResults(null);
+            setSearchError(true);
           }
         } finally {
           if (thisRequestId === requestIdRef.current) {
@@ -355,6 +362,7 @@ export function CommandSearch() {
       setQuery("");
       setResults(null);
       setLoading(false);
+      setSearchError(false);
       if (debounceRef.current) clearTimeout(debounceRef.current);
       if (abortRef.current) abortRef.current.abort();
     }
@@ -440,8 +448,26 @@ export function CommandSearch() {
           </div>
         )}
 
-        {/* Empty state — when query present, not loading, no results */}
-        {!loading && query.trim() && !hasResults && (
+        {/* Error state — the request timed out or the server failed. Distinct
+            from "No results" so a broken search never masquerades as empty data. */}
+        {!loading && query.trim() && searchError && (
+          <div className="flex flex-col items-center gap-2 py-4 px-4 text-center" data-testid="status-search-error">
+            <Search className="h-8 w-8 text-muted-foreground/40" />
+            <p className="font-medium text-sm">Search timed out</p>
+            <p className="text-xs text-muted-foreground">Something went wrong — this didn’t load. Try again.</p>
+            <button
+              type="button"
+              onClick={() => handleQueryChange(query)}
+              className="mt-1 text-xs font-medium text-primary hover:underline"
+              data-testid="button-search-retry"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Empty state — when query present, not loading, no results, no error */}
+        {!loading && query.trim() && !hasResults && !searchError && (
           <CommandEmpty data-testid="text-search-empty">
             <div className="flex flex-col items-center gap-1 py-2">
               <Search className="h-8 w-8 text-muted-foreground/40" />
