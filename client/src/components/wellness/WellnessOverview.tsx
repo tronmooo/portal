@@ -58,7 +58,7 @@ function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, test
 }) {
   return (
     <Card className="p-3 min-w-[8.5rem] flex-1" data-testid={testId} style={{ borderColor: `hsl(${tone} / 0.28)` }}>
-      <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         <Icon className="w-3 h-3" style={{ color: `hsl(${tone})` }} /> {label}
       </div>
       <div className="flex items-end justify-between mt-1">
@@ -69,7 +69,7 @@ function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, test
         {ring && <Ring value={ring.value} max={ring.max} color={tone} label="" />}
       </div>
       {series && series.length >= 2 && <div className="mt-1.5"><Spark series={series} color={tone} /></div>}
-      {sub && <div className="text-[10px] font-mono text-muted-foreground mt-1">{sub}</div>}
+      {sub && <div className="text-[10px] text-muted-foreground mt-1">{sub}</div>}
     </Card>
   );
 }
@@ -82,16 +82,16 @@ function SectionCard({ title, icon: Icon, tone, badge, viewAllHref, onViewAll, c
   return (
     <Card className="p-4 flex flex-col" data-testid={testId} style={{ borderColor: `hsl(${tone} / 0.22)` }}>
       <div className="flex items-center justify-between mb-3">
-        <span className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-widest" style={{ color: `hsl(${tone})` }}>
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider" style={{ color: `hsl(${tone})` }}>
           <Icon className="w-3.5 h-3.5" /> {title}
         </span>
-        {badge && <span className="text-[10px] font-mono text-muted-foreground">{badge}</span>}
+        {badge && <span className="text-[10px] text-muted-foreground">{badge}</span>}
       </div>
       <div className="flex-1">{children}</div>
       {(viewAllHref || onViewAll) && (
         viewAllHref
-          ? <Link href={viewAllHref}><span className="mt-3 inline-block text-[11px] font-mono hover:underline cursor-pointer" style={{ color: `hsl(${tone})` }} data-testid={`${testId}-viewall`}>View all →</span></Link>
-          : <button className="mt-3 text-left text-[11px] font-mono hover:underline" style={{ color: `hsl(${tone})` }} onClick={onViewAll} data-testid={`${testId}-viewall`}>View all →</button>
+          ? <Link href={viewAllHref}><span className="mt-3 inline-block text-[11px] hover:underline cursor-pointer" style={{ color: `hsl(${tone})` }} data-testid={`${testId}-viewall`}>View all →</span></Link>
+          : <button className="mt-3 text-left text-[11px] hover:underline" style={{ color: `hsl(${tone})` }} onClick={onViewAll} data-testid={`${testId}-viewall`}>View all →</button>
       )}
     </Card>
   );
@@ -249,7 +249,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             <ul className="space-y-2">
               {schedule.slice(0, 6).map((e) => (
                 <li key={e.id} className="flex items-center gap-3 text-sm" data-testid={`wellness-event-${e.id}`}>
-                  <span className="text-[11px] font-mono text-muted-foreground w-16 shrink-0">{e.time}</span>
+                  <span className="text-[11px] text-muted-foreground w-16 shrink-0">{e.time}</span>
                   <span className="truncate">{e.title}</span>
                 </li>
               ))}
@@ -271,8 +271,8 @@ export function WellnessOverview(props: WellnessOverviewProps) {
                       : <Circle className="w-4 h-4 shrink-0 text-red-500" />}
                   </button>
                   <span className="flex-1 truncate">{m.name}{m.dose ? ` ${m.dose}` : ""}</span>
-                  {m.time && <span className="text-[11px] font-mono text-muted-foreground">{m.time}</span>}
-                  <span className={`text-[10px] font-mono ${m.taken ? "text-emerald-500" : "text-red-500"}`}>{m.taken ? "Taken" : "Due"}</span>
+                  {m.time && <span className="text-[11px] text-muted-foreground">{m.time}</span>}
+                  <span className={`text-[10px] ${m.taken ? "text-emerald-500" : "text-red-500"}`}>{m.taken ? "Taken" : "Due"}</span>
                 </li>
               ))}
             </ul>
@@ -371,7 +371,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             <ul className="space-y-2 text-sm">
               {appointments.slice(0, 5).map((a) => (
                 <li key={a.id} className="flex items-center gap-2" data-testid={`wellness-appt-${a.id}`}>
-                  <span className="text-[11px] font-mono text-muted-foreground w-24 shrink-0">{a.date}{a.time ? ` ${a.time}` : ""}</span>
+                  <span className="text-[11px] text-muted-foreground w-24 shrink-0">{a.date}{a.time ? ` ${a.time}` : ""}</span>
                   <span className="truncate">{a.title}</span>
                 </li>
               ))}
@@ -396,8 +396,8 @@ export function WellnessOverview(props: WellnessOverviewProps) {
               {labs.slice(0, 5).map((l) => (
                 <li key={l.id} className="flex items-center gap-2" data-testid={`wellness-lab-${l.id}`}>
                   <span className="truncate flex-1">{l.name}</span>
-                  {l.date && <span className="text-[10px] font-mono text-muted-foreground">{l.date}</span>}
-                  {l.status && <span className="text-[10px] font-mono" style={{ color: `hsl(${T.green})` }}>{l.status}</span>}
+                  {l.date && <span className="text-[10px] text-muted-foreground">{l.date}</span>}
+                  {l.status && <span className="text-[10px]" style={{ color: `hsl(${T.green})` }}>{l.status}</span>}
                 </li>
               ))}
             </ul>
@@ -412,7 +412,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
                 <li key={s.id} className="flex items-center gap-2" data-testid={`wellness-supp-${s.id}`}>
                   <Leaf className="w-3 h-3 shrink-0" style={{ color: `hsl(${T.green})` }} />
                   <span className="flex-1 truncate">{s.name}{s.dose ? ` ${s.dose}` : ""}</span>
-                  {s.schedule && <span className="text-[10px] font-mono text-muted-foreground">{s.schedule}</span>}
+                  {s.schedule && <span className="text-[10px] text-muted-foreground">{s.schedule}</span>}
                 </li>
               ))}
             </ul>
@@ -430,7 +430,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
                 <li key={d.id} className="flex items-center gap-2" data-testid={`wellness-doc-${d.id}`}>
                   <FileText className="w-3 h-3 shrink-0 text-muted-foreground" />
                   <span className="flex-1 truncate">{d.name}</span>
-                  {d.date && <span className="text-[10px] font-mono text-muted-foreground">{d.date}</span>}
+                  {d.date && <span className="text-[10px] text-muted-foreground">{d.date}</span>}
                 </li>
               ))}
             </ul>
@@ -472,7 +472,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
                 <li key={r.id} className="flex items-center gap-2" data-testid={`wellness-activity-${r.id}`}>
                   <CheckCircle2 className="w-3 h-3 shrink-0" style={{ color: `hsl(${T.teal})` }} />
                   <span className="flex-1 truncate">{r.text}</span>
-                  {r.when && <span className="text-[10px] font-mono text-muted-foreground shrink-0">{r.when}</span>}
+                  {r.when && <span className="text-[10px] text-muted-foreground shrink-0">{r.when}</span>}
                 </li>
               ))}
             </ul>

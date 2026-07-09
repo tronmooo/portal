@@ -70,10 +70,10 @@ function KpiCard({ label, value, trend, tone, series, chartKind = "line", sub, o
     <button onClick={onClick} data-testid={testId}
       className="text-left rounded-xl border bg-card/40 p-3 hover:bg-muted/30 transition-colors min-w-[8.5rem] flex-1"
       style={{ borderColor: `hsl(${color} / 0.28)` }}>
-      <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">{label}</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className="text-xl font-bold tabular-nums mt-0.5" style={{ color: `hsl(${color})` }}>{value}</div>
-      {trend && <div className="text-[10px] font-mono mt-0.5" style={{ color: `hsl(${color})` }}>{trend}</div>}
-      {sub && <div className="text-[10px] font-mono text-muted-foreground mt-1 truncate">{sub}</div>}
+      {trend && <div className="text-[10px] mt-0.5" style={{ color: `hsl(${color})` }}>{trend}</div>}
+      {sub && <div className="text-[10px] text-muted-foreground mt-1 truncate">{sub}</div>}
       {hasChart && (chartKind === "bars"
         ? <MiniBars series={series!} color={color} />
         : <div className="mt-1.5"><Sparkline series={series!} /></div>)}
@@ -193,8 +193,8 @@ export function MoneyOverview(props: {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Card className="p-4" data-testid="money-cashflow-overview">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Cash Flow Overview</span>
-            <button className="text-[10px] font-mono text-primary hover:underline" onClick={() => onOpenCashFlow?.()} data-testid="money-view-cashflow">View →</button>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cash Flow Overview</span>
+            <button className="text-[10px] text-primary hover:underline" onClick={() => onOpenCashFlow?.()} data-testid="money-view-cashflow">View →</button>
           </div>
           <div className="flex items-center gap-4">
             <DonutRing inflow={cashIn} outflow={cashOut} net={cashFlow} />
@@ -208,7 +208,7 @@ export function MoneyOverview(props: {
 
         <Card className="p-4" data-testid="money-categories">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Spending by Category · MTD</span>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Spending by Category · MTD</span>
           </div>
           {categories.length === 0 ? <p className="text-xs text-muted-foreground">No spending this month.</p> : (
             <div className="space-y-1.5">
@@ -235,8 +235,8 @@ export function MoneyOverview(props: {
       {cashTrend.length >= 2 && (
         <Card className="p-4" data-testid="money-cashflow-trend">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Cash Flow Trend</span>
-            <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cash Flow Trend</span>
+            <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500" />In</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-red-500" />Out</span>
               <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-sky-400" />Net</span>
@@ -264,7 +264,7 @@ export function MoneyOverview(props: {
       {budgets.length > 0 && (
         <Card className="p-4" data-testid="money-budgets">
           <div className="flex items-center justify-between mb-3">
-            <button className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground hover:text-foreground" onClick={() => onOpenBudget?.()} data-testid="money-budgets-header">Budgets · MTD vs limit →</button>
+            <button className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground" onClick={() => onOpenBudget?.()} data-testid="money-budgets-header">Budgets · MTD vs limit →</button>
             <div className="flex gap-1.5">
               {onOpenBudget && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onOpenBudget} data-testid="money-manage-budgets">+ Budget</Button>}
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onAddExpense} data-testid="money-add-expense">+ Expense</Button>
@@ -300,14 +300,14 @@ export function MoneyOverview(props: {
       {/* Bills + Balance sheet */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Card className="p-4" data-testid="money-bills">
-          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-3">Bills · next 14d</div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">Bills · next 14d</div>
           {bills.length === 0 ? (
             <p className="text-xs text-muted-foreground">No bills due in the next 14 days.</p>
           ) : (
             <div className="space-y-1.5">
               {bills.map(b => (
                 <div key={b.id} className="flex items-center gap-3 py-1.5" data-testid={`money-bill-${b.id}`}>
-                  <span className="text-[10px] font-mono uppercase w-14 shrink-0 text-muted-foreground">
+                  <span className="text-[10px] font-semibold uppercase w-14 shrink-0 text-muted-foreground">
                     {b.status === "overdue" ? <span className="text-red-500">overdue</span>
                       : b.daysUntil === 0 ? <span className="text-amber-500">today</span>
                       : `${b.daysUntil}d`}
@@ -327,7 +327,7 @@ export function MoneyOverview(props: {
         </Card>
 
         <Card className="p-4" data-testid="money-balance-sheet">
-          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-3">Balance Sheet · Assets vs Liabilities</div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">Balance Sheet · Assets vs Liabilities</div>
           {(() => {
             const scale = Math.max(assets, liabilities, 1);
             return (
@@ -355,13 +355,13 @@ export function MoneyOverview(props: {
           {assetBreakdown.length > 0 && (
             <Card className="p-4" data-testid="money-assets">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Assets · {money(assets)}</span>
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Assets · {money(assets)}</span>
               </div>
               <div className="divide-y divide-border/60">
                 {assetBreakdown.slice(0, 8).map(a => (
                   <Link key={a.id} href={`/profiles/${a.id}`}>
                     <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-asset-${a.id}`}>
-                      <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 shrink-0">{a.type}</span>
+                      <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 shrink-0">{a.type}</span>
                       <span className="flex-1 text-sm truncate">{a.name}</span>
                       <span className="text-sm font-semibold tabular-nums">{money(a.value)}</span>
                     </div>
@@ -373,13 +373,13 @@ export function MoneyOverview(props: {
           {liabilityBreakdown.length > 0 && (
             <Card className="p-4" data-testid="money-liabilities">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground">Liabilities · {money(liabilities)}</span>
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Liabilities · {money(liabilities)}</span>
               </div>
               <div className="divide-y divide-border/60">
                 {liabilityBreakdown.slice(0, 8).map(l => (
                   <Link key={l.id} href={`/profiles/${l.id}`}>
                     <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-liability-${l.id}`}>
-                      <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 shrink-0">{l.type}</span>
+                      <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 shrink-0">{l.type}</span>
                       <span className="flex-1 text-sm truncate">{l.name}</span>
                       <span className="text-sm font-semibold tabular-nums text-red-500">{money(l.value)}</span>
                     </div>
@@ -394,7 +394,7 @@ export function MoneyOverview(props: {
       {/* Financial Alerts & Insights — derived, each row deep-links. */}
       {alerts.length > 0 && (
         <Card className="p-4" data-testid="money-alerts">
-          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">Financial Alerts & Insights</div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Financial Alerts & Insights</div>
           <div className="space-y-1">
             {alerts.map(a => (
               <button key={a.id} onClick={a.onClick} disabled={!a.onClick}
