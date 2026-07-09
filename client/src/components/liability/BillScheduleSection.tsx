@@ -10,6 +10,11 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarClock, CheckCircle2, SkipForward, Pause, Play, Pencil, Clock, ChevronDown, ChevronRight, ChevronLeft, Bell } from "lucide-react";
 import { BILL_STATUS_META, type BillStatus } from "@shared/liability-status";
+// reminderLeadDays is a single integer (legacy) or an array of lead-day
+// offsets ([7,3,0] = 7 days before, 3 days before, morning of the due date).
+// Shared helpers keep client display in lockstep with the server cron.
+import { normalizeReminderLeads, reminderLeadsLabel } from "@shared/bill-reminders";
+export { reminderLeadsLabel };
 
 type OccStatus = BillStatus | "skipped";
 interface Occ {
@@ -21,7 +26,7 @@ interface Schedule {
   family?: string; isRecurring?: boolean;
   firstPayment: string | null; nextDue: { date: string; effectiveDate: string; amount: number } | null;
   lastPaid: string | null; autopay: boolean; paused: boolean; pausedUntil: string | null;
-  gracePeriodDays: number | null; lateFee: number | null; reminderLeadDays: number | null;
+  gracePeriodDays: number | null; lateFee: number | null; reminderLeadDays: number | number[] | null;
   totalPayments: number | null; paidCount: number; remainingPayments: number | null; recurrenceEnd: string | null;
   annualTotal: number; calendarSynced: boolean; occurrences: Occ[];
   payments: { id: string; amount: number; date: string }[];
@@ -147,7 +152,7 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
           <Fact label="Calendar" value={data.calendarSynced ? "Synced" : "—"} />
           <Fact label="Grace period" value={data.gracePeriodDays != null ? `${data.gracePeriodDays} days` : "—"} />
           <Fact label="Late fee" value={data.lateFee != null ? usd(data.lateFee) : "—"} />
-          <Fact label="Reminder" value={data.reminderLeadDays != null ? `${data.reminderLeadDays} days before` : "—"} />
+          <Fact label="Reminder" value={reminderLeadsLabel(data.reminderLeadDays) ?? "—"} />
           <Fact label="Payments made" value={String(data.payments?.length ?? 0)} />
         </div>
 
@@ -174,7 +179,7 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
             {calOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             Calendar view
             <span className="text-xs text-muted-foreground font-normal">
-              — {data.reminderLeadDays != null ? `due dates + reminders (${data.reminderLeadDays}d before)` : "all due dates"}
+              — {reminderLeadsLabel(data.reminderLeadDays) ? `due dates + reminders (${reminderLeadsLabel(data.reminderLeadDays)})` : "all due dates"}
             </span>
           </button>
           {calOpen && (
@@ -290,19 +295,21 @@ const isoAdd = (iso: string, days: number) => {
 function MiniMonthCalendar({
   occurrences, reminderLeadDays, onPickDay,
 }: {
-  occurrences: Occ[]; reminderLeadDays: number | null; onPickDay: (date: string) => void;
+  occurrences: Occ[]; reminderLeadDays: number | number[] | null; onPickDay: (date: string) => void;
 }) {
   const firstOcc = occurrences[0]?.effectiveDate;
   const initial = (firstOcc || new Date().toLocaleDateString("en-CA")).slice(0, 7);
   const [ym, setYm] = useState(initial);
   const [y, m] = ym.split("-").map(Number);
 
-  // Map each day → its occurrence + whether it's a reminder day.
+  // Map each day → its occurrence + whether it's a reminder day. Lead 0
+  // (morning-of) lands on the occurrence itself, which already gets a dot.
+  const leads = normalizeReminderLeads(reminderLeadDays).filter((n) => n > 0);
   const byDay = new Map<string, Occ>();
   const reminderDays = new Set<string>();
   for (const o of occurrences) {
     byDay.set(o.effectiveDate, o);
-    if (reminderLeadDays != null && reminderLeadDays > 0) reminderDays.add(isoAdd(o.effectiveDate, reminderLeadDays));
+    for (const lead of leads) reminderDays.add(isoAdd(o.effectiveDate, lead));
   }
 
   const firstDow = new Date(y, m - 1, 1).getDay();
@@ -352,7 +359,7 @@ function MiniMonthCalendar({
         <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60" />Upcoming</span>
         <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-600" />Paid</span>
         <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-600" />Overdue</span>
-        {reminderLeadDays != null && reminderLeadDays > 0 && <span className="flex items-center gap-1"><Bell className="w-2.5 h-2.5 text-amber-500" />Reminder</span>}
+        {leads.length > 0 && <span className="flex items-center gap-1"><Bell className="w-2.5 h-2.5 text-amber-500" />Reminder</span>}
       </div>
     </div>
   );

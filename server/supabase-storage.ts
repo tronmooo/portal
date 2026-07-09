@@ -31,6 +31,7 @@ import {
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
 import { isRecurringBill } from "../shared/liability-types";
+import { normalizeReminderLeads } from "../shared/bill-reminders";
 import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-ownership";
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
@@ -3798,7 +3799,12 @@ export class SupabaseStorage implements IStorage {
       source: "obligation",
       // Finite terms — only when explicitly provided (never invented).
       ...((data as any).count != null ? { count: Math.max(1, parseInt(String((data as any).count), 10) || 0) } : {}),
-      ...((data as any).reminderLeadDays != null ? { reminderLeadDays: Math.max(0, parseInt(String((data as any).reminderLeadDays), 10) || 0) } : {}),
+      // Single integer (legacy) or array of lead-day offsets ([7,3,0] =
+      // remind 7 days before, 3 days before, and the morning of each due date).
+      // Stored as a normalized array; readers accept both shapes.
+      ...(normalizeReminderLeads((data as any).reminderLeadDays).length > 0
+        ? { reminderLeadDays: normalizeReminderLeads((data as any).reminderLeadDays) }
+        : {}),
       ...((data as any).recurrenceEnd ? { recurrenceEnd: String((data as any).recurrenceEnd).slice(0, 10) } : {}),
       ...(data.notes ? { notes: data.notes } : {}),
     };

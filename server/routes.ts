@@ -12,6 +12,7 @@ import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance }
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill } from "@shared/liability-types";
 import { advanceLiabilityDueDate, readDueDate } from "@shared/liability-recurrence";
+import { normalizeReminderLeads, reminderFireDate } from "@shared/bill-reminders";
 import { generateSchedule, liabilityAmount, liabilityFrequency } from "@shared/liability-schedule";
 import { isRecurringBill as isRecurringBillType } from "@shared/liability-types";
 import { selfIdsFrom } from "@shared/scope";
@@ -1257,10 +1258,21 @@ export async function registerRoutes(
                 for (const bill of bills) {
                   const f: any = bill.fields || {};
                   const due = readDueDate(f);
-                  if (!due || due > windowEnd) continue; // not due within the window
+                  if (!due) continue;
+                  // Per-bill reminder offsets: reminderLeadDays is an array of
+                  // lead-day offsets ([7,3,0] = 7 days before, 3 days before,
+                  // morning of) or a legacy single integer. Empty when unset.
+                  const leads = normalizeReminderLeads(f.reminderLeadDays);
+                  const maxLead = leads.length > 0 ? Math.max(...leads) : 0;
+                  // A bill due beyond (scan window + its longest lead) can't
+                  // produce anything this run — skip. With a 7-day lead the
+                  // scan must consider bills due up to 10 days out so the
+                  // "7 days before" reminder fires inside the 3-day window.
+                  const scanEnd = toLocalDateStr(new Date(Date.now() + (REMINDER_WINDOW_DAYS + maxLead) * 86400000), DEFAULT_TIMEZONE);
+                  if (due > scanEnd) continue;
                   const amount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? 0) || 0;
                   const autopay = f.autopay === true || f.autoPay === true || String(f.autopay ?? "").toLowerCase() === "true";
-                  if (autopay && amount > 0) {
+                  if (autopay && amount > 0 && due <= windowEnd) {
                     // Auto-log the payment and roll the due date forward.
                     try {
                       await scoped.createLiabilityPayment({
@@ -1277,16 +1289,31 @@ export async function registerRoutes(
                         fields: { ...f, dueDate: nextDue, nextDueDate: nextDue, lastPaidDate: todayISO, status: "upcoming" },
                       });
                       autopaid++;
+                      // This occurrence is paid — `due` is now stale, so don't
+                      // emit reminders for it. The rolled-forward due date is
+                      // handled on the next scan.
+                      continue;
                     } catch { /* per-bill best effort */ }
-                  } else {
-                    // Non-autopay: surface a reminder (deduped by title + fire date).
-                    const title = `Bill due: ${bill.name}`;
-                    const fireAt = `${due}T09:00:00`;
+                  }
+                  // Reminders. Explicit per-bill offsets fire even for autopay
+                  // bills (the user asked for them); without explicit offsets,
+                  // non-autopay bills keep the legacy due-date reminder.
+                  const offsets = leads.length > 0 ? leads : (!autopay ? [0] : []);
+                  for (const lead of offsets) {
+                    const fireDate = reminderFireDate(due, lead);
+                    if (fireDate < todayISO || fireDate > windowEnd) continue;
+                    const title = lead > 0
+                      ? `Bill due in ${lead} day${lead === 1 ? "" : "s"}: ${bill.name}`
+                      : `Bill due: ${bill.name}`;
+                    // Morning-of reminders fire earlier (8am) so the user sees
+                    // them before the day gets going; lead reminders keep 9am.
+                    const fireAt = `${fireDate}T${lead === 0 ? "08" : "09"}:00:00`;
                     const dup = (existingReminders || []).some((r: any) =>
-                      r.title === title && String(r.fireAt || "").slice(0, 10) === due);
+                      r.title === title && String(r.fireAt || "").slice(0, 10) === fireDate);
                     if (!dup) {
                       try {
-                        await scoped.createReminder({ title, fireAt, profileId: bill.id });
+                        const created = await scoped.createReminder({ title, fireAt, profileId: bill.id });
+                        existingReminders.push(created as any); // intra-run dedup
                         reminded++;
                       } catch { /* best effort */ }
                     }
@@ -3439,7 +3466,7 @@ Respond ONLY in JSON format:
       if (detail.type === "liability" && isRecurringBillType((detail as any).type_key ?? (detail as any).typeKey)) {
         const rf: any = detail.fields || {};
         const remaining = rf.count != null ? `${rf.count} total payment(s) configured` : "open-ended (no fixed end)";
-        typePrompt = `This is a RECURRING BILL / subscription, not a loan. Summarize ONLY from the stored fields: amount $${rf.monthlyAmount ?? rf.amount ?? 0} per ${rf.frequency ?? "month"}, next due ${rf.dueDate ?? rf.nextDueDate ?? "unknown"}, ${remaining}${rf.reminderLeadDays != null ? `, reminder ${rf.reminderLeadDays} day(s) before each due date` : ", no reminder set"}${rf.autopay ? ", autopay on" : ""}. Do NOT mention APR, interest, payoff date, amortization, or a principal balance — this bill has none. Do NOT invent a reminder schedule, payment count, or end date that is not in the fields above.`;
+        typePrompt = `This is a RECURRING BILL / subscription, not a loan. Summarize ONLY from the stored fields: amount $${rf.monthlyAmount ?? rf.amount ?? 0} per ${rf.frequency ?? "month"}, next due ${rf.dueDate ?? rf.nextDueDate ?? "unknown"}, ${remaining}${rf.reminderLeadDays != null ? `, reminder ${(Array.isArray(rf.reminderLeadDays) ? rf.reminderLeadDays : [rf.reminderLeadDays]).map((n: any) => Number(n) === 0 ? "morning of" : `${n}d`).join(", ")} before each due date` : ", no reminder set"}${rf.autopay ? ", autopay on" : ""}. Do NOT mention APR, interest, payoff date, amortization, or a principal balance — this bill has none. Do NOT invent a reminder schedule, payment count, or end date that is not in the fields above.`;
       }
 
       const systemPrompt = `You are the AI engine for Portol, a personal life management app. You analyze profile data to produce a concise, actionable summary.

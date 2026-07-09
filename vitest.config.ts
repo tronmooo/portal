@@ -31,6 +31,7 @@ export default defineConfig({
       'tests/mutate-reset-race.test.ts',
       'tests/liability-types.test.ts',
       'tests/liability-recurrence.test.ts',
+      'tests/bill-reminders.test.ts',
       'tests/liability-schedule.test.ts',
       'tests/cost-of-ownership.test.ts',
       'tests/profile-scope.test.ts',

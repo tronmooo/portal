@@ -22,6 +22,7 @@ import {
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
+import { normalizeReminderLeads } from "@shared/bill-reminders";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -3019,7 +3020,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         nextDueDate: { type: "string", description: "Next due date as an ISO date string (YYYY-MM-DD). Convert natural language like 'the 30th', 'on the 15th of each month', 'next Friday', 'June 30' into an exact YYYY-MM-DD. Example: 'due on the 30th of each month' when today is 2026-06-16 → nextDueDate: '2026-06-30'. If the named day already passed this month, use NEXT month (e.g. today is the 20th and user says 'the 5th' → use NEXT month's 5th)." },
         recurrenceEnd: { type: "string", description: "Optional ISO date (YYYY-MM-DD) when the recurrence ENDS. Pass this when the user gives a time-bounded duration like 'for the next year' (→ today + 12 months), 'for 6 months', 'until December', 'through 2027'. If omitted, the obligation recurs indefinitely. Example: today is 2026-06-16, user says 'for the next year' → recurrenceEnd: '2027-06-16'." },
         count: { type: "integer", description: "Total number of payments when the user gives a FINITE count: 'for 10 months', 'for the next 10 payments', '12 installments', 'stops after the final payment'. When set, the bill terminates after this many occurrences and the profile shows remaining payments (10 → 9 → …). Omit for an open-ended recurring bill." },
-        reminderLeadDays: { type: "integer", description: "Days before each due date to remind the user, ONLY when they explicitly ask ('remind me 3 days before' → 3). NEVER invent this — omit it entirely if the user did not request a reminder." },
+        reminderLeadDays: { type: "array", items: { type: "integer" }, description: "Days before EACH due date to remind the user, ONLY when they explicitly ask. Accepts multiple offsets: 'remind me 7 days, 3 days, and the morning of the due date' → [7, 3, 0] (0 = the morning of the due date itself). 'remind me 3 days before' → [3]. These reminders repeat automatically for EVERY future occurrence of the bill — never call create_reminder per payment. NEVER invent this — omit it entirely if the user did not request a reminder." },
         category: { type: "string", description: "Category (rent, utilities, insurance, subscription, loan, phone, internet, etc.)" },
         autopay: { type: "boolean", description: "Whether this is on autopay" },
         forProfile: { type: "string", description: "Name of the person/pet this obligation belongs to (e.g. 'Max', 'Mom', 'Luna'). The auto-created subscription profile will be nested under this person/pet. ALWAYS set this when the user mentions a specific person or pet." },
@@ -3973,7 +3974,8 @@ BEHAVIOR:
 - SINGLE ACTION PER ENTITY: When the user asks to create ONE subscription, obligation, or profile, make exactly ONE tool call. Do NOT call create_obligation multiple times for the same subscription. Do NOT call create_profile AND create_obligation for the same item (create_obligation auto-creates the subscription profile).
 - RECURRING BILL = ONE create_obligation, NOTHING ELSE: A recurring BILL (phone bill, rent, electricity, water, internet, insurance premium — a monthly/periodic charge the user pays that has NO outstanding principal balance to pay down) is handled by EXACTLY ONE create_obligation call. That call ALREADY creates a standalone liability profile behind the scenes. So phrases like "save it as its own liability profile", "make it a liability", "create a liability for Spotify", or "add it to my liabilities" require NO extra call — do NOT also call create_liability or create_profile for that bill, and do NOT call create_obligation twice. Doing so creates DUPLICATE profiles (one bill → 2-3 rows) — a critical bug. create_liability is ONLY for actual debt with a payoff balance (loans, credit cards, medical/tax debt), never for a recurring service bill. Even when the user literally says "liability", a monthly/periodic charge with a due date is a create_obligation.
   FINITE TERM: "for 10 months", "10 payments", "12 installments", "stops after the final payment" → pass count:10 (the bill terminates after N and shows remaining payments). "for the next year", "until December" → recurrenceEnd.
-  REMINDERS — NEVER INVENT: only pass reminderLeadDays (and only create reminders) when the user EXPLICITLY asks ("remind me 3 days before" → reminderLeadDays:3). If they say nothing about reminders, pass NO reminderLeadDays and create NO reminder — do not assume a default date.
+  REMINDERS — NEVER INVENT: only pass reminderLeadDays (and only create reminders) when the user EXPLICITLY asks ("remind me 3 days before" → reminderLeadDays:[3]). Multiple offsets go in ONE array on the SAME create_obligation call: "remind me 7 days, 3 days, and the morning of the due date" → reminderLeadDays:[7,3,0] (0 = the morning of the due date). If they say nothing about reminders, pass NO reminderLeadDays and create NO reminder — do not assume a default date.
+  CALENDAR + REMINDERS ARE AUTOMATIC FOR THE WHOLE SERIES: after ONE create_obligation call, EVERY future due date (24 months, 5 years — the entire window the user views) already appears on the Calendar and dashboards, and reminderLeadDays reminders repeat automatically before EVERY occurrence. "Add every payment to the calendar for the next 24 months and remind me before each one" is FULLY satisfied by that single create_obligation call — NEVER loop create_event or create_reminder per month/occurrence (that floods the account with duplicates and will be rejected). In your reply, tell the user the payments and reminders are on the calendar automatically.
   NAME IT EXACTLY: Pass the bill's real name to create_obligation — "Phone Bill", "Rent", "Electric Bill". NEVER append "payment", "bill payment", or similar to the name. The recurring charge IS the bill; naming it "Phone Bill payment" is wrong.
 - MANAGING AN EXISTING BILL — ALWAYS update_obligation, NEVER create a new one: when the user changes a bill they already have, call update_obligation(name:<bill>) and either pass a changes object or a series action. It edits the existing liability AND its recurring calendar series together:
   "move my phone bill to the 18th" → changes:{ dueDay: 18 } (or nextDueDate). "increase it to $95" → changes:{ amount: 95 }. "make it quarterly" → changes:{ frequency: "quarterly" }.
@@ -7956,7 +7958,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const resolvedDue = input.nextDueDate || inferredDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
       // Finite term: "for 10 months / 10 payments / stops after the final one".
       const finiteCount = input.count != null ? Math.max(1, parseInt(String(input.count), 10) || 0) : undefined;
-      const reminderLead = input.reminderLeadDays != null ? Math.max(0, parseInt(String(input.reminderLeadDays), 10) || 0) : undefined;
+      // Reminder offsets: accepts a single integer (legacy) or an array of
+      // lead-day offsets ("remind me 7 days, 3 days, and the morning of" →
+      // [7,3,0]). Normalized to a deduped, descending array capped at 5
+      // offsets of 0–60 days so the cron can fan out one reminder per offset
+      // per occurrence without unbounded growth.
+      const reminderLeadArr = normalizeReminderLeads(input.reminderLeadDays);
+      const reminderLead: number[] | undefined = reminderLeadArr.length > 0 ? reminderLeadArr : undefined;
       // When a count is given (and no explicit end), the series ends on the Nth
       // occurrence: first due advanced (count-1) periods.
       let derivedEnd: string | undefined = input.recurrenceEnd || undefined;
@@ -11193,7 +11201,12 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     let iterations = 0;
     let totalToolCalls = 0;
     const MAX_ITERATIONS = 15; // Each iteration is a full AI round-trip; increased to handle 10+ action messages
-    const MAX_TOOL_CALLS = 30; // Safety limit on total tool executions per message
+    const MAX_TOOL_CALLS = 50; // Safety limit on total tool executions per message — "log my whole day" messages legitimately carry 25-35 distinct actions (trackers + habits + journal + events + reminders + tasks), so 30 truncated them mid-way
+    // Per-message counts of identical event/reminder titles — backstop against
+    // the model hand-materializing a recurring series (24 monthly payments,
+    // 72 per-occurrence reminders) instead of one create_obligation.
+    const seriesGuardCounts = new Map<string, number>();
+    const SERIES_GUARD_MAX = 6;
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
@@ -11284,6 +11297,31 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           continue;
         }
         totalToolCalls++;
+
+        // SERIES-SPAM GUARD: a recurring bill's calendar occurrences and
+        // reminders are generated automatically from ONE create_obligation
+        // (see system prompt). If the model still tries to materialize a
+        // series by hand — the same event/reminder title over and over with
+        // only the date changing ("Car Insurance Payment" × 24 months,
+        // "Car Insurance due soon" × 72) — cut it off after a handful and
+        // point it at the right tool. Keyed on title so legitimately distinct
+        // items in a big multi-action message are unaffected.
+        if (toolUse.name === "create_event" || toolUse.name === "create_reminder") {
+          const seriesKey = `${toolUse.name}::${String((toolUse.input as any)?.title || "").toLowerCase().replace(/\s+/g, " ").trim()}`;
+          const seen = (seriesGuardCounts.get(seriesKey) || 0) + 1;
+          seriesGuardCounts.set(seriesKey, seen);
+          if (seen > SERIES_GUARD_MAX) {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({
+                error: `Blocked: you've already created ${SERIES_GUARD_MAX} "${(toolUse.input as any)?.title}" items this message. Recurring series must NOT be materialized one-by-one. For a recurring bill, ONE create_obligation call (with reminderLeadDays:[7,3,0] for reminder offsets) automatically puts every future payment and reminder on the calendar. For a repeating reminder, use create_reminder's recurrence+count fields in ONE call. Stop repeating this call.`,
+              }),
+              is_error: true,
+            });
+            continue;
+          }
+        }
 
         try {
           // Validate input before executing

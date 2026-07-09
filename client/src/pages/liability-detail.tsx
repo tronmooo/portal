@@ -55,7 +55,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
-import { BillScheduleSection } from "@/components/liability/BillScheduleSection";
+import { BillScheduleSection, reminderLeadsLabel } from "@/components/liability/BillScheduleSection";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -725,7 +725,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     billTotalTerm && billTotalTerm > 0
       ? Math.min(100, Math.round((billPaidCount / billTotalTerm) * 100))
       : 0;
-  const billReminderLead: number | null = schedule?.reminderLeadDays ?? null;
+  const billReminderLead: number | number[] | null = schedule?.reminderLeadDays ?? null;
   const billFrequencyLabel: string = schedule?.frequency || String(f2.frequency || "monthly");
 
   // Summary + amortization
@@ -1268,7 +1268,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   <Row label="Payments made" value={String(billPaidCount)} />
                   {missedCount > 0 && <Row label="Missed" value={`${missedCount}`} />}
                   <Row label="Annual total" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : "—"} />
-                  <Row label="Reminder" value={billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : "None"} />
+                  <Row label="Reminder" value={reminderLeadsLabel(billReminderLead) ?? "None"} />
                   <Row label="Ends" value={schedule?.recurrenceEnd ? fmtDate(schedule.recurrenceEnd) : "No end date"} />
                   <Row label="Autopay" value={(f2.autopay || f2.autoRenew) ? "On" : "Off"} />
                 </CardContent>
