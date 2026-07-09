@@ -8,6 +8,7 @@
 // IMPORTANT: never writes the store on mount — initDefaultProfileFilter()
 // (dashboard.tsx) seeds the Self profile on first load and a mount-time write
 // here would race it.
+import { useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, Gem, Users } from "lucide-react";
@@ -18,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import {
-  setFilterEveryone, setFilterSelected, toggleFilterProfile,
+  reconcileProfileFilter, setFilterEveryone, setFilterSelected, toggleFilterProfile,
 } from "@/lib/profileFilter";
 
 interface LiteProfile { id: string; type: string; name: string; avatar?: string }
@@ -36,6 +37,14 @@ export function HubProfileSwitcher() {
     staleTime: 30_000,
   });
   const people = (profiles || []).filter(p => ["self", "person", "pet"].includes(p.type));
+
+  // Heal a persisted scope pointing at deleted/recreated profile ids (the
+  // "header says Mike, every tile says 0" state). /api/profiles/lite returns
+  // ALL live profiles, so a loaded non-empty list is authoritative;
+  // reconcileProfileFilter no-ops when every selected id still resolves.
+  useEffect(() => {
+    if (profiles && profiles.length > 0) reconcileProfileFilter(profiles);
+  }, [profiles]);
 
   const label = (() => {
     if (scope.mode === "everyone") return "Everyone";
