@@ -77,14 +77,14 @@ function StatTile({ label, value, sub, accent, onClick, testId }: {
     <button
       onClick={onClick}
       data-testid={testId}
-      className="flex-1 min-w-[7.5rem] rounded-lg border bg-card/40 px-2.5 py-2 text-left hover:bg-muted/40 transition-colors"
-      style={{ borderColor: `hsl(${accent} / 0.3)` }}
+      className="flex-1 min-w-[7.5rem] rounded-xl border px-2.5 py-2 text-left card-lift transition-all"
+      style={{ borderColor: `hsl(${accent} / 0.30)`, background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, hsl(var(--card)) 75%)` }}
     >
       <div className="flex items-center gap-1.5">
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
       </div>
-      <div className="text-xl font-bold tabular-nums mt-0.5" style={{ color: `hsl(${accent})` }}>{value}</div>
+      <div className="metric-value text-xl mt-0.5" style={{ color: `hsl(${accent})` }}>{value}</div>
       {sub && <div className="text-[10px] text-muted-foreground truncate">{sub}</div>}
     </button>
   );

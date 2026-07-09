@@ -68,10 +68,10 @@ function KpiCard({ label, value, trend, tone, series, chartKind = "line", sub, o
   const hasChart = series && series.length >= 2;
   return (
     <button onClick={onClick} data-testid={testId}
-      className="text-left rounded-xl border bg-card/40 p-3 hover:bg-muted/30 transition-colors min-w-[8.5rem] flex-1"
-      style={{ borderColor: `hsl(${color} / 0.28)` }}>
+      className="text-left rounded-xl border p-3 card-lift transition-all min-w-[8.5rem] flex-1"
+      style={{ borderColor: `hsl(${color} / 0.30)`, background: `linear-gradient(135deg, hsl(${color} / 0.12) 0%, hsl(var(--card)) 75%)` }}>
       <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className="text-xl font-bold tabular-nums mt-0.5" style={{ color: `hsl(${color})` }}>{value}</div>
+      <div className="metric-value text-xl mt-0.5" style={{ color: `hsl(${color})` }}>{value}</div>
       {trend && <div className="text-[10px] mt-0.5" style={{ color: `hsl(${color})` }}>{trend}</div>}
       {sub && <div className="text-[10px] text-muted-foreground mt-1 truncate">{sub}</div>}
       {hasChart && (chartKind === "bars"
