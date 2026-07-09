@@ -2745,16 +2745,17 @@ export class SupabaseStorage implements IStorage {
     const [allEvents, allTasks, allObligations, profiles] = await Promise.all([
       this.getEvents(), this.getTasks(), this.getObligations(), this.getProfiles(),
     ]);
-    // Profile filtering (PR AC — calendar isolation):
-    // When a profile filter is active, an item must be EXPLICITLY linked to
-    // one of the selected profiles. Orphan items (linkedProfiles = []) are
-    // hidden from every individual-profile calendar, including Self — per the
-    // explicit user rule "If an event is not assigned to a profile, it should
-    // not appear in individual profile calendars." This is stricter than the
-    // shared `passesProfileFilter` default (which falls orphans through to
-    // Self) because the calendar is the one surface where leaked, untargeted
-    // items dominate the visual layout and erase any sense of per-profile
-    // ownership. Other surfaces (finance / dashboard) keep the soft rule.
+    // Profile filtering (calendar isolation):
+    // When a profile filter is active, an item shows if it is linked to one of
+    // the selected profiles. Orphan items (linkedProfiles = []) fall through to
+    // the SELF (default) profile — per the user rule "unassigned stuff should
+    // always go to the primary person's profile by default." So an unassigned
+    // event/task/obligation appears on the primary person's calendar, never on
+    // a different person/pet/asset calendar. This is the same soft-orphan rule
+    // (`belongs_to_self`) that finance, the dashboard, and every list endpoint
+    // apply, so the whole app now scopes unassigned data one consistent way.
+    // (This intentionally supersedes the earlier stricter calendar rule that
+    // hid orphans from every individual calendar.)
     const filterActive = !!(profileIds && profileIds.length > 0);
     const _selfIds = selfIdsFrom(profiles);
     const matchesProfile = (linked: string[] | null | undefined) => {
@@ -2762,7 +2763,7 @@ export class SupabaseStorage implements IStorage {
       return isInScope(
         Array.isArray(linked) ? linked : [],
         { selectedIds: profileIds!, selfIds: _selfIds },
-        "out_of_scope",
+        "belongs_to_self",
       );
     };
     // PR AC: reminders do NOT belong on the calendar. They have their own

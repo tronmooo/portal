@@ -14,7 +14,7 @@ import { isRecurringBill } from "@shared/liability-types";
 import { advanceLiabilityDueDate, readDueDate } from "@shared/liability-recurrence";
 import { generateSchedule, liabilityAmount, liabilityFrequency } from "@shared/liability-schedule";
 import { isRecurringBill as isRecurringBillType } from "@shared/liability-types";
-import { selfIdsFrom, isInScope } from "@shared/scope";
+import { selfIdsFrom } from "@shared/scope";
 import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
@@ -5083,14 +5083,15 @@ Rules:
     // appointment reminders (many created with no profile) leaked into EVERY
     // profile's dashboard REMINDERS card. This was the ONE list endpoint that
     // bypassed the canonical scope rule that /api/tasks, /api/obligations,
-    // /api/expenses, /api/calendar/timeline, etc. all apply.
+    // /api/expenses, etc. all apply.
     //
-    // Match the calendar's STRICT isolation policy ("out_of_scope"): when a
-    // profile filter is active, a reminder shows only if it is explicitly
-    // linked to a selected profile. Unlinked reminders never fall through to
-    // an individual profile — they only appear in the unfiltered "Everyone"
-    // view. This is the isolation the user requires: every profile displays
-    // only its own data.
+    // Apply the app-wide default rule ("belongs_to_self"): unassigned items
+    // default to the primary person. When a profile filter is active a reminder
+    // shows if it is linked to a selected profile; an UNLINKED reminder falls
+    // through only when the selection includes the self (default) profile — so
+    // it appears on the primary person's dashboard, never on a different
+    // person/pet/asset profile. This matches passesProfileFilter used by every
+    // sibling endpoint, so reminders now scope identically to tasks/incomes/etc.
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
     const reminderFilterIds = profileIdsParam
@@ -5098,12 +5099,10 @@ Rules:
       : (fp ? [fp] : []);
     if (reminderFilterIds.length > 0) {
       const allProfiles = await storage.getProfiles();
-      const selfIds = selfIdsFrom(allProfiles);
       reminders = reminders.filter((r) =>
-        isInScope(
+        passesProfileFilter(
           r.profileId ? [r.profileId] : [],
-          { selectedIds: reminderFilterIds, selfIds },
-          "out_of_scope",
+          { selectedIds: reminderFilterIds, allProfiles },
         ),
       );
     }
