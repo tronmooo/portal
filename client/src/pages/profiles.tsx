@@ -1,6 +1,6 @@
 import { formatApiError } from "@/lib/formatError";
 import { invalidateDomains } from "@/lib/cache-bus";
-import { EmptyState } from "@/components/EmptyState";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import ProfileTypeSelector from "@/components/registry/ProfileTypeSelector";
@@ -1545,7 +1545,7 @@ export default function ProfilesPage() {
           </Button>
         </div>
       ) : filteredProfiles.length === 0 && searchQuery.trim() ? (
-        <EmptyState icon={Search} title="No matching profiles" description="Try a different search term." />
+        <EmptyState icon={Search} label="No matching profiles" hint="Try a different search term." />
       ) : (
         sortedTypes.map((type) => (
           <div key={type}>

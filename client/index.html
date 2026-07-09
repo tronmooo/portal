@@ -30,12 +30,10 @@
     <meta name="description" content="Portol — Your personal life management system. Track finances, health, documents, and more." />
     <meta property="og:title" content="Portol — Your Life, Organized" />
     <meta property="og:description" content="A personal life management system for tracking finances, health, documents, assets, and more." />
-    <!-- P1.3: Inter + JetBrains Mono are self-hosted via @fontsource imports in
-         src/main.tsx (bundled into the hashed CSS). Only General Sans remains on
-         a CDN (Fontshare — not self-hostable). -->
-    <link rel="preconnect" href="https://api.fontshare.com" crossorigin>
-    <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
-    <link href="https://api.fontshare.com/v2/css?f[]=general-sans@300,400,500,600,700&display=swap" rel="stylesheet">
+    <!-- Fonts (Plus Jakarta Sans, Inter, JetBrains Mono) are self-hosted via
+         @fontsource imports in src/main.tsx, bundled into the hashed CSS. The
+         --font-sans token uses Plus Jakarta Sans; the former General Sans CDN
+         link was a dead load (never referenced by any token) and was removed. -->
   </head>
   <body>
     <div id="root"></div>
