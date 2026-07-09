@@ -2983,7 +2983,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name" },
-        frequency: { type: "string", enum: ["daily", "weekly", "custom"], description: "Frequency" },
+        frequency: { type: "string", enum: ["daily", "weekly", "custom"], description: "Frequency. Use 'custom' and set `days` when the user names specific weekdays (e.g. 'Mon/Wed/Fri')." },
+        days: { type: "array", items: { type: "string" }, description: "Specific weekdays the habit occurs on, e.g. ['monday','wednesday','friday'] for 'every Mon, Wed, and Fri'. Set this whenever the user names particular days; the habit is then scheduled only on those days." },
         icon: { type: "string", description: "Emoji icon" },
         color: { type: "string", description: "Color hex" },
         timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "bedtime", "anytime"], description: "When during the day the habit should occur. Infer from phrasing like 'in the morning', 'after lunch' (afternoon), 'this evening', 'before bed' (bedtime)." },
@@ -3047,7 +3048,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Journal ---
   {
     name: "journal_entry",
-    description: "Create a journal entry (free-form reflective text) for the user or a specific profile. Use when user says 'add a journal entry', 'write that X happened', 'journal entry for Joe', or shares a multi-sentence reflection. mood is optional — infer it from context (sore/tired → 'bad', motivated/energetic → 'great', neutral/normal → 'neutral'). Defaults to 'neutral' if unknown.\n\nDO NOT use this for a mood RATING or check-in such as 'my mood is 7/10', 'feeling a 6 out of 10', 'mood is good today', or 'I feel great' — that is quantitative mood tracking. Use log_tracker_entry with trackerName 'Mood' instead (it matches the user's existing Mood tracker or creates one). Only use journal_entry for mood when the user is clearly writing a diary-style narrative, not logging a score.",
+    description: "Create a journal entry OR a QUICK NOTE for the user or a specific profile. This is the ONLY tool for notes — the dashboard's 'Quick Notes' section is backed by journal entries. Use it whenever the user says 'quick note', 'note', 'jot down', 'note to self', 'make a note that…', 'add a journal entry', 'write that X happened', 'journal entry for Joe', or shares a reflection. DO NOT create a document for a note — a note is NOT a document (documents are files/records like a passport or license). mood is optional — infer it from context (sore/tired → 'bad', motivated/energetic → 'great', neutral/normal → 'neutral'). Defaults to 'neutral' if unknown.\n\nDO NOT use this for a mood RATING or check-in such as 'my mood is 7/10', 'feeling a 6 out of 10', 'mood is good today', or 'I feel great' — that is quantitative mood tracking. Use log_tracker_entry with trackerName 'Mood' instead (it matches the user's existing Mood tracker or creates one). Only use journal_entry for mood when the user is clearly writing a diary-style narrative, not logging a score.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3128,13 +3129,14 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "create_document",
-    description: "Create a new text document.",
+    description: "Create a new stored document/record (passport, license, insurance card, warranty, note-as-document, etc.). Use this for 'create a document', 'add a document', 'save a document'. Set expirationDate when the user gives an expiry/renewal date so it surfaces under Document Expirations.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Document name" },
         content: { type: "string", description: "Document content (text)" },
         forProfile: { type: "string", description: "Name of profile to link this document to" },
+        expirationDate: { type: "string", description: "Expiration/renewal date as YYYY-MM-DD. Convert natural language ('expires December 1', 'valid until Aug 2027') to an exact date. When set, the document appears in Document Expirations and the Docs-expiring count." },
       },
       required: ["name"],
     },
@@ -3155,6 +3157,17 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         profileId: { type: "string", description: "Profile ID (only for profile_detail)" },
       },
       required: ["page"],
+    },
+  },
+  {
+    name: "set_dashboard_scope",
+    description: "Change the dashboard/Executive PROFILE FILTER — i.e. WHOSE data the dashboard shows. Use whenever the user says 'show me <Name>'s dashboard only', 'switch to <Name>', 'filter the dashboard to <Name>', 'only show <Name>'s tasks/events/bills', or 'switch to Everyone / show everyone / show all profiles'. This does NOT create or read data — it sets the active scope so every Executive section (tasks, events, bills, habits, docs, reminders, counts) shows only that profile (or the combined Everyone view). To focus a single person/pet pass profileName; to show the combined view pass everyone:true.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        profileName: { type: "string", description: "Exact name of the person/pet to scope the dashboard to (e.g. 'Mike'). Omit when everyone is true." },
+        everyone: { type: "boolean", description: "Set true to switch to the combined 'Everyone' view (all profiles)." },
+      },
     },
   },
 
@@ -4770,7 +4783,17 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
     }
     case "create_profile": {
       if (!normalized.name?.trim()) errors.push("Profile name is required");
-      else normalized.name = normalized.name.trim();
+      else {
+        // BUG-20260709-double-profile: the model sometimes passes the raw
+        // descriptor as the name ("a person named Mike" instead of "Mike"),
+        // which both clutters data and dodges the same-name dedup. Strip a
+        // leading "a/an/the/my [new] <type> named/called " prefix so the name
+        // collapses to the bare identifier and dedups against the clean one.
+        normalized.name = String(normalized.name)
+          .replace(/^\s*(?:a|an|the|my)\s+(?:new\s+)?(?:person|people|pet|dog|cat|animal|profile|vehicle|car|truck|asset|property|house|home|account|subscription|loan|liability)?\s*(?:named|called)\s+/i, "")
+          .replace(/^\s*(?:named|called)\s+/i, "")
+          .trim();
+      }
       // BUG 5 alias: "home"/"house"/"real_estate" are common synonyms the model
       // emits for real property. Canonical profile type is "property".
       if (normalized.type && ["home", "house", "real_estate", "realestate"].includes(String(normalized.type).toLowerCase())) {
@@ -5567,8 +5590,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // the reminder onto the calendar by creating a companion event. The
       // reminder row still drives the in-app notification via the cron loop; the
       // event makes it visible. The card/undo target this event id.
+      // BUG-20260709-reminder-calendar-clutter: a lead-up reminder for an event
+      // ("Driver License Renewal — 30 days away") must NOT also become its own
+      // calendar entry — that turned one important date into 4 calendar rows.
+      // Lead-up reminders stay in the Reminders section + fire a notification;
+      // only stand-alone reminders mirror onto the calendar.
+      const isLeadUpReminder = /(?:[—-]\s*)?\b\d+\s*(?:day|days|hour|hours|week|weeks|month|months)\s*(?:away|before|out|prior|ahead)\b/i.test(input.title || "");
       let calendarEvent: any = null;
       try {
+        if (isLeadUpReminder) {
+          // Skip the calendar mirror — notification-only lead-up reminder.
+        } else {
         const evDate = fireDate.toLocaleDateString("en-CA", { timeZone: _remTz }); // YYYY-MM-DD
         const evTime = fireDate.toLocaleTimeString("en-GB", { timeZone: _remTz, hour: "2-digit", minute: "2-digit" }); // HH:MM (24h)
         const evDedupKey = `event:${safeLC(reminderForProfile || "")}:${safeLC(input.title)}:${evDate}`;
@@ -5597,6 +5629,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
                 .catch((e: any) => console.warn("[AI] Reminder event linking failed:", e?.message));
             }
           }
+        }
         }
       } catch (e: any) {
         // Calendar mirroring is best-effort — a failure here must not lose the
@@ -7781,13 +7814,31 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         logger.info("ai", `Habit name "${input.name}" already taken — using "${habitName}"`);
       }
 
+      // BUG-20260709-habit-weekdays: map named weekdays ('Mon/Wed/Fri') to the
+      // habit's targetDays (0=Sun..6=Sat) so the schedule is actually stored,
+      // instead of collapsing to a bare "custom" frequency with no days. The
+      // reply previously CLAIMED a Mon/Wed/Fri schedule that was never persisted.
+      const DOW: Record<string, number> = {
+        sun: 0, sunday: 0, mon: 1, monday: 1, tue: 2, tues: 2, tuesday: 2,
+        wed: 3, weds: 3, wednesday: 3, thu: 4, thur: 4, thurs: 4, thursday: 4,
+        fri: 5, friday: 5, sat: 6, saturday: 6,
+      };
+      let habitTargetDays: number[] | undefined;
+      const rawDays: any[] = Array.isArray(input.days) ? input.days : [];
+      if (rawDays.length > 0) {
+        const nums: number[] = rawDays
+          .map((d: any) => (typeof d === "number" ? d : DOW[String(d).trim().toLowerCase()]))
+          .filter((n: any): n is number => typeof n === "number" && n >= 0 && n <= 6);
+        if (nums.length > 0) habitTargetDays = Array.from(new Set(nums)).sort((a, b) => a - b);
+      }
       // P0.3a: validate with the shared insert schema before writing.
       const habitTimeOfDay = input.timeOfDay === "night" ? "bedtime" : input.timeOfDay;
       const habitPayload = validateAiPayload(insertHabitSchema, {
         name: habitName,
-        frequency: input.frequency || "daily",
+        frequency: habitTargetDays ? "custom" : (input.frequency || "daily"),
         icon: input.icon,
         color: input.color,
+        ...(habitTargetDays ? { targetDays: habitTargetDays } : {}),
         ...(habitTimeOfDay ? { timeOfDay: habitTimeOfDay } : {}),
         ...(input.scheduledTime ? { scheduledTime: input.scheduledTime } : {}),
       }, "habit");
@@ -8209,6 +8260,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_document": {
+      // BUG-20260709-doc-expiration: capture an expiration date into
+      // extractedData (+ the expirationDate column) so the document shows up in
+      // Document Expirations and the Docs-expiring count. Previously the date
+      // only landed in the free-text content and never surfaced anywhere.
+      let docExpiry: string | undefined;
+      if (input.expirationDate) {
+        const d = new Date(String(input.expirationDate));
+        if (!isNaN(d.getTime())) docExpiry = d.toISOString().slice(0, 10);
+      }
+      const docExtracted = docExpiry
+        ? { expirationDate: docExpiry, "Expiration Date": docExpiry }
+        : {};
       // P0.3a: validate the schema-covered part with the shared insert schema;
       // `size` isn't in insertDocumentSchema so it's passed alongside explicitly.
       const createDocPayload = validateAiPayload(insertDocumentSchema, {
@@ -8216,10 +8279,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         type: "document",
         mimeType: "text/plain",
         fileData: Buffer.from(input.content || "").toString("base64"),
+        extractedData: docExtracted,
       }, "document");
       if (!createDocPayload.ok) return { error: createDocPayload.error };
       const doc = await storage.createDocument({
         ...createDocPayload.data,
+        ...(docExpiry ? { expirationDate: docExpiry } : {}),
         size: input.content?.length || 0,
       });
       if (input.forProfile) {
@@ -8232,6 +8297,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "navigate":
       return { navigateTo: input.page, profileId: input.profileId };
+
+    case "set_dashboard_scope": {
+      // Resolve the target so the CLIENT can apply the profile filter. The
+      // engine can't touch the browser's filter store, so it returns a
+      // structured `scope` the chat UI acts on (setFilterSelected / everyone).
+      if (input.everyone === true || /^every(one|body)$|^all$/i.test(String(input.profileName || "").trim())) {
+        return { scope: { mode: "everyone" }, reply: "Switched the dashboard to Everyone (all profiles)." };
+      }
+      const wanted = String(input.profileName || "").trim();
+      if (!wanted) return { error: "Tell me which profile to focus the dashboard on (a name, or 'everyone')." };
+      const profiles = await storage.getProfiles();
+      const match = matchProfileByName(profiles, wanted);
+      if (!match) return { error: `I couldn't find a profile named "${wanted}". Check the name and try again.` };
+      return {
+        scope: { mode: "selected", profileId: match.id, profileName: match.name },
+        reply: `Dashboard now scoped to ${match.name} only. Every Executive section shows just ${match.name}'s data.`,
+      };
+    }
 
     case "create_goal": {
       // Dedup: skip if a goal with the same title already exists
@@ -11306,7 +11389,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const result = await executeTool(toolUse.name, inputWithCtx, userId);
           
           // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
+          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
             invalidateContextCache(userId);
           }
@@ -11338,7 +11421,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
           // Log the action to in-memory history
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
-          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
+          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
@@ -11730,7 +11813,7 @@ export const READ_ONLY_TOOLS = new Set<string>([
   "get_related", "get_relationships", "get_liability_summary", "get_cashflow",
   "get_budget_summary", "query_net_worth_history", "get_loan_schedule", "query_calendar",
   "query_expenses", "query_tasks", "spending_analytics", "get_asset_rollup",
-  "search_documents", "retrieve_document", "open_document", "navigate",
+  "search_documents", "retrieve_document", "open_document", "navigate", "set_dashboard_scope",
   "generate_chart", "generate_table", "generate_report", "refresh_ai_summary",
 ]);
 

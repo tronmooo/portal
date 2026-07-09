@@ -945,6 +945,15 @@ export async function registerRoutes(
       // internal AI tool calls. Bust the response cache BEFORE sending the response so
       // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale cache.
       clearAllCache();
+      // Hoist a dashboard-scope directive (from set_dashboard_scope) to the top
+      // level so the chat client can apply the profile filter without digging
+      // through the results array. The engine can't touch the browser filter
+      // store, so the client does it on receipt.
+      try {
+        const rs: any[] = Array.isArray((result as any)?.results) ? (result as any).results : [];
+        const scoped = rs.find((r) => r && typeof r === "object" && (r as any).scope);
+        if (scoped) (result as any).scope = (scoped as any).scope;
+      } catch { /* non-fatal */ }
       res.json(result);
     } catch (err: any) {
       const msg = err?.message || "unknown error";

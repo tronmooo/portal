@@ -1063,6 +1063,21 @@ export class SupabaseStorage implements IStorage {
   async createProfile(data: InsertProfile): Promise<Profile> {
     const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "liability", "investment", "property", "account", "insurance", "medical"]);
     if (data.type && !validProfileTypes.has(data.type)) data.type = "person";
+    // DEDUP people/pets (BUG-20260709-double-profile): the AI chat path calls
+    // this directly (bypassing the REST route's findBlockingDuplicateProfile),
+    // and the model sometimes emits TWO create_profile calls for one request —
+    // e.g. "create a profile for a person named Mike" produced BOTH "Mike" and a
+    // junk "a person named Mike". People and pets must not duplicate on an exact
+    // (case-insensitive, trimmed) name for the same user. Assets/vehicles/etc CAN
+    // legitimately repeat (two "Samsung TV"s), so this only guards person/pet.
+    if ((data.type === "person" || data.type === "pet") && typeof data.name === "string" && data.name.trim()) {
+      const wanted = data.name.trim().toLowerCase();
+      const existingProfiles = await this.getProfiles().catch(() => [] as Profile[]);
+      const dupe = existingProfiles.find(
+        p => p.type === data.type && typeof p.name === "string" && p.name.trim().toLowerCase() === wanted,
+      );
+      if (dupe) return dupe;
+    }
     const now = new Date().toISOString();
     const id = randomUUID();
     // Auto-assign parent to self profile if not specified for child types
@@ -5696,6 +5711,23 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder> {
+    // DEDUP (BUG-20260709-dup-reminder): a stale/replayed action was creating a
+    // second identical reminder (same title + same fire time). An unfired
+    // reminder with the same user + title + fire_at is a duplicate — return the
+    // existing one instead of inserting again. Recurring reminders differ by
+    // fireAt, so this never collapses legitimate multi-occurrence schedules.
+    {
+      const { data: existing } = await this.supabase
+        .from("reminders")
+        .select("*")
+        .eq("user_id", this.userId)
+        .eq("title", data.title)
+        .eq("fire_at", data.fireAt)
+        .is("fired_at", null)
+        .is("deleted_at", null)
+        .limit(1);
+      if (existing && existing.length > 0) return this.mapReminder(existing[0]);
+    }
     const { data: row, error } = await this.supabase.from("reminders").insert({
       user_id: this.userId,
       profile_id: data.profileId || null,

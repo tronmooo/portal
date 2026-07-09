@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import { setFilterSelected, setFilterEveryone } from "@/lib/profileFilter";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stopProp } from "@/lib/event-utils";
@@ -1930,6 +1931,17 @@ export default function ChatPage() {
         artifact: data.artifact,
       };
       setMessages((prev: any) => [...prev, assistantMsg]);
+      // set_dashboard_scope: apply the returned profile filter so the dashboard/
+      // Executive tab actually re-scopes from a chat command ("show me Mike's
+      // dashboard only" / "switch to Everyone").
+      if (data?.scope && typeof data.scope === "object") {
+        try {
+          if (data.scope.mode === "everyone") setFilterEveryone();
+          else if (data.scope.mode === "selected" && data.scope.profileId) {
+            setFilterSelected([data.scope.profileId], [data.scope.profileName || "Selected"]);
+          }
+        } catch { /* filter store not ready — non-fatal */ }
+      }
       invalidateAll();
     },
     onError: (err: Error) => {
