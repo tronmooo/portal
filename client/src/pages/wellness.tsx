@@ -13,8 +13,8 @@ import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { useToast } from "@/hooks/use-toast";
-import { HeartPulse } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { HeartPulse, Plus } from "lucide-react";
+import { ModalShell } from "@/components/ui/modal-shell";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -395,35 +395,40 @@ export default function WellnessPage() {
         onQuickLog={onQuickLog}
       />
 
-      {/* Inline quick-log dialog for weight / mood / sleep / steps. */}
-      <Dialog open={logKind != null} onOpenChange={(o) => { if (!o) { setLogKind(null); setLogValue(""); } }}>
-        <DialogContent className="max-w-xs" data-testid="wellness-quicklog-dialog">
-          <DialogHeader>
-            <DialogTitle>Log {logKind ? logMeta[logKind].label : ""}</DialogTitle>
-          </DialogHeader>
-          {logKind && (
-            <div className="space-y-2">
-              <Label htmlFor="wellness-log-input" className="text-xs">{logMeta[logKind].label} ({logMeta[logKind].unit})</Label>
-              <Input
-                id="wellness-log-input" type="number" inputMode="decimal" autoFocus
-                step={logMeta[logKind].step} placeholder={logMeta[logKind].placeholder}
-                value={logValue} onChange={(e) => setLogValue(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") submitQuickLog(); }}
-                data-testid="wellness-log-input"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                Logs to your {metricForKind(logKind).trackerName || logMeta[logKind].label} tracker — updates everywhere.
-              </p>
-            </div>
-          )}
-          <DialogFooter>
+      {/* Inline quick-log dialog for weight / mood / sleep / steps — shared ModalShell. */}
+      <ModalShell
+        open={logKind != null}
+        onOpenChange={(o) => { if (!o) { setLogKind(null); setLogValue(""); } }}
+        title={`Log ${logKind ? logMeta[logKind].label : ""}`}
+        icon={Plus}
+        accent="199 89% 60%"
+        width="xs"
+        testId="wellness-quicklog-dialog"
+        footer={
+          <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => { setLogKind(null); setLogValue(""); }}>Cancel</Button>
             <Button size="sm" onClick={submitQuickLog} disabled={quickLog.isPending || !logValue.trim()} data-testid="wellness-log-submit">
               {quickLog.isPending ? "Logging…" : "Log"}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </div>
+        }
+      >
+        {logKind && (
+          <div className="space-y-2 px-4 py-4">
+            <Label htmlFor="wellness-log-input" className="text-xs">{logMeta[logKind].label} ({logMeta[logKind].unit})</Label>
+            <Input
+              id="wellness-log-input" type="number" inputMode="decimal" autoFocus
+              step={logMeta[logKind].step} placeholder={logMeta[logKind].placeholder}
+              value={logValue} onChange={(e) => setLogValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") submitQuickLog(); }}
+              data-testid="wellness-log-input"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Logs to your {metricForKind(logKind).trackerName || logMeta[logKind].label} tracker — updates everywhere.
+            </p>
+          </div>
+        )}
+      </ModalShell>
     </div>
   );
 }
