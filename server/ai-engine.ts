@@ -11875,9 +11875,22 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     let totalToolCalls = 0;
     const MAX_ITERATIONS = 15; // Each iteration is a full AI round-trip; increased to handle 10+ action messages
     const MAX_TOOL_CALLS = 30; // Safety limit on total tool executions per message
+    // Wall-clock guard ("Load failed" fix): long multi-tool chains (up to 15
+    // model round-trips) can outlive the browser/proxy connection even under
+    // the platform's function limit — the client then shows a generic dropped-
+    // connection error while writes silently continue server-side. Stop
+    // starting NEW round-trips after 90s and report what completed honestly.
+    const startedAt = Date.now();
+    const WALL_CLOCK_BUDGET_MS = 90_000;
+    let ranOutOfTime = false;
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
+      if (iterations > 1 && Date.now() - startedAt > WALL_CLOCK_BUDGET_MS) {
+        ranOutOfTime = true;
+        logger.warn("ai", `Wall-clock budget hit after ${iterations - 1} round-trips / ${totalToolCalls} tool calls — returning partial results`);
+        break;
+      }
 
       // Retry on overloaded/rate-limit errors
       let response;
@@ -12338,6 +12351,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         /\b(done|added|created|set up|set it up|scheduled|saved|noted|all set)\b/i.test(finalReply || "")) {
       logger.warn("ai", `[false-success-guard] reply claimed success with zero tool calls — rewriting. msg="${(userMessage || "").slice(0, 80)}"`);
       finalReply = "I described what I would do but didn't actually execute a tool call. Can you rephrase or be more specific?";
+    }
+
+    // Wall-clock budget hit: be explicit that the turn ended early and report
+    // what DID complete — the actions list below is the honest record.
+    if (ranOutOfTime) {
+      const doneCount = allActions.length;
+      const summary = doneCount > 0
+        ? `I ran out of time before finishing everything — ${doneCount} action${doneCount === 1 ? "" : "s"} completed (listed below). Ask me to continue with whatever is still missing.`
+        : "I ran out of time before completing that — nothing was changed. Try splitting the request into smaller steps.";
+      finalReply = finalReply ? `${finalReply}\n\n⏱️ ${summary}` : `⏱️ ${summary}`;
     }
 
     // If artifact found, persist it to chat_artifacts table.

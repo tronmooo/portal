@@ -1945,15 +1945,24 @@ export default function ChatPage() {
       invalidateAll();
     },
     onError: (err: Error) => {
+      // A dropped connection ("Load failed" / timeout) does NOT mean nothing
+      // happened — the server keeps executing tool calls after the socket
+      // dies. Be honest about that, and refresh all data so any writes that
+      // DID land show up on the dashboard instead of looking lost.
+      const dropped = /load failed|timed out|network|fetch|abort/i.test(err.message || "");
+      const content = dropped
+        ? "That took too long or the connection dropped. Some of the changes may still have been applied — I've refreshed your data, so check the dashboard, or ask me \"what did you just change?\""
+        : `Something went wrong: ${err.message || "Network error"}. Please try again.`;
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: `Something went wrong: ${err.message || "Network error"}. Please try again.`,
+          content,
           timestamp: new Date().toISOString(),
         },
       ]);
+      invalidateAll();
     },
     // Release the synchronous send lock once the round-trip resolves (success
     // or error), so the next message can be sent.
