@@ -3614,14 +3614,16 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "update_journal",
-    description: "Update an existing journal entry's content, mood, or tags.",
+    description: "Update an existing journal entry's content, mood, or tags. For TEXT edits ('change X to Y in today's entry') ALWAYS use find/replace — you cannot see the entry's full current content, and changes.content REPLACES the whole entry (destroying everything you didn't retype).",
     input_schema: {
       type: "object" as const,
       properties: {
-        date: { type: "string", description: "Date of the journal entry to update (YYYY-MM-DD)" },
-        changes: { type: "object", description: "Fields to update: content, mood, tags" },
+        date: { type: "string", description: "Date of the journal entry to update (YYYY-MM-DD). Defaults to today." },
+        find: { type: "string", description: "Existing text to replace (exact or close phrase from the entry). PREFERRED for text edits." },
+        replace: { type: "string", description: "Replacement text for the matched phrase." },
+        changes: { type: "object", description: "Direct field overwrites: mood, tags — or content (DANGER: replaces the ENTIRE entry text; only when the user dictated a full rewrite)." },
       },
-      required: ["date", "changes"],
+      required: ["date"],
     },
   },
   {
@@ -6595,19 +6597,33 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const tnLC = String(input.trackerName || "").toLowerCase();
         const isBPTarget = /blood\s*pressure|^bp$/.test(tnLC);
         const hasBPVals = Object.keys(vals).some(k => /^(systolic|diastolic)$/i.test(k));
+        let hrNum: number | null = null;
         if (hrKey && isBPTarget && hasBPVals) {
           const hrRaw = vals[hrKey];
-          const hrNum = typeof hrRaw === "number" ? hrRaw : parseFloat(String(hrRaw));
+          const parsed = typeof hrRaw === "number" ? hrRaw : parseFloat(String(hrRaw));
+          if (isFinite(parsed)) hrNum = parsed;
           delete (input.values as any)[hrKey];
-          if (isFinite(hrNum)) {
-            await executeTool("log_tracker_entry", {
-              trackerName: "Heart Rate",
-              values: { bpm: hrNum },
-              forProfile: input.forProfile,
-              at: input.at,
-              __userMessage: (input as any).__userMessage,
-            }, userId).catch((e: any) => logger.warn("ai", `HR split-out failed: ${e?.message || e}`));
-          }
+        }
+        // DROPPED-HR RESCUE: the model routinely logs "BP 124/78 with a resting
+        // heart rate of 59" as ONE BP call and never sends the pulse at all
+        // (observed live 3× in the 2026-07 audits — the prompt rule alone does
+        // not hold). When the BP call carries no pulse but the user's message
+        // clearly states one, recover it from the message text.
+        if (isBPTarget && hasBPVals && hrNum === null) {
+          const msg = String((input as any).__userMessage || "");
+          const m = msg.match(/(?:resting\s+)?(?:heart\s*rate|pulse)\D{0,20}?(\d{2,3})\b/i)
+            || msg.match(/\b(\d{2,3})\s*bpm\b/i);
+          const parsed = m ? parseInt(m[1], 10) : NaN;
+          if (isFinite(parsed) && parsed >= 25 && parsed <= 250) hrNum = parsed;
+        }
+        if (hrNum !== null && isBPTarget) {
+          await executeTool("log_tracker_entry", {
+            trackerName: "Heart Rate",
+            values: { bpm: hrNum },
+            forProfile: input.forProfile,
+            at: input.at,
+            __userMessage: (input as any).__userMessage,
+          }, userId).catch((e: any) => logger.warn("ai", `HR split-out failed: ${e?.message || e}`));
         }
       } catch { /* never block the primary log on the split guard */ }
 
@@ -7305,11 +7321,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         return { error: `Cannot create a liability with a negative balance ($${input.currentBalance}). A liability is what you owe — it must be ≥ 0.` };
       }
       // Reject impossible date ranges (end/payoff/forgiveness before start).
+      // The schema has no generic end-date key, so the model often carries the
+      // end date only in notes/message — recover BOTH dates from the user's
+      // own phrasing too ("starting X ... ending Y") before accepting.
       {
-        const startish = String(input.firstPaymentDate || input.startDate || "").slice(0, 10);
-        const endish = String(input.forgivenessDate || input.endDate || input.payoffDate || "").slice(0, 10);
+        const ISO = /\b(\d{4}-\d{2}-\d{2})\b/;
+        const msg = `${String((input as any).__userMessage || "")} ${String(input.notes || "")}`;
+        const startish = String(input.firstPaymentDate || input.startDate || "").slice(0, 10)
+          || (msg.match(new RegExp(`(?:start(?:ing|s)?|begin(?:ning|s)?|from)\\D{0,20}?${ISO.source}`, "i"))?.[1] ?? "");
+        const endish = String(input.forgivenessDate || input.endDate || input.payoffDate || "").slice(0, 10)
+          || (msg.match(new RegExp(`(?:end(?:ing|s)?|until|through|to|payoff|final payment)\\D{0,20}?${ISO.source}`, "i"))?.[1] ?? "");
         if (/^\d{4}-\d{2}-\d{2}$/.test(startish) && /^\d{4}-\d{2}-\d{2}$/.test(endish) && endish < startish) {
-          return { error: `That liability ends (${endish}) before it starts (${startish}) — check the dates and try again.` };
+          return { error: `That liability ends (${endish}) before it starts (${startish}) — nothing was created. Check the dates and try again.` };
         }
       }
       // Normalize annualRate (accept either decimal 0.065 or percent 6.5)
@@ -9682,7 +9705,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "update_journal": {
       const entries = await storage.getJournalEntries();
-      const today2 = new Date().toLocaleDateString('en-CA');
+      // Same timezone as journal_entry's create path — server-UTC "today" is
+      // a different date than the user's evening, which made "today's entry"
+      // resolve to nothing (or yesterday's) between 00:00 and 08:00 UTC.
+      const today2 = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
       let matchEntry2 = input.date ? entries.find(e => e.date === input.date) : null;
       if (!matchEntry2) matchEntry2 = entries.find(e => e.date === today2) ?? entries[entries.length - 1] ?? null;
       if (input.forProfile && matchEntry2) {
@@ -9695,7 +9721,26 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
       if (!matchEntry2) return { error: `No journal entry found for date "${input.date || today2}"` };
-      const updated = await storage.updateJournalEntry(matchEntry2.id, input.changes);
+      const changes: any = { ...(input.changes || {}) };
+      // find/replace: targeted text edit that PRESERVES the rest of the entry.
+      if (input.find && input.replace !== undefined) {
+        const current = String(matchEntry2.content || "");
+        const needle = String(input.find);
+        let next: string;
+        if (current.includes(needle)) {
+          next = current.split(needle).join(String(input.replace));
+        } else {
+          // Case-insensitive fallback for close phrasing.
+          const idx = current.toLowerCase().indexOf(needle.toLowerCase());
+          if (idx < 0) {
+            return { error: `I couldn't find "${needle.slice(0, 60)}" in the ${matchEntry2.date} entry, so nothing was changed. The entry currently says: "${current.slice(0, 160)}"` };
+          }
+          next = current.slice(0, idx) + String(input.replace) + current.slice(idx + needle.length);
+        }
+        changes.content = next;
+      }
+      if (Object.keys(changes).length === 0) return { error: "No changes given — pass find/replace for a text edit, or changes for mood/tags." };
+      const updated = await storage.updateJournalEntry(matchEntry2.id, changes);
       return { updated: true, journal: updated };
     }
 

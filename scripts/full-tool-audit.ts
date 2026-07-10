@@ -580,7 +580,9 @@ async function section8_assets() {
   const crv = (await list("/profiles")).find((p) => (p.name || "").includes(`${TAG}_crv`));
   const revalued = !!crv && /26,?000|26000/.test(JSON.stringify(crv.fields || {}));
   const nw1 = (await api("GET", "/dashboard-enhanced")).data as any;
-  const nwMoved = Number(nw1?.financeSnapshot?.netWorth ?? 0) !== Number(nw0?.financeSnapshot?.netWorth ?? 0);
+  // Net worth = totalAssetValue - totalLiabilities (financeSnapshot has no
+  // literal netWorth key). A $2k revalue must move totalAssetValue.
+  const nwMoved = Number(nw1?.financeSnapshot?.totalAssetValue ?? 0) !== Number(nw0?.financeSnapshot?.totalAssetValue ?? 0);
   record({
     section: S, capability: "Asset — revalue + net worth", command: "CR-V → $26,000",
     tool: ev2.tools[0] || "", args: "", toolResult: ev2.reply.slice(0, 100),
