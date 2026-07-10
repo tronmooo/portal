@@ -91,20 +91,20 @@ export const PARITY_MATRIX: ParityRow[] = [
 
   // ── Incomes ────────────────────────────────────────────────────────────────
   { entity: "Income", operation: "Create", ui: "Finance → Income / Cash-flow popup", aiTools: ["log_income"], status: "covered" },
-  { entity: "Income", operation: "Edit", ui: "Finance income row", aiTools: ["update_income"], status: "planned" },
-  { entity: "Income", operation: "Delete", ui: "Finance income row", aiTools: ["delete_income"], status: "planned" },
+  { entity: "Income", operation: "Edit", ui: "Finance income row", aiTools: ["update_income"], status: "added" },
+  { entity: "Income", operation: "Delete", ui: "Finance income row", aiTools: ["delete_income"], status: "added" },
 
   // ── Paychecks ──────────────────────────────────────────────────────────────
   { entity: "Paycheck", operation: "Log expected", ui: "Finance → Paychecks", aiTools: ["log_expected_paycheck"], status: "covered" },
   { entity: "Paycheck", operation: "Confirm received (actual amount)", ui: "Paycheck row → Confirm", aiTools: ["confirm_paycheck_received"], status: "covered" },
-  { entity: "Paycheck", operation: "Delete", ui: "Paycheck row menu", aiTools: ["delete_paycheck"], status: "planned" },
+  { entity: "Paycheck", operation: "Delete", ui: "Paycheck row menu", aiTools: ["delete_paycheck"], status: "added" },
 
   // ── Budgets ────────────────────────────────────────────────────────────────
   { entity: "Budget", operation: "Set / create category budget", ui: "Budget popup", aiTools: ["set_budget", "create_budget"], status: "covered" },
   { entity: "Budget", operation: "Edit amount", ui: "Budget popup row", aiTools: ["update_budget"], status: "covered" },
   { entity: "Budget", operation: "Delete", ui: "Budget popup row", aiTools: ["delete_budget"], status: "covered" },
   { entity: "Budget", operation: "Read summary", ui: "Budget popup / hero tile", aiTools: ["get_budget_summary"], status: "covered" },
-  { entity: "Budget", operation: "Copy previous month", ui: "Budget popup → Copy last month", aiTools: ["copy_budgets_previous_month"], status: "planned" },
+  { entity: "Budget", operation: "Copy previous month", ui: "Budget popup → Copy last month", aiTools: ["copy_budgets_previous_month"], status: "added" },
 
   // ── Obligations / bills ────────────────────────────────────────────────────
   { entity: "Bill", operation: "Create", ui: "Liabilities tab / Quick-add → Bill", aiTools: ["create_obligation"], status: "covered" },
@@ -162,7 +162,7 @@ export const PARITY_MATRIX: ParityRow[] = [
   // ── Memories (AI facts) ────────────────────────────────────────────────────
   { entity: "Memory", operation: "Save", ui: "(chat-first) Info tab shows saved facts", aiTools: ["save_memory"], status: "covered" },
   { entity: "Memory", operation: "Recall", ui: "Info tab facts list", aiTools: ["recall_memory"], status: "covered" },
-  { entity: "Memory", operation: "Edit value", ui: "Info tab fact row editor", aiTools: ["update_memory"], status: "planned" },
+  { entity: "Memory", operation: "Edit value", ui: "Info tab fact row editor", aiTools: ["update_memory"], status: "added" },
   { entity: "Memory", operation: "Delete", ui: "Info tab fact row menu", aiTools: ["delete_memory"], status: "covered" },
 
   // ── Artifacts ──────────────────────────────────────────────────────────────

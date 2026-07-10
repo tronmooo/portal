@@ -2678,6 +2678,18 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     }
   },
   {
+    name: "delete_paycheck",
+    description: "Delete an expected paycheck entry. Find it by source (partial match) and optionally its expected date. Use for 'delete the Acme paycheck', 'remove that expected paycheck on the 15th'. Do NOT use for income entries (delete_income).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        source: { type: "string", description: "Paycheck source to delete (partial match, e.g. employer name)" },
+        expected_date: { type: "string", description: "Optional expected date (YYYY-MM-DD) to disambiguate" },
+      },
+      required: ["source"],
+    },
+  },
+  {
     name: "get_loan_schedule",
     description: "Get the full amortization schedule for a loan, showing each payment with principal, interest, and remaining balance",
     input_schema: {
@@ -3465,6 +3477,18 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
   {
+    name: "update_memory",
+    description: "Update the value of an EXISTING saved memory/fact. Find it by key or current content (partial match), then store the corrected value. Use for 'actually my gate code is 4321', 'update the wifi password memory'. Do NOT create a second memory for a correction — update the existing one.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Memory key or current content to find (partial match)" },
+        newValue: { type: "string", description: "The corrected/updated value to store" },
+      },
+      required: ["query", "newValue"],
+    },
+  },
+  {
     name: "bulk_complete_tasks",
     description: "Mark multiple tasks as complete at once. Use when user says 'complete all tasks', 'mark everything done', or 'finish all overdue tasks'.",
     input_schema: {
@@ -3688,6 +3712,30 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       required: ["amount", "source"],
     },
   },
+  {
+    name: "update_income",
+    description: "Update an EXISTING income entry (amount, source/description, frequency, category, date). Find it by its description/source (partial match). Use for 'change my freelance income to $250', 'my paycheck income is actually monthly'. Do NOT use for paychecks (confirm_paycheck_received) or expenses (update_expense).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        description: { type: "string", description: "Description/source of the income to update (partial match, e.g. 'freelance')" },
+        changes: { type: "object", description: "Fields to update — any of 'description', 'amount' (number), 'frequency' (once|weekly|biweekly|monthly|yearly), 'category', 'date' (YYYY-MM-DD)" },
+      },
+      required: ["description", "changes"],
+    },
+  },
+  {
+    name: "delete_income",
+    description: "Delete an income entry by its description/source (partial match). Use for 'delete the freelance income', 'remove that $500 income I logged'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        description: { type: "string", description: "Description/source of the income to delete (partial match)" },
+        amount: { type: "number", description: "Optional amount to disambiguate when several incomes share a description" },
+      },
+      required: ["description"],
+    },
+  },
 
   // --- Medication refill scheduling ---
   {
@@ -3753,6 +3801,16 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
       },
       required: ["budgetId"],
+    },
+  },
+  {
+    name: "copy_budgets_previous_month",
+    description: "Copy ALL of the previous month's category budgets into a target month (defaults to the current month). Use for 'copy last month's budgets', 'same budgets as June', 'roll my budgets forward'. Overwrites the target month's budget list with the copies.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        month: { type: "string", description: "Target month (YYYY-MM). Defaults to the current month." },
+      },
     },
   },
 
@@ -4139,6 +4197,15 @@ NEVER say "X already has a journal entry" unless the Journal Entries context abo
 If journal_entry succeeds, say "Journal entry saved for [name]."
 NEVER substitute a create_task when the user explicitly asks for a journal entry.
 
+━━━ INCOME / PAYCHECK / BUDGET / MEMORY CRUD ━━━
+- log income: log_income(amount, source) — "I got paid $X", "received $X from Y"
+- edit income: update_income(description, changes) — "change my freelance income to $250/mo"
+- delete income: delete_income(description, amount?) — "remove that $500 income"
+- expected paycheck: log_expected_paycheck; confirm: confirm_paycheck_received; delete: delete_paycheck(source, expected_date?)
+- budgets: set_budget/create_budget to set, update_budget to change, delete_budget to remove
+- "copy last month's budgets" / "same budgets as last month" → copy_budgets_previous_month(month?)
+- correct a saved fact: update_memory(query, newValue) — "actually my gate code is 4321". NEVER save a second memory for a correction; update the existing one.
+
 ━━━ MULTI-ACTION COMPOUND COMMANDS ━━━
 When user says MULTIPLE things in one message, execute ALL of them as SEPARATE tool calls.
 Example: "Joe completed his water habit, delete his stretching task, create a goal to lose 5 pounds"
@@ -4162,7 +4229,7 @@ If "delete Joe's running thing" could match habit OR tracker OR event:
 NEVER delete randomly. NEVER delete the wrong item.
 
 ━━━ DELETE CONFIRMATION RULE ━━━
-BEFORE calling ANY delete tool (delete_profile, delete_task, delete_expense, delete_habit, delete_obligation, delete_event, delete_tracker, delete_tracker_entry, delete_journal, delete_budget), you MUST:
+BEFORE calling ANY delete tool (delete_profile, delete_task, delete_expense, delete_habit, delete_obligation, delete_event, delete_tracker, delete_tracker_entry, delete_journal, delete_budget, delete_income, delete_paycheck, delete_memory), you MUST:
 1. Tell the user EXACTLY what you're about to delete (name, type, amount if applicable)
 2. Ask "Should I delete this?" or "Are you sure?"
 3. ONLY call the delete tool AFTER the user confirms in a follow-up message
@@ -6371,6 +6438,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return { deleted: true, category: target.category, month };
     }
 
+    case "copy_budgets_previous_month": {
+      const toMonth = /^\d{4}-\d{2}$/.test(String(input.month || ""))
+        ? String(input.month)
+        : new Date().toLocaleDateString('en-CA', { timeZone: (storage as any)._timezone || 'America/Los_Angeles' }).slice(0, 7);
+      const [y, m] = toMonth.split("-").map(Number);
+      const fromMonth = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+      const copied = await storage.copyBudgetsToMonth(fromMonth, toMonth);
+      if (copied === 0) return { error: `No budgets exist in ${fromMonth} to copy` };
+      return { copied, fromMonth, toMonth, message: `Copied ${copied} budget${copied === 1 ? "" : "s"} from ${fromMonth} to ${toMonth}` };
+    }
+
     case "get_budget_summary": {
       const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
       // W4-3: scope BOTH the budget side and the spend side to a profile when the
@@ -6448,6 +6526,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "confirm_paycheck_received": {
       const r = await storage.confirmPaycheck(input.paycheck_id, input.actual_amount);
       return { result: r, actions: [{ type: "update", category: "paycheck", data: r }] };
+    }
+    case "delete_paycheck": {
+      const paychecks = await storage.getPaychecks();
+      const needle = safeLC(input.source);
+      let matches = paychecks.filter((p: any) => safeLC(p.source).includes(needle));
+      if (input.expected_date && matches.length > 1) {
+        const byDate = matches.filter((p: any) => String(p.expected_date || "").slice(0, 10) === String(input.expected_date).slice(0, 10));
+        if (byDate.length > 0) matches = byDate;
+      }
+      if (matches.length === 0) return { error: `No paycheck found matching "${input.source}"`, candidates: paychecks.slice(0, 5).map((p: any) => p.source) };
+      if (matches.length > 1) return { error: `Multiple paychecks match "${input.source}" — specify the expected date`, candidates: matches.slice(0, 5).map((p: any) => `${p.source} (${p.expected_date})`) };
+      await storage.deletePaycheck(matches[0].id);
+      return { deleted: true, source: matches[0].source, expected_date: matches[0].expected_date, id: matches[0].id };
     }
     case "get_loan_schedule": {
       const schedule = await storage.getLoanSchedule(input.loan_id);
@@ -8678,6 +8769,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return { deleted: true, key: match.key, id: match.id };
     }
 
+    case "update_memory": {
+      const memories = await storage.getMemories();
+      const match = memories.find(m =>
+        m.key.toLowerCase().includes(safeLC(input.query)) ||
+        m.value.toLowerCase().includes(safeLC(input.query))
+      );
+      if (!match) return { error: `No memory found matching "${input.query}"` };
+      if (!input.newValue || !String(input.newValue).trim()) return { error: "newValue is required" };
+      const updated = await storage.updateMemory(match.id, { value: String(input.newValue).trim() });
+      return { updated: true, key: match.key, id: match.id, memory: updated, message: `Updated memory "${match.key}"` };
+    }
+
     case "bulk_complete_tasks": {
       const tasks = await storage.getTasks();
       const now = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
@@ -9086,6 +9189,40 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!incomePayload.ok) return { error: incomePayload.error };
       const created = await storage.createIncome(incomePayload.data);
       return { success: true, income: created, message: `Logged $${input.amount} income from ${input.source}` };
+    }
+
+    case "update_income": {
+      const incomes = await storage.getIncomes();
+      const needle = safeLC(input.description);
+      const match = incomes.find(i => safeLC(i.description).includes(needle));
+      if (!match) return { error: `No income found matching "${input.description}"`, candidates: incomes.slice(0, 5).map(i => i.description) };
+      const allowed = ["description", "amount", "frequency", "category", "date"] as const;
+      const changes: Record<string, any> = {};
+      for (const k of allowed) if (input.changes?.[k] !== undefined) changes[k] = input.changes[k];
+      if (Object.keys(changes).length === 0) return { error: "No valid fields to update — supported: description, amount, frequency, category, date" };
+      if (changes.amount !== undefined) {
+        const amt = typeof changes.amount === "number" ? changes.amount : parseFloat(changes.amount);
+        if (!isFinite(amt) || amt < 0) return { error: `Invalid amount: ${input.changes.amount}` };
+        changes.amount = amt;
+      }
+      const updated = await storage.updateIncome(match.id, changes);
+      return { updated: true, income: updated, message: `Updated income "${match.description}"` };
+    }
+
+    case "delete_income": {
+      const incomes = await storage.getIncomes();
+      const needle = safeLC(input.description);
+      let matches = incomes.filter(i => safeLC(i.description).includes(needle));
+      if (input.amount !== undefined && matches.length > 1) {
+        const amt = Number(input.amount);
+        const byAmount = matches.filter(i => Math.abs(i.amount - amt) < 0.005);
+        if (byAmount.length > 0) matches = byAmount;
+      }
+      if (matches.length === 0) return { error: `No income found matching "${input.description}"`, candidates: incomes.slice(0, 5).map(i => i.description) };
+      if (matches.length > 1) return { error: `Multiple incomes match "${input.description}" — be more specific`, candidates: matches.slice(0, 5).map(i => `${i.description} ($${i.amount})`) };
+      const ok = await storage.deleteIncome(matches[0].id);
+      if (!ok) return { error: `Failed to delete income "${matches[0].description}"` };
+      return { deleted: true, description: matches[0].description, amount: matches[0].amount, id: matches[0].id };
     }
 
     // --- Document management ---
@@ -11765,13 +11902,17 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   delete_expense: "delete_entity",
   refund_expense: "log_expense",
   log_income: "log_income",
+  update_income: "update_entity",
+  delete_income: "delete_entity",
   log_expected_paycheck: "log_paycheck",
   confirm_paycheck_received: "log_paycheck",
+  delete_paycheck: "delete_entity",
   // Budgets
   create_budget: "set_budget",
   set_budget: "set_budget",
   update_budget: "set_budget",
   delete_budget: "set_budget",
+  copy_budgets_previous_month: "set_budget",
   // Liabilities / ownership links
   create_liability: "create_liability",
   update_liability: "update_entity",
@@ -11817,6 +11958,7 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   // Memory
   save_memory: "save_memory",
   delete_memory: "delete_entity",
+  update_memory: "update_entity",
   // Documents
   create_document: "manage_document",
   upload_document: "manage_document",

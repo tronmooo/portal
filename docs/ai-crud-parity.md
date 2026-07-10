@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**112 operations** — ✅ 82 covered · 🆕 0 added · 🔜 19 planned · 🚫 11 excluded by design.
+**112 operations** — ✅ 82 covered · 🆕 5 added · 🔜 14 planned · 🚫 11 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -95,8 +95,8 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Operation | UI surface | AI tool(s) | Status | Notes |
 |---|---|---|---|---|
 | Create | Finance → Income / Cash-flow popup | `log_income` | ✅ covered |  |
-| Edit | Finance income row | `update_income` | 🔜 planned |  |
-| Delete | Finance income row | `delete_income` | 🔜 planned |  |
+| Edit | Finance income row | `update_income` | 🆕 added |  |
+| Delete | Finance income row | `delete_income` | 🆕 added |  |
 
 ### Paycheck
 
@@ -104,7 +104,7 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 |---|---|---|---|---|
 | Log expected | Finance → Paychecks | `log_expected_paycheck` | ✅ covered |  |
 | Confirm received (actual amount) | Paycheck row → Confirm | `confirm_paycheck_received` | ✅ covered |  |
-| Delete | Paycheck row menu | `delete_paycheck` | 🔜 planned |  |
+| Delete | Paycheck row menu | `delete_paycheck` | 🆕 added |  |
 
 ### Budget
 
@@ -114,7 +114,7 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Edit amount | Budget popup row | `update_budget` | ✅ covered |  |
 | Delete | Budget popup row | `delete_budget` | ✅ covered |  |
 | Read summary | Budget popup / hero tile | `get_budget_summary` | ✅ covered |  |
-| Copy previous month | Budget popup → Copy last month | `copy_budgets_previous_month` | 🔜 planned |  |
+| Copy previous month | Budget popup → Copy last month | `copy_budgets_previous_month` | 🆕 added |  |
 
 ### Bill
 
@@ -202,7 +202,7 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 |---|---|---|---|---|
 | Save | (chat-first) Info tab shows saved facts | `save_memory` | ✅ covered |  |
 | Recall | Info tab facts list | `recall_memory` | ✅ covered |  |
-| Edit value | Info tab fact row editor | `update_memory` | 🔜 planned |  |
+| Edit value | Info tab fact row editor | `update_memory` | 🆕 added |  |
 | Delete | Info tab fact row menu | `delete_memory` | ✅ covered |  |
 
 ### Artifact
