@@ -73,6 +73,10 @@ async function waitForDeploy(sha: string): Promise<void> {
   throw new Error(`Deploy ${sha.slice(0, 8)} not live after 6 min — is the branch merged to main?`);
 }
 
+// Cross-step state for the Batch 5 merge flow (steps run in order).
+let mergeSrcId = "";
+let mergeTgtId = "";
+
 const STEPS: Step[] = [
   // ── Batch 1 (MCP-grade) — envelope + verification ──────────────────────────
   {
@@ -82,11 +86,11 @@ const STEPS: Step[] = [
   },
   {
     batch: "1", tool: "envelope (duplicate_count surfaced)",
-    // Two identical EXPENSES (expenses allow duplicates by design — tasks
-    // dedup in their handler, so they never show a duplicate_count). The
-    // second create's envelope should make the model mention the existing
-    // similar entry in its reply, without blocking the save.
-    seed: async () => { await seedPost("/expenses", { description: `${TAG}_dupexp coffee`, amount: 5.5, category: "food" }); },
+    // Same-NAME expense with a DIFFERENT amount: create_expense's 2-minute
+    // dedup only fires on equal amounts, so this second create really lands,
+    // and the envelope's duplicate_count (normalized-name match) is 1 — the
+    // reply must mention the existing similar entry without blocking the save.
+    seed: async () => { await seedPost("/expenses", { description: `${TAG}_dupexp coffee`, amount: 6.75, category: "food" }); },
     message: `Add a $5.50 expense called ${TAG}_dupexp coffee`,
     verify: async () => (await list("/expenses")).filter((e) => (e.description || "").includes(`${TAG}_dupexp`)).length >= 2,
     verifyReply: (reply) => /similar|duplicate|already|second|another/i.test(reply),
@@ -166,6 +170,49 @@ const STEPS: Step[] = [
     message: `Why is ${TAG}_whytask showing on my dashboard today?`,
     verify: async () => true,
     verifyReply: (reply) => /due|today|agenda|overdue|dashboard/i.test(reply),
+  },
+
+  // ── Batch 5 (MCP-grade) — merge_profiles (preview → confirm → undo) ────────
+  {
+    batch: "5", tool: "merge preview (no changes yet)",
+    seed: async () => {
+      const src = await seedPost("/profiles", { name: `${TAG}_mrgsrc`, type: "person" });
+      const tgt = await seedPost("/profiles", { name: `${TAG}_mrgtgt`, type: "person" });
+      mergeSrcId = src.id; mergeTgtId = tgt.id;
+      await seedPost("/tasks", { title: `${TAG}_mrgtask src chore`, linkedProfiles: [src.id] });
+    },
+    message: `Merge the profile ${TAG}_mrgsrc into ${TAG}_mrgtgt`,
+    // Preview turn: BOTH profiles must still exist untouched.
+    verify: async () => {
+      const profiles = await list("/profiles");
+      return profiles.some((p) => p.id === mergeSrcId) && profiles.some((p) => p.id === mergeTgtId);
+    },
+    verifyReply: (reply) => /preview|confirm|re-point|proceed|merge/i.test(reply),
+  },
+  {
+    batch: "5", tool: "merge execute (confirm turn)",
+    message: `Yes, I confirm — go ahead with the pending profile merge of ${TAG}_mrgsrc into ${TAG}_mrgtgt.`,
+    retryMessage: `Execute the pending merge plan now — I already confirmed merging ${TAG}_mrgsrc into ${TAG}_mrgtgt.`,
+    // Source archived (gone from the live list), task re-pointed to the target.
+    verify: async () => {
+      const profiles = await list("/profiles");
+      if (profiles.some((p) => p.id === mergeSrcId)) return false;
+      const tasks = await list("/tasks");
+      const t = tasks.find((x) => (x.title || "").includes(`${TAG}_mrgtask`));
+      return !!t && Array.isArray(t.linkedProfiles) && t.linkedProfiles.includes(mergeTgtId);
+    },
+  },
+  {
+    batch: "5", tool: "merge undo (source restored)",
+    message: `Undo that merge`,
+    retryMessage: `Undo my last action — the ${TAG}_mrgsrc profile merge`,
+    verify: async () => {
+      const profiles = await list("/profiles");
+      if (!profiles.some((p) => p.id === mergeSrcId)) return false;
+      const tasks = await list("/tasks");
+      const t = tasks.find((x) => (x.title || "").includes(`${TAG}_mrgtask`));
+      return !!t && Array.isArray(t.linkedProfiles) && t.linkedProfiles.includes(mergeSrcId);
+    },
   },
 
   // ── Batch A — Finance ──────────────────────────────────────────────────────

@@ -3744,6 +3744,18 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
   {
+    name: "merge_profiles",
+    description: "MERGE one profile into another — 'merge the duplicate Mike profiles', 'combine Mom and Mother into one'. PHASE 1 only: returns a PREVIEW (record counts to re-point, children to move, plan_id) and changes NOTHING. After the user confirms in their NEXT message, call execute_bulk_action({confirm:true}). The source is archived (soft-deleted, undoable); its records, child profiles, and empty-field values move to the target.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        source_name: { type: "string", description: "The profile to merge FROM (will be archived)" },
+        target_name: { type: "string", description: "The profile to merge INTO (kept)" },
+      },
+      required: ["source_name", "target_name"],
+    },
+  },
+  {
     name: "find_orphans",
     description: "Scan the user's data for orphaned / inconsistent ownership records — 'check my data for orphaned records', 'is my data healthy?', 'find broken links'. Read-only: reports issues, fixes nothing.",
     input_schema: { type: "object" as const, properties: {}, required: [] },
@@ -4549,6 +4561,7 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - Destructive BULK operations always take two turns: preview_bulk_action first (relay its counts + sample names verbatim), then execute_bulk_action({plan_id, confirm:true}) ONLY after the user explicitly confirms in their NEXT message. Never loop single delete_* calls for a "delete all …" request, and never call execute_bulk_action in the same turn as the preview.
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
 - HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
+- MERGE PROFILES: "merge X into Y" / "combine the duplicate profiles" → merge_profiles(source_name, target_name) shows a preview; after the user confirms in their NEXT message, execute_bulk_action({confirm:true}). Same two-turn rule as bulk deletes — never merge in one turn.
 - DATA HEALTH: "is my data healthy" / "check for orphans" → find_orphans; "fix/repair them" (after seeing issues) → repair_relations(confirm:true); "duplicate expenses?" → find_duplicates; "are my dashboard numbers right" → validate_dashboard_counts; "refresh my dashboard" / "counts look stale" → refresh_dashboard; "why is X on my dashboard / in today's agenda" → explain_dashboard_item(name). Relay these tools' message fields — never invent health results.
 
 TOOL CHOICE RULES — CRITICAL:
@@ -9586,6 +9599,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return executeBulkPlan(storage, input.plan_id ? String(input.plan_id) : undefined);
     }
 
+    case "merge_profiles": {
+      const { planMergeProfiles } = await import("./merge-profiles");
+      return planMergeProfiles(storage, String(input.source_name || ""), String(input.target_name || ""));
+    }
+
     case "find_orphans": {
       const { findOrphans } = await import("./ai-system-tools");
       return findOrphans(storage);
@@ -12308,6 +12326,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           if (result && !result.error && !READ_ONLY_TOOLS.has(toolUse.name)
               && toolUse.name !== "undo_last_action"
               && toolUse.name !== "preview_bulk_action"
+              && toolUse.name !== "merge_profiles"
               && toolUse.name !== "execute_bulk_action") {
             await recordActionLog(turnVerifyCtx, toolUse.name, actionType, inputWithCtx, result, beforeRows);
           }
@@ -12771,6 +12790,7 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   preview_bulk_action: "update_entity",
   execute_bulk_action: "delete_entity",
   repair_relations: "update_entity",
+  merge_profiles: "update_profile",
   create_reminder: "create_reminder",
   update_reminder: "update_entity",
   delete_reminder: "delete_entity",

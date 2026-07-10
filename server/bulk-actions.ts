@@ -152,6 +152,16 @@ export async function executeBulkPlan(storage: IStorage, planId?: string): Promi
   }
   planId = plan.id;
 
+  // Non-delete operations dispatch to their own executor (same plan table,
+  // same drift discipline).
+  if (plan.operation === "merge_profiles") {
+    const { executeMergeProfiles } = await import("./merge-profiles");
+    return executeMergeProfiles(storage, plan as any);
+  }
+  if (plan.operation !== "delete") {
+    return { error: `Unknown bulk operation "${plan.operation}".` };
+  }
+
   const criteria: BulkCriteria = plan.criteria;
   const { idsByType, profileId, error } = await deriveBulkSet(storage, criteria);
   if (error) return { error };

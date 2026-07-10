@@ -327,6 +327,11 @@ export async function executeReversePlan(
       }
       return { ok: restored > 0, description: `Restored ${restored} record${restored === 1 ? "" : "s"}${failed ? ` (${failed} could not be restored)` : ""}.` };
     }
+    case "unmerge": {
+      const { reverseMerge } = await import("./merge-profiles");
+      const res = await reverseMerge(storage, plan);
+      return { ok: res.ok, description: res.ok ? `Unmerged: ${res.description}.` : res.description };
+    }
     default:
       return { ok: false, description: `Unknown reverse plan "${plan.op}".` };
   }

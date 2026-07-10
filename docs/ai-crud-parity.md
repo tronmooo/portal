@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**120 operations** — ✅ 82 covered · 🆕 27 added · 🔜 0 planned · 🚫 11 excluded by design.
+**121 operations** — ✅ 82 covered · 🆕 28 added · 🔜 0 planned · 🚫 11 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -249,6 +249,7 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 
 | Operation | UI surface | AI tool(s) | Status | Notes |
 |---|---|---|---|---|
+| Merge duplicate profiles (preview → confirm) | (chat-first) profile cleanup | `merge_profiles`, `execute_bulk_action` | 🆕 added |  |
 | Orphan scan + repair | Settings → data health | `find_orphans`, `repair_relations` | 🆕 added |  |
 | Profile-isolation validation | (chat-first) data health | `validate_profile_isolation` | 🆕 added |  |
 | Duplicate detection | (chat-first) data health | `find_duplicates` | 🆕 added |  |
