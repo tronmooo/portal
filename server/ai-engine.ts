@@ -3495,6 +3495,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         changes: { type: "object", description: "Fields to update — can include 'title', 'description', 'priority', 'dueDate', 'status'. Avoid changes.tags (it REPLACES the whole array) — use addTags/removeTags instead." },
         addTags: { type: "array", items: { type: "string" }, description: "Tags to ADD (merged with existing, deduped). Use the tag grammar from the tool description." },
         removeTags: { type: "array", items: { type: "string" }, description: "Tags to REMOVE. An entry ending in ':' removes every tag with that prefix (e.g. 'recur:' clears recurrence; 'st:' clears all subtasks)." },
+        forProfile: { type: "string", description: "MOVE the task to this profile (person/pet name) — replaces the current owner. Use for 'that task is actually Mike's' / 'move it to Luna's list'." },
       },
       required: ["title"],
     },
@@ -3507,8 +3508,9 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       properties: {
         description: { type: "string", description: "Description of the expense to find (partial match)" },
         changes: { type: "object", description: "Fields to update — can include 'amount', 'category', 'description', 'vendor', 'date'" },
+        forProfile: { type: "string", description: "MOVE the expense to this profile (person/pet/asset name) — replaces the current owner. Use for 'move the gym expense to Luna' / 'that charge is actually Mike's'." },
       },
-      required: ["description", "changes"],
+      required: ["description"],
     },
   },
   {
@@ -4669,7 +4671,7 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
 - HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
 - MERGE PROFILES: "merge X into Y" / "combine the duplicate profiles" → merge_profiles(source_name, target_name) shows a preview; after the user confirms in their NEXT message, execute_bulk_action({confirm:true}). Same two-turn rule as bulk deletes — never merge in one turn.
-- MOVE BETWEEN PROFILES: "move the gym expense to Luna" / "that task is actually Mike's" → the entity's update_* tool with forProfile/owner set to the target (ownership re-points through the single writer). Do NOT delete + recreate, and do NOT use merge_profiles for a single record.
+- MOVE BETWEEN PROFILES: "move the gym expense to Luna" / "that task is actually Mike's" → update_expense/update_task with forProfile:"<target>" (this REPLACES the owner — do not put profile names inside changes). Do NOT delete + recreate, and do NOT use merge_profiles for a single record.
 - DASHBOARD LAYOUT: "hide the X section" / "show Finance on my dashboard" / "move Goals to the top" / "reset my dashboard" → configure_dashboard_sections. This controls SECTIONS of the dashboard, not data. Undoable.
 - DATA HEALTH: "is my data healthy" / "check for orphans" → find_orphans; "fix/repair them" (after seeing issues) → repair_relations(confirm:true); "duplicate expenses?" → find_duplicates; "are my dashboard numbers right" → validate_dashboard_counts; "refresh my dashboard" / "counts look stale" → refresh_dashboard; "why is X on my dashboard / in today's agenda" → explain_dashboard_item(name). Relay these tools' message fields — never invent health results.
 
@@ -9266,17 +9268,44 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
         changes.tags = tags;
       }
+      // forProfile = MOVE: replace the owner set (tasks are target-only —
+      // matches the create-path rule that explicit forProfile does NOT
+      // auto-link self for non-expense entities).
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        const fpLC = safeLC(String(input.forProfile)).trim();
+        const target = profiles.find(p => p.name.toLowerCase() === fpLC)
+          || profiles.find(p => p.name.toLowerCase().includes(fpLC));
+        if (!target) return { error: `I couldn't find a profile named "${input.forProfile}". Which person/pet did you mean?` };
+        changes.linkedProfiles = [target.id];
+      }
       if (Object.keys(changes).length === 0) return { error: "No changes provided" };
       const updated = await storage.updateTask(match.id, changes);
-      return { updated: true, task: updated };
+      return { updated: true, task: updated, ...(input.forProfile ? { moved_to: input.forProfile } : {}) };
     }
 
     case "update_expense": {
       const expenses = await storage.getExpenses();
       const match = expenses.find(e => e.description.toLowerCase().includes(safeLC(input.description)));
       if (!match) return { error: `No expense found matching "${input.description}"` };
-      const updated = await storage.updateExpense(match.id, input.changes);
-      return { updated: true, expense: updated };
+      const changes: any = { ...(input.changes || {}) };
+      // forProfile = MOVE: replace the owner set. Expenses keep the app-wide
+      // convention of also linking self so they stay visible in the main
+      // Finance view (mirrors the create_expense path).
+      if (input.forProfile) {
+        const profiles = await storage.getProfiles();
+        const fpLC = safeLC(String(input.forProfile)).trim();
+        const target = profiles.find(p => p.name.toLowerCase() === fpLC)
+          || profiles.find(p => p.name.toLowerCase().includes(fpLC));
+        if (!target) return { error: `I couldn't find a profile named "${input.forProfile}". Which person/pet did you mean?` };
+        const selfProfile = profiles.find(p => p.type === "self");
+        changes.linkedProfiles = (selfProfile && target.id !== selfProfile.id)
+          ? [target.id, selfProfile.id]
+          : [target.id];
+      }
+      if (Object.keys(changes).length === 0) return { error: "No changes given for the expense update." };
+      const updated = await storage.updateExpense(match.id, changes);
+      return { updated: true, expense: updated, ...(input.forProfile ? { moved_to: input.forProfile } : {}) };
     }
 
     case "update_obligation": {
