@@ -325,6 +325,29 @@ const STEPS: Step[] = [
     verifyReply: (reply) => /dose|taken|skipped|missed|expected|adherence/i.test(reply),
   },
 
+  // ── Batch 9 (MCP-grade) — routing hints ────────────────────────────────────
+  {
+    batch: "9", tool: "projects ⇒ goals routing",
+    message: `Create a project called ${TAG}_proj kitchen remodel`,
+    verify: async () => (await list("/goals")).some((g) => (g.title || g.name || "").includes(`${TAG}_proj`)),
+  },
+  {
+    batch: "9", tool: "move expense between profiles",
+    seed: async () => {
+      await seedPost("/profiles", { name: `${TAG}_luna`, type: "person" });
+      await seedPost("/expenses", { description: `${TAG}_movexp gym fee`, amount: 30, category: "fitness" });
+    },
+    message: `Move the ${TAG}_movexp expense to ${TAG}_luna's profile`,
+    retryMessage: `Update the ${TAG}_movexp expense — its owner should be ${TAG}_luna`,
+    verify: async () => {
+      const profiles = await list("/profiles");
+      const luna = profiles.find((p) => (p.name || "").includes(`${TAG}_luna`));
+      if (!luna) return false;
+      const exp = (await list("/expenses")).find((e) => (e.description || "").includes(`${TAG}_movexp`));
+      return !!exp && Array.isArray(exp.linkedProfiles) && exp.linkedProfiles.includes(luna.id);
+    },
+  },
+
   // ── Batch A — Finance ──────────────────────────────────────────────────────
   {
     batch: "A", tool: "update_income",
