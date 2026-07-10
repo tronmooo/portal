@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**123 operations** — ✅ 82 covered · 🆕 31 added · 🔜 0 planned · 🚫 10 excluded by design.
+**125 operations** — ✅ 82 covered · 🆕 33 added · 🔜 0 planned · 🚫 10 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -257,6 +257,13 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Duplicate detection | (chat-first) data health | `find_duplicates` | 🆕 added |  |
 | Dashboard refresh + count validation | Dashboard reload | `refresh_dashboard`, `validate_dashboard_counts` | 🆕 added |  |
 | Explain dashboard placement | (chat-first) section rules | `explain_dashboard_item` | 🆕 added |  |
+
+### Medication
+
+| Operation | UI surface | AI tool(s) | Status | Notes |
+|---|---|---|---|---|
+| Log / skip doses | Health → medication tracker entries | `log_medication_dose`, `skip_medication_dose` | 🆕 added |  |
+| Adherence / dose history | Health → medication tracker | `get_missed_doses`, `get_dose_history` | 🆕 added |  |
 
 ### Settings
 

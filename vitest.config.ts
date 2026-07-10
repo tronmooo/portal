@@ -78,6 +78,7 @@ export default defineConfig({
       'tests/merge-profiles.test.ts',
       'tests/dashboard-layout-guard.test.ts',
       'tests/notifications-v2.test.ts',
+      'tests/medication-doses.test.ts',
       'tests/ai-button-parity.test.ts',
       'tests/dashboard-buttons.test.ts',
       'tests/design-kit.test.tsx',

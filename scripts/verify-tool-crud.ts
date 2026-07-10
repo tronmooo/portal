@@ -289,6 +289,42 @@ const STEPS: Step[] = [
     },
   },
 
+  // ── Batch 8 (MCP-grade) — medication dose ledger ───────────────────────────
+  {
+    batch: "8", tool: "log_medication_dose",
+    seed: async () => {
+      await seedPost("/trackers", {
+        name: `${TAG}_med Lisinopril (twice daily)`, category: "medication",
+        fields: [
+          { name: "drugName", type: "text" }, { name: "dosage", type: "text" },
+          { name: "timeTaken", type: "text" }, { name: "adherence", type: "select", options: ["taken", "skipped", "missed"] },
+          { name: "sideEffects", type: "text" }, { name: "notes", type: "text" },
+        ],
+      });
+    },
+    message: `I took my ${TAG}_med Lisinopril this morning`,
+    verify: async () => {
+      const trackers = await list("/trackers");
+      const t = trackers.find((x) => (x.name || "").includes(`${TAG}_med`));
+      return !!t && (t.entries || []).some((e: any) => String(e?.values?.adherence).toLowerCase() === "taken");
+    },
+  },
+  {
+    batch: "8", tool: "skip_medication_dose",
+    message: `I skipped tonight's ${TAG}_med Lisinopril dose, felt nauseous`,
+    verify: async () => {
+      const trackers = await list("/trackers");
+      const t = trackers.find((x) => (x.name || "").includes(`${TAG}_med`));
+      return !!t && (t.entries || []).some((e: any) => String(e?.values?.adherence).toLowerCase() === "skipped");
+    },
+  },
+  {
+    batch: "8", tool: "get_missed_doses",
+    message: `What ${TAG}_med doses did I miss this week?`,
+    verify: async () => true,
+    verifyReply: (reply) => /dose|taken|skipped|missed|expected|adherence/i.test(reply),
+  },
+
   // ── Batch A — Finance ──────────────────────────────────────────────────────
   {
     batch: "A", tool: "update_income",

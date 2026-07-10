@@ -2636,6 +2636,59 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "log_medication_dose",
+    description: "Log a TAKEN medication dose — 'I took my Lisinopril', 'gave Max his Heartgard this morning', 'took my meds'. Resolves the medication tracker and logs an adherence:taken entry. If the user has multiple medications and didn't name one, the tool asks which. NOT for creating the medication — use create_tracker for that.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        medication: { type: "string", description: "Medication/tracker name (omit ONLY when the user didn't name it)" },
+        time_taken: { type: "string", description: "When it was taken, as said ('this morning', '8am', 'with dinner')" },
+        dosage: { type: "string", description: "Dose if mentioned ('10mg', '2 tablets')" },
+        forProfile: { type: "string", description: "Whose medication (person/pet name) when stated" },
+        notes: { type: "string", description: "Anything else the user mentioned" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "skip_medication_dose",
+    description: "Log a SKIPPED or MISSED medication dose — 'I skipped tonight's dose', 'forgot my Metformin yesterday', 'didn't give Max his pill, he was sick'. Records adherence:skipped (deliberate) or adherence:missed (forgot) with the reason.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        medication: { type: "string", description: "Medication/tracker name (omit ONLY when the user didn't name it)" },
+        reason: { type: "string", description: "Why it was skipped/missed ('felt nauseous', 'forgot')" },
+        missed: { type: "boolean", description: "true when the user FORGOT (missed) rather than deliberately skipped" },
+        forProfile: { type: "string", description: "Whose medication when stated" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_missed_doses",
+    description: "Report missed/skipped medication doses over a window — 'what doses did I miss this week?', 'how's my Metformin adherence?', 'did Max get all his pills?'. Compares expected doses (from the medication's frequency) against logged entries; unlogged gaps are reported separately from explicit misses.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        medication: { type: "string", description: "Medication name (omit to use the only medication, or get asked which)" },
+        days: { type: "number", description: "Window in days (default 7, max 90)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_dose_history",
+    description: "Show the dose-by-dose medication log — 'show my Lisinopril history', 'when did I last take my meds?'. Read-only list of taken/skipped/missed entries with times and side effects.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        medication: { type: "string", description: "Medication name (omit to use the only medication)" },
+        days: { type: "number", description: "Window in days (default 14, max 90)" },
+      },
+      required: [],
+    },
+  },
+  {
     name: "complete_task",
     description: "Mark a task as DONE/COMPLETE. Use this when user says 'I completed X', 'mark X as done', 'finished X task', 'checked off X', 'did X', 'I did the X task'. Find by title. NEVER use create_task when the user is referring to completing an EXISTING task. If task is not found, say so — do NOT create a new one.",
     input_schema: {
@@ -4619,7 +4672,8 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 
 TOOL CHOICE RULES — CRITICAL:
 DATA CLASSIFICATION RULES (NEVER VIOLATE):
-- MEDICATION: When a user mentions medication ("take Heartgard", "give Max his meds", "prescribed lisinopril"), update the PROFILE with medication info in their health fields (update_profile with fields: { medications: "..." }). Do NOT create a "Medication" tracker. Medications are profile data, not time-series tracker data.
+- MEDICATION: When a user mentions a NEW/prescribed medication ("prescribed lisinopril", "Max is on Heartgard now"), update the PROFILE with medication info in their health fields (update_profile with fields: { medications: "..." }). Do NOT create a "Medication" tracker unless the user asks to track doses over time.
+- MEDICATION DOSES: "I took my Lisinopril" / "gave Max his pill" → log_medication_dose. "I skipped/forgot tonight's dose" → skip_medication_dose (missed:true when forgotten). "what doses did I miss this week" / "how's my adherence" → get_missed_doses. "show my dose history" / "when did I last take it" → get_dose_history. These need a medication TRACKER; if none exists, say so and offer to create one. If the user has several medications and didn't name one, the tool will ask — relay its question.
 - WATER INTAKE / HYDRATION: If a user says "drank 8 glasses of water" or "8oz water", log to the existing Hydration/Water tracker if one exists. If none exists, create a habit ("Drink water") rather than a tracker — daily water goals are habits, not measurements.
 - HABITS vs TRACKERS: Habits are binary daily actions (did it / didn't). Trackers are numeric measurements over time. "Take medication" = habit. "Blood pressure 120/80" = tracker. "Drank 8 glasses" = habit check-in. "Weight 180 lbs" = tracker.
 - LOANS/BILLS: When a user mentions rent, bills, or debts, use create_obligation. Do NOT create a "loan" profile for recurring bills. Loans are only for actual loan instruments (mortgage, car loan, student loan) with APR, term, and principal.
@@ -6304,6 +6358,55 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           ? "Notification preferences cleared — everything shows again."
           : `Muted: ${mutedBits.join(", ")}. These no longer appear in the bell (undoable).`,
       };
+    }
+
+    case "log_medication_dose":
+    case "skip_medication_dose": {
+      const { resolveMedicationTracker } = await import("./medication-doses");
+      const trackers = await storage.getTrackers();
+      const { tracker, error: medErr } = resolveMedicationTracker(trackers as any, input.medication ? String(input.medication) : undefined);
+      if (!tracker) return { error: medErr };
+      const taking = name === "log_medication_dose";
+      const adherence = taking ? "taken" : (input.missed === true ? "missed" : "skipped");
+      // Delegate to log_tracker_entry — same dedup/profile/audit path as every
+      // other tracker write, just with the adherence fields pre-filled.
+      const result = await executeTool("log_tracker_entry", {
+        trackerName: tracker.name,
+        values: {
+          drugName: tracker.name,
+          adherence,
+          ...(input.dosage ? { dosage: String(input.dosage) } : {}),
+          ...(input.time_taken ? { timeTaken: String(input.time_taken) } : {}),
+          ...(input.reason ? { sideEffects: String(input.reason) } : {}),
+          ...(input.notes ? { notes: String(input.notes) } : {}),
+        },
+        ...(input.forProfile ? { forProfile: input.forProfile } : {}),
+        __userMessage: (input as any).__userMessage,
+      }, userId);
+      if (result?.error) return result;
+      return {
+        ...result,
+        adherence,
+        message: taking
+          ? `Logged a taken dose of ${tracker.name}${input.time_taken ? ` (${input.time_taken})` : ""}.`
+          : `Logged a ${adherence} dose of ${tracker.name}${input.reason ? ` — ${input.reason}` : ""}.`,
+      };
+    }
+
+    case "get_missed_doses": {
+      const { resolveMedicationTracker, computeMissedDoses } = await import("./medication-doses");
+      const trackers = await storage.getTrackers();
+      const { tracker, error: medErr } = resolveMedicationTracker(trackers as any, input.medication ? String(input.medication) : undefined);
+      if (!tracker) return { error: medErr };
+      return computeMissedDoses(tracker as any, { days: input.days });
+    }
+
+    case "get_dose_history": {
+      const { resolveMedicationTracker, doseHistory } = await import("./medication-doses");
+      const trackers = await storage.getTrackers();
+      const { tracker, error: medErr } = resolveMedicationTracker(trackers as any, input.medication ? String(input.medication) : undefined);
+      if (!tracker) return { error: medErr };
+      return doseHistory(tracker as any, { days: input.days });
     }
 
     case "create_task": {
@@ -12934,6 +13037,7 @@ export const READ_ONLY_TOOLS = new Set<string>([
   // deliberately here too: no envelope, no undo-ledger row to trip "undo that".
   "find_orphans", "validate_profile_isolation", "find_duplicates",
   "validate_dashboard_counts", "explain_dashboard_item", "refresh_dashboard",
+  "get_missed_doses", "get_dose_history",
 ]);
 
 // Every WRITE tool → a typed ParsedAction so the chat UI shows it as a real
@@ -12964,6 +13068,8 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   create_notification: "update_entity",
   mark_notifications_read: "update_entity",
   set_notification_preferences: "update_entity",
+  log_medication_dose: "log_entry",
+  skip_medication_dose: "log_entry",
   create_reminder: "create_reminder",
   update_reminder: "update_entity",
   delete_reminder: "delete_entity",
