@@ -17,7 +17,7 @@ import {
 } from "@shared/recurrence";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
-import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
+import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { computeNetWorth } from "@shared/net-worth";
 import { computeNowItems, type NowItem } from "@shared/now-rank";
 import {
@@ -5273,6 +5273,10 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!allProfiles || allProfiles.length === 0) return;
     initDefaultProfileFilter(allProfiles);
+    // Heal a persisted scope whose profile ids were hard-deleted/recreated —
+    // otherwise every widget queries a dead id and renders 0 while the
+    // switcher still shows the remembered name.
+    reconcileProfileFilter(allProfiles);
   }, [allProfiles]);
 
   // Compute stats profile param for API calls.

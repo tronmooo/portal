@@ -578,6 +578,7 @@ export class SupabaseStorage implements IStorage {
       id: r.id, title: r.title, description: r.description || undefined,
       status: r.status, priority: r.priority, dueDate: r.due_date || undefined,
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [], createdAt: r.created_at,
+      updatedAt: r.updated_at || r.created_at,
     };
   }
 
@@ -5081,12 +5082,19 @@ export class SupabaseStorage implements IStorage {
           })(),
           timestamp: e.timestamp,
         }))),
-        ...tasks.filter(t => t.status === 'done').slice(-3).map(t => ({
-          type: 'task_completed',
-          description: `Completed: ${t.title}`,
-          timestamp: t.createdAt,
-        })),
-        ...expenses.slice(-3).map(e => ({
+        // Newest completions first, stamped with COMPLETION time (updatedAt).
+        // getTasks() returns created_at DESC, so slice(-3) grabbed the three
+        // OLDEST done tasks timestamped at creation — a task completed just now
+        // never surfaced in Recent Activity.
+        ...tasks.filter(t => t.status === 'done')
+          .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())
+          .slice(0, 3).map(t => ({
+            type: 'task_completed',
+            description: `Completed: ${t.title}`,
+            timestamp: t.updatedAt || t.createdAt,
+          })),
+        // Expenses are ordered date DESC — take the head, not the tail.
+        ...expenses.slice(0, 3).map(e => ({
           type: 'expense',
           description: `$${e.amount} — ${e.description}`,
           timestamp: e.date || e.createdAt,

@@ -1136,7 +1136,7 @@ export class MemStorage implements IStorage {
   async updateTask(id: string, data: Partial<Task>) {
     const t = this.tasks.get(id);
     if (!t) return undefined;
-    const updated = { ...t, ...data };
+    const updated = { ...t, ...data, updatedAt: new Date().toISOString() };
     this.tasks.set(id, updated);
     if (data.status === "done") this.logActivity("task", `Completed: ${t.title}`);
     return updated;
@@ -1768,11 +1768,15 @@ export class MemStorage implements IStorage {
           })(),
           timestamp: e.timestamp,
         }))),
-        ...tasks.filter(t => t.status === 'done').slice(-3).map(t => ({
-          type: 'task_completed',
-          description: `Completed: ${t.title}`,
-          timestamp: t.createdAt,
-        })),
+        // Newest completions first, stamped with COMPLETION time (updatedAt) —
+        // mirrors the SupabaseStorage fix so dev-mode matches production.
+        ...tasks.filter(t => t.status === 'done')
+          .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())
+          .slice(0, 3).map(t => ({
+            type: 'task_completed',
+            description: `Completed: ${t.title}`,
+            timestamp: t.updatedAt || t.createdAt,
+          })),
         ...expenses.slice(-3).map(e => ({
           type: 'expense',
           description: `$${e.amount} — ${e.description}`,

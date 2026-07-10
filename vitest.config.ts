@@ -34,6 +34,7 @@ export default defineConfig({
       'tests/liability-schedule.test.ts',
       'tests/cost-of-ownership.test.ts',
       'tests/profile-scope.test.ts',
+      'tests/profile-filter-reconcile.test.ts',
       'tests/useProfileScope.dom.test.tsx',
       'tests/finance-import.test.ts',
       'tests/profile-dedup.test.ts',

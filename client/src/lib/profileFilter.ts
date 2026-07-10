@@ -220,6 +220,65 @@ export function initDefaultProfileFilter(profiles: Array<{ id: string; name?: st
   setFilterSelected([self.id], [self.name || "Me"]);
 }
 
+/**
+ * Self-heal a persisted selection whose profile IDs no longer exist.
+ *
+ * The selection (ids + display names) persists in localStorage, but profiles
+ * can be hard-deleted and recreated (QA cleanup, re-imports). When that
+ * happens the stored id matches nothing: every module queries
+ * `?profileIds=<dead-id>` and correctly returns empty, while the switcher
+ * still shows the remembered name — the dashboard reads "Mike" yet every
+ * tile is 0 even though Mike's data exists under a new id.
+ *
+ * Given a SUCCESSFULLY loaded, non-empty profile list (callers must not pass
+ * transient/errored results — an empty list is ignored here as a guard):
+ *   1. keep ids that still resolve,
+ *   2. re-map dead ids to a live profile with the same stored name
+ *      (people/pets/self preferred),
+ *   3. drop ids that can't be re-mapped,
+ *   4. if nothing survives, fall back to the Self profile (or Everyone).
+ * No-op when every id already resolves, so it's safe to call on every load.
+ */
+export function reconcileProfileFilter(
+  profiles: Array<{ id: string; name?: string; type?: string }> | null | undefined
+): void {
+  if (!profiles || profiles.length === 0) return;
+  if (_state.mode !== "selected" || _state.selectedIds.length === 0) return;
+  const live = (id: string) => profiles.some(p => p.id === id);
+  if (_state.selectedIds.every(live)) return;
+
+  const ids: string[] = [];
+  const names: string[] = [];
+  _state.selectedIds.forEach((id, i) => {
+    const match = profiles.find(p => p.id === id);
+    if (match) {
+      ids.push(id);
+      names.push(match.name || _state.selectedNames[i] || "");
+      return;
+    }
+    const wanted = (_state.selectedNames[i] || "").trim().toLowerCase();
+    if (!wanted) return; // dead id with no name to re-map by — drop
+    const primary = ["self", "person", "pet"];
+    const byName =
+      profiles.find(p => primary.includes(p.type || "") && (p.name || "").trim().toLowerCase() === wanted && !ids.includes(p.id)) ||
+      profiles.find(p => (p.name || "").trim().toLowerCase() === wanted && !ids.includes(p.id));
+    if (byName) {
+      ids.push(byName.id);
+      names.push(byName.name || _state.selectedNames[i] || "");
+    }
+  });
+
+  if (ids.length > 0) {
+    _state = { mode: "selected", selectedIds: ids, selectedNames: names };
+  } else {
+    const self = profiles.find(p => p?.type === "self");
+    _state = self
+      ? { mode: "selected", selectedIds: [self.id], selectedNames: [self.name || "Me"] }
+      : { mode: "everyone", selectedIds: [], selectedNames: [] };
+  }
+  saveToStorage();
+}
+
 /** Set filter to "everyone" (no filtering) */
 export function setFilterEveryone() {
   _state = { mode: "everyone", selectedIds: [], selectedNames: [] };

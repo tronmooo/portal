@@ -711,6 +711,8 @@ export interface Task {
   linkedProfiles: string[];
   tags: string[];
   createdAt: string;
+  /** Last write time — for a done task this is when it was completed. */
+  updatedAt?: string;
 }
 
 export const insertTaskSchema = z.object({

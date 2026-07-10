@@ -625,10 +625,13 @@ export async function registerRoutes(
     next();
   });
 
-  // Version endpoint — frontend polls this to detect new deploys
+  // Version endpoint — frontend polls this to detect new deploys.
+  // `sha` identifies the deployed commit (Vercel injects VERCEL_GIT_COMMIT_SHA)
+  // so tooling can poll for a specific push to go live; `version` is only the
+  // instance boot time and changes on every cold start.
   const BUILD_VERSION = Date.now().toString(36);
   app.get("/api/version", (req, res) => {
-    res.json({ version: BUILD_VERSION });
+    res.json({ version: BUILD_VERSION, sha: process.env.VERCEL_GIT_COMMIT_SHA || null });
   });
 
   // Client-side error beacon. Fired by ErrorBoundary when React catches a
