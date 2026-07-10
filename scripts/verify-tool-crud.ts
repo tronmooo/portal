@@ -335,7 +335,7 @@ const STEPS: Step[] = [
     batch: "9", tool: "move expense between profiles",
     seed: async () => {
       await seedPost("/profiles", { name: `${TAG}_luna`, type: "person" });
-      await seedPost("/expenses", { description: `${TAG}_movexp gym fee`, amount: 30, category: "fitness" });
+      await seedPost("/expenses", { description: `${TAG}_movexp gym fee`, amount: 30, category: "health" });
     },
     message: `Move the ${TAG}_movexp expense to ${TAG}_luna's profile`,
     retryMessage: `Update the ${TAG}_movexp expense — its owner should be ${TAG}_luna`,
