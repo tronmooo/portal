@@ -82,11 +82,37 @@ const STEPS: Step[] = [
   },
   {
     batch: "1", tool: "envelope (duplicate_count surfaced)",
-    // Same title again — the envelope's duplicate_count should make the model
-    // mention the existing similar task in its reply (without blocking).
-    message: `Add a task called ${TAG}_env smoke test due tomorrow`,
-    verify: async () => (await list("/tasks")).filter((t) => (t.title || "").includes(`${TAG}_env`)).length >= 1,
-    verifyReply: (reply) => /similar|duplicate|already have|existing/i.test(reply),
+    // Two identical EXPENSES (expenses allow duplicates by design — tasks
+    // dedup in their handler, so they never show a duplicate_count). The
+    // second create's envelope should make the model mention the existing
+    // similar entry in its reply, without blocking the save.
+    seed: async () => { await seedPost("/expenses", { description: `${TAG}_dupexp coffee`, amount: 5.5, category: "food" }); },
+    message: `Add a $5.50 expense called ${TAG}_dupexp coffee`,
+    verify: async () => (await list("/expenses")).filter((e) => (e.description || "").includes(`${TAG}_dupexp`)).length >= 2,
+    verifyReply: (reply) => /similar|duplicate|already|second|another/i.test(reply),
+  },
+
+  // ── Batch 2 (MCP-grade) — action ledger + undo ─────────────────────────────
+  {
+    batch: "2", tool: "undo_last_action (create→delete)",
+    message: `Log a $12 expense called ${TAG}_undoexp coffee`,
+    verify: async () => (await list("/expenses")).some((e) => (e.description || "").includes(`${TAG}_undoexp`)),
+  },
+  {
+    batch: "2", tool: "undo_last_action (executes)",
+    message: `Undo that last expense`,
+    retryMessage: `Undo my last action — the ${TAG}_undoexp expense`,
+    verify: async () => !(await list("/expenses")).some((e) => (e.description || "").includes(`${TAG}_undoexp`)),
+  },
+  {
+    batch: "2", tool: "get_entity_history",
+    seed: async () => { await seedPost("/tasks", { title: `${TAG}_histtask review docs` }); },
+    message: `What's the change history of the task ${TAG}_histtask review docs?`,
+    // History for a REST-seeded task may be empty (ledger records chat actions;
+    // audit_log records creates) — the check is that the tool answers with a
+    // history/no-changes response rather than an error or a guess.
+    verify: async () => true,
+    verifyReply: (reply) => /history|change|created|no recorded/i.test(reply),
   },
 
   // ── Batch A — Finance ──────────────────────────────────────────────────────

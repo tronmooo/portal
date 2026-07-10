@@ -61,6 +61,7 @@ import {
   type LiabilityPayment, type InsertLiabilityPayment,
   type AssetPartyLink, type InsertAssetPartyLink,
   type OwnershipHistoryEntry,
+  type AiActionLog, type InsertAiActionLog,
   MOOD_SCORES,
 } from "@shared/schema";
 import { type IStorage, type Reminder, computeSecondaryData } from "./storage";
@@ -482,6 +483,76 @@ export class SupabaseStorage implements IStorage {
       entity_name: description,
       source,
     })).catch(() => {}); // non-critical, never block
+  }
+
+  // ============================================================
+  // AI ACTION LEDGER (undo + audit for chat mutations)
+  // ============================================================
+  private rowToAiActionLog(r: any): AiActionLog {
+    return {
+      id: r.id, tool: r.tool, actionType: r.action_type,
+      entityType: r.entity_type, entityId: r.entity_id, entityName: r.entity_name,
+      input: r.input, before: r.before, after: r.after,
+      reversible: !!r.reversible, reversePlan: r.reverse_plan,
+      source: r.source, createdAt: r.created_at,
+      undoneAt: r.undone_at, undoneByLogId: r.undone_by_log_id,
+    };
+  }
+
+  async createAiActionLog(entry: InsertAiActionLog): Promise<AiActionLog | undefined> {
+    const { data, error } = await this.supabase.from("ai_action_log").insert({
+      user_id: this.userId,
+      tool: entry.tool,
+      action_type: entry.actionType,
+      entity_type: entry.entityType ?? null,
+      entity_id: entry.entityId ?? null,
+      entity_name: entry.entityName ?? null,
+      input: entry.input ?? null,
+      before: entry.before ?? null,
+      after: entry.after ?? null,
+      reversible: entry.reversible ?? false,
+      reverse_plan: entry.reversePlan ?? null,
+      source: entry.source || "chat",
+    }).select().single();
+    if (error) throw error;
+    return data ? this.rowToAiActionLog(data) : undefined;
+  }
+
+  async listAiActionLog(opts: { limit?: number; entityType?: string; entityId?: string; includeUndone?: boolean } = {}): Promise<AiActionLog[]> {
+    let q = this.supabase.from("ai_action_log").select("*")
+      .eq("user_id", this.userId);
+    if (opts.entityType) q = q.eq("entity_type", opts.entityType);
+    if (opts.entityId) q = q.eq("entity_id", opts.entityId);
+    if (!opts.includeUndone) q = q.is("undone_at", null);
+    const { data, error } = await q.order("created_at", { ascending: false })
+      .limit(Math.min(Math.max(opts.limit || 20, 1), 100));
+    if (error) throw error;
+    return (data || []).map(r => this.rowToAiActionLog(r));
+  }
+
+  async markActionUndone(id: string, undoneByLogId?: string): Promise<void> {
+    const { error } = await this.supabase.from("ai_action_log")
+      .update({ undone_at: new Date().toISOString(), undone_by_log_id: undoneByLogId ?? null })
+      .eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+  }
+
+  /** Generic soft-delete restore (deleted_at = null) for entities without a
+   *  dedicated restore method. Only tables that soft-delete are mapped. */
+  async restoreEntity(entityType: string, id: string): Promise<boolean> {
+    const TABLES: Record<string, string> = {
+      task: "tasks", habit: "habits", expense: "expenses", income: "incomes",
+      event: "events", document: "documents", reminder: "reminders",
+      profile: "profiles", obligation: "profiles",
+    };
+    const table = TABLES[entityType];
+    if (!table) return false;
+    const { data, error } = await this.supabase.from(table)
+      .update({ deleted_at: null })
+      .eq("id", id).eq("user_id", this.userId)
+      .select("id");
+    if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
   }
 
   /**

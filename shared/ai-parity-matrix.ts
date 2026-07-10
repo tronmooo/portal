@@ -186,6 +186,8 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Reporting", operation: "Charts / tables / reports", ui: "Chat-rendered outputs", aiTools: ["generate_chart", "generate_table", "generate_report"], status: "covered" },
   { entity: "Reporting", operation: "Refresh AI summary", ui: "Executive → AI summary", aiTools: ["refresh_ai_summary"], status: "covered" },
   { entity: "Meta", operation: "Global search / summary / navigation / action history", ui: "Search bar / nav", aiTools: ["search", "get_summary", "navigate", "recall_actions"], status: "covered" },
+  { entity: "Meta", operation: "Undo last action", ui: "Chat action-card Undo button", aiTools: ["undo_last_action"], status: "added" },
+  { entity: "Meta", operation: "Record change history / audit trail", ui: "(chat-first) activity feed", aiTools: ["get_entity_history"], status: "added" },
 
   // ── App-level operations excluded by design ────────────────────────────────
   { entity: "Settings", operation: "Customize dashboard layout", ui: "Dashboard → Customize", aiTools: [], status: "excluded", reason: "Pure UI layout serialization (drag-order preference) — no meaningful chat equivalent." },

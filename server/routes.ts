@@ -1325,6 +1325,17 @@ export async function registerRoutes(
   app.get("/api/activity", asyncHandler(async (req, res) => {
     const actUserId = (req as AuthenticatedRequest).userId || undefined;
     const count = 10;
+    // Durable AI action ledger first (survives restarts); legacy in-memory
+    // map as fallback so the feed never goes blank on a ledger error.
+    try {
+      const rows = await storage.listAiActionLog({ limit: count, includeUndone: true });
+      if (rows.length > 0) {
+        return res.json(rows.map(r => ({
+          timestamp: r.createdAt, action: r.tool, type: r.actionType,
+          entityName: r.entityName || "", entityId: r.entityId || undefined,
+        })));
+      }
+    } catch { /* fall through to legacy map */ }
     res.json(getActionLog(count, actUserId));
   }));
 

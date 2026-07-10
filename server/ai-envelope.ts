@@ -122,6 +122,199 @@ function extractEntityId(result: any): string | undefined {
 
 const VERBS: Record<string, string> = { create: "Created", update: "Updated", delete: "Deleted" };
 
+/** Entity types whose delete is a recoverable soft delete (deleted_at). */
+export const SOFT_DELETE_TYPES = new Set([
+  "task", "habit", "expense", "income", "event", "document", "reminder", "profile", "obligation",
+]);
+
+/**
+ * Pre-write snapshot for update/delete tools: one entity-list read BEFORE the
+ * tool executes, so the ledger can store `before` (updates → reapply_before
+ * undo; hard deletes → recreate-from-snapshot undo). Creates skip this.
+ * Returns null when the tool's entity type has no mapping.
+ */
+export async function captureBeforeRows(toolName: string, ctx: TurnVerifyContext): Promise<any[] | null> {
+  try {
+    if (classifyOperation(toolName) === "create") return null;
+    const entityType = TOOL_ENTITY[toolName];
+    const meta = entityType ? ENTITY_META[entityType] : undefined;
+    if (!meta) return null;
+    return await meta.list(ctx.storage);
+  } catch {
+    return null;
+  }
+}
+
+/** Compute reversibility + a machine-readable reverse plan for the ledger. */
+export function planReverse(
+  op: "create" | "update" | "delete",
+  entityType: string | undefined,
+  entityId: string | undefined,
+  before: any | null,
+): { reversible: boolean; reversePlan?: Record<string, any> } {
+  if (!entityType || !entityId) return { reversible: false };
+  if (op === "create") {
+    return { reversible: true, reversePlan: { op: "delete", soft: SOFT_DELETE_TYPES.has(entityType) } };
+  }
+  if (op === "delete") {
+    if (SOFT_DELETE_TYPES.has(entityType)) return { reversible: true, reversePlan: { op: "restore" } };
+    if (before) return { reversible: true, reversePlan: { op: "recreate", snapshot: before } };
+    return { reversible: false, reversePlan: { op: "none", reason: "hard delete with no pre-delete snapshot" } };
+  }
+  // update-class ops
+  if (before) return { reversible: true, reversePlan: { op: "reapply_before", before } };
+  return { reversible: false, reversePlan: { op: "none", reason: "no before snapshot for this update" } };
+}
+
+/**
+ * Persist one ai_action_log row for a successful write. Awaited with a soft
+ * timeout (unawaited promises are unreliable on serverless); a failed log
+ * write never fails the tool.
+ */
+export async function recordActionLog(
+  ctx: TurnVerifyContext,
+  toolName: string,
+  actionType: string,
+  input: Record<string, any>,
+  envelope: any,
+  beforeRows: any[] | null,
+  source = "chat",
+): Promise<void> {
+  try {
+    const op = classifyOperation(toolName);
+    const entityType = TOOL_ENTITY[toolName];
+    const entityId = envelope?.entity?.id || extractEntityId(envelope);
+    const before = beforeRows && entityId ? (beforeRows.find((r: any) => r.id === entityId) ?? null) : null;
+    const { reversible, reversePlan } = planReverse(op, entityType, entityId, before);
+    const { __userMessage, ...inputSansMsg } = input || {};
+    const write = ctx.storage.createAiActionLog({
+      tool: toolName,
+      actionType,
+      entityType,
+      entityId: entityId ? String(entityId) : undefined,
+      entityName: envelope?.entity?.name || undefined,
+      input: inputSansMsg,
+      before: before || undefined,
+      after: envelope?.entity || undefined,
+      reversible,
+      reversePlan,
+      source,
+    });
+    await Promise.race([write, new Promise((r) => setTimeout(r, 750))]);
+  } catch (e: any) {
+    try { console.warn(`[ai-envelope] action log failed for ${toolName}:`, e?.message || e); } catch { /* noop */ }
+  }
+}
+
+// ── Undo execution ───────────────────────────────────────────────────────────
+type AnyStorage = IStorage & Record<string, any>;
+
+const DELETE_FN: Record<string, (s: AnyStorage, id: string) => Promise<any>> = {
+  task: (s, id) => s.deleteTask(id),
+  expense: (s, id) => s.deleteExpense(id),
+  income: (s, id) => s.deleteIncome(id),
+  event: (s, id) => s.deleteEvent(id),
+  habit: (s, id) => s.deleteHabit(id),
+  reminder: (s, id) => s.deleteReminder(id),
+  document: (s, id) => s.deleteDocument(id),
+  profile: (s, id) => s.deleteProfile(id),
+  obligation: (s, id) => s.deleteObligation(id),
+  memory: (s, id) => s.deleteMemory(id),
+  artifact: (s, id) => s.deleteArtifact(id),
+  goal: (s, id) => s.deleteGoal(id),
+  tracker: (s, id) => s.deleteTracker(id),
+  journal: (s, id) => s.deleteJournalEntry(id),
+  paycheck: (s, id) => s.deletePaycheck(id),
+};
+
+const UPDATE_FN: Record<string, (s: AnyStorage, id: string, data: any) => Promise<any>> = {
+  task: (s, id, d) => s.updateTask(id, d),
+  expense: (s, id, d) => s.updateExpense(id, d),
+  income: (s, id, d) => s.updateIncome(id, d),
+  event: (s, id, d) => s.updateEvent(id, d),
+  habit: (s, id, d) => s.updateHabit(id, d),
+  obligation: (s, id, d) => s.updateObligation(id, d),
+  profile: (s, id, d) => s.updateProfile(id, d),
+  goal: (s, id, d) => s.updateGoal(id, d),
+  artifact: (s, id, d) => s.updateArtifact(id, d),
+  memory: (s, id, d) => s.updateMemory(id, d),
+  journal: (s, id, d) => s.updateJournalEntry(id, d),
+  tracker: (s, id, d) => s.updateTracker(id, d),
+};
+
+const RECREATE_FN: Record<string, (s: AnyStorage, snapshot: any) => Promise<any>> = {
+  goal: (s, snap) => s.createGoal(snap),
+  memory: (s, snap) => s.saveMemory(snap),
+  artifact: (s, snap) => s.createArtifact(snap),
+  journal: (s, snap) => s.createJournalEntry(snap),
+  tracker: (s, snap) => s.createTracker(snap),
+};
+
+/** Fields that must never be re-applied verbatim from a snapshot. */
+const SNAPSHOT_STRIP = new Set(["id", "createdAt", "updatedAt", "userId", "deletedAt"]);
+function cleanSnapshot(row: any): any {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(row || {})) if (!SNAPSHOT_STRIP.has(k)) out[k] = v;
+  return out;
+}
+
+/**
+ * Execute a ledger row's reverse plan. Returns a human-honest outcome —
+ * including refusals when a plan isn't safely executable.
+ */
+export async function executeReversePlan(
+  storage: IStorage,
+  log: { entityType?: string | null; entityId?: string | null; entityName?: string | null; reversePlan?: any; reversible: boolean },
+): Promise<{ ok: boolean; description: string; newEntityId?: string }> {
+  const s = storage as AnyStorage;
+  const type = log.entityType || "";
+  const id = log.entityId || "";
+  const name = log.entityName ? `"${log.entityName}"` : `the ${type}`;
+  const plan = log.reversePlan || {};
+  if (!log.reversible || !plan.op || plan.op === "none") {
+    return { ok: false, description: `That action can't be undone automatically${plan.reason ? ` (${plan.reason})` : ""}.` };
+  }
+  switch (plan.op) {
+    case "delete": {
+      const fn = DELETE_FN[type];
+      if (!fn || !id) return { ok: false, description: `No delete path for ${type}.` };
+      await fn(s, id);
+      return { ok: true, description: `Removed ${name} (${plan.soft ? "recoverable" : "permanent"} delete).` };
+    }
+    case "restore": {
+      const ok = await s.restoreEntity(type, id);
+      return ok
+        ? { ok: true, description: `Restored ${name}.` }
+        : { ok: false, description: `Couldn't restore ${name} — it may have been permanently removed.` };
+    }
+    case "reapply_before": {
+      const fn = UPDATE_FN[type];
+      if (!fn || !id || !plan.before) return { ok: false, description: `No before-state to re-apply for ${name}.` };
+      await fn(s, id, cleanSnapshot(plan.before));
+      return { ok: true, description: `Reverted ${name} to its previous values.` };
+    }
+    case "recreate": {
+      const fn = RECREATE_FN[type];
+      if (!fn || !plan.snapshot) return { ok: false, description: `${name} was permanently deleted and no snapshot exists to recreate it.` };
+      const created = await fn(s, cleanSnapshot(plan.snapshot));
+      return { ok: true, description: `Recreated ${name} from its snapshot (it has a new id).`, newEntityId: created?.id };
+    }
+    case "restore_set": {
+      // Bulk undo: restore every soft-deleted id per entity type.
+      const sets: Record<string, string[]> = plan.ids || {};
+      let restored = 0, failed = 0;
+      for (const [t, ids] of Object.entries(sets)) {
+        for (const rid of ids) {
+          try { (await s.restoreEntity(t, rid)) ? restored++ : failed++; } catch { failed++; }
+        }
+      }
+      return { ok: restored > 0, description: `Restored ${restored} record${restored === 1 ? "" : "s"}${failed ? ` (${failed} could not be restored)` : ""}.` };
+    }
+    default:
+      return { ok: false, description: `Unknown reverse plan "${plan.op}".` };
+  }
+}
+
 /**
  * Wrap a SUCCESSFUL write-tool result in the standard envelope. Never throws
  * usefully — callers get the raw result back if anything goes wrong here.

@@ -22,7 +22,7 @@ import {
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
-import { finalizeToolResult, buildTurnVerifyContext } from "./ai-envelope";
+import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, SOFT_DELETE_TYPES } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
@@ -3691,6 +3691,32 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
   {
+    name: "undo_last_action",
+    description: "UNDO a previous chat action — 'undo that', 'undo my last action', 'take that back', 'I didn't mean to do that'. Reverses the most recent reversible write (creates get deleted, deletes get restored, updates get their previous values re-applied). Pass tool and/or entity_name to undo a SPECIFIC earlier action instead of the newest one. Refuses honestly when an action can't be reversed.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        tool: { type: "string", description: "Optional: only undo an action made by this tool (e.g. 'create_expense')" },
+        entity_name: { type: "string", description: "Optional: only undo an action whose record name matches this (partial)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_entity_history",
+    description: "Show the change history / audit trail for a record — 'who changed the mortgage balance and when', 'what happened to my Honda asset', 'show the history of this task'. Returns when each change happened, the source (chat, manual UI edit, import, repair), and what changed.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        entity_type: { type: "string", description: "Record type: task, expense, income, event, habit, tracker, goal, profile, obligation, journal, memory, artifact, reminder, document" },
+        name: { type: "string", description: "Record name/title to look up (partial match). Provide this OR id." },
+        id: { type: "string", description: "Exact record id, when known." },
+        limit: { type: "number", description: "Max entries (default 15)" },
+      },
+      required: ["entity_type"],
+    },
+  },
+  {
     name: "sync_calendar",
     description: "Sync events with Google Calendar. Imports new events from Google Calendar into Portol. Use when the user asks to sync, import, or pull their Google Calendar events.",
     input_schema: {
@@ -4440,6 +4466,8 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - VERIFICATION: write tools return a "verification" object. If verification.database_record_exists is false after a create/update, tell the user the save could NOT be confirmed — do not say "done". After a delete, database_record_exists:false means the delete IS confirmed.
 - If verification.duplicate_count > 0, mention it once ("note: you already have N similar entries") but do NOT block, merge, or delete — duplicates are allowed.
 - Destructive BULK operations always take two turns: preview first, then execute only after the user explicitly confirms in their next message.
+- UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
+- HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
 
 TOOL CHOICE RULES — CRITICAL:
 DATA CLASSIFICATION RULES (NEVER VIOLATE):
@@ -4754,6 +4782,7 @@ RESPONSE FORMAT (CRITICAL — the UI renders rich entry cards from your tool cal
   - "Logged for Jim."
   - "Both entries saved."
   NEVER list the items you logged. NEVER repeat tracker names. NEVER write "✅…" bullets. NEVER write route paths like "/trackers + Jim's Health tab". NEVER write paragraphs.
+  EXCEPTION — duplicate note: when a result's verification.duplicate_count > 0, add ONE short sentence like "Saved — note you already have a similar entry." This is the only allowed addition to the short reply.
 
 * When a tool FAILED or returned no result → say so on its own line, starting with ❌, citing exactly what failed. Example:
   "❌ Hydration habit not found for Jane — say 'create hydration habit for Jane' first."
@@ -9371,8 +9400,80 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "recall_actions": {
       const count = Math.min(input.count || 10, 20);
-      const recentActions = getActionLog(count);
-      return { actions: recentActions, total: recentActions.length };
+      // Durable ledger (ai_action_log) — survives restarts, unlike the old
+      // in-memory 20-entry map. Falls back to the legacy map on table errors.
+      try {
+        const rows = await storage.listAiActionLog({ limit: count, includeUndone: true });
+        const recentActions = rows.map(r => ({
+          timestamp: r.createdAt, action: r.tool, type: r.actionType,
+          entityName: r.entityName || "", entityId: r.entityId || undefined,
+          ...(r.undoneAt ? { undone: true } : {}),
+        }));
+        return { actions: recentActions, total: recentActions.length };
+      } catch {
+        const recentActions = getActionLog(count);
+        return { actions: recentActions, total: recentActions.length };
+      }
+    }
+
+    case "undo_last_action": {
+      const rows = await storage.listAiActionLog({ limit: 25 });
+      const toolFilter = input.tool ? safeLC(String(input.tool)) : "";
+      const nameFilter = input.entity_name ? safeLC(String(input.entity_name)) : "";
+      const candidates = rows.filter(r =>
+        r.source !== "undo"
+        && (!toolFilter || safeLC(r.tool).includes(toolFilter))
+        && (!nameFilter || safeLC(r.entityName || "").includes(nameFilter)));
+      if (candidates.length === 0) {
+        return { error: `No recent${toolFilter || nameFilter ? " matching" : ""} chat action found to undo.` };
+      }
+      const target = candidates[0];
+      if (!target.reversible) {
+        return { error: `The last matching action (${target.tool} on ${target.entityName || target.entityType || "a record"}) can't be undone automatically${(target.reversePlan as any)?.reason ? `: ${(target.reversePlan as any).reason}` : "."}` };
+      }
+      const outcome = await executeReversePlan(storage, target);
+      if (!outcome.ok) return { error: outcome.description };
+      const undoLog = await storage.createAiActionLog({
+        tool: "undo_last_action", actionType: "update_entity",
+        entityType: target.entityType || undefined, entityId: target.entityId || undefined,
+        entityName: target.entityName || undefined,
+        input: { undid: target.id }, reversible: false, source: "undo",
+      }).catch(() => undefined);
+      await storage.markActionUndone(target.id, undoLog?.id);
+      return { undone: true, tool: target.tool, entity: target.entityName || target.entityType, message: `Undid ${target.tool}: ${outcome.description}` };
+    }
+
+    case "get_entity_history": {
+      const entityType = safeLC(String(input.entity_type || "")).trim();
+      if (!entityType) return { error: "entity_type is required" };
+      let entityId: string | undefined = input.id ? String(input.id) : undefined;
+      let displayName = input.name ? String(input.name) : entityId;
+      if (!entityId && input.name) {
+        // Resolve the id from the ledger's own entity names first, then give up
+        // honestly — history lookups don't fuzzy-write anything.
+        const needle = safeLC(String(input.name));
+        const recent = await storage.listAiActionLog({ limit: 100, entityType, includeUndone: true });
+        const hit = recent.find(r => safeLC(r.entityName || "").includes(needle));
+        if (hit?.entityId) { entityId = hit.entityId; displayName = hit.entityName || displayName; }
+      }
+      const ledger = await storage.listAiActionLog({ limit: Math.min(input.limit || 15, 50), entityType, entityId, includeUndone: true });
+      // audit_log rows (manual UI edits, ownership changes) for the same entity.
+      let auditRows: any[] = [];
+      try {
+        if (entityId) {
+          const { data } = await (storage as any).supabase
+            .from("audit_log").select("action, entity_name, source, created_at, details")
+            .eq("user_id", (storage as any).userId).eq("entity_id", entityId)
+            .order("created_at", { ascending: false }).limit(25);
+          auditRows = data || [];
+        }
+      } catch { /* audit history is best-effort */ }
+      const history = [
+        ...ledger.map(r => ({ when: r.createdAt, source: r.source === "chat" ? "chat" : r.source, tool: r.tool, summary: `${r.tool}${r.entityName ? ` — ${r.entityName}` : ""}${r.undoneAt ? " (undone)" : ""}` })),
+        ...auditRows.map(a => ({ when: a.created_at, source: a.source || "manual", tool: a.action, summary: a.entity_name || a.action })),
+      ].sort((a, b) => String(b.when).localeCompare(String(a.when))).slice(0, Math.min(input.limit || 15, 50));
+      if (history.length === 0) return { history: [], message: `No recorded changes found for that ${entityType}${displayName ? ` ("${displayName}")` : ""}. History covers chat actions (always) and UI edits where audited.` };
+      return { history, entity: displayName, total: history.length };
     }
 
     case "sync_calendar": {
@@ -12027,10 +12128,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // create_profile (and any other guarded tool) can compare requested
           // fields against what the user actually said.
           const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
+          // Pre-write snapshot for update/delete tools (one list read) — gives
+          // the action ledger a `before` for reapply/recreate undo plans.
+          const beforeRows = READ_ONLY_TOOLS.has(toolUse.name)
+            ? null
+            : await captureBeforeRows(toolUse.name, turnVerifyCtx);
           const rawResult = await executeTool(toolUse.name, inputWithCtx, userId);
 
           // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
+          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
             invalidateContextCache(userId);
           }
@@ -12046,6 +12152,12 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const result = (rawResult && !rawResult.error && !READ_ONLY_TOOLS.has(toolUse.name))
             ? await finalizeToolResult(toolUse.name, actionType, inputWithCtx, rawResult, turnVerifyCtx)
             : rawResult;
+          // Persist the action to the durable ledger (undo/audit). Never
+          // blocks or fails the tool; excluded for the ledger's own tools.
+          if (result && !result.error && !READ_ONLY_TOOLS.has(toolUse.name)
+              && toolUse.name !== "undo_last_action") {
+            await recordActionLog(turnVerifyCtx, toolUse.name, actionType, inputWithCtx, result, beforeRows);
+          }
           const inp = toolUse.input as Record<string, any>;
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
           // Only count as a real action if it succeeded (no error field)
@@ -12071,7 +12183,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
           // Log the action to in-memory history
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
-          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
+          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
@@ -12475,6 +12587,7 @@ export const READ_ONLY_TOOLS = new Set<string>([
   "query_expenses", "query_tasks", "spending_analytics", "get_asset_rollup",
   "search_documents", "retrieve_document", "open_document", "navigate", "set_dashboard_scope",
   "generate_chart", "generate_table", "generate_report", "refresh_ai_summary",
+  "get_entity_history",
 ]);
 
 // Every WRITE tool → a typed ParsedAction so the chat UI shows it as a real
@@ -12496,6 +12609,7 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   delete_task: "delete_task",
   restore_task: "update_entity",
   restore_habit: "update_entity",
+  undo_last_action: "update_entity",
   create_reminder: "create_reminder",
   update_reminder: "update_entity",
   delete_reminder: "delete_entity",

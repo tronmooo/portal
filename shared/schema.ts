@@ -1309,3 +1309,42 @@ export const insertCaptureSchema = z.object({
 });
 export type InsertCapture = z.input<typeof insertCaptureSchema>;
 
+
+// ============================================================
+// AI ACTION LEDGER (undo + audit for chat mutations)
+// ============================================================
+// One row per successful AI-chat write, with enough context to reverse it.
+// Powers undo_last_action / get_entity_history and the /api/activity feed.
+
+export interface AiActionLog {
+  id: string;
+  tool: string;
+  actionType: string;
+  entityType?: string | null;
+  entityId?: string | null;
+  entityName?: string | null;
+  input?: Record<string, unknown> | null;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  reversible: boolean;
+  /** {op:'delete'|'restore'|'reapply_before'|'recreate'|'restore_set', ...} */
+  reversePlan?: Record<string, unknown> | null;
+  source: "chat" | "bulk" | "undo" | string;
+  createdAt: string;
+  undoneAt?: string | null;
+  undoneByLogId?: string | null;
+}
+
+export interface InsertAiActionLog {
+  tool: string;
+  actionType: string;
+  entityType?: string;
+  entityId?: string;
+  entityName?: string;
+  input?: Record<string, unknown>;
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  reversible?: boolean;
+  reversePlan?: Record<string, unknown>;
+  source?: string;
+}

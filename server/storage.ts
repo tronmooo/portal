@@ -190,6 +190,13 @@ export interface IStorage {
   restoreHabit(id: string): Promise<boolean>;
   getDeletedTasks(limit?: number): Promise<Task[]>;
   getDeletedHabits(limit?: number): Promise<Habit[]>;
+  /** Generic soft-delete restore for entity types without a dedicated method. */
+  restoreEntity(entityType: string, id: string): Promise<boolean>;
+
+  // AI action ledger (undo + audit for chat mutations)
+  createAiActionLog(entry: import("@shared/schema").InsertAiActionLog): Promise<import("@shared/schema").AiActionLog | undefined>;
+  listAiActionLog(opts?: { limit?: number; entityType?: string; entityId?: string; includeUndone?: boolean }): Promise<import("@shared/schema").AiActionLog[]>;
+  markActionUndone(id: string, undoneByLogId?: string): Promise<void>;
   deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean>;
   migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }>;
 
@@ -2115,6 +2122,34 @@ export class MemStorage implements IStorage {
   async restoreHabit(_id: string): Promise<boolean> { return false; }
   async getDeletedTasks(_limit?: number): Promise<Task[]> { return []; }
   async getDeletedHabits(_limit?: number): Promise<Habit[]> { return []; }
+  async restoreEntity(_entityType: string, _id: string): Promise<boolean> { return false; }
+
+  // AI action ledger stubs (in-memory, bounded)
+  private aiActionLogStore: import("@shared/schema").AiActionLog[] = [];
+  async createAiActionLog(entry: import("@shared/schema").InsertAiActionLog): Promise<import("@shared/schema").AiActionLog | undefined> {
+    const row: import("@shared/schema").AiActionLog = {
+      id: crypto.randomUUID(), tool: entry.tool, actionType: entry.actionType,
+      entityType: entry.entityType ?? null, entityId: entry.entityId ?? null, entityName: entry.entityName ?? null,
+      input: entry.input ?? null, before: entry.before ?? null, after: entry.after ?? null,
+      reversible: entry.reversible ?? false, reversePlan: entry.reversePlan ?? null,
+      source: entry.source || "chat", createdAt: new Date().toISOString(),
+      undoneAt: null, undoneByLogId: null,
+    };
+    this.aiActionLogStore.unshift(row);
+    if (this.aiActionLogStore.length > 200) this.aiActionLogStore.pop();
+    return row;
+  }
+  async listAiActionLog(opts: { limit?: number; entityType?: string; entityId?: string; includeUndone?: boolean } = {}): Promise<import("@shared/schema").AiActionLog[]> {
+    return this.aiActionLogStore
+      .filter(r => (!opts.entityType || r.entityType === opts.entityType)
+        && (!opts.entityId || r.entityId === opts.entityId)
+        && (opts.includeUndone || !r.undoneAt))
+      .slice(0, Math.min(opts.limit || 20, 100));
+  }
+  async markActionUndone(id: string, undoneByLogId?: string): Promise<void> {
+    const r = this.aiActionLogStore.find(x => x.id === id);
+    if (r) { r.undoneAt = new Date().toISOString(); r.undoneByLogId = undoneByLogId ?? null; }
+  }
   async deleteHabitCheckin(_habitId: string, _checkinId: string): Promise<boolean> { return false; }
   async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> { return { migrated: 0, errors: ["Not supported in MemStorage"] }; }
 
