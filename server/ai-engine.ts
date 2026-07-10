@@ -3544,14 +3544,38 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "update_artifact",
-    description: "Update an existing artifact's title or content.",
+    description: "Update an existing artifact's title, content, or pinned state. Use for edits AND for 'pin my grocery list' (changes.pinned:true) / 'unpin it' (changes.pinned:false).",
     input_schema: {
       type: "object" as const,
       properties: {
         title: { type: "string", description: "Current title of the artifact (partial match)" },
-        changes: { type: "object", description: "Fields to update: title, content, items (for checklists), language (for code), dataBindings (for charts)" },
+        changes: { type: "object", description: "Fields to update: title, content, items (for checklists), language (for code), dataBindings (for charts), pinned (boolean — true to pin/favorite, false to unpin)" },
       },
       required: ["title", "changes"],
+    },
+  },
+  {
+    name: "duplicate_artifact",
+    description: "Duplicate an existing artifact ('make a copy of my packing list'). The copy gets ' (copy)' appended (or newTitle), is never pinned, and is not publicly shared.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Title of the artifact to duplicate (partial match)" },
+        newTitle: { type: "string", description: "Optional title for the copy. Defaults to '<original> (copy)'." },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "toggle_artifact_item",
+    description: "Check or uncheck an item on a checklist artifact — 'check off milk on my grocery list', 'uncheck the passport item on the packing list'. Finds the item by its text (partial match) and flips its checked state.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Checklist artifact title (partial match)" },
+        itemText: { type: "string", description: "Text of the checklist item to toggle (partial match)" },
+      },
+      required: ["title", "itemText"],
     },
   },
   {
@@ -4350,6 +4374,13 @@ NEVER say "X already has a journal entry" unless the Journal Entries context abo
 "X felt Y" / "X was feeling Y" / "note that X felt Y" → journal_entry. Infer mood: sore/tired/rough=bad, happy/good=good, motivated/energized=great, neutral/normal=okay.
 If journal_entry succeeds, say "Journal entry saved for [name]."
 NEVER substitute a create_task when the user explicitly asks for a journal entry.
+
+━━━ ARTIFACT CRUD ━━━
+- create list/note/doc artifact: create_artifact; edit: update_artifact(title, changes)
+- "pin my grocery list" → update_artifact(title, changes:{pinned:true}); unpin → pinned:false
+- "make a copy of X" → duplicate_artifact(title, newTitle?)
+- "check off milk on my grocery list" / "uncheck X" → toggle_artifact_item(title, itemText)
+- delete: delete_artifact(title)
 
 ━━━ REMINDER / RESTORE / NOTIFICATION CRUD ━━━
 - set a reminder: create_reminder(title, fireAt)
@@ -9228,6 +9259,41 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return { updated: true, artifact: updated };
     }
 
+    case "duplicate_artifact": {
+      const artifacts = await storage.getArtifacts();
+      const src = artifacts.find(a => a.title.toLowerCase().includes(safeLC(input.title)));
+      if (!src) return { error: `No artifact found matching "${input.title}"`, candidates: artifacts.slice(0, 5).map(a => a.title) };
+      // Mirror POST /api/artifacts/:id/duplicate: "(copy)" title, never pinned,
+      // shareToken NOT carried over, item ids re-minted by createArtifact.
+      const created = await storage.createArtifact({
+        type: src.type,
+        title: (input.newTitle && String(input.newTitle).trim()) || `${src.title} (copy)`,
+        content: src.content || "",
+        items: (src.items || []).map(i => ({ text: i.text, checked: i.checked })),
+        tags: src.tags || [],
+        pinned: false,
+        linkedProfiles: src.linkedProfiles || [],
+        language: src.language,
+        dataBindings: src.dataBindings,
+        chartData: src.chartData,
+        sheetData: src.sheetData,
+        source: src.source,
+      } as any);
+      return { duplicated: true, artifact: created, message: `Duplicated "${src.title}" as "${created.title}".` };
+    }
+
+    case "toggle_artifact_item": {
+      const artifacts = await storage.getArtifacts();
+      const art = artifacts.find(a => a.title.toLowerCase().includes(safeLC(input.title)));
+      if (!art) return { error: `No artifact found matching "${input.title}"`, candidates: artifacts.slice(0, 5).map(a => a.title) };
+      const needle = safeLC(input.itemText).trim();
+      const item = (art.items || []).find(i => i.text.toLowerCase().includes(needle));
+      if (!item) return { error: `No checklist item matching "${input.itemText}" in "${art.title}"`, candidates: (art.items || []).slice(0, 8).map(i => i.text) };
+      const updated = await storage.toggleChecklistItem(art.id, item.id);
+      const after = (updated?.items || []).find(i => i.id === item.id);
+      return { toggled: true, item: item.text, checked: after?.checked ?? !item.checked, artifact: updated, message: `${after?.checked ? "Checked off" : "Unchecked"} "${item.text}" on "${art.title}".` };
+    }
+
     case "delete_goal": {
       const goals = await storage.getGoals();
       const match = goals.find(g => g.title.toLowerCase().includes(safeLC(input.title)));
@@ -12442,6 +12508,8 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   create_artifact: "create_artifact",
   update_artifact: "update_entity",
   delete_artifact: "delete_entity",
+  duplicate_artifact: "create_artifact",
+  toggle_artifact_item: "update_entity",
   // Memory
   save_memory: "save_memory",
   delete_memory: "delete_entity",

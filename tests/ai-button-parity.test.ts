@@ -43,6 +43,13 @@ describe("AI ↔ dashboard CRUD parity matrix", () => {
     }
   });
 
+  it("no rows are left in 'planned' — every capability is either live or excluded", () => {
+    // The 2026-07 parity effort landed every planned tool. New capabilities
+    // must ship as covered/added with real tools (or excluded with a reason);
+    // relax this only if a deliberate multi-commit rollout needs the status.
+    expect(planned.map((r) => `${r.entity}/${r.operation}`)).toEqual([]);
+  });
+
   it("covers the full dashboard surface", () => {
     // Superset of the old 33-row DASHBOARD_ACTIONS table.
     expect(PARITY_MATRIX.length).toBeGreaterThanOrEqual(80);

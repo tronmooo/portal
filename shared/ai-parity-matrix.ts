@@ -171,9 +171,9 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Artifact", operation: "Delete", ui: "Artifact card menu", aiTools: ["delete_artifact"], status: "covered" },
   // Handler + storage already pass `pinned` through — only the tool's schema
   // description omits it. Batch D adds the schema text; flips to "added".
-  { entity: "Artifact", operation: "Pin / unpin", ui: "Artifact card pin toggle", aiTools: ["update_artifact"], status: "planned" },
-  { entity: "Artifact", operation: "Duplicate", ui: "Artifact card menu → Duplicate", aiTools: ["duplicate_artifact"], status: "planned" },
-  { entity: "Artifact", operation: "Toggle checklist item", ui: "Artifact checklist checkbox", aiTools: ["toggle_artifact_item"], status: "planned" },
+  { entity: "Artifact", operation: "Pin / unpin", ui: "Artifact card pin toggle", aiTools: ["update_artifact"], status: "added" },
+  { entity: "Artifact", operation: "Duplicate", ui: "Artifact card menu → Duplicate", aiTools: ["duplicate_artifact"], status: "added" },
+  { entity: "Artifact", operation: "Toggle checklist item", ui: "Artifact checklist checkbox", aiTools: ["toggle_artifact_item"], status: "added" },
   { entity: "Artifact", operation: "Share / unshare public link", ui: "Artifact menu → Share", aiTools: [], status: "excluded", reason: "Publishes content at a public URL — outward-facing action kept behind an explicit UI click." },
 
   // ── Notifications ──────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**112 operations** — ✅ 82 covered · 🆕 16 added · 🔜 3 planned · 🚫 11 excluded by design.
+**112 operations** — ✅ 82 covered · 🆕 19 added · 🔜 0 planned · 🚫 11 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -212,9 +212,9 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Create (list/note/doc) | Artifacts tab → New | `create_artifact` | ✅ covered |  |
 | Edit content | Artifact editor | `update_artifact` | ✅ covered |  |
 | Delete | Artifact card menu | `delete_artifact` | ✅ covered |  |
-| Pin / unpin | Artifact card pin toggle | `update_artifact` | 🔜 planned |  |
-| Duplicate | Artifact card menu → Duplicate | `duplicate_artifact` | 🔜 planned |  |
-| Toggle checklist item | Artifact checklist checkbox | `toggle_artifact_item` | 🔜 planned |  |
+| Pin / unpin | Artifact card pin toggle | `update_artifact` | 🆕 added |  |
+| Duplicate | Artifact card menu → Duplicate | `duplicate_artifact` | 🆕 added |  |
+| Toggle checklist item | Artifact checklist checkbox | `toggle_artifact_item` | 🆕 added |  |
 | Share / unshare public link | Artifact menu → Share | — | 🚫 excluded | Publishes content at a public URL — outward-facing action kept behind an explicit UI click. |
 
 ### Notification

@@ -254,6 +254,30 @@ const STEPS: Step[] = [
       return !!(t?.tags || []).some((tag: string) => tag.startsWith("st:0:") && tag.includes("milk"));
     },
   },
+  // ── Batch D — Artifacts ────────────────────────────────────────────────────
+  {
+    batch: "D", tool: "update_artifact (pin)",
+    seed: async () => { await seedPost("/artifacts", { type: "checklist", title: `${TAG}_alist groceries`, content: "", items: [{ text: "milk", checked: false }, { text: "eggs", checked: false }] }); },
+    message: `Pin my ${TAG}_alist groceries list`,
+    retryMessage: `Update the artifact "${TAG}_alist groceries" — set pinned to true`,
+    verify: async () => (await list("/artifacts")).some((a) => (a.title || "").includes(`${TAG}_alist`) && a.pinned === true),
+  },
+  {
+    batch: "D", tool: "toggle_artifact_item",
+    seed: async () => { await seedPost("/artifacts", { type: "checklist", title: `${TAG}_blist packing`, content: "", items: [{ text: "passport", checked: false }, { text: "charger", checked: false }] }); },
+    message: `Check off passport on my ${TAG}_blist packing list`,
+    retryMessage: `On the checklist artifact "${TAG}_blist packing", mark the "passport" item as done`,
+    verify: async () => {
+      const a = (await list("/artifacts")).find((x) => (x.title || "").includes(`${TAG}_blist`) && !(x.title || "").includes("(copy)"));
+      return !!(a?.items || []).some((i: any) => (i.text || "").includes("passport") && i.checked === true);
+    },
+  },
+  {
+    batch: "D", tool: "duplicate_artifact",
+    seed: async () => { await seedPost("/artifacts", { type: "checklist", title: `${TAG}_clist chores`, content: "", items: [{ text: "vacuum", checked: false }] }); },
+    message: `Make a copy of my ${TAG}_clist chores list`,
+    verify: async () => (await list("/artifacts")).some((a) => (a.title || "").includes(`${TAG}_clist`) && (a.title || "").includes("(copy)")),
+  },
   {
     batch: "A", tool: "copy_budgets_previous_month",
     seed: async () => { await seedPost("/budgets", { category: "education", amount: 22133, month: prevMonth }); },
