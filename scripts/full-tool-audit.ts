@@ -502,12 +502,12 @@ async function section6_journal() {
   await cycle({
     section: S, capability: "Journal entry",
     createCmd: `Create a journal entry for today saying ${text}`,
-    find: async () => (await list("/journal")).find((j) => JSON.stringify(j).includes(`${TAG}_journal`)) || null,
+    find: async () => (await list("/journal")).find((j) => JSON.stringify(j).toLowerCase().includes(`${TAG}_journal`.toLowerCase())) || null,
     endpointLabel: "Journal (/journal)",
     owners: ["self"],
     updateCmd: `Update today's ${TAG}_journal entry — change "much better tonight" to "completely relaxed tonight".`,
     verifyUpdate: async () => {
-      const j = (await list("/journal")).find((x) => JSON.stringify(x).includes(`${TAG}_journal`));
+      const j = (await list("/journal")).find((x) => JSON.stringify(x).toLowerCase().includes(`${TAG}_journal`.toLowerCase()));
       return !!j && /completely relaxed/i.test(JSON.stringify(j));
     },
     deleteCmd: `Delete today's ${TAG}_journal entry.`,

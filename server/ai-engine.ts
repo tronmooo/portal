@@ -2716,7 +2716,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Trackers ---
   {
     name: "log_tracker_entry",
-    description: "Log values to a tracker (health, fitness, habits, metrics — NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries). CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}).\n- Supplements / vitamins / medications → EACH item gets its OWN tracker named EXACTLY after the item: 'Multivitamin', 'Fish Oil', 'Vitamin D', 'Creatine', 'Amoxicillin', 'Lisinopril'. NEVER bucket different items into one generic 'Supplements' (or 'Vitamins'/'Medications') tracker. If the user logs several in one message (e.g. 'multivitamin, fish oil, and amoxicillin'), make a SEPARATE log_tracker_entry call for EACH, one per its own tracker. ALWAYS reuse an existing tracker whose name is that item (an existing 'Multivitamin' tracker → append the entry, do NOT create a new tracker). Use values:{dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency, taken:true} — include dosage+unit whenever the user states OR clearly implies one (do not invent a dosage that wasn't given). Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER} (or glasses). Put the numeric amount directly in the ounces field.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
+    description: "Log values to a tracker (health, fitness, habits, metrics — NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries). CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}). When ONE message contains BOTH a BP reading AND a heart rate ('124/78 with a resting heart rate of 59'), make TWO log_tracker_entry calls — one to 'Blood Pressure' {systolic,diastolic} AND one to 'Heart Rate' {bpm}. NEVER silently drop the heart rate.\n- Supplements / vitamins / medications → EACH item gets its OWN tracker named EXACTLY after the item: 'Multivitamin', 'Fish Oil', 'Vitamin D', 'Creatine', 'Amoxicillin', 'Lisinopril'. NEVER bucket different items into one generic 'Supplements' (or 'Vitamins'/'Medications') tracker. If the user logs several in one message (e.g. 'multivitamin, fish oil, and amoxicillin'), make a SEPARATE log_tracker_entry call for EACH, one per its own tracker. ALWAYS reuse an existing tracker whose name is that item (an existing 'Multivitamin' tracker → append the entry, do NOT create a new tracker). Use values:{dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency, taken:true} — include dosage+unit whenever the user states OR clearly implies one (do not invent a dosage that wasn't given). Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER} (or glasses). Put the numeric amount directly in the ounces field.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3569,7 +3569,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "delete_event",
-    description: "Delete a calendar event by title.",
+    description: "Delete a calendar EVENT by title. NOT for reminders — when the user says 'reminder' ('delete the pickup reminder', 'cancel my dentist reminder'), use delete_reminder instead; reminders live in their own table and deleting a look-alike event leaves the reminder still armed.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -4506,7 +4506,7 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 
 ━━━ COMPLETION vs DELETION vs UPDATE (DIFFERENT THINGS) ━━━
 - "mark X done" / "I completed X" / "finished X" / "checked off X" → complete_task OR checkin_habit OR update_goal(status:completed) OR complete_event
-- "delete X" / "remove X" / "get rid of X" → delete_task OR delete_habit OR delete_event OR delete_goal OR delete_tracker
+- "delete X" / "remove X" / "get rid of X" → delete_task OR delete_habit OR delete_event OR delete_goal OR delete_tracker. If the user says "REMINDER" anywhere in the request → delete_reminder, NEVER delete_event.
 - "update X" / "change X to" / "edit X" → update_task OR update_habit OR update_goal OR update_event OR update_tracker_entry
 - "undo X" / "unmark X" / "I didn't do X" → uncomplete_habit (remove checkin)
 - NEVER use create_* when user says complete/done/finished for an EXISTING item
@@ -5767,12 +5767,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         logger.info("ai", `Profile "${input.name}" already exists (${existingProfile.id}) — updating instead of creating`);
         // P0.3e: keep update-instead-of-create writes flat too.
         const mergedFields = { ...existingProfile.fields, ...flattenAiProfileFields(input.fields) };
-        return storage.updateProfile(existingProfile.id, {
+        const mergedProfile = await storage.updateProfile(existingProfile.id, {
           fields: mergedFields,
           notes: input.notes || existingProfile.notes,
           tags: input.tags?.length ? input.tags : existingProfile.tags,
           type: input.type || existingProfile.type,
         });
+        // SAY it was a merge — otherwise the model replies "profile created"
+        // for a profile that already existed.
+        return { ...(mergedProfile as any), deduped: true, message: `A profile named "${existingProfile.name}" already exists — I updated it with the new details instead of creating a duplicate.` };
       }
       // Auto-detect parent profile for non-primary profile types
       let parentProfileId = input.parentProfileId || (intendedParentId ?? undefined);
@@ -5979,6 +5982,27 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
       const changes: any = {};
       if (updateFlatFields) changes.fields = { ...profile.fields, ...updateFlatFields };
+      // VALUE NORMALIZATION: net worth reads currentValue with the HIGHEST
+      // precedence (shared/asset-value resolveAssetValue) — a model writing
+      // "value"/"marketValue" onto an asset that already has a currentValue
+      // would change the field but never move net worth. Mirror any explicit
+      // value-ish write onto currentValue so "update the CR-V to $26,000"
+      // actually reprices the asset.
+      if (changes.fields && !isPersonLike) {
+        const VALUE_KEYS = ["value", "worth", "marketValue", "market_value", "estimatedValue", "estimated_value", "currentvalue"];
+        if (changes.fields.currentValue === undefined || !(updateFlatFields && "currentValue" in updateFlatFields)) {
+          for (const k of Object.keys(updateFlatFields || {})) {
+            if (VALUE_KEYS.includes(k) || VALUE_KEYS.includes(k.toLowerCase())) {
+              const num = Number(String((updateFlatFields as any)[k]).replace(/[^0-9.-]/g, ""));
+              if (isFinite(num) && num > 0) {
+                changes.fields.previousValue = profile.fields?.currentValue ?? profile.fields?.purchasePrice;
+                changes.fields.currentValue = num;
+                break;
+              }
+            }
+          }
+        }
+      }
       if (input.changes.notes !== undefined) changes.notes = input.changes.notes;
       if (input.changes.tags) changes.tags = input.changes.tags;
       if (input.changes.type) changes.type = input.changes.type;
@@ -6469,7 +6493,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (input.dueDate && t.dueDate && input.dueDate !== t.dueDate) return false;
         return true;
       });
-      if (dupTask) return dupTask; // Return existing instead of creating duplicate
+      // Return the existing task instead of creating a duplicate — and SAY so,
+      // otherwise the model replies "created" for a task that already existed.
+      if (dupTask) return { ...dupTask, deduped: true, message: `A very similar task already exists ("${dupTask.title}") — I didn't create a duplicate.` };
 
       // In-memory dedup lock (includes profile for cross-profile dedup safety)
       // Use the normalized title so trivial punctuation/casing differences
@@ -7276,6 +7302,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Reject negative balance on create.
       if (input.currentBalance != null && Number(input.currentBalance) < 0) {
         return { error: `Cannot create a liability with a negative balance ($${input.currentBalance}). A liability is what you owe — it must be ≥ 0.` };
+      }
+      // Reject impossible date ranges (end/payoff/forgiveness before start).
+      {
+        const startish = String(input.firstPaymentDate || input.startDate || "").slice(0, 10);
+        const endish = String(input.forgivenessDate || input.endDate || input.payoffDate || "").slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(startish) && /^\d{4}-\d{2}-\d{2}$/.test(endish) && endish < startish) {
+          return { error: `That liability ends (${endish}) before it starts (${startish}) — check the dates and try again.` };
+        }
       }
       // Normalize annualRate (accept either decimal 0.065 or percent 6.5)
       let rate = Number(input.annualRate);
@@ -8260,7 +8294,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       });
       if (dupExpense) {
         logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
-        return dupExpense;
+        return { ...dupExpense, deduped: true, message: `An identical expense from the last few minutes already exists ($${dupExpense.amount} ${dupExpense.description}) — I didn't log it twice.` };
       }
       // Server-side category inference fallback when AI sends 'general'
       let inferredCategory = input.category || "general";
