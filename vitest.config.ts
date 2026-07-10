@@ -69,6 +69,7 @@ export default defineConfig({
       'tests/executive-sections.test.tsx',
       'tests/wellness-metrics.test.ts',
       'tests/wellness-overview.test.tsx',
+      'tests/wellness-dynamic.test.ts',
       'tests/query-key-hygiene.test.ts',
       'tests/ai-tool-registry.test.ts',
       'tests/ai-button-parity.test.ts',
