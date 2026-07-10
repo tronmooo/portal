@@ -188,6 +188,8 @@ export interface IStorage {
   // Soft-delete restore & misc
   restoreTask(id: string): Promise<boolean>;
   restoreHabit(id: string): Promise<boolean>;
+  getDeletedTasks(limit?: number): Promise<Task[]>;
+  getDeletedHabits(limit?: number): Promise<Habit[]>;
   deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean>;
   migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }>;
 
@@ -203,6 +205,8 @@ export interface IStorage {
   createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder>;
   listReminders(filter?: { dueBefore?: Date }): Promise<Reminder[]>;
   markReminderFired(id: string): Promise<boolean>;
+  updateReminder(id: string, data: { title?: string; fireAt?: string; profileId?: string | null }): Promise<Reminder | undefined>;
+  deleteReminder(id: string): Promise<boolean>;
 
   // Paychecks
   getPaychecks(): Promise<any[]>;
@@ -2109,6 +2113,8 @@ export class MemStorage implements IStorage {
   // Soft-delete restore stubs
   async restoreTask(_id: string): Promise<boolean> { return false; }
   async restoreHabit(_id: string): Promise<boolean> { return false; }
+  async getDeletedTasks(_limit?: number): Promise<Task[]> { return []; }
+  async getDeletedHabits(_limit?: number): Promise<Habit[]> { return []; }
   async deleteHabitCheckin(_habitId: string, _checkinId: string): Promise<boolean> { return false; }
   async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> { return { migrated: 0, errors: ["Not supported in MemStorage"] }; }
 
@@ -2201,6 +2207,20 @@ export class MemStorage implements IStorage {
     const r = this.reminderStore.find(x => x.id === id);
     if (!r) return false;
     r.firedAt = new Date().toISOString();
+    return true;
+  }
+  async updateReminder(id: string, data: { title?: string; fireAt?: string; profileId?: string | null }): Promise<Reminder | undefined> {
+    const r = this.reminderStore.find(x => x.id === id);
+    if (!r) return undefined;
+    if (data.title !== undefined) r.title = data.title;
+    if (data.fireAt !== undefined) r.fireAt = data.fireAt;
+    if (data.profileId !== undefined) (r as any).profileId = data.profileId;
+    return r;
+  }
+  async deleteReminder(id: string): Promise<boolean> {
+    const idx = this.reminderStore.findIndex(x => x.id === id);
+    if (idx === -1) return false;
+    this.reminderStore.splice(idx, 1);
     return true;
   }
 

@@ -42,6 +42,15 @@ async function list(endpoint: string): Promise<any[]> {
   return Array.isArray(r.data) ? r.data : (r.data?.items || []);
 }
 
+/** Seed writes must actually land — retry once on 429, throw on other errors
+ *  so a step fails loudly at seed time instead of mysteriously at verify. */
+async function seedPost(path: string, body: any): Promise<any> {
+  let r = await api("POST", path, body);
+  if (r.status === 429) { await sleep(6500); r = await api("POST", path, body); }
+  if (!r.ok) throw new Error(`seed POST ${path} failed: ${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
+  return r.data;
+}
+
 // ── Deploy wait: poll /api/version until `sha` matches the pushed commit ──
 async function waitForDeploy(sha: string): Promise<void> {
   const deadline = Date.now() + 6 * 60_000;
@@ -66,28 +75,28 @@ const STEPS: Step[] = [
   // ── Batch A — Finance ──────────────────────────────────────────────────────
   {
     batch: "A", tool: "update_income",
-    seed: async () => { await api("POST", "/incomes", { description: `${TAG}_inc`, amount: 100, frequency: "monthly", category: "freelance" }); },
+    seed: async () => { await seedPost("/incomes", { description: `${TAG}_inc`, amount: 100, frequency: "monthly", category: "freelance" }); },
     message: `Change the ${TAG}_inc income to $250`,
     retryMessage: `Update the income entry called ${TAG}_inc — set its amount to $250`,
     verify: async () => (await list("/incomes")).some((r) => (r.description || "").includes(`${TAG}_inc`) && Number(r.amount) === 250),
   },
   {
     batch: "A", tool: "delete_income",
-    seed: async () => { await api("POST", "/incomes", { description: `${TAG}_inc2`, amount: 77, frequency: "once", category: "other" }); },
+    seed: async () => { await seedPost("/incomes", { description: `${TAG}_inc2`, amount: 77, frequency: "once", category: "other" }); },
     message: `Delete the ${TAG}_inc2 income`,
     retryMessage: `Yes — delete the income entry called ${TAG}_inc2`,
     verify: async () => !(await list("/incomes")).some((r) => (r.description || "").includes(`${TAG}_inc2`)),
   },
   {
     batch: "A", tool: "delete_paycheck",
-    seed: async () => { await api("POST", "/paychecks", { source: `${TAG}_pay`, amount: 500, expected_date: today }); },
+    seed: async () => { await seedPost("/paychecks", { source: `${TAG}_pay`, amount: 500, expected_date: today }); },
     message: `Delete the expected paycheck from ${TAG}_pay`,
     retryMessage: `I have an expected paycheck whose source/employer is "${TAG}_pay" — delete that paycheck entry`,
     verify: async () => !(await list("/paychecks")).some((r) => (r.source || "").includes(`${TAG}_pay`)),
   },
   {
     batch: "A", tool: "update_memory",
-    seed: async () => { await api("POST", "/memories", { key: `${TAG}_mem`, value: "old value 1", category: "general" }); },
+    seed: async () => { await seedPost("/memories", { key: `${TAG}_mem`, value: "old value 1", category: "general" }); },
     message: `Update my saved memory ${TAG}_mem — the correct value is "new value 42"`,
     retryMessage: `Change the memory with key ${TAG}_mem to say: new value 42`,
     verify: async () => (await list("/memories")).some((r) => (r.key || "").includes(`${TAG}_mem`) && String(r.value || "").includes("new value 42")),
@@ -96,8 +105,8 @@ const STEPS: Step[] = [
   {
     batch: "B", tool: "undo_last_payment",
     seed: async () => {
-      const bill = (await api("POST", "/obligations", { name: `${TAG}_ubill`, amount: 42, frequency: "monthly", kind: "bill", nextDueDate: today })).data;
-      await api("POST", `/obligations/${bill.id}/pay`, { amount: 42 });
+      const bill = await seedPost("/obligations", { name: `${TAG}_ubill`, amount: 42, frequency: "monthly", kind: "bill", nextDueDate: today });
+      await seedPost(`/obligations/${bill.id}/pay`, { amount: 42 });
     },
     message: `Undo the last payment on the ${TAG}_ubill bill`,
     verify: async () => {
@@ -108,8 +117,8 @@ const STEPS: Step[] = [
   {
     batch: "B", tool: "update_liability_payment",
     seed: async () => {
-      const bill = (await api("POST", "/obligations", { name: `${TAG}_pbill`, amount: 60, frequency: "monthly", kind: "bill", nextDueDate: today })).data;
-      await api("POST", `/obligations/${bill.id}/pay`, { amount: 60 });
+      const bill = await seedPost("/obligations", { name: `${TAG}_pbill`, amount: 60, frequency: "monthly", kind: "bill", nextDueDate: today });
+      await seedPost(`/obligations/${bill.id}/pay`, { amount: 60 });
     },
     message: `The ${TAG}_pbill payment I just logged was actually $55 — fix it`,
     retryMessage: `Update the most recent recorded payment on ${TAG}_pbill: set its amount to $55`,
@@ -121,20 +130,26 @@ const STEPS: Step[] = [
   {
     batch: "B", tool: "delete_liability_payment",
     seed: async () => {
-      const bill = (await api("POST", "/obligations", { name: `${TAG}_dbill`, amount: 30, frequency: "monthly", kind: "bill", nextDueDate: today })).data;
-      await api("POST", `/obligations/${bill.id}/pay`, { amount: 30 });
-      await api("POST", `/obligations/${bill.id}/pay`, { amount: 30 });
+      const bill = await seedPost("/obligations", { name: `${TAG}_dbill`, amount: 30, frequency: "monthly", kind: "bill", nextDueDate: today });
+      // The pay endpoint dedupes ANY second pay on the same obligation within
+      // 8s (userId:obligationId key, amount ignored) — space the two payments
+      // past that window or the second silently returns {deduped:true}.
+      await seedPost(`/obligations/${bill.id}/pay`, { amount: 30 });
+      await sleep(8500);
+      await seedPost(`/obligations/${bill.id}/pay`, { amount: 31 });
     },
-    message: `Delete the duplicate payment on ${TAG}_dbill — remove the most recent one`,
+    message: `Delete the $31 payment recorded on ${TAG}_dbill`,
+    retryMessage: `Yes — remove the most recent recorded payment (the $31 one) from ${TAG}_dbill's payment history`,
     verify: async () => {
       const b = (await list("/obligations")).find((o) => (o.name || "").includes(`${TAG}_dbill`));
-      return !!b && (b.payments || []).length === 1;
+      const pays = (b?.payments || []) as any[];
+      return pays.length === 1 && Number(pays[0].amount) === 30;
     },
   },
   {
     batch: "B", tool: "update_obligation (reschedule occurrence)",
     seed: async () => {
-      await api("POST", "/obligations", { name: `${TAG}_rbill`, amount: 25, frequency: "monthly", kind: "bill", nextDueDate: today });
+      await seedPost("/obligations", { name: `${TAG}_rbill`, amount: 25, frequency: "monthly", kind: "bill", nextDueDate: today });
     },
     message: `Move the next ${TAG}_rbill payment to the 28th of next month — just that one occurrence, don't change the schedule`,
     verify: async () => {
@@ -159,18 +174,89 @@ const STEPS: Step[] = [
           remaining_balance: 1000 - n * 80,
         };
       });
-      await api("POST", "/loans/schedule", { entries });
+      await seedPost("/loans/schedule", { entries });
     },
     message: `Mark the next ${TAG}_loan payment as paid on the loan schedule`,
+    retryMessage: `On my loan amortization schedule there is a loan called ${TAG}_loan — mark its next unpaid installment as paid (do NOT create anything)`,
     verify: async () => {
       const r = await api("GET", `/loans/schedule`);
       const rows: any[] = Array.isArray(r.data) ? r.data : [];
       return rows.some((row) => (row.loan_name || "").includes(`${TAG}_loan`) && row.paid && Number(row.payment_number) === 1);
     },
   },
+  // ── Batch C — Executive / wellness / notifications ─────────────────────────
+  {
+    batch: "C", tool: "update_reminder",
+    seed: async () => {
+      const at = new Date(Date.now() + 3 * 86400000); at.setHours(10, 0, 0, 0);
+      await seedPost("/reminders", { title: `${TAG}_rem call vet`, fireAt: at.toISOString() });
+    },
+    message: `Move my ${TAG}_rem call vet reminder to 4pm that same day`,
+    retryMessage: `Update the pending reminder titled "${TAG}_rem call vet" — change its time to 16:00 on the same date it is currently set for`,
+    verify: async () => {
+      const rems = await list("/reminders");
+      const r = rems.find((x) => (x.title || "").includes(`${TAG}_rem`));
+      if (!r?.fireAt) return false;
+      const d = new Date(r.fireAt);
+      return d.getUTCHours() !== 10 || d.getHours() === 16; // moved off the seeded 10:00
+    },
+  },
+  {
+    batch: "C", tool: "delete_reminder",
+    seed: async () => {
+      const at = new Date(Date.now() + 4 * 86400000); at.setHours(9, 0, 0, 0);
+      await seedPost("/reminders", { title: `${TAG}_rem2 renew tags`, fireAt: at.toISOString() });
+    },
+    message: `Cancel the ${TAG}_rem2 renew tags reminder`,
+    retryMessage: `Yes — delete the pending reminder titled "${TAG}_rem2 renew tags"`,
+    verify: async () => !(await list("/reminders")).some((x) => (x.title || "").includes(`${TAG}_rem2`)),
+  },
+  {
+    batch: "C", tool: "restore_task",
+    seed: async () => {
+      const t = await seedPost("/tasks", { title: `${TAG}_rtask file taxes` });
+      await api("DELETE", `/tasks/${t.id}`);
+    },
+    message: `Restore the ${TAG}_rtask file taxes task I deleted`,
+    verify: async () => (await list("/tasks")).some((t) => (t.title || "").includes(`${TAG}_rtask`)),
+  },
+  {
+    batch: "C", tool: "restore_habit",
+    seed: async () => {
+      const h = await seedPost("/habits", { name: `${TAG}_rhabit stretch`, frequency: "daily" });
+      await api("DELETE", `/habits/${h.id}`);
+    },
+    message: `Bring back the ${TAG}_rhabit stretch habit I deleted`,
+    verify: async () => (await list("/habits")).some((h) => (h.name || "").includes(`${TAG}_rhabit`)),
+  },
+  {
+    batch: "C", tool: "dismiss_notifications",
+    seed: async () => {
+      // An overdue task guarantees at least one live notification to dismiss.
+      await seedPost("/tasks", { title: `${TAG}_ntask overdue thing`, dueDate: new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10) });
+    },
+    message: `Dismiss all my notifications`,
+    verify: async () => {
+      const r = await api("GET", "/preferences/dismissed_notifications");
+      try {
+        const ids = JSON.parse((r.data as any)?.value || "[]");
+        return Array.isArray(ids) && ids.some((id: string) => String(id).startsWith("task-overdue-") || String(id).startsWith("task-today-"));
+      } catch { return false; }
+    },
+  },
+  {
+    batch: "C", tool: "update_task (addTags subtask)",
+    seed: async () => { await seedPost("/tasks", { title: `${TAG}_stask groceries` }); },
+    message: `Add a subtask "buy milk" to my ${TAG}_stask groceries task`,
+    retryMessage: `Update the task ${TAG}_stask groceries: add the subtask tag for "buy milk" (do not replace its other tags)`,
+    verify: async () => {
+      const t = (await list("/tasks")).find((x) => (x.title || "").includes(`${TAG}_stask`));
+      return !!(t?.tags || []).some((tag: string) => tag.startsWith("st:0:") && tag.includes("milk"));
+    },
+  },
   {
     batch: "A", tool: "copy_budgets_previous_month",
-    seed: async () => { await api("POST", "/budgets", { category: "education", amount: 22133, month: prevMonth }); },
+    seed: async () => { await seedPost("/budgets", { category: "education", amount: 22133, month: prevMonth }); },
     message: `Copy last month's budgets to this month`,
     verify: async () => {
       const r = await api("GET", `/budgets?month=${month}`);

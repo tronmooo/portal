@@ -2582,6 +2582,16 @@ export class SupabaseStorage implements IStorage {
     return !error;
   }
 
+  /** Recently soft-deleted tasks (newest deletion first) — for restore-by-name. */
+  async getDeletedTasks(limit = 25): Promise<Task[]> {
+    const { data, error } = await this.supabase
+      .from("tasks").select("*").eq("user_id", this.userId)
+      .not("deleted_at", "is", null)
+      .order("deleted_at", { ascending: false }).limit(limit);
+    if (error) throw error;
+    return (data || []).map(r => this.rowToTask(r));
+  }
+
   // ============================================================
   // EXPENSES
   // ============================================================
@@ -3689,6 +3699,16 @@ export class SupabaseStorage implements IStorage {
   async restoreHabit(id: string): Promise<boolean> {
     const { error } = await this.supabase.from("habits").update({ deleted_at: null }).eq("id", id).eq("user_id", this.userId);
     return !error;
+  }
+
+  /** Recently soft-deleted habits (newest deletion first) — for restore-by-name. */
+  async getDeletedHabits(limit = 25): Promise<Habit[]> {
+    const { data, error } = await this.supabase
+      .from("habits").select("*").eq("user_id", this.userId)
+      .not("deleted_at", "is", null)
+      .order("deleted_at", { ascending: false }).limit(limit);
+    if (error) throw error;
+    return (data || []).map(r => this.rowToHabit(r, []));
   }
 
   // ============================================================
@@ -5785,6 +5805,28 @@ export class SupabaseStorage implements IStorage {
       .eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     return true;
+  }
+
+  async updateReminder(id: string, data: { title?: string; fireAt?: string; profileId?: string | null }): Promise<Reminder | undefined> {
+    const patch: any = {};
+    if (data.title !== undefined) patch.title = data.title;
+    if (data.fireAt !== undefined) patch.fire_at = data.fireAt;
+    if (data.profileId !== undefined) patch.profile_id = data.profileId;
+    if (Object.keys(patch).length === 0) return undefined;
+    const { data: row, error } = await this.supabase.from("reminders")
+      .update(patch).eq("id", id).eq("user_id", this.userId)
+      .select().single();
+    if (error) throw error;
+    return row ? this.mapReminder(row) : undefined;
+  }
+
+  async deleteReminder(id: string): Promise<boolean> {
+    const { data, error } = await this.supabase.from("reminders")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id).eq("user_id", this.userId)
+      .select("id");
+    if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
   }
 
   // ============================================================

@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**112 operations** — ✅ 82 covered · 🆕 10 added · 🔜 9 planned · 🚫 11 excluded by design.
+**112 operations** — ✅ 82 covered · 🆕 16 added · 🔜 3 planned · 🚫 11 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -19,8 +19,8 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Complete | Tasks popup checkbox | `complete_task` | ✅ covered |  |
 | Bulk complete | Tasks popup multi-select | `bulk_complete_tasks` | ✅ covered |  |
 | Delete | Tasks popup row menu | `delete_task` | ✅ covered |  |
-| Restore soft-deleted | Tasks popup undo toast | `restore_task` | 🔜 planned |  |
-| Subtasks / recurrence / critical priority (tag-encoded) | Tasks popup composer + row editor | `update_task` | 🔜 planned |  |
+| Restore soft-deleted | Tasks popup undo toast | `restore_task` | 🆕 added |  |
+| Subtasks / recurrence / critical priority (tag-encoded) | Tasks popup composer + row editor | `update_task` | 🆕 added |  |
 | List / query | Tasks popup tabs | `query_tasks` | ✅ covered |  |
 
 ### Habit
@@ -32,7 +32,7 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Un-check (remove check-in) | Habits popup toggle | `uncomplete_habit` | ✅ covered |  |
 | Edit (rename/frequency/schedule) | Habits popup editor | `update_habit` | ✅ covered |  |
 | Delete | Habits popup row menu | `delete_habit` | ✅ covered |  |
-| Restore soft-deleted | Habits popup undo toast | `restore_habit` | 🔜 planned |  |
+| Restore soft-deleted | Habits popup undo toast | `restore_habit` | 🆕 added |  |
 
 ### Tracker
 
@@ -76,8 +76,8 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Operation | UI surface | AI tool(s) | Status | Notes |
 |---|---|---|---|---|
 | Create | Quick-add → Reminder | `create_reminder` | ✅ covered |  |
-| Edit / move time | (no UI surface — chat only) | `update_reminder` | 🔜 planned |  |
-| Delete | (no UI surface — chat only) | `delete_reminder` | 🔜 planned |  |
+| Edit / move time | (no UI surface — chat only) | `update_reminder` | 🆕 added |  |
+| Delete | (no UI surface — chat only) | `delete_reminder` | 🆕 added |  |
 
 ### Expense
 
@@ -221,7 +221,7 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 
 | Operation | UI surface | AI tool(s) | Status | Notes |
 |---|---|---|---|---|
-| Dismiss one / all | Notification bell | `dismiss_notifications` | 🔜 planned |  |
+| Dismiss one / all | Notification bell | `dismiss_notifications` | 🆕 added |  |
 
 ### Domain
 

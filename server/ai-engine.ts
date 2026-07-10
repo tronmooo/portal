@@ -21,6 +21,7 @@ import {
   insertMemorySchema,
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
+import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
@@ -2542,6 +2543,61 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "update_reminder",
+    description: "Move or rename an EXISTING reminder ('move my dentist reminder to 4pm', 'push that reminder to tomorrow'). Finds the pending reminder by title (partial match) and updates its time and/or title — the mirrored calendar entry moves with it. Do NOT create a new reminder for a time change.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Title of the pending reminder to update (partial match)" },
+        newFireAt: { type: "string", description: "New fire time as full ISO 8601 datetime (resolve 'tomorrow 9am' to absolute)" },
+        newTitle: { type: "string", description: "New title, when renaming" },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "delete_reminder",
+    description: "Delete a pending reminder ('cancel my dentist reminder', 'delete the medication reminders'). Finds ALL un-fired occurrences matching the title (partial match) and removes them, plus the mirrored calendar entry.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Title of the reminder(s) to delete (partial match)" },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "restore_task",
+    description: "Restore (undelete) a recently DELETED task — 'bring back the task I just deleted', 'restore the passport task'. Searches soft-deleted tasks by title. NOT for un-completing (use update_task changes.status:'todo').",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Title of the deleted task to restore (partial match). Omit to restore the most recently deleted task." },
+      },
+    },
+  },
+  {
+    name: "restore_habit",
+    description: "Restore (undelete) a recently DELETED habit — 'bring back my meditation habit', 'restore the habit I deleted'. Searches soft-deleted habits by name.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Name of the deleted habit to restore (partial match). Omit to restore the most recently deleted habit." },
+      },
+    },
+  },
+  {
+    name: "dismiss_notifications",
+    description: "Dismiss notification(s) from the notification bell — 'dismiss all my notifications', 'clear the bill notifications', 'dismiss the passport expiry alert'. which:'all' clears everything currently showing; otherwise pass a title/text match.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        which: { type: "string", description: "'all' to dismiss every current notification, or text to match against notification titles/messages (partial, case-insensitive)" },
+      },
+      required: ["which"],
+    },
+  },
+  {
     name: "complete_task",
     description: "Mark a task as DONE/COMPLETE. Use this when user says 'I completed X', 'mark X as done', 'finished X task', 'checked off X', 'did X', 'I did the X task'. Find by title. NEVER use create_task when the user is referring to completing an EXISTING task. If task is not found, say so — do NOT create a new one.",
     input_schema: {
@@ -2814,6 +2870,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       properties: {
         liabilityName: { type: "string", description: "Liability/bill name (partial match)" },
         paymentDate: { type: "string", description: "YYYY-MM-DD of the payment to edit. Defaults to the most recent payment." },
+        amount: { type: "number", description: "CURRENT amount of the payment to target, when the user identifies it by amount ('the $31 payment')." },
         changes: { type: "object", description: "Fields to update — 'amount' (number), 'paymentDate' (YYYY-MM-DD), 'notes'" },
       },
       required: ["liabilityName", "changes"],
@@ -2827,6 +2884,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       properties: {
         liabilityName: { type: "string", description: "Liability/bill name (partial match)" },
         paymentDate: { type: "string", description: "YYYY-MM-DD of the payment to delete. Defaults to the most recent payment." },
+        amount: { type: "number", description: "Amount of the payment to target, when the user identifies it by amount ('delete the $31 payment')." },
       },
       required: ["liabilityName"],
     },
@@ -3338,14 +3396,16 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "update_task",
-    description: "Update an existing task. Find by title (partial match), then apply changes like new title, description, priority, due date, or status.",
+    description: "Update an existing task. Find by title (partial match), then apply changes like new title, description, priority, due date, or status. Rich metadata is tag-encoded — use addTags/removeTags for ADDITIVE tag edits (they merge with the task's existing tags server-side): subtasks `st:0:<text>` (0=open, 1=done), recurrence `recur:daily|weekdays|weekly|monthly|yearly|every-N-days|every-N-weeks` (end via `runtil:YYYY-MM-DD` or `rcount:N`), critical priority `prio:critical` (also set changes.priority:'high'), category `cat:<x>`, time-of-day `time:HH:MM`, estimate `est:<minutes>`. Examples: 'add a subtask buy milk to Groceries' → addTags:['st:0:buy milk']; 'make Water Plants repeat weekly' → addTags:['recur:weekly']; 'stop it repeating' → removeTags:['recur:'].",
     input_schema: {
       type: "object" as const,
       properties: {
         title: { type: "string", description: "Title of the task to update (partial match)" },
-        changes: { type: "object", description: "Fields to update — can include 'title', 'description', 'priority', 'dueDate', 'status', 'tags'" },
+        changes: { type: "object", description: "Fields to update — can include 'title', 'description', 'priority', 'dueDate', 'status'. Avoid changes.tags (it REPLACES the whole array) — use addTags/removeTags instead." },
+        addTags: { type: "array", items: { type: "string" }, description: "Tags to ADD (merged with existing, deduped). Use the tag grammar from the tool description." },
+        removeTags: { type: "array", items: { type: "string" }, description: "Tags to REMOVE. An entry ending in ':' removes every tag with that prefix (e.g. 'recur:' clears recurrence; 'st:' clears all subtasks)." },
       },
-      required: ["title", "changes"],
+      required: ["title"],
     },
   },
   {
@@ -4291,6 +4351,14 @@ NEVER say "X already has a journal entry" unless the Journal Entries context abo
 If journal_entry succeeds, say "Journal entry saved for [name]."
 NEVER substitute a create_task when the user explicitly asks for a journal entry.
 
+━━━ REMINDER / RESTORE / NOTIFICATION CRUD ━━━
+- set a reminder: create_reminder(title, fireAt)
+- "move my X reminder to 4pm" / "push it to tomorrow" → update_reminder(title, newFireAt) — NEVER create a second reminder for a time change
+- "cancel/delete the X reminder(s)" → delete_reminder(title) — removes every pending occurrence + the calendar entry
+- "bring back / restore the task I deleted" → restore_task(title?) — searches recently DELETED tasks (they are NOT in your data context; call the tool). "un-complete" is update_task(changes.status:'todo'), not restore.
+- "restore the X habit" → restore_habit(name?)
+- "dismiss my notifications" / "clear the bill alerts" → dismiss_notifications(which:'all' or matching text)
+
 ━━━ INCOME / PAYCHECK / BUDGET / MEMORY CRUD ━━━
 - log income: log_income(amount, source) — "I got paid $X", "received $X from Y"
 - edit income: update_income(description, changes) — "change my freelance income to $250/mo"
@@ -4397,7 +4465,7 @@ PAYMENT HISTORY EDITS / UNDO:
 - "that mortgage payment was actually $1450" / "fix the payment I logged" → update_liability_payment(liabilityName, changes:{amount:1450}). Targets the most recent payment; pass paymentDate for an older one.
 - "delete that duplicate payment" → delete_liability_payment(liabilityName, paymentDate?).
 - "undo the last payment on the electric bill" / "I didn't actually pay rent" → undo_last_payment(billName). The bill shows unpaid again.
-- "mark the next car-loan installment paid" / "installment 14 is paid" → mark_loan_payment(loanName, paymentNumber?) — checks off the amortization SCHEDULE row. To record a real payment against the balance use add_liability_payment.
+- "mark the next car-loan installment paid" / "installment 14 is paid" / anything mentioning the "loan schedule" or "amortization" → mark_loan_payment(loanName, paymentNumber?) — checks off the amortization SCHEDULE row. Loan schedules are NOT listed in your data context — call the tool with the name the user gave; it searches the schedule table itself. NEVER ask to create a loan first, and never substitute create_liability. To record a real payment against a balance use add_liability_payment.
 - "move the August electric payment to the 10th" (one-time) → update_obligation(name, occurrenceDate:"2026-08", rescheduleTo:"2026-08-10"). Permanent series change → changes.nextDueDate/dueDay.
 - "this month's internet bill is $80 instead of $60" (one-time) → update_obligation(name, occurrenceDate:"next", occurrenceAmount:80). Permanent → changes.amount.
 - "delete my mortgage / remove the car loan entirely" → delete_profile(name) — liabilities are profiles; there is no separate delete-liability tool.
@@ -5810,6 +5878,114 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           : `Reminder set for ${human} and added to your calendar. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
         actions: [{ type: "create", category: "reminder", data: reminder }],
       };
+    }
+
+    case "update_reminder": {
+      const pending = await storage.listReminders();
+      const needle = safeLC(input.title).trim();
+      const matches = pending.filter(r => safeLC(r.title).includes(needle));
+      if (matches.length === 0) return { error: `No pending reminder found matching "${input.title}"`, candidates: pending.slice(0, 5).map(r => r.title) };
+      // Earliest matching occurrence — the one the user means by "my X reminder".
+      const target = matches.slice().sort((a, b) => String(a.fireAt).localeCompare(String(b.fireAt)))[0];
+      const patch: { title?: string; fireAt?: string } = {};
+      if (input.newTitle && String(input.newTitle).trim()) patch.title = String(input.newTitle).trim();
+      if (input.newFireAt) {
+        const when = new Date(input.newFireAt);
+        if (isNaN(when.getTime())) return { error: `Invalid new time: "${input.newFireAt}"` };
+        patch.fireAt = when.toISOString();
+      }
+      if (!patch.title && !patch.fireAt) return { error: "Nothing to change — pass newFireAt and/or newTitle" };
+      const updated = await storage.updateReminder(target.id, patch);
+      // Move the mirrored calendar entry (same title, tagged "reminder") along.
+      try {
+        const _tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
+        const oldDate = new Date(target.fireAt).toLocaleDateString("en-CA", { timeZone: _tz });
+        const events = await storage.getEvents();
+        const mirror = events.find(e => e.title.toLowerCase() === safeLC(target.title) && e.date === oldDate && (e.tags || []).includes("reminder"));
+        if (mirror) {
+          const evPatch: any = {};
+          if (patch.title) evPatch.title = patch.title;
+          if (patch.fireAt) {
+            const nd = new Date(patch.fireAt);
+            evPatch.date = nd.toLocaleDateString("en-CA", { timeZone: _tz });
+            evPatch.time = nd.toLocaleTimeString("en-GB", { timeZone: _tz, hour: "2-digit", minute: "2-digit" });
+          }
+          await storage.updateEvent(mirror.id, evPatch);
+        }
+      } catch (e: any) { console.warn("[AI] Reminder mirror move failed:", e?.message || e); }
+      return { updated: true, reminder: updated, message: `Reminder "${target.title}" updated${patch.fireAt ? ` — now fires ${new Date(patch.fireAt).toLocaleString("en-US", { timeZone: (storage as any)._timezone || DEFAULT_TIMEZONE, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : ""}.` };
+    }
+
+    case "delete_reminder": {
+      const pending = await storage.listReminders();
+      const needle = safeLC(input.title).trim();
+      const matches = pending.filter(r => safeLC(r.title).includes(needle));
+      if (matches.length === 0) return { error: `No pending reminder found matching "${input.title}"`, candidates: pending.slice(0, 5).map(r => r.title) };
+      let removed = 0;
+      for (const r of matches) { if (await storage.deleteReminder(r.id)) removed++; }
+      // Best-effort: remove the mirrored calendar entries too.
+      try {
+        const _tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
+        const dates = new Set(matches.map(r => new Date(r.fireAt).toLocaleDateString("en-CA", { timeZone: _tz })));
+        const events = await storage.getEvents();
+        for (const e of events) {
+          if ((e.tags || []).includes("reminder") && e.title.toLowerCase() === safeLC(matches[0].title) && dates.has(e.date)) {
+            await storage.deleteEvent(e.id).catch(() => { /* best effort */ });
+          }
+        }
+      } catch (e: any) { console.warn("[AI] Reminder mirror cleanup failed:", e?.message || e); }
+      return { deleted: true, count: removed, title: matches[0].title, message: `Deleted ${removed} pending reminder${removed === 1 ? "" : "s"} for "${matches[0].title}".` };
+    }
+
+    case "restore_task": {
+      const deleted = await storage.getDeletedTasks();
+      if (deleted.length === 0) return { error: "No recently deleted tasks to restore" };
+      const needle = safeLC(input.title || "").trim();
+      const target = needle
+        ? deleted.find(t => t.title.toLowerCase().includes(needle))
+        : deleted[0]; // most recently deleted
+      if (!target) return { error: `No deleted task found matching "${input.title}"`, candidates: deleted.slice(0, 5).map(t => t.title) };
+      const ok = await storage.restoreTask(target.id);
+      if (!ok) return { error: `Couldn't restore "${target.title}"` };
+      return { restored: true, task: target, message: `Restored task "${target.title}".` };
+    }
+
+    case "restore_habit": {
+      const deleted = await storage.getDeletedHabits();
+      if (deleted.length === 0) return { error: "No recently deleted habits to restore" };
+      const needle = safeLC(input.name || "").trim();
+      const target = needle
+        ? deleted.find(h => h.name.toLowerCase().includes(needle))
+        : deleted[0];
+      if (!target) return { error: `No deleted habit found matching "${input.name}"`, candidates: deleted.slice(0, 5).map(h => h.name) };
+      const ok = await storage.restoreHabit(target.id);
+      if (!ok) return { error: `Couldn't restore "${target.name}"` };
+      return { restored: true, habit: target, message: `Restored habit "${target.name}".` };
+    }
+
+    case "dismiss_notifications": {
+      const _tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
+      const current = await buildNotifications(storage, _tz);
+      const which = String(input.which || "").trim();
+      const targets = which.toLowerCase() === "all"
+        ? current
+        : current.filter(n => `${n.title} ${n.message}`.toLowerCase().includes(which.toLowerCase()));
+      if (targets.length === 0) {
+        return which.toLowerCase() === "all"
+          ? { dismissed: 0, message: "No notifications to dismiss — the bell is already clear." }
+          : { error: `No notifications match "${which}"`, candidates: current.slice(0, 5).map(n => n.title) };
+      }
+      // Same read/merge/write contract as the bell UI (NotificationBell.tsx):
+      // the preference holds a JSON array of dismissed notification ids.
+      let existing: string[] = [];
+      try {
+        const raw = await storage.getPreference(DISMISSED_NOTIFICATIONS_PREF);
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(parsed)) existing = parsed.filter((x) => typeof x === "string");
+      } catch { /* start fresh on unparseable value */ }
+      const merged = Array.from(new Set([...existing, ...targets.map(n => n.id)]));
+      await storage.setPreference(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(merged));
+      return { dismissed: targets.length, titles: targets.slice(0, 8).map(n => n.title), message: `Dismissed ${targets.length} notification${targets.length === 1 ? "" : "s"}.` };
     }
 
     case "create_task": {
@@ -8649,7 +8825,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const tasks = await storage.getTasks();
       const match = tasks.find(t => t.title.toLowerCase().includes(safeLC(input.title)));
       if (!match) return { error: `No task found matching "${input.title}"` };
-      const updated = await storage.updateTask(match.id, input.changes);
+      const changes: Record<string, any> = { ...(input.changes || {}) };
+      // Additive tag edits MERGE with the task's existing tags server-side.
+      // storage.updateTask replaces the whole array, so a bare changes.tags
+      // from the model (which can't see current tags) would wipe subtasks/
+      // recurrence/categories — addTags/removeTags is the safe path.
+      if (Array.isArray(input.addTags) || Array.isArray(input.removeTags)) {
+        let tags: string[] = Array.isArray(changes.tags) ? changes.tags : [...(match.tags || [])];
+        for (const raw of (input.removeTags || [])) {
+          const r = String(raw);
+          tags = r.endsWith(":") ? tags.filter(t => !t.startsWith(r)) : tags.filter(t => t !== r);
+        }
+        for (const raw of (input.addTags || [])) {
+          const a = String(raw);
+          if (!tags.includes(a)) tags.push(a);
+        }
+        changes.tags = tags;
+      }
+      if (Object.keys(changes).length === 0) return { error: "No changes provided" };
+      const updated = await storage.updateTask(match.id, changes);
       return { updated: true, task: updated };
     }
 
@@ -8765,13 +8959,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!liability) return { error: `Liability not found: ${input.liabilityName}`, candidates: liabs.slice(0, 5).map((p: any) => p.name) };
       const payments = await storage.getLiabilityPayments(liability.id); // newest first
       if (payments.length === 0) return { error: `${liability.name} has no recorded payments` };
-      let target = payments[0];
+      let candidates = payments;
       if (input.paymentDate) {
         const d = String(input.paymentDate).slice(0, 10);
-        const byDate = payments.find(p => String(p.paymentDate || "").slice(0, 10) === d);
-        if (!byDate) return { error: `No ${liability.name} payment on ${d}`, candidates: payments.slice(0, 5).map(p => `${p.paymentDate} ($${p.amount})`) };
-        target = byDate;
+        candidates = candidates.filter(p => String(p.paymentDate || "").slice(0, 10) === d);
+        if (candidates.length === 0) return { error: `No ${liability.name} payment on ${d}`, candidates: payments.slice(0, 5).map(p => `${p.paymentDate} ($${p.amount})`) };
       }
+      // "the $31 payment" — target by current amount when the user identifies
+      // it that way (same-day payments make date alone ambiguous).
+      if (input.amount != null) {
+        const amt = Number(input.amount);
+        const byAmt = candidates.filter(p => Math.abs(Number(p.amount) - amt) < 0.005);
+        if (byAmt.length === 0) return { error: `No ${liability.name} payment of $${amt}`, candidates: candidates.slice(0, 5).map(p => `${p.paymentDate} ($${p.amount})`) };
+        candidates = byAmt;
+      }
+      // Most recent first (createdAt tiebreak — payment_date alone ties for
+      // same-day payments).
+      const target = candidates.slice().sort((a: any, b: any) =>
+        String(b.createdAt || b.paymentDate || "").localeCompare(String(a.createdAt || a.paymentDate || "")))[0];
       if (name === "delete_liability_payment") {
         const ok = await storage.deleteLiabilityPayment(target.id);
         if (!ok) return { error: `Couldn't delete the ${liability.name} payment` };
@@ -12161,7 +12366,12 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   complete_task: "complete_task",
   bulk_complete_tasks: "complete_task",
   delete_task: "delete_task",
+  restore_task: "update_entity",
+  restore_habit: "update_entity",
   create_reminder: "create_reminder",
+  update_reminder: "update_entity",
+  delete_reminder: "delete_entity",
+  dismiss_notifications: "update_entity",
   // Trackers
   log_tracker_entry: "log_entry",
   create_tracker: "create_tracker",

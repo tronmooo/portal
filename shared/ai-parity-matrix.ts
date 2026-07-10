@@ -38,11 +38,11 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Task", operation: "Complete", ui: "Tasks popup checkbox", aiTools: ["complete_task"], status: "covered" },
   { entity: "Task", operation: "Bulk complete", ui: "Tasks popup multi-select", aiTools: ["bulk_complete_tasks"], status: "covered" },
   { entity: "Task", operation: "Delete", ui: "Tasks popup row menu", aiTools: ["delete_task"], status: "covered" },
-  { entity: "Task", operation: "Restore soft-deleted", ui: "Tasks popup undo toast", aiTools: ["restore_task"], status: "planned" },
+  { entity: "Task", operation: "Restore soft-deleted", ui: "Tasks popup undo toast", aiTools: ["restore_task"], status: "added" },
   // update_task passes tags through today but REPLACES the whole array — safe
   // additive tag ops (subtasks, recurrence, prio:critical) need the addTags /
   // removeTags merge extension (Batch C). Flips to "added" when that lands.
-  { entity: "Task", operation: "Subtasks / recurrence / critical priority (tag-encoded)", ui: "Tasks popup composer + row editor", aiTools: ["update_task"], status: "planned" },
+  { entity: "Task", operation: "Subtasks / recurrence / critical priority (tag-encoded)", ui: "Tasks popup composer + row editor", aiTools: ["update_task"], status: "added" },
   { entity: "Task", operation: "List / query", ui: "Tasks popup tabs", aiTools: ["query_tasks"], status: "covered" },
 
   // ── Habits ─────────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Habit", operation: "Un-check (remove check-in)", ui: "Habits popup toggle", aiTools: ["uncomplete_habit"], status: "covered" },
   { entity: "Habit", operation: "Edit (rename/frequency/schedule)", ui: "Habits popup editor", aiTools: ["update_habit"], status: "covered" },
   { entity: "Habit", operation: "Delete", ui: "Habits popup row menu", aiTools: ["delete_habit"], status: "covered" },
-  { entity: "Habit", operation: "Restore soft-deleted", ui: "Habits popup undo toast", aiTools: ["restore_habit"], status: "planned" },
+  { entity: "Habit", operation: "Restore soft-deleted", ui: "Habits popup undo toast", aiTools: ["restore_habit"], status: "added" },
 
   // ── Trackers & entries ─────────────────────────────────────────────────────
   { entity: "Tracker", operation: "Create", ui: "Trackers tab → New tracker", aiTools: ["create_tracker"], status: "covered" },
@@ -78,8 +78,8 @@ export const PARITY_MATRIX: ParityRow[] = [
 
   // ── Reminders ──────────────────────────────────────────────────────────────
   { entity: "Reminder", operation: "Create", ui: "Quick-add → Reminder", aiTools: ["create_reminder"], status: "covered" },
-  { entity: "Reminder", operation: "Edit / move time", ui: "(no UI surface — chat only)", aiTools: ["update_reminder"], status: "planned" },
-  { entity: "Reminder", operation: "Delete", ui: "(no UI surface — chat only)", aiTools: ["delete_reminder"], status: "planned" },
+  { entity: "Reminder", operation: "Edit / move time", ui: "(no UI surface — chat only)", aiTools: ["update_reminder"], status: "added" },
+  { entity: "Reminder", operation: "Delete", ui: "(no UI surface — chat only)", aiTools: ["delete_reminder"], status: "added" },
 
   // ── Expenses ───────────────────────────────────────────────────────────────
   { entity: "Expense", operation: "Create", ui: "Finance tab / Quick-add", aiTools: ["create_expense"], status: "covered" },
@@ -177,7 +177,7 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Artifact", operation: "Share / unshare public link", ui: "Artifact menu → Share", aiTools: [], status: "excluded", reason: "Publishes content at a public URL — outward-facing action kept behind an explicit UI click." },
 
   // ── Notifications ──────────────────────────────────────────────────────────
-  { entity: "Notification", operation: "Dismiss one / all", ui: "Notification bell", aiTools: ["dismiss_notifications"], status: "planned" },
+  { entity: "Notification", operation: "Dismiss one / all", ui: "Notification bell", aiTools: ["dismiss_notifications"], status: "added" },
 
   // ── Custom domains ─────────────────────────────────────────────────────────
   { entity: "Domain", operation: "Create / update / delete", ui: "Custom domain manager", aiTools: ["create_domain", "update_domain", "delete_domain"], status: "covered" },
