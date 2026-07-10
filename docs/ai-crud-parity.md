@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**115 operations** — ✅ 82 covered · 🆕 22 added · 🔜 0 planned · 🚫 11 excluded by design.
+**120 operations** — ✅ 82 covered · 🆕 27 added · 🔜 0 planned · 🚫 11 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -244,6 +244,16 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Undo last action | Chat action-card Undo button | `undo_last_action` | 🆕 added |  |
 | Record change history / audit trail | (chat-first) activity feed | `get_entity_history` | 🆕 added |  |
 | Bulk delete (preview → confirm → execute) | (chat-first) multi-select delete | `preview_bulk_action`, `execute_bulk_action` | 🆕 added |  |
+
+### System
+
+| Operation | UI surface | AI tool(s) | Status | Notes |
+|---|---|---|---|---|
+| Orphan scan + repair | Settings → data health | `find_orphans`, `repair_relations` | 🆕 added |  |
+| Profile-isolation validation | (chat-first) data health | `validate_profile_isolation` | 🆕 added |  |
+| Duplicate detection | (chat-first) data health | `find_duplicates` | 🆕 added |  |
+| Dashboard refresh + count validation | Dashboard reload | `refresh_dashboard`, `validate_dashboard_counts` | 🆕 added |  |
+| Explain dashboard placement | (chat-first) section rules | `explain_dashboard_item` | 🆕 added |  |
 
 ### Settings
 

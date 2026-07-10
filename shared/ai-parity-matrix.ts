@@ -189,6 +189,11 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Meta", operation: "Undo last action", ui: "Chat action-card Undo button", aiTools: ["undo_last_action"], status: "added" },
   { entity: "Meta", operation: "Record change history / audit trail", ui: "(chat-first) activity feed", aiTools: ["get_entity_history"], status: "added" },
   { entity: "Meta", operation: "Bulk delete (preview → confirm → execute)", ui: "(chat-first) multi-select delete", aiTools: ["preview_bulk_action", "execute_bulk_action"], status: "added" },
+  { entity: "System", operation: "Orphan scan + repair", ui: "Settings → data health", aiTools: ["find_orphans", "repair_relations"], status: "added" },
+  { entity: "System", operation: "Profile-isolation validation", ui: "(chat-first) data health", aiTools: ["validate_profile_isolation"], status: "added" },
+  { entity: "System", operation: "Duplicate detection", ui: "(chat-first) data health", aiTools: ["find_duplicates"], status: "added" },
+  { entity: "System", operation: "Dashboard refresh + count validation", ui: "Dashboard reload", aiTools: ["refresh_dashboard", "validate_dashboard_counts"], status: "added" },
+  { entity: "System", operation: "Explain dashboard placement", ui: "(chat-first) section rules", aiTools: ["explain_dashboard_item"], status: "added" },
 
   // ── App-level operations excluded by design ────────────────────────────────
   { entity: "Settings", operation: "Customize dashboard layout", ui: "Dashboard → Customize", aiTools: [], status: "excluded", reason: "Pure UI layout serialization (drag-order preference) — no meaningful chat equivalent." },

@@ -137,6 +137,37 @@ const STEPS: Step[] = [
     verify: async () => (await list("/tasks")).filter((t) => (t.title || "").includes(`${TAG}_bulk`)).length === 0,
   },
 
+  // ── Batch 4 (MCP-grade) — system validate / repair / refresh ───────────────
+  {
+    batch: "4", tool: "find_orphans",
+    message: `Check my data for orphaned records`,
+    verify: async () => true,
+    verifyReply: (reply) => /orphan|consistent|healthy|no.*issue|found \d+/i.test(reply),
+  },
+  {
+    batch: "4", tool: "find_duplicates",
+    seed: async () => {
+      await seedPost("/expenses", { description: `${TAG}_dupscan latte`, amount: 4.25, category: "food" });
+      await seedPost("/expenses", { description: `${TAG}_dupscan latte`, amount: 4.25, category: "food" });
+    },
+    message: `Do I have any duplicate expenses?`,
+    verify: async () => true,
+    verifyReply: (reply) => /duplicate|similar/i.test(reply),
+  },
+  {
+    batch: "4", tool: "refresh_dashboard",
+    message: `Refresh my dashboard — the counts look stale`,
+    verify: async () => true,
+    verifyReply: (reply) => /refresh|recomputed|cleared|up to date/i.test(reply),
+  },
+  {
+    batch: "4", tool: "explain_dashboard_item",
+    seed: async () => { await seedPost("/tasks", { title: `${TAG}_whytask pay water bill`, dueDate: today }); },
+    message: `Why is ${TAG}_whytask showing on my dashboard today?`,
+    verify: async () => true,
+    verifyReply: (reply) => /due|today|agenda|overdue|dashboard/i.test(reply),
+  },
+
   // ── Batch A — Finance ──────────────────────────────────────────────────────
   {
     batch: "A", tool: "update_income",

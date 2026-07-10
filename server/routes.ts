@@ -19,6 +19,7 @@ import { selfIdsFrom } from "@shared/scope";
 import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
+import { registerCacheBuster } from "./cache-bus";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 
@@ -366,6 +367,9 @@ const USER_CACHE_PREFIXES = [
 function bustUserCaches(uid: string): void {
   for (const prefix of USER_CACHE_PREFIXES) bustCache(`${prefix}${uid}`);
 }
+// Let AI tools (refresh_dashboard) bust this module-private cache without a
+// circular routes↔ai-engine import — see server/cache-bus.ts.
+registerCacheBuster(bustUserCaches);
 
 // Verify a client-supplied entity id belongs to the current user.
 // Returns true if owned, false if not owned or unknown entity type.

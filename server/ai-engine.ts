@@ -3744,6 +3744,60 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
   {
+    name: "find_orphans",
+    description: "Scan the user's data for orphaned / inconsistent ownership records — 'check my data for orphaned records', 'is my data healthy?', 'find broken links'. Read-only: reports issues, fixes nothing.",
+    input_schema: { type: "object" as const, properties: {}, required: [] },
+  },
+  {
+    name: "repair_relations",
+    description: "FIX the ownership issues found by find_orphans — 'repair my data', 'fix the broken links', 'clean up the orphans'. Run find_orphans first and only repair after the user has seen the issue list and asked for the fix.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        confirm: { type: "boolean", description: "Must be true — the user explicitly asked to repair" },
+      },
+      required: ["confirm"],
+    },
+  },
+  {
+    name: "validate_profile_isolation",
+    description: "Verify every record's profile links point only at the user's own profiles — 'is my data isolated correctly?', 'check profile links', 'validate my data'. Read-only.",
+    input_schema: { type: "object" as const, properties: {}, required: [] },
+  },
+  {
+    name: "find_duplicates",
+    description: "Find likely duplicate records — 'do I have duplicate expenses?', 'find duplicate profiles', 'any doubled-up tasks?'. Heuristic candidates ONLY; never merges or deletes anything.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        entity_type: { type: "string", description: "Limit to one type: profile, task, expense, income, event, habit, tracker, goal, journal, memory, artifact, reminder, document. Omit to scan everything." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "refresh_dashboard",
+    description: "Force-refresh the dashboard — 'refresh my dashboard', 'my counts look stale', 'reload my data'. Clears the server's per-user caches, bumps the data version, and returns fresh counts.",
+    input_schema: { type: "object" as const, properties: {}, required: [] },
+  },
+  {
+    name: "validate_dashboard_counts",
+    description: "Check that dashboard tile counts match the database — 'are my dashboard numbers right?', 'the task count looks wrong'. Recomputes each tile from raw data and reports any mismatch. Read-only.",
+    input_schema: { type: "object" as const, properties: {}, required: [] },
+  },
+  {
+    name: "explain_dashboard_item",
+    description: "Explain WHY an item appears (or doesn't) on the dashboard — 'why is the mortgage in today's agenda?', 'why does this task show as upcoming?', 'why is X on my dashboard?'. Looks the record up and explains the section rules (due dates, recurrence, overdue state) that place it.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "The item's name as shown on the dashboard (partial match)" },
+        entity_type: { type: "string", description: "Optional: the record type if known (task, event, obligation, reminder, habit, expense…)" },
+      },
+      required: ["name"],
+    },
+  },
+  {
     name: "sync_calendar",
     description: "Sync events with Google Calendar. Imports new events from Google Calendar into Portol. Use when the user asks to sync, import, or pull their Google Calendar events.",
     input_schema: {
@@ -4495,6 +4549,7 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - Destructive BULK operations always take two turns: preview_bulk_action first (relay its counts + sample names verbatim), then execute_bulk_action({plan_id, confirm:true}) ONLY after the user explicitly confirms in their NEXT message. Never loop single delete_* calls for a "delete all …" request, and never call execute_bulk_action in the same turn as the preview.
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
 - HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
+- DATA HEALTH: "is my data healthy" / "check for orphans" → find_orphans; "fix/repair them" (after seeing issues) → repair_relations(confirm:true); "duplicate expenses?" → find_duplicates; "are my dashboard numbers right" → validate_dashboard_counts; "refresh my dashboard" / "counts look stale" → refresh_dashboard; "why is X on my dashboard / in today's agenda" → explain_dashboard_item(name). Relay these tools' message fields — never invent health results.
 
 TOOL CHOICE RULES — CRITICAL:
 DATA CLASSIFICATION RULES (NEVER VIOLATE):
@@ -4811,6 +4866,7 @@ RESPONSE FORMAT (CRITICAL — the UI renders rich entry cards from your tool cal
   NEVER list the items you logged. NEVER repeat tracker names. NEVER write "✅…" bullets. NEVER write route paths like "/trackers + Jim's Health tab". NEVER write paragraphs.
   EXCEPTION — duplicate note: when a result's verification.duplicate_count > 0, add ONE short sentence like "Saved — note you already have a similar entry." This is the only allowed addition to the short reply.
   EXCEPTION — bulk preview: after preview_bulk_action, relay the preview message IN FULL (counts, sample names, "nothing deleted yet, confirm to proceed") — a bulk preview is a question to the user, not a completed write.
+  EXCEPTION — system reports: after execute_bulk_action, repair_relations, or refresh_dashboard, relay the result's message sentence (totals/counts) instead of a bare "Done.".
 
 * When a tool FAILED or returned no result → say so on its own line, starting with ❌, citing exactly what failed. Example:
   "❌ Hydration habit not found for Jane — say 'create hydration habit for Jane' first."
@@ -9530,6 +9586,45 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return executeBulkPlan(storage, input.plan_id ? String(input.plan_id) : undefined);
     }
 
+    case "find_orphans": {
+      const { findOrphans } = await import("./ai-system-tools");
+      return findOrphans(storage);
+    }
+
+    case "repair_relations": {
+      if (input.confirm !== true) {
+        return { error: "Not repaired — run find_orphans first and pass confirm:true once the user asks for the fix." };
+      }
+      const { repairRelations } = await import("./ai-system-tools");
+      return repairRelations(storage);
+    }
+
+    case "validate_profile_isolation": {
+      const { validateProfileIsolation } = await import("./ai-system-tools");
+      return validateProfileIsolation(storage);
+    }
+
+    case "find_duplicates": {
+      const { findDuplicates } = await import("./ai-system-tools");
+      return findDuplicates(storage, input.entity_type ? String(input.entity_type) : undefined);
+    }
+
+    case "refresh_dashboard": {
+      if (!userId) return { error: "Can't refresh — no authenticated user on this request." };
+      const { refreshDashboard } = await import("./ai-system-tools");
+      return refreshDashboard(storage, userId);
+    }
+
+    case "validate_dashboard_counts": {
+      const { validateDashboardCounts } = await import("./ai-system-tools");
+      return validateDashboardCounts(storage);
+    }
+
+    case "explain_dashboard_item": {
+      const { explainDashboardItem } = await import("./dashboard-explain");
+      return explainDashboardItem(storage, String(input.name || ""), input.entity_type ? String(input.entity_type) : undefined);
+    }
+
     case "sync_calendar": {
       try {
         const { execFile } = require("child_process");
@@ -12190,7 +12285,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const rawResult = await executeTool(toolUse.name, inputWithCtx, userId);
 
           // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history"];
+          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
             invalidateContextCache(userId);
           }
@@ -12241,7 +12336,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
           // Log the action to in-memory history
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
-          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history"];
+          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
@@ -12646,6 +12741,11 @@ export const READ_ONLY_TOOLS = new Set<string>([
   "search_documents", "retrieve_document", "open_document", "navigate", "set_dashboard_scope",
   "generate_chart", "generate_table", "generate_report", "refresh_ai_summary",
   "get_entity_history",
+  // System diagnostics (Batch 4) — find/validate/explain are pure reads;
+  // refresh_dashboard mutates only server caches (no user data), so it is
+  // deliberately here too: no envelope, no undo-ledger row to trip "undo that".
+  "find_orphans", "validate_profile_isolation", "find_duplicates",
+  "validate_dashboard_counts", "explain_dashboard_item", "refresh_dashboard",
 ]);
 
 // Every WRITE tool → a typed ParsedAction so the chat UI shows it as a real
@@ -12670,6 +12770,7 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   undo_last_action: "update_entity",
   preview_bulk_action: "update_entity",
   execute_bulk_action: "delete_entity",
+  repair_relations: "update_entity",
   create_reminder: "create_reminder",
   update_reminder: "update_entity",
   delete_reminder: "delete_entity",
