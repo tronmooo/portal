@@ -2529,7 +2529,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "create_reminder",
-    description: "Create a REAL reminder that fires a notification at a specific date AND time AND places it on the calendar as an event (it shows up on the Calendar and dashboard, not just as a task). ALWAYS use this (NOT create_task) whenever the user says 'remind me' OR gives a clock time to be reminded — e.g. 'remind me to call the dentist Friday at 10am', 'remind me tomorrow at 3pm', 'remind Bob to take meds at 8am'. A request with a day and/or a clock time is a calendar reminder, not a plain task. Only fall back to create_task for an undated to-do with NO time intent ('add a task to buy milk').",
+    description: "Create a REAL reminder that fires a notification at a specific date AND time AND places it on the calendar as an event (it shows up on the Calendar and dashboard, not just as a task). ALWAYS use this (NOT create_task) whenever the user says 'remind me' OR gives a clock time to be reminded — e.g. 'remind me to call the dentist Friday at 10am', 'remind me tomorrow at 3pm', 'remind Bob to take meds at 8am'. A request with a day and/or a clock time is a calendar reminder, not a plain task. Only fall back to create_task for an undated to-do with NO time intent ('add a task to buy milk'). NEVER use this when the user says 'move/change/push/reschedule MY <x> reminder' — that refers to an EXISTING reminder: call update_reminder instead (creating a second one leaves the old one firing too).",
     input_schema: {
       type: "object" as const,
       properties: {

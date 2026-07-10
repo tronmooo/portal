@@ -163,7 +163,7 @@ const STEPS: Step[] = [
   {
     batch: "B", tool: "mark_loan_payment",
     seed: async () => {
-      const loanId = `${TAG}_loan`;
+      const loanId = crypto.randomUUID(); // loan_id column is uuid — the marker lives in loan_name
       const base = new Date();
       const entries = [1, 2, 3].map((n) => {
         const d = new Date(base.getFullYear(), base.getMonth() + n, 1);
