@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**121 operations** — ✅ 82 covered · 🆕 29 added · 🔜 0 planned · 🚫 10 excluded by design.
+**123 operations** — ✅ 82 covered · 🆕 31 added · 🔜 0 planned · 🚫 10 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -222,6 +222,8 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Operation | UI surface | AI tool(s) | Status | Notes |
 |---|---|---|---|---|
 | Dismiss one / all | Notification bell | `dismiss_notifications` | 🆕 added |  |
+| Create custom notification | (chat-first) bell entries | `create_notification` | 🆕 added |  |
+| Mark read / mute preferences | Notification bell | `mark_notifications_read`, `set_notification_preferences` | 🆕 added |  |
 
 ### Domain
 

@@ -5860,7 +5860,9 @@ Rules:
           const lp: string[] = ent.linkedProfiles || [];
           return lp.some((pid: string) => ids.includes(pid));
         };
-        const filtered = deduped.filter(n => matchesProfile(n.entityType, n.entityId));
+        // Custom (user-created) notifications aren't entity-derived — they
+        // survive every profile filter rather than silently vanishing.
+        const filtered = deduped.filter(n => n.type === "custom" || matchesProfile(n.entityType, n.entityId));
         setCache(fullKey, filtered, 2 * 60 * 1000);
         return res.json(filtered);
       }

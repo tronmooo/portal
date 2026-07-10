@@ -203,6 +203,11 @@ export interface IStorage {
   getAiBulkPlan(planId: string): Promise<{ id: string; operation: string; criteria: any; planHash: string; preview: any; status: string; expiresAt: string } | undefined>;
   getLatestPendingAiBulkPlan(): Promise<{ id: string; operation: string; criteria: any; planHash: string; preview: any; status: string; expiresAt: string } | undefined>;
   setAiBulkPlanStatus(planId: string, status: string, patch?: { affected?: any; executedAt?: string }): Promise<void>;
+
+  // User-created notifications (custom rows merged into the computed bell list)
+  createUserNotification(n: { title: string; message?: string; severity?: string; entityType?: string; entityId?: string }): Promise<{ id: string; title: string; message: string; severity: string; createdAt: string }>;
+  listUserNotifications(opts?: { includeDismissed?: boolean; limit?: number }): Promise<Array<{ id: string; title: string; message: string; severity: string; entityType?: string | null; entityId?: string | null; createdAt: string; readAt?: string | null; dismissedAt?: string | null }>>;
+  markUserNotifications(field: "read" | "dismissed", ids?: string[]): Promise<number>;
   deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean>;
   migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }>;
 
@@ -2174,6 +2179,36 @@ export class MemStorage implements IStorage {
   async setAiBulkPlanStatus(planId: string, status: string, patch?: { affected?: any; executedAt?: string }): Promise<void> {
     const row = this.aiBulkPlanStore.get(planId);
     if (row) Object.assign(row, { status }, patch?.affected !== undefined ? { affected: patch.affected } : {}, patch?.executedAt ? { executedAt: patch.executedAt } : {});
+  }
+
+  // User notification stubs (in-memory, bounded)
+  private userNotificationStore: Array<{ id: string; title: string; message: string; severity: string; entityType?: string | null; entityId?: string | null; createdAt: string; readAt?: string | null; dismissedAt?: string | null }> = [];
+  async createUserNotification(n: { title: string; message?: string; severity?: string; entityType?: string; entityId?: string }) {
+    const row = {
+      id: crypto.randomUUID(), title: n.title, message: n.message || "",
+      severity: ["critical", "warning", "info"].includes(String(n.severity)) ? String(n.severity) : "info",
+      entityType: n.entityType ?? null, entityId: n.entityId ?? null,
+      createdAt: new Date().toISOString(), readAt: null as string | null, dismissedAt: null as string | null,
+    };
+    this.userNotificationStore.unshift(row);
+    if (this.userNotificationStore.length > 200) this.userNotificationStore.pop();
+    return row;
+  }
+  async listUserNotifications(opts: { includeDismissed?: boolean; limit?: number } = {}) {
+    return this.userNotificationStore
+      .filter(r => opts.includeDismissed || !r.dismissedAt)
+      .slice(0, Math.min(opts.limit || 50, 200));
+  }
+  async markUserNotifications(field: "read" | "dismissed", ids?: string[]): Promise<number> {
+    const col = field === "read" ? "readAt" : "dismissedAt";
+    let n = 0;
+    for (const r of this.userNotificationStore) {
+      if ((r as any)[col]) continue;
+      if (ids && ids.length > 0 && !ids.includes(r.id)) continue;
+      (r as any)[col] = new Date().toISOString();
+      n++;
+    }
+    return n;
   }
   async deleteHabitCheckin(_habitId: string, _checkinId: string): Promise<boolean> { return false; }
   async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> { return { migrated: 0, errors: ["Not supported in MemStorage"] }; }

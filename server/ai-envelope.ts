@@ -192,6 +192,10 @@ export async function recordActionLog(
       reversible = true;
       reversePlan = { op: "set_preference", key: "dashboard_layout", value: envelope?._previousState?.layout ?? null };
     }
+    if (toolName === "set_notification_preferences") {
+      reversible = true;
+      reversePlan = { op: "set_preference", key: "notification_prefs", value: envelope?._previousState?.prefs ?? "{}" };
+    }
     const { __userMessage, ...inputSansMsg } = input || {};
     const write = ctx.storage.createAiActionLog({
       tool: toolName,

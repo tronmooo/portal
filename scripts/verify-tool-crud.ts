@@ -241,6 +241,54 @@ const STEPS: Step[] = [
     },
   },
 
+  // ── Batch 7 (MCP-grade) — notifications v2 ─────────────────────────────────
+  {
+    batch: "7", tool: "create_notification",
+    message: `Create an urgent notification: ${TAG}_notif insurance renewal needs attention`,
+    verify: async () => {
+      const r = await api("GET", "/notifications");
+      const rows: any[] = Array.isArray(r.data) ? r.data : [];
+      return rows.some((n) => String(n.id || "").startsWith("custom:") && `${n.title} ${n.message}`.includes(`${TAG}_notif`));
+    },
+  },
+  {
+    batch: "7", tool: "mark_notifications_read",
+    message: `Mark the ${TAG}_notif notification as read`,
+    verify: async () => true,
+    verifyReply: (reply) => /read|marked/i.test(reply),
+  },
+  {
+    batch: "7", tool: "dismiss custom notification",
+    message: `Dismiss the ${TAG}_notif notification`,
+    verify: async () => {
+      const r = await api("GET", "/notifications");
+      const rows: any[] = Array.isArray(r.data) ? r.data : [];
+      return !rows.some((n) => `${n.title} ${n.message}`.includes(`${TAG}_notif`));
+    },
+  },
+  {
+    batch: "7", tool: "set_notification_preferences",
+    message: `Mute info notifications`,
+    verify: async () => {
+      const r = await api("GET", "/preferences/notification_prefs");
+      const raw = (r.data as any)?.value;
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed?.muted_severities) && parsed.muted_severities.includes("info");
+    },
+  },
+  {
+    batch: "7", tool: "set_notification_preferences (clear)",
+    message: `Unmute all my notifications`,
+    verify: async () => {
+      const r = await api("GET", "/preferences/notification_prefs");
+      const raw = (r.data as any)?.value;
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      return !(parsed?.muted_severities || []).length && !(parsed?.muted_types || []).length;
+    },
+  },
+
   // ── Batch A — Finance ──────────────────────────────────────────────────────
   {
     batch: "A", tool: "update_income",

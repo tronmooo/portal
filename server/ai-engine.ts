@@ -2599,6 +2599,43 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: "create_notification",
+    description: "Create a PERSISTED notification in the notification bell — 'notify me about the insurance renewal', 'create an urgent notification that rent changed', 'add a reminder notification'. This is a bell entry, NOT a scheduled reminder (use create_reminder for time-based firing).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Short notification title" },
+        message: { type: "string", description: "Longer detail line (optional)" },
+        severity: { type: "string", enum: ["critical", "warning", "info"], description: "Urgency — 'urgent'/'important' ⇒ critical or warning; default info" },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "mark_notifications_read",
+    description: "Mark notifications as READ — 'mark all my notifications as read', 'mark the insurance one read'. Only user-created (custom) notifications carry read state; computed alerts (bills due, overdue tasks) have none — dismiss those instead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        which: { type: "string", description: "'all' for every unread custom notification, or text to match against titles (partial)" },
+      },
+      required: ["which"],
+    },
+  },
+  {
+    name: "set_notification_preferences",
+    description: "Mute or unmute notification categories — 'mute info notifications', 'stop showing bill alerts', 'unmute everything'. Muted severities/types are filtered out of the bell. Types: document_expiring, task_overdue, task_due_today, bill_due, habit_at_risk, streak_milestone, reminder, custom.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        mute_severities: { type: "array", items: { type: "string" }, description: "Severities to mute (critical/warning/info). Replaces the current muted set when provided." },
+        mute_types: { type: "array", items: { type: "string" }, description: "Notification types to mute. Replaces the current muted set when provided." },
+        clear: { type: "boolean", description: "true = unmute everything (reset preferences)" },
+      },
+      required: [],
+    },
+  },
+  {
     name: "complete_task",
     description: "Mark a task as DONE/COMPLETE. Use this when user says 'I completed X', 'mark X as done', 'finished X task', 'checked off X', 'did X', 'I did the X task'. Find by title. NEVER use create_task when the user is referring to completing an EXISTING task. If task is not found, say so — do NOT create a new one.",
     input_schema: {
@@ -4522,6 +4559,8 @@ NEVER substitute a create_task when the user explicitly asks for a journal entry
 - "bring back / restore the task I deleted" → restore_task(title?) — searches recently DELETED tasks (they are NOT in your data context; call the tool). "un-complete" is update_task(changes.status:'todo'), not restore.
 - "restore the X habit" → restore_habit(name?)
 - "dismiss my notifications" / "clear the bill alerts" → dismiss_notifications(which:'all' or matching text)
+- "create/add a notification" / "notify me that X" (no specific time) → create_notification. With a specific date/time ("remind me Friday at 3") → create_reminder instead.
+- "mark my notifications read" → mark_notifications_read; "mute info notifications" / "stop showing streak alerts" → set_notification_preferences; "unmute everything" → set_notification_preferences(clear:true)
 
 ━━━ INCOME / PAYCHECK / BUDGET / MEMORY CRUD ━━━
 - log income: log_income(amount, source) — "I got paid $X", "received $X from Y"
@@ -6187,9 +6226,84 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const parsed = raw ? JSON.parse(raw) : [];
         if (Array.isArray(parsed)) existing = parsed.filter((x) => typeof x === "string");
       } catch { /* start fresh on unparseable value */ }
-      const merged = Array.from(new Set([...existing, ...targets.map(n => n.id)]));
-      await storage.setPreference(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(merged));
+      // Custom (persisted) rows get a dismissed_at stamp; computed ids go
+      // into the preference like the bell UI does.
+      const customIds = targets.filter(n => n.id.startsWith("custom:")).map(n => n.id.slice("custom:".length));
+      if (customIds.length > 0) {
+        try { await storage.markUserNotifications("dismissed", customIds); } catch { /* best effort */ }
+      }
+      const computedIds = targets.filter(n => !n.id.startsWith("custom:")).map(n => n.id);
+      if (computedIds.length > 0) {
+        const merged = Array.from(new Set([...existing, ...computedIds]));
+        await storage.setPreference(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(merged));
+      }
       return { dismissed: targets.length, titles: targets.slice(0, 8).map(n => n.title), message: `Dismissed ${targets.length} notification${targets.length === 1 ? "" : "s"}.` };
+    }
+
+    case "create_notification": {
+      const title = String(input.title || "").trim();
+      if (!title) return { error: "The notification needs a title." };
+      const row = await storage.createUserNotification({
+        title,
+        message: input.message ? String(input.message) : "",
+        severity: input.severity ? String(input.severity) : "info",
+      });
+      return {
+        id: row.id,
+        notification_id: `custom:${row.id}`,
+        severity: row.severity,
+        message: `Created a ${row.severity} notification: "${title}". It shows in the bell until dismissed.`,
+      };
+    }
+
+    case "mark_notifications_read": {
+      const which = String(input.which || "").trim();
+      if (which.toLowerCase() === "all") {
+        const n = await storage.markUserNotifications("read");
+        return {
+          marked_read: n,
+          message: n === 0
+            ? "No unread custom notifications. Note: computed alerts (bills due, overdue tasks) have no read state — I can dismiss those instead."
+            : `Marked ${n} notification${n === 1 ? "" : "s"} as read. Computed alerts (bills due, overdue tasks) have no read state — say "dismiss" to clear those.`,
+        };
+      }
+      const rows = await storage.listUserNotifications();
+      const hits = rows.filter(r => !r.readAt && `${r.title} ${r.message}`.toLowerCase().includes(which.toLowerCase()));
+      if (hits.length === 0) return { error: `No unread custom notifications match "${which}". Computed alerts have no read state — dismiss those instead.` };
+      const n = await storage.markUserNotifications("read", hits.map(r => r.id));
+      return { marked_read: n, titles: hits.slice(0, 8).map(r => r.title), message: `Marked ${n} notification${n === 1 ? "" : "s"} as read.` };
+    }
+
+    case "set_notification_preferences": {
+      const { NOTIFICATION_PREFS_PREF, readNotificationPrefs } = await import("./notification-service");
+      const prev = await storage.getPreference(NOTIFICATION_PREFS_PREF);
+      const VALID_SEV = new Set(["critical", "warning", "info"]);
+      const VALID_TYPES = new Set(["document_expiring", "task_overdue", "task_due_today", "bill_due", "habit_at_risk", "streak_milestone", "reminder", "custom"]);
+      let next: { muted_severities?: string[]; muted_types?: string[] };
+      if (input.clear === true) {
+        next = {};
+      } else {
+        const current = await readNotificationPrefs(storage);
+        next = { ...current };
+        if (Array.isArray(input.mute_severities)) {
+          next.muted_severities = input.mute_severities.map((s: any) => safeLC(String(s))).filter((s: string) => VALID_SEV.has(s));
+        }
+        if (Array.isArray(input.mute_types)) {
+          next.muted_types = input.mute_types.map((s: any) => safeLC(String(s))).filter((s: string) => VALID_TYPES.has(s));
+        }
+      }
+      await storage.setPreference(NOTIFICATION_PREFS_PREF, JSON.stringify(next));
+      const mutedBits = [
+        ...(next.muted_severities || []).map((s) => `${s} severity`),
+        ...(next.muted_types || []),
+      ];
+      return {
+        _previousState: { prefs: prev },
+        preferences: next,
+        message: mutedBits.length === 0
+          ? "Notification preferences cleared — everything shows again."
+          : `Muted: ${mutedBits.join(", ")}. These no longer appear in the bell (undoable).`,
+      };
     }
 
     case "create_task": {
@@ -12847,6 +12961,9 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   repair_relations: "update_entity",
   merge_profiles: "update_profile",
   configure_dashboard_sections: "update_entity",
+  create_notification: "update_entity",
+  mark_notifications_read: "update_entity",
+  set_notification_preferences: "update_entity",
   create_reminder: "create_reminder",
   update_reminder: "update_entity",
   delete_reminder: "delete_entity",

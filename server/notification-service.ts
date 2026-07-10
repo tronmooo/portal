@@ -11,7 +11,7 @@ import { getUserToday } from "@shared/timezone";
 
 export interface AppNotification {
   id: string;
-  type: "document_expiring" | "task_overdue" | "task_due_today" | "bill_due" | "habit_at_risk" | "streak_milestone" | "reminder";
+  type: "document_expiring" | "task_overdue" | "task_due_today" | "bill_due" | "habit_at_risk" | "streak_milestone" | "reminder" | "custom";
   severity: "critical" | "warning" | "info";
   title: string;
   message: string;
@@ -19,10 +19,31 @@ export interface AppNotification {
   entityType?: string;
   dueDate?: string;
   dismissed?: boolean;
+  /** Custom rows only: whether mark_notifications_read has stamped it. */
+  read?: boolean;
 }
 
 /** Preference key holding the dismissed-notification ids (JSON string array). */
 export const DISMISSED_NOTIFICATIONS_PREF = "dismissed_notifications";
+
+/** Preference key holding notification filters: {muted_severities?, muted_types?}. */
+export const NOTIFICATION_PREFS_PREF = "notification_prefs";
+
+export interface NotificationPrefs {
+  muted_severities?: string[];
+  muted_types?: string[];
+}
+
+export async function readNotificationPrefs(storage: IStorage): Promise<NotificationPrefs> {
+  try {
+    const raw = await storage.getPreference(NOTIFICATION_PREFS_PREF);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 // Helper: try to parse various date formats into a Date object
 function parseDate(val: string): Date | null {
@@ -348,7 +369,35 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     }
   }
 
+  // --- Persisted custom rows (chat's create_notification) ---
+  // Namespaced ids ('custom:<uuid>') can never collide with the computed ids
+  // above; dismissal for these rows is a dismissed_at stamp, not the pref.
+  try {
+    const custom = await storage.listUserNotifications();
+    for (const row of custom) {
+      const sev = (["critical", "warning", "info"].includes(row.severity) ? row.severity : "info") as AppNotification["severity"];
+      deduped.push({
+        id: `custom:${row.id}`,
+        type: "custom",
+        severity: sev,
+        title: row.title,
+        message: row.message,
+        entityId: row.entityId || undefined,
+        entityType: row.entityType || undefined,
+        read: !!row.readAt,
+      });
+    }
+  } catch { /* custom rows are best-effort (table may not exist locally) */ }
+
+  // --- User notification preferences: muted severities/types drop out ---
+  const prefs = await readNotificationPrefs(storage);
+  const mutedSev = new Set((prefs.muted_severities || []).map((s) => String(s).toLowerCase()));
+  const mutedTypes = new Set((prefs.muted_types || []).map((s) => String(s).toLowerCase()));
+  const filtered = (mutedSev.size > 0 || mutedTypes.size > 0)
+    ? deduped.filter((n) => !mutedSev.has(n.severity) && !mutedTypes.has(n.type))
+    : deduped;
+
   // Sort: critical first, then warning, then info
-  deduped.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
-  return deduped;
+  filtered.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+  return filtered;
 }

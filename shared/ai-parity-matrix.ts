@@ -195,6 +195,8 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "System", operation: "Duplicate detection", ui: "(chat-first) data health", aiTools: ["find_duplicates"], status: "added" },
   { entity: "System", operation: "Dashboard refresh + count validation", ui: "Dashboard reload", aiTools: ["refresh_dashboard", "validate_dashboard_counts"], status: "added" },
   { entity: "System", operation: "Explain dashboard placement", ui: "(chat-first) section rules", aiTools: ["explain_dashboard_item"], status: "added" },
+  { entity: "Notification", operation: "Create custom notification", ui: "(chat-first) bell entries", aiTools: ["create_notification"], status: "added" },
+  { entity: "Notification", operation: "Mark read / mute preferences", ui: "Notification bell", aiTools: ["mark_notifications_read", "set_notification_preferences"], status: "added" },
 
   // ── App-level operations excluded by design ────────────────────────────────
   { entity: "Settings", operation: "Customize dashboard layout", ui: "Dashboard → Customize", aiTools: ["configure_dashboard_sections"], status: "added" },

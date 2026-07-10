@@ -595,6 +595,54 @@ export class SupabaseStorage implements IStorage {
     return data ? this.rowToAiBulkPlan(data) : undefined;
   }
 
+  // ============================================================
+  // USER NOTIFICATIONS (persisted custom rows; computed ones live
+  // in server/notification-service.ts)
+  // ============================================================
+  private rowToUserNotification(r: any) {
+    return {
+      id: r.id, title: r.title, message: r.message, severity: r.severity,
+      entityType: r.entity_type, entityId: r.entity_id,
+      createdAt: r.created_at, readAt: r.read_at, dismissedAt: r.dismissed_at,
+    };
+  }
+
+  async createUserNotification(n: { title: string; message?: string; severity?: string; entityType?: string; entityId?: string }) {
+    const { data, error } = await this.supabase.from("user_notifications").insert({
+      user_id: this.userId,
+      title: n.title,
+      message: n.message || "",
+      severity: ["critical", "warning", "info"].includes(String(n.severity)) ? n.severity : "info",
+      entity_type: n.entityType ?? null,
+      entity_id: n.entityId ?? null,
+    }).select().single();
+    if (error) throw error;
+    return this.rowToUserNotification(data);
+  }
+
+  async listUserNotifications(opts: { includeDismissed?: boolean; limit?: number } = {}) {
+    let q = this.supabase.from("user_notifications").select("*").eq("user_id", this.userId);
+    if (!opts.includeDismissed) q = q.is("dismissed_at", null);
+    const { data, error } = await q.order("created_at", { ascending: false })
+      .limit(Math.min(Math.max(opts.limit || 50, 1), 200));
+    if (error) throw error;
+    return (data || []).map(r => this.rowToUserNotification(r));
+  }
+
+  /** Stamp read_at / dismissed_at on custom notification rows. ids are the
+   *  raw uuids (without the 'custom:' namespace prefix); empty = all unread/
+   *  un-dismissed rows. Returns how many rows were stamped. */
+  async markUserNotifications(field: "read" | "dismissed", ids?: string[]): Promise<number> {
+    const col = field === "read" ? "read_at" : "dismissed_at";
+    let q = this.supabase.from("user_notifications")
+      .update({ [col]: new Date().toISOString() })
+      .eq("user_id", this.userId).is(col, null);
+    if (ids && ids.length > 0) q = q.in("id", ids);
+    const { data, error } = await q.select("id");
+    if (error) throw error;
+    return Array.isArray(data) ? data.length : 0;
+  }
+
   async setAiBulkPlanStatus(planId: string, status: string, patch?: { affected?: any; executedAt?: string }): Promise<void> {
     const { error } = await this.supabase.from("ai_bulk_plans")
       .update({
