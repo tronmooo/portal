@@ -115,6 +115,28 @@ const STEPS: Step[] = [
     verifyReply: (reply) => /history|change|created|no recorded/i.test(reply),
   },
 
+  // ── Batch 3 (MCP-grade) — bulk preview → confirm → execute ─────────────────
+  {
+    batch: "3", tool: "bulk preview (no deletes yet)",
+    seed: async () => {
+      await seedPost("/tasks", { title: `${TAG}_bulk one` });
+      await seedPost("/tasks", { title: `${TAG}_bulk two` });
+      await seedPost("/tasks", { title: `${TAG}_bulk three` });
+    },
+    message: `Delete all my tasks containing ${TAG}_bulk`,
+    // Preview turn: NOTHING deleted yet, reply relays counts + asks to confirm.
+    verify: async () => (await list("/tasks")).filter((t) => (t.title || "").includes(`${TAG}_bulk`)).length === 3,
+    verifyReply: (reply) => /3\s|three/i.test(reply) && /confirm|proceed|sure|go ahead/i.test(reply),
+  },
+  {
+    batch: "3", tool: "bulk execute (confirm turn)",
+    // Standalone confirmation (each verifier step is a fresh conversation, so
+    // it names what is being confirmed; plan_id resolves server-side).
+    message: `Yes, I confirm — go ahead with the pending bulk delete of my ${TAG}_bulk tasks from the preview.`,
+    retryMessage: `Execute the pending bulk delete plan now — I already confirmed the ${TAG}_bulk preview.`,
+    verify: async () => (await list("/tasks")).filter((t) => (t.title || "").includes(`${TAG}_bulk`)).length === 0,
+  },
+
   // ── Batch A — Finance ──────────────────────────────────────────────────────
   {
     batch: "A", tool: "update_income",

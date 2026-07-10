@@ -197,6 +197,12 @@ export interface IStorage {
   createAiActionLog(entry: import("@shared/schema").InsertAiActionLog): Promise<import("@shared/schema").AiActionLog | undefined>;
   listAiActionLog(opts?: { limit?: number; entityType?: string; entityId?: string; includeUndone?: boolean }): Promise<import("@shared/schema").AiActionLog[]>;
   markActionUndone(id: string, undoneByLogId?: string): Promise<void>;
+
+  // AI bulk plans (preview → confirm → execute)
+  createAiBulkPlan(plan: { operation: string; criteria: any; planHash: string; preview: any; expiresAt: string }): Promise<{ id: string; operation: string; criteria: any; planHash: string; preview: any; status: string; expiresAt: string }>;
+  getAiBulkPlan(planId: string): Promise<{ id: string; operation: string; criteria: any; planHash: string; preview: any; status: string; expiresAt: string } | undefined>;
+  getLatestPendingAiBulkPlan(): Promise<{ id: string; operation: string; criteria: any; planHash: string; preview: any; status: string; expiresAt: string } | undefined>;
+  setAiBulkPlanStatus(planId: string, status: string, patch?: { affected?: any; executedAt?: string }): Promise<void>;
   deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean>;
   migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }>;
 
@@ -2149,6 +2155,25 @@ export class MemStorage implements IStorage {
   async markActionUndone(id: string, undoneByLogId?: string): Promise<void> {
     const r = this.aiActionLogStore.find(x => x.id === id);
     if (r) { r.undoneAt = new Date().toISOString(); r.undoneByLogId = undoneByLogId ?? null; }
+  }
+  // AI bulk plan stubs (in-memory, bounded)
+  private aiBulkPlanStore = new Map<string, { id: string; operation: string; criteria: any; planHash: string; preview: any; status: string; affected?: any; expiresAt: string; executedAt?: string }>();
+  async createAiBulkPlan(plan: { operation: string; criteria: any; planHash: string; preview: any; expiresAt: string }) {
+    const row = { id: crypto.randomUUID(), status: "pending", ...plan };
+    this.aiBulkPlanStore.set(row.id, row);
+    if (this.aiBulkPlanStore.size > 50) {
+      const oldest = this.aiBulkPlanStore.keys().next().value;
+      if (oldest) this.aiBulkPlanStore.delete(oldest);
+    }
+    return row;
+  }
+  async getAiBulkPlan(planId: string) { return this.aiBulkPlanStore.get(planId); }
+  async getLatestPendingAiBulkPlan() {
+    return [...this.aiBulkPlanStore.values()].reverse().find(p => p.status === "pending");
+  }
+  async setAiBulkPlanStatus(planId: string, status: string, patch?: { affected?: any; executedAt?: string }): Promise<void> {
+    const row = this.aiBulkPlanStore.get(planId);
+    if (row) Object.assign(row, { status }, patch?.affected !== undefined ? { affected: patch.affected } : {}, patch?.executedAt ? { executedAt: patch.executedAt } : {});
   }
   async deleteHabitCheckin(_habitId: string, _checkinId: string): Promise<boolean> { return false; }
   async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> { return { migrated: 0, errors: ["Not supported in MemStorage"] }; }

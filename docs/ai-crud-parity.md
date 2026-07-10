@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**114 operations** — ✅ 82 covered · 🆕 21 added · 🔜 0 planned · 🚫 11 excluded by design.
+**115 operations** — ✅ 82 covered · 🆕 22 added · 🔜 0 planned · 🚫 11 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -243,6 +243,7 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Global search / summary / navigation / action history | Search bar / nav | `search`, `get_summary`, `navigate`, `recall_actions` | ✅ covered |  |
 | Undo last action | Chat action-card Undo button | `undo_last_action` | 🆕 added |  |
 | Record change history / audit trail | (chat-first) activity feed | `get_entity_history` | 🆕 added |  |
+| Bulk delete (preview → confirm → execute) | (chat-first) multi-select delete | `preview_bulk_action`, `execute_bulk_action` | 🆕 added |  |
 
 ### Settings
 

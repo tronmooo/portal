@@ -555,6 +555,57 @@ export class SupabaseStorage implements IStorage {
     return Array.isArray(data) && data.length > 0;
   }
 
+  // ============================================================
+  // AI BULK PLANS (preview → confirm → execute)
+  // ============================================================
+  private rowToAiBulkPlan(r: any) {
+    return {
+      id: r.id, operation: r.operation, criteria: r.criteria,
+      planHash: r.plan_hash, preview: r.preview, status: r.status,
+      affected: r.affected, createdAt: r.created_at,
+      expiresAt: r.expires_at, executedAt: r.executed_at,
+    };
+  }
+
+  async createAiBulkPlan(plan: { operation: string; criteria: any; planHash: string; preview: any; expiresAt: string }) {
+    const { data, error } = await this.supabase.from("ai_bulk_plans").insert({
+      user_id: this.userId,
+      operation: plan.operation,
+      criteria: plan.criteria,
+      plan_hash: plan.planHash,
+      preview: plan.preview,
+      expires_at: plan.expiresAt,
+    }).select().single();
+    if (error) throw error;
+    return this.rowToAiBulkPlan(data);
+  }
+
+  async getAiBulkPlan(planId: string) {
+    const { data, error } = await this.supabase.from("ai_bulk_plans")
+      .select("*").eq("id", planId).eq("user_id", this.userId).maybeSingle();
+    if (error) throw error;
+    return data ? this.rowToAiBulkPlan(data) : undefined;
+  }
+
+  async getLatestPendingAiBulkPlan() {
+    const { data, error } = await this.supabase.from("ai_bulk_plans")
+      .select("*").eq("user_id", this.userId).eq("status", "pending")
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (error) throw error;
+    return data ? this.rowToAiBulkPlan(data) : undefined;
+  }
+
+  async setAiBulkPlanStatus(planId: string, status: string, patch?: { affected?: any; executedAt?: string }): Promise<void> {
+    const { error } = await this.supabase.from("ai_bulk_plans")
+      .update({
+        status,
+        ...(patch?.affected !== undefined ? { affected: patch.affected } : {}),
+        ...(patch?.executedAt ? { executed_at: patch.executedAt } : {}),
+      })
+      .eq("id", planId).eq("user_id", this.userId);
+    if (error) throw error;
+  }
+
   /**
    * [P0.2] Optimistic concurrency for the updateX methods.
    *

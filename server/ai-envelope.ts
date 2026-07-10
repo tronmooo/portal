@@ -250,6 +250,23 @@ const RECREATE_FN: Record<string, (s: AnyStorage, snapshot: any) => Promise<any>
   tracker: (s, snap) => s.createTracker(snap),
 };
 
+// Reusable entity helpers for the bulk-action machinery (server/bulk-actions).
+export function getEntityList(storage: IStorage, entityType: string): Promise<any[]> | null {
+  const meta = ENTITY_META[entityType];
+  return meta ? meta.list(storage) : null;
+}
+export function getEntityName(entityType: string, row: any): string {
+  const meta = ENTITY_META[entityType];
+  return meta ? String(meta.name(row) ?? "") : "";
+}
+export async function deleteEntityById(storage: IStorage, entityType: string, id: string): Promise<boolean> {
+  const fn = DELETE_FN[entityType];
+  if (!fn) return false;
+  await fn(storage as AnyStorage, id);
+  return true;
+}
+export const BULK_ENTITY_TYPES = Object.keys(ENTITY_META);
+
 /** Fields that must never be re-applied verbatim from a snapshot. */
 const SNAPSHOT_STRIP = new Set(["id", "createdAt", "updatedAt", "userId", "deletedAt"]);
 function cleanSnapshot(row: any): any {

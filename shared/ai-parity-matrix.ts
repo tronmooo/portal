@@ -188,6 +188,7 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Meta", operation: "Global search / summary / navigation / action history", ui: "Search bar / nav", aiTools: ["search", "get_summary", "navigate", "recall_actions"], status: "covered" },
   { entity: "Meta", operation: "Undo last action", ui: "Chat action-card Undo button", aiTools: ["undo_last_action"], status: "added" },
   { entity: "Meta", operation: "Record change history / audit trail", ui: "(chat-first) activity feed", aiTools: ["get_entity_history"], status: "added" },
+  { entity: "Meta", operation: "Bulk delete (preview → confirm → execute)", ui: "(chat-first) multi-select delete", aiTools: ["preview_bulk_action", "execute_bulk_action"], status: "added" },
 
   // ── App-level operations excluded by design ────────────────────────────────
   { entity: "Settings", operation: "Customize dashboard layout", ui: "Dashboard → Customize", aiTools: [], status: "excluded", reason: "Pure UI layout serialization (drag-order preference) — no meaningful chat equivalent." },

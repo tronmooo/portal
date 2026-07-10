@@ -3717,6 +3717,33 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
   {
+    name: "preview_bulk_action",
+    description: "PHASE 1 of a bulk delete — 'delete all my test tasks', 'clear out everything for the Demo profile', 'remove all expenses containing lunch from before June'. Derives the affected set and returns a PREVIEW (counts + sample names + plan_id). NOTHING is deleted in this phase. ALWAYS use this (never loop single deletes) when the user asks to delete multiple records by a filter. Requires at least one bound: name_contains, profile_name, or before_date.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        entity_types: { type: "array", items: { type: "string" }, description: "Record types to scan (task, expense, income, event, habit, tracker, goal, journal, memory, artifact, reminder, document, paycheck). Omit to scan all common types." },
+        name_contains: { type: "string", description: "Only records whose name/title contains this text (case-insensitive)" },
+        profile_name: { type: "string", description: "Only records owned by this profile" },
+        before_date: { type: "string", description: "Only records created before this date (YYYY-MM-DD)" },
+        include_profile: { type: "boolean", description: "Also delete the profile itself (full cascade). Only with profile_name." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "execute_bulk_action",
+    description: "PHASE 2 of a bulk delete — run ONLY after preview_bulk_action AND the user explicitly confirmed the preview in a later message. Re-derives the affected set server-side; if the data changed since the preview the plan is cancelled and a fresh preview is required. Pass the plan_id from the preview.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        plan_id: { type: "string", description: "The plan_id returned by preview_bulk_action. Omit to execute the most recent pending preview." },
+        confirm: { type: "boolean", description: "Must be true — asserts the user explicitly confirmed" },
+      },
+      required: ["confirm"],
+    },
+  },
+  {
     name: "sync_calendar",
     description: "Sync events with Google Calendar. Imports new events from Google Calendar into Portol. Use when the user asks to sync, import, or pull their Google Calendar events.",
     input_schema: {
@@ -4465,7 +4492,7 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - Example failure: "❌ Couldn't find a task called 'stretching' for Joe. Do you want to check all his tasks?"
 - VERIFICATION: write tools return a "verification" object. If verification.database_record_exists is false after a create/update, tell the user the save could NOT be confirmed — do not say "done". After a delete, database_record_exists:false means the delete IS confirmed.
 - If verification.duplicate_count > 0, mention it once ("note: you already have N similar entries") but do NOT block, merge, or delete — duplicates are allowed.
-- Destructive BULK operations always take two turns: preview first, then execute only after the user explicitly confirms in their next message.
+- Destructive BULK operations always take two turns: preview_bulk_action first (relay its counts + sample names verbatim), then execute_bulk_action({plan_id, confirm:true}) ONLY after the user explicitly confirms in their NEXT message. Never loop single delete_* calls for a "delete all …" request, and never call execute_bulk_action in the same turn as the preview.
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
 - HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
 
@@ -4783,6 +4810,7 @@ RESPONSE FORMAT (CRITICAL — the UI renders rich entry cards from your tool cal
   - "Both entries saved."
   NEVER list the items you logged. NEVER repeat tracker names. NEVER write "✅…" bullets. NEVER write route paths like "/trackers + Jim's Health tab". NEVER write paragraphs.
   EXCEPTION — duplicate note: when a result's verification.duplicate_count > 0, add ONE short sentence like "Saved — note you already have a similar entry." This is the only allowed addition to the short reply.
+  EXCEPTION — bulk preview: after preview_bulk_action, relay the preview message IN FULL (counts, sample names, "nothing deleted yet, confirm to proceed") — a bulk preview is a question to the user, not a completed write.
 
 * When a tool FAILED or returned no result → say so on its own line, starting with ❌, citing exactly what failed. Example:
   "❌ Hydration habit not found for Jane — say 'create hydration habit for Jane' first."
@@ -4914,6 +4942,12 @@ function summarizeSingleItem(item: any): any {
       ...(item.copied !== undefined ? { copied: item.copied } : {}),
       ...(item.dismissed !== undefined ? { dismissed: item.dismissed } : {}),
       ...(item.completed !== undefined ? { completed: item.completed } : {}),
+      // Bulk two-phase flow: the model relays the preview (counts + samples)
+      // and may echo plan_id into the confirmation turn.
+      ...(item.plan_id ? { plan_id: item.plan_id } : {}),
+      ...(item.preview ? { preview: item.preview } : {}),
+      ...(item.deleted ? { deleted: item.deleted } : {}),
+      ...(item.total !== undefined ? { total: item.total } : {}),
     };
   }
 
@@ -9476,6 +9510,26 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return { history, entity: displayName, total: history.length };
     }
 
+    case "preview_bulk_action": {
+      const { planBulkAction } = await import("./bulk-actions");
+      return planBulkAction(storage, {
+        operation: "delete",
+        entity_types: Array.isArray(input.entity_types) ? input.entity_types : undefined,
+        name_contains: input.name_contains ? String(input.name_contains) : undefined,
+        profile_name: input.profile_name ? String(input.profile_name) : undefined,
+        before_date: input.before_date ? String(input.before_date) : undefined,
+        include_profile: input.include_profile === true,
+      });
+    }
+
+    case "execute_bulk_action": {
+      if (input.confirm !== true) {
+        return { error: "Not executed — the user must explicitly confirm the preview first (confirm: true)." };
+      }
+      const { executeBulkPlan } = await import("./bulk-actions");
+      return executeBulkPlan(storage, input.plan_id ? String(input.plan_id) : undefined);
+    }
+
     case "sync_calendar": {
       try {
         const { execFile } = require("child_process");
@@ -12153,9 +12207,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             ? await finalizeToolResult(toolUse.name, actionType, inputWithCtx, rawResult, turnVerifyCtx)
             : rawResult;
           // Persist the action to the durable ledger (undo/audit). Never
-          // blocks or fails the tool; excluded for the ledger's own tools.
+          // blocks or fails the tool; excluded for the ledger's own tools and
+          // for bulk tools (preview writes no entities; execute logs its own
+          // single restore_set row inside executeBulkPlan).
           if (result && !result.error && !READ_ONLY_TOOLS.has(toolUse.name)
-              && toolUse.name !== "undo_last_action") {
+              && toolUse.name !== "undo_last_action"
+              && toolUse.name !== "preview_bulk_action"
+              && toolUse.name !== "execute_bulk_action") {
             await recordActionLog(turnVerifyCtx, toolUse.name, actionType, inputWithCtx, result, beforeRows);
           }
           const inp = toolUse.input as Record<string, any>;
@@ -12610,6 +12668,8 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   restore_task: "update_entity",
   restore_habit: "update_entity",
   undo_last_action: "update_entity",
+  preview_bulk_action: "update_entity",
+  execute_bulk_action: "delete_entity",
   create_reminder: "create_reminder",
   update_reminder: "update_entity",
   delete_reminder: "delete_entity",
