@@ -72,6 +72,7 @@ export default defineConfig({
       'tests/wellness-dynamic.test.ts',
       'tests/query-key-hygiene.test.ts',
       'tests/ai-tool-registry.test.ts',
+      'tests/ai-envelope.test.ts',
       'tests/ai-button-parity.test.ts',
       'tests/dashboard-buttons.test.ts',
       'tests/design-kit.test.tsx',

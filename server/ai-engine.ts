@@ -22,6 +22,7 @@ import {
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
+import { finalizeToolResult, buildTurnVerifyContext } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
@@ -4436,6 +4437,9 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - If action succeeded → confirm with: what was done, for whom, the item name, and the new state.
 - Example success: "✅ Marked Joe's Water habit done for today (April 9). His streak is now 3 days."
 - Example failure: "❌ Couldn't find a task called 'stretching' for Joe. Do you want to check all his tasks?"
+- VERIFICATION: write tools return a "verification" object. If verification.database_record_exists is false after a create/update, tell the user the save could NOT be confirmed — do not say "done". After a delete, database_record_exists:false means the delete IS confirmed.
+- If verification.duplicate_count > 0, mention it once ("note: you already have N similar entries") but do NOT block, merge, or delete — duplicates are allowed.
+- Destructive BULK operations always take two turns: preview first, then execute only after the user explicitly confirms in their next message.
 
 TOOL CHOICE RULES — CRITICAL:
 DATA CLASSIFICATION RULES (NEVER VIOLATE):
@@ -4860,6 +4864,29 @@ function summarizeResult(result: any): any {
 
 function summarizeSingleItem(item: any): any {
   if (!item) return item;
+
+  // Enveloped write results (server/ai-envelope): the model needs only the
+  // envelope — success, human message, entity ref, and verification — plus a
+  // small whitelist of raw keys some replies rely on. This keeps the token
+  // cost flat while making verification visible so the model reports honestly.
+  if (typeof item.success === "boolean" && typeof item.action === "string" && item.message) {
+    return {
+      success: item.success,
+      action: item.action,
+      message: item.message,
+      ...(item.entity ? { entity: item.entity } : {}),
+      ...(item.verification ? { verification: item.verification } : {}),
+      ...(item._validationWarnings ? { warnings: item._validationWarnings } : {}),
+      // Raw keys the model already leans on in follow-up turns:
+      ...(item.candidates ? { candidates: item.candidates } : {}),
+      ...(item.suggestedAssetLink ? { suggestedAssetLink: item.suggestedAssetLink } : {}),
+      ...(item.scope ? { scope: item.scope } : {}),
+      ...(item.count !== undefined ? { count: item.count } : {}),
+      ...(item.copied !== undefined ? { copied: item.copied } : {}),
+      ...(item.dismissed !== undefined ? { dismissed: item.dismissed } : {}),
+      ...(item.completed !== undefined ? { completed: item.completed } : {}),
+    };
+  }
 
   // For retrieve_document results: strip extractedData details and documentPreview
   // The image viewer will display the document — AI just needs to know it was found
@@ -11883,6 +11910,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     const startedAt = Date.now();
     const WALL_CLOCK_BUDGET_MS = 90_000;
     let ranOutOfTime = false;
+    // Envelope verification context — one per chat turn; memoizes the user's
+    // profile-id set across all tool calls in the turn (see server/ai-envelope).
+    const turnVerifyCtx = buildTurnVerifyContext(storage);
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
@@ -11997,8 +12027,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // create_profile (and any other guarded tool) can compare requested
           // fields against what the user actually said.
           const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
-          const result = await executeTool(toolUse.name, inputWithCtx, userId);
-          
+          const rawResult = await executeTool(toolUse.name, inputWithCtx, userId);
+
           // Invalidate context cache after any write operation
           const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
@@ -12007,6 +12037,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
           // Map tool name to a ParsedAction type for backwards compat
           const actionType = mapToolToActionType(toolUse.name);
+
+          // Envelope + post-write verification for successful WRITE tools —
+          // read-back, duplicate count, profile isolation (server/ai-envelope).
+          // Raw result is spread into the envelope so every downstream reader
+          // (entityId extraction, undo cards, chart/table plumbing) is
+          // untouched. Read-only tools and {error} results pass through raw.
+          const result = (rawResult && !rawResult.error && !READ_ONLY_TOOLS.has(toolUse.name))
+            ? await finalizeToolResult(toolUse.name, actionType, inputWithCtx, rawResult, turnVerifyCtx)
+            : rawResult;
           const inp = toolUse.input as Record<string, any>;
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
           // Only count as a real action if it succeeded (no error field)

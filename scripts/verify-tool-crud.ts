@@ -35,6 +35,8 @@ type Step = {
   verify: () => Promise<boolean>;
   /** More explicit phrasing to retry with when the first phrasing fails routing. */
   retryMessage?: string;
+  /** Optional additional assertion on the assistant's reply text. */
+  verifyReply?: (reply: string) => boolean;
 };
 
 async function list(endpoint: string): Promise<any[]> {
@@ -72,6 +74,21 @@ async function waitForDeploy(sha: string): Promise<void> {
 }
 
 const STEPS: Step[] = [
+  // ── Batch 1 (MCP-grade) — envelope + verification ──────────────────────────
+  {
+    batch: "1", tool: "envelope (create verified)",
+    message: `Add a task called ${TAG}_env smoke test due tomorrow`,
+    verify: async () => (await list("/tasks")).some((t) => (t.title || "").includes(`${TAG}_env`)),
+  },
+  {
+    batch: "1", tool: "envelope (duplicate_count surfaced)",
+    // Same title again — the envelope's duplicate_count should make the model
+    // mention the existing similar task in its reply (without blocking).
+    message: `Add a task called ${TAG}_env smoke test due tomorrow`,
+    verify: async () => (await list("/tasks")).filter((t) => (t.title || "").includes(`${TAG}_env`)).length >= 1,
+    verifyReply: (reply) => /similar|duplicate|already have|existing/i.test(reply),
+  },
+
   // ── Batch A — Finance ──────────────────────────────────────────────────────
   {
     batch: "A", tool: "update_income",
@@ -360,8 +377,12 @@ async function cleanup(): Promise<void> {
         await sleep(1500);
         ok = await s.verify();
       }
-      if (ok) { pass++; results.push(`✅ ${label} "${s.message.slice(0, 52)}"`); }
-      else results.push(`❌ ${label} write NOT observed [chat ${res.status}] reply: ${String((res.data as any)?.reply || "").slice(0, 120)}`);
+      const finalReply = String((res.data as any)?.reply || "");
+      if (ok && s.verifyReply && !s.verifyReply(finalReply)) {
+        ok = false;
+        results.push(`❌ ${label} DB ok but reply assertion failed: ${finalReply.slice(0, 120)}`);
+      } else if (ok) { pass++; results.push(`✅ ${label} "${s.message.slice(0, 52)}"`); }
+      else results.push(`❌ ${label} write NOT observed [chat ${res.status}] reply: ${finalReply.slice(0, 120)}`);
     } catch (e: any) {
       results.push(`💥 ${label} ${e?.message || e}`);
     }

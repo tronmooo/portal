@@ -1,0 +1,201 @@
+// ── Tool-result envelope + post-write verification ──────────────────────────
+// Wraps successful WRITE-tool results from the AI chat's processMessage loop
+// in a standard envelope:
+//
+//   { success, action, action_type, message,
+//     entity?: { type, id, name },
+//     verification?: { database_record_exists?, duplicate_count?, profile_isolation_valid? },
+//     ...rawResult }                       // raw spread LAST-IN wins nothing:
+//                                          // envelope keys are additive; raw
+//                                          // keys (id, task, _previousState…)
+//                                          // all survive for the chat UI/undo.
+//
+// Design rules (see docs/ai-crud-parity.md effort + plan):
+// - Wrapped ONLY at the processMessage choke point — executeTool's raw return
+//   shapes are a contract for internal tool-to-tool delegation and the
+//   test_ai_e2e/test_ai_render scripts.
+// - Verification is cheap by construction: at most ONE fresh entity-list read
+//   per write (fetched AFTER the write so it observes it — lists are per-user
+//   and small) plus a per-turn memoized profile-id set. Entity types without a
+//   mapping simply omit verification fields — omission means "not computed",
+//   never "failed".
+// - The envelope must NEVER break a tool: any error here returns the raw
+//   result unchanged.
+import type { IStorage } from "./storage";
+
+export interface ToolVerification {
+  /** Post-write read-back: the record is visible in the database (creates/
+   *  updates) or gone (deletes). Omitted when no read-back mapping exists. */
+  database_record_exists?: boolean;
+  /** How many OTHER records of the same type share this record's normalized
+   *  name/title. Reported, never enforced — duplicates are allowed. */
+  duplicate_count?: number;
+  /** Every profile id the record links to belongs to this user. */
+  profile_isolation_valid?: boolean;
+}
+
+export interface TurnVerifyContext {
+  storage: IStorage;
+  /** Lazily fetched, memoized for the turn; refreshed after profile writes. */
+  _profileIds: Set<string> | null;
+}
+
+export function buildTurnVerifyContext(storage: IStorage): TurnVerifyContext {
+  return { storage, _profileIds: null };
+}
+
+async function profileIdSet(ctx: TurnVerifyContext, refresh = false): Promise<Set<string>> {
+  if (!ctx._profileIds || refresh) {
+    const profiles = await ctx.storage.getProfiles();
+    ctx._profileIds = new Set(profiles.map((p: any) => p.id));
+  }
+  return ctx._profileIds;
+}
+
+// ── Entity metadata ──────────────────────────────────────────────────────────
+type EntityMeta = {
+  list: (s: IStorage) => Promise<any[]>;
+  name: (row: any) => string;
+  /** Rows the list returns include soft-deleted? (false everywhere today —
+   *  get* methods filter deleted_at, which is exactly what "exists" means.) */
+};
+
+const ENTITY_META: Record<string, EntityMeta> = {
+  task: { list: (s) => s.getTasks(), name: (r) => r.title },
+  expense: { list: (s) => s.getExpenses(), name: (r) => r.description },
+  income: { list: (s) => s.getIncomes(), name: (r) => r.description },
+  event: { list: (s) => s.getEvents(), name: (r) => r.title },
+  habit: { list: (s) => s.getHabits(), name: (r) => r.name },
+  tracker: { list: (s) => s.getTrackers(), name: (r) => r.name },
+  goal: { list: (s) => s.getGoals(), name: (r) => r.title },
+  profile: { list: (s) => s.getProfiles(), name: (r) => r.name },
+  obligation: { list: (s) => s.getObligations(), name: (r) => r.name },
+  journal: { list: (s) => s.getJournalEntries(), name: (r) => String(r.content || "").slice(0, 40) },
+  memory: { list: (s) => s.getMemories(), name: (r) => r.key },
+  artifact: { list: (s) => s.getArtifacts(), name: (r) => r.title },
+  reminder: { list: (s) => s.listReminders(), name: (r) => r.title },
+  document: { list: (s) => s.getDocuments(), name: (r) => r.name },
+  paycheck: { list: (s) => s.getPaychecks(), name: (r) => r.source },
+};
+
+/** Which entity a tool operates on. Tools absent from this map still get the
+ *  envelope (success/action/message) but no verification. */
+const TOOL_ENTITY: Record<string, string> = {
+  create_task: "task", update_task: "task", complete_task: "task", delete_task: "task",
+  restore_task: "task", bulk_complete_tasks: "task",
+  create_expense: "expense", update_expense: "expense", delete_expense: "expense", refund_expense: "expense",
+  log_income: "income", update_income: "income", delete_income: "income",
+  create_event: "event", update_event: "event", delete_event: "event", complete_event: "event",
+  create_habit: "habit", update_habit: "habit", delete_habit: "habit", restore_habit: "habit",
+  checkin_habit: "habit", uncomplete_habit: "habit",
+  create_tracker: "tracker", update_tracker: "tracker", delete_tracker: "tracker",
+  create_goal: "goal", update_goal: "goal", delete_goal: "goal",
+  create_profile: "profile", update_profile: "profile", delete_profile: "profile",
+  create_liability: "profile", update_liability: "profile", revalue_asset: "profile",
+  create_obligation: "obligation", update_obligation: "obligation", delete_obligation: "obligation",
+  pay_obligation: "obligation", undo_last_payment: "obligation",
+  journal_entry: "journal", update_journal: "journal", delete_journal: "journal",
+  save_memory: "memory", update_memory: "memory", delete_memory: "memory",
+  create_artifact: "artifact", update_artifact: "artifact", delete_artifact: "artifact",
+  duplicate_artifact: "artifact", toggle_artifact_item: "artifact",
+  create_reminder: "reminder", update_reminder: "reminder", delete_reminder: "reminder",
+  create_document: "document",
+  log_expected_paycheck: "paycheck", confirm_paycheck_received: "paycheck", delete_paycheck: "paycheck",
+};
+
+/** Operation class drives which verification checks run. */
+export function classifyOperation(toolName: string): "create" | "update" | "delete" {
+  if (/^(delete_|remove_)/.test(toolName)) return "delete";
+  if (/^(create_|log_|add_|duplicate_|journal_entry$|save_memory$|upload_)/.test(toolName)) return "create";
+  return "update"; // complete/checkin/pay/restore/toggle/link/set/copy/etc.
+}
+
+const normalizeName = (s: string): string =>
+  String(s || "").toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+
+function extractEntityId(result: any): string | undefined {
+  return result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id
+    || result?.obligation?.id || result?.income?.id || result?.artifact?.id
+    || result?.reminder?.id || result?.memory?.id || result?.payment?.id
+    || result?.entity?.id;
+}
+
+const VERBS: Record<string, string> = { create: "Created", update: "Updated", delete: "Deleted" };
+
+/**
+ * Wrap a SUCCESSFUL write-tool result in the standard envelope. Never throws
+ * usefully — callers get the raw result back if anything goes wrong here.
+ */
+export async function finalizeToolResult(
+  toolName: string,
+  actionType: string,
+  input: Record<string, any>,
+  result: any,
+  ctx: TurnVerifyContext,
+): Promise<any> {
+  try {
+    const op = classifyOperation(toolName);
+    const entityType = TOOL_ENTITY[toolName];
+    const entityId = extractEntityId(result);
+    const verification: ToolVerification = {};
+    let entityName: string | undefined =
+      result?.title || result?.name || result?.entity?.name
+      || input?.title || input?.name || input?.description || input?.trackerName || input?.key;
+
+    if (entityType && ENTITY_META[entityType] && entityId) {
+      // ONE fresh list read, taken AFTER the write so it observes it. Do not
+      // memoize the written type across a multi-write turn — the next write's
+      // read-back must see this one too.
+      const meta = ENTITY_META[entityType];
+      let rows: any[] | null = null;
+      try { rows = await meta.list(ctx.storage); } catch { rows = null; }
+      if (rows) {
+        const row = rows.find((r: any) => r.id === entityId);
+        if (op === "delete") {
+          // "exists" refers to the LIVE record — false is the desired outcome
+          // after a delete (get* lists already exclude soft-deleted rows).
+          verification.database_record_exists = !!row && !row.deletedAt;
+        } else {
+          verification.database_record_exists = !!row;
+          if (row) {
+            entityName = meta.name(row) || entityName;
+            if (op === "create") {
+              const norm = normalizeName(meta.name(row));
+              if (norm) {
+                verification.duplicate_count = rows.filter(
+                  (r: any) => r.id !== entityId && normalizeName(meta.name(r)) === norm
+                ).length;
+              }
+            }
+            const linked: string[] = Array.isArray(row.linkedProfiles) ? row.linkedProfiles : [];
+            if (linked.length > 0) {
+              const ids = await profileIdSet(ctx, entityType === "profile");
+              verification.profile_isolation_valid = linked.every((id) => ids.has(id));
+            } else {
+              // Orphans belong to self by the app-wide scope rule — valid.
+              verification.profile_isolation_valid = true;
+            }
+          }
+        }
+      }
+    }
+
+    const message = typeof result?.message === "string" && result.message
+      ? result.message.slice(0, 200)
+      : `${VERBS[op]} ${entityType || "record"}${entityName ? ` "${String(entityName).slice(0, 60)}"` : ""}.`;
+
+    return {
+      success: true,
+      action: toolName,
+      action_type: actionType,
+      message,
+      ...(entityType && entityId ? { entity: { type: entityType, id: entityId, ...(entityName ? { name: String(entityName).slice(0, 80) } : {}) } } : {}),
+      ...(Object.keys(verification).length > 0 ? { verification } : {}),
+      ...result,
+    };
+  } catch (e: any) {
+    // The envelope must never break a tool.
+    try { console.warn(`[ai-envelope] finalize failed for ${toolName}:`, e?.message || e); } catch { /* noop */ }
+    return result;
+  }
+}
