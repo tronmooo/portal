@@ -24,6 +24,8 @@ import {
 } from "@/lib/wellness-metrics";
 import { getCanonicalGroup } from "@/lib/tracker-health";
 import { readField } from "@/lib/profile-fields";
+import { buildWellnessCards } from "@/lib/wellness-dynamic";
+import { computeKeyFindings } from "@shared/tracker-insights";
 import {
   WellnessOverview,
   type WellnessMed, type WellnessSupp, type WellnessAppt,
@@ -154,6 +156,19 @@ export default function WellnessPage() {
   // sleep / steps) that need a value, not a fixed increment. ──
   const [logKind, setLogKind] = useState<null | "weight" | "mood" | "sleep" | "steps">(null);
   const [logValue, setLogValue] = useState("");
+
+  // ── AI Deep Dive: an on-demand LLM narrative over the wellness data. Called
+  // ONLY when the user taps the button (no per-visit token cost). The server
+  // falls back to the deterministic findings if the model is unavailable. ──
+  const [aiNarrative, setAiNarrative] = useState<string | null>(null);
+  const aiDeepDive = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/wellness/insights${profileParam}`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => setAiNarrative(typeof data?.narrative === "string" ? data.narrative : null),
+    onError: () => toast({ title: "Couldn't generate insights", variant: "destructive" }),
+  });
 
   // ── Derive everything from the shared data ──
   const vitals = extractVitals(trackers);
@@ -294,13 +309,31 @@ export default function WellnessPage() {
     caloriesBurned: caloriesBurned ? Math.round(caloriesBurned) : undefined,
   };
 
-  // AI wellness insights — honest, derived from the real data.
-  const insights: string[] = [];
-  if (sleep.value != null) insights.push(sleep.value >= 7 ? `You slept ${sleep.value.toFixed(1)}h last night — right in the healthy range.` : `You slept ${sleep.value.toFixed(1)}h last night — aim for 7–9h.`);
-  if (hydration.value != null && hydration.value < HYDRATION_GOAL) insights.push(`You're at ${Math.round(hydration.value)} of ${HYDRATION_GOAL} oz of water today — a bit more to hit your goal.`);
-  if (restingHr.value != null && restingHr.value <= 60) insights.push(`Your resting heart rate (${restingHr.value} bpm) is excellent.`);
-  if (habitCards.length > 0) insights.push(`You've completed ${habitsCompleted} of ${habitCards.length} habits today.`);
-  if (vitals.weight.changePct != null && Math.abs(vitals.weight.changePct) >= 0.5) insights.push(`Weight is ${vitals.weight.changePct < 0 ? "down" : "up"} ${Math.abs(vitals.weight.changePct).toFixed(1)}% since your last log.`);
+  // Dynamic per-tracker cards — one for EVERY metric the user actually logs,
+  // whatever it is. This is what makes Wellness reflect the user's real data
+  // instead of a predetermined list.
+  const dynamicCards = buildWellnessCards(trackers);
+
+  // AI wellness insights — REAL findings from the shared insight engine
+  // (trend / anomaly / streak / milestone, health-direction aware) over
+  // whatever the user tracks, instead of the old hardcoded template strings.
+  const keyFindings = computeKeyFindings({
+    trackers: (trackers as any) || [],
+    obligations: (obligations as any) || [],
+    habits: (habits as any) || [],
+    financeSnapshot: undefined,
+    netWorthHistory: [],
+  } as any);
+  const HEALTH_FINDING = /tracker_|habit_/;
+  const insights: string[] = keyFindings
+    .filter((f: any) => HEALTH_FINDING.test(String(f.kind)))
+    .map((f: any) => f.detail ? `${f.title} — ${f.detail}` : f.title);
+  // Light supplementary lines when the engine has little to say yet.
+  if (insights.length < 3) {
+    if (sleep.value != null) insights.push(sleep.value >= 7 ? `You slept ${sleep.value.toFixed(1)}h last night — right in the healthy range.` : `You slept ${sleep.value.toFixed(1)}h last night — aim for 7–9h.`);
+    if (hydration.value != null && hydration.value < HYDRATION_GOAL) insights.push(`You're at ${Math.round(hydration.value)} of ${HYDRATION_GOAL} oz of water today.`);
+    if (habitCards.length > 0) insights.push(`You've completed ${habitsCompleted} of ${habitCards.length} habits today.`);
+  }
 
   // Health reminders — from active medication/appointment obligations + hydration.
   const reminders: string[] = [];
@@ -354,7 +387,15 @@ export default function WellnessPage() {
   };
 
   return (
-    <div className={embedded ? "px-3 sm:px-4 py-3" : "container mx-auto px-3 sm:px-4 py-4 max-w-7xl"}>
+    // BUG-20260709-wellness-scroll: the hub <main> is overflow-hidden, so every
+    // hub page must own its scroll container (see dashboard/trackers/finance/…).
+    // Wellness was missing it, so tall content overflowed the clipped <main>
+    // (unreachable) and the last cards hid under the 60px fixed bottom nav.
+    // Mirror the peers: h-full + overflow-y-auto + pb-24 nav clearance.
+    <div
+      className={`h-full overflow-y-auto overflow-x-hidden pb-24 ${embedded ? "px-3 sm:px-4 py-3" : "container mx-auto px-3 sm:px-4 py-4 max-w-7xl"}`}
+      style={{ WebkitOverflowScrolling: "touch" }}
+    >
       {!embedded && (
         <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
           <div>
@@ -408,6 +449,10 @@ export default function WellnessPage() {
         recentActivity={recentActivity}
         weightUnit={vitals.weightUnit}
         onQuickLog={onQuickLog}
+        dynamicCards={dynamicCards}
+        onAiDeepDive={() => aiDeepDive.mutate()}
+        aiDeepDiveLoading={aiDeepDive.isPending}
+        aiNarrative={aiNarrative}
       />
 
       {/* Inline quick-log dialog for weight / mood / sleep / steps — shared ModalShell. */}

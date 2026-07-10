@@ -14,10 +14,16 @@ import { Button } from "@/components/ui/button";
 import {
   Activity, Heart, Moon, Droplet, Flame, HeartPulse, Brain, Pill, CalendarClock,
   Bell, FlaskConical, Leaf, FileText, Stethoscope, AlertTriangle, Sparkles,
-  CheckCircle2, Circle, Footprints, Dumbbell, Plus, TrendingUp, TrendingDown,
+  CheckCircle2, Circle, Footprints, Dumbbell, Plus, TrendingUp, TrendingDown, Minus,
 } from "lucide-react";
+import { groupWellnessCards, type WellnessCard } from "@/lib/wellness-dynamic";
 
 // ── shared bits ──────────────────────────────────────────────────────────────
+const T = {
+  green: "155 65% 45%", teal: "173 60% 44%", blue: "213 90% 62%", cyan: "199 89% 60%",
+  purple: "262 70% 62%", pink: "330 75% 62%", amber: "38 96% 54%", orange: "25 90% 58%",
+  red: "0 72% 58%", indigo: "240 60% 65%",
+};
 const fmt = (n: number | null | undefined, dp = 0) =>
   n == null || !Number.isFinite(n) ? "—" : Number(n).toLocaleString("en-US", { maximumFractionDigits: dp });
 
@@ -100,6 +106,61 @@ function SectionCard({ title, icon: Icon, tone, badge, viewAllHref, onViewAll, c
 
 const Empty = ({ text }: { text: string }) => <p className="text-xs text-muted-foreground">{text}</p>;
 
+// ── Dynamic per-tracker card ───────────────────────────────────────────────
+// Renders ONE metric the user actually tracks. Reused for every tracker with
+// data — measurement (Weight/Sleep), dual (Blood Pressure), or a non-numeric
+// activity ("Guitar" → recent-log count). Nothing predetermined.
+const GROUP_TONE: Record<string, string> = {
+  Health: T.red, Fitness: T.green, Nutrition: T.orange, Mental: T.purple,
+  Sleep: T.purple, Medication: T.pink, Lifestyle: T.teal, Other: T.blue,
+};
+function DynamicCard({ card }: { card: WellnessCard }) {
+  const tone = GROUP_TONE[card.group] || T.blue;
+  const favColor = card.favorable === "good" ? T.green : card.favorable === "bad" ? T.red : "var(--muted-foreground)";
+  const TrendIco = card.direction === "up" ? TrendingUp : card.direction === "down" ? TrendingDown : Minus;
+  const valueText = card.pair
+    ? `${card.pair.systolic ?? "—"}/${card.pair.diastolic ?? "—"}`
+    : fmt(card.value, card.isCount ? 0 : 1);
+  return (
+    <Link href="/trackers">
+      <Card className="p-3 card-lift transition-all cursor-pointer" data-testid={`wellness-metric-${card.id}`}
+        style={{ borderColor: `hsl(${tone} / 0.22)` }}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide truncate" style={{ color: `hsl(${tone})` }}>{card.name}</span>
+          {card.changePct != null && card.favorable !== "neutral" && (
+            <span className="flex items-center gap-0.5 text-[10px] shrink-0" style={{ color: favColor.startsWith("var") ? undefined : `hsl(${favColor})` }}>
+              <TrendIco className="w-3 h-3" /> {Math.abs(card.changePct).toFixed(0)}%
+            </span>
+          )}
+        </div>
+        <div className="flex items-end justify-between mt-1 gap-2">
+          <div className="metric-value text-2xl leading-none" style={{ color: `hsl(${tone})` }}>
+            {valueText}<span className="text-[11px] text-muted-foreground ml-1">{card.unit}</span>
+          </div>
+        </div>
+        {card.series.length >= 2 && <div className="mt-1.5"><Spark series={card.series} color={tone} /></div>}
+        <div className="text-[10px] text-muted-foreground mt-1">{card.entryCount} logged</div>
+      </Card>
+    </Link>
+  );
+}
+function DynamicMetricGrid({ cards }: { cards: WellnessCard[] }) {
+  if (!cards || cards.length === 0) return null;
+  const groups = groupWellnessCards(cards);
+  return (
+    <div className="space-y-3" data-testid="wellness-dynamic">
+      {groups.map((g) => (
+        <div key={g.group}>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 px-0.5">{g.group}</div>
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
+            {g.cards.map((c) => <DynamicCard key={c.id} card={c} />)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // A "+ Log X" quick-log button (renders only when a handler is wired).
 function LogButton({ label, onClick, testId }: { label: string; onClick?: () => void; testId: string }) {
   if (!onClick) return null;
@@ -176,13 +237,16 @@ export interface WellnessOverviewProps {
 
   weightUnit?: string;
   onQuickLog?: (kind: "hydration" | "weight" | "mood" | "sleep" | "steps") => void;
+
+  /** Dynamic per-tracker cards — one per metric the user actually logs. */
+  dynamicCards?: WellnessCard[];
+  /** Called when the user taps "AI Deep Dive". */
+  onAiDeepDive?: () => void;
+  aiDeepDiveLoading?: boolean;
+  /** Narrative returned by the AI deep dive (rendered under the insights card). */
+  aiNarrative?: string | null;
 }
 
-const T = {
-  green: "155 65% 45%", teal: "173 60% 44%", blue: "213 90% 62%", cyan: "199 89% 60%",
-  purple: "262 70% 62%", pink: "330 75% 62%", amber: "38 96% 54%", orange: "25 90% 58%",
-  red: "0 72% 58%", indigo: "240 60% 65%",
-};
 
 export function WellnessOverview(props: WellnessOverviewProps) {
   const {
@@ -193,36 +257,81 @@ export function WellnessOverview(props: WellnessOverviewProps) {
     schedule, medications, onToggleMed, togglingMedId, vitals, sleep, nutrition, mood, activity,
     appointments, reminders, labs, supplements, documents, conditions, allergies,
     recentActivity, weightUnit = "lbs", onQuickLog,
+    dynamicCards = [], onAiDeepDive, aiDeepDiveLoading, aiNarrative,
   } = props;
 
   const dueMeds = medications.filter((m) => !m.taken).length;
+  // Dynamic visibility: only render a section when it actually has data — an
+  // empty account shows nothing for it ("if they don't have any, they don't
+  // need them"). The dynamic per-tracker grid already covers single metrics, so
+  // the fixed cards below are reserved for the aggregate/list surfaces.
+  const has = {
+    habits: habits.length > 0,
+    missed: missedHabits.length > 0,
+    schedule: schedule.length > 0,
+    meds: medications.length > 0,
+    appts: appointments.length > 0,
+    reminders: reminders.length > 0,
+    labs: labs.length > 0,
+    supps: supplements.length > 0,
+    docs: documents.length > 0,
+    conditions: conditions.length > 0,
+    allergies: allergies.length > 0,
+    activity: recentActivity.length > 0,
+    insights: insights.length > 0 || !!aiNarrative || !!onAiDeepDive,
+  };
 
   return (
     <div className="space-y-3" data-testid="wellness-overview">
-      {/* ── KPI strip ── */}
+      {/* ── KPI strip — only tiles that actually have a value ── */}
       <div className="flex flex-wrap gap-2" data-testid="wellness-kpis">
-        <KpiTile testId="wellness-kpi-score" label="Wellness Score" tone={wellnessScore != null && wellnessScore >= 80 ? T.green : wellnessScore != null && wellnessScore >= 60 ? T.amber : T.red}
-          icon={Sparkles} value={wellnessScore != null ? String(wellnessScore) : "—"} unit={wellnessScoreLabel} />
-        <KpiTile testId="wellness-kpi-sleep" label="Sleep" tone={T.purple} icon={Moon}
-          value={sleepHours != null ? `${fmt(sleepHours, 1)}h` : "—"} sub="last night" series={sleepSeries} />
-        <KpiTile testId="wellness-kpi-activity" label="Activity" tone={T.blue} icon={Footprints}
-          value={fmt(steps)} unit="steps" series={stepsSeries} />
-        <KpiTile testId="wellness-kpi-hr" label="Resting HR" tone={T.green} icon={Heart}
-          value={restingHr != null ? String(restingHr) : "—"} unit="bpm" series={restingHrSeries} />
-        <KpiTile testId="wellness-kpi-hydration" label="Hydration" tone={T.cyan} icon={Droplet}
-          value={fmt(hydrationOz)} unit={`/ ${hydrationGoal} oz`} ring={{ value: hydrationOz || 0, max: hydrationGoal }} />
-        <KpiTile testId="wellness-kpi-calories" label="Calories" tone={T.orange} icon={Flame}
-          value={fmt(calories)} unit={`/ ${caloriesGoal} kcal`} ring={{ value: calories || 0, max: caloriesGoal }} />
-        <KpiTile testId="wellness-kpi-streak" label="Streak" tone={T.orange} icon={Flame}
-          value={streak != null ? String(streak) : "—"} unit="days" />
+        {wellnessScore != null && (
+          <KpiTile testId="wellness-kpi-score" label="Wellness Score" tone={wellnessScore >= 80 ? T.green : wellnessScore >= 60 ? T.amber : T.red}
+            icon={Sparkles} value={String(wellnessScore)} unit={wellnessScoreLabel} />
+        )}
+        {sleepHours != null && (
+          <KpiTile testId="wellness-kpi-sleep" label="Sleep" tone={T.purple} icon={Moon}
+            value={`${fmt(sleepHours, 1)}h`} sub="last night" series={sleepSeries} />
+        )}
+        {steps != null && (
+          <KpiTile testId="wellness-kpi-activity" label="Activity" tone={T.blue} icon={Footprints}
+            value={fmt(steps)} unit="steps" series={stepsSeries} />
+        )}
+        {restingHr != null && (
+          <KpiTile testId="wellness-kpi-hr" label="Resting HR" tone={T.green} icon={Heart}
+            value={String(restingHr)} unit="bpm" series={restingHrSeries} />
+        )}
+        {hydrationOz != null && (
+          <KpiTile testId="wellness-kpi-hydration" label="Hydration" tone={T.cyan} icon={Droplet}
+            value={fmt(hydrationOz)} unit={`/ ${hydrationGoal} oz`} ring={{ value: hydrationOz || 0, max: hydrationGoal }} />
+        )}
+        {calories != null && (
+          <KpiTile testId="wellness-kpi-calories" label="Calories" tone={T.orange} icon={Flame}
+            value={fmt(calories)} unit={`/ ${caloriesGoal} kcal`} ring={{ value: calories || 0, max: caloriesGoal }} />
+        )}
+        {streak != null && (
+          <KpiTile testId="wellness-kpi-streak" label="Streak" tone={T.orange} icon={Flame}
+            value={String(streak)} unit="days" />
+        )}
       </div>
 
-      {/* ── Row: AI insights · habits · schedule · medications ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+      {/* ── Quick-log row — one tap to log the point-in-time metrics ── */}
+      {onQuickLog && (
+        <div className="flex flex-wrap gap-2" data-testid="wellness-quicklog">
+          {([["hydration", Droplet, "Water"], ["weight", HeartPulse, "Weight"], ["sleep", Moon, "Sleep"], ["mood", Brain, "Mood"], ["steps", Footprints, "Steps"]] as const).map(([kind, Icon, label]) => (
+            <Button key={kind} size="sm" variant="outline" className="h-8 text-xs" onClick={() => onQuickLog(kind)} data-testid={`wellness-quicklog-${kind}`}>
+              <Icon className="w-3.5 h-3.5 mr-1" /> {label}
+            </Button>
+          ))}
+        </div>
+      )}
+
+      {/* ── AI Wellness Insights (deterministic every load + optional deep dive) ── */}
+      {has.insights && (
         <SectionCard testId="wellness-insights" title="AI Wellness Insights" icon={Sparkles} tone={T.purple}>
-          {insights.length === 0 ? <Empty text="Log a few days of trackers to unlock insights." /> : (
+          {insights.length === 0 && !aiNarrative ? <Empty text="Log a few days of trackers to unlock insights." /> : (
             <ul className="space-y-2">
-              {insights.slice(0, 5).map((t, i) => (
+              {insights.slice(0, 6).map((t, i) => (
                 <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
                   <Sparkles className="w-3 h-3 mt-0.5 shrink-0" style={{ color: `hsl(${T.purple})` }} />
                   <span>{t}</span>
@@ -230,8 +339,32 @@ export function WellnessOverview(props: WellnessOverviewProps) {
               ))}
             </ul>
           )}
+          {aiNarrative && (
+            <p className="mt-3 text-xs leading-relaxed rounded-md p-2.5 bg-purple-500/5" style={{ borderLeft: `2px solid hsl(${T.purple})` }}>{aiNarrative}</p>
+          )}
+          {onAiDeepDive && (
+            <Button size="sm" variant="outline" className="h-7 text-xs mt-3" onClick={onAiDeepDive} disabled={aiDeepDiveLoading} data-testid="wellness-ai-deepdive">
+              <Sparkles className="w-3 h-3 mr-1" /> {aiDeepDiveLoading ? "Thinking…" : "AI Deep Dive"}
+            </Button>
+          )}
         </SectionCard>
+      )}
 
+      {/* ── DYNAMIC metric grid — one card per metric the user actually tracks ── */}
+      <DynamicMetricGrid cards={dynamicCards} />
+
+      {/* ── Truly-empty account: a single friendly nudge, no wall of empties ── */}
+      {dynamicCards.length === 0 && !has.habits && !has.meds && !has.schedule && !has.appts && !has.docs && (
+        <Card className="p-6 text-center" data-testid="wellness-empty">
+          <HeartPulse className="w-8 h-8 mx-auto mb-2 text-red-500/70" />
+          <p className="text-sm font-medium">Nothing tracked yet</p>
+          <p className="text-xs text-muted-foreground mt-1">Log something in chat — “weight 180”, “slept 7 hours”, “bp 120/80” — and it shows up here automatically.</p>
+        </Card>
+      )}
+
+      {/* ── Aggregate / list cards — each rendered ONLY when it has data ── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        {has.habits && (
         <SectionCard testId="wellness-habits" title="Today's Habits" icon={CheckCircle2} tone={T.green}
           badge={`${habitsCompleted} / ${habits.length} done`} viewAllHref="/habits">
           {habits.length === 0 ? <Empty text="No habits yet — add one from chat." /> : (
@@ -251,7 +384,9 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             </ul>
           )}
         </SectionCard>
+        )}
 
+        {has.missed && (
         <SectionCard testId="wellness-missed-habits" title="Missed Habits" icon={AlertTriangle} tone={T.amber}
           badge={missedHabits.length ? `${missedHabits.length} to do` : undefined} viewAllHref="/habits">
           {missedHabits.length === 0 ? <Empty text="All habits on track today. ✓" /> : (
@@ -269,7 +404,9 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             </ul>
           )}
         </SectionCard>
+        )}
 
+        {has.schedule && (
         <SectionCard testId="wellness-schedule" title="Today's Schedule" icon={CalendarClock} tone={T.blue} viewAllHref="/calendar">
           {schedule.length === 0 ? <Empty text="Nothing scheduled today." /> : (
             <ul className="space-y-2">
@@ -282,7 +419,9 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             </ul>
           )}
         </SectionCard>
+        )}
 
+        {has.meds && (
         <SectionCard testId="wellness-medications" title="Medications" icon={Pill} tone={T.pink}
           badge={dueMeds > 0 ? `${dueMeds} due` : "all taken"} viewAllHref="/obligations">
           {medications.length === 0 ? <Empty text="No medications tracked." /> : (
@@ -304,229 +443,123 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             </ul>
           )}
         </SectionCard>
+        )}
       </div>
 
-      {/* ── Row: vitals · sleep · nutrition · hydration · exercise ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        <SectionCard testId="wellness-vitals" title="Vitals Overview" icon={HeartPulse} tone={T.red} viewAllHref="/trackers">
-          {vitals.length === 0 ? <Empty text="No vitals logged yet." /> : (
-            <ul className="space-y-2">
-              {vitals.map((v, i) => (
-                <li key={i} className="flex items-center gap-2 text-sm" data-testid={`wellness-vital-${i}`}>
-                  {v.icon ? <v.icon className="w-3.5 h-3.5 text-muted-foreground shrink-0" /> : <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />}
-                  <span className="text-muted-foreground">{v.label}</span>
-                  <span className="ml-auto tabular-nums font-semibold flex items-center gap-1">{v.value}{trendIcon(v.change)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <LogButton label="Log weight" onClick={onQuickLog && (() => onQuickLog("weight"))} testId="wellness-log-weight" />
-        </SectionCard>
-
-        <SectionCard testId="wellness-sleep" title="Sleep Summary" icon={Moon} tone={T.purple} viewAllHref="/trackers">
-          {sleep?.hours == null ? <Empty text="No sleep logged." /> : (
-            <div className="flex items-center gap-4">
-              <div>
-                <div className="text-2xl font-bold tabular-nums" style={{ color: `hsl(${T.purple})` }}>{fmt(sleep.hours, 1)}h</div>
-                <div className="text-[10px] text-muted-foreground">total sleep</div>
-              </div>
-              <ul className="text-xs text-muted-foreground space-y-1 flex-1">
-                {sleep.deep != null && <li className="flex justify-between"><span>Deep</span><span className="tabular-nums">{fmt(sleep.deep, 1)}h</span></li>}
-                {sleep.rem != null && <li className="flex justify-between"><span>REM</span><span className="tabular-nums">{fmt(sleep.rem, 1)}h</span></li>}
-                {sleep.efficiency != null && <li className="flex justify-between"><span>Efficiency</span><span className="tabular-nums">{fmt(sleep.efficiency)}%</span></li>}
-              </ul>
-            </div>
-          )}
-          <LogButton label="Log sleep" onClick={onQuickLog && (() => onQuickLog("sleep"))} testId="wellness-log-sleep" />
-        </SectionCard>
-
-        <SectionCard testId="wellness-nutrition" title="Nutrition Summary" icon={Flame} tone={T.orange}>
-          {nutrition?.calories == null ? <Empty text="No nutrition logged." /> : (
-            <div className="flex items-center gap-4">
-              <Ring value={nutrition.calories || 0} max={nutrition.caloriesGoal || 2300} color={T.orange} label="kcal" unit="kcal" />
-              <ul className="text-xs space-y-1 flex-1">
-                {nutrition.protein != null && <li className="flex justify-between"><span className="text-muted-foreground">Protein</span><span className="tabular-nums font-semibold">{fmt(nutrition.protein)}g</span></li>}
-                {nutrition.carbs != null && <li className="flex justify-between"><span className="text-muted-foreground">Carbs</span><span className="tabular-nums font-semibold">{fmt(nutrition.carbs)}g</span></li>}
-                {nutrition.fats != null && <li className="flex justify-between"><span className="text-muted-foreground">Fats</span><span className="tabular-nums font-semibold">{fmt(nutrition.fats)}g</span></li>}
-                <li className="flex justify-between border-t border-border/50 pt-1"><span className="text-muted-foreground">Calories</span><span className="tabular-nums font-semibold">{fmt(nutrition.calories)} / {fmt(nutrition.caloriesGoal)}</span></li>
-              </ul>
-            </div>
-          )}
-        </SectionCard>
-
-        <SectionCard testId="wellness-hydration" title="Hydration" icon={Droplet} tone={T.cyan} viewAllHref="/trackers">
-          <div className="flex items-center gap-4">
-            <Ring value={hydrationOz || 0} max={hydrationGoal} color={T.cyan} label="oz" unit="oz" />
-            <div className="flex-1">
-              <div className="text-sm"><span className="font-semibold tabular-nums">{fmt(hydrationOz)}</span> <span className="text-muted-foreground">/ {hydrationGoal} oz today</span></div>
-              <Button size="sm" variant="outline" className="h-7 text-xs mt-2" onClick={() => onQuickLog?.("hydration")} data-testid="wellness-log-hydration">
-                <Plus className="w-3 h-3 mr-1" /> Log water
-              </Button>
-            </div>
-          </div>
-        </SectionCard>
-
-        <SectionCard testId="wellness-exercise" title="Exercise & Activity" icon={Dumbbell} tone={T.green} viewAllHref="/trackers">
-          {!activity || (activity.workouts == null && activity.activeMin == null && activity.caloriesBurned == null)
-            ? <Empty text="No workouts logged this week." /> : (
-            <ul className="space-y-2 text-sm">
-              {activity.workouts != null && <li className="flex items-center gap-2"><Dumbbell className="w-3.5 h-3.5" style={{ color: `hsl(${T.green})` }} /><span className="text-muted-foreground">Workouts</span><span className="ml-auto tabular-nums font-semibold">{activity.workouts}</span></li>}
-              {activity.activeMin != null && <li className="flex items-center gap-2"><Activity className="w-3.5 h-3.5" style={{ color: `hsl(${T.green})` }} /><span className="text-muted-foreground">Active time</span><span className="ml-auto tabular-nums font-semibold">{fmt(activity.activeMin)} min</span></li>}
-              {activity.caloriesBurned != null && <li className="flex items-center gap-2"><Flame className="w-3.5 h-3.5" style={{ color: `hsl(${T.green})` }} /><span className="text-muted-foreground">Calories burned</span><span className="ml-auto tabular-nums font-semibold">{fmt(activity.caloriesBurned)}</span></li>}
-            </ul>
-          )}
-          <LogButton label="Log steps" onClick={onQuickLog && (() => onQuickLog("steps"))} testId="wellness-log-steps" />
-        </SectionCard>
-
-        <SectionCard testId="wellness-mood" title="Mood & Wellness" icon={Brain} tone={T.pink} viewAllHref="/trackers">
-          {mood?.value == null ? <Empty text="No mood logged." /> : (
-            <div>
-              <div className="text-2xl font-bold tabular-nums" style={{ color: `hsl(${T.pink})` }}>{fmt(mood.value, 1)}<span className="text-sm text-muted-foreground"> / 10</span></div>
-              {mood.series.length >= 2 && <div className="mt-2"><Spark series={mood.series} color={T.pink} /></div>}
-            </div>
-          )}
-          <LogButton label="Log mood" onClick={onQuickLog && (() => onQuickLog("mood"))} testId="wellness-log-mood" />
-        </SectionCard>
-
-        <SectionCard testId="wellness-mental" title="Mental Wellness" icon={Brain} tone={T.purple} viewAllHref="/trackers">
-          {meditationMin == null ? (
-            <Empty text="No mindfulness logged. Ask the AI to start a meditation tracker." />
-          ) : (
-            <div className="flex items-center gap-2 text-sm">
-              <Brain className="w-3.5 h-3.5" style={{ color: `hsl(${T.purple})` }} />
-              <span className="text-muted-foreground">Mindfulness today</span>
-              <span className="ml-auto metric-value text-lg" style={{ color: `hsl(${T.purple})` }}>{fmt(meditationMin)} min</span>
-            </div>
-          )}
-        </SectionCard>
-
-        <SectionCard testId="wellness-recovery" title="Recovery" icon={Activity} tone={T.teal}>
-          {recoveryScore == null ? (
-            <Empty text="No recovery data. Log sleep + resting HR, or connect a wearable." />
-          ) : (
-            <div className="flex items-center gap-4">
-              <Ring value={recoveryScore} max={100} color={T.teal} label="score" unit="score" />
-              <div className="text-sm text-muted-foreground">Readiness based on sleep + resting HR.</div>
-            </div>
-          )}
-        </SectionCard>
-      </div>
-
-      {/* ── Row: appointments · reminders · labs · supplements ── */}
+      {/* ── Aggregate / list cards — appointments · reminders · labs ·
+           supplements · documents · conditions · allergies · activity —
+           each rendered ONLY when it has data (dynamic, no empty cards). ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        {has.appts && (
         <SectionCard testId="wellness-appointments" title="Upcoming Appointments" icon={CalendarClock} tone={T.blue}
-          badge={appointments.length ? `${appointments.length} upcoming` : undefined} viewAllHref="/calendar">
-          {appointments.length === 0 ? <Empty text="No upcoming appointments." /> : (
-            <ul className="space-y-2 text-sm">
-              {appointments.slice(0, 5).map((a) => (
-                <li key={a.id} className="flex items-center gap-2" data-testid={`wellness-appt-${a.id}`}>
-                  <span className="text-[11px] text-muted-foreground w-24 shrink-0">{a.date}{a.time ? ` ${a.time}` : ""}</span>
-                  <span className="truncate">{a.title}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          badge={`${appointments.length} upcoming`} viewAllHref="/calendar">
+          <ul className="space-y-2 text-sm">
+            {appointments.slice(0, 5).map((a) => (
+              <li key={a.id} className="flex items-center gap-2" data-testid={`wellness-appt-${a.id}`}>
+                <span className="text-[11px] text-muted-foreground w-24 shrink-0">{a.date}{a.time ? ` ${a.time}` : ""}</span>
+                <span className="truncate">{a.title}</span>
+              </li>
+            ))}
+          </ul>
         </SectionCard>
+        )}
 
+        {has.reminders && (
         <SectionCard testId="wellness-reminders" title="Health Reminders" icon={Bell} tone={T.amber}
-          badge={reminders.length ? `${reminders.length} active` : undefined}>
-          {reminders.length === 0 ? <Empty text="No active reminders." /> : (
-            <ul className="space-y-1.5 text-xs">
-              {reminders.slice(0, 5).map((r, i) => (
-                <li key={i} className="flex items-start gap-2"><Bell className="w-3 h-3 mt-0.5 shrink-0" style={{ color: `hsl(${T.amber})` }} /><span>{r}</span></li>
-              ))}
-            </ul>
-          )}
+          badge={`${reminders.length} active`}>
+          <ul className="space-y-1.5 text-xs">
+            {reminders.slice(0, 5).map((r, i) => (
+              <li key={i} className="flex items-start gap-2"><Bell className="w-3 h-3 mt-0.5 shrink-0" style={{ color: `hsl(${T.amber})` }} /><span>{r}</span></li>
+            ))}
+          </ul>
         </SectionCard>
+        )}
 
+        {has.labs && (
         <SectionCard testId="wellness-labs" title="Lab Results" icon={FlaskConical} tone={T.teal} viewAllHref="/trackers">
-          {labs.length === 0 ? <Empty text="No lab results tracked." /> : (
-            <ul className="space-y-2 text-sm">
-              {labs.slice(0, 5).map((l) => (
-                <li key={l.id} className="flex items-center gap-2" data-testid={`wellness-lab-${l.id}`}>
-                  <span className="truncate flex-1">{l.name}</span>
-                  {l.date && <span className="text-[10px] text-muted-foreground">{l.date}</span>}
-                  {l.status && <span className="text-[10px]" style={{ color: `hsl(${T.green})` }}>{l.status}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
+          <ul className="space-y-2 text-sm">
+            {labs.slice(0, 5).map((l) => (
+              <li key={l.id} className="flex items-center gap-2" data-testid={`wellness-lab-${l.id}`}>
+                <span className="truncate flex-1">{l.name}</span>
+                {l.date && <span className="text-[10px] text-muted-foreground">{l.date}</span>}
+                {l.status && <span className="text-[10px]" style={{ color: `hsl(${T.green})` }}>{l.status}</span>}
+              </li>
+            ))}
+          </ul>
         </SectionCard>
+        )}
 
+        {has.supps && (
         <SectionCard testId="wellness-supplements" title="Supplements" icon={Leaf} tone={T.green}
-          badge={supplements.length ? `${supplements.length} active` : undefined} viewAllHref="/obligations">
-          {supplements.length === 0 ? <Empty text="No supplements tracked." /> : (
-            <ul className="space-y-1.5 text-sm">
-              {supplements.slice(0, 5).map((s) => (
-                <li key={s.id} className="flex items-center gap-2" data-testid={`wellness-supp-${s.id}`}>
-                  <Leaf className="w-3 h-3 shrink-0" style={{ color: `hsl(${T.green})` }} />
-                  <span className="flex-1 truncate">{s.name}{s.dose ? ` ${s.dose}` : ""}</span>
-                  {s.schedule && <span className="text-[10px] text-muted-foreground">{s.schedule}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
+          badge={`${supplements.length} active`} viewAllHref="/obligations">
+          <ul className="space-y-1.5 text-sm">
+            {supplements.slice(0, 5).map((s) => (
+              <li key={s.id} className="flex items-center gap-2" data-testid={`wellness-supp-${s.id}`}>
+                <Leaf className="w-3 h-3 shrink-0" style={{ color: `hsl(${T.green})` }} />
+                <span className="flex-1 truncate">{s.name}{s.dose ? ` ${s.dose}` : ""}</span>
+                {s.schedule && <span className="text-[10px] text-muted-foreground">{s.schedule}</span>}
+              </li>
+            ))}
+          </ul>
         </SectionCard>
-      </div>
+        )}
 
-      {/* ── Row: documents · conditions · allergies · recent activity ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        {has.docs && (
         <SectionCard testId="wellness-documents" title="Health Documents" icon={FileText} tone={T.blue}
-          badge={documents.length ? `${documents.length} docs` : undefined} viewAllHref="/linked?tab=documents">
-          {documents.length === 0 ? <Empty text="No health documents." /> : (
-            <ul className="space-y-2 text-sm">
-              {documents.slice(0, 5).map((d) => (
-                <li key={d.id} className="flex items-center gap-2" data-testid={`wellness-doc-${d.id}`}>
-                  <FileText className="w-3 h-3 shrink-0 text-muted-foreground" />
-                  <span className="flex-1 truncate">{d.name}</span>
-                  {d.date && <span className="text-[10px] text-muted-foreground">{d.date}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
+          badge={`${documents.length} docs`} viewAllHref="/linked?tab=documents">
+          <ul className="space-y-2 text-sm">
+            {documents.slice(0, 5).map((d) => (
+              <li key={d.id} className="flex items-center gap-2" data-testid={`wellness-doc-${d.id}`}>
+                <FileText className="w-3 h-3 shrink-0 text-muted-foreground" />
+                <span className="flex-1 truncate">{d.name}</span>
+                {d.date && <span className="text-[10px] text-muted-foreground">{d.date}</span>}
+              </li>
+            ))}
+          </ul>
         </SectionCard>
+        )}
 
+        {has.conditions && (
         <SectionCard testId="wellness-conditions" title="Medical Conditions" icon={Stethoscope} tone={T.orange}
-          badge={conditions.length ? `${conditions.length} known` : undefined}>
-          {conditions.length === 0 ? <Empty text="No conditions recorded." /> : (
-            <ul className="space-y-2 text-sm">
-              {conditions.slice(0, 5).map((c) => (
-                <li key={c.id} data-testid={`wellness-condition-${c.id}`}>
-                  <div className="font-medium">{c.name}</div>
-                  {c.note && <div className="text-[11px] text-muted-foreground">{c.note}</div>}
-                </li>
-              ))}
-            </ul>
-          )}
+          badge={`${conditions.length} known`}>
+          <ul className="space-y-2 text-sm">
+            {conditions.slice(0, 5).map((c) => (
+              <li key={c.id} data-testid={`wellness-condition-${c.id}`}>
+                <div className="font-medium">{c.name}</div>
+                {c.note && <div className="text-[11px] text-muted-foreground">{c.note}</div>}
+              </li>
+            ))}
+          </ul>
         </SectionCard>
+        )}
 
+        {has.allergies && (
         <SectionCard testId="wellness-allergies" title="Allergies" icon={AlertTriangle} tone={T.red}
-          badge={allergies.length ? `${allergies.length} known` : undefined}>
-          {allergies.length === 0 ? <Empty text="No allergies recorded." /> : (
-            <ul className="space-y-2 text-sm">
-              {allergies.slice(0, 5).map((a) => (
-                <li key={a.id} data-testid={`wellness-allergy-${a.id}`}>
-                  <div className="font-medium">{a.name}</div>
-                  {a.note && <div className="text-[11px] text-muted-foreground">{a.note}</div>}
-                </li>
-              ))}
-            </ul>
-          )}
+          badge={`${allergies.length} known`}>
+          <ul className="space-y-2 text-sm">
+            {allergies.slice(0, 5).map((a) => (
+              <li key={a.id} data-testid={`wellness-allergy-${a.id}`}>
+                <div className="font-medium">{a.name}</div>
+                {a.note && <div className="text-[11px] text-muted-foreground">{a.note}</div>}
+              </li>
+            ))}
+          </ul>
         </SectionCard>
+        )}
 
+        {has.activity && (
         <SectionCard testId="wellness-activity" title="Recent Activity" icon={Activity} tone={T.teal}>
-          {recentActivity.length === 0 ? <Empty text="No recent activity." /> : (
-            <ul className="space-y-2 text-sm">
-              {recentActivity.slice(0, 6).map((r) => (
-                <li key={r.id} className="flex items-center gap-2" data-testid={`wellness-activity-${r.id}`}>
-                  <CheckCircle2 className="w-3 h-3 shrink-0" style={{ color: `hsl(${T.teal})` }} />
-                  <span className="flex-1 truncate">{r.text}</span>
-                  {r.when && <span className="text-[10px] text-muted-foreground shrink-0">{r.when}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
+          <ul className="space-y-2 text-sm">
+            {recentActivity.slice(0, 6).map((r) => (
+              <li key={r.id} className="flex items-center gap-2" data-testid={`wellness-activity-${r.id}`}>
+                <CheckCircle2 className="w-3 h-3 shrink-0" style={{ color: `hsl(${T.teal})` }} />
+                <span className="flex-1 truncate">{r.text}</span>
+                {r.when && <span className="text-[10px] text-muted-foreground shrink-0">{r.when}</span>}
+              </li>
+            ))}
+          </ul>
         </SectionCard>
+        )}
       </div>
     </div>
   );

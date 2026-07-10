@@ -6,6 +6,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { computeKeyFindings } from "@shared/tracker-insights";
 import { ownedAssetIds } from "@shared/cost-of-ownership";
 import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "@shared/ownership-model";
 import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
@@ -2528,6 +2529,57 @@ If unsure, return "profile_fact".`,
     } catch (err: any) {
       log.error("[Insights]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate insights" });
+    }
+  }));
+
+  // ---- Wellness AI Deep Dive (on-demand narrative) ----
+  // The Wellness tab computes deterministic findings on every load for free.
+  // This endpoint is called ONLY when the user taps "AI Deep Dive": it turns the
+  // same deterministic findings into a short, human narrative via Haiku, and
+  // falls back to a plain summary of those findings if the model is unavailable —
+  // so it never fails or blocks. Profile-scoped like every other read.
+  app.post("/api/wellness/insights", asyncHandler(async (req, res) => {
+    try {
+      const idsRaw = (req.body?.profileIds ?? req.query.profileIds) as string | string[] | undefined;
+      const ids = Array.isArray(idsRaw)
+        ? idsRaw.filter((x) => typeof x === "string" && x)
+        : (typeof idsRaw === "string" ? idsRaw.split(",").filter(Boolean) : []);
+      const [trackers, habits, obligations, profiles] = await Promise.all([
+        storage.getTrackers(), storage.getHabits(), storage.getObligations(), storage.getProfiles(),
+      ]);
+      const filterActive = ids.length > 0;
+      const filterCtx = { selectedIds: ids, allProfiles: profiles };
+      const scoped = <T extends { linkedProfiles?: string[] }>(rows: T[]) =>
+        !filterActive ? rows : rows.filter((r) => passesProfileFilter((r as any).linkedProfiles, filterCtx));
+      const findings = computeKeyFindings({
+        trackers: scoped(trackers as any) as any,
+        obligations: scoped(obligations as any) as any,
+        habits: scoped(habits as any) as any,
+      } as any);
+      const healthFindings = findings.filter((f: any) => /tracker_|habit_/.test(String(f.kind))).slice(0, 12);
+      // Deterministic fallback narrative — a plain readout of the findings.
+      const fallbackNarrative = healthFindings.length === 0
+        ? "Not enough logged yet to spot trends. Keep logging your trackers and check back in a few days."
+        : healthFindings.slice(0, 5).map((f: any) => f.detail ? `${f.title} — ${f.detail}` : f.title).join(" ");
+      if (healthFindings.length === 0) {
+        return res.json({ narrative: fallbackNarrative, findingsCount: 0 });
+      }
+      const summary = healthFindings
+        .map((f: any) => `- [${f.severity}/${f.direction}] ${f.title}${f.detail ? `: ${f.detail}` : ""}`)
+        .join("\n");
+      const decision = await aiDecide<{ narrative: string }>({
+        task: "wellness-deep-dive",
+        system: `You are a supportive health coach. You are given DETERMINISTIC findings computed from the user's own health tracker data. Write a short, warm, plain-language wellness summary (2-4 sentences) that ties the findings together and gives ONE concrete, encouraging suggestion. Do NOT invent numbers or metrics not present in the findings. Do NOT give medical diagnoses. Return ONLY JSON: {"narrative": "<text>"}`,
+        user: `Findings:\n${summary}\n\nReturn JSON only: {"narrative": "<2-4 sentence summary>"}`,
+        timeoutMs: 6000,
+        maxTokens: 320,
+        fallback: () => ({ narrative: fallbackNarrative }),
+        validate: (x: any) => x && typeof x === "object" && typeof x.narrative === "string" && x.narrative.length > 0,
+      });
+      res.json({ narrative: decision.value.narrative, findingsCount: healthFindings.length });
+    } catch (err: any) {
+      log.error("[WellnessInsights]", err?.message || "unknown error");
+      res.status(500).json({ error: "Failed to generate wellness insights" });
     }
   }));
 
