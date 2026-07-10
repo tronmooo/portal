@@ -197,7 +197,7 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "System", operation: "Explain dashboard placement", ui: "(chat-first) section rules", aiTools: ["explain_dashboard_item"], status: "added" },
 
   // ── App-level operations excluded by design ────────────────────────────────
-  { entity: "Settings", operation: "Customize dashboard layout", ui: "Dashboard → Customize", aiTools: [], status: "excluded", reason: "Pure UI layout serialization (drag-order preference) — no meaningful chat equivalent." },
+  { entity: "Settings", operation: "Customize dashboard layout", ui: "Dashboard → Customize", aiTools: ["configure_dashboard_sections"], status: "added" },
   { entity: "Settings", operation: "Bank-CSV / ChatGPT finance import", ui: "Settings + dashboard import dialogs", aiTools: [], status: "excluded", reason: "Multi-step file/preview/commit import flows — chat handles individual records instead." },
   { entity: "Settings", operation: "Full data export / import", ui: "Dashboard menu", aiTools: [], status: "excluded", reason: "Whole-account file transfer — kept behind explicit UI actions." },
   { entity: "Settings", operation: "Delete ALL data", ui: "Settings → Danger zone", aiTools: [], status: "excluded", reason: "Catastrophic destructive action — must never be reachable through a chat message." },

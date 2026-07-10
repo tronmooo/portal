@@ -185,7 +185,13 @@ export async function recordActionLog(
     const entityType = TOOL_ENTITY[toolName];
     const entityId = envelope?.entity?.id || extractEntityId(envelope);
     const before = beforeRows && entityId ? (beforeRows.find((r: any) => r.id === entityId) ?? null) : null;
-    const { reversible, reversePlan } = planReverse(op, entityType, entityId, before);
+    let { reversible, reversePlan } = planReverse(op, entityType, entityId, before);
+    // Preference-backed tools (dashboard layout, notification prefs) undo by
+    // restoring the previous preference value the handler stashed.
+    if (toolName === "configure_dashboard_sections") {
+      reversible = true;
+      reversePlan = { op: "set_preference", key: "dashboard_layout", value: envelope?._previousState?.layout ?? null };
+    }
     const { __userMessage, ...inputSansMsg } = input || {};
     const write = ctx.storage.createAiActionLog({
       tool: toolName,
@@ -331,6 +337,20 @@ export async function executeReversePlan(
       const { reverseMerge } = await import("./merge-profiles");
       const res = await reverseMerge(storage, plan);
       return { ok: res.ok, description: res.ok ? `Unmerged: ${res.description}.` : res.description };
+    }
+    case "set_preference": {
+      if (!plan.key) return { ok: false, description: "No preference key in the reverse plan." };
+      if (plan.value === null || plan.value === undefined) {
+        // No prior saved value — restore by writing the current defaults.
+        if (plan.key === "dashboard_layout") {
+          const { DEFAULT_SECTION_DEFS, serializeLayoutValue } = await import("../shared/dashboard-layout");
+          await s.setPreference(plan.key, serializeLayoutValue(DEFAULT_SECTION_DEFS));
+          return { ok: true, description: "Restored the default dashboard layout." };
+        }
+        return { ok: false, description: `No previous value recorded for ${plan.key}.` };
+      }
+      await s.setPreference(plan.key, String(plan.value));
+      return { ok: true, description: `Restored the previous ${plan.key.replace(/_/g, " ")}.` };
     }
     default:
       return { ok: false, description: `Unknown reverse plan "${plan.op}".` };

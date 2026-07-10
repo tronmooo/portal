@@ -215,6 +215,32 @@ const STEPS: Step[] = [
     },
   },
 
+  // ── Batch 6 (MCP-grade) — dashboard section control ────────────────────────
+  {
+    batch: "6", tool: "configure_dashboard_sections",
+    message: `Show the Weekly Summary section on my dashboard`,
+    verify: async () => {
+      const r = await api("GET", "/preferences/dashboard_layout");
+      const raw = (r.data as any)?.value;
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      if (Number(parsed?.version) < 16) return false;
+      const sec = (parsed?.sections || []).find((s: any) => s.id === "weekly-summary");
+      return !!sec && sec.visible === true;
+    },
+  },
+  {
+    batch: "6", tool: "configure_dashboard_sections (hide + undo-ready)",
+    message: `Hide the Weekly Summary section again`,
+    verify: async () => {
+      const r = await api("GET", "/preferences/dashboard_layout");
+      const raw = (r.data as any)?.value;
+      if (!raw) return false;
+      const sec = (JSON.parse(raw)?.sections || []).find((s: any) => s.id === "weekly-summary");
+      return !!sec && sec.visible === false;
+    },
+  },
+
   // ── Batch A — Finance ──────────────────────────────────────────────────────
   {
     batch: "A", tool: "update_income",

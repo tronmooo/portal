@@ -3756,6 +3756,19 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
   {
+    name: "configure_dashboard_sections",
+    description: "Show, hide, or reorder DASHBOARD SECTIONS — 'hide the Quick Notes section', 'show the Finance section on my dashboard', 'move Goals to the top', 'reset my dashboard layout'. Operates on the saved dashboard layout the Customize dialog uses. Use list:true to see the available sections first when unsure of the name.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        action: { type: "string", enum: ["show", "hide", "move", "reset", "list"], description: "show/hide a section, move it to a position, reset the whole layout to defaults, or list sections + visibility" },
+        section: { type: "string", description: "Section name or id (e.g. 'Notifications', 'Finance', 'Weekly Summary'). Required for show/hide/move." },
+        position: { type: "number", description: "For move: 1-based position from the top" },
+      },
+      required: ["action"],
+    },
+  },
+  {
     name: "find_orphans",
     description: "Scan the user's data for orphaned / inconsistent ownership records — 'check my data for orphaned records', 'is my data healthy?', 'find broken links'. Read-only: reports issues, fixes nothing.",
     input_schema: { type: "object" as const, properties: {}, required: [] },
@@ -4562,6 +4575,7 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
 - HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
 - MERGE PROFILES: "merge X into Y" / "combine the duplicate profiles" → merge_profiles(source_name, target_name) shows a preview; after the user confirms in their NEXT message, execute_bulk_action({confirm:true}). Same two-turn rule as bulk deletes — never merge in one turn.
+- DASHBOARD LAYOUT: "hide the X section" / "show Finance on my dashboard" / "move Goals to the top" / "reset my dashboard" → configure_dashboard_sections. This controls SECTIONS of the dashboard, not data. Undoable.
 - DATA HEALTH: "is my data healthy" / "check for orphans" → find_orphans; "fix/repair them" (after seeing issues) → repair_relations(confirm:true); "duplicate expenses?" → find_duplicates; "are my dashboard numbers right" → validate_dashboard_counts; "refresh my dashboard" / "counts look stale" → refresh_dashboard; "why is X on my dashboard / in today's agenda" → explain_dashboard_item(name). Relay these tools' message fields — never invent health results.
 
 TOOL CHOICE RULES — CRITICAL:
@@ -9604,6 +9618,47 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return planMergeProfiles(storage, String(input.source_name || ""), String(input.target_name || ""));
     }
 
+    case "configure_dashboard_sections": {
+      const { DEFAULT_SECTION_DEFS, parseLayoutValue, serializeLayoutValue, findSection } = await import("../shared/dashboard-layout");
+      const action = safeLC(String(input.action || ""));
+      const saved = await storage.getPreference("dashboard_layout");
+      const current = parseLayoutValue(saved) || DEFAULT_SECTION_DEFS.map((s) => ({ ...s }));
+
+      if (action === "list") {
+        return {
+          sections: current.map((s, i) => ({ position: i + 1, id: s.id, label: s.label, visible: s.visible })),
+          message: `Your dashboard has ${current.length} sections; ${current.filter((s) => s.visible).length} visible.`,
+        };
+      }
+      if (action === "reset") {
+        await storage.setPreference("dashboard_layout", serializeLayoutValue(DEFAULT_SECTION_DEFS));
+        return { _previousState: { layout: saved }, message: "Dashboard layout reset to the default (Daily Briefing only)." };
+      }
+      const target = findSection(current, String(input.section || ""));
+      if (!target) {
+        return { error: `No dashboard section matches "${input.section}". Sections: ${current.map((s) => s.label).join(", ")}.` };
+      }
+      if (action === "show" || action === "hide") {
+        target.visible = action === "show";
+      } else if (action === "move") {
+        const pos = Math.max(1, Math.min(current.length, Number(input.position) || 1));
+        const idx = current.indexOf(target);
+        current.splice(idx, 1);
+        current.splice(pos - 1, 0, target);
+        if (!target.visible) target.visible = true; // moving implies wanting to see it
+      } else {
+        return { error: `Unknown action "${input.action}" — use show, hide, move, reset, or list.` };
+      }
+      await storage.setPreference("dashboard_layout", serializeLayoutValue(current));
+      return {
+        _previousState: { layout: saved },
+        section: { id: target.id, label: target.label, visible: target.visible },
+        message: action === "move"
+          ? `Moved "${target.label}" to position ${current.indexOf(target) + 1} on your dashboard.`
+          : `${action === "show" ? "Showed" : "Hid"} the "${target.label}" section on your dashboard.`,
+      };
+    }
+
     case "find_orphans": {
       const { findOrphans } = await import("./ai-system-tools");
       return findOrphans(storage);
@@ -12791,6 +12846,7 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   execute_bulk_action: "delete_entity",
   repair_relations: "update_entity",
   merge_profiles: "update_profile",
+  configure_dashboard_sections: "update_entity",
   create_reminder: "create_reminder",
   update_reminder: "update_entity",
   delete_reminder: "delete_entity",

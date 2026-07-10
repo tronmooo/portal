@@ -90,6 +90,7 @@ import { isTestEntity } from "@shared/test-data";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
+import { DEFAULT_SECTION_DEFS, LAYOUT_VERSION } from "@shared/dashboard-layout";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
@@ -4783,41 +4784,36 @@ export function WeeklySummarySection({ stats, filterIds }: { stats: DashboardSta
   );
 }
 
-const DEFAULT_SECTIONS: DashboardSection[] = [
-  // ── Executive daily briefing (2026-07, LAYOUT_VERSION 15) ─────────────────
-  // Dense spreadsheet-style command center (user spec): AI briefing line,
-  // quick actions, then the compact table stack — agenda, tasks, habits,
-  // reminders, important dates, document expirations, bills, calendar
-  // preview, projects, activity, notes. Every row opens its module's
-  // EXISTING popup. The legacy card sections stay registered below (hidden)
-  // so Customize can re-enable any of them.
-  { id: "exec-briefing",    label: "Daily Briefing",       icon: ListChecks,   visible: true, column: "full" },
-
-  // ── Hidden by default (available via Customize) ──────────────────────────
-  // 2026-07-08 (user request): the greeting/attention hero card and the
-  // quick-action pill row are removed from the Executive default — the
-  // briefing's stat tiles + AI Executive Brief replace them. Both remain
-  // one toggle away in Customize.
-  { id: "hero-briefing",    label: "Briefing",             icon: Sparkles,     visible: false, column: "full" },
-  { id: "quick-actions",    label: "Quick Actions",        icon: Zap,          visible: false, column: "full" },
-  { id: "needs-attention",  label: "Action Required",      icon: AlertTriangle,visible: false, column: "full" },
-  { id: "today",            label: "Today's Schedule",     icon: Calendar,     visible: false, column: "full" },
-  { id: "now-queue",        label: "Now",                  icon: Flame,        visible: false, column: "full" },
-  { id: "notifications",    label: "Notifications",        icon: Bell,         visible: false, column: "full" },
-  { id: "upcoming-dates",   label: "Upcoming",             icon: CalendarDays, visible: false, column: "full" },
-  { id: "obligations",      label: "Bills & Subscriptions",icon: CreditCard,   visible: false, column: "full" },
-  { id: "hero-kpis",        label: "Hero Metrics",         icon: Sparkles,     visible: false, column: "full" },
-  { id: "kpis",             label: "Key Metrics",          icon: BarChart3,    visible: false, column: "full" },
-  { id: "weekly-summary",   label: "Weekly Summary",       icon: TrendingUp,   visible: false, column: "full" },
-  { id: "trends",           label: "Trends",               icon: Activity,     visible: false, column: "full" },
-  { id: "health",           label: "Health",               icon: HeartPulse,   visible: false, column: "full" },
-  { id: "goals",            label: "Goals",                icon: Target,       visible: false, column: "full" },
-  { id: "key-findings",     label: "Key Findings",         icon: Lightbulb,    visible: false, column: "full" },
-  { id: "domain-hubs",      label: "Explore",              icon: BarChart3,    visible: false, column: "full" },
-  { id: "activity",         label: "Recent Activity",      icon: Activity,     visible: false, column: "full" },
-  { id: "ai-summary",       label: "AI Summary",           icon: Sparkles,     visible: false, column: "full" },
-  { id: "finance",          label: "Finance",              icon: DollarSign,   visible: false, column: "full" },
-];
+// Section ids/labels/visibility live in shared/dashboard-layout.ts (single
+// source of truth with the AI's configure_dashboard_sections tool — see the
+// drift guard in tests/dashboard-layout-guard.test.ts). Icons are React
+// components, so they stay client-side and are joined here by id.
+const SECTION_ICONS: Record<string, any> = {
+  "exec-briefing": ListChecks,
+  "hero-briefing": Sparkles,
+  "quick-actions": Zap,
+  "needs-attention": AlertTriangle,
+  "today": Calendar,
+  "now-queue": Flame,
+  "notifications": Bell,
+  "upcoming-dates": CalendarDays,
+  "obligations": CreditCard,
+  "hero-kpis": Sparkles,
+  "kpis": BarChart3,
+  "weekly-summary": TrendingUp,
+  "trends": Activity,
+  "health": HeartPulse,
+  "goals": Target,
+  "key-findings": Lightbulb,
+  "domain-hubs": BarChart3,
+  "activity": Activity,
+  "ai-summary": Sparkles,
+  "finance": DollarSign,
+};
+const DEFAULT_SECTIONS: DashboardSection[] = DEFAULT_SECTION_DEFS.map((s) => ({
+  ...s,
+  icon: SECTION_ICONS[s.id] || Activity,
+}));
 // Swimlane groups (id sets) — render small group header chips during layout
 const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: string[] }> = [
   { key: "now",        label: "Now",        emoji: "⚡", ids: ["hero-briefing", "quick-actions", "exec-briefing", "needs-attention", "today", "now-queue", "notifications", "upcoming-dates", "obligations"] },
@@ -4826,7 +4822,7 @@ const SWIMLANE_GROUPS: Array<{ key: string; label: string; emoji: string; ids: s
   { key: "more",       label: "More", emoji: "🗂️", ids: ["finance"] },
 ];
 
-const LAYOUT_VERSION = 16; // Briefing-only Executive: hero card + quick actions removed from defaults (user request)
+// LAYOUT_VERSION is imported from shared/dashboard-layout.ts — bump it THERE.
 
 // ── Dashboard v2 Phase 5: Focus modes ───────────────────────────────────────
 // A mode reweights WHICH sections show and in WHAT order — Portol is too broad

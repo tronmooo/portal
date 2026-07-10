@@ -76,6 +76,7 @@ export default defineConfig({
       'tests/bulk-actions.test.ts',
       'tests/ai-system-tools.test.ts',
       'tests/merge-profiles.test.ts',
+      'tests/dashboard-layout-guard.test.ts',
       'tests/ai-button-parity.test.ts',
       'tests/dashboard-buttons.test.ts',
       'tests/design-kit.test.tsx',

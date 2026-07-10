@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**121 operations** — ✅ 82 covered · 🆕 28 added · 🔜 0 planned · 🚫 11 excluded by design.
+**121 operations** — ✅ 82 covered · 🆕 29 added · 🔜 0 planned · 🚫 10 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -260,7 +260,7 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 
 | Operation | UI surface | AI tool(s) | Status | Notes |
 |---|---|---|---|---|
-| Customize dashboard layout | Dashboard → Customize | — | 🚫 excluded | Pure UI layout serialization (drag-order preference) — no meaningful chat equivalent. |
+| Customize dashboard layout | Dashboard → Customize | `configure_dashboard_sections` | 🆕 added |  |
 | Bank-CSV / ChatGPT finance import | Settings + dashboard import dialogs | — | 🚫 excluded | Multi-step file/preview/commit import flows — chat handles individual records instead. |
 | Full data export / import | Dashboard menu | — | 🚫 excluded | Whole-account file transfer — kept behind explicit UI actions. |
 | Delete ALL data | Settings → Danger zone | — | 🚫 excluded | Catastrophic destructive action — must never be reachable through a chat message. |
