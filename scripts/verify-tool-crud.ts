@@ -81,8 +81,8 @@ const STEPS: Step[] = [
   {
     batch: "A", tool: "delete_paycheck",
     seed: async () => { await api("POST", "/paychecks", { source: `${TAG}_pay`, amount: 500, expected_date: today }); },
-    message: `Delete the ${TAG}_pay expected paycheck`,
-    retryMessage: `Yes — remove the expected paycheck from ${TAG}_pay`,
+    message: `Delete the expected paycheck from ${TAG}_pay`,
+    retryMessage: `I have an expected paycheck whose source/employer is "${TAG}_pay" — delete that paycheck entry`,
     verify: async () => !(await list("/paychecks")).some((r) => (r.source || "").includes(`${TAG}_pay`)),
   },
   {
@@ -91,6 +91,82 @@ const STEPS: Step[] = [
     message: `Update my saved memory ${TAG}_mem — the correct value is "new value 42"`,
     retryMessage: `Change the memory with key ${TAG}_mem to say: new value 42`,
     verify: async () => (await list("/memories")).some((r) => (r.key || "").includes(`${TAG}_mem`) && String(r.value || "").includes("new value 42")),
+  },
+  // ── Batch B — Liabilities / bills / loans ──────────────────────────────────
+  {
+    batch: "B", tool: "undo_last_payment",
+    seed: async () => {
+      const bill = (await api("POST", "/obligations", { name: `${TAG}_ubill`, amount: 42, frequency: "monthly", kind: "bill", nextDueDate: today })).data;
+      await api("POST", `/obligations/${bill.id}/pay`, { amount: 42 });
+    },
+    message: `Undo the last payment on the ${TAG}_ubill bill`,
+    verify: async () => {
+      const b = (await list("/obligations")).find((o) => (o.name || "").includes(`${TAG}_ubill`));
+      return !!b && !(b.payments || []).length;
+    },
+  },
+  {
+    batch: "B", tool: "update_liability_payment",
+    seed: async () => {
+      const bill = (await api("POST", "/obligations", { name: `${TAG}_pbill`, amount: 60, frequency: "monthly", kind: "bill", nextDueDate: today })).data;
+      await api("POST", `/obligations/${bill.id}/pay`, { amount: 60 });
+    },
+    message: `The ${TAG}_pbill payment I just logged was actually $55 — fix it`,
+    retryMessage: `Update the most recent recorded payment on ${TAG}_pbill: set its amount to $55`,
+    verify: async () => {
+      const b = (await list("/obligations")).find((o) => (o.name || "").includes(`${TAG}_pbill`));
+      return !!(b?.payments || []).some((p: any) => Number(p.amount) === 55);
+    },
+  },
+  {
+    batch: "B", tool: "delete_liability_payment",
+    seed: async () => {
+      const bill = (await api("POST", "/obligations", { name: `${TAG}_dbill`, amount: 30, frequency: "monthly", kind: "bill", nextDueDate: today })).data;
+      await api("POST", `/obligations/${bill.id}/pay`, { amount: 30 });
+      await api("POST", `/obligations/${bill.id}/pay`, { amount: 30 });
+    },
+    message: `Delete the duplicate payment on ${TAG}_dbill — remove the most recent one`,
+    verify: async () => {
+      const b = (await list("/obligations")).find((o) => (o.name || "").includes(`${TAG}_dbill`));
+      return !!b && (b.payments || []).length === 1;
+    },
+  },
+  {
+    batch: "B", tool: "update_obligation (reschedule occurrence)",
+    seed: async () => {
+      await api("POST", "/obligations", { name: `${TAG}_rbill`, amount: 25, frequency: "monthly", kind: "bill", nextDueDate: today });
+    },
+    message: `Move the next ${TAG}_rbill payment to the 28th of next month — just that one occurrence, don't change the schedule`,
+    verify: async () => {
+      const b = (await list("/obligations")).find((o) => (o.name || "").includes(`${TAG}_rbill`));
+      if (!b) return false;
+      const r = await api("GET", `/liabilities/${b.id}/schedule`);
+      const occs: any[] = (r.data as any)?.occurrences || [];
+      return occs.some((o) => o.movedTo || o.effectiveDate !== o.date);
+    },
+  },
+  {
+    batch: "B", tool: "mark_loan_payment",
+    seed: async () => {
+      const loanId = `${TAG}_loan`;
+      const base = new Date();
+      const entries = [1, 2, 3].map((n) => {
+        const d = new Date(base.getFullYear(), base.getMonth() + n, 1);
+        return {
+          loan_id: loanId, loan_name: `${TAG}_loan`, payment_number: n,
+          payment_date: d.toISOString().slice(0, 10),
+          principal_amount: 80, interest_amount: 20, total_payment: 100,
+          remaining_balance: 1000 - n * 80,
+        };
+      });
+      await api("POST", "/loans/schedule", { entries });
+    },
+    message: `Mark the next ${TAG}_loan payment as paid on the loan schedule`,
+    verify: async () => {
+      const r = await api("GET", `/loans/schedule`);
+      const rows: any[] = Array.isArray(r.data) ? r.data : [];
+      return rows.some((row) => (row.loan_name || "").includes(`${TAG}_loan`) && row.paid && Number(row.payment_number) === 1);
+    },
   },
   {
     batch: "A", tool: "copy_budgets_previous_month",
@@ -152,6 +228,21 @@ async function cleanup(): Promise<void> {
       if (res.status === 429) { await sleep(6000); res = await api("POST", "/chat", { message: s.message }); }
       await sleep(1500);
       let ok = await s.verify();
+      const reply = String((res.data as any)?.reply || "");
+      if (!ok && /\?|confirm|are you sure|is that correct|should i/i.test(reply)) {
+        // Destructive commands ask for confirmation (by design) — answer like
+        // the real UI would: a follow-up turn with conversation history.
+        await sleep(3600);
+        res = await api("POST", "/chat", {
+          message: "Yes, that's correct — go ahead.",
+          history: [
+            { role: "user", content: s.message },
+            { role: "assistant", content: reply },
+          ],
+        });
+        await sleep(1500);
+        ok = await s.verify();
+      }
       if (!ok && s.retryMessage) {
         // Routing may need more explicit phrasing — one retry before failing.
         await sleep(3600);

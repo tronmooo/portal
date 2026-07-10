@@ -111,25 +111,25 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Bill", operation: "Edit (name/amount/frequency/due)", ui: "Bill row editor", aiTools: ["update_obligation"], status: "covered" },
   { entity: "Bill", operation: "Delete", ui: "Bill row menu", aiTools: ["delete_obligation"], status: "covered" },
   { entity: "Bill", operation: "Pay (record payment)", ui: "Bill row → Pay", aiTools: ["pay_obligation"], status: "covered" },
-  { entity: "Bill", operation: "Undo last payment", ui: "Bill row → Undo payment", aiTools: ["undo_last_payment"], status: "planned" },
+  { entity: "Bill", operation: "Undo last payment", ui: "Bill row → Undo payment", aiTools: ["undo_last_payment"], status: "added" },
   { entity: "Bill", operation: "Pay a specific occurrence (by month/date)", ui: "Bill schedule occurrence row → Pay", aiTools: ["pay_obligation"], status: "covered" },
   { entity: "Bill", operation: "Skip an occurrence", ui: "Bill schedule occurrence row → Skip", aiTools: ["update_obligation"], status: "covered" },
   { entity: "Bill", operation: "Pause / resume schedule", ui: "Bill schedule header toggle", aiTools: ["update_obligation"], status: "covered" },
-  // rescheduleOccurrence/setOccurrenceFields exist in storage but are not
-  // reachable from any tool — Batch B extends update_obligation with
-  // reschedule + occurrence-amount params. Flips to "added" when that lands.
-  { entity: "Bill", operation: "Reschedule an occurrence / override its amount", ui: "Bill schedule occurrence row → Edit", aiTools: ["update_obligation"], status: "planned" },
+  // Batch B: update_obligation gained occurrenceDate/rescheduleTo/
+  // occurrenceAmount/occurrenceNotes params wired to rescheduleOccurrence and
+  // setOccurrenceFields.
+  { entity: "Bill", operation: "Reschedule an occurrence / override its amount", ui: "Bill schedule occurrence row → Edit", aiTools: ["update_obligation"], status: "added" },
 
   // ── Liabilities (loans / mortgages) ────────────────────────────────────────
   { entity: "Liability", operation: "Create", ui: "Liabilities tab / Net-worth popup", aiTools: ["create_liability"], status: "covered" },
   { entity: "Liability", operation: "Edit (balance/rate/terms)", ui: "Liability detail page", aiTools: ["update_liability"], status: "covered" },
   { entity: "Liability", operation: "Delete", ui: "Liability detail → Delete", aiTools: ["delete_profile"], status: "covered" },
   { entity: "Liability", operation: "Record payment", ui: "Liability detail → Add payment", aiTools: ["add_liability_payment"], status: "covered" },
-  { entity: "Liability", operation: "Edit a recorded payment", ui: "Liability payments list", aiTools: ["update_liability_payment"], status: "planned" },
-  { entity: "Liability", operation: "Delete a recorded payment", ui: "Liability payments list", aiTools: ["delete_liability_payment"], status: "planned" },
+  { entity: "Liability", operation: "Edit a recorded payment", ui: "Liability payments list", aiTools: ["update_liability_payment"], status: "added" },
+  { entity: "Liability", operation: "Delete a recorded payment", ui: "Liability payments list", aiTools: ["delete_liability_payment"], status: "added" },
   { entity: "Liability", operation: "Read summary / payoff", ui: "Liability detail header", aiTools: ["get_liability_summary"], status: "covered" },
   { entity: "Loan", operation: "Read amortization schedule", ui: "Finance → Loans", aiTools: ["get_loan_schedule"], status: "covered" },
-  { entity: "Loan", operation: "Mark scheduled payment paid", ui: "Loan schedule row → Mark paid", aiTools: ["mark_loan_payment"], status: "planned" },
+  { entity: "Loan", operation: "Mark scheduled payment paid", ui: "Loan schedule row → Mark paid", aiTools: ["mark_loan_payment"], status: "added" },
   { entity: "Loan", operation: "Create amortization schedule (bulk rows)", ui: "Finance → Loans import", aiTools: [], status: "excluded", reason: "Bulk tabular input — an import concern, not a chat command." },
 
   // ── Assets / net worth / profiles ──────────────────────────────────────────

@@ -2807,6 +2807,54 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
   {
+    name: "update_liability_payment",
+    description: "Edit a RECORDED payment on a liability/loan/bill (fix a typo'd amount, wrong date, add a note). Finds the liability by name, then targets the MOST RECENT payment unless paymentDate narrows it. Use for 'that mortgage payment was actually $1450', 'change the payment I logged today to $55'. Do NOT use to record a new payment (add_liability_payment) or undo one (undo_last_payment / delete_liability_payment).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        liabilityName: { type: "string", description: "Liability/bill name (partial match)" },
+        paymentDate: { type: "string", description: "YYYY-MM-DD of the payment to edit. Defaults to the most recent payment." },
+        changes: { type: "object", description: "Fields to update — 'amount' (number), 'paymentDate' (YYYY-MM-DD), 'notes'" },
+      },
+      required: ["liabilityName", "changes"],
+    },
+  },
+  {
+    name: "delete_liability_payment",
+    description: "Delete a RECORDED payment from a liability/loan/bill's payment history ('remove that duplicate mortgage payment', 'delete the payment I logged on the 3rd'). Targets the MOST RECENT payment unless paymentDate narrows it. For 'undo the last payment on <bill>' undo_last_payment also works.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        liabilityName: { type: "string", description: "Liability/bill name (partial match)" },
+        paymentDate: { type: "string", description: "YYYY-MM-DD of the payment to delete. Defaults to the most recent payment." },
+      },
+      required: ["liabilityName"],
+    },
+  },
+  {
+    name: "undo_last_payment",
+    description: "Undo the MOST RECENT payment recorded on a recurring bill/obligation — removes the payment row so the bill shows unpaid again. Use for 'undo that payment', 'I didn't actually pay the electric bill', 'unmark the rent as paid'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        billName: { type: "string", description: "Bill/obligation name (partial match)" },
+      },
+      required: ["billName"],
+    },
+  },
+  {
+    name: "mark_loan_payment",
+    description: "Mark a scheduled amortization payment as PAID on a loan's payment schedule (the Finance → Loans table). Targets the next unpaid installment unless paymentNumber is given. Use for 'mark the next car-loan payment paid', 'installment 14 of the mortgage schedule is paid'. This checks off the SCHEDULE row only — to record a real payment with amounts against the balance, use add_liability_payment.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        loanName: { type: "string", description: "Loan name as it appears in the schedule (partial match)" },
+        paymentNumber: { type: "number", description: "Specific installment number to mark paid. Defaults to the next unpaid one." },
+      },
+      required: ["loanName"],
+    },
+  },
+  {
     name: "link_liability_asset",
     description: "Link a liability to a collateral asset. Use for: 'this mortgage is on my house', 'the auto loan is for my Civic', 'HELOC against the property'. Creates a liability_asset_link row so the asset's profile shows the liability and vice versa. Multiple assets can be linked to one liability (e.g. cross-collateralized).",
     input_schema: {
@@ -3314,7 +3362,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "update_obligation",
-    description: "Update or manage an EXISTING recurring bill/obligation and its calendar series (never create a new one). Find by name (partial match), then either edit fields via `changes` OR run a series action. Use for: 'move my phone bill to the 18th' (changes.nextDueDate or dueDay), 'increase it to $95' (changes.amount), 'make it quarterly' (changes.frequency), 'skip next month' (skip:'next'), 'pause until January' (pause:true, pauseUntil), 'resume it' (resume:true).",
+    description: "Update or manage an EXISTING recurring bill/obligation and its calendar series (never create a new one). Find by name (partial match), then either edit fields via `changes` OR run a series action. Use for: 'move my phone bill to the 18th' (changes.nextDueDate or dueDay), 'increase it to $95' (changes.amount), 'make it quarterly' (changes.frequency), 'skip next month' (skip:'next'), 'pause until January' (pause:true, pauseUntil), 'resume it' (resume:true), 'move the August payment to the 10th' (occurrenceDate:'2026-08', rescheduleTo:'2026-08-10'), 'this month's bill is $80 instead' (occurrenceDate:'next', occurrenceAmount:80 — a ONE-TIME override; use changes.amount for a permanent change).",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3324,6 +3372,10 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         pause: { type: "boolean", description: "Pause the recurring payments (stop generating occurrences)." },
         pauseUntil: { type: "string", description: "Resume automatically on this date (YYYY-MM-DD). Use with pause." },
         resume: { type: "boolean", description: "Resume a paused bill." },
+        occurrenceDate: { type: "string", description: "Which single occurrence to target for rescheduleTo/occurrenceAmount/occurrenceNotes: 'next', a YYYY-MM month, or a YYYY-MM-DD date." },
+        rescheduleTo: { type: "string", description: "Move the targeted occurrence to this date (YYYY-MM-DD) WITHOUT changing the series. One-time move only." },
+        occurrenceAmount: { type: "number", description: "One-time amount override for the targeted occurrence (does not change the recurring amount)." },
+        occurrenceNotes: { type: "string", description: "Note to attach to the targeted occurrence." },
       },
       required: ["name"],
     },
@@ -4340,6 +4392,15 @@ PAYMENT PHRASING → add_liability_payment:
 - "reverse the duplicate $200 charge on my Visa" → add_liability_payment(liabilityName:"Visa", amount:200, paymentType:"reversal"). Adds amount back to balance.
 - "deferred my student loan payments for 3 months" → update_liability with notes about forbearance OR add a single deferred row via paymentType:"deferred".
 - "I paid $200 extra toward Bob's Honda loan" → if a liability tied to Bob's Honda exists, target it by name (e.g. liabilityName:"Bob Honda"). If multiple Honda loans exist, the closer match in profile parentage wins; pass extra context in liabilityName.
+
+PAYMENT HISTORY EDITS / UNDO:
+- "that mortgage payment was actually $1450" / "fix the payment I logged" → update_liability_payment(liabilityName, changes:{amount:1450}). Targets the most recent payment; pass paymentDate for an older one.
+- "delete that duplicate payment" → delete_liability_payment(liabilityName, paymentDate?).
+- "undo the last payment on the electric bill" / "I didn't actually pay rent" → undo_last_payment(billName). The bill shows unpaid again.
+- "mark the next car-loan installment paid" / "installment 14 is paid" → mark_loan_payment(loanName, paymentNumber?) — checks off the amortization SCHEDULE row. To record a real payment against the balance use add_liability_payment.
+- "move the August electric payment to the 10th" (one-time) → update_obligation(name, occurrenceDate:"2026-08", rescheduleTo:"2026-08-10"). Permanent series change → changes.nextDueDate/dueDay.
+- "this month's internet bill is $80 instead of $60" (one-time) → update_obligation(name, occurrenceDate:"next", occurrenceAmount:80). Permanent → changes.amount.
+- "delete my mortgage / remove the car loan entirely" → delete_profile(name) — liabilities are profiles; there is no separate delete-liability tool.
 
 CROSS-PROFILE LIABILITY ASSIGNMENT:
 - "My wife's car loan with Toyota for $25k at 5%" → create_liability(name:"Wife's Toyota Loan", subtype:"auto_loan", lender:"Toyota", currentBalance:25000, annualRate:5, forProfile:"Wife"). The liability nests under the Wife profile.
@@ -8628,6 +8689,34 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const r = await (storage as any).skipOccurrence(match.id, target.date);
         return { updated: true, action: "skipped", skipped: target.date, obligation: r };
       }
+      // Occurrence-level ops: one-time reschedule or amount/notes override for a
+      // SINGLE occurrence, leaving the recurring series untouched.
+      if (input.rescheduleTo || input.occurrenceAmount != null || input.occurrenceNotes) {
+        const sched = await (storage as any).getLiabilitySchedule(match.id, 24);
+        const occs: any[] = sched?.occurrences || [];
+        const open = occs.filter(o => o.status !== "paid" && o.status !== "skipped");
+        const sel = String(input.occurrenceDate || "next").trim().toLowerCase();
+        let target: any;
+        if (sel === "next" || !sel) target = open[0];
+        else if (/^\d{4}-\d{2}-\d{2}$/.test(sel)) target = open.find(o => o.date === sel || o.effectiveDate === sel);
+        else if (/^\d{4}-\d{2}$/.test(sel)) target = open.find(o => o.date.slice(0, 7) === sel);
+        if (!target) return { error: `No open ${match.name} occurrence matching "${input.occurrenceDate || "next"}"${open.length ? ` — next open: ${open.slice(0, 3).map(o => o.date).join(", ")}` : ""}.` };
+        if (input.rescheduleTo) {
+          const to = String(input.rescheduleTo).slice(0, 10);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return { error: `rescheduleTo must be YYYY-MM-DD (got "${input.rescheduleTo}")` };
+          const r = await (storage as any).rescheduleOccurrence(match.id, target.date, to);
+          return { updated: true, action: "rescheduled", from: target.date, to, obligation: r };
+        }
+        const patch: any = {};
+        if (input.occurrenceAmount != null) {
+          const amt = Number(input.occurrenceAmount);
+          if (!isFinite(amt) || amt < 0) return { error: `Invalid occurrenceAmount: ${input.occurrenceAmount}` };
+          patch.amount = amt;
+        }
+        if (input.occurrenceNotes) patch.notes = String(input.occurrenceNotes);
+        const r = await (storage as any).setOccurrenceFields(match.id, target.date, patch);
+        return { updated: true, action: "occurrence_override", date: target.date, ...patch, obligation: r };
+      }
 
       // Field edits. Normalize a few natural inputs the model tends to send.
       const changes: any = { ...(input.changes || {}) };
@@ -8648,6 +8737,78 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (changes.frequency) changes.frequency = FREQ_ALIASES[String(changes.frequency).toLowerCase()] || String(changes.frequency).toLowerCase();
       const updated = await storage.updateObligation(match.id, changes);
       return { updated: true, obligation: updated };
+    }
+
+    case "undo_last_payment": {
+      const obligations = await storage.getObligations();
+      const match = obligations.find(o => o.name.toLowerCase().includes(safeLC(input.billName)));
+      if (!match) return { error: `No bill found matching "${input.billName}"` };
+      const payments = (match as any).payments || [];
+      if (payments.length === 0) return { error: `${match.name} has no recorded payments to undo` };
+      // Most recent by createdAt (fallback: payment date) — same semantics as
+      // DELETE /api/obligations/:id/last-payment.
+      const latest = payments.slice().sort((a: any, b: any) =>
+        String(b.createdAt || b.date || "").localeCompare(String(a.createdAt || a.date || "")))[0];
+      const ok = await storage.deleteLiabilityPayment(latest.id);
+      if (!ok) return { error: `Couldn't remove the last payment on ${match.name}` };
+      return { undone: true, bill: match.name, amount: latest.amount, date: latest.date || latest.paymentDate, message: `Removed the last payment ($${latest.amount}) on ${match.name} — it now shows unpaid.` };
+    }
+
+    case "update_liability_payment":
+    case "delete_liability_payment": {
+      const profiles = await storage.getProfiles();
+      const nameLC = safeLC(input.liabilityName).trim();
+      const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
+      const liability = liabs.find((p: any) => p.name.toLowerCase() === nameLC)
+        || liabs.find((p: any) => p.name.toLowerCase().includes(nameLC))
+        || liabs.find((p: any) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()));
+      if (!liability) return { error: `Liability not found: ${input.liabilityName}`, candidates: liabs.slice(0, 5).map((p: any) => p.name) };
+      const payments = await storage.getLiabilityPayments(liability.id); // newest first
+      if (payments.length === 0) return { error: `${liability.name} has no recorded payments` };
+      let target = payments[0];
+      if (input.paymentDate) {
+        const d = String(input.paymentDate).slice(0, 10);
+        const byDate = payments.find(p => String(p.paymentDate || "").slice(0, 10) === d);
+        if (!byDate) return { error: `No ${liability.name} payment on ${d}`, candidates: payments.slice(0, 5).map(p => `${p.paymentDate} ($${p.amount})`) };
+        target = byDate;
+      }
+      if (name === "delete_liability_payment") {
+        const ok = await storage.deleteLiabilityPayment(target.id);
+        if (!ok) return { error: `Couldn't delete the ${liability.name} payment` };
+        return { deleted: true, liability: liability.name, amount: target.amount, date: target.paymentDate };
+      }
+      const allowed = ["amount", "paymentDate", "notes"] as const;
+      const patch: Record<string, any> = {};
+      for (const k of allowed) if (input.changes?.[k] !== undefined) patch[k] = input.changes[k];
+      if (Object.keys(patch).length === 0) return { error: "No valid fields to update — supported: amount, paymentDate, notes" };
+      if (patch.amount !== undefined) {
+        const amt = Number(patch.amount);
+        if (!isFinite(amt) || amt < 0) return { error: `Invalid amount: ${input.changes.amount}` };
+        patch.amount = amt;
+      }
+      const updated = await storage.updateLiabilityPayment(target.id, patch);
+      return { updated: true, liability: liability.name, payment: updated };
+    }
+
+    case "mark_loan_payment": {
+      const rows = await storage.getAllLoanSchedules();
+      const needle = safeLC(input.loanName).trim();
+      const loanRows = rows.filter((r: any) => String(r.loan_name || "").toLowerCase().includes(needle));
+      if (loanRows.length === 0) {
+        const names = Array.from(new Set(rows.map((r: any) => r.loan_name))).slice(0, 5);
+        return { error: `No loan schedule found matching "${input.loanName}"`, candidates: names };
+      }
+      let target: any;
+      if (input.paymentNumber != null) {
+        target = loanRows.find((r: any) => Number(r.payment_number) === Number(input.paymentNumber));
+        if (!target) return { error: `No installment #${input.paymentNumber} on ${loanRows[0].loan_name}` };
+      } else {
+        target = loanRows.filter((r: any) => !r.paid).sort((a: any, b: any) => a.payment_number - b.payment_number)[0];
+        if (!target) return { error: `Every scheduled ${loanRows[0].loan_name} payment is already marked paid` };
+      }
+      if (target.paid) return { alreadyPaid: true, loan: target.loan_name, paymentNumber: target.payment_number };
+      const marked = await storage.markLoanPayment(target.id);
+      return { marked: true, loan: target.loan_name, paymentNumber: target.payment_number, date: target.payment_date, amount: target.total_payment, payment: marked };
     }
 
     case "update_habit": {
@@ -12054,6 +12215,10 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   create_obligation: "create_obligation",
   pay_obligation: "pay_obligation",
   update_obligation: "update_entity",
+  undo_last_payment: "delete_entity",
+  update_liability_payment: "update_entity",
+  delete_liability_payment: "delete_entity",
+  mark_loan_payment: "pay_obligation",
   delete_obligation: "delete_entity",
   // Journal
   journal_entry: "journal_entry",

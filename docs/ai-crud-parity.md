@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**112 operations** — ✅ 82 covered · 🆕 5 added · 🔜 14 planned · 🚫 11 excluded by design.
+**112 operations** — ✅ 82 covered · 🆕 10 added · 🔜 9 planned · 🚫 11 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -124,11 +124,11 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Edit (name/amount/frequency/due) | Bill row editor | `update_obligation` | ✅ covered |  |
 | Delete | Bill row menu | `delete_obligation` | ✅ covered |  |
 | Pay (record payment) | Bill row → Pay | `pay_obligation` | ✅ covered |  |
-| Undo last payment | Bill row → Undo payment | `undo_last_payment` | 🔜 planned |  |
+| Undo last payment | Bill row → Undo payment | `undo_last_payment` | 🆕 added |  |
 | Pay a specific occurrence (by month/date) | Bill schedule occurrence row → Pay | `pay_obligation` | ✅ covered |  |
 | Skip an occurrence | Bill schedule occurrence row → Skip | `update_obligation` | ✅ covered |  |
 | Pause / resume schedule | Bill schedule header toggle | `update_obligation` | ✅ covered |  |
-| Reschedule an occurrence / override its amount | Bill schedule occurrence row → Edit | `update_obligation` | 🔜 planned |  |
+| Reschedule an occurrence / override its amount | Bill schedule occurrence row → Edit | `update_obligation` | 🆕 added |  |
 
 ### Liability
 
@@ -138,8 +138,8 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Edit (balance/rate/terms) | Liability detail page | `update_liability` | ✅ covered |  |
 | Delete | Liability detail → Delete | `delete_profile` | ✅ covered |  |
 | Record payment | Liability detail → Add payment | `add_liability_payment` | ✅ covered |  |
-| Edit a recorded payment | Liability payments list | `update_liability_payment` | 🔜 planned |  |
-| Delete a recorded payment | Liability payments list | `delete_liability_payment` | 🔜 planned |  |
+| Edit a recorded payment | Liability payments list | `update_liability_payment` | 🆕 added |  |
+| Delete a recorded payment | Liability payments list | `delete_liability_payment` | 🆕 added |  |
 | Read summary / payoff | Liability detail header | `get_liability_summary` | ✅ covered |  |
 
 ### Loan
@@ -147,7 +147,7 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Operation | UI surface | AI tool(s) | Status | Notes |
 |---|---|---|---|---|
 | Read amortization schedule | Finance → Loans | `get_loan_schedule` | ✅ covered |  |
-| Mark scheduled payment paid | Loan schedule row → Mark paid | `mark_loan_payment` | 🔜 planned |  |
+| Mark scheduled payment paid | Loan schedule row → Mark paid | `mark_loan_payment` | 🆕 added |  |
 | Create amortization schedule (bulk rows) | Finance → Loans import | — | 🚫 excluded | Bulk tabular input — an import concern, not a chat command. |
 
 ### Profile
