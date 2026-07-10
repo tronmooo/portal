@@ -899,6 +899,7 @@ function buildReport(): string {
 (async () => {
   const args = process.argv.slice(2);
   const only = args.find((a) => a.startsWith("--section="))?.split("=")[1];
+  const onlySet = only ? new Set(only.split(",").map((x) => x.trim())) : null;
   const reportPath = args.find((a) => a.startsWith("--report="))?.split("=")[1]
     || `docs/full-tool-audit-${TAG}.md`;
 
@@ -926,7 +927,7 @@ function buildReport(): string {
     ["isolation", sectionIsolation],
   ];
   for (const [nm, fn] of sections) {
-    if (only && nm !== only) continue;
+    if (onlySet && !onlySet.has(nm)) continue;
     console.log(`\n── section: ${nm} ──`);
     try { await fn(); } catch (e: any) {
       console.error(`section ${nm} crashed: ${e?.message || e}`);
@@ -938,7 +939,7 @@ function buildReport(): string {
     }
   }
 
-  if (!only) await cleanup();
+  await cleanup();
   const report = buildReport();
   writeFileSync(reportPath, report);
   console.log(`\n${report}\n\nReport written to ${reportPath}`);
