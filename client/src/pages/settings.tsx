@@ -76,8 +76,8 @@ function StatCard({ icon: Icon, label, value, href, accent }: { icon: any; label
   return (
     <button
       onClick={() => navigate(href)}
-      className="flex items-center gap-3 p-3 rounded-xl border border-border/40 hover:bg-muted/30 hover:border-primary/30 active:scale-[0.98] transition-all text-left card-lift w-full"
-      style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.07) 0%, transparent 60%)` }}
+      className="flex items-center gap-3 p-3 rounded-xl border active:scale-[0.98] transition-all text-left card-lift w-full"
+      style={{ borderColor: `hsl(${accent} / 0.30)`, background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, hsl(var(--card)) 75%)` }}
     >
       <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: `hsl(${accent} / 0.15)` }}>
         <Icon className="h-4 w-4" style={{ color: `hsl(${accent})` }} />

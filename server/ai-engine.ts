@@ -27,6 +27,7 @@ import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medi
 import { passesProfileFilter } from "@shared/profile-filter";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
+import { matchHabitByName } from "@shared/habit-match";
 import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
@@ -770,6 +771,35 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     };
   }
 
+  // ┌─ DASHBOARD SCOPE FAST-PATH ──────────────────────────────────────────────┐
+  // Deterministically route "show me <Name>'s dashboard only" / "switch to
+  // Everyone" to set_dashboard_scope. The LLM sometimes misrouted these to
+  // profile/document disambiguation (BUG-20260709). Anchored on dashboard/
+  // executive/everyone so it can't hijack unrelated messages.
+  {
+    const everyoneScope = /\b(?:switch|change|set|go)\s+(?:to\s+)?(?:the\s+)?everyone(?:\s+(?:view|mode|dashboard))?\b/i.test(message)
+      || /\bshow\s+(?:me\s+)?(?:everyone|all\s+profiles|the\s+household)\b/i.test(message)
+      || /\beveryone\s+(?:view|dashboard)\b/i.test(message);
+    const scopeAnchor = /\b(dashboard|executive|scope|filter|only\s+\w+'s|profile\s+filter)\b/i.test(message);
+    let nameScope: string | null = null;
+    if (!everyoneScope) {
+      const m = message.match(/\bshow\s+(?:me\s+)?(?:only\s+)?([A-Z][\w' -]{0,40}?)(?:'s|s')\s+(?:executive\s+)?dashboard\b/i)
+        || message.match(/\b(?:switch|scope|filter|limit)\s+(?:the\s+)?(?:dashboard|executive|view)\s+to\s+([A-Z][\w' -]{0,40}?)\b/i)
+        || message.match(/\bshow\s+(?:me\s+)?only\s+([A-Z][\w' -]{0,40}?)(?:'s|s')\s+(?:data|tasks|events|dashboard)\b/i);
+      if (m) nameScope = m[1].trim();
+    }
+    if (everyoneScope && (scopeAnchor || /everyone/i.test(message))) {
+      return { matched: true, reply: "Switched the dashboard to Everyone (all profiles).", actions: [{ type: "set_dashboard_scope", category: "ai", data: { everyone: true } } as any], results: [{ scope: { mode: "everyone" } }] };
+    }
+    if (nameScope) {
+      const profiles = await storage.getProfiles().catch(() => [] as any[]);
+      const match = matchProfileByName(profiles, nameScope);
+      if (match) {
+        return { matched: true, reply: `Dashboard now scoped to ${match.name} only. Every Executive section shows just ${match.name}'s data.`, actions: [{ type: "set_dashboard_scope", category: "ai", data: { profileName: match.name } } as any], results: [{ scope: { mode: "selected", profileId: match.id, profileName: match.name } }] };
+      }
+    }
+  }
+
   // ┌─ JOURNAL FAST-PATH (runs BEFORE multi-intent guard) ─────────────────────┐
   // This bypasses the AI entirely for journal entries because the AI
   // persistently hallucinates that profiles "already have entries."
@@ -937,7 +967,7 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   if (habitCheckinMatch) {
     const habitName = habitCheckinMatch[1].trim();
     const habits = await storage.getHabits();
-    const habit = habits.find(h => h.name.toLowerCase().includes(habitName));
+    const habit = matchHabitByName(habits, habitName);
     if (habit) {
       const checkin = await storage.checkinHabit(habit.id);
       actions.push({ type: "checkin_habit", category: "habit", data: { habitName: habit.name } });
@@ -2372,7 +2402,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
 // ANTHROPIC TOOL DEFINITIONS
 // ============================================================
 
-const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
+export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- Data Query Tools ---
   {
     name: "search",
@@ -2977,14 +3007,17 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- CRUD: Habits ---
   {
     name: "create_habit",
-    description: "Create a new habit to track.",
+    description: "Create a new habit to track. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name" },
-        frequency: { type: "string", enum: ["daily", "weekly", "custom"], description: "Frequency" },
+        frequency: { type: "string", enum: ["daily", "weekly", "custom"], description: "Frequency. Use 'custom' and set `days` when the user names specific weekdays (e.g. 'Mon/Wed/Fri')." },
+        days: { type: "array", items: { type: "string" }, description: "Specific weekdays the habit occurs on, e.g. ['monday','wednesday','friday'] for 'every Mon, Wed, and Fri'. Set this whenever the user names particular days; the habit is then scheduled only on those days." },
         icon: { type: "string", description: "Emoji icon" },
         color: { type: "string", description: "Color hex" },
+        timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "bedtime", "anytime"], description: "When during the day the habit should occur. Infer from phrasing like 'in the morning', 'after lunch' (afternoon), 'this evening', 'before bed' (bedtime)." },
+        scheduledTime: { type: "string", description: "Optional precise time in 24h HH:MM (e.g. '08:00', '21:30') when the user gives a specific time." },
         forProfile: { type: "string", description: "Name of the profile this habit belongs to. ALWAYS set when the user mentions a specific person or pet." },
       },
       required: ["name"],
@@ -3044,7 +3077,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Journal ---
   {
     name: "journal_entry",
-    description: "Create a journal entry (free-form reflective text) for the user or a specific profile. Use when user says 'add a journal entry', 'write that X happened', 'journal entry for Joe', or shares a multi-sentence reflection. mood is optional — infer it from context (sore/tired → 'bad', motivated/energetic → 'great', neutral/normal → 'neutral'). Defaults to 'neutral' if unknown.\n\nDO NOT use this for a mood RATING or check-in such as 'my mood is 7/10', 'feeling a 6 out of 10', 'mood is good today', or 'I feel great' — that is quantitative mood tracking. Use log_tracker_entry with trackerName 'Mood' instead (it matches the user's existing Mood tracker or creates one). Only use journal_entry for mood when the user is clearly writing a diary-style narrative, not logging a score.",
+    description: "Create a journal entry OR a QUICK NOTE for the user or a specific profile. This is the ONLY tool for notes — the dashboard's 'Quick Notes' section is backed by journal entries. Use it whenever the user says 'quick note', 'note', 'jot down', 'note to self', 'make a note that…', 'add a journal entry', 'write that X happened', 'journal entry for Joe', or shares a reflection. DO NOT create a document for a note — a note is NOT a document (documents are files/records like a passport or license). mood is optional — infer it from context (sore/tired → 'bad', motivated/energetic → 'great', neutral/normal → 'neutral'). Defaults to 'neutral' if unknown.\n\nDO NOT use this for a mood RATING or check-in such as 'my mood is 7/10', 'feeling a 6 out of 10', 'mood is good today', or 'I feel great' — that is quantitative mood tracking. Use log_tracker_entry with trackerName 'Mood' instead (it matches the user's existing Mood tracker or creates one). Only use journal_entry for mood when the user is clearly writing a diary-style narrative, not logging a score.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3099,7 +3132,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Memory ---
   {
     name: "save_memory",
-    description: "Save a fact or piece of information about the user for later recall. Use when user says 'remember that...' or states a personal fact.",
+    description: "Save an ABSTRACT preference or piece of context that does NOT belong to a specific profile — e.g. 'I prefer window seats', 'I'm vegetarian', 'remind me gently'. Do NOT use this for concrete attributes of a person (sizes, measurements, physical traits, IDs, contact details) or any 'save this to my info' request — those are profile-level data and MUST use update_profile with a fields entry so they appear in the Info tab.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3125,13 +3158,14 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "create_document",
-    description: "Create a new text document.",
+    description: "Create a new stored document/record (passport, license, insurance card, warranty, note-as-document, etc.). Use this for 'create a document', 'add a document', 'save a document'. Set expirationDate when the user gives an expiry/renewal date so it surfaces under Document Expirations.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Document name" },
         content: { type: "string", description: "Document content (text)" },
         forProfile: { type: "string", description: "Name of profile to link this document to" },
+        expirationDate: { type: "string", description: "Expiration/renewal date as YYYY-MM-DD. Convert natural language ('expires December 1', 'valid until Aug 2027') to an exact date. When set, the document appears in Document Expirations and the Docs-expiring count." },
       },
       required: ["name"],
     },
@@ -3152,6 +3186,17 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         profileId: { type: "string", description: "Profile ID (only for profile_detail)" },
       },
       required: ["page"],
+    },
+  },
+  {
+    name: "set_dashboard_scope",
+    description: "Change the dashboard/Executive PROFILE FILTER — i.e. WHOSE data the dashboard shows. Use whenever the user says 'show me <Name>'s dashboard only', 'switch to <Name>', 'filter the dashboard to <Name>', 'only show <Name>'s tasks/events/bills', or 'switch to Everyone / show everyone / show all profiles'. This does NOT create or read data — it sets the active scope so every Executive section (tasks, events, bills, habits, docs, reminders, counts) shows only that profile (or the combined Everyone view). To focus a single person/pet pass profileName; to show the combined view pass everyone:true.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        profileName: { type: "string", description: "Exact name of the person/pet to scope the dashboard to (e.g. 'Mike'). Omit when everyone is true." },
+        everyone: { type: "boolean", description: "Set true to switch to the combined 'Everyone' view (all profiles)." },
+      },
     },
   },
 
@@ -3273,12 +3318,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "update_habit",
-    description: "Update a habit. Find by name (partial match), then apply changes.",
+    description: "Update a habit. Find by name (partial match), then apply changes. Use this to reschedule a habit — e.g. 'move my lisinopril to the evening' → changes: { timeOfDay: 'evening' }.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name (partial match)" },
-        changes: { type: "object", description: "Fields to update — can include 'name', 'icon', 'color', 'frequency', 'targetDays'" },
+        changes: { type: "object", description: "Fields to update — can include 'name', 'icon', 'color', 'frequency', 'targetDays', 'timeOfDay' (morning|afternoon|evening|bedtime|anytime), 'scheduledTime' (HH:MM 24h)." },
       },
       required: ["name", "changes"],
     },
@@ -3887,7 +3932,7 @@ MEDICATION TRACKING (separate system from habits):
 - Every medication, prescription, vitamin, or supplement gets its OWN tracker named EXACTLY after the item (e.g. "Multivitamin", "Fish Oil", "Amoxicillin", "Metformin"). NEVER create or use a generic "Supplements"/"Vitamins"/"Medications" tracker, and never bucket two different items together.
 - ALWAYS check for an existing tracker of that name first and append to it (log_tracker_entry); only create a new tracker (category="medication") when none exists. Logging "my multivitamin" when a "Multivitamin" tracker already exists MUST append to it — do not spawn a second tracker.
 - When the user logs several items in one message ("multivitamin, fish oil, and amoxicillin 500mg"), make a SEPARATE log_tracker_entry call for each, one per its own tracker.
-- Medication tracker fields MUST include: { drug: "Name", dosage: "Xmg", taken: true/false, time: "HH:MM", notes: "..." }. Capture dosage+unit whenever the user states or clearly implies one; do NOT invent a dosage the user didn't give (e.g. don't assume a multivitamin is 500mg just because a different drug in the same sentence was).
+- Medication tracker fields MUST include: { drug: "Name", dosage: "Xmg", taken: true/false, time: "HH:MM", notes: "..." }. Capture dosage+unit whenever the user states or clearly implies one. If the user does NOT state a dose ("log that I took my Amoxicillin"), OMIT the dosage/dose field entirely — do NOT put a placeholder like 1. The system will fill in that medication's usual dose from its own history. NEVER borrow a dose from a DIFFERENT drug mentioned in the same sentence (don't assume a multivitamin is 500mg because another pill was).
 - Medication adherence = entries where taken=true / total entries × 100%
 - NEVER lump medications into habit check-ins. Medications are structured data, not binary check-offs.
 - If a user says "I took my Metformin 500mg" → log_tracker_entry to the Metformin tracker (or create it) with { drug: "Metformin", dosage: "500mg", taken: true }
@@ -4285,9 +4330,11 @@ NEVER:
 CRITICAL ROUTING RULES (NEVER VIOLATE):
 - "X owes me $Y" or "collect $Y from X" or "X owes me $Y for Z" → ALWAYS create_task with title like "Collect $Y from X for Z" and forProfile: "X". NEVER EVER use save_memory for debts/money owed. This applies to ALL variations: "owes me", "owes us", "I lent X $Y", "X hasn't paid me back".
 - "My blood type is X" or personal health info (allergies, height, weight, etc.) → ALWAYS update_profile on the self/Me profile with fields: { bloodType: "O+" } (or the appropriate field). NEVER use save_memory for profile-level data. Same for any profile: "Mom's blood type", "Max's breed".
+- ANY concrete personal ATTRIBUTE of a person (self or a named person) → ALWAYS update_profile on that profile with a fields entry, NEVER save_memory. This includes sizes and measurements (shoe/foot size, shirt/pant/dress/ring/hat sizes, height, weight, inseam, waist, chest), physical attributes (eye color, hair color), IDs/numbers (license, passport, SSN-last4, member numbers), and contact/identity details. Examples: "I have size 12 feet" → update_profile name:"Me" changes:{ fields:{ shoeSize: "12" } }; "my shirt size is L" → fields:{ shirtSize: "L" }; "my ring size is 9" → fields:{ ringSize: "9" }. Pick a short, clear camelCase field key that matches the attribute.
+- EXPLICIT "save to my info" — when the user says "save this to my info", "add this to my info tab", "put this in my info", "keep this in my profile", or similar → ALWAYS update_profile with a fields entry on the referenced profile (default to self/Me when unspecified). NEVER use save_memory for these; the Info tab reads profile fields.
 - "X's birthday is Y" → ALWAYS do BOTH: (1) update_profile with name: "X" and changes: { fields: { birthday: "Y" } } — if the profile doesn't exist, it will be auto-created. (2) create_event with title: "🎂 X's Birthday", date: Y (with correct year), recurrence: "yearly". Do NOT ask for confirmation. Just do it.
-- save_memory is ONLY for abstract facts/preferences, NOT for concrete data that belongs in a profile field, task, expense, or event.
-- save_memory should ONLY be used for abstract preferences, facts, or context that doesn't fit any structured data type (e.g., "Remember that I prefer window seats", "I'm vegetarian").
+- save_memory is ONLY for abstract facts/preferences, NOT for concrete data that belongs in a profile field, task, expense, or event. If a fact is a concrete attribute of a person (a size, measurement, number, physical trait, contact detail), it is profile-level data → use update_profile, not save_memory.
+- save_memory should ONLY be used for abstract preferences, facts, or context that doesn't fit any structured data type AND is not an attribute of a specific profile (e.g., "Remember that I prefer window seats", "I'm vegetarian", "I like to be reminded gently").
 
 ASSET & SUBSCRIPTION CRUD via chat:
 - WARRANTY CLAIMS: "Filed a warranty claim for my MacBook" → create_expense with category: "warranty", description: "Warranty claim - MacBook", forProfile: "MacBook" (or the asset name)
@@ -4765,7 +4812,17 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
     }
     case "create_profile": {
       if (!normalized.name?.trim()) errors.push("Profile name is required");
-      else normalized.name = normalized.name.trim();
+      else {
+        // BUG-20260709-double-profile: the model sometimes passes the raw
+        // descriptor as the name ("a person named Mike" instead of "Mike"),
+        // which both clutters data and dodges the same-name dedup. Strip a
+        // leading "a/an/the/my [new] <type> named/called " prefix so the name
+        // collapses to the bare identifier and dedups against the clean one.
+        normalized.name = String(normalized.name)
+          .replace(/^\s*(?:a|an|the|my)\s+(?:new\s+)?(?:person|people|pet|dog|cat|animal|profile|vehicle|car|truck|asset|property|house|home|account|subscription|loan|liability)?\s*(?:named|called)\s+/i, "")
+          .replace(/^\s*(?:named|called)\s+/i, "")
+          .trim();
+      }
       // BUG 5 alias: "home"/"house"/"real_estate" are common synonyms the model
       // emits for real property. Canonical profile type is "property".
       if (normalized.type && ["home", "house", "real_estate", "realestate"].includes(String(normalized.type).toLowerCase())) {
@@ -5562,8 +5619,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // the reminder onto the calendar by creating a companion event. The
       // reminder row still drives the in-app notification via the cron loop; the
       // event makes it visible. The card/undo target this event id.
+      // BUG-20260709-reminder-calendar-clutter: a lead-up reminder for an event
+      // ("Driver License Renewal — 30 days away") must NOT also become its own
+      // calendar entry — that turned one important date into 4 calendar rows.
+      // Lead-up reminders stay in the Reminders section + fire a notification;
+      // only stand-alone reminders mirror onto the calendar.
+      const isLeadUpReminder = /(?:[—-]\s*)?\b\d+\s*(?:day|days|hour|hours|week|weeks|month|months)\s*(?:away|before|out|prior|ahead)\b/i.test(input.title || "");
       let calendarEvent: any = null;
       try {
+        if (isLeadUpReminder) {
+          // Skip the calendar mirror — notification-only lead-up reminder.
+        } else {
         const evDate = fireDate.toLocaleDateString("en-CA", { timeZone: _remTz }); // YYYY-MM-DD
         const evTime = fireDate.toLocaleTimeString("en-GB", { timeZone: _remTz, hour: "2-digit", minute: "2-digit" }); // HH:MM (24h)
         const evDedupKey = `event:${safeLC(reminderForProfile || "")}:${safeLC(input.title)}:${evDate}`;
@@ -5592,6 +5658,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
                 .catch((e: any) => console.warn("[AI] Reminder event linking failed:", e?.message));
             }
           }
+        }
         }
       } catch (e: any) {
         // Calendar mirroring is best-effort — a failure here must not lose the
@@ -5927,6 +5994,54 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const entryValues = { ...input.values };
       if (input.notes) entryValues._notes = input.notes;
       if (tracker) {
+        // ── MEDICATION DOSE DEFAULTING (user report 2026-07) ──────────────
+        // Logging "I took my Amoxicillin" with no dose used to store a stray
+        // value (it showed as "1 mg"). A medication's dose is a stable
+        // standard — when the user doesn't restate it, reuse the tracker's
+        // usual (most-recent) dose instead of a guessed/blank one. Anything the
+        // user explicitly states wins: if they named a dose in this message (or
+        // a number that matches the logged dose), we leave it untouched.
+        try {
+          const isMed = tracker.category === "medication"
+            || /\b(medication|prescri|\brx\b)\b/i.test(tracker.name || "");
+          if (isMed) {
+            const numFields = (tracker.fields || []).filter((f: any) => f.type === "number");
+            const doseField = numFields.find((f: any) => /dos|amount|strength|mg|mcg|\bml\b|\biu\b|units?|pills?|tablets?/i.test(f.name)) || numFields[0];
+            if (doseField) {
+              const dfName = String(doseField.name);
+              const doseKeyRe = new RegExp(`^(${dfName}|dose|dosage|amount|value|strength|mg|mcg)$`, "i");
+              // The dose number (if any) the model put on this log.
+              let modelDose: number | undefined;
+              for (const [k, v] of Object.entries(entryValues)) {
+                if (k === "_notes" || !doseKeyRe.test(k)) continue;
+                const n = typeof v === "number" ? v : parseFloat(String(v));
+                if (isFinite(n)) { modelDose = n; break; }
+              }
+              // Did the USER explicitly state a dose in their message? A dose
+              // token (number + med unit), or a number that matches what the
+              // model logged, both count as explicit intent.
+              const rawMsg = String((input as any).__userMessage || "");
+              const explicitDose =
+                /\d+(?:\.\d+)?\s*(mg|mcg|g|ml|iu|units?|pills?|tablets?|tabs?|caps?|capsules?|puffs?|drops?|sprays?)\b/i.test(rawMsg)
+                || (modelDose !== undefined && new RegExp(`\\b${modelDose}\\b`).test(rawMsg));
+              if (!explicitDose) {
+                const usual = [...(tracker.entries || [])]
+                  .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                  .map((e: any) => e.values?.[dfName])
+                  .find((v: any) => typeof v === "number" && isFinite(v) && v > 0);
+                if (typeof usual === "number") {
+                  // Drop the guessed dose and apply the tracker's standard dose.
+                  for (const k of Object.keys(entryValues)) {
+                    if (doseKeyRe.test(k) && k !== "_notes") delete entryValues[k];
+                  }
+                  entryValues[dfName] = usual;
+                  logger.info("ai", `Medication ${tracker.name}: no dose stated — defaulted to usual ${usual}${tracker.unit || ""}`);
+                }
+              }
+            }
+          }
+        } catch { /* never block a log on dose inference */ }
+
         // Dedup: check if nearly identical entry was logged in the last 2 minutes
         const twoMinAgo = Date.now() - 120000;
         const recentDup = tracker.entries.find((e: any) => {
@@ -7728,12 +7843,33 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         logger.info("ai", `Habit name "${input.name}" already taken — using "${habitName}"`);
       }
 
+      // BUG-20260709-habit-weekdays: map named weekdays ('Mon/Wed/Fri') to the
+      // habit's targetDays (0=Sun..6=Sat) so the schedule is actually stored,
+      // instead of collapsing to a bare "custom" frequency with no days. The
+      // reply previously CLAIMED a Mon/Wed/Fri schedule that was never persisted.
+      const DOW: Record<string, number> = {
+        sun: 0, sunday: 0, mon: 1, monday: 1, tue: 2, tues: 2, tuesday: 2,
+        wed: 3, weds: 3, wednesday: 3, thu: 4, thur: 4, thurs: 4, thursday: 4,
+        fri: 5, friday: 5, sat: 6, saturday: 6,
+      };
+      let habitTargetDays: number[] | undefined;
+      const rawDays: any[] = Array.isArray(input.days) ? input.days : [];
+      if (rawDays.length > 0) {
+        const nums: number[] = rawDays
+          .map((d: any) => (typeof d === "number" ? d : DOW[String(d).trim().toLowerCase()]))
+          .filter((n: any): n is number => typeof n === "number" && n >= 0 && n <= 6);
+        if (nums.length > 0) habitTargetDays = Array.from(new Set(nums)).sort((a, b) => a - b);
+      }
       // P0.3a: validate with the shared insert schema before writing.
+      const habitTimeOfDay = input.timeOfDay === "night" ? "bedtime" : input.timeOfDay;
       const habitPayload = validateAiPayload(insertHabitSchema, {
         name: habitName,
-        frequency: input.frequency || "daily",
+        frequency: habitTargetDays ? "custom" : (input.frequency || "daily"),
         icon: input.icon,
         color: input.color,
+        ...(habitTargetDays ? { targetDays: habitTargetDays } : {}),
+        ...(habitTimeOfDay ? { timeOfDay: habitTimeOfDay } : {}),
+        ...(input.scheduledTime ? { scheduledTime: input.scheduledTime } : {}),
       }, "habit");
       if (!habitPayload.ok) return { error: habitPayload.error };
       // P0.3b: write ownership in the create itself (createHabit accepts
@@ -7755,7 +7891,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "checkin_habit": {
       const habits = await storage.getHabits();
-      const nameQuery = (input.name || "").toLowerCase();
       // Filter by profile if specified
       let eligible = habits;
       if (input.forProfile) {
@@ -7770,8 +7905,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           if (selfHabits.length > 0) eligible = selfHabits;
         }
       }
-      const habit = eligible.find(h => h.name.toLowerCase().includes(nameQuery))
-        ?? habits.find(h => h.name.toLowerCase().includes(nameQuery)); // fallback to any
+      // Fuzzy, stem-aware match so "I pooped" resolves the "POOP" habit and
+      // "did my running" resolves "Run". Falls back to the full habit list when
+      // the profile-scoped list has no match.
+      const habit = matchHabitByName(eligible, input.name || "")
+        ?? matchHabitByName(habits, input.name || "");
       if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
       return storage.checkinHabit(habit.id);
     }
@@ -8151,6 +8289,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_document": {
+      // BUG-20260709-doc-expiration: capture an expiration date into
+      // extractedData (+ the expirationDate column) so the document shows up in
+      // Document Expirations and the Docs-expiring count. Previously the date
+      // only landed in the free-text content and never surfaced anywhere.
+      let docExpiry: string | undefined;
+      if (input.expirationDate) {
+        const d = new Date(String(input.expirationDate));
+        if (!isNaN(d.getTime())) docExpiry = d.toISOString().slice(0, 10);
+      }
+      const docExtracted = docExpiry
+        ? { expirationDate: docExpiry, "Expiration Date": docExpiry }
+        : {};
       // P0.3a: validate the schema-covered part with the shared insert schema;
       // `size` isn't in insertDocumentSchema so it's passed alongside explicitly.
       const createDocPayload = validateAiPayload(insertDocumentSchema, {
@@ -8158,10 +8308,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         type: "document",
         mimeType: "text/plain",
         fileData: Buffer.from(input.content || "").toString("base64"),
+        extractedData: docExtracted,
       }, "document");
       if (!createDocPayload.ok) return { error: createDocPayload.error };
       const doc = await storage.createDocument({
         ...createDocPayload.data,
+        ...(docExpiry ? { expirationDate: docExpiry } : {}),
         size: input.content?.length || 0,
       });
       if (input.forProfile) {
@@ -8174,6 +8326,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "navigate":
       return { navigateTo: input.page, profileId: input.profileId };
+
+    case "set_dashboard_scope": {
+      // Resolve the target so the CLIENT can apply the profile filter. The
+      // engine can't touch the browser's filter store, so it returns a
+      // structured `scope` the chat UI acts on (setFilterSelected / everyone).
+      if (input.everyone === true || /^every(one|body)$|^all$/i.test(String(input.profileName || "").trim())) {
+        return { scope: { mode: "everyone" }, reply: "Switched the dashboard to Everyone (all profiles)." };
+      }
+      const wanted = String(input.profileName || "").trim();
+      if (!wanted) return { error: "Tell me which profile to focus the dashboard on (a name, or 'everyone')." };
+      const profiles = await storage.getProfiles();
+      const match = matchProfileByName(profiles, wanted);
+      if (!match) return { error: `I couldn't find a profile named "${wanted}". Check the name and try again.` };
+      return {
+        scope: { mode: "selected", profileId: match.id, profileName: match.name },
+        reply: `Dashboard now scoped to ${match.name} only. Every Executive section shows just ${match.name}'s data.`,
+      };
+    }
 
     case "create_goal": {
       // Dedup: skip if a goal with the same title already exists
@@ -8190,11 +8360,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const found = trackers.find(t => t.name.toLowerCase().includes(trackerId.toLowerCase()));
         trackerId = found?.id || undefined;
       }
-      // Resolve habit name to ID
+      // Resolve habit name to ID (stem-aware, so "running" links a "Run" habit)
       let habitId = input.habitId;
       if (habitId) {
         const habits = await storage.getHabits();
-        const found = habits.find(h => h.name.toLowerCase().includes(habitId.toLowerCase()));
+        const found = matchHabitByName(habits, habitId);
         habitId = found?.id || undefined;
       }
       // P0.3a: validate with the shared insert schema before writing. Unknown
@@ -8392,8 +8562,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "update_habit": {
       const habits = await storage.getHabits();
       const uhResult = safeMatchEntity(habits, input.name || "", h => h.name);
-      if (!uhResult.match) return { error: uhResult.error || "Habit not found", candidates: uhResult.candidates };
-      const updated = await storage.updateHabit(uhResult.match.id, input.changes);
+      // Fall back to the stem-aware matcher so "update my running habit" resolves
+      // a habit named "Run" even when the substring matcher misses.
+      const uhMatch = uhResult.match ?? matchHabitByName(habits, input.name || "");
+      if (!uhMatch) return { error: uhResult.error || "Habit not found", candidates: uhResult.candidates };
+      // Whitelist the fields a habit update may touch (the model passes a free-form
+      // `changes` object). This lets time-of-day scheduling flow through while
+      // ignoring stray keys.
+      const rawChanges = (input.changes || {}) as Record<string, any>;
+      const allowed: (keyof typeof rawChanges)[] = ["name", "icon", "color", "frequency", "targetDays", "targetPerDay", "timeOfDay", "scheduledTime"];
+      const changes: Record<string, any> = {};
+      for (const k of allowed) if (rawChanges[k] !== undefined) changes[k] = rawChanges[k];
+      // Normalize a bare "night" alias the model may emit for bedtime.
+      if (changes.timeOfDay === "night") changes.timeOfDay = "bedtime";
+      const updated = await storage.updateHabit(uhMatch.id, changes);
       return { updated: true, habit: updated };
     }
 
@@ -8425,7 +8607,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "uncomplete_habit": {
       const habits = await storage.getHabits();
-      const nameQ = (input.name || "").toLowerCase();
       let eligible = habits;
       if (input.forProfile) {
         const profs = await storage.getProfiles();
@@ -8435,7 +8616,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
         if (selfProf) { const sh = habits.filter(h => (h.linkedProfiles||[]).includes(selfProf.id)); if (sh.length > 0) eligible = sh; }
       }
-      const habit = eligible.find(h => h.name.toLowerCase().includes(nameQ)) ?? habits.find(h => h.name.toLowerCase().includes(nameQ));
+      const habit = matchHabitByName(eligible, input.name || "") ?? matchHabitByName(habits, input.name || "");
       if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
       const targetDate = input.date || new Date().toLocaleDateString('en-CA');
       // Find and delete today's checkin
@@ -11237,7 +11418,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const result = await executeTool(toolUse.name, inputWithCtx, userId);
           
           // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
+          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
             invalidateContextCache(userId);
           }
@@ -11269,7 +11450,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
           // Log the action to in-memory history
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
-          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
+          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
@@ -11652,59 +11833,116 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   }
 }
 
-// Map tool names to legacy ParsedAction types for backwards compatibility
+// Read-only tools — deliberately surface as the generic "retrieve" action.
+// Kept in lockstep with the readOnlyToolNames lists in processMessage; the
+// tests/ai-tool-registry.test.ts guard fails if any WRITE tool is missing from
+// TOOL_ACTION_MAP below (i.e. would fall through to "retrieve").
+export const READ_ONLY_TOOLS = new Set<string>([
+  "search", "get_summary", "get_profile_data", "recall_actions", "get_goal_progress",
+  "get_related", "get_relationships", "get_liability_summary", "get_cashflow",
+  "get_budget_summary", "query_net_worth_history", "get_loan_schedule", "query_calendar",
+  "query_expenses", "query_tasks", "spending_analytics", "get_asset_rollup",
+  "search_documents", "retrieve_document", "open_document", "navigate", "set_dashboard_scope",
+  "generate_chart", "generate_table", "generate_report", "refresh_ai_summary",
+]);
+
+// Every WRITE tool → a typed ParsedAction so the chat UI shows it as a real
+// action (creates/logs are undoable; the generic buckets at least label the
+// change) instead of the opaque "retrieve" fallback it used before 2026-07.
+export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
+  recall_memory: "recall_memory",
+  // Profiles / assets
+  create_profile: "create_profile",
+  update_profile: "update_profile",
+  delete_profile: "delete_entity",
+  revalue_asset: "revalue_asset",
+  convert_expense_to_asset: "revalue_asset",
+  // Tasks
+  create_task: "create_task",
+  update_task: "update_entity",
+  complete_task: "complete_task",
+  bulk_complete_tasks: "complete_task",
+  delete_task: "delete_task",
+  create_reminder: "create_reminder",
+  // Trackers
+  log_tracker_entry: "log_entry",
+  create_tracker: "create_tracker",
+  update_tracker: "update_entity",
+  delete_tracker: "delete_entity",
+  delete_tracker_entry: "delete_tracker_entry",
+  update_tracker_entry: "update_tracker_entry",
+  // Expenses / income / paychecks
+  create_expense: "log_expense",
+  update_expense: "update_entity",
+  delete_expense: "delete_entity",
+  refund_expense: "log_expense",
+  log_income: "log_income",
+  log_expected_paycheck: "log_paycheck",
+  confirm_paycheck_received: "log_paycheck",
+  // Budgets
+  create_budget: "set_budget",
+  set_budget: "set_budget",
+  update_budget: "set_budget",
+  delete_budget: "set_budget",
+  // Liabilities / ownership links
+  create_liability: "create_liability",
+  update_liability: "update_entity",
+  add_liability_payment: "add_liability_payment",
+  link_liability_asset: "link_entities",
+  link_liability_owner: "link_entities",
+  link_asset_to_liability: "link_entities",
+  unlink_asset_from_liability: "link_entities",
+  move_liability_to_asset: "update_entity",
+  link_asset_owner: "link_entities",
+  split_ownership: "link_entities",
+  link_entities: "link_entities",
+  // Events / calendar
+  create_event: "create_event",
+  update_event: "update_entity",
+  delete_event: "delete_entity",
+  complete_event: "complete_event",
+  sync_calendar: "update_entity",
+  schedule_medication_refills: "create_event",
+  // Habits
+  create_habit: "create_habit",
+  checkin_habit: "checkin_habit",
+  uncomplete_habit: "uncomplete_habit",
+  update_habit: "update_entity",
+  delete_habit: "delete_habit",
+  // Obligations
+  create_obligation: "create_obligation",
+  pay_obligation: "pay_obligation",
+  update_obligation: "update_entity",
+  delete_obligation: "delete_entity",
+  // Journal
+  journal_entry: "journal_entry",
+  update_journal: "update_entity",
+  delete_journal: "delete_entity",
+  // Goals
+  create_goal: "create_goal",
+  update_goal: "update_entity",
+  delete_goal: "delete_entity",
+  // Artifacts / notes
+  create_artifact: "create_artifact",
+  update_artifact: "update_entity",
+  delete_artifact: "delete_entity",
+  // Memory
+  save_memory: "save_memory",
+  delete_memory: "delete_entity",
+  // Documents
+  create_document: "manage_document",
+  upload_document: "manage_document",
+  manage_document: "manage_document",
+  // Domains
+  create_domain: "manage_domain",
+  update_domain: "manage_domain",
+  delete_domain: "manage_domain",
+};
+
+// Map tool names to ParsedAction types (read-only tools + anything
+// unrecognized fall through to "retrieve").
 function mapToolToActionType(toolName: string): ParsedAction["type"] {
-  const mapping: Record<string, ParsedAction["type"]> = {
-    search: "retrieve",
-    get_summary: "retrieve",
-    get_profile_data: "retrieve",
-    recall_memory: "recall_memory",
-    create_profile: "create_profile",
-    update_profile: "update_profile",
-    delete_profile: "retrieve",
-    create_task: "create_task",
-    complete_task: "complete_task",
-    delete_task: "delete_task",
-    log_tracker_entry: "log_entry",
-    create_tracker: "create_tracker",
-    create_expense: "log_expense",
-    delete_expense: "log_expense",
-    create_event: "create_event",
-    update_event: "create_event",
-    create_reminder: "create_reminder",
-    create_habit: "create_habit",
-    checkin_habit: "checkin_habit",
-    create_obligation: "create_obligation",
-    pay_obligation: "pay_obligation",
-    journal_entry: "journal_entry",
-    create_artifact: "create_artifact",
-    save_memory: "save_memory",
-    open_document: "retrieve",
-    navigate: "retrieve",
-    link_entities: "retrieve",
-    get_related: "retrieve",
-    create_goal: "create_goal",
-    update_goal: "create_goal",
-    delete_goal: "create_goal",
-    uncomplete_habit: "checkin_habit",
-    complete_event: "complete_event",
-    delete_tracker_entry: "log_entry",
-    update_tracker_entry: "log_entry",
-    retrieve_document: "retrieve",
-    generate_chart: "retrieve",
-    generate_table: "retrieve",
-    generate_report: "retrieve",
-    query_calendar: "retrieve",
-    query_expenses: "retrieve",
-    query_tasks: "retrieve",
-    spending_analytics: "retrieve",
-    log_income: "log_expense",
-    manage_document: "retrieve",
-    schedule_medication_refills: "create_event",
-    get_asset_rollup: "retrieve",
-    search_documents: "retrieve",
-  };
-  return mapping[toolName] || "retrieve";
+  return TOOL_ACTION_MAP[toolName] || "retrieve";
 }
 
 // Fallback rule-based parsing when AI is unavailable

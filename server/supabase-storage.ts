@@ -625,6 +625,8 @@ export class SupabaseStorage implements IStorage {
       id: r.id, name: r.name, icon: r.icon || undefined, color: r.color || undefined,
       frequency: r.frequency, targetDays: r.target_days || undefined,
       targetPerDay: r.target_per_day || 1,
+      timeOfDay: r.time_of_day || undefined,
+      scheduledTime: r.scheduled_time || undefined,
       currentStreak: r.current_streak || 0, longestStreak: r.longest_streak || 0,
       linkedProfiles: r.linked_profiles || [],
       checkins, createdAt: r.created_at,
@@ -881,8 +883,15 @@ export class SupabaseStorage implements IStorage {
     const obligationIds = (obligationsRes as any[]).map((r: any) => r.id);
     const habitIds = (habitsRes as any[]).map((r: any) => r.id);
     const [trackerEntryRows, obligationPaymentRows, habitCheckinRows] = await Promise.all([
+      // PERF 2026-07-08: cap at the 1000 most recent entries. This fetch was
+      // unbounded — a profile with a dense tracker (e.g. daily weight for
+      // years) shipped every row on every profile open, dominating both the
+      // query time and the JSON payload. Newest-first ordering means the cap
+      // drops only the oldest history; the profile page's charts/timeline
+      // show recent activity, and full history stays available through the
+      // trackers page's own paginated fetches.
       trackerIds.length > 0
-        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).is("deleted_at", null).order("timestamp", { ascending: false }).then(r => r.data || [])
+        ? this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).in("tracker_id", trackerIds).is("deleted_at", null).order("timestamp", { ascending: false }).limit(1000).then(r => r.data || [])
         : Promise.resolve([] as any[]),
       // Obligations retired — no separate obligation payment feed on the timeline.
       Promise.resolve([] as any[]),
@@ -928,12 +937,22 @@ export class SupabaseStorage implements IStorage {
     const directChildren = allProfiles.filter(p => p.parentProfileId === id);
     const childProfiles: any[] = [...directChildren];
     const isPersonLike = profile.type === "self" || profile.type === "person" || profile.type === "pet";
+    // PERF 2026-07-08: fetch each ownership link table ONCE and reuse it for
+    // both the co-owner child derivation here and the ownership-share
+    // annotation below. Previously this method queried asset_party_links and
+    // liability_profile_links twice each (a ForParty query + an unfiltered
+    // one). The full-table variants are also request-memoized, so the
+    // profile-bootstrap route's own link fetch shares the same round-trip.
+    let allAssetLinks: any[] = [];
+    let allLiabLinks: any[] = [];
     if (isPersonLike) {
+      [allAssetLinks, allLiabLinks] = await Promise.all([
+        this.getAssetPartyLinks().catch(() => [] as any[]),
+        this.getLiabilityProfileLinks().catch(() => [] as any[]),
+      ]);
       try {
-        const [assetLinks, liabLinks] = await Promise.all([
-          this.getAssetPartyLinksForParty(id).catch(() => [] as any[]),
-          this.getLiabilityProfileLinksForParty(id).catch(() => [] as any[]),
-        ]);
+        const assetLinks = allAssetLinks.filter((l: any) => l?.partyProfileId === id);
+        const liabLinks = allLiabLinks.filter((l: any) => l?.partyProfileId === id);
         const seen = new Set(directChildren.map(p => p.id));
         for (const l of assetLinks || []) {
           const aid = (l as any).assetProfileId;
@@ -986,10 +1005,7 @@ export class SupabaseStorage implements IStorage {
     // don't sprout a confusing "0%". Only meaningful for person-like profiles.
     if (isPersonLike && childProfiles.length > 0) {
       try {
-        const [allAssetLinks, allLiabLinks] = await Promise.all([
-          this.getAssetPartyLinks().catch(() => [] as any[]),
-          this.getLiabilityProfileLinks().catch(() => [] as any[]),
-        ]);
+        // Reuses the link tables fetched once above — no extra round-trips.
         const selfId2 = allProfiles.find(p => p.type === "self")?.id || null;
         const assetLinksByItem = new Map<string, OwnershipLink[]>();
         for (const l of (allAssetLinks as any[]) || []) {
@@ -1047,6 +1063,41 @@ export class SupabaseStorage implements IStorage {
   async createProfile(data: InsertProfile): Promise<Profile> {
     const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "liability", "investment", "property", "account", "insurance", "medical"]);
     if (data.type && !validProfileTypes.has(data.type)) data.type = "person";
+    // NAME NORMALIZATION (BUG-20260709-double-profile): strip a leading
+    // "a/an/the/my [new] <type> named/called " descriptor that the model
+    // sometimes passes as the literal name ("a person named Mike" → "Mike").
+    // Done HERE — the single chokepoint every create path funnels through — so
+    // the AI tool executor, the REST route, and the dedup below all see the
+    // clean name. Without this the junk-named twin dodged the same-name dedup.
+    if (typeof data.name === "string" && data.name.trim()) {
+      data.name = data.name
+        .replace(/^\s*(?:a|an|the|my)\s+(?:new\s+)?(?:person|people|pet|dog|cat|animal|profile|vehicle|car|truck|asset|property|house|home|account|subscription|loan|liability)?\s*(?:named|called)\s+/i, "")
+        .replace(/^\s*(?:named|called)\s+/i, "")
+        .trim();
+    }
+    // DEDUP people/pets (BUG-20260709-double-profile): the AI chat path calls
+    // this directly (bypassing the REST route's findBlockingDuplicateProfile),
+    // and the model sometimes emits TWO create_profile calls for one request —
+    // e.g. "create a profile for a person named Mike" produced BOTH "Mike" and a
+    // junk "a person named Mike". People and pets must not duplicate on an exact
+    // (case-insensitive, trimmed) name for the same user. Assets/vehicles/etc CAN
+    // legitimately repeat (two "Samsung TV"s), so this only guards person/pet.
+    if ((data.type === "person" || data.type === "pet") && typeof data.name === "string" && data.name.trim()) {
+      // Query the DB DIRECTLY (not the request-memoized getProfiles) so that a
+      // second create_profile in the SAME chat turn sees the row the first one
+      // just inserted — otherwise a stale memo lets the twin slip through.
+      const { data: rows } = await this.supabase
+        .from("profiles")
+        .select("id")
+        .eq("user_id", this.userId)
+        .eq("type", data.type)
+        .ilike("name", data.name.trim())
+        .limit(1);
+      if (rows && rows.length > 0) {
+        const existing = await this.getProfile(rows[0].id);
+        if (existing) return existing;
+      }
+    }
     const now = new Date().toISOString();
     const id = randomUUID();
     // Auto-assign parent to self profile if not specified for child types
@@ -2102,6 +2153,49 @@ export class SupabaseStorage implements IStorage {
       const selfProfile = await this.getSelfProfile();
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
+
+    // NAME DISAMBIGUATION (BUG-20260709-tracker-dupkey): the `trackers` table has
+    // a UNIQUE (user_id, name) index (idx_trackers_name_user WHERE deleted_at IS
+    // NULL). Trackers are keyed by name PER USER, not per profile — so inserting
+    // a tracker whose bare name is already used by ANOTHER profile fails with a
+    // Postgres duplicate-key error (23505). That is exactly what broke logging
+    // "Bill ran 2 miles" / "Bill ate a chicken sandwich": a "Running"/"Calories"
+    // tracker already existed for the Self profile, and createTracker inserted
+    // the bare name instead of a per-profile one. The dedup above already reused
+    // a same-name tracker that belongs to the SAME profile; reaching here means
+    // the name collides with a DIFFERENT profile's tracker. Match the app's
+    // existing convention ("Calories - Bob") by suffixing the target profile's
+    // name, then a numeric counter, until the name is free for this user.
+    const takenNames = new Set(existing.map(t => t.name.toLowerCase()));
+    let finalName = data.name;
+    if (takenNames.has(finalName.toLowerCase())) {
+      let profileSuffix = "";
+      const targetPid = requestedProfiles[0] || linkedProfiles[0];
+      if (targetPid) {
+        try {
+          const p = await this.getProfile(targetPid);
+          if (p?.name) profileSuffix = ` - ${p.name}`;
+        } catch { /* fall through to numeric suffix */ }
+      }
+      const suffixedName = `${data.name}${profileSuffix}`;
+      // If the per-profile tracker already exists for THIS profile (e.g. the AI
+      // passed the bare "Calories" for Bob but "Calories - Bob" already exists),
+      // reuse it instead of spawning "Calories - Bob 2" — the dedup at the top
+      // only compared the bare name, so it missed the suffixed form.
+      if (profileSuffix && targetPid) {
+        const existingForProfile = existing.find(t =>
+          t.name.toLowerCase() === suffixedName.toLowerCase() &&
+          (t.linkedProfiles || []).includes(targetPid));
+        if (existingForProfile) return existingForProfile;
+      }
+      let candidate = suffixedName;
+      let n = 2;
+      while (takenNames.has(candidate.toLowerCase())) {
+        candidate = `${data.name}${profileSuffix} ${n++}`;
+        if (n > 100) { candidate = `${data.name} ${id.slice(0, 4)}`; break; }
+      }
+      finalName = candidate;
+    }
     // UNIVERSAL ENGINE: never reject a tracker over field shape. Coerce every
     // field to the canonical {name, type} so an AI-supplied field with an odd
     // type ("time", "string", missing) can't fail the insert. Unknown types
@@ -2122,29 +2216,42 @@ export class SupabaseStorage implements IStorage {
     // (metric_definition) are added only when actually supplied, so a
     // deployment that hasn't run that migration never sees a "column does not
     // exist" schema error on a brand-new tracker.
-    const baseRow: any = {
-      id, user_id: this.userId, name: data.name, category: data.category || "custom",
-      unit: data.unit || null, icon: data.icon || null, fields: safeFields,
-      linked_profiles: linkedProfiles, created_at: now,
+    // Insert helper — builds the row for a given name and retries WITHOUT the
+    // optional metric_definition column if a deployment hasn't migrated it.
+    const insertWithName = async (nm: string): Promise<{ error: any }> => {
+      const base: any = {
+        id, user_id: this.userId, name: nm, category: data.category || "custom",
+        unit: data.unit || null, icon: data.icon || null, fields: safeFields,
+        linked_profiles: linkedProfiles, created_at: now,
+      };
+      const full = (data as any).metricDefinition
+        ? { ...base, metric_definition: (data as any).metricDefinition }
+        : base;
+      let err = (await this.supabase.from("trackers").insert(full)).error;
+      if (err && full !== base &&
+          /metric_definition|column .* does not exist|schema cache|could not find/i.test(err.message || "")) {
+        console.warn(`[createTracker] optional column rejected (${err.message}); retrying with base columns`);
+        err = (await this.supabase.from("trackers").insert(base)).error;
+      }
+      return { error: err };
     };
-    const fullRow = (data as any).metricDefinition
-      ? { ...baseRow, metric_definition: (data as any).metricDefinition }
-      : baseRow;
 
-    let insertErr = (await this.supabase.from("trackers").insert(fullRow)).error;
-    // Resilience: if an OPTIONAL column is missing on this deployment, retry
-    // with the base columns only rather than failing the whole save.
-    if (insertErr && fullRow !== baseRow &&
-        /metric_definition|column .* does not exist|schema cache|could not find/i.test(insertErr.message || "")) {
-      console.warn(`[createTracker] optional column rejected (${insertErr.message}); retrying with base columns`);
-      insertErr = (await this.supabase.from("trackers").insert(baseRow)).error;
+    let insertErr = (await insertWithName(finalName)).error;
+    // BACKSTOP for the UNIQUE (user_id, name) constraint: if the name still
+    // collided (a race, or a soft-deleted row the pre-check missed), retry once
+    // with a guaranteed-unique suffix so a user's log never hard-fails with a
+    // raw "duplicate key" error. Pre-emptive disambiguation above handles the
+    // common case; this guarantees forward progress.
+    if (insertErr && /duplicate key|23505|idx_trackers_name_user|already exists/i.test(insertErr.message || insertErr.code || "")) {
+      finalName = `${finalName} ${id.slice(0, 4)}`;
+      insertErr = (await insertWithName(finalName)).error;
     }
     if (insertErr) throw insertErr;
     // Link to profiles via junction table
     for (const pId of linkedProfiles) {
       await this.linkProfileTo(pId, "tracker", id);
     }
-    this.logActivity("tracker", `Created tracker: ${data.name}`);
+    this.logActivity("tracker", `Created tracker: ${finalName}`);
     return (await this.getTracker(id))!;
   }
 
@@ -2729,16 +2836,17 @@ export class SupabaseStorage implements IStorage {
     const [allEvents, allTasks, allObligations, profiles] = await Promise.all([
       this.getEvents(), this.getTasks(), this.getObligations(), this.getProfiles(),
     ]);
-    // Profile filtering (PR AC — calendar isolation):
-    // When a profile filter is active, an item must be EXPLICITLY linked to
-    // one of the selected profiles. Orphan items (linkedProfiles = []) are
-    // hidden from every individual-profile calendar, including Self — per the
-    // explicit user rule "If an event is not assigned to a profile, it should
-    // not appear in individual profile calendars." This is stricter than the
-    // shared `passesProfileFilter` default (which falls orphans through to
-    // Self) because the calendar is the one surface where leaked, untargeted
-    // items dominate the visual layout and erase any sense of per-profile
-    // ownership. Other surfaces (finance / dashboard) keep the soft rule.
+    // Profile filtering (calendar isolation):
+    // When a profile filter is active, an item shows if it is linked to one of
+    // the selected profiles. Orphan items (linkedProfiles = []) fall through to
+    // the SELF (default) profile — per the user rule "unassigned stuff should
+    // always go to the primary person's profile by default." So an unassigned
+    // event/task/obligation appears on the primary person's calendar, never on
+    // a different person/pet/asset calendar. This is the same soft-orphan rule
+    // (`belongs_to_self`) that finance, the dashboard, and every list endpoint
+    // apply, so the whole app now scopes unassigned data one consistent way.
+    // (This intentionally supersedes the earlier stricter calendar rule that
+    // hid orphans from every individual calendar.)
     const filterActive = !!(profileIds && profileIds.length > 0);
     const _selfIds = selfIdsFrom(profiles);
     const matchesProfile = (linked: string[] | null | undefined) => {
@@ -2746,7 +2854,7 @@ export class SupabaseStorage implements IStorage {
       return isInScope(
         Array.isArray(linked) ? linked : [],
         { selectedIds: profileIds!, selfIds: _selfIds },
-        "out_of_scope",
+        "belongs_to_self",
       );
     };
     // PR AC: reminders do NOT belong on the calendar. They have their own
@@ -3014,6 +3122,26 @@ export class SupabaseStorage implements IStorage {
     };
     for (const profile of profiles) {
       const f = profile.fields || {};
+
+      // PROFILE-SCOPE FIX (BUG-20260709-virtual-event-leak): every virtual event
+      // below (birthday, subscription renewal, vehicle service, vet visit,
+      // warranty/insurance expiry, loan payment…) was pushed via addVirtualEvent
+      // WITHOUT any profile-filter check — the one timeline source that skipped
+      // matchesProfile entirely. That is why "Car Insurance — Renewal" (a
+      // subscription nested under Self) persisted on EVERY profile's calendar and
+      // Important Dates (Bill, Bob, Jim…), regardless of the isolation policy —
+      // no policy change could fix a path that never filtered at all.
+      //
+      // Scope this profile's virtual events to the profile itself, plus its
+      // PARENT for child profiles (a subscription/vehicle/asset/loan is owned by
+      // the person it is nested under), using the SAME matchesProfile rule the
+      // stored-events / tasks / obligations / liability paths already use. When a
+      // filter is active and this profile is out of scope, emit none of its
+      // virtual events; unfiltered ("Everyone") still shows everything.
+      const vevScope = profile.parentProfileId
+        ? [profile.id, profile.parentProfileId]
+        : [profile.id];
+      if (!matchesProfile(vevScope)) continue;
 
       // Person / Self → birthday (yearly)
       if ((profile.type === "person" || profile.type === "self") && f.birthday) {
@@ -3465,6 +3593,8 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, name: data.name, icon: data.icon || null,
       color: data.color || null, frequency: data.frequency || "daily",
       target_days: data.targetDays || null, target_per_day: data.targetPerDay || 1,
+      time_of_day: (data as any).timeOfDay || null,
+      scheduled_time: (data as any).scheduledTime || null,
       current_streak: 0, longest_streak: 0,
       linked_profiles: linkedProfiles,
       created_at: now,
@@ -3530,6 +3660,8 @@ export class SupabaseStorage implements IStorage {
       name: merged.name, icon: merged.icon || null, color: merged.color || null,
       frequency: merged.frequency, target_days: merged.targetDays || null,
       target_per_day: merged.targetPerDay || existing.targetPerDay || 1,
+      time_of_day: merged.timeOfDay || null,
+      scheduled_time: merged.scheduledTime || null,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a
@@ -4793,9 +4925,12 @@ export class SupabaseStorage implements IStorage {
       ? Array.from(new Set([...fpIds, ...ownedAssetSet]))
       : fpIds;
     const filterCtxExpense = { selectedIds: expenseScopeIds || [], allProfiles };
-    // When the scope widened we need every expense row (the pushdown fetch may
-    // have excluded asset-linked ones); expenses are small + bounded per user.
-    const expenseSource = (fpIds && ownedAssetSet.size > 0) ? await this.getExpenses() : allExpenses;
+    // When the scope widened (person filter + owned assets), the person-only
+    // pushdown (allExpenses) excluded asset-linked rows. PERF (2026-07): fetch
+    // the WIDENED set via the same GIN pushdown + request-memo instead of the
+    // whole expense table — bounded to the relevant rows, and shared with the
+    // getDashboardEnhanced call in the same request.
+    const expenseSource = (fpIds && ownedAssetSet.size > 0) ? await this.getExpenses(expenseScopeIds) : allExpenses;
     const expenses = expenseSource.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpense));
     const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
     const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
@@ -5049,7 +5184,9 @@ export class SupabaseStorage implements IStorage {
       ? Array.from(new Set([...fpIds, ...ownedAssetSetEnh]))
       : fpIds;
     const filterCtxExpenseEnh = { selectedIds: expenseScopeIdsEnh || [], allProfiles };
-    const expenseSourceEnh = (fpIds && ownedAssetSetEnh.size > 0) ? await this.getExpenses() : rawExpenses;
+    // PERF (2026-07): fetch the WIDENED scope via GIN pushdown + memo, not the
+    // full expense table (see the matching comment in getStats).
+    const expenseSourceEnh = (fpIds && ownedAssetSetEnh.size > 0) ? await this.getExpenses(expenseScopeIdsEnh) : rawExpenses;
     const allExpenses = expenseSourceEnh.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpenseEnh));
     const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
     const allTasks = rawTasks.filter(t => matchesProfileEnhanced(t.linkedProfiles));
@@ -5594,6 +5731,23 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder> {
+    // DEDUP (BUG-20260709-dup-reminder): a stale/replayed action was creating a
+    // second identical reminder (same title + same fire time). An unfired
+    // reminder with the same user + title + fire_at is a duplicate — return the
+    // existing one instead of inserting again. Recurring reminders differ by
+    // fireAt, so this never collapses legitimate multi-occurrence schedules.
+    {
+      const { data: existing } = await this.supabase
+        .from("reminders")
+        .select("*")
+        .eq("user_id", this.userId)
+        .eq("title", data.title)
+        .eq("fire_at", data.fireAt)
+        .is("fired_at", null)
+        .is("deleted_at", null)
+        .limit(1);
+      if (existing && existing.length > 0) return this.mapReminder(existing[0]);
+    }
     const { data: row, error } = await this.supabase.from("reminders").insert({
       user_id: this.userId,
       profile_id: data.profileId || null,

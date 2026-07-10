@@ -7,6 +7,7 @@
  */
 
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { flattenProfile } from "@/lib/flattenProfile";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import {
@@ -1661,12 +1662,12 @@ function KpiTile({
   testid?: string;
 }) {
   return (
-    <div className="rounded-lg border p-3 bg-card" data-testid={testid}>
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+    <div className="rounded-xl border border-card-border p-3 bg-card card-lift transition-all" data-testid={testid}>
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {icon}
         <span>{label}</span>
       </div>
-      <div className="text-lg font-semibold mt-1 leading-tight">{value}</div>
+      <div className="metric-value text-lg mt-1 leading-tight">{value}</div>
       {sub ? <div className="text-xs text-muted-foreground mt-0.5">{sub}</div> : null}
     </div>
   );
@@ -3387,12 +3388,19 @@ function ActivityTimelineCard({
   payments: LiabilityPayment[];
 }) {
   // Pull the standard profile detail (which already collects related events,
-  // tasks, obligations, documents, etc.).
+  // tasks, obligations, documents, etc.). This key is normally already in
+  // cache — ProfileDetailPage populates it before rendering this page — so no
+  // network call fires on mount. BUG FIX (2026-07-08): the queryFn previously
+  // fetched the PLAIN profile (`/api/profiles/:id`), so whenever a stale
+  // refetch ran through THIS observer it overwrote the rich detail object in
+  // the shared cache with one missing every related* array — blanking the
+  // timeline and the rest of the page's linked data. Fetch the real detail
+  // endpoint with the same flattened shape the page-level query writes.
   const detailQuery = useQuery<any>({
     queryKey: ["/api/profiles", profileId, "detail"],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/profiles/${profileId}`);
-      return res.json();
+      const res = await apiRequest("GET", `/api/profiles/${profileId}/detail`);
+      return flattenProfile(await res.json());
     },
     enabled: !!profileId,
   });

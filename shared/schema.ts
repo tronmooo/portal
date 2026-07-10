@@ -54,7 +54,22 @@ export interface AIAction {
 
 // Legacy compat
 export interface ParsedAction {
-  type: "create_profile" | "create_tracker" | "log_entry" | "create_task" | "complete_task" | "delete_task" | "log_expense" | "create_event" | "create_reminder" | "complete_event" | "update_profile" | "create_goal" | "create_habit" | "checkin_habit" | "uncomplete_habit" | "delete_habit" | "create_obligation" | "pay_obligation" | "journal_entry" | "create_artifact" | "save_memory" | "recall_memory" | "retrieve" | "delete_tracker_entry" | "update_tracker_entry" | "unknown";
+  type:
+    // Creates / logs (undoable in the chat UI)
+    | "create_profile" | "create_tracker" | "log_entry" | "create_task" | "log_expense"
+    | "create_event" | "create_reminder" | "create_goal" | "create_habit" | "create_obligation"
+    | "journal_entry" | "create_artifact" | "save_memory" | "create_liability"
+    | "add_liability_payment" | "log_income" | "log_paycheck"
+    // State changes
+    | "complete_task" | "delete_task" | "complete_event" | "checkin_habit" | "uncomplete_habit"
+    | "delete_habit" | "pay_obligation" | "update_profile" | "delete_tracker_entry"
+    | "update_tracker_entry" | "recall_memory"
+    // Generic write buckets (2026-07: cover the ~40 tools that used to fall
+    // through to "retrieve" so every write surfaces as a typed action)
+    | "update_entity" | "delete_entity" | "link_entities" | "set_budget"
+    | "revalue_asset" | "manage_domain" | "manage_document"
+    // Reads
+    | "retrieve" | "unknown";
   category: string;
   data: Record<string, any>;
   confirmed?: boolean;
@@ -362,6 +377,12 @@ export type InsertTrackerEntry = z.infer<typeof insertTrackerEntrySchema>;
 
 export type HabitFrequency = "daily" | "weekly" | "custom";
 
+// When during the day a habit is meant to happen. "custom" pairs with
+// scheduledTime (HH:MM); "anytime" means no particular slot. This drives the
+// Morning/Afternoon/Evening/Night grouping on the Habits screen instead of
+// inferring the slot from the last check-in timestamp.
+export type HabitTimeOfDay = "morning" | "afternoon" | "evening" | "bedtime" | "anytime";
+
 export interface Habit {
   id: string;
   name: string;
@@ -370,6 +391,8 @@ export interface Habit {
   frequency: HabitFrequency;
   targetDays?: number[]; // 0=Sun..6=Sat for custom frequency
   targetPerDay: number; // How many times per day (default 1, e.g., 3 for "brush teeth 3x daily")
+  timeOfDay?: HabitTimeOfDay; // Scheduled slot; editable from the habit profile
+  scheduledTime?: string; // "HH:MM" (24h) when timeOfDay is "custom" or a precise time is set
   currentStreak: number;
   longestStreak: number;
   checkins: HabitCheckin[];
@@ -392,6 +415,10 @@ export const insertHabitSchema = z.object({
   frequency: z.enum(["daily", "weekly", "custom"]).default("daily"),
   targetDays: z.array(z.number().min(0).max(6)).optional(),
   targetPerDay: z.number().min(1).max(10).default(1),
+  // Nullable so a PATCH can explicitly clear a habit's schedule (send null),
+  // not just leave it unset (undefined).
+  timeOfDay: z.enum(["morning", "afternoon", "evening", "bedtime", "anytime"]).nullable().optional(),
+  scheduledTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM (24h)").nullable().optional(),
 });
 
 export type InsertHabit = z.input<typeof insertHabitSchema>;

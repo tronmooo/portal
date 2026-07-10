@@ -228,12 +228,7 @@ h1, h2, h3, .text-xl, .text-2xl {
   letter-spacing: -0.03em;
   font-weight: 700;
 }
-/* Stat numbers — tight, punchy, bold */
-.metric-value {
-  letter-spacing: -0.04em;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
+/* Stat numbers: .metric-value is defined once below (dup removed 2026-07). */
 /* Section headers — uppercase spaced tracking */
 .section-label {
   font-size: 0.6875rem;
@@ -290,16 +285,7 @@ h1, h2, h3, .text-xl, .text-2xl {
   animation: messageIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Shimmer for skeletons */
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-.skeleton-shimmer {
-  background: linear-gradient(90deg, hsl(var(--muted)) 25%, hsl(var(--accent)) 50%, hsl(var(--muted)) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s ease-in-out infinite;
-}
+/* .skeleton-shimmer + its keyframes are defined once below (dup removed 2026-07). */
 
 /* Pulse dot for AI thinking */
 @keyframes pulse-dot {
@@ -486,12 +472,7 @@ h1, h2, h3, .text-xl, .text-2xl {
 }
 
 /* Frosted glass card */
-.glass-card {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  background: hsl(var(--card) / 0.75);
-  border: 1px solid hsl(var(--border) / 0.5);
-}
+/* .glass-card is defined once below (dup removed 2026-07; border merged in). */
 
 /* Section gradient header backgrounds */
 .section-grad-health   { background: linear-gradient(135deg, hsl(var(--accent-health)   / 0.10) 0%, transparent 55%); }
@@ -552,11 +533,12 @@ h1, h2, h3, .text-xl, .text-2xl {
   transition: box-shadow 0.3s ease;
 }
 
-/* Glassmorphism card enhancement */
+/* Glassmorphism card enhancement (merged: border from the former duplicate). */
 .glass-card {
   backdrop-filter: blur(16px) saturate(180%);
   -webkit-backdrop-filter: blur(16px) saturate(180%);
   background: hsl(var(--card) / 0.8) !important;
+  border: 1px solid hsl(var(--border) / 0.5);
 }
 
 /* Consistent rounded corners — standardize to 2xl */

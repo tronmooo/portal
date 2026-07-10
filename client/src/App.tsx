@@ -1,5 +1,6 @@
 import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
+import { parse as parseRoutePattern } from "regexparam";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
@@ -18,7 +19,7 @@ import { initErrorReporter } from "@/lib/errorReporter";
 initErrorReporter();
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { Sun, Moon, Settings, Calendar, Lock, LogOut, Users } from "lucide-react";
+import { Sun, Moon, Settings, Calendar, Lock, LogOut } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -29,6 +30,9 @@ import {
   CommandSearchTrigger,
 } from "@/components/CommandSearch";
 import { NotificationBell } from "@/components/NotificationBell";
+import { HubShell } from "@/components/hub/HubShell";
+import { HubChromeContext } from "@/components/hub/hub-context";
+import { isHubRoute, isHubLocationForNav } from "@/components/hub/hub-routes";
 
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { InstallPrompt } from "@/components/InstallPrompt";
@@ -43,8 +47,8 @@ import ChatPage from "@/pages/chat";
 // Lazy load heavy pages
 const _dashImport = () => import("@/pages/dashboard");
 const _trackImport = () => import("@/pages/trackers");
-const _profImport  = () => import("@/pages/profiles");
-const _profDImport = () => import("@/pages/profile-detail");
+const _profDispatchImport = () => import("@/pages/profile-route-dispatch");
+const _profInfoImport = () => import("@/pages/profile-info");
 const _docDImport  = () => import("@/pages/document-detail");
 const _authImport  = () => import("@/pages/auth");
 const _resetImport = () => import("@/pages/reset-password");
@@ -52,6 +56,7 @@ const _settImport  = () => import("@/pages/settings");
 const _calImport   = () => import("@/pages/calendar-page");
 const _artImport   = () => import("@/pages/artifacts");
 const _finImport   = () => import("@/pages/finance");
+const _wellImport  = () => import("@/pages/wellness");
 const _habImport   = () => import("@/pages/habits");
 const _jourImport  = () => import("@/pages/journal");
 const _oblImport   = () => import("@/pages/obligations");
@@ -65,8 +70,8 @@ const _shareViewImport = () => import("@/pages/share-view");
 
 const DashboardPage    = lazy(_dashImport);
 const TrackersPage     = lazy(_trackImport);
-const ProfilesPage     = lazy(_profImport);
-const ProfileDetailPage = lazy(_profDImport);
+const ProfileRouteDispatch = lazy(_profDispatchImport);
+const ProfileInfoPage  = lazy(_profInfoImport);
 const DocumentDetailPage = lazy(_docDImport);
 const AuthPage         = lazy(_authImport);
 const ResetPasswordPage = lazy(_resetImport);
@@ -74,6 +79,7 @@ const SettingsPage     = lazy(_settImport);
 const CalendarPage     = lazy(_calImport);
 const ArtifactsPage    = lazy(_artImport);
 const FinancePage      = lazy(_finImport);
+const WellnessPage     = lazy(_wellImport);
 const HabitsPage       = lazy(_habImport);
 const JournalPage      = lazy(_jourImport);
 const ObligationsPage  = lazy(_oblImport);
@@ -92,7 +98,7 @@ const ShareViewPage    = lazy(_shareViewImport);
 const MAIN_TAB_IMPORTS = [
   _dashImport,
   _trackImport,
-  _profImport,
+  _profInfoImport,
   _settImport,
   _calImport,
   _artImport,
@@ -349,7 +355,9 @@ function SwipeNav() {
   const startTime = useRef<number>(0);
   const didMove = useRef(false);
 
-  const TAB_ORDER = ['/', '/dashboard', '/linked', '/calendar', '/artifacts'];
+  // Hub consolidation (2026-07): 4 tabs — any hub route (dashboard, linked,
+  // trackers, profiles, finance, ...) counts as the /dashboard swipe slot.
+  const TAB_ORDER = ['/', '/dashboard', '/calendar', '/artifacts'];
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
     // Don't intercept if touch started on an interactive element
@@ -377,7 +385,9 @@ function SwipeNav() {
     startY.current = null;
     // Require: horizontal > 80px, clearly horizontal (3:1 ratio), completed in < 600ms
     if (Math.abs(dx) < 80 || Math.abs(dx) < Math.abs(dy) * 3 || elapsed > 600) return;
-    const currentTab = TAB_ORDER.find(t => t === location || (t !== '/' && location.startsWith(t))) || '/';
+    const currentTab = isHubLocationForNav(location)
+      ? '/dashboard'
+      : TAB_ORDER.find(t => t === location || (t !== '/' && location.startsWith(t))) || '/';
     const idx = TAB_ORDER.indexOf(currentTab);
     if (dx < 0 && idx < TAB_ORDER.length - 1) navigate(TAB_ORDER[idx + 1]);
     if (dx > 0 && idx > 0) navigate(TAB_ORDER[idx - 1]);
@@ -427,8 +437,9 @@ function RouteTitle() {
       "/dashboard/tasks": "Tasks — Portol",
       "/dashboard/documents": "Documents — Portol",
       "/dashboard/artifacts": "Artifacts — Portol",
-      "/dashboard/health": "Health — Portol",
-      "/health": "Health — Portol",
+      "/dashboard/health": "Wellness — Portol",
+      "/health": "Wellness — Portol",
+      "/wellness": "Wellness — Portol",
       "/trackers": "Trackers — Portol",
       "/linked": "Linked — Portol",
       "/profiles": "Profiles — Portol",
@@ -600,6 +611,25 @@ function PointerEventsGuard() {
   return null;
 }
 
+// Hub consolidation (2026-07): the unified hub chrome (KPI strip + profile
+// switcher + tab chips) mounts ONCE here — outside AppRouter's <Suspense> —
+// so it persists across tab switches while lazy page chunks stream in. Pages
+// under a hub route read HubChromeContext to hide their duplicate headers.
+function HubArea() {
+  const [location] = useLocation();
+  const isHub = isHubRoute(location);
+  return (
+    <>
+      {isHub && <HubShell />}
+      <div className="flex-1 min-h-0">
+        <HubChromeContext.Provider value={isHub}>
+          <AppRouter />
+        </HubChromeContext.Provider>
+      </div>
+    </>
+  );
+}
+
 function AppRouter() {
   return (
     <SectionErrorBoundary name="app">
@@ -610,8 +640,15 @@ function AppRouter() {
         <Route path="/trackers" component={TrackersPage} />
         <Route path="/linked" component={TrackersPage} />
         <Route path="/liabilities" component={TrackersPage} />
-        <Route path="/profiles" component={ProfilesPage} />
-        <Route path="/profiles/:id" component={ProfileDetailPage} />
+        {/* Info tab. No id → the combined "everyone" Info view (replaces the
+            retired profiles grid). */}
+        <Route path="/profiles" component={ProfileInfoPage} />
+        {/* Single-profile Info — MUST precede /profiles/:id so the more
+            specific pattern wins under the query-tolerant matcher. */}
+        <Route path="/profiles/:id/info" component={ProfileInfoPage} />
+        {/* Dispatcher: people redirect to their dashboard + Info; every other
+            profile type still renders the per-type detail page. */}
+        <Route path="/profiles/:id" component={ProfileRouteDispatch} />
         <Route path="/documents/:id" component={DocumentDetailPage} />
         <Route path="/calendar" component={CalendarPage} />
         <Route path="/settings" component={SettingsPage} />
@@ -622,9 +659,9 @@ function AppRouter() {
         <Route path="/dashboard/documents" component={ArtifactsPage} />
         {/* Legacy alias: QuickCreateFab + trackers page navigate to /dashboard/artifacts. */}
         <Route path="/dashboard/artifacts" component={ArtifactsPage} />
-        {/* Legacy singular alias: anywhere /profile/:id was bookmarked, route it to the
-            real /profiles/:id detail page so we never 404 on a real profile UUID. */}
-        <Route path="/profile/:id" component={ProfileDetailPage} />
+        {/* Legacy singular alias: anywhere /profile/:id was bookmarked, route it
+            through the dispatcher (normalizes to /profiles/:id) so we never 404. */}
+        <Route path="/profile/:id" component={ProfileRouteDispatch} />
         <Route path="/editor/new/:type" component={EditorPage} />
         <Route path="/editor/:id" component={EditorPage} />
         <Route path="/insights" component={InsightsPage} />
@@ -646,11 +683,13 @@ function AppRouter() {
         <Route path="/journal" component={JournalPage} />
         <Route path="/habits" component={HabitsPage} />
         <Route path="/bills" component={ObligationsPage} />
-        {/* Health dashboard alias: the dashboard has a Health section but no dedicated
-            sub-route existed. Route /dashboard/health and /health to TrackersPage,
-            which is where health trackers (weight, BP, etc.) live. */}
-        <Route path="/dashboard/health" component={TrackersPage} />
-        <Route path="/health" component={TrackersPage} />
+        {/* Wellness tab (Health→Wellness redesign): a health command center that
+            reads the same tracker/habit/stats data as everything else. The deep
+            tracker grid still lives under /trackers. /health + /dashboard/health
+            stay as aliases so old links land on the new overview. */}
+        <Route path="/wellness" component={WellnessPage} />
+        <Route path="/dashboard/health" component={WellnessPage} />
+        <Route path="/health" component={WellnessPage} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>
@@ -662,6 +701,25 @@ const sidebarStyle = {
   "--sidebar-width": "14rem",
   "--sidebar-width-icon": "3rem",
 };
+
+// ── Query-tolerant route matching (BUG 2026-07-08: hub tabs 404) ─────────────
+// With useHashLocation the query string lives INSIDE the hash, so wouter's
+// location is e.g. "/linked?tab=assets". The default regexparam patterns are
+// anchored ("^\/linked\/?$") and therefore DON'T match once a query is
+// present — every query-carrying link (hub Assets/Documents chips,
+// /tasks?new=1, /finance?new=expense, /dashboard/journal?new=1) fell through
+// the Switch to the "Page not found" route, and "/profiles/:id?x=1" captured
+// the query INTO the id param. This parser keeps regexparam's semantics but
+// lets an optional "?..." suffix ride along, and stops param captures at "?".
+// Verified: "/linked" matches "/linked?tab=assets"; "/profiles/:id" on
+// "/profiles/abc?x=1" captures "abc"; "/linkedextra" still does NOT match.
+function queryTolerantParser(route: string, loose?: boolean) {
+  const { pattern, keys } = parseRoutePattern(route, loose);
+  let src = pattern.source;
+  if (src.endsWith("\\/?$")) src = src.slice(0, -4) + "\\/?(?:\\?.*)?$";
+  src = src.replace("(?=$|\\/)", "(?=$|\\/|\\?)"); // loose (nested) form
+  return { pattern: new RegExp(src, pattern.flags), keys };
+}
 
 // Detect new deploys and force reload — prevents stale UI after deployments
 // Version check REMOVED — was causing 30-second freeze on iOS.
@@ -680,7 +738,7 @@ function App() {
         <AuthProvider>
         <TooltipProvider>
           <ErrorBoundary>
-          <Router hook={useHashLocation}>
+          <Router hook={useHashLocation} parser={queryTolerantParser}>
             <ScrollToTop />
             <PointerEventsGuard />
             <RouteTitle />
@@ -713,9 +771,6 @@ function App() {
                       {/* Search trigger — centre-right in header */}
                       <div className="flex items-center gap-1 sm:gap-2 flex-1 justify-end mr-1">
                         <CommandSearchTrigger />
-                        <Button variant="ghost" size="icon" onClick={() => hashNavigate("/profiles")} className="h-8 w-8" title="Profiles" aria-label="Open profiles" data-testid="button-profiles-header">
-                          <Users className="h-4 w-4" />
-                        </Button>
                         <NotificationBell />
                         {/* Top-right dark/light toggle — always visible on every screen size. */}
                         <ThemeToggle />
@@ -723,10 +778,8 @@ function App() {
                         <ProfileButton />
                       </div>
                     </header>
-                    <main id="main-content" className="flex-1 min-w-0 overflow-hidden pb-[var(--mobile-nav-height)] md:pb-0">
-                      <div className="h-full">
-                        <AppRouter />
-                      </div>
+                    <main id="main-content" className="flex-1 min-w-0 overflow-hidden pb-[var(--mobile-nav-height)] md:pb-0 flex flex-col">
+                      <HubArea />
                     </main>
                   </div>
                 </div>

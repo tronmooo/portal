@@ -343,6 +343,28 @@ function clearAllCache(): void {
   responseCache.clear();
 }
 
+// Every per-user TTL cache-key prefix (non-version-stamped). Version-stamped
+// keys self-invalidate via the DB data-version bump, so they are NOT listed
+// here. Kept in sync with the write-bust middleware's inline list; INCLUDES
+// bootstrap/profile-bootstrap which that list omits (they were only ever
+// cleared by the global wipe this scoped bust replaces).
+const USER_CACHE_PREFIXES = [
+  "stats:", "enhanced:", "bootstrap:", "profile-bootstrap:", "profile-detail:",
+  "profiles:", "trackers:", "tasks:", "expenses:", "events:", "habits:",
+  "obligations:", "journal:", "documents:", "goals:", "insights:",
+  "insights-data:", "activity:", "ai-digest:", "artifacts:", "notifications:",
+  "cashflow:", "calendar:",
+];
+
+// Scoped cache-bust: drop only the MUTATING user's cached responses instead of
+// wiping every user's cache on the warm instance (the old clearAllCache did the
+// latter, so one write cold-started the 60s stats/enhanced/bootstrap caches for
+// everyone). Per-user only — all cached data is per-user, so there is nothing
+// shared to invalidate across users.
+function bustUserCaches(uid: string): void {
+  for (const prefix of USER_CACHE_PREFIXES) bustCache(`${prefix}${uid}`);
+}
+
 // Verify a client-supplied entity id belongs to the current user.
 // Returns true if owned, false if not owned or unknown entity type.
 async function verifyEntityOwnership(entityType: string, entityId: string): Promise<boolean> {
@@ -390,16 +412,22 @@ function cacheBustMiddleware(req: any, res: any, next: any) {
   const isMutation = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
   const isAiMutator = req.path === '/api/chat' || req.path.startsWith('/api/upload') || req.path === '/api/chat/confirm-extraction';
   if (isMutation || isAiMutator) {
-    // Bug fix: bust BEFORE the handler runs as well as on finish.
-    // Previously only the res.on('finish') bust existed, which races with the
-    // client's invalidate-then-refetch: the GET /api/stats that fires immediately
-    // after onSuccess() could still hit a warm cache entry because 'finish' fires
-    // asynchronously AFTER the response has been sent.  Clearing synchronously here
-    // ensures any in-flight read that arrives while the mutation handler is executing
-    // will miss the cache and go to the DB instead.
-    clearAllCache();
+    // Bust BEFORE the handler runs as well as on finish. The pre-handler bust
+    // prevents a GET racing mid-handler from re-caching pre-write data; the
+    // finish bust catches long writes (AI chat) that mutate during the handler.
+    //
+    // PERF (2026-07): scope the bust to the MUTATING user instead of
+    // clearAllCache()'s global wipe — a single write used to cold-start the 60s
+    // stats/enhanced/bootstrap caches for every user on the warm instance. All
+    // cached data is per-user, so there is nothing shared to clear. authMiddleware
+    // runs before this (index.ts), so req.userId is populated on /api writes; the
+    // rare no-user case (unauthenticated mutating path) falls back to a full clear.
+    const uid = (req as any).userId as string | undefined;
+    if (uid) bustUserCaches(uid); else clearAllCache();
     res.on('finish', () => {
-      if (res.statusCode >= 200 && res.statusCode < 400) clearAllCache();
+      if (res.statusCode >= 200 && res.statusCode < 400) {
+        if (uid) bustUserCaches(uid); else clearAllCache();
+      }
     });
   }
   next();
@@ -543,6 +571,19 @@ export async function registerRoutes(
 
   // Clear server cache on any mutation so changes are reflected immediately
   app.use(cacheBustMiddleware);
+
+  // PERF observability (2026-07-08): log any API request that takes >1s so
+  // slow endpoints are visible in production logs (Vercel function logs)
+  // without extra tooling. Deliberately warn-only and threshold-gated — this
+  // must never add per-request noise or overhead on the fast path.
+  app.use((req, res, next) => {
+    const t0 = Date.now();
+    res.on("finish", () => {
+      const ms = Date.now() - t0;
+      if (ms > 1000) log.warn(`[slow-request] ${req.method} ${req.path} → ${res.statusCode} in ${ms}ms`);
+    });
+    next();
+  });
 
   // CORS — allow requests from the app's own domain and Capacitor
   app.use((req, res, next) => {
@@ -904,6 +945,15 @@ export async function registerRoutes(
       // internal AI tool calls. Bust the response cache BEFORE sending the response so
       // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale cache.
       clearAllCache();
+      // Hoist a dashboard-scope directive (from set_dashboard_scope) to the top
+      // level so the chat client can apply the profile filter without digging
+      // through the results array. The engine can't touch the browser filter
+      // store, so the client does it on receipt.
+      try {
+        const rs: any[] = Array.isArray((result as any)?.results) ? (result as any).results : [];
+        const scoped = rs.find((r) => r && typeof r === "object" && (r as any).scope);
+        if (scoped) (result as any).scope = (scoped as any).scope;
+      } catch { /* non-fatal */ }
       res.json(result);
     } catch (err: any) {
       const msg = err?.message || "unknown error";
@@ -2586,7 +2636,12 @@ If unsure, return "profile_fact".`,
   }));
   app.get("/api/profiles/:id/detail", asyncHandler(async (req, res) => {
     // NO cache — profile detail must always reflect current DB state (Principle 5)
+    // PERF 2026-07-08: per-request memo (same treatment as /api/stats) so
+    // getProfileDetail's internal fanout shares one fetch per table —
+    // getProfiles + asset/liability link tables were each fetched 2-3x per call.
+    try { (storage as any).enableRequestMemo?.(); } catch {}
     const detail = await storage.getProfileDetail(req.params.id);
+    try { (storage as any).disableRequestMemo?.(); } catch {}
     if (!detail) return res.status(404).json({ error: "Not found" });
     // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
     if ((detail as any).userId && (detail as any).userId !== (req as AuthenticatedRequest).userId) {
@@ -2684,6 +2739,11 @@ If unsure, return "profile_fact".`,
     if (cached) return res.json(cached);
 
     const data = await dedupe(cacheKey, async () => {
+      // PERF 2026-07-08: per-request memo so the Promise.all below and
+      // getProfileDetail's internal fanout share ONE fetch per table.
+      // Without it, getProfiles ran twice (once inside getProfileDetail,
+      // once here) and the ownership link tables were fetched up to 4x.
+      try { (storage as any).enableRequestMemo?.(); } catch {}
       // PROFILE DETAIL has its own internal Promise.all batches (junction-table
       // lookups + entity fetch) — see supabase-storage.ts:getProfileDetail.
       // We run it in parallel with the lightweight pieces.
@@ -2693,9 +2753,66 @@ If unsure, return "profile_fact".`,
         storage.getAssetPartyLinks ? storage.getAssetPartyLinks().catch(() => [] as any[]) : Promise.resolve([] as any[]),
         storage.getLiabilityProfileLinks ? storage.getLiabilityProfileLinks().catch(() => [] as any[]) : Promise.resolve([] as any[]),
       ]);
-      if (!detail) return null;
+      if (!detail) {
+        try { (storage as any).disableRequestMemo?.(); } catch {}
+        return null;
+      }
       // S1: ownership guard — storage filters by user_id but be defensive.
-      if ((detail as any).userId && (detail as any).userId !== userId) return null;
+      if ((detail as any).userId && (detail as any).userId !== userId) {
+        try { (storage as any).disableRequestMemo?.(); } catch {}
+        return null;
+      }
+
+      // PERF 2026-07-08: type-specific extras so the liability/asset profile
+      // pages don't fire 4-5 follow-up serverless invocations after the
+      // bootstrap lands. Party enrichment reuses the already-fetched
+      // allProfiles list — zero extra round-trips for it.
+      const profileType = String((detail as any).type || "");
+      const enrichParties = (rows: any[]) => (rows || []).map((r: any) => {
+        const p = allProfiles.find(x => x.id === r.partyProfileId);
+        return { ...r, party: p ? { id: p.id, name: p.name, type: p.type } : null };
+      });
+
+      // Mirrors client/src/pages/profile-detail.tsx isAssetProfile — the set of
+      // types whose page reads ["/api/assets", id, "parties"].
+      const ASSET_PAGE_TYPES = new Set(["vehicle", "asset", "subscription", "loan", "investment", "property", "insurance", "medical", "account"]);
+      let assetParties: any[] | undefined;
+      if (ASSET_PAGE_TYPES.has(profileType)) {
+        assetParties = enrichParties((assetPartyLinks as any[]).filter((l: any) => l?.assetProfileId === profileId));
+      }
+
+      let liabilityExtras: any;
+      if (profileType === "liability" || profileType === "loan") {
+        // Same self-heal as GET /api/liabilities/:id/parties: older bills that
+        // predate the auto-ownership hook have no owner link — backfill once.
+        let partyRows = (liabilityProfileLinks as any[]).filter((l: any) => l?.liabilityProfileId === profileId);
+        if (partyRows.length === 0 && (storage as any).ensureLiabilityOwnerLink) {
+          try {
+            await (storage as any).ensureLiabilityOwnerLink(profileId);
+            partyRows = await storage.getLiabilityProfileLinks(profileId);
+          } catch { /* best-effort — page still renders without owner rows */ }
+        }
+        const [payments, schedule, assetLinks] = await Promise.all([
+          (storage as any).getLiabilityPayments
+            ? (storage as any).getLiabilityPayments(profileId).catch(() => [] as any[])
+            : Promise.resolve([] as any[]),
+          (storage as any).getLiabilitySchedule
+            ? (storage as any).getLiabilitySchedule(profileId, 12).catch(() => null)
+            : Promise.resolve(null),
+          (storage as any).getLiabilityAssetLinks
+            ? (storage as any).getLiabilityAssetLinks(profileId).catch(() => [] as any[])
+            : Promise.resolve([] as any[]),
+        ]);
+        liabilityExtras = {
+          payments,
+          // schedule is null for non-recurring liabilities (the standalone
+          // endpoint 404s there); the client only seeds it when present.
+          schedule: schedule || null,
+          parties: enrichParties(partyRows),
+          assets: assetLinks,
+        };
+      }
+      try { (storage as any).disableRequestMemo?.(); } catch {}
 
       // Build the tree in-process from the already-fetched allProfiles list
       // (no extra DB round-trip, no duplicate getProfiles call).
@@ -2733,6 +2850,8 @@ If unsure, return "profile_fact".`,
         profiles: allProfiles,
         assetPartyLinks,
         liabilityProfileLinks,
+        ...(assetParties !== undefined ? { assetParties } : {}),
+        ...(liabilityExtras !== undefined ? { liabilityExtras } : {}),
       };
     });
 
@@ -4531,7 +4650,21 @@ Rules:
     const profileIdsRaw = req.query.profileIds as string | undefined;
     const profileIds = profileIdsRaw ? profileIdsRaw.split(",").filter(Boolean) : undefined;
     try {
-      const items = await storage.getCalendarTimeline(start, end, profileIds);
+      // PERF 2026-07-08: same treatment as /api/stats. getCalendarTimeline
+      // fans out to 4 full-table fetches (events/tasks/obligations/profiles);
+      // request-memo shares them with any concurrent handler work, the 30s
+      // response cache serves repeat month-scrolls instantly, and dedupe
+      // collapses concurrent identical requests. cacheBustMiddleware clears
+      // the cache synchronously on every write, so staleness is bounded by
+      // the next mutation, not the TTL.
+      const calUserId = cacheUserKey(req as AuthenticatedRequest);
+      const calCacheKey = `caltimeline:${calUserId}:${start}:${end}:${profileIds?.join(",") || "all"}:${tz}`;
+      const cached = getCached(calCacheKey);
+      if (cached) return res.json(cached);
+      try { (storage as any).enableRequestMemo?.(); } catch {}
+      const items = await dedupe(calCacheKey, () => storage.getCalendarTimeline(start, end, profileIds));
+      try { (storage as any).disableRequestMemo?.(); } catch {}
+      setCache(calCacheKey, items, 30 * 1000);
       res.json(items);
     } catch (err: any) {
       res.status(500).json({ error: "Failed to load calendar" });
@@ -4951,8 +5084,37 @@ Rules:
   // Previously reminders were ONLY created by the AI / cron; the dashboard
   // "Add reminder" quick-action needs a plain REST create. listReminders /
   // createReminder already exist on IStorage (used by the cron firer).
-  app.get("/api/reminders", asyncHandler(async (_req, res) => {
-    const reminders = await storage.listReminders();
+  app.get("/api/reminders", asyncHandler(async (req, res) => {
+    let reminders = await storage.listReminders();
+    // Profile isolation (BUG-20260709-reminder-leak): reminders carry a scalar
+    // `profileId`, but this endpoint previously returned EVERY reminder for the
+    // user regardless of the active profile filter — so medication / refill /
+    // appointment reminders (many created with no profile) leaked into EVERY
+    // profile's dashboard REMINDERS card. This was the ONE list endpoint that
+    // bypassed the canonical scope rule that /api/tasks, /api/obligations,
+    // /api/expenses, etc. all apply.
+    //
+    // Apply the app-wide default rule ("belongs_to_self"): unassigned items
+    // default to the primary person. When a profile filter is active a reminder
+    // shows if it is linked to a selected profile; an UNLINKED reminder falls
+    // through only when the selection includes the self (default) profile — so
+    // it appears on the primary person's dashboard, never on a different
+    // person/pet/asset profile. This matches passesProfileFilter used by every
+    // sibling endpoint, so reminders now scope identically to tasks/incomes/etc.
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    const fp = req.query.profileId as string | undefined;
+    const reminderFilterIds = profileIdsParam
+      ? profileIdsParam.split(",").filter(Boolean)
+      : (fp ? [fp] : []);
+    if (reminderFilterIds.length > 0) {
+      const allProfiles = await storage.getProfiles();
+      reminders = reminders.filter((r) =>
+        passesProfileFilter(
+          r.profileId ? [r.profileId] : [],
+          { selectedIds: reminderFilterIds, allProfiles },
+        ),
+      );
+    }
     res.json(reminders);
   }));
   app.post("/api/reminders", asyncHandler(async (req, res) => {

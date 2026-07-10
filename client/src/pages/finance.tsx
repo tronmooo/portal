@@ -13,6 +13,9 @@ import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { useHubChrome } from "@/components/hub/hub-context";
+import { MoneyOverview } from "@/components/finance/MoneyOverview";
+import { NetWorthPopup, CashFlowPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -100,6 +103,8 @@ function ExpandableRow({
 export default function FinancePage() {
   useEffect(() => { document.title = "Finance — Portol"; }, []);
   const { toast } = useToast();
+  // Hub consolidation (2026-07): shell owns back-nav + profile switcher.
+  const hubEmbedded = useHubChrome();
   // PROFILE-CONTEXT FIX: read the active scope reactively from the single source
   // of truth. The old code only resynced on the window `focus` event, so a
   // filter change made elsewhere (or by the chip on this page) left Finance
@@ -219,6 +224,13 @@ export default function FinancePage() {
     }
   }, [editingIncome?.id]);
 
+  // Finance redesign (2026-07): deeper tools (paychecks, income, loan
+  // schedules, cashflow grid) collapse below the Money overview so the tab
+  // leads with the snapshot. Default collapsed.
+  const [showMore, setShowMore] = useState(false);
+  // Command-center drill-down popups (the SAME dashboard popups — reused).
+  const [financePopup, setFinancePopup] = useState<"networth" | "cashflow" | "budget" | null>(null);
+
   // ── Cashflow entry state ─────────────────────────────────────────────────
   const [addCashflowOpen, setAddCashflowOpen] = useState(false);
   const [newCashflow, setNewCashflow] = useState({
@@ -314,8 +326,13 @@ export default function FinancePage() {
   });
 
   // ── ALL hooks MUST be above early returns (React Rules of Hooks) ──
-  // Paychecks
-  const { data: paychecks = [] } = useQuery<any[]>({ queryKey: ["/api/paychecks"] });
+  // Paychecks — profile-scoped like every other query here (BUG-20260709):
+  // the bare query leaked all profiles' paychecks into the "Expected Paychecks"
+  // list under every profile. Server filters /api/paychecks by profileIds.
+  const { data: paychecks = [] } = useQuery<any[]>({
+    queryKey: ["/api/paychecks", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/paychecks${profileParam}`).then(r => r.json()),
+  });
   // RACE FIX: payload passed as variables — see addExpenseMutation comment.
   // (User hit "400: source is required" because the form was reset before the
   // mutation read it.)
@@ -443,7 +460,18 @@ export default function FinancePage() {
   });
 
   // ── Incomes (separate from paychecks: recurring income streams) ──────────
-  const { data: incomes = [] } = useQuery<any[]>({ queryKey: ["/api/incomes"] });
+  // PROFILE-SCOPE FIX (BUG-20260709-income-leak): this query MUST send the
+  // active profile filter, like every other query on this page. Without the
+  // explicit queryFn + scoped key it hit the bare /api/incomes and summed ALL
+  // incomes into `monthlyIncome` — so INCOME · MTD and CASH FLOW showed the
+  // same total (e.g. $32,700) under EVERY profile, including brand-new ones
+  // that have no income. The server already scopes /api/incomes by profileIds
+  // (orphans fall through to the self profile only), so passing the param is
+  // all that's needed; keying on mode/ids makes switching profiles refetch.
+  const { data: incomes = [] } = useQuery<any[]>({
+    queryKey: ["/api/incomes", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/incomes${profileParam}`).then(r => r.json()),
+  });
 
   // RACE FIX: payload passed as variables — see addExpenseMutation comment.
   type NewIncomeVars = { description: string; amount: number; category: string; frequency: string; date?: string; profileId?: string };
@@ -585,6 +613,33 @@ export default function FinancePage() {
   // while Finance showed April). Match dashboard's `currentMonth` derivation.
   const cfMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
   const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth] });
+
+  // ── Money-overview data (2026-07 Finance redesign) ───────────────────────
+  // Budgets (per-category limits) + net-worth trend history power the new
+  // snapshot/budget cards. Scoped like every other query on this page.
+  const { data: budgetData } = useQuery<any>({
+    queryKey: ["/api/budgets", cfMonth, filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/budgets?month=${cfMonth}${profileParam ? `&${profileParam.slice(1)}` : ""}`).then(r => r.json()),
+  });
+  const budgets: any[] = Array.isArray(budgetData?.budgets) ? budgetData.budgets : (Array.isArray(budgetData) ? budgetData : []);
+  const { data: nwHistory = [] } = useQuery<any[]>({
+    queryKey: ["/api/net-worth/history", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/net-worth/history${profileParam}${profileParam ? "&" : "?"}lookbackDays=120`).then(r => r.json()).catch(() => []),
+  });
+
+  // Pay a bill straight from the Finance "Bills · next 14d" card — same
+  // endpoint + optimistic pattern as ObligationsManager.payMut.
+  const payBillMut = useMutation<void, Error, { id: string; amount: number }>({
+    mutationFn: async ({ id }) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
+    onSuccess: () => {
+      toast({ title: "Payment recorded" });
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+    },
+    onError: (err) => toast({ title: "Failed to record payment", description: formatApiError(err), variant: "destructive" }),
+  });
 
   // ── Cashflow upsert mutation (POST /api/cashflow) ────────────────────────
   // RACE FIX: payload passed as variables — see addExpenseMutation comment.
@@ -737,6 +792,8 @@ export default function FinancePage() {
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
       <div>
         <div className="flex items-center gap-3 mb-4">
+          {/* Hub-embedded (2026-07): shell owns back-nav + profile switcher. */}
+          {!hubEmbedded && (<>
           {/* Round-6 fix (BUG-014): previously rendered a wouter <Link href="/dashboard"/>
               which navigates but does not pop history. On some platforms (mobile back
               gesture, dashboard → finance → expense detail → back) this could end up
@@ -764,6 +821,7 @@ export default function FinancePage() {
             onChange={() => {}}
             compact
           />
+          </>)}
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
@@ -941,117 +999,133 @@ export default function FinancePage() {
         <p className="text-sm text-muted-foreground mt-0.5">Expense tracking and analysis{filterCategory !== "all" && ` — ${filterCategory}`}</p>
       </div>
 
-      {/* Financial KPIs */}
+      {/* ── Money overview (2026-07 redesign) ── replaces the two ad-hoc KPI
+          grids with the mockup snapshot/budgets/bills/balance-sheet/breakdown
+          cards. All values derive from data already fetched above. */}
       {(() => {
-        const now = new Date();
-        const thisMonth = profileFiltered.filter(e => {
-          const raw = e.date?.slice(0, 10) || "";
-          const d = new Date(raw + "T00:00:00");
-          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-        });
-        const monthTotal = thisMonth.reduce((s, e) => s + e.amount, 0);
-        
-        // Asset values from profiles. We constrain to asset-bearing types
-        // (vehicle/asset/investment/property) and apply the SAME profile
-        // filter rule used elsewhere: if a filter is active, an asset only
-        // counts when its parent profile is selected, OR the asset itself
-        // is selected directly.
-        const assetProfiles = (profiles || []).filter(p => {
-          if (!["vehicle", "asset", "investment", "property"].includes(p.type)) return false;
-          if (filterMode === "everyone" || filterIds.length === 0) return true;
-          const pParent = p.parentProfileId;
-          if (pParent && filterIds.includes(pParent)) return true;
-          // Allow direct selection of the asset itself (e.g. selecting the
-          // F150 directly should still surface its value).
-          return filterIds.includes(p.id);
-        });
-        // BUG-20260528-asset-resolver-duplication: previously used a local
-        // readVal()/NS/KEYS resolver that diverged from the canonical one
-        // (different namespace + key list, no parseMoney). Now uses the
-        // shared resolveAssetValue so this tile matches the dashboard.
-        const totalAssetValue = assetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0);
+        const snap = enhanced?.financeSnapshot || {};
+        const assetValue = Number(snap.totalAssetValue || 0);
+        const liabilities = Number(snap.totalLiabilities || 0);
+        const netWorth = assetValue - liabilities;
 
-        // Liabilities from obligations. Use the unified rule so this view
-        // matches expense filtering (previously this lane silently included
-        // every orphan obligation when filtering, which inflated
-        // "Bob's monthly bills" with bills that weren't linked to anyone).
-        const oblData = (obligations || []).filter((o: any) => passesProfileFilter(o.linkedProfiles, filterCtx));
-        // BUG-20260528-monthly-multipliers: use shared toMonthlyAmount so
-        // this matches getStats() / getDashboardEnhanced() to the cent.
-        const monthlyLiabilities = oblData.reduce(
-          (s: number, o: any) => s + toMonthlyAmount(o.amount, o.frequency),
-          0,
-        );
-        
+        // Net-worth trend: history is newest-first → reverse to oldest→newest.
+        const nwSeries = (Array.isArray(nwHistory) ? nwHistory : [])
+          .map((r: any) => Number(r.netWorth ?? r.net_worth ?? 0))
+          .filter((n: number) => Number.isFinite(n))
+          .reverse();
+        const momPct = nwSeries.length >= 2 && nwSeries[0] !== 0
+          ? ((nwSeries[nwSeries.length - 1] - nwSeries[0]) / Math.abs(nwSeries[0])) * 100
+          : (typeof snap.spendTrend === "number" ? null : null);
+
+        // Cash flow: monthly income vs (month spend + monthlyized bills).
+        const monthlyIncome = (incomes || []).reduce(
+          (s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
+        const spendMtd = Number(snap.totalMonthlySpend || 0);
+        const cashOut = spendMtd + Number(snap.monthlyObligationTotal || 0);
+        const savingsRate = monthlyIncome > 0 ? Math.round(((monthlyIncome - spendMtd) / monthlyIncome) * 100) : null;
+
+        // Budgets: limit from /api/budgets, spent from snapshot.spendByCategory.
+        const spendByCat: Record<string, number> = snap.spendByCategory || {};
+        const budgetRows = (budgets || [])
+          .map((b: any) => ({
+            category: String(b.category || "general"),
+            limit: Number(b.amount ?? b.limit ?? 0),
+            spent: Number(spendByCat[String(b.category || "").toLowerCase()] ?? spendByCat[b.category] ?? 0),
+          }))
+          .filter((b: { limit: number }) => b.limit > 0);
+
+        const bills14 = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : [])
+          .filter((b: any) => typeof b.daysUntil === "number" && b.daysUntil <= 14)
+          .slice(0, 8);
+
+        const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
+
+        // Financial alerts & insights — derived, honest, each deep-links.
+        const alerts: Array<{ id: string; text: string; tone: "pos" | "neg" | "warn"; onClick?: () => void }> = [];
+        const overdue = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : []).filter((b: any) => b.status === "overdue");
+        if (overdue.length > 0) alerts.push({ id: "overdue", tone: "neg", text: `You have ${overdue.length} overdue bill${overdue.length > 1 ? "s" : ""} totaling $${overdue.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
+        const breached = budgetRows.filter(b => b.spent > b.limit);
+        for (const b of breached.slice(0, 2)) alerts.push({ id: `budget-${b.category}`, tone: "warn", text: `${b.category[0].toUpperCase()}${b.category.slice(1)} spending is over budget (${Math.round((b.spent / b.limit) * 100)}%).`, onClick: () => setFinancePopup("budget") });
+        if (savingsRate != null && savingsRate >= 15) alerts.push({ id: "savings", tone: "pos", text: `Great job — you're saving ${savingsRate}% of income this month.` });
+        const soonBill = bills14.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
+        if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling $${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
+
+        // Multi-month cash-flow trend (last 6 months) from real expenses. Outflow
+        // is summed per calendar month; inflow uses the current monthly income
+        // (no per-month income history yet — honest flat baseline); net = in−out.
+        const now = new Date();
+        const monthKeys: Array<{ key: string; label: string }> = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          monthKeys.push({
+            key: `${d.getFullYear()}-${d.getMonth()}`,
+            label: d.toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }),
+          });
+        }
+        const outByMonth: Record<string, number> = {};
+        for (const e of (Array.isArray(expenses) ? expenses : [])) {
+          const raw = (e as any).date || (e as any).createdAt;
+          if (!raw) continue;
+          const d = new Date(raw);
+          if (isNaN(d.getTime())) continue;
+          const k = `${d.getFullYear()}-${d.getMonth()}`;
+          outByMonth[k] = (outByMonth[k] || 0) + (Number((e as any).amount) || 0);
+        }
+        const cashTrend = monthKeys.map(m => {
+          const outflow = Math.round(outByMonth[m.key] || 0);
+          return { month: m.label, inflow: Math.round(monthlyIncome), outflow, net: Math.round(monthlyIncome) - outflow };
+        });
+        // Per-KPI mini-chart series.
+        const spendSeries = cashTrend.map(c => c.outflow);
+        const incomeSeries = cashTrend.map(c => c.inflow);
+        const billsSeries = bills14.map((b: any) => Number(b.amount) || 0);
+
         return (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <div className="rounded-lg border p-2.5">
-              <p className="text-xs-tight text-muted-foreground font-medium uppercase tracking-wider">Total Spent</p>
-              <p className="text-lg font-bold tabular-nums mt-0.5" data-testid="text-total-spent">${total.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
-            </div>
-            <div className="rounded-lg border p-2.5">
-              <p className="text-xs-tight text-muted-foreground font-medium uppercase tracking-wider">This Month</p>
-              <p className="text-lg font-bold tabular-nums mt-0.5">${monthTotal.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
-            </div>
-            <div className="rounded-lg border p-2.5">
-              <p className="text-xs-tight text-muted-foreground font-medium uppercase tracking-wider">Asset Value</p>
-              <p className="text-lg font-bold tabular-nums mt-0.5 text-green-600">${totalAssetValue.toLocaleString()}</p>
-            </div>
-            <div className="rounded-lg border p-2.5">
-              <p className="text-xs-tight text-muted-foreground font-medium uppercase tracking-wider">Monthly Bills</p>
-              <p className="text-lg font-bold tabular-nums mt-0.5 text-amber-600">${monthlyLiabilities.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}</p>
-            </div>
-          </div>
+          <MoneyOverview
+            netWorth={netWorth}
+            assets={assetValue}
+            liabilities={liabilities}
+            momPct={momPct}
+            nwSeries={nwSeries}
+            cashIn={monthlyIncome}
+            cashOut={cashOut}
+            spendMtd={spendMtd}
+            spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
+            incomeMtd={monthlyIncome}
+            budgets={budgetRows}
+            bills={bills14}
+            spendByCategory={spendByCat}
+            cashTrend={cashTrend}
+            spendSeries={spendSeries}
+            incomeSeries={incomeSeries}
+            billsSeries={billsSeries}
+            alerts={alerts}
+            assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
+            liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map((l: any) => ({ id: l.id, name: l.name, type: l.type, value: Number(l.value ?? l.grossValue ?? 0) })) : []}
+            monthLabel={monthLabel}
+            onAddExpense={() => setAddOpen(true)}
+            onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
+            payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null}
+            onOpenNetWorth={() => setFinancePopup("networth")}
+            onOpenCashFlow={() => setFinancePopup("cashflow")}
+            onOpenBudget={() => setFinancePopup("budget")}
+            onCategoryClick={(cat) => { setFilterCategory(cat); setSearchQuery(""); }}
+          />
         );
       })()}
 
-      {/* Net Worth KPIs */}
+      {/* Command-center drill-down popups — the SAME components the dashboard
+          KPI tiles use, mounted here so every Finance card/KPI opens a real,
+          detailed pop-up (Net Worth breakdown, Cash Flow, Budget manager). */}
       {(() => {
-        const assetValue = enhanced?.financeSnapshot?.totalAssetValue || 0;
-        const liabilities = enhanced?.financeSnapshot?.totalLiabilities || 0;
-        // BUG-20260528-profile-filter-leakage: previously inline orphan rule
-        // always passed empty-linked obligations regardless of self-profile
-        // selection. Now uses canonical passesProfileFilter from
-        // shared/profile-filter.ts. Multipliers use toMonthlyAmount.
-        const filteredObl = (obligations || []).filter((o: any) =>
-          passesProfileFilter(o.linkedProfiles, filterCtx),
-        );
-        const monthlyBills = filteredObl.reduce(
-          (s: number, o: any) => s + toMonthlyAmount(o.amount, o.frequency),
-          0,
-        );
-        const netWorth = assetValue - liabilities;
-        const now = new Date();
-        const thisMonthExpenses = filtered.filter(e => {
-          const raw = e.date?.slice(0, 10) || "";
-          const d = new Date(raw + "T00:00:00");
-          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-        });
-        const thisMonthTotal = thisMonthExpenses.reduce((s, e) => s + e.amount, 0);
+        const fc: "all" | "selected" | "everyone" = (filterMode === "selected" ? "selected" : "everyone");
+        const monthlyIncome = (incomes || []).reduce((s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
         return (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Card className="p-3">
-              <p className="text-xs text-muted-foreground uppercase">This Month</p>
-              <p className="text-lg font-bold tabular-nums">${thisMonthTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="text-xs text-muted-foreground">{thisMonthExpenses.length} expenses</p>
-            </Card>
-            <Card className="p-3">
-              <p className="text-xs text-muted-foreground uppercase">Monthly Bills</p>
-              <p className="text-lg font-bold tabular-nums">${monthlyBills.toLocaleString()}</p>
-              <p className="text-xs text-muted-foreground">{obligations?.length || 0} obligations</p>
-            </Card>
-            <Card className="p-3">
-              <p className="text-xs text-muted-foreground uppercase">Assets</p>
-              <p className="text-lg font-bold tabular-nums text-green-500">${assetValue.toLocaleString()}</p>
-            </Card>
-            <Card className="p-3">
-              <p className="text-xs text-muted-foreground uppercase">Net Worth</p>
-              <p className={`text-lg font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>
-                ${netWorth.toLocaleString()}
-              </p>
-              {liabilities > 0 && <p className="text-xs text-muted-foreground">Liabilities: ${liabilities.toLocaleString()}</p>}
-            </Card>
-          </div>
+          <>
+            <NetWorthPopup open={financePopup === "networth"} onOpenChange={(o) => !o && setFinancePopup(null)} filterMode={fc} filterIds={filterIds} />
+            <CashFlowPopup open={financePopup === "cashflow"} onOpenChange={(o) => !o && setFinancePopup(null)} filterMode={fc} filterIds={filterIds} />
+            <BudgetPopup open={financePopup === "budget"} onOpenChange={(o) => !o && setFinancePopup(null)} filterMode={fc} filterIds={filterIds} monthlyIncome={monthlyIncome} />
+          </>
         );
       })()}
 
@@ -1264,6 +1338,16 @@ export default function FinancePage() {
         </DialogContent>
       </Dialog>
 
+      {/* ── Deeper tools (collapsible) ── paychecks, income, loans, cashflow */}
+      <button
+        onClick={() => setShowMore(v => !v)}
+        className="flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors pt-2"
+        data-testid="finance-toggle-more"
+      >
+        <ChevronDown className={`h-4 w-4 transition-transform ${showMore ? "rotate-180" : ""}`} />
+        {showMore ? "Hide" : "More"} — paychecks, income, loan schedules, cash flow
+      </button>
+      {showMore && (<>
       {/* ── Paychecks Section ── */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
@@ -1849,6 +1933,8 @@ export default function FinancePage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      </>)}{/* end collapsible More */}
 
       {/* U2 fix: Delete Paycheck Confirmation — mirrors the expense pattern below. */}
       <AlertDialog open={paycheckToDelete !== null} onOpenChange={(open) => { if (!open) setPaycheckToDelete(null); }}>

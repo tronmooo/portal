@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { flattenProfile } from "@/lib/flattenProfile";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
 // profile-detail stays under control. The legacy ChildAssetsCard /
 // ValueRollupCard / MaintenanceCard below still exist and are still used for
@@ -1893,120 +1894,9 @@ function NestedAssetSections({
   );
 }
 
-// ── Field flattening (nested → top-level) ───────────────────────────────────
-// Storage paths used by the app:
-//   fields.vehicles.{licensePlate,vin,make,model,year,mileage,color,trim,registrationExpiration}
-//   fields.insurance.{insurer,policyNumber,coverage,coverageType,monthlyPremium,deductible}
-//   fields.housing.{currentValue,address,beds,baths,sqft}
-//   fields.other.{purchasePrice,valuationDate,valuationMethod,valuationRange,valuationConfidence}
-//   fields.finance.{balance,monthlyPayment,interestRate,loans:[{balance}]}
-//   fields.subscriptions.{cost,frequency,monthlyCost,renewalDate,status}
-// Older / manual edits write the same keys at the top level. We promote nested
-// keys to the top level so every reader (`f.licensePlate`, `f.currentValue`,
-// etc.) works, with top-level winning if both exist. Numeric strings like "699"
-// are left as-is — Number(...) at the call site coerces them.
-function flattenProfileFields(rawFields: any): any {
-  if (!rawFields || typeof rawFields !== "object") return rawFields || {};
-  const NESTED_GROUPS = [
-    // financial / asset groups
-    "vehicles", "insurance", "housing", "other", "finance", "subscriptions", "utilities",
-    // person / self groups
-    "personal", "identity", "health", "contact", "emergency",
-    // pet groups
-    "pets", "pet",
-  ];
-  // Aliases so UI keys match storage keys.
-  // Storage key (left) → UI key (right). When we promote a nested key, also
-  // mirror it under the UI alias if the alias slot is empty.
-  const KEY_ALIASES: Record<string, string> = {
-    dateOfBirth: "birthday",
-    dob: "birthday",
-    licenseNumber: "license",
-    licenseClass: "licenseClass",
-    issuingAuthority: "licenseState",
-    expirationDate: "licenseExpiration",
-    patientName: "name",
-    primaryPhone: "phone",
-    homePhone: "phone",
-    cellPhone: "phone",
-    homeAddress: "address",
-    serviceAddress: "address",
-  };
-  const out: any = {};
-  // Case-insensitive presence tracking so "Weight" and "weight" don't both end
-  // up as separate rows. First write wins; matches storage's schema (lowercase).
-  const seenLC: Record<string, string> = {}; // lowercased key -> canonical key already in out
-  const setIfEmpty = (key: string, val: any) => {
-    if (val === undefined || val === null || val === "") return;
-    const lc = key.toLowerCase();
-    const existingKey = seenLC[lc];
-    if (existingKey !== undefined) {
-      const cur = out[existingKey];
-      if (cur === undefined || cur === null || cur === "") out[existingKey] = val;
-      return;
-    }
-    out[key] = val;
-    seenLC[lc] = key;
-  };
-  // First, copy nested-group keys up
-  for (const group of NESTED_GROUPS) {
-    const nested = rawFields[group];
-    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
-      for (const [k, v] of Object.entries(nested)) {
-        if (v === undefined || v === null || v === "") continue;
-        setIfEmpty(k, v);
-        const alias = KEY_ALIASES[k];
-        if (alias && alias !== k) setIfEmpty(alias, v);
-      }
-    }
-  }
-  // Then, top-level keys win
-  for (const [k, v] of Object.entries(rawFields)) {
-    if (NESTED_GROUPS.includes(k)) {
-      // Preserve the original nested object too so existing code that reads
-      // fields.vehicles.* / fields.personal.* etc. keeps working
-      out[k] = v;
-      continue;
-    }
-    if (v === undefined || v === null || v === "") continue;
-    const lc = k.toLowerCase();
-    const existingKey = seenLC[lc];
-    if (existingKey !== undefined && existingKey !== k) {
-      // Top-level wins over a nested-promoted duplicate — replace under the
-      // top-level key and drop the previously-promoted alias row.
-      delete out[existingKey];
-      out[k] = v;
-      seenLC[lc] = k;
-    } else {
-      out[k] = v;
-      seenLC[lc] = k;
-    }
-  }
-  // Liability fallback: if no top-level balance but finance.loans[] has one, sum them
-  const finance = rawFields.finance;
-  if (finance && Array.isArray(finance.loans) && finance.loans.length > 0) {
-    const loanSum = finance.loans.reduce(
-      (s: number, l: any) => s + (Number(l?.balance) || 0),
-      0,
-    );
-    if (loanSum > 0 && (out.balance == null || out.balance === "")) {
-      out.balance = loanSum;
-    }
-  }
-  return out;
-}
-
-// Apply flattening to a profile and (recursively) its child profiles.
-function flattenProfile<T extends { fields?: any; childProfiles?: any[] } | null | undefined>(p: T): T {
-  if (!p) return p;
-  const flat: any = { ...p, fields: flattenProfileFields((p as any).fields) };
-  if (Array.isArray((p as any).childProfiles)) {
-    flat.childProfiles = (p as any).childProfiles.map((c: any) =>
-      c ? { ...c, fields: flattenProfileFields(c.fields) } : c,
-    );
-  }
-  return flat as T;
-}
+// Field flattening (nested → top-level) moved to @/lib/flattenProfile so
+// liability-detail.tsx (which writes the SAME ["/api/profiles", id, "detail"]
+// cache key) produces an identical shape. Imported at the top of this file.
 
 function getExpirationStatus(doc: Document): "expired" | "soon" | "ok" | null {
   const expField = doc.extractedData?.expirationDate || doc.extractedData?.expiry || doc.extractedData?.expiration;
@@ -12674,29 +12564,6 @@ export default function ProfileDetailPage() {
   // while loading or if the fetch fails.
   useEffect(() => { document.title = "Profile — Portol"; }, []);
 
-  // PERF (2026-05-28): single-shot bootstrap. /api/profile-bootstrap/:id returns
-  // detail + tree + allProfiles + assetPartyLinks + liabilityProfileLinks in
-  // ONE round-trip. We pre-fill the react-query cache so the individual
-  // useQuery hooks below resolve from cache without firing extra network
-  // calls. Without this, the page fired ~10 parallel network calls and the
-  // skeleton stayed up for several seconds on cold loads.
-  useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-    apiRequest("GET", `/api/profile-bootstrap/${id}`)
-      .then(r => r.json())
-      .then((b: any) => {
-        if (cancelled || !b || typeof b !== "object") return;
-        if (b.detail) queryClient.setQueryData(["/api/profiles", id, "detail"], flattenProfile(b.detail));
-        if (b.tree) queryClient.setQueryData(["/api/profiles", id, "tree"], b.tree);
-        if (b.profiles) queryClient.setQueryData(["/api/profiles"], b.profiles);
-        if (b.assetPartyLinks) queryClient.setQueryData(["/api/asset-party-links"], b.assetPartyLinks);
-        if (b.liabilityProfileLinks) queryClient.setQueryData(["/api/liability-profile-links"], b.liabilityProfileLinks);
-      })
-      .catch(() => { /* non-fatal — individual queries will fetch on their own */ });
-    return () => { cancelled = true; };
-  }, [id]);
-
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [linkedFilter, setLinkedFilter] = useState<"all" | "profiles" | "trackers" | "documents">("all");
@@ -12739,13 +12606,55 @@ export default function ProfileDetailPage() {
   const { data: profile, isLoading, error } = useQuery<ProfileDetail>({
     queryKey: ["/api/profiles", id, "detail"],
     queryFn: async () => {
+      // PERF (2026-07-08): ONE round-trip. /api/profile-bootstrap/:id returns
+      // detail + tree + allProfiles + assetPartyLinks + liabilityProfileLinks
+      // in a single response. Previously the page fired the bootstrap (as a
+      // fire-and-forget effect) AND /detail AND /api/profiles AND /tree in
+      // parallel on every open — the heavy getProfileDetail aggregation ran
+      // TWICE server-side and the profiles table was scanned three more times.
+      // Seeding the sibling cache keys here lets the dependent queries below
+      // (and every child component that reads the same keys) resolve from
+      // cache without any extra network calls.
+      try {
+        const res = await apiRequest("GET", `/api/profile-bootstrap/${id}`);
+        const b = await res.json();
+        if (b && typeof b === "object" && b.detail) {
+          if (b.tree) queryClient.setQueryData(["/api/profiles", id, "tree"], b.tree);
+          if (b.profiles) queryClient.setQueryData(["/api/profiles"], b.profiles);
+          if (b.assetPartyLinks) queryClient.setQueryData(["/api/asset-party-links"], b.assetPartyLinks);
+          if (b.liabilityProfileLinks) queryClient.setQueryData(["/api/liability-profile-links"], b.liabilityProfileLinks);
+          // Type-specific extras (PERF 2026-07-08): pre-seed the queries the
+          // asset/liability pages fire right after the detail resolves, so
+          // opening those profiles costs ONE round-trip instead of 5-6. Key
+          // shapes must match the consumers exactly — liability-detail.tsx
+          // uses both the array form ["/api/liabilities", id, "parties"] and
+          // the template-string form [`/api/liabilities/${id}/parties`] for
+          // parties, so both slots are seeded.
+          if (b.assetParties) queryClient.setQueryData(["/api/assets", id, "parties"], b.assetParties);
+          if (b.liabilityExtras && typeof b.liabilityExtras === "object") {
+            const ex = b.liabilityExtras;
+            if (ex.payments) queryClient.setQueryData([`/api/liabilities/${id}/payments`], ex.payments);
+            if (ex.schedule) queryClient.setQueryData(["/api/liabilities", id, "schedule"], ex.schedule);
+            if (ex.parties) {
+              queryClient.setQueryData(["/api/liabilities", id, "parties"], ex.parties);
+              queryClient.setQueryData([`/api/liabilities/${id}/parties`], ex.parties);
+            }
+            if (ex.assets) queryClient.setQueryData([`/api/liabilities/${id}/assets`], ex.assets);
+          }
+          // Flatten nested storage paths (fields.vehicles.*, fields.insurance.*,
+          // fields.housing.*, fields.other.*, fields.finance.*) up to top level
+          // so every reader (`f.licensePlate`, `f.currentValue`, `f.year`, etc.)
+          // works regardless of how the value was originally written.
+          return flattenProfile(b.detail);
+        }
+      } catch (err: any) {
+        // 404 = the profile genuinely doesn't exist — surface the error state.
+        if (String(err?.message || "").startsWith("404")) throw err;
+        // Any other failure (transient network, older server build) falls
+        // through to the legacy per-endpoint fetch below.
+      }
       const res = await apiRequest("GET", `/api/profiles/${id}/detail`);
-      const raw = await res.json();
-      // Flatten nested storage paths (fields.vehicles.*, fields.insurance.*,
-      // fields.housing.*, fields.other.*, fields.finance.*) up to top level so
-      // every reader (`f.licensePlate`, `f.currentValue`, `f.year`, etc.) works
-      // regardless of how the value was originally written. Top-level keys win.
-      return flattenProfile(raw);
+      return flattenProfile(await res.json());
     },
     enabled: !!id,
     // PERF: keep the detail in cache so re-opening a profile renders the header
@@ -12760,18 +12669,23 @@ export default function ProfileDetailPage() {
 
   // Page-level all-profiles — powers the new breadcrumb + summary + tree.
   // Shared across all child queries via the same queryKey so React Query
-  // dedupes the network request.
+  // dedupes the network request. Gated on the detail query above having
+  // resolved: its queryFn seeds this exact key from the bootstrap payload, so
+  // by the time this is enabled the data is already fresh in cache and no
+  // network call fires. (Enabling it from the start raced the bootstrap with
+  // a redundant full /api/profiles scan on every profile open.)
   const { data: allProfilesPage = [] } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
-    enabled: !!id,
+    enabled: !!id && !!profile,
   });
 
   // Tree for the current profile — used by Overview rebuild + Financials tab.
+  // Same seeding strategy as above: served from cache once the bootstrap lands.
   const { data: pageTreeData } = useQuery<any>({
     queryKey: ["/api/profiles", id, "tree"],
     queryFn: () => apiRequest("GET", `/api/profiles/${id}/tree`).then(r => r.json()),
-    enabled: !!id,
+    enabled: !!id && !!profile,
   });
 
   // Once the profile loads, refine the browser-tab title so it reflects the

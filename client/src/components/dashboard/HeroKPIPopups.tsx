@@ -36,6 +36,7 @@ import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ModalShell } from "@/components/ui/modal-shell";
 
 // P1.2 remediation: the asset/liability value resolvers are imported from
 // @shared/asset-value (the single source of truth) instead of the hand-copied
@@ -151,34 +152,24 @@ interface ShellProps {
   children: React.ReactNode;
   testId?: string;
 }
+// Thin wrapper over the shared ModalShell (design-system unification, 2026-07)
+// so the NetWorth/CashFlow/Budget popups use the exact same shell — radius,
+// close button, icon-chip header, 90dvh scroll body — as every other popup.
 function MetricPopupShell({ open, onOpenChange, icon: Icon, iconColor, title, description, total, children, testId }: ShellProps) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-w-md p-0 gap-0 overflow-hidden flex flex-col max-h-[90dvh]"
-        data-testid={testId}
-      >
-        <DialogHeader className="px-4 pt-4 pb-3 border-b border-border shrink-0">
-          <div className="flex items-start gap-3">
-            <div className="rounded-lg p-2 shrink-0" style={{ background: `${iconColor}1f` }}>
-              <Icon className="h-4 w-4" style={{ color: iconColor }} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <DialogTitle className="text-sm">{title}</DialogTitle>
-              {description && <DialogDescription className="text-[11px] mt-0.5">{description}</DialogDescription>}
-            </div>
-            {total && (
-              <div className="text-right">
-                <p className="text-lg font-bold tabular-nums leading-none" style={{ color: iconColor }}>{total}</p>
-              </div>
-            )}
-          </div>
-        </DialogHeader>
-        {/* Viewport-relative height so the popup never clips its top/bottom on
-            short screens (was a fixed 720/600px that bled off small viewports). */}
-        <div className="overflow-y-auto min-h-0 flex-1">{children}</div>
-      </DialogContent>
-    </Dialog>
+    <ModalShell
+      open={open}
+      onOpenChange={onOpenChange}
+      icon={Icon}
+      accent={iconColor}
+      title={title}
+      description={description}
+      width="md"
+      testId={testId}
+      headerRight={total ? <p className="metric-value text-lg leading-none" style={{ color: iconColor }}>{total}</p> : undefined}
+    >
+      {children}
+    </ModalShell>
   );
 }
 

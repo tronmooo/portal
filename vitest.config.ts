@@ -2,6 +2,11 @@ import { defineConfig } from 'vitest/config';
 import path from 'path';
 
 export default defineConfig({
+  // Use the automatic JSX runtime so components under test don't need an
+  // explicit `import React` (matches the Vite app build). Without this,
+  // jsdom component tests hit "React is not defined" for any component that
+  // relies on the automatic runtime.
+  esbuild: { jsx: 'automatic' },
   test: {
     globals: true,
     environment: 'node',
@@ -10,6 +15,7 @@ export default defineConfig({
       'tests/schema.test.ts',
       'tests/utils.test.ts',
       'tests/recall-match.test.ts',
+      'tests/habit-match.test.ts',
       'tests/reextract-merge.test.ts',
       'tests/chart-data.test.ts',
       'tests/tracker-normalize.test.ts',
@@ -37,6 +43,8 @@ export default defineConfig({
       'tests/cache-isolation.test.ts',
       'tests/ownership-model.test.ts',
       'tests/scope.test.ts',
+      'tests/reminder-scope.test.ts',
+      'tests/calendar-virtual-event-scope.test.ts',
       'tests/ownership.test.ts',
       'tests/asset-rollup.test.ts',
       'tests/asset-classification.test.ts',
@@ -53,6 +61,19 @@ export default defineConfig({
       'tests/tracker-units.test.ts',
       'tests/entity-naming.test.ts',
       'tests/search-index.test.ts',
+      'tests/tracker-health.test.ts',
+      'tests/hub-routes.test.ts',
+      'tests/profile-fields.test.ts',
+      'tests/money-overview.test.tsx',
+      'tests/executive-sections.test.tsx',
+      'tests/wellness-metrics.test.ts',
+      'tests/wellness-overview.test.tsx',
+      'tests/query-key-hygiene.test.ts',
+      'tests/ai-tool-registry.test.ts',
+      'tests/ai-button-parity.test.ts',
+      'tests/dashboard-buttons.test.ts',
+      'tests/design-kit.test.tsx',
+      'tests/typography-hygiene.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
