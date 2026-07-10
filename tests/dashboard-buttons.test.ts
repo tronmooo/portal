@@ -26,8 +26,10 @@ const REQUIRED: Record<string, string[]> = {
   ],
   "client/src/components/wellness/WellnessOverview.tsx": [
     "wellness-kpi-score", "wellness-habit-", "wellness-med-toggle-",
-    "wellness-log-hydration", "wellness-log-weight", "wellness-log-sleep",
-    "wellness-log-mood", "wellness-log-steps",
+    // 2026-07-10 dynamic redesign: the five quick-log buttons render from one
+    // template literal (`wellness-quicklog-${kind}`), so the guard matches the
+    // shared prefix + the onQuickLog hook that drives all of them.
+    "wellness-quicklog-", "onQuickLog",
   ],
   "client/src/components/dashboard/TaskHabitPopups.tsx": [
     "button-add-task", "btn-new-habit-add",
