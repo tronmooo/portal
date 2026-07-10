@@ -9708,7 +9708,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Same timezone as journal_entry's create path — server-UTC "today" is
       // a different date than the user's evening, which made "today's entry"
       // resolve to nothing (or yesterday's) between 00:00 and 08:00 UTC.
-      const today2 = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const today2 = new Date().toLocaleDateString('en-CA', { timeZone: DEFAULT_TIMEZONE });
       let matchEntry2 = input.date ? entries.find(e => e.date === input.date) : null;
       if (!matchEntry2) matchEntry2 = entries.find(e => e.date === today2) ?? entries[entries.length - 1] ?? null;
       if (input.forProfile && matchEntry2) {
