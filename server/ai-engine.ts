@@ -805,10 +805,28 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   // ┌─ JOURNAL FAST-PATH (runs BEFORE multi-intent guard) ─────────────────────┐
   // This bypasses the AI entirely for journal entries because the AI
   // persistently hallucinates that profiles "already have entries."
-  const journalForMatch = lower.match(/(?:add|create|write|log)\s+(?:a\s+)?journal\s+(?:entry\s+)?for\s+(\w+)(?:\s*[:\-—]+\s*|\s+(?:saying|about|that|he|she|they)\s+)(.+)/i);
+  //
+  // SCOPE GUARDS (2026-07 mega-query audit): the fast-path must only fire for
+  // messages that ARE a journal instruction — not messages that merely CONTAIN
+  // one. Previously 'Create a profile… Add a journal entry for Sarah saying
+  // "…" At the same time, tell me…' matched mid-message and the greedy (.+)
+  // swallowed every later instruction into the journal content, silently
+  // dropping six other actions (the model never ran). Now:
+  //   1. the instruction must START the message, and
+  //   2. quoted content ends at its closing quote — trailing text beyond
+  //      punctuation means multi-intent ⇒ fall through to the real model.
+  const journalForMatch = lower.match(/^\s*(?:please\s+)?(?:add|create|write|log)\s+(?:a\s+)?journal\s+(?:entry\s+)?for\s+(\w+)(?:\s*[:\-—]+\s*|\s+(?:saying|about|that|he|she|they)\s+)(.+)/i);
   if (journalForMatch) {
     const profileName = journalForMatch[1].trim();
-    const content = journalForMatch[2].trim();
+    let content = journalForMatch[2].trim();
+    let journalTrailing = "";
+    const qm = content.match(/^["“”'']\s*([^"“”]*?)\s*["“”'']\s*(.*)$/s);
+    if (qm) { content = qm[1].trim(); journalTrailing = (qm[2] || "").trim(); }
+    const unquotedTrailingCommand = !qm && /[.!?]\s+(?:at the same time|meanwhile|in addition)\b|[.!?]\s+(?:also\s+|then\s+|now\s+)?(?:create|add|delete|remove|mark|change|update|schedule|tell me|show me|remind me)\b/i.test(content);
+    if (/\w/.test(journalTrailing) || unquotedTrailingCommand) {
+      // More instructions after the journal text — this is a multi-action
+      // message; the model must handle ALL of it.
+    } else {
     const contentLC = content.toLowerCase();
     let mood: string = 'neutral';
     if (/amazing|incredible|fantastic|best/.test(contentLC)) mood = 'amazing';
@@ -832,6 +850,7 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     actions.push({ type: "journal_entry", category: "journal", data: { mood, content, forProfile: profileName } });
     results.push(entry);
     return { matched: true, reply: `Journal entry saved for ${profile?.name || profileName}. Mood: ${mood}. "${content.slice(0, 100)}"`, actions, results };
+    }
   }
   // └─ END JOURNAL FAST-PATH ──────────────────────────────────────────┘
 

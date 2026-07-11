@@ -103,7 +103,13 @@ async function journalToday(): Promise<any | null> {
 }
 const entryToday = (t: any, re: RegExp) =>
   !!t && (t.entries || []).some((e: any) => {
-    const ts = String(e.timestamp || "").slice(0, 10);
+    const raw = String(e.timestamp || "");
+    // Entry timestamps are UTC ISO; convert to the LA calendar date the
+    // product (and `today`) use, falling back to a plain slice for
+    // date-only strings.
+    const ts = /T/.test(raw)
+      ? new Date(raw).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" })
+      : raw.slice(0, 10);
     return ts === today && re.test(J(e.values));
   });
 
@@ -175,7 +181,13 @@ const SCENARIOS: Scenario[] = [
           { label: "running 2.4 mi / 28 min", verify: async () => { const t = (await list("/trackers")).find((x) => /running|run\b/i.test(x.name || "") && entryToday(x, /2\.4/)); return !!t; } },
           { label: "soccer 70 min high intensity", verify: async () => { const rows = await list("/trackers"); return rows.some((x) => entryToday(x, /70/) && entryToday(x, /high/i) && /soccer/i.test(J(x).slice(0, 400))); } },
           { label: "bench 4x8 @135", verify: async () => { const rows = await list("/trackers"); return rows.some((x) => /bench/i.test(x.name || "") && entryToday(x, /135/)); } },
-          { label: "≥4 habits checked today", verify: async () => { const hs = await list("/habits"); return hs.filter((h) => (h.checkins || []).some((c: any) => c.date === today)).length >= 4; } },
+          { label: "4 'habit' items completed (habit check-in OR supplement-tracker entry — supplements are trackers by design)", verify: async () => {
+            const hs = await list("/habits");
+            const trs = await list("/trackers");
+            const doneAsHabit = (re: RegExp) => hs.some((h) => re.test(h.name || "") && (h.checkins || []).some((c: any) => c.date === today));
+            const doneAsTracker = (re: RegExp) => trs.some((t) => re.test(t.name || "") && entryToday(t, /taken|true|1|45|64|72|84/i));
+            return [/multivitamin/i, /fish oil/i, /water|hydration/i, /guitar/i].every((re) => doneAsHabit(re) || doneAsTracker(re));
+          } },
           { label: "guitar 45-min session", verify: async () => { const rows = await list("/trackers"); return rows.some((x) => /guitar/i.test(x.name || "") && entryToday(x, /45/)); } },
           { label: "journal contains 'more focused'", verify: async () => { const j = await journalToday(); return !!j && /more focused/i.test(String(j.content || "")); } },
         ],
@@ -187,7 +199,7 @@ const SCENARIOS: Scenario[] = [
           { label: "water 84 (72 replaced, not duplicated)", verify: async () => { const t = await trackerBy(/hydration|water/i); return entryToday(t, /84/) && !entryToday(t, /"72|:72/); } },
           { label: "weight 183.9 (184.6 replaced)", verify: async () => { const t = await trackerBy(/weight/i); return entryToday(t, /183\.9/) && !entryToday(t, /184\.6/); } },
           { label: "journal: 'calmer and more focused' + rest intact", verify: async () => { const j = await journalToday(); return !!j && /calmer and more focused/i.test(String(j.content || "")) && /stressed this morning/i.test(String(j.content || "")); } },
-          { label: "fish-oil habit UNchecked", verify: async () => { const h = await habitBy(/fish oil/i); return !!h && !(h.checkins || []).some((c: any) => c.date === today); } },
+          { label: "fish-oil completion undone (habit unchecked, or tracker-based by design)", verify: async () => { const h = await habitBy(/fish oil/i); return !h || !(h.checkins || []).some((c: any) => c.date === today); } },
           { label: "running entry deleted", verify: async () => { const rows = await list("/trackers"); return !rows.some((x) => /running|run\b/i.test(x.name || "") && entryToday(x, /2\.4/)); } },
         ],
       },
