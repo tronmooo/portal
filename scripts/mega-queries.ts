@@ -23,8 +23,14 @@ import { api } from "../tests/smoke/fixture/api";
 import { API_BASE } from "../tests/smoke/fixture/account";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const plusDays = (n: number) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+// The product stamps dates in the user's timezone (LA default) — a UTC "today"
+// diverges from the app's between 00:00 and 08:00 UTC and poisons every
+// date assertion. Compute all dates in LA.
+const laDate = (msOffset: number) =>
+  new Date(Date.now() + msOffset).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+const plusDays = (n: number) => laDate(n * 86400000);
 const today = plusDays(0);
+const RUN_START = new Date(Date.now() - 60000).toISOString();
 function nextDow(dow: number): string { // 0=Sun … 6=Sat, strictly future
   const d = new Date();
   let add = (dow - d.getDay() + 7) % 7;
@@ -78,8 +84,11 @@ async function chatTurn(message: string, history: Array<{ role: string; content:
 }
 
 // Finders --------------------------------------------------------------------
-const findBy = (rows: any[], re: RegExp, key = "") =>
-  rows.find((r) => re.test(key ? String(r[key] || "") : J(r))) || null;
+const findBy = (rows: any[], re: RegExp, key = "") => {
+  const hit = (r: any) => re.test(key ? String(r[key] || "") : J(r));
+  const fresh = rows.filter((r) => hit(r) && String(r.createdAt || "") >= RUN_START);
+  return fresh[0] || rows.find(hit) || null;
+};
 async function profileByName(re: RegExp) { return findBy(await list("/profiles"), re, "name"); }
 async function taskBy(re: RegExp) { return findBy(await list("/tasks"), re, "title"); }
 async function eventBy(re: RegExp) { return findBy(await list("/events"), re, "title"); }
@@ -288,11 +297,11 @@ const SCENARIOS: Scenario[] = [
         message: `Create three profiles: Bob Carter, Jane Miller, and Mike Torres. For Bob, create a $75 grocery expense, a task called Renew gym membership, and an event called Bob dental cleaning next Tuesday at 10:00 AM. For Jane, create a $120 utility expense, a task called Submit tax documents, and a reminder called Call accountant for Friday at 9:00 AM. For Mike, create a $40 gas expense, a task called Buy birthday gift, and an event called Mike birthday dinner Saturday from 6:00 PM to 8:00 PM.`,
         checks: [
           { label: "3 profiles created", verify: async () => { S.bob = await profileByName(/Bob Carter/i); S.jane = await profileByName(/Jane Miller/i); S.mikeT = await profileByName(/Mike Torres/i); return !!S.bob && !!S.jane && !!S.mikeT; } },
-          { label: "Bob: $75 grocery owned by Bob", verify: async () => { const e = await expenseBy(/grocery/i); return !!e && Math.abs(e.amount - 75) < 0.01 && !!S.bob && (e.linkedProfiles || []).includes(S.bob.id); } },
+          { label: "Bob: $75 grocery owned by Bob", verify: async () => { const e = (await list("/expenses")).find((x) => /grocery/i.test(x.description || "") && Math.abs(x.amount - 75) < 0.01) || null; return !!e && Math.abs(e.amount - 75) < 0.01 && !!S.bob && (e.linkedProfiles || []).includes(S.bob.id); } },
           { label: "Bob: gym task + dental event owned by Bob", verify: async () => { const t = await taskBy(/gym membership/i); const ev = await eventBy(/dental cleaning/i); return !!t && !!ev && !!S.bob && (t.linkedProfiles || []).includes(S.bob.id) && (ev.linkedProfiles || []).includes(S.bob.id); } },
-          { label: "Jane: $120 utility + tax task + accountant reminder", verify: async () => { const e = await expenseBy(/utility/i); const t = await taskBy(/tax documents/i); const r = await reminderBy(/accountant/i); return !!e && Math.abs(e.amount - 120) < 0.01 && !!t && !!r && !!S.jane && (e.linkedProfiles || []).includes(S.jane.id); } },
+          { label: "Jane: $120 utility + tax task + accountant reminder", verify: async () => { const e = (await list("/expenses")).find((x) => /utility/i.test(x.description || "") && Math.abs(x.amount - 120) < 0.01) || null; const t = await taskBy(/tax documents/i); const r = await reminderBy(/accountant/i); return !!e && Math.abs(e.amount - 120) < 0.01 && !!t && !!r && !!S.jane && (e.linkedProfiles || []).includes(S.jane.id); } },
           { label: "Mike: $40 gas + gift task + birthday event", verify: async () => { const e = await expenseBy(/gas/i); const t = await taskBy(/birthday gift/i); const ev = await eventBy(/birthday dinner/i); return !!e && !!t && !!ev && !!S.mikeT && (ev.linkedProfiles || []).includes(S.mikeT.id); } },
-          { label: "NO cross-contamination (Bob's rows never carry Jane/Mike ids)", verify: async () => { const e = await expenseBy(/grocery/i); return !!e && !(e.linkedProfiles || []).some((id: string) => id === S.jane?.id || id === S.mikeT?.id); } },
+          { label: "NO cross-contamination (Bob's rows never carry Jane/Mike ids)", verify: async () => { const e = (await list("/expenses")).find((x) => /grocery/i.test(x.description || "") && Math.abs(x.amount - 75) < 0.01) || null; return !!e && !(e.linkedProfiles || []).some((id: string) => id === S.jane?.id || id === S.mikeT?.id); } },
         ],
       },
       {
@@ -301,7 +310,7 @@ const SCENARIOS: Scenario[] = [
         checks: [
           { label: "Bob + Jane tasks done", verify: async () => { const b = await taskBy(/gym membership/i); const j = await taskBy(/tax documents/i); return !!b && !!j && b.status === "done" && j.status === "done"; } },
           { label: "Mike's task still OPEN", verify: async () => { const m = await taskBy(/birthday gift/i); return !!m && m.status !== "done"; } },
-          { label: "Jane's utility expense gone; Bob's grocery kept", verify: async () => !(await expenseBy(/utility/i)) && !!(await expenseBy(/grocery/i)) },
+          { label: "Jane's utility expense gone; Bob's grocery kept", verify: async () => !(await list("/expenses")).some((x) => /utility/i.test(x.description || "") && Math.abs(x.amount - 120) < 0.01) && (await list("/expenses")).some((x) => /grocery/i.test(x.description || "") && Math.abs(x.amount - 75) < 0.01) },
           { label: "Mike's event gone; Bob's event kept", verify: async () => !(await eventBy(/birthday dinner/i)) && !!(await eventBy(/dental cleaning/i)) },
           { label: "Jane's reminder untouched", verify: async () => !!(await reminderBy(/accountant/i)) },
         ],
@@ -550,8 +559,15 @@ async function runScenario(sc: Scenario): Promise<ScenarioResult> {
       const enh: any = (await api("GET", "/dashboard-enhanced")).data;
       S.assets0 = Number(enh?.financeSnapshot?.totalAssetValue ?? NaN);
     }
-    const ev = await chatTurn(turn.message, history);
+    let ev = await chatTurn(turn.message, history);
     history.push({ role: "user", content: turn.message }, { role: "assistant", content: ev.reply });
+    // Destructive commands ask for confirmation by design — answer like the
+    // real user would, in the same conversation.
+    if (/proceed\?|are you sure|should i delete|confirm\b.*\?|delete.*\?$/i.test(ev.reply)) {
+      const ev2 = await chatTurn("Yes — go ahead.", history);
+      history.push({ role: "user", content: "Yes — go ahead." }, { role: "assistant", content: ev2.reply });
+      ev = { ...ev2, tools: [...new Set([...ev.tools, ...ev2.tools])], elapsedMs: ev.elapsedMs + ev2.elapsedMs };
+    }
     if (ev.status !== 200 || ev.elapsedMs > 90_000 || /timed out|Load failed/i.test(ev.reply)) anyTimeout = true;
     await sleep(3000); // let writes settle before verification reads
     const checks: Array<{ label: string; ok: boolean }> = [];
