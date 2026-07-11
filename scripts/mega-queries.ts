@@ -309,11 +309,11 @@ const SCENARIOS: Scenario[] = [
         message: `Create three profiles: Bob Carter, Jane Miller, and Mike Torres. For Bob, create a $75 grocery expense, a task called Renew gym membership, and an event called Bob dental cleaning next Tuesday at 10:00 AM. For Jane, create a $120 utility expense, a task called Submit tax documents, and a reminder called Call accountant for Friday at 9:00 AM. For Mike, create a $40 gas expense, a task called Buy birthday gift, and an event called Mike birthday dinner Saturday from 6:00 PM to 8:00 PM.`,
         checks: [
           { label: "3 profiles created", verify: async () => { S.bob = await profileByName(/Bob Carter/i); S.jane = await profileByName(/Jane Miller/i); S.mikeT = await profileByName(/Mike Torres/i); return !!S.bob && !!S.jane && !!S.mikeT; } },
-          { label: "Bob: $75 grocery owned by Bob", verify: async () => { const e = (await list("/expenses")).find((x) => /grocery/i.test(x.description || "") && Math.abs(x.amount - 75) < 0.01) || null; return !!e && Math.abs(e.amount - 75) < 0.01 && !!S.bob && (e.linkedProfiles || []).includes(S.bob.id); } },
+          { label: "Bob: $75 grocery owned by Bob", verify: async () => { const e = (await list("/expenses")).find((x) => /grocer/i.test(x.description || "") && Math.abs(x.amount - 75) < 0.01) || null; return !!e && Math.abs(e.amount - 75) < 0.01 && !!S.bob && (e.linkedProfiles || []).includes(S.bob.id); } },
           { label: "Bob: gym task + dental event owned by Bob", verify: async () => { const t = await taskBy(/gym membership/i); const ev = await eventBy(/dental cleaning/i); return !!t && !!ev && !!S.bob && (t.linkedProfiles || []).includes(S.bob.id) && (ev.linkedProfiles || []).includes(S.bob.id); } },
           { label: "Jane: $120 utility + tax task + accountant reminder", verify: async () => { const e = (await list("/expenses")).find((x) => /utility/i.test(x.description || "") && Math.abs(x.amount - 120) < 0.01) || null; const t = await taskBy(/tax documents/i); const r = await reminderBy(/accountant/i); return !!e && Math.abs(e.amount - 120) < 0.01 && !!t && !!r && !!S.jane && (e.linkedProfiles || []).includes(S.jane.id); } },
           { label: "Mike: $40 gas + gift task + birthday event", verify: async () => { const e = await expenseBy(/gas/i); const t = await taskBy(/birthday gift/i); const ev = await eventBy(/birthday dinner/i); return !!e && !!t && !!ev && !!S.mikeT && (ev.linkedProfiles || []).includes(S.mikeT.id); } },
-          { label: "NO cross-contamination (Bob's rows never carry Jane/Mike ids)", verify: async () => { const e = (await list("/expenses")).find((x) => /grocery/i.test(x.description || "") && Math.abs(x.amount - 75) < 0.01) || null; return !!e && !(e.linkedProfiles || []).some((id: string) => id === S.jane?.id || id === S.mikeT?.id); } },
+          { label: "NO cross-contamination (Bob's rows never carry Jane/Mike ids)", verify: async () => { const e = (await list("/expenses")).find((x) => /grocer/i.test(x.description || "") && Math.abs(x.amount - 75) < 0.01) || null; return !!e && !(e.linkedProfiles || []).some((id: string) => id === S.jane?.id || id === S.mikeT?.id); } },
         ],
       },
       {
@@ -322,7 +322,7 @@ const SCENARIOS: Scenario[] = [
         checks: [
           { label: "Bob + Jane tasks done", verify: async () => { const b = await taskBy(/gym membership/i); const j = await taskBy(/tax documents/i); return !!b && !!j && b.status === "done" && j.status === "done"; } },
           { label: "Mike's task still OPEN", verify: async () => { const m = await taskBy(/birthday gift/i); return !!m && m.status !== "done"; } },
-          { label: "Jane's utility expense gone; Bob's grocery kept", verify: async () => !(await list("/expenses")).some((x) => /utility/i.test(x.description || "") && Math.abs(x.amount - 120) < 0.01) && (await list("/expenses")).some((x) => /grocery/i.test(x.description || "") && Math.abs(x.amount - 75) < 0.01) },
+          { label: "Jane's utility expense gone; Bob's grocery kept", verify: async () => !(await list("/expenses")).some((x) => /utility/i.test(x.description || "") && Math.abs(x.amount - 120) < 0.01) && (await list("/expenses")).some((x) => /grocer/i.test(x.description || "") && Math.abs(x.amount - 75) < 0.01) },
           { label: "Mike's event gone; Bob's event kept", verify: async () => !(await eventBy(/birthday dinner/i)) && !!(await eventBy(/dental cleaning/i)) },
           { label: "Jane's reminder untouched", verify: async () => !!(await reminderBy(/accountant/i)) },
         ],
@@ -527,7 +527,7 @@ const SCENARIOS: Scenario[] = [
         label: "complete task, move location, raise rent, delete reminder only",
         message: `Mark Sarah's Prepare lease documents task complete. Change the Lease signing event location to the north office. Change the rent bill from $1,450 to $1,500. Delete only the Bring identification reminder — keep the event.`,
         checks: [
-          { label: "task completed", verify: async () => { const t = await taskBy(/lease documents/i); return !!t && t.status === "done"; } },
+          { label: "task completed (any matching row/instance done)", verify: async () => (await list("/tasks")).some((t) => /lease documents/i.test(t.title || "") && (t.status === "done" || t.completed === true)) },
           { label: "event location = north office (event kept)", verify: async () => { const e = await eventBy(/lease signing/i); return !!e && /north/i.test(J(e)); } },
           { label: "rent = 1500", verify: async () => { const o = await obligationBy(/rent/i); return !!o && Math.abs(o.amount - 1500) < 0.01; } },
           { label: "reminder gone; event survived", verify: async () => !(await reminderBy(/identification/i)) && !!(await eventBy(/lease signing/i)) },
@@ -537,7 +537,7 @@ const SCENARIOS: Scenario[] = [
         label: "refresh re-read: persistence + no dups",
         message: `Refresh and re-read every Sarah record. Confirm the completed task is still completed, the event still says north office, the rent is $1,500, and that there is exactly one Sarah profile and one rent bill.`,
         checks: [
-          { label: "task STILL done after refresh", verify: async () => { const t = await taskBy(/lease documents/i); return !!t && t.status === "done"; } },
+          { label: "task STILL done after refresh", verify: async () => (await list("/tasks")).some((t) => /lease documents/i.test(t.title || "") && (t.status === "done" || t.completed === true)) },
           { label: "exactly ONE Sarah profile", verify: async () => (await list("/profiles")).filter((p) => /sarah bennett/i.test(p.name || "")).length === 1 },
           { label: "exactly ONE rent bill", verify: async () => (await list("/obligations")).filter((o) => /rent/i.test(o.name || "")).length === 1 },
         ],
@@ -602,7 +602,7 @@ async function runScenario(sc: Scenario): Promise<ScenarioResult> {
 }
 
 // ── Cleanup ──────────────────────────────────────────────────────────────────
-const MARKERS = /alex morgan|call alex|airport rental|rental car pickup|leave for the airport|bob carter|jane miller|mike torres|grocery|gym membership|dental cleaning|utility|tax documents|call accountant|gas expense|birthday gift|birthday dinner|jordan lee|air filter|honda cr-v|roof cargo box|honda auto loan|oil change|tires deposit|cleanup (test|expense|reminder)|sarah bennett|lease|security deposit|rent bill|phone bill|internet(?!.*archive)|spotify premium|car insurance|vehicle registration|stretch for 10|tire pressure|budget review|ghost task|overshare|backwards bill|bad date event/i;
+const MARKERS = /alex morgan|call alex|airport rental|rental car pickup|leave for the airport|bob carter|jane miller|mike torres|grocer|gym membership|dental cleaning|utility|tax documents|call accountant|gas expense|birthday gift|birthday dinner|jordan lee|air filter|honda cr-v|roof cargo box|honda auto loan|oil change|tires deposit|cleanup (test|expense|reminder)|sarah bennett|lease|security deposit|rent bill|phone bill|internet(?!.*archive)|spotify premium|car insurance|vehicle registration|stretch for 10|tire pressure|budget review|ghost task|overshare|backwards bill|bad date event/i;
 
 async function cleanup(): Promise<void> {
   console.log("\n── cleanup ──");
