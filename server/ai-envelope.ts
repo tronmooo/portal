@@ -216,6 +216,30 @@ export async function recordActionLog(
   }
 }
 
+// ── Document extracted-field trimming ────────────────────────────────────────
+/**
+ * Model-facing view of a document's extractedData: scalar fields only,
+ * bounded key count and value length, so the model can ANSWER questions like
+ * "what's my license plate?" from a registration document without the token
+ * cost of nested blobs or base64 junk. Returns undefined when nothing usable.
+ */
+export function trimExtractedFields(extracted: any, maxKeys = 30, maxValueLen = 120): Record<string, string> | undefined {
+  if (!extracted || typeof extracted !== "object" || Array.isArray(extracted)) return undefined;
+  const out: Record<string, string> = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(extracted)) {
+    if (n >= maxKeys) break;
+    if (v === null || v === undefined) continue;
+    const t = typeof v;
+    if (t !== "string" && t !== "number" && t !== "boolean") continue;
+    const s = String(v).trim();
+    if (!s || s.length > 2000) continue; // skip empties and blob-like values
+    out[k] = s.slice(0, maxValueLen);
+    n++;
+  }
+  return n > 0 ? out : undefined;
+}
+
 // ── Undo execution ───────────────────────────────────────────────────────────
 type AnyStorage = IStorage & Record<string, any>;
 

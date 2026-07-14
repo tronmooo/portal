@@ -129,3 +129,38 @@ describe("finalizeToolResult", () => {
     expect(env.message).toBe("Copied 3 budgets from 2026-06 to 2026-07");
   });
 });
+
+// ── trimExtractedFields (model-facing document field view) ───────────────────
+import { trimExtractedFields } from "../server/ai-envelope";
+
+describe("trimExtractedFields", () => {
+  it("keeps scalar fields (the license-plate case) and drops nested/blob values", () => {
+    const out = trimExtractedFields({
+      licenseNumber: "8YPJ480",
+      make: "HOND",
+      year: 2021,
+      valid: true,
+      nested: { deep: "object" },
+      list: [1, 2, 3],
+      blob: "x".repeat(5000),
+      empty: "",
+      nil: null,
+    });
+    expect(out).toEqual({ licenseNumber: "8YPJ480", make: "HOND", year: "2021", valid: "true" });
+  });
+
+  it("bounds key count and value length", () => {
+    const big: Record<string, string> = {};
+    for (let i = 0; i < 50; i++) big[`k${i}`] = "v".repeat(500);
+    const out = trimExtractedFields(big)!;
+    expect(Object.keys(out)).toHaveLength(30);
+    expect(out.k0).toHaveLength(120);
+  });
+
+  it("returns undefined for empty/invalid input", () => {
+    expect(trimExtractedFields(null)).toBeUndefined();
+    expect(trimExtractedFields([])).toBeUndefined();
+    expect(trimExtractedFields({})).toBeUndefined();
+    expect(trimExtractedFields({ only: { nested: true } })).toBeUndefined();
+  });
+});

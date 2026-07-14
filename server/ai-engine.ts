@@ -22,7 +22,7 @@ import {
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
-import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, SOFT_DELETE_TYPES } from "./ai-envelope";
+import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, SOFT_DELETE_TYPES, trimExtractedFields } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
@@ -4694,6 +4694,8 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - MERGE PROFILES: "merge X into Y" / "combine the duplicate profiles" → merge_profiles(source_name, target_name) shows a preview; after the user confirms in their NEXT message, execute_bulk_action({confirm:true}). Same two-turn rule as bulk deletes — never merge in one turn.
 - MOVE BETWEEN PROFILES: "move the gym expense to Luna" / "that task is actually Mike's" → update_expense/update_task with forProfile:"<target>" (this REPLACES the owner — do not put profile names inside changes). Do NOT delete + recreate, and do NOT use merge_profiles for a single record.
 - DASHBOARD LAYOUT: "hide the X section" / "show Finance on my dashboard" / "move Goals to the top" / "reset my dashboard" → configure_dashboard_sections. This controls SECTIONS of the dashboard, not data. Undoable.
+- DOCUMENT FIELD LOOKUPS: "what's my license plate / VIN / policy number / registration expiry / license number" → the answer usually lives in a LINKED DOCUMENT's extracted fields, not profile fields. Check BOTH: get_profile_data(profile) — its documents[] include each doc's extracted "fields" — and, if needed, search_documents(forProfile). A vehicle registration's licenseNumber/plate field IS the license plate. NEVER say the value isn't stored until you've looked at the linked documents' fields. If a document exists but lacks the field, say which document you checked.
+- INDIRECT VEHICLE/ASSET REFERENCES: "my car" / "my truck" / "my Honda" → resolve against existing VEHICLE/asset profiles: exactly one candidate → use it; several → ask which one ("Do you mean your Honda CR-V or the Tacoma?"); none → say so. Prefer the vehicle profile over look-alike liability/subscription profiles that merely contain the vehicle's name (e.g. "Progressive Auto Insurance - Honda CR-V" is NOT the vehicle).
 - DATA HEALTH: "is my data healthy" / "check for orphans" → find_orphans; "fix/repair them" (after seeing issues) → repair_relations(confirm:true); "duplicate expenses?" → find_duplicates; "are my dashboard numbers right" → validate_dashboard_counts; "refresh my dashboard" / "counts look stale" → refresh_dashboard; "why is X on my dashboard / in today's agenda" → explain_dashboard_item(name). Relay these tools' message fields — never invent health results.
 
 TOOL CHOICE RULES — CRITICAL:
@@ -5155,13 +5157,17 @@ function summarizeSingleItem(item: any): any {
     };
   }
 
-  // For retrieve_document results: strip extractedData details and documentPreview
-  // The image viewer will display the document — AI just needs to know it was found
+  // For retrieve_document results: strip the documentPreview payload (the
+  // image viewer displays it) but KEEP the extracted FIELDS — questions like
+  // "what's my license plate?" are answered from a linked document's
+  // extractedData, and stripping it made every such lookup falsely report
+  // "not stored in any linked documents" (2026-07 regression report).
   if (item.found !== undefined && item.documentPreview) {
     return {
       found: item.found,
       documentName: item.document?.name,
       documentType: item.document?.type,
+      extractedFields: trimExtractedFields(item.document?.extractedData),
       imageWillBeDisplayed: true, // tells AI the image is auto-shown
       totalMatches: item.totalMatches,
     };
@@ -5172,8 +5178,9 @@ function summarizeSingleItem(item: any): any {
     const { fileData, ...rest } = item;
     return {
       ...rest,
+      extractedData: undefined,
       hasFileData: true,
-      extractedDataKeys: item.extractedData ? Object.keys(item.extractedData) : [],
+      extractedFields: trimExtractedFields(item.extractedData),
     };
   }
 
@@ -5582,7 +5589,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         expenses: detail.relatedExpenses.map(e => ({ description: e.description, amount: e.amount, category: e.category, date: e.date })),
         trackers: detail.relatedTrackers.map(t => ({ name: t.name, category: t.category, entryCount: t.entries.length, latestEntry: t.entries[t.entries.length - 1]?.values })),
         events: detail.relatedEvents.map(e => ({ title: e.title, date: e.date, time: e.time })),
-        documents: detail.relatedDocuments.map(d => ({ name: d.name, type: d.type })),
+        // Include each linked document's extracted FIELDS (scalar, bounded) —
+        // "what's my license plate?" is answered from the registration doc's
+        // extractedData; names alone forced a second lookup the model often
+        // skipped, then it falsely reported "not in any linked documents".
+        documents: detail.relatedDocuments.map(d => ({ name: d.name, type: d.type, fields: trimExtractedFields((d as any).extractedData) })),
         obligations: detail.relatedObligations.map(o => ({ name: o.name, amount: o.amount, frequency: o.frequency, nextDue: o.nextDueDate })),
         childProfiles: (detail.childProfiles || []).map(c => {
           if (financialChildTypes.has(c.type) && c.fields && typeof c.fields === "object") {
@@ -10779,9 +10790,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "search_documents": {
       const allProfiles = await storage.getProfiles();
-      const searchNameDocs = (input.forProfile || "").toLowerCase().trim();
-      const rootProfileDocs = allProfiles.find(p => p.name.toLowerCase() === searchNameDocs)
-        || allProfiles.find(p => p.name.toLowerCase().includes(searchNameDocs));
+      // Word-boundary matcher (same as get_profile_data) — the old naive
+      // first-includes match let "Honda" resolve to "Progressive Auto
+      // Insurance - Honda CR-V 2021" (a subscription with no documents)
+      // instead of the Honda CR-V vehicle, producing a false "no documents
+      // attached" (2026-07 license-plate regression report).
+      const rootProfileDocs = matchProfileByName(allProfiles, input.forProfile || "");
       if (!rootProfileDocs) {
         return { error: `Profile "${input.forProfile}" not found.` };
       }
@@ -10834,6 +10848,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             type: d.type,
             createdAt: (d as any).createdAt || null,
             linkedTo: ownerNames,
+            // The extracted FIELDS are the point of a document search in chat
+            // ("what's my plate / policy number / registration expiry") —
+            // scalar, bounded (see trimExtractedFields).
+            fields: trimExtractedFields((d as any).extractedData),
           };
         }),
       };

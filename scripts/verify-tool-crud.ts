@@ -348,6 +348,34 @@ const STEPS: Step[] = [
     },
   },
 
+  // ── Batch V (regression) — document-field lookups + vehicle resolution ─────
+  {
+    batch: "V", tool: "license plate from linked registration doc",
+    seed: async () => {
+      const car = await seedPost("/profiles", { name: `${TAG}_veh Honda CR-V 2021`, type: "vehicle" });
+      // Look-alike liability that previously shadowed the vehicle in
+      // search_documents' naive includes-match.
+      await seedPost("/profiles", { name: `Insurance - ${TAG}_veh Honda CR-V 2021`, type: "subscription" });
+      await seedPost("/documents", {
+        name: `${TAG}_veh CA Vehicle Registration`,
+        type: "vehicle_registration",
+        mimeType: "text/plain",
+        fileData: "",
+        extractedData: { licenseNumber: "8ZQX417", make: "HOND", year: "2021", registeredOwner: "Smoke Test" },
+        linkedProfiles: [car.id],
+      });
+    },
+    message: `Can you retrieve my license plate number from my ${TAG}_veh Honda?`,
+    verify: async () => true,
+    verifyReply: (reply) => /8ZQX417/.test(reply),
+  },
+  {
+    batch: "V", tool: "indirect vehicle reference (single vehicle)",
+    message: `What's the license plate on my ${TAG}_veh car?`,
+    verify: async () => true,
+    verifyReply: (reply) => /8ZQX417|CR-V/i.test(reply) && !/not stored|don't have|couldn't find/i.test(reply),
+  },
+
   // ── Batch A — Finance ──────────────────────────────────────────────────────
   {
     batch: "A", tool: "update_income",
