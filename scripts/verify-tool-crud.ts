@@ -361,7 +361,7 @@ const STEPS: Step[] = [
         type: "vehicle_registration",
         mimeType: "text/plain",
         fileData: "",
-        extractedData: { licenseNumber: "8ZQX417", make: "HOND", year: "2021", registeredOwner: "Smoke Test" },
+        extractedData: { licenseNumber: "8ZQX417", make: "HOND", year: "2021", registeredOwner: "Smoke Test", expirationDate: "2027-03-28" },
         linkedProfiles: [car.id],
       });
     },
@@ -374,6 +374,38 @@ const STEPS: Step[] = [
     message: `What's the license plate on my ${TAG}_veh car?`,
     verify: async () => true,
     verifyReply: (reply) => /8ZQX417|CR-V/i.test(reply) && !/not stored|don't have|couldn't find/i.test(reply),
+  },
+  {
+    batch: "V", tool: "UNLINKED document found by content",
+    seed: async () => {
+      await seedPost("/documents", {
+        name: `${TAG}_pol Statement`,
+        type: "insurance",
+        mimeType: "text/plain",
+        fileData: "",
+        extractedData: { provider: "Acme Mutual", policyNumber: "PLCY-773301", premium: "$92/mo" },
+        linkedProfiles: [],
+      });
+    },
+    message: `What's my Acme Mutual policy number?`,
+    verify: async () => true,
+    verifyReply: (reply) => /PLCY-?773301/i.test(reply),
+  },
+  {
+    batch: "V", tool: "link_document to profile",
+    message: `Link the ${TAG}_pol Statement document to my ${TAG}_veh Honda.`,
+    verify: async () => {
+      const docs = await list("/documents");
+      const doc = docs.find((d) => (d.name || "").includes(`${TAG}_pol`));
+      const car = (await list("/profiles")).find((p) => (p.name || "").includes(`${TAG}_veh Honda`));
+      return !!doc && !!car && (doc.linkedProfiles || []).includes(car.id);
+    },
+  },
+  {
+    batch: "V", tool: "cross-entity inference (registration expiry)",
+    message: `When does my ${TAG}_veh car's registration expire?`,
+    verify: async () => true,
+    verifyReply: (reply) => /2027|March/i.test(reply) && !/couldn't find|no document/i.test(reply),
   },
 
   // ── Batch A — Finance ──────────────────────────────────────────────────────

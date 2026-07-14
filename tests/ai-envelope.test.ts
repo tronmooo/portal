@@ -164,3 +164,24 @@ describe("trimExtractedFields", () => {
     expect(trimExtractedFields({ only: { nested: true } })).toBeUndefined();
   });
 });
+
+// ── docContentMatches (document content search) ──────────────────────────────
+import { docContentMatches } from "../server/ai-envelope";
+
+describe("docContentMatches", () => {
+  const reg = { licenseNumber: "8YPJ480", make: "HOND", model: "CR-V", expirationDate: "2027-03-28" };
+  it("matches on field VALUES (a plate) and KEYS (licenseNumber)", () => {
+    expect(docContentMatches(reg, "8ypj480")).toBe(true);
+    expect(docContentMatches(reg, "licensenumber")).toBe(true);
+    expect(docContentMatches(reg, "hond")).toBe(true);
+  });
+  it("bidirectional token match: 'Honda' finds the doc's abbreviated make 'HOND'", () => {
+    expect(docContentMatches(reg, "honda registration expiry")).toBe(true);
+    expect(docContentMatches(reg, "honda")).toBe(true);
+  });
+  it("no match for unrelated queries / empty fields", () => {
+    expect(docContentMatches(reg, "netflix subscription")).toBe(false);
+    expect(docContentMatches({}, "anything")).toBe(false);
+    expect(docContentMatches(null, "anything")).toBe(false);
+  });
+});

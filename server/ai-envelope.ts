@@ -240,6 +240,27 @@ export function trimExtractedFields(extracted: any, maxKeys = 30, maxValueLen = 
   return n > 0 ? out : undefined;
 }
 
+/**
+ * Content match for document search: does the query hit the document's
+ * extracted field KEYS or VALUES (scalars only)? Lets "policy number",
+ * "8YPJ480", or "licensePlate" find the right document even when the
+ * document's NAME doesn't contain the term.
+ */
+export function docContentMatches(extracted: any, queryLower: string): boolean {
+  if (!queryLower) return false;
+  const fields = trimExtractedFields(extracted, 60, 300);
+  if (!fields) return false;
+  const terms = queryLower.split(/\s+/).filter((t) => t.length >= 3);
+  if (terms.length === 0) return false;
+  const haystack = Object.entries(fields)
+    .map(([k, v]) => `${k} ${v}`).join(" ").toLowerCase();
+  if (terms.some((t) => haystack.includes(t))) return true;
+  // Bidirectional token match: the query "Honda" must find make:"HOND" —
+  // abbreviations on documents are routinely shorter than the user's word.
+  const tokens = haystack.split(/[^a-z0-9-]+/).filter((k) => k.length >= 4);
+  return terms.some((t) => t.length >= 4 && tokens.some((k) => t.includes(k) || k.includes(t)));
+}
+
 // ── Undo execution ───────────────────────────────────────────────────────────
 type AnyStorage = IStorage & Record<string, any>;
 

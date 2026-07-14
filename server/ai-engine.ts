@@ -22,7 +22,7 @@ import {
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
-import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, SOFT_DELETE_TYPES, trimExtractedFields } from "./ai-envelope";
+import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
@@ -4281,15 +4281,27 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "search_documents",
-    description: "Search for documents linked to a specific profile. Use when the user asks 'show me all documents linked to my house', 'what documents does my car have?', 'find warranties for my appliances'. Set includeChildAssets=true to also return documents from nested child profiles (e.g. appliances inside a house).",
+    description: "Search the user's DOCUMENTS — every uploaded document is a first-class knowledge source. Results include each document's extracted fields (plate numbers, VINs, policy/account numbers, expiration dates, names, addresses…), so use this to ANSWER questions from paperwork: 'what's my policy number', 'when does my registration expire', 'find warranties for my appliances'. Omit forProfile to search ALL documents (including ones not linked to any profile); the query matches document names, types, AND field contents.",
     input_schema: {
       type: "object" as const,
       properties: {
-        forProfile: { type: "string", description: "Profile name to search documents for (case-insensitive). Examples: 'My House', 'Tesla', 'Samsung refrigerator'." },
-        includeChildAssets: { type: "boolean", description: "If true, also return documents from all descendant (child, grandchild, etc.) profiles. Default false. Set to true for queries like 'show me all documents linked to my house'." },
-        query: { type: "string", description: "Optional text filter to narrow results by document name or type." },
+        forProfile: { type: "string", description: "Optional: limit to documents linked to this profile ('My House', 'Tesla'). OMIT to search every document in the account." },
+        includeChildAssets: { type: "boolean", description: "With forProfile: also return documents from all descendant profiles (appliances inside a house). Default false." },
+        query: { type: "string", description: "Text filter matched against document name, type, and extracted field keys/values ('registration', 'policy number', 'Honda')." },
       },
-      required: ["forProfile"],
+      required: [],
+    },
+  },
+  {
+    name: "link_document",
+    description: "Link an existing DOCUMENT to a profile/asset — 'link the registration to my Honda', 'attach that insurance card to Mom', 'this warranty belongs to the fridge'. Also use PROACTIVELY (after asking) when a document's contents clearly describe an existing profile (a registration whose make/model matches a vehicle) but isn't linked to it. Adds the link; existing links are kept.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        documentName: { type: "string", description: "Document name to link (partial match)" },
+        profileName: { type: "string", description: "Profile/asset to link it to (e.g. 'Honda CR-V')" },
+      },
+      required: ["documentName", "profileName"],
     },
   },
   {
@@ -4694,7 +4706,8 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - MERGE PROFILES: "merge X into Y" / "combine the duplicate profiles" → merge_profiles(source_name, target_name) shows a preview; after the user confirms in their NEXT message, execute_bulk_action({confirm:true}). Same two-turn rule as bulk deletes — never merge in one turn.
 - MOVE BETWEEN PROFILES: "move the gym expense to Luna" / "that task is actually Mike's" → update_expense/update_task with forProfile:"<target>" (this REPLACES the owner — do not put profile names inside changes). Do NOT delete + recreate, and do NOT use merge_profiles for a single record.
 - DASHBOARD LAYOUT: "hide the X section" / "show Finance on my dashboard" / "move Goals to the top" / "reset my dashboard" → configure_dashboard_sections. This controls SECTIONS of the dashboard, not data. Undoable.
-- DOCUMENT FIELD LOOKUPS: "what's my license plate / VIN / policy number / registration expiry / license number" → the answer usually lives in a LINKED DOCUMENT's extracted fields, not profile fields. Check BOTH: get_profile_data(profile) — its documents[] include each doc's extracted "fields" — and, if needed, search_documents(forProfile). A vehicle registration's licenseNumber/plate field IS the license plate. NEVER say the value isn't stored until you've looked at the linked documents' fields. If a document exists but lacks the field, say which document you checked.
+- DOCUMENT FIELD LOOKUPS: "what's my license plate / VIN / policy number / registration expiry / license number" → the answer usually lives in a DOCUMENT's extracted fields, not profile fields. Check in order: (1) get_profile_data(profile) — its documents[] include each doc's extracted "fields"; (2) search_documents(forProfile) for that profile's docs; (3) search_documents WITHOUT forProfile — searches EVERY document's name, type, AND field contents, including documents not linked to any profile. A vehicle registration's licenseNumber/plate field IS the license plate. NEVER say a value isn't stored until you've searched all documents. If a document exists but lacks the field, say which document you checked.
+- DOCUMENTS ARE KNOWLEDGE: documents are first-class sources for answering questions and inferring context. When an unlinked document's contents clearly describe an existing profile (a registration whose make/model matches the user's vehicle, an insurance card naming a family member), USE it to answer, then offer to link_document it to that profile. When several documents could answer, ask a smart follow-up naming the candidates instead of guessing or failing.
 - INDIRECT VEHICLE/ASSET REFERENCES: "my car" / "my truck" / "my Honda" → resolve against existing VEHICLE/asset profiles: exactly one candidate → use it; several → ask which one ("Do you mean your Honda CR-V or the Tacoma?"); none → say so. Prefer the vehicle profile over look-alike liability/subscription profiles that merely contain the vehicle's name (e.g. "Progressive Auto Insurance - Honda CR-V" is NOT the vehicle).
 - DATA HEALTH: "is my data healthy" / "check for orphans" → find_orphans; "fix/repair them" (after seeing issues) → repair_relations(confirm:true); "duplicate expenses?" → find_duplicates; "are my dashboard numbers right" → validate_dashboard_counts; "refresh my dashboard" / "counts look stale" → refresh_dashboard; "why is X on my dashboard / in today's agenda" → explain_dashboard_item(name). Relay these tools' message fields — never invent health results.
 
@@ -10480,6 +10493,41 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     // --- Document management ---
+    case "link_document": {
+      const docs = await storage.getDocuments();
+      const needleDoc = safeLC(String(input.documentName || ""));
+      const docMatches = docs.filter(d => (d.name || "").toLowerCase().includes(needleDoc));
+      if (docMatches.length === 0) return { error: `No document found matching "${input.documentName}". Use search_documents to see what exists.` };
+      if (docMatches.length > 1) return { error: `Multiple documents match "${input.documentName}" — which one?`, candidates: docMatches.slice(0, 5).map(d => d.name) };
+      const doc = docMatches[0];
+      const linkProfiles = await storage.getProfiles();
+      const target = matchProfileByName(linkProfiles, input.profileName);
+      if (!target) return { error: `No profile found matching "${input.profileName}".` };
+      const current: string[] = Array.isArray((doc as any).linkedProfiles) ? (doc as any).linkedProfiles : [];
+      if (current.includes(target.id)) {
+        return { linked: true, alreadyLinked: true, message: `"${doc.name}" is already linked to ${target.name}.` };
+      }
+      // Route through the single ownership writer (audit row + junction sync).
+      try {
+        const { addOwner } = await import("./ownership-writer");
+        const sb = (storage as any).supabase;
+        const uid = (storage as any).userId as string;
+        const selfId = linkProfiles.find(p => p.type === "self")?.id || target.id;
+        if (sb && uid) {
+          await addOwner(sb, uid, "document", doc.id, target.id, selfId);
+        } else {
+          await storage.updateDocument(doc.id, { linkedProfiles: [...current, target.id] } as any);
+        }
+      } catch (e: any) {
+        return { error: `Couldn't link the document: ${e?.message || e}` };
+      }
+      return {
+        linked: true, id: doc.id,
+        _previousState: { documentId: doc.id, linkedProfiles: current },
+        message: `Linked "${doc.name}" to ${target.name}. Its fields (plate numbers, expirations, …) now show under that profile.`,
+      };
+    }
+
     case "schedule_medication_refills": {
       const start = String(input.startDate || "");
       if (!/^\d{4}-\d{2}-\d{2}/.test(start)) return { error: "startDate (YYYY-MM-DD) is required to schedule refills." };
@@ -10790,19 +10838,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "search_documents": {
       const allProfiles = await storage.getProfiles();
-      // Word-boundary matcher (same as get_profile_data) — the old naive
-      // first-includes match let "Honda" resolve to "Progressive Auto
-      // Insurance - Honda CR-V 2021" (a subscription with no documents)
-      // instead of the Honda CR-V vehicle, producing a false "no documents
-      // attached" (2026-07 license-plate regression report).
-      const rootProfileDocs = matchProfileByName(allProfiles, input.forProfile || "");
-      if (!rootProfileDocs) {
-        return { error: `Profile "${input.forProfile}" not found.` };
+      // forProfile is OPTIONAL — documents are first-class knowledge sources
+      // and many (bank statements, citations, unfiled paperwork) aren't
+      // linked to any profile. No profile ⇒ search the whole account.
+      let rootProfileDocs: any = null;
+      if (input.forProfile && String(input.forProfile).trim()) {
+        // Word-boundary matcher (same as get_profile_data) — the old naive
+        // first-includes match let "Honda" resolve to "Progressive Auto
+        // Insurance - Honda CR-V 2021" (a subscription with no documents)
+        // instead of the Honda CR-V vehicle, producing a false "no documents
+        // attached" (2026-07 license-plate regression report).
+        rootProfileDocs = matchProfileByName(allProfiles, input.forProfile);
+        if (!rootProfileDocs) {
+          return { error: `Profile "${input.forProfile}" not found — retry WITHOUT forProfile to search all documents.` };
+        }
       }
 
       // Collect profile IDs to search (root + descendants if includeChildAssets)
-      const profileIdsToSearch = new Set<string>([rootProfileDocs.id]);
-      if (input.includeChildAssets) {
+      const profileIdsToSearch = new Set<string>(rootProfileDocs ? [rootProfileDocs.id] : []);
+      if (rootProfileDocs && input.includeChildAssets) {
         // BFS over descendants
         const queueDocs = [rootProfileDocs.id];
         const visitedDocs = new Set<string>();
@@ -10824,10 +10878,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const allDocs = await storage.getDocuments();
       const queryLower = (input.query || "").toLowerCase().trim();
       const matchedDocs = allDocs.filter(d => {
-        const linkedProfiles: string[] = (d as any).linkedProfiles || [];
-        const isLinked = linkedProfiles.some(pid => profileIdsToSearch.has(pid));
-        if (!isLinked) return false;
-        if (queryLower && !d.name.toLowerCase().includes(queryLower) && !(d.type || "").toLowerCase().includes(queryLower)) return false;
+        if (profileIdsToSearch.size > 0) {
+          const linkedProfiles: string[] = (d as any).linkedProfiles || [];
+          if (!linkedProfiles.some(pid => profileIdsToSearch.has(pid))) return false;
+        }
+        if (queryLower
+          && !d.name.toLowerCase().includes(queryLower)
+          && !(d.type || "").toLowerCase().includes(queryLower)
+          // CONTENT match: extracted field keys/values ("policy number",
+          // "Honda", a plate) find the doc even when its NAME doesn't.
+          && !docContentMatches((d as any).extractedData, queryLower)) return false;
         return true;
       });
 
@@ -10836,7 +10896,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       for (const p of allProfiles) profileIdToName[p.id] = p.name;
 
       return {
-        profileName: rootProfileDocs.name,
+        profileName: rootProfileDocs?.name || "(all documents)",
         includeChildAssets: input.includeChildAssets || false,
         totalCount: matchedDocs.length,
         documents: matchedDocs.map(d => {
@@ -13220,6 +13280,7 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   set_notification_preferences: "update_entity",
   log_medication_dose: "log_entry",
   skip_medication_dose: "log_entry",
+  link_document: "link_entities",
   create_reminder: "create_reminder",
   update_reminder: "update_entity",
   delete_reminder: "delete_entity",

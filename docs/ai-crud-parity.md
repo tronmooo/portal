@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**125 operations** — ✅ 82 covered · 🆕 33 added · 🔜 0 planned · 🚫 10 excluded by design.
+**126 operations** — ✅ 82 covered · 🆕 34 added · 🔜 0 planned · 🚫 10 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -187,6 +187,7 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Search / open / retrieve | Documents list + search | `search_documents`, `open_document`, `retrieve_document` | ✅ covered |  |
 | Email document out | Document viewer → Email | — | 🚫 excluded | Sends content to an external recipient — outward-facing action kept behind an explicit UI click. |
 | Replace file binary | Document viewer → Replace | — | 🚫 excluded | Binary file upload — not expressible as a chat command. |
+| Link to profile/asset | Document card → link | `link_document` | 🆕 added |  |
 
 ### Journal
 

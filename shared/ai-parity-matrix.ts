@@ -199,6 +199,7 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Notification", operation: "Mark read / mute preferences", ui: "Notification bell", aiTools: ["mark_notifications_read", "set_notification_preferences"], status: "added" },
   { entity: "Medication", operation: "Log / skip doses", ui: "Health → medication tracker entries", aiTools: ["log_medication_dose", "skip_medication_dose"], status: "added" },
   { entity: "Medication", operation: "Adherence / dose history", ui: "Health → medication tracker", aiTools: ["get_missed_doses", "get_dose_history"], status: "added" },
+  { entity: "Document", operation: "Link to profile/asset", ui: "Document card → link", aiTools: ["link_document"], status: "added" },
 
   // ── App-level operations excluded by design ────────────────────────────────
   { entity: "Settings", operation: "Customize dashboard layout", ui: "Dashboard → Customize", aiTools: ["configure_dashboard_sections"], status: "added" },
