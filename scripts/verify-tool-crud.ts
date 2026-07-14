@@ -407,6 +407,22 @@ const STEPS: Step[] = [
     verify: async () => true,
     verifyReply: (reply) => /2027|March/i.test(reply) && !/couldn't find|no document/i.test(reply),
   },
+  {
+    batch: "V", tool: "driver's license number (user's exact report)",
+    seed: async () => {
+      await seedPost("/documents", {
+        name: `${TAG}_dl Driver License`,
+        type: "drivers_license",
+        mimeType: "text/plain",
+        fileData: "",
+        extractedData: { firstName: "Smoke", lastName: "Test", licenseNumber: "S226-000-11-222-0", class: "E", sex: "M", expirationDate: "2034-03-12" },
+        linkedProfiles: [],
+      });
+    },
+    message: `What is my driver's license number?`,
+    verify: async () => true,
+    verifyReply: (reply) => /S226-?000-?11-?222-?0/i.test(reply),
+  },
 
   // ── Batch A — Finance ──────────────────────────────────────────────────────
   {
