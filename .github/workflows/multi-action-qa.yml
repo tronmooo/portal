@@ -1,0 +1,54 @@
+name: Multi-action AI chat QA
+
+# On-demand proof that one chat message with 5/10/20 discrete actions executes
+# end-to-end (AI -> tools -> DB -> REST read-back -> fresh-session refresh)
+# against a real deployment. Runs from a GitHub runner because the authoring
+# environment's egress policy blocks *.vercel.app preview URLs.
+#
+# Push-trigger: scoped to the fix branch so pushing the suite both ships and
+# executes it (same pattern as live-e2e.yml — MCP can't dispatch workflows).
+on:
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "API base to test (default: branch preview deployment)"
+        required: false
+  push:
+    branches: ["claude/ai-chat-multi-action-fix-qzl64e"]
+    paths:
+      - "scripts/verify-multi-action.ts"
+      - ".github/workflows/multi-action-qa.yml"
+
+env:
+  PREVIEW_ORIGIN: https://portal-git-claude-ai-chat-multi-actio-0bd030-tronmooos-projects.vercel.app
+
+jobs:
+  multi-action-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+
+      - name: Wait for the preview deployment of this commit
+        run: |
+          echo "Waiting for $PREVIEW_ORIGIN to serve sha=$GITHUB_SHA"
+          for i in $(seq 1 40); do
+            body=$(curl -sS --max-time 20 "$PREVIEW_ORIGIN/api/version" || echo "")
+            echo "poll $i: $body"
+            if echo "$body" | grep -q "$GITHUB_SHA"; then
+              echo "Preview is live on this commit."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "Preview never reached this commit — testing whatever is deployed." >&2
+
+      - name: Run 5/10/20-action verification suite
+        env:
+          SMOKE_API_BASE: ${{ github.event.inputs.api_base || 'https://portal-git-claude-ai-chat-multi-actio-0bd030-tronmooos-projects.vercel.app/api' }}
+        run: npx tsx scripts/verify-multi-action.ts
