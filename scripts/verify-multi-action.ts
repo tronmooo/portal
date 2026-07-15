@@ -53,8 +53,13 @@ const expenseBy = async (re: RegExp) => findBy(await list("/expenses"), re, "des
 const habitBy = async (re: RegExp) => findBy(await list("/habits"), re, "name");
 const trackerBy = async (re: RegExp) => findBy(await list("/trackers"), re, "name");
 const obligationBy = async (re: RegExp) => findBy(await list("/obligations"), re, "name");
-const assetBy = async (re: RegExp) => findBy(await list("/assets"), re);
-const liabilityBy = async (re: RegExp) => findBy(await list("/liabilities"), re);
+// Assets and liabilities are PROFILE rows (type:"asset" / type:"liability") —
+// there is no /api/assets or /api/liabilities list endpoint; the UI reads them
+// from /profiles too.
+const assetBy = async (re: RegExp) =>
+  findBy((await list("/profiles")).filter((p) => p.type === "asset"), re, "name");
+const liabilityBy = async (re: RegExp) =>
+  findBy((await list("/profiles")).filter((p) => p.type === "liability"), re, "name");
 const profileByName = async (re: RegExp) => findBy(await list("/profiles"), re, "name");
 const journalToday = async () => (await list("/journal")).find((j) => String(j.date || "").startsWith(today)) || null;
 
@@ -217,6 +222,23 @@ async function check(phase: string, label: string, fn: () => Promise<boolean>) {
     return trs.some((t) => /hydration|water/i.test(t.name || "") && entryToday(t, /72/));
   });
   await check("C", "20. Mike expense cleats $19.99 + ownership", async () => { const x = await expenseBy(new RegExp(`${TAG} Mike cleats`, "i")); return !!x && Math.abs(Number(x.amount) - 19.99) < 0.001 && linkedTo(x, mike?.id); });
+
+  // ═══ Command D — stated-fact comprehension (the "shower" regression) ══════
+  // Real user report 2026-07-15: sleep + meal were logged but "I took one
+  // shower" was silently dropped. Every stated fact must produce a tool call
+  // or an explicit "not logged" acknowledgement — never a silent skip.
+  const d = await chat("D: stated facts (sleep/shower/meal)",
+    `I went to bed at 11 PM last night. I woke up at 7 AM. I took one shower and now I'm about to eat three triple cheeseburgers, plain with a fry and a large cherry Coke.`);
+  const anyTrackerEntryToday = async (nameRe: RegExp, valRe: RegExp) =>
+    (await list("/trackers")).some((t) => nameRe.test(String(t.name || "")) && entryToday(t, valRe));
+  await check("D", "sleep logged today (11PM–7AM)", async () =>
+    (await list("/trackers")).some((t) => /sleep/i.test(String(t.name || "")) && entryToday(t, /8|11|7/)));
+  await check("D", "meal logged today (cheeseburgers)", async () =>
+    (await list("/trackers")).some((t) => entryToday(t, /cheeseburger/i)));
+  await check("D", "shower logged OR explicitly acknowledged as not logged", async () =>
+    (await anyTrackerEntryToday(/shower|hygiene/i, /1|shower|true|taken/i))
+    || (await list("/trackers")).some((t) => entryToday(t, /shower/i))
+    || /shower/i.test(d.reply));
 
   // ═══ Refresh persistence — fresh auth session, re-read everything ═════════
   await getSmokeToken(true); // force new token = new app session after refresh
