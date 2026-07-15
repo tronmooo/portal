@@ -4498,6 +4498,13 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone" }: { filterId
     queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
   });
+  // Chat-created reminders ("remind me to take evening medication") must show
+  // in the cross-app Upcoming feed, not only in the Executive briefing's
+  // Reminders section (user report 2026-07-15).
+  const { data: reminders = [] } = useQuery<any[]>({
+    queryKey: ["/api/reminders", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/reminders${profileParam}`).then(r => r.json()),
+  });
 
   const [entityFilter, setEntityFilter] = useState<"all" | UpcomingEntityKind>("all");
   const [pins, setPins] = useState<Set<string>>(() => loadUpcomingPins());
@@ -4512,8 +4519,8 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone" }: { filterId
   };
 
   const all = useMemo(() => aggregateUpcomingDates({
-    profiles, documents, tasks, events, obligations, goals,
-  }), [profiles, documents, tasks, events, obligations, goals]);
+    profiles, documents, tasks, events, obligations, goals, reminders,
+  }), [profiles, documents, tasks, events, obligations, goals, reminders]);
 
   const filtered = useMemo(() => {
     let items = all;

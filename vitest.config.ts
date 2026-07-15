@@ -82,6 +82,7 @@ export default defineConfig({
       'tests/ai-button-parity.test.ts',
       'tests/action-split.test.ts',
       'tests/bulk-extraction-normalize.test.ts',
+      'tests/upcoming-reminders.test.ts',
       'tests/habit-intent.test.ts',
       'tests/dashboard-buttons.test.ts',
       'tests/design-kit.test.tsx',

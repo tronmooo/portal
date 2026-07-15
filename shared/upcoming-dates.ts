@@ -70,6 +70,7 @@ export type UpcomingCategory =
   | "investment_maturity"
   | "court_date"
   | "legal_filing"
+  | "reminder"
   | "custom";
 
 export type UpcomingEntityKind =
@@ -167,6 +168,7 @@ export const CATEGORY_LABELS: Record<UpcomingCategory, string> = {
   investment_maturity: "Investment Maturity",
   court_date: "Court Date",
   legal_filing: "Legal Filing",
+  reminder: "Reminder",
   custom: "Custom Date",
 };
 
@@ -214,6 +216,7 @@ export const CATEGORY_ICONS: Record<UpcomingCategory, string> = {
   investment_maturity: "📈",
   court_date: "⚖️",
   legal_filing: "📋",
+  reminder: "⏰",
   custom: "📌",
 };
 
@@ -417,6 +420,8 @@ interface AggregatorInputs {
   events?: any[];
   obligations?: any[];
   goals?: any[];
+  /** Rows from /api/reminders — { id, title, fireAt, firedAt?, profileId? }. */
+  reminders?: any[];
 }
 
 function profileHref(p: any): string {
@@ -664,6 +669,40 @@ function extractObligations(obligations: any[]): UpcomingDate[] {
   return out;
 }
 
+function extractReminders(reminders: any[]): UpcomingDate[] {
+  const out: UpcomingDate[] = [];
+  const today = todayISO();
+  for (const r of reminders || []) {
+    if (!r || r.firedAt || r.deletedAt) continue; // fired = handled, done = soft-deleted
+    if (!r.fireAt) continue;
+    const fire = new Date(r.fireAt);
+    if (isNaN(fire.getTime())) continue;
+    // fireAt is a timestamp; Upcoming works in local calendar days.
+    const next = isoFromDate(fire);
+    if (parseDate(next)!.getTime() < parseDate(today)!.getTime()) continue;
+    const daysUntil = daysBetween(today, next);
+    const time = fire.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    out.push({
+      id: hashId(["reminder", r.id, next]),
+      sourceId: r.id,
+      category: "reminder",
+      entityKind: "other",
+      title: r.title || "Reminder",
+      subtitle: time,
+      nextDate: next,
+      daysUntil,
+      urgency: classifyUrgency(daysUntil),
+      timeframe: classifyTimeframe(daysUntil),
+      recurring: false,
+      href: `#/calendar`,
+      relatedProfileId: r.profileId || undefined,
+      needsActionSoon: daysUntil <= 1,
+      icon: CATEGORY_ICONS.reminder,
+    });
+  }
+  return out;
+}
+
 function extractGoals(goals: any[]): UpcomingDate[] {
   const out: UpcomingDate[] = [];
   const today = todayISO();
@@ -725,6 +764,7 @@ export function aggregateUpcomingDates(
   all.push(...extractEvents(input.events || []));
   all.push(...extractObligations(input.obligations || []));
   all.push(...extractGoals(input.goals || []));
+  all.push(...extractReminders(input.reminders || []));
 
   // First pass: dedupe by id (recurrence rolls + explicit calendar entries may collide).
   const byId = new Map<string, UpcomingDate>();
@@ -754,11 +794,22 @@ export function aggregateUpcomingDates(
     if (preferIncoming) bySemantic.set(semKey, item);
   }
 
+  // Third pass: chat reminders are mirrored onto the calendar as companion
+  // events (create_reminder in the AI engine), so the same "take evening
+  // medication" can arrive both as a calendar_event and as a reminder row.
+  // Keep the event (richer category/links) and drop the duplicate reminder.
+  const eventTitleKeys = new Set(
+    [...bySemantic.values()]
+      .filter(u => u.category !== "reminder" && u.entityKind === "event")
+      .map(u => `${u.title.trim().toLowerCase()}::${u.nextDate}`),
+  );
+
   const today = todayISO();
   const todayMs = parseDate(today)!.getTime();
   const filtered = [...bySemantic.values()].filter(u => {
     const ms = parseDate(u.nextDate)?.getTime();
     if (ms === undefined || ms < todayMs) return false;
+    if (u.category === "reminder" && eventTitleKeys.has(`${u.title.trim().toLowerCase()}::${u.nextDate}`)) return false;
     // Reminder window — drop anything farther than windowDays out.
     return u.daysUntil <= windowDays;
   });

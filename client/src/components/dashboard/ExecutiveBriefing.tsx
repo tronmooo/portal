@@ -254,7 +254,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   const projects = (goals || []).filter((g: any) => g.status === "active" || !g.status).slice(0, 8);
   const activity = (stats?.recentActivity || []).slice(0, 8);
   const notes = (journal || []).slice(0, 4);
-  const activeReminders = (Array.isArray(reminders) ? reminders : []).filter((r: any) => !r.completed && !r.dismissed).slice(0, 8);
+  // Reminder rows carry { title, fireAt, firedAt } — there is no completed/
+  // dismissed field (done = soft-delete, fired = firedAt set). Un-fired rows
+  // are the active ones; sort soonest-first so the next reminder leads.
+  const activeReminders = (Array.isArray(reminders) ? reminders : [])
+    .filter((r: any) => !r.firedAt)
+    .sort((a: any, b: any) => new Date(a.fireAt || 0).getTime() - new Date(b.fireAt || 0).getTime())
+    .slice(0, 8);
   const notifs = (Array.isArray(notifications) ? notifications : []).filter((n: any) => !n.dismissed);
   const alerts = notifs.filter((n: any) => n.severity === "critical").slice(0, 6);
   const infoNotifs = notifs.filter((n: any) => n.severity !== "critical").slice(0, 6);
@@ -393,10 +399,20 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
         <Section id="reminders" title="Reminders" count={activeReminders.length} testId="brief-reminders" defaultOpen={activeReminders.length > 0}>
           {activeReminders.length === 0 ? <Empty label="No reminders." /> : (
             <div className="divide-y divide-border/30">
-              {activeReminders.map((r: any) => (
-                <Row key={r.id} cells={[r.dueDate ? dayLabel(String(r.dueDate).slice(0, 10), todayStr) : "—", r.title || r.message || r.content]}
-                  onClick={() => setPopup("reminders")} />
-              ))}
+              {activeReminders.map((r: any) => {
+                // Reminders fire at a timestamp (fireAt), not a bare date.
+                const fire = r.fireAt ? new Date(r.fireAt) : null;
+                const when = fire && !isNaN(fire.getTime())
+                  ? dayLabel(fire.toLocaleDateString("en-CA"), todayStr)
+                  : "—";
+                const time = fire && !isNaN(fire.getTime())
+                  ? fire.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+                  : "";
+                return (
+                  <Row key={r.id} cells={[when, r.title || r.message || r.content, time]}
+                    onClick={() => setPopup("reminders")} />
+                );
+              })}
             </div>
           )}
         </Section>
