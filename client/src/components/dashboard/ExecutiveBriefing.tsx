@@ -13,9 +13,10 @@ import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ChevronDown } from "lucide-react";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
+import { BillsPopup, EventsPopup, DocsPopup, ProjectsPopup, NotesPopup, RemindersPopup } from "@/components/dashboard/BriefingPopups";
 import type { DashboardStats } from "@shared/schema";
 
-type PopupKind = "tasks" | "habits" | null;
+type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | "projects" | "notes" | "reminders" | null;
 
 // Per-section accent colors (HSL) — the "colorful, visually organized" pass.
 const ACCENTS: Record<string, string> = {
@@ -250,7 +251,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     else if (n.entityType === "profile" && n.entityId) navigate(`/profiles/${n.entityId}`);
     else if (n.entityType === "task") setPopup("tasks");
     else if (n.entityType === "habit") setPopup("habits");
-    else navigate("/calendar");
+    else setPopup("events");
   };
 
   // ── Executive Score (transparent derivation, presentation-only): start at
@@ -274,12 +275,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   if (overdueTasks.length === 0) aiBrief.push({ text: "No overdue tasks.", tone: "pos" });
   else aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => setPopup("tasks") });
   const soonestDoc = docs.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-  if (soonestDoc) aiBrief.push({ text: `${soonestDoc.name || soonestDoc.fieldName || "A document"} expires in ${soonestDoc.daysUntil} days.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => soonestDoc.documentId && navigate(`/documents/${soonestDoc.documentId}`) });
+  if (soonestDoc) aiBrief.push({ text: `${soonestDoc.name || soonestDoc.fieldName || "A document"} expires in ${soonestDoc.daysUntil} days.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => setPopup("docs") });
   if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => setPopup("habits") });
   const soonestBill = bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) due ${soonestBill.daysUntil === 0 ? "today" : `in ${soonestBill.daysUntil}d`}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => navigate("/dashboard/finance") });
+  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) due ${soonestBill.daysUntil === 0 ? "today" : `in ${soonestBill.daysUntil}d`}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => setPopup("bills") });
   for (const n of alerts.slice(0, 2)) aiBrief.push({ text: n.title, tone: "neg", go: () => goNotif(n) });
-  if (birthdays[0]) aiBrief.push({ text: `${birthdays[0].title} in ${daysLeft(birthdays[0].date.slice(0, 10))} days.`, tone: "warn", go: () => navigate("/calendar") });
+  if (birthdays[0]) aiBrief.push({ text: `${birthdays[0].title} in ${daysLeft(birthdays[0].date.slice(0, 10))} days.`, tone: "warn", go: () => setPopup("events") });
 
   return (
     <div data-testid="executive-briefing">
@@ -288,10 +289,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
         <StatTile label="Score" value={hasScoreInputs ? String(score) : "—"} sub={hasScoreInputs ? `${scoreLabel} · ${overdueTasks.length} critical` : "No data yet"} accent={!hasScoreInputs ? "240 10% 60%" : score >= 90 ? "155 65% 45%" : score >= 75 ? "43 96% 56%" : "0 72% 58%"} onClick={() => setPopup("tasks")} testId="brief-stat-score" />
         <StatTile label="Tasks" value={String(pending.length)} sub={`${agendaTasks.length} today · ${overdueTasks.length} overdue`} accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
         <StatTile label="Habits" value={`${habitRows.length - missedCount}/${habitRows.length}`} sub={missedCount > 0 ? `${missedCount} still due` : "all done"} accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
-        <StatTile label="Bills" value={String(bills.length)} sub={`$${Math.round(billsUpcomingTotal).toLocaleString()} upcoming`} accent={ACCENTS.bills} onClick={() => navigate("/dashboard/finance")} testId="brief-stat-bills" />
-        <StatTile label="Docs" value={String(docs.length)} sub={docs.length ? "expiring soon" : "all good"} accent={ACCENTS.docs} onClick={() => navigate("/linked?tab=documents")} testId="brief-stat-docs" />
-        <StatTile label="Events" value={String(eventCount)} sub="next 14 days" accent={ACCENTS.calendar} onClick={() => navigate("/calendar")} testId="brief-stat-events" />
-        <StatTile label="Projects" value={String(projects.length)} sub={`${doneToday} done today`} accent={ACCENTS.projects} onClick={() => navigate("/goals")} testId="brief-stat-projects" />
+        <StatTile label="Bills" value={String(bills.length)} sub={`$${Math.round(billsUpcomingTotal).toLocaleString()} upcoming`} accent={ACCENTS.bills} onClick={() => setPopup("bills")} testId="brief-stat-bills" />
+        <StatTile label="Docs" value={String(docs.length)} sub={docs.length ? "expiring soon" : "all good"} accent={ACCENTS.docs} onClick={() => setPopup("docs")} testId="brief-stat-docs" />
+        <StatTile label="Events" value={String(eventCount)} sub="next 14 days" accent={ACCENTS.calendar} onClick={() => setPopup("events")} testId="brief-stat-events" />
+        <StatTile label="Projects" value={String(projects.length)} sub={`${doneToday} done today`} accent={ACCENTS.projects} onClick={() => setPopup("projects")} testId="brief-stat-projects" />
       </div>
 
       <div className="md:columns-2 xl:columns-3 gap-2">
@@ -316,7 +317,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
                 <Row key={i.id} testId={`brief-agenda-${i.id}`}
                   cells={[i.time || (i.allDay ? "all day" : "today"), i.title, i.type]}
                   urgent={i.type === "bill" || i.type === "obligation"}
-                  onClick={() => i.type === "task" ? setPopup("tasks") : navigate("/calendar")} />
+                  onClick={() => i.type === "task" ? setPopup("tasks") : setPopup("events")} />
               ))}
               {agendaTasks.map((t: any) => (
                 <Row key={t.id} testId={`brief-agenda-task-${t.id}`}
@@ -377,7 +378,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
             <div className="divide-y divide-border/30">
               {activeReminders.map((r: any) => (
                 <Row key={r.id} cells={[r.dueDate ? dayLabel(String(r.dueDate).slice(0, 10), todayStr) : "—", r.title || r.message || r.content]}
-                  onClick={() => navigate("/calendar")} />
+                  onClick={() => setPopup("reminders")} />
               ))}
             </div>
           )}
@@ -388,7 +389,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
             <div className="divide-y divide-border/30">
               {birthdays.map((i: any) => (
                 <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
-                  onClick={() => navigate("/calendar")} />
+                  onClick={() => setPopup("events")} />
               ))}
             </div>
           )}
@@ -399,7 +400,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
             <div className="divide-y divide-border/30">
               {appointments.map((i: any) => (
                 <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
-                  onClick={() => navigate("/calendar")} />
+                  onClick={() => setPopup("events")} />
               ))}
             </div>
           )}
@@ -410,7 +411,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
             <div className="divide-y divide-border/30">
               {importantDates.map((i: any) => (
                 <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
-                  onClick={() => navigate("/calendar")} />
+                  onClick={() => setPopup("events")} />
               ))}
             </div>
           )}
@@ -424,7 +425,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
                   cells={[d.expirationDate?.slice(5, 10) || "—", d.name || d.fieldName || "Document", `${d.daysUntil}d`]}
                   urgent={typeof d.daysUntil === "number" && d.daysUntil <= 21}
                   valueTone={typeof d.daysUntil === "number" && d.daysUntil <= 45 ? "warn" : undefined}
-                  onClick={() => d.documentId && navigate(`/documents/${d.documentId}`)} />
+                  onClick={() => setPopup("docs")} />
               ))}
             </div>
           )}
@@ -440,7 +441,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
                       cells={[b.status === "overdue" ? "overdue" : b.daysUntil === 0 ? "today" : `${b.daysUntil}d`, b.name, `$${Number(b.amount).toLocaleString()}`]}
                       urgent={b.status === "overdue" || b.daysUntil === 0}
                       valueTone="pos"
-                      onClick={() => b.linkedLiabilityId ? navigate(`/profiles/${b.linkedLiabilityId}`) : navigate("/dashboard/finance")} />
+                      onClick={() => setPopup("bills")} />
                   </div>
                   <button
                     onClick={() => payBill.mutate(b.id)}
@@ -461,7 +462,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
                 <div key={d.day}>
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-1">{d.day}</div>
                   {d.items.map((i: any) => (
-                    <Row key={i.id} cells={[i.time || "", i.title]} onClick={() => navigate("/calendar")} />
+                    <Row key={i.id} cells={[i.time || "", i.title]} onClick={() => setPopup("events")} />
                   ))}
                 </div>
               ))}
@@ -489,7 +490,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
                 <Row key={g.id}
                   cells={["goal", g.title, g.target ? `${Math.round(((g.current ?? 0) / g.target) * 100)}%` : ""]}
                   valueTone="pos"
-                  onClick={() => navigate("/goals")} />
+                  onClick={() => setPopup("projects")} />
               ))}
             </div>
           )}
@@ -510,7 +511,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
             <div className="divide-y divide-border/30">
               {notes.map((n: any) => (
                 <Row key={n.id} cells={[String(n.date || n.createdAt || "").slice(5, 10), String(n.content || "").slice(0, 90)]}
-                  onClick={() => navigate("/journal")} />
+                  onClick={() => setPopup("notes")} />
               ))}
             </div>
           )}
@@ -522,6 +523,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
           if a lazy chunk fetch would have failed. */}
       {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
+      {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={enhanced?.financeSnapshot?.upcomingBills || []} />}
+      {popup === "events" && <EventsPopup open onClose={() => setPopup(null)} items={tl} todayStr={todayStr} />}
+      {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={enhanced?.expiringDocuments || []} />}
+      {popup === "projects" && <ProjectsPopup open onClose={() => setPopup(null)} goals={goals} />}
+      {popup === "notes" && <NotesPopup open onClose={() => setPopup(null)} notes={(journal || []).slice(0, 20)} />}
+      {popup === "reminders" && <RemindersPopup open onClose={() => setPopup(null)} reminders={reminders} />}
     </div>
   );
 }

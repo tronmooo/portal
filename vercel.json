@@ -61,7 +61,7 @@
   ],
   "functions": {
     "api/index.js": {
-      "maxDuration": 300,
+      "maxDuration": 60,
       "memory": 1024
     }
   }

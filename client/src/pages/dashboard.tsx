@@ -5189,17 +5189,17 @@ function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton }: {
   if (showSkeleton) return <SkeletonGrid cols={3} rows={2} h="h-14" />;
   return (
     <div className="space-y-3" data-testid="household-dashboard">
-      {/* Everyone scope = the standard dashboard overview aggregated across all
-          profiles, WITHOUT the Budget card (budget is per-person and lives on
-          the personal dashboard). Net Worth + Cash Flow hero, then the KPI
-          tiles, then the shared/household sections. */}
-      <HeroKPISection enhanced={enhanced} stats={stats} filterMode="everyone" filterIds={[]} refetching={false} hideBudget />
-      {stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={[]} filterMode="everyone" /> : null}
-      {stats ? <ActionRequiredSection stats={stats} enhanced={enhanced} profileId={undefined} /> : null}
-      <ObligationsSection data={enhanced?.financeSnapshot?.upcomingBills || []} />
-      <TodaySection enhanced={enhanced} stats={stats} />
+      {/* Everyone scope = the SAME dense Executive briefing the personal
+          dashboards use (2026-07-15 user request: "make Everyone look like the
+          rest of the app"), aggregated across all profiles — every tile and
+          row opens its module's popup, exactly like the personal view.
+          Household-only extras (combined net-worth hero + per-person cards)
+          follow below the briefing. */}
+      <ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />
+      <HouseholdGroupHeader icon={Users} label="Household" />
+      <HouseholdHero allProfiles={allProfiles} />
+      <ProfileSummaryGrid allProfiles={allProfiles} />
       <AISummaryWidget stats={stats} enhanced={enhanced} filterMode="everyone" filterIds={[]} scopeLabel="Everyone" />
-      {stats ? <ActivitySection activities={stats.recentActivity} /> : null}
     </div>
   );
 }
