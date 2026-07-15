@@ -2947,12 +2947,24 @@ export default function ChatPage() {
                       const whoFor = action.data?.forProfile
                         ? String(action.data.forProfile).charAt(0).toUpperCase() + String(action.data.forProfile).slice(1)
                         : 'You';
-                      // Format values: "250 cal, 31g carbs, 4g protein"
+                      // Format values: "250 cal, 31g carbs, 4g protein".
+                      // Underscore keys are reserved metadata (_notes,
+                      // _enrichment); estimated values render with a ≈ so
+                      // the user always sees exact vs estimated distinctly.
+                      const enrichment = (action.data?.values as any)?._enrichment;
+                      const estimatedParts: string[] = enrichment?.estimated
+                        ? Object.entries(enrichment.estimated as Record<string, any>)
+                            .map(([k, pv]) => `≈${(pv as any)?.value} ${k} (est.)`)
+                            .slice(0, 3)
+                        : [];
                       const entryValues = isTrackerEntry && action.data?.values
-                        ? Object.entries(action.data.values as Record<string,any>)
-                            .filter(([k]) => k !== '_notes' && k !== 'item')
-                            .map(([k, v]) => `${v} ${k}`)
-                            .slice(0, 4).join(' · ')
+                        ? [
+                            ...Object.entries(action.data.values as Record<string,any>)
+                              .filter(([k]) => !k.startsWith('_') && k !== 'item')
+                              .map(([k, v]) => `${v} ${k}`)
+                              .slice(0, 4),
+                            ...estimatedParts,
+                          ].join(' · ')
                         : '';
                       const entryItem = isTrackerEntry && action.data?.values?.item
                         ? String(action.data.values.item) : '';

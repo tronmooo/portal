@@ -31,6 +31,17 @@ import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from 
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
+import { resolveCanonicalActivity } from "@shared/canonical-activity";
+import {
+  enrichWalkRunEntry,
+  enrichHydrationEntry,
+  enrichSleepEntry,
+  derivePersonalMetrics,
+  parseHeightToCm,
+  parseWeightToKg,
+  summarizeEnrichment,
+  type Enrichment,
+} from "@shared/estimation-engine";
 import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
@@ -2763,7 +2774,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         trackerName: { type: "string", description: "Name of the tracker — MUST be the specific activity: 'Basketball' for basketball, 'Tennis' for tennis, 'Running' for running, 'Soccer' for soccer, 'Swimming' for swimming, 'Yoga' for yoga. Never use 'Running' for a non-running sport." },
-        values: { type: "object", description: "Key-value pairs to log. ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
+        values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. OTHER SPORTS/ACTIVITIES: ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
         at: { type: "string", description: "Optional date/time the entry actually happened (ISO date, natural language like 'June 3 2025', or a bare clock time like '8:15 AM' which is treated as today at that time). ALWAYS set this when the user attaches a time to the action ('at 8:15 AM', 'this morning at 7', 'yesterday'). Omit for 'now'." },
@@ -4611,6 +4622,12 @@ Portol is a life OS with generic trackers. There is NO list of "supported" activ
 - "I went to the bathroom at 8:15 AM" → log_tracker_entry(trackerName:"Bathroom Visits", values:{count:1}, at:"8:15 AM")
 - "brushed my teeth" → Teeth Brushing; "vacuumed" → Vacuuming; "washed dishes" → Dishes; "practiced guitar for an hour" → Guitar Practice {duration:60}; "read for 45 minutes" → Reading {minutes:45}
 When the user attaches a clock time or date to an action, pass it via the at parameter. Substances, hygiene, bodily functions, chores, and hobbies are all first-class trackable domains — log them without commentary, hedging, or asking permission to "set up" tracking.
+
+━━━ NORMALIZATION & ESTIMATES (walking/running/steps/hydration/sleep) ━━━
+- ONE canonical tracker per activity: "I walked 1 mile", "I walked 2,100 steps", "walked for 22 minutes", "walked 1.6 kilometers" are ALL the "Walking" tracker (the server enforces this). Never create "Walking Distance"/"Steps Walked"/"Daily Walk" variants.
+- Pass only the explicit facts; the server's estimation engine converts units and derives the rest (steps from distance via the user's own stride/history, pace from distance+duration, calories from weight+pace) with per-value confidence.
+- ESTIMATE HONESTY: the tool result's estimateNote lists derived/estimated values. Reply like "Logged a 1-mile walk — about 2,150 steps and ~20 minutes based on your walking history." NEVER present an estimated number as something the user said, and NEVER invent numbers not in the tool result.
+- Explicit user values are never overwritten by estimates: "1 mile and 2,400 steps" saves BOTH exactly as given.
 - ACTIVITY ≠ HABIT: "I did / I took / I smoked / I went / I played" are ACTIVITY REPORTS → log_tracker_entry, ALWAYS — even when a habit with a similar name exists (on any profile). NEVER call checkin_habit or create_habit for them, never ask "did you mean the habit?", and never derail the rest of the message over a habit. Habits move ONLY on explicit language: "mark off X", "check in X", "completed my X habit", "make this a habit", "every day", "remind me".
 - NEVER DROP DETAILS: every number, unit, duration, count, method, and timestamp the user states MUST appear in the entry ("for an hour" → duration:60; "once" → count:1; "a blunt" → method:"blunt"; "at 8:15 AM" → at:"8:15 AM"). Losing a stated detail is a logging failure.
 - PROFILE OWNERSHIP: entries belong to the user (self) unless THIS message explicitly names someone else ("Rex threw up", "log water for Mom"). NEVER pick a profile from conversation history, from the active dashboard filter chatter, or from which profile happens to own a similar tracker/habit name.
@@ -6722,6 +6739,21 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       } catch { /* never block the primary log on the split guard */ }
 
       const trackers = await storage.getTrackers();
+
+      // ── CANONICAL ACTIVITY RESOLUTION (normalization layer, 2026-07-15) ──
+      // "Walking Distance", "Steps Walked", "Daily Walk" etc. are all ONE
+      // canonical Walking tracker — never separate trackers. Keep the raw
+      // name only when the user already has a custom tracker under it and
+      // no canonical tracker exists (don't strand their data).
+      const canonActivity = resolveCanonicalActivity(input.trackerName || "");
+      if (canonActivity && canonActivity.trackerName.toLowerCase() !== String(input.trackerName || "").toLowerCase()) {
+        const rawHasTracker = trackers.some(t => trackerNamesMatch(t.name, input.trackerName));
+        const canonHasTracker = trackers.some(t => trackerNamesMatch(t.name, canonActivity.trackerName));
+        if (!rawHasTracker || canonHasTracker) {
+          logger.info("ai", `Canonical activity: "${input.trackerName}" → "${canonActivity.trackerName}"`);
+          input.trackerName = canonActivity.trackerName;
+        }
+      }
       const trackerName = (input.trackerName || "").toLowerCase();
 
       // Resolve forProfile FIRST so we can match the right tracker
@@ -6755,6 +6787,55 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!targetProfileId) {
         const selfProfile = profiles.find(p => p.type === "self");
         if (selfProfile) targetProfileId = selfProfile.id;
+      }
+
+      // ── ESTIMATION / NORMALIZATION LAYER (2026-07-15) ──
+      // The model passes only what the user stated; deterministic code
+      // (shared/estimation-engine) converts units, derives exact values
+      // (distance + duration → pace = calculated) and estimates the rest
+      // (distance → steps via stride/history = estimated), with provenance,
+      // confidence, and an assumptions registry. Estimates NEVER overwrite
+      // explicit values, and all personal context (height, weight, walking
+      // history) comes from the TARGET profile only — never another profile.
+      let entryEnrichment: Enrichment | null = null;
+      try {
+        const canonType = canonActivity?.type;
+        input.values = input.values || {};
+        if (canonType === "walking" || canonType === "running") {
+          const targetProf: any = profiles.find(p => p.id === targetProfileId);
+          const pf = targetProf?.fields || {};
+          const heightCm = parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches);
+          const weightKg = parseWeightToKg(pf.weight ?? pf.weightLbs ?? pf.weight_lbs ?? pf.weightKg);
+          const histTracker = trackers.find(t => trackerNamesMatch(t.name, input.trackerName));
+          const histEntries = (histTracker?.entries || [])
+            .filter((e: any) => !e.profileId || e.profileId === targetProfileId)
+            .slice(0, 60);
+          const personal = derivePersonalMetrics(histEntries);
+          entryEnrichment = enrichWalkRunEntry(canonType, input.values, { heightCm, weightKg, personal });
+        } else if (canonType === "hydration") {
+          entryEnrichment = enrichHydrationEntry(input.values);
+        } else if (canonType === "sleep") {
+          entryEnrichment = enrichSleepEntry(input.values);
+          // A calculated sleep duration is exact — surface it as the primary
+          // hours field so the sleep card/chart reads it.
+          if (entryEnrichment.calculated.hours && input.values.hours == null) {
+            input.values.hours = entryEnrichment.calculated.hours.value;
+          }
+        }
+        if (entryEnrichment && (
+          Object.keys(entryEnrichment.calculated).length ||
+          Object.keys(entryEnrichment.estimated).length ||
+          Object.keys(entryEnrichment.canonical).length ||
+          entryEnrichment.assumptions.length
+        )) {
+          (input.values as any)._enrichment = entryEnrichment;
+          const note = summarizeEnrichment(entryEnrichment);
+          if (note) logger.info("ai", `Enrichment [${input.trackerName}]: ${note}`);
+        } else {
+          entryEnrichment = null;
+        }
+      } catch (e: any) {
+        logger.warn("ai", `Enrichment failed for "${input.trackerName}" (non-fatal): ${e?.message || e}`);
       }
 
       // Find the right tracker: prefer one linked to the target profile
@@ -6938,7 +7019,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const knownFieldNames = new Set((tracker.fields || []).map((f: any) => String(f.name).toLowerCase()));
         const unknownFields: string[] = [];
         for (const k of Object.keys(normalizedValues)) {
-          if (k === "_notes") continue;
+          if (k.startsWith("_")) continue; // reserved metadata (_notes, _enrichment)
           if (knownFieldNames.has(k.toLowerCase())) continue;
           unknownFields.push(k);
         }
@@ -7009,6 +7090,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           (entry as any).__unknownFields = droppedFields;
           (entry as any).__trackerName = tracker.name;
           (entry as any).__knownFields = [...knownFieldNames];
+        }
+        // Estimate honesty: give the model a ready-made summary so the reply
+        // says "estimated ≈2,150 steps", never presenting estimates as exact.
+        if (entry && entryEnrichment) {
+          const note = summarizeEnrichment(entryEnrichment);
+          if (note) (entry as any).estimateNote = `Derived/estimated (tell the user estimates are estimates): ${note}`;
         }
         return entry;
       }
@@ -7173,6 +7260,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Surface what was auto-created so callers (bulk path, chat UI) can
         // report "created a new X tracker" honestly.
         if (entry) (entry as any).__createdTracker = { id: newTracker.id, name: newTracker.name };
+        if (entry && entryEnrichment) {
+          const note = summarizeEnrichment(entryEnrichment);
+          if (note) (entry as any).estimateNote = `Derived/estimated (tell the user estimates are estimates): ${note}`;
+        }
         return entry;
       } catch (err: any) {
         const msg = err?.message || String(err);

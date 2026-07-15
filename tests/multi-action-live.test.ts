@@ -216,6 +216,45 @@ describe(`multi-action regression (${BASE})`, () => {
     await runTier(50);
   }, 600_000);
 
+  it("normalization: 'I walked one mile' → canonical Walking tracker, distance exact, steps/duration labeled estimates", async () => {
+    const res = await chat("I walked one mile.");
+    const trackers = await getTrackers();
+    const walking = trackers.find((x: any) => /^walking$/i.test(String(x.name)));
+    expect(walking, `no canonical Walking tracker; reply: ${res.reply?.slice(0, 300)}`).toBeTruthy();
+    const entry = (walking.entries || [])[0];
+    expect(entry, "walking entry missing").toBeTruthy();
+    // Distance saved exactly; NOT shoved into a steps field ("1 steps" bug).
+    expect(Number(entry.values?.distance ?? entry.values?.miles), "distance lost").toBe(1);
+    expect(entry.values?.steps, "explicit steps invented from thin air").not.toBe(1);
+    // Provenance rides with the entry; estimates are labeled with confidence.
+    const enrich = entry.values?._enrichment;
+    expect(enrich, "enrichment provenance missing").toBeTruthy();
+    if (enrich?.estimated?.steps) {
+      expect(enrich.estimated.steps.source).toBe("estimated");
+      expect(enrich.estimated.steps.confidence).toBeGreaterThan(0.3);
+    }
+    // The reply must not present estimated steps as exact user data.
+    expect(res.reply.toLowerCase()).not.toMatch(/you walked exactly/);
+    // Cleanup the shared canonical tracker's test entry.
+    await api("DELETE", `/trackers/${walking.id}/entries/${entry.id}`).catch(() => {});
+  }, 240_000);
+
+  it("normalization: variants land on ONE Walking tracker, explicit steps never overwritten", async () => {
+    await chat("I walked 2,100 steps.");
+    const res = await chat("I walked 1 mile and took 2,400 steps.");
+    const trackers = await getTrackers();
+    const walkers = trackers.filter((x: any) => /walk|steps/i.test(String(x.name)));
+    const canonical = walkers.filter((x: any) => /^walking$/i.test(String(x.name)));
+    expect(canonical.length, `expected one canonical Walking tracker, got: ${walkers.map((w: any) => w.name).join(", ")}`).toBe(1);
+    const entries = canonical[0].entries || [];
+    const both = entries.find((e: any) => Number(e.values?.steps) === 2400);
+    expect(both, `explicit 2,400 steps replaced by a formula; reply: ${res.reply?.slice(0, 200)}`).toBeTruthy();
+    expect(Number(both.values?.distance ?? both.values?.miles)).toBe(1);
+    for (const e of entries.slice(0, 4)) {
+      await api("DELETE", `/trackers/${canonical[0].id}/entries/${e.id}`).catch(() => {});
+    }
+  }, 300_000);
+
   it("Auto-Create Trackers OFF: skips unknown trackers, reports them, creates nothing", async () => {
     const set = await api("PUT", "/preferences/ai_auto_create_trackers", { value: "false" });
     expect(set.ok).toBe(true);

@@ -248,7 +248,7 @@ export function normalizeTrackerEntry(
   const exactClaimed = new Set<string>();
   let numericSourceCount = 0;
   for (const [k, v] of Object.entries(rawValues || {})) {
-    if (k === "_notes") continue;
+    if (k.startsWith("_")) continue; // reserved metadata keys (_notes, _enrichment)
     const lc = k.toLowerCase();
     const f = (tracker.fields || []).find(f => String(f.name).toLowerCase() === lc);
     if (f) exactClaimed.add(f.name);
@@ -259,7 +259,9 @@ export function normalizeTrackerEntry(
   const allowSingleNumericFallback = numericSourceCount <= 1;
 
   for (const [k, v] of Object.entries(rawValues || {})) {
-    if (k === "_notes") { out._notes = v; continue; }
+    // Reserved metadata keys pass through untouched: _notes (free text) and
+    // _enrichment (provenance/estimates from shared/estimation-engine).
+    if (k.startsWith("_")) { (out as any)[k] = v; continue; }
 
     // Resolve field name (value-aware: a non-numeric stray never gets mapped
     // onto a lone numeric field)
