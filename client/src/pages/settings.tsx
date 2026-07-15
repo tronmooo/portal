@@ -287,6 +287,10 @@ export default function SettingsPage() {
     queryKey: ["/api/preferences/ai_smart_routing"],
     queryFn: () => apiRequest("GET", "/api/preferences/ai_smart_routing").then(r => r.json()),
   });
+  const { data: prefAutoCreateTrackers } = useQuery<{ value: string | null }>({
+    queryKey: ["/api/preferences/ai_auto_create_trackers"],
+    queryFn: () => apiRequest("GET", "/api/preferences/ai_auto_create_trackers").then(r => r.json()),
+  });
 
   // (2026-05-24) Map retired Sonnet 4.5 saved preferences onto the current
   // Sonnet 4.6 so the Select displays the right option and the server doesn't
@@ -302,6 +306,7 @@ export default function SettingsPage() {
   const aiFastPath = prefFastPath?.value !== "false";
   const aiAutoExpense = prefAutoExpense?.value !== "false";
   const aiSmartRouting = prefSmartRouting?.value !== "false";
+  const aiAutoCreateTrackers = prefAutoCreateTrackers?.value !== "false";
 
   async function setAiPreference(key: string, value: string) {
     // Optimistic: reflect the new value immediately so the Switch/Select doesn't flicker back
@@ -753,6 +758,17 @@ export default function SettingsPage() {
               <Switch
                 checked={aiSmartRouting}
                 onCheckedChange={(checked) => setAiPreference("ai_smart_routing", String(checked))}
+              />
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between">
+              <div className="flex-1 mr-4">
+                <Label className="text-sm font-medium">Auto-Create Trackers</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">When you log something without an existing tracker, create one automatically</p>
+              </div>
+              <Switch
+                checked={aiAutoCreateTrackers}
+                onCheckedChange={(checked) => setAiPreference("ai_auto_create_trackers", String(checked))}
               />
             </div>
           </CardContent>

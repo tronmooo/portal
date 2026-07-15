@@ -1,0 +1,166 @@
+// Bulk multi-action extraction — pure pieces (prompt, schema, parsing,
+// reply building). No imports from ai-engine so this module stays
+// unit-testable (tests/bulk-extraction-normalize.test.ts) and free of
+// circular dependencies; the executor lives in server/ai-engine.ts
+// (runBulkLogPath) because it needs the engine's private tool plumbing.
+import type Anthropic from "@anthropic-ai/sdk";
+
+/** Write tools the extractor may emit. Anything else is dropped. */
+export const BULK_ACTION_TOOLS = [
+  "log_tracker_entry",
+  "create_expense",
+  "create_task",
+  "create_event",
+  "create_reminder",
+  "checkin_habit",
+  "journal_entry",
+  "log_medication_dose",
+  "log_income",
+] as const;
+export type BulkActionTool = (typeof BULK_ACTION_TOOLS)[number];
+
+export interface ExtractedOperation {
+  tool: BulkActionTool;
+  input: Record<string, any>;
+  raw: string;
+}
+
+export interface OperationOutcome {
+  index: number;
+  raw: string;
+  tool: string;
+  status: "ok" | "failed" | "skipped" | "deduped";
+  error?: string;
+  entityId?: string;
+  trackerName?: string;
+  createdTracker?: { id: string; name: string };
+}
+
+/** Hard cap on operations per message — matches the engine's MAX_TOOL_CALLS. */
+export const MAX_BULK_OPERATIONS = 60;
+
+export const EXTRACT_ACTIONS_TOOL: Anthropic.Messages.Tool = {
+  name: "extract_actions",
+  description:
+    "Extract EVERY independent action from the user's message as a separate operation. Never merge, drop, or skip an action.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      operations: {
+        type: "array",
+        description: "One entry per independent action in the message, in order.",
+        items: {
+          type: "object",
+          properties: {
+            tool: {
+              type: "string",
+              enum: [...BULK_ACTION_TOOLS],
+              description: "Which write tool handles this action.",
+            },
+            input: {
+              type: "object",
+              description: "The exact input object for that tool.",
+            },
+            raw: {
+              type: "string",
+              description: "The clause from the user's message this operation came from, verbatim.",
+            },
+          },
+          required: ["tool", "input", "raw"],
+        },
+      },
+    },
+    required: ["operations"],
+  },
+};
+
+export function buildExtractionSystemPrompt(opts: {
+  nowISO: string;
+  timezone?: string;
+  trackerNames: string[];
+  profileNames: string[];
+  habitNames: string[];
+}): string {
+  const trackers = opts.trackerNames.slice(0, 150).join(", ") || "(none yet)";
+  const habits = opts.habitNames.slice(0, 60).join(", ") || "(none)";
+  const profiles = opts.profileNames.slice(0, 60).join(", ") || "(none)";
+  return `You are the action extractor for Portol, a life-tracking OS. The user sent one message describing MANY things they did. Convert EVERY independent action into one operation via the extract_actions tool. NEVER drop, merge, or refuse an action — there is no list of "supported" activities; anything the user did is loggable.
+
+NOW: ${opts.nowISO}${opts.timezone ? ` (user timezone: ${opts.timezone})` : ""}
+
+ROUTING RULES:
+- Default: log_tracker_entry(trackerName, values, at?, notes?, forProfile?). trackerName = the literal activity, capitalized ("Soccer", "Cannabis", "Shower", "Bathroom Visits", "Guitar Practice", "Reading", "Vacuuming", "Dishes"). Reuse an EXISTING tracker name from the list below when the activity matches it.
+- values: include what the user stated — duration (minutes), distance, quantity, intensity. Fitness/sport entries need { activityType, duration?, caloriesBurned?, intensity? }. Water/hydration → trackerName "Hydration", values:{ ounces }. Food eaten → trackerName "Nutrition", values:{ item, calories? }. Coffee/caffeine drunk → "Coffee", values:{ cups:1 }. Sleep ("went to bed at X", "woke up at Y", "slept N hours") → trackerName "Sleep", values:{ hours? , bedtime?, wakeTime? }. Weight reading → "Weight", values:{ weight }.
+- Counts default to 1: a bare "took a shower" → values:{ count: 1 }.
+- Medications/supplements ("took lisinopril", "took fish oil") → log_tracker_entry with trackerName EXACTLY the item name ("Lisinopril", "Fish Oil"), values:{ taken: true, dosage?, unit? }. One operation PER item.
+- Money spent or a bill paid ("paid my electric bill", "bought groceries $40") → create_expense({ amount?, description, category? }). If no amount is stated, omit amount... if the tool requires an amount, still emit the operation with your best reading of the clause.
+- A future to-do ("need to call the dentist") → create_task({ title, dueDate? }). An appointment with a time → create_event.
+- "at 8:15 AM" style times → pass through the at parameter (bare time strings are fine).
+- Journaling as an activity ("journaled") → log_tracker_entry trackerName "Journaling". An actual journal passage ("journal that today was great: ...") → journal_entry.
+- If the action clearly matches one of the user's existing habits by name, use checkin_habit({ name }) INSTEAD of a tracker entry.
+- forProfile: set ONLY when the action is about someone else ("Rex", "Mom").
+
+EXISTING TRACKERS: ${trackers}
+EXISTING HABITS: ${habits}
+PROFILES: ${profiles}
+
+Return EVERY action — a 20-sentence message yields ~20 operations. Echo each source clause in raw.`;
+}
+
+/** Validate + normalize whatever the model returned. Drops non-whitelisted
+ * tools and malformed rows; caps the total. */
+export function parseExtractedOperations(toolInput: any): ExtractedOperation[] {
+  const rows = Array.isArray(toolInput?.operations) ? toolInput.operations : [];
+  const ops: ExtractedOperation[] = [];
+  for (const row of rows) {
+    if (ops.length >= MAX_BULK_OPERATIONS) break;
+    if (!row || typeof row !== "object") continue;
+    const tool = String(row.tool || "");
+    if (!(BULK_ACTION_TOOLS as readonly string[]).includes(tool)) continue;
+    if (!row.input || typeof row.input !== "object" || Array.isArray(row.input)) continue;
+    ops.push({
+      tool: tool as BulkActionTool,
+      input: row.input as Record<string, any>,
+      raw: typeof row.raw === "string" && row.raw.trim() ? row.raw.trim() : summarizeInput(row.input),
+    });
+  }
+  return ops;
+}
+
+function summarizeInput(input: Record<string, any>): string {
+  return String(input.trackerName || input.title || input.description || input.name || "action");
+}
+
+function opLabel(op: OperationOutcome): string {
+  return op.trackerName || op.raw || op.tool;
+}
+
+/** Deterministic reply enumerating every operation — never claims more or
+ * less than what actually happened. */
+export function buildBulkReply(ops: OperationOutcome[], createdTrackers: Array<{ id: string; name: string }>): string {
+  const ok = ops.filter((o) => o.status === "ok");
+  const deduped = ops.filter((o) => o.status === "deduped");
+  const failed = ops.filter((o) => o.status === "failed");
+  const skipped = ops.filter((o) => o.status === "skipped");
+
+  const lines: string[] = [];
+  if (ok.length > 0) {
+    lines.push(`Logged ${ok.length} of ${ops.length} actions:`);
+    for (const o of ok) lines.push(`✅ ${opLabel(o)}`);
+  }
+  if (deduped.length > 0) {
+    for (const o of deduped) lines.push(`↩️ ${opLabel(o)} — already logged just now, kept the existing entry`);
+  }
+  if (createdTrackers.length > 0) {
+    lines.push(`Created ${createdTrackers.length} new tracker${createdTrackers.length > 1 ? "s" : ""}: ${createdTrackers.map((t) => t.name).join(", ")}.`);
+  }
+  if (failed.length > 0) {
+    lines.push(`⚠️ ${failed.length} failed:`);
+    for (const o of failed) lines.push(`✗ ${opLabel(o)} — ${o.error || "failed"}`);
+  }
+  if (skipped.length > 0) {
+    lines.push(`⏸ ${skipped.length} not run (time limit): ${skipped.map(opLabel).join(", ")}. Send them again and I'll log them.`);
+  }
+  if (lines.length === 0) return "I couldn't extract any actions from that — try rephrasing?";
+  return lines.join("\n");
+}

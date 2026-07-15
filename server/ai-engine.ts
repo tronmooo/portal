@@ -36,6 +36,16 @@ import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE } from "@shared/timezone";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
+import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
+import {
+  EXTRACT_ACTIONS_TOOL,
+  MAX_BULK_OPERATIONS,
+  buildExtractionSystemPrompt,
+  parseExtractedOperations,
+  buildBulkReply,
+  type ExtractedOperation,
+  type OperationOutcome,
+} from "./ai-bulk-log";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -2735,7 +2745,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Trackers ---
   {
     name: "log_tracker_entry",
-    description: "Log values to a tracker (health, fitness, habits, metrics — NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries). CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}). When ONE message contains BOTH a BP reading AND a heart rate ('124/78 with a resting heart rate of 59'), make TWO log_tracker_entry calls — one to 'Blood Pressure' {systolic,diastolic} AND one to 'Heart Rate' {bpm}. NEVER silently drop the heart rate.\n- Supplements / vitamins / medications → EACH item gets its OWN tracker named EXACTLY after the item: 'Multivitamin', 'Fish Oil', 'Vitamin D', 'Creatine', 'Amoxicillin', 'Lisinopril'. NEVER bucket different items into one generic 'Supplements' (or 'Vitamins'/'Medications') tracker. If the user logs several in one message (e.g. 'multivitamin, fish oil, and amoxicillin'), make a SEPARATE log_tracker_entry call for EACH, one per its own tracker. ALWAYS reuse an existing tracker whose name is that item (an existing 'Multivitamin' tracker → append the entry, do NOT create a new tracker). Use values:{dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency, taken:true} — include dosage+unit whenever the user states OR clearly implies one (do not invent a dosage that wasn't given). Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER} (or glasses). Put the numeric amount directly in the ounces field.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
+    description: "Log values to a tracker for ANY repeatable life event, activity, or personal metric the user reports — health, fitness, hygiene (showers, bathroom visits, brushing teeth), substances (cannabis, alcohol, nicotine, caffeine), chores (vacuuming, dishes, laundry), hobbies (reading, guitar, gaming), personal care, social activities, habits, metrics — if the user says they did/consumed/experienced it, it is loggable. There is NO fixed list of supported activities; NEVER refuse to log something as 'not tracked'. (NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries.) CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}). When ONE message contains BOTH a BP reading AND a heart rate ('124/78 with a resting heart rate of 59'), make TWO log_tracker_entry calls — one to 'Blood Pressure' {systolic,diastolic} AND one to 'Heart Rate' {bpm}. NEVER silently drop the heart rate.\n- Supplements / vitamins / medications → EACH item gets its OWN tracker named EXACTLY after the item: 'Multivitamin', 'Fish Oil', 'Vitamin D', 'Creatine', 'Amoxicillin', 'Lisinopril'. NEVER bucket different items into one generic 'Supplements' (or 'Vitamins'/'Medications') tracker. If the user logs several in one message (e.g. 'multivitamin, fish oil, and amoxicillin'), make a SEPARATE log_tracker_entry call for EACH, one per its own tracker. ALWAYS reuse an existing tracker whose name is that item (an existing 'Multivitamin' tracker → append the entry, do NOT create a new tracker). Use values:{dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency, taken:true} — include dosage+unit whenever the user states OR clearly implies one (do not invent a dosage that wasn't given). Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER} (or glasses). Put the numeric amount directly in the ounces field.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -2743,7 +2753,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         values: { type: "object", description: "Key-value pairs to log. ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
-        at: { type: "string", description: "Optional date/time the entry actually happened (ISO date or natural language like 'June 3 2025'). Set this when the user says the entry was on a specific past or future date. Omit for 'now'." },
+        at: { type: "string", description: "Optional date/time the entry actually happened (ISO date, natural language like 'June 3 2025', or a bare clock time like '8:15 AM' which is treated as today at that time). ALWAYS set this when the user attaches a time to the action ('at 8:15 AM', 'this morning at 7', 'yesterday'). Omit for 'now'." },
       },
       required: ["trackerName", "values"],
     },
@@ -4474,7 +4484,7 @@ BEHAVIOR:
   "skip next month" → skip:"next" (or skip:"2026-09" for a specific month). "pause until January" → pause:true, pauseUntil:"2027-01-01". "resume it" → resume:true.
   To PAY a specific month's occurrence use pay_obligation with forMonth:"YYYY-MM" or dueDate:"YYYY-MM-DD".
   Answer informational questions directly from the bill's stored fields: "when is my next phone bill?" → its next due date; "how much am I paying annually?" → amount times periods per year (monthly x12, weekly x52, quarterly x4, yearly x1). Never invent numbers.
-- MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 or even 20 actions, you MUST execute ALL of them as separate tool calls. Do not merge or skip any. You can handle up to 20 tool calls in a single response.
+- MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. Every independent sentence or clause describing something the user did is its own operation. If a user sends 10, 20, or even 50 actions, you MUST execute ALL of them as separate tool calls — count the clauses and match that count in tool calls. Emit ALL the tool calls in a SINGLE response whenever possible (parallel tool use) instead of one per round. NEVER handle some items and verbally decline the rest — off-catalog activities (cannabis, shower, bathroom, chores) are logged via log_tracker_entry like everything else. If you run out of room in one response, continue emitting the remaining tool calls in the next round until every item is handled.
 - ATTRIBUTION IN BATCHES: When an item says "for <Name>" ("grocery expense $47.82 for Robert", "vet bill for Rex"), you MUST set forProfile:"<Name>" on that tool call. In a long multi-action message it is easy to forget this — do NOT. And NEVER tell the user something was attributed to a person unless you actually passed forProfile for it.
 - LIABILITY PAYMENT — MATCH THE LOAN, DON'T SUBSTITUTE: add_liability_payment must target the SPECIFIC loan the user named. If the user says "car loan payment" and no auto loan exists, do NOT apply it to a mortgage, student loan, or any other loan just because it's "the only one" — that corrupts the wrong balance. Instead report that no matching loan was found and ask whether to create it. Same for "mortgage payment" when only a car loan exists, etc.
 - ACTION COUNTING: In your response, accurately count how many distinct actions you performed. Count each tool call separately. If the user sent 10 items and you performed 10 tool calls, say "I've handled all 10 items." Never undercount.
@@ -4581,6 +4591,14 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 - "remove X from my schedule" → complete_event(removeFromSchedule:true)
 - "cancel X" → delete_event OR update_event(changes:{status:"cancelled"})
 
+━━━ UNIVERSAL LOGGING — EVERYTHING IS TRACKABLE ━━━
+Portol is a life OS with generic trackers. There is NO list of "supported" activities and NO activity you refuse to log. NEVER reply "X isn't something I track", "I don't track that", or any variant — that response is ALWAYS wrong. Every statement of something the user did, consumed, or experienced becomes a log_tracker_entry call; if no tracker exists yet, the tool auto-creates one.
+- "I smoked some cannabis" → log_tracker_entry(trackerName:"Cannabis", values:{amount or method if given, else sessions:1})
+- "I took a shower" → log_tracker_entry(trackerName:"Shower", values:{count:1, duration if given})
+- "I went to the bathroom at 8:15 AM" → log_tracker_entry(trackerName:"Bathroom Visits", values:{count:1}, at:"8:15 AM")
+- "brushed my teeth" → Teeth Brushing; "vacuumed" → Vacuuming; "washed dishes" → Dishes; "practiced guitar for an hour" → Guitar Practice {duration:60}; "read for 45 minutes" → Reading {minutes:45}
+When the user attaches a clock time or date to an action, pass it via the at parameter. Substances, hygiene, bodily functions, chores, and hobbies are all first-class trackable domains — log them without commentary, hedging, or asking permission to "set up" tracking.
+
 ━━━ TRACKER CRUD ━━━
 - create tracker: create_tracker(name, category, fields, forProfile?)
 
@@ -4668,6 +4686,7 @@ Example: "Joe completed his water habit, delete his stretching task, create a go
 → Tool 2: delete_habit(name:"Stretching") OR delete_task(title:"Stretching") — if ambiguous, DELETE BOTH and say so
 → Tool 3: create_goal(title:"Lose 5 pounds", type:"weight_loss", target:5, unit:"lbs", forProfile:"Joe")
 All 3 must execute. Report: ✅ Water habit checked in for Joe, ✅ Stretching deleted, ✅ Goal created.
+This applies at ANY scale: a 20-sentence "here's my day" recap is 20 operations — log every one (soccer AND cannabis AND shower AND bathroom AND chores), emitting as many tool calls per response as you can. In your final reply, enumerate what you logged per item; if any tool call failed, name the failed item honestly.
 
 PROFILE CONTEXT INHERITANCE: If the user sets a profile context ("Joe completed..., his task..., his habit..."),
 apply forProfile:"Joe" to ALL subsequent actions in the same message until profile changes.
@@ -5225,7 +5244,7 @@ interface ValidationResult {
   errors: string[];
 }
 
-function validateToolInput(toolName: string, input: Record<string, any>): ValidationResult {
+export function validateToolInput(toolName: string, input: Record<string, any>): ValidationResult {
   const warnings: string[] = [];
   const errors: string[] = [];
   const normalized = { ...input };
@@ -5339,7 +5358,19 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
       // (ISO or natural language). On parse failure, warn and drop it so the
       // executor falls back to NOW(). Do NOT infer from the raw message here.
       if (normalized.at != null && String(normalized.at).trim()) {
-        const when = new Date(String(normalized.at).trim());
+        let atStr = String(normalized.at).trim();
+        // A bare clock time ("8:15 AM", "10pm") is Invalid Date to new Date()
+        // and was silently dropped to "now" — compose it with today's date.
+        const bareTime = atStr.match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)$/i);
+        if (bareTime) {
+          let hours = parseInt(bareTime[1], 10) % 12;
+          if (/^p/i.test(bareTime[3])) hours += 12;
+          const minutes = bareTime[2] ? parseInt(bareTime[2], 10) : 0;
+          const today = new Date();
+          today.setHours(hours, minutes, 0, 0);
+          atStr = today.toISOString();
+        }
+        const when = new Date(atStr);
         if (isNaN(when.getTime())) {
           warnings.push(`Couldn't parse entry date "${normalized.at}" — using now instead`);
           normalized.at = undefined;
@@ -6992,7 +7023,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
 
-      // Auto-create tracker if not found — infer category from name.
+      // Auto-create tracker if not found — gated by the user's Auto-Create
+      // Trackers setting (default ON; only an explicit "false" disables it).
+      // When OFF, nothing is created or logged — the structured error tells
+      // the model exactly what to say and how the user can proceed.
+      const autoCreatePref = await storage.getPreference("ai_auto_create_trackers").catch(() => null);
+      if (autoCreatePref === "false") {
+        return {
+          error: `No "${input.trackerName}" tracker exists and Auto-Create Trackers is off (Settings → AI). Say "create a ${input.trackerName} tracker" to add it explicitly, or turn the setting back on.`,
+          code: "AUTO_CREATE_DISABLED",
+          trackerName: input.trackerName,
+        };
+      }
+
+      // Infer category from name.
       //
       // ORDER MATTERS. The keyword scan is a first-match-wins waterfall,
       // so put MORE SPECIFIC buckets ahead of MORE GENERAL ones. The order
@@ -7107,6 +7151,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // first entry is written.
         const { values: nv } = normalizeTrackerEntry(newTracker as any, entryValues);
         const entry = await storage.logEntry({ trackerId: newTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        // Surface what was auto-created so callers (bulk path, chat UI) can
+        // report "created a new X tracker" honestly.
+        if (entry) (entry as any).__createdTracker = { id: newTracker.id, name: newTracker.name };
         return entry;
       } catch (err: any) {
         const msg = err?.message || String(err);
@@ -11844,6 +11891,142 @@ function parseArtifactFromResponse(text: string, profileId: string): { chatText:
 }
 
 // ============================================================
+// BULK MULTI-ACTION PATH — one extraction call, deterministic execution
+// ============================================================
+// Long "here's my day" recaps (8+ independent actions, up to 50+) cannot
+// survive the general agentic loop inside the serverless time budget: each
+// round-trip re-sends the full system prompt + ~120 tools. Instead: ONE
+// forced-tool extraction call converts the message into a queue of write
+// operations, then each is executed independently through the same
+// validate → execute → verify → ledger plumbing the loop uses. One failure
+// never aborts the rest; every operation reports its own outcome.
+function opRawLabel(toolUse: { name: string; input?: any }): string {
+  const inp = (toolUse.input || {}) as Record<string, any>;
+  return String(inp.trackerName || inp.title || inp.description || inp.name || toolUse.name);
+}
+
+async function runBulkLogPath(
+  userMessage: string,
+  userId: string | undefined,
+  chatModel: string,
+  ctx: { trackerNames: string[]; profileNames: string[]; habitNames: string[] },
+): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[] } | null> {
+  const heuristicCount = countActionClauses(userMessage);
+  const tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
+  const extractionSystem = buildExtractionSystemPrompt({
+    nowISO: new Date().toLocaleString("en-US", { timeZone: tz, dateStyle: "full", timeStyle: "short" }),
+    timezone: tz,
+    trackerNames: ctx.trackerNames,
+    profileNames: ctx.profileNames,
+    habitNames: ctx.habitNames,
+  });
+
+  // ── Phase A: extract every action in ONE model call ──
+  const extractOnce = async (messages: Anthropic.Messages.MessageParam[]): Promise<{ ops: ExtractedOperation[]; response: Anthropic.Messages.Message } | null> => {
+    const response = await getClient().messages.create({
+      model: chatModel,
+      max_tokens: 16000,
+      system: extractionSystem,
+      tools: [EXTRACT_ACTIONS_TOOL],
+      tool_choice: { type: "tool", name: "extract_actions" },
+      messages,
+    });
+    const toolUse = response.content.find((b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use");
+    if (!toolUse) return null;
+    return { ops: parseExtractedOperations(toolUse.input), response };
+  };
+
+  let ops: ExtractedOperation[] = [];
+  try {
+    const first = await extractOnce([{ role: "user", content: userMessage }]);
+    if (!first) return null;
+    ops = first.ops;
+    // Coverage check: the deterministic clause count is a floor estimate. If
+    // extraction came back clearly short, retry once with a corrective nudge.
+    if (ops.length < heuristicCount - 2) {
+      logger.warn("ai", `Bulk extraction returned ${ops.length} ops for ~${heuristicCount} clauses — retrying once`);
+      const retry = await extractOnce([
+        { role: "user", content: userMessage },
+        { role: "assistant", content: first.response.content },
+        { role: "user", content: [
+          { type: "tool_result", tool_use_id: (first.response.content.find((b) => b.type === "tool_use") as any)?.id || "retry", content: `You extracted only ${ops.length} operations but the message contains about ${heuristicCount} independent actions. Re-extract with EVERY action included — do not drop any.` },
+        ] as any },
+      ]);
+      if (retry && retry.ops.length > ops.length) ops = retry.ops;
+    }
+  } catch (err: any) {
+    logger.warn("ai", `Bulk extraction failed (${err?.message}) — falling back to the agentic loop`);
+    return null;
+  }
+  if (ops.length === 0) return null;
+
+  // ── Phase B: execute every operation independently ──
+  const startedAt = Date.now();
+  const EXEC_BUDGET_MS = process.env.VERCEL ? 40_000 : 75_000;
+  const turnVerifyCtx = buildTurnVerifyContext(storage);
+  const actions: ParsedAction[] = [];
+  const results: any[] = [];
+  const operations: OperationOutcome[] = [];
+  const createdTrackers: Array<{ id: string; name: string }> = [];
+  const seenEntityIds = new Set<string>();
+
+  for (let i = 0; i < ops.length && i < MAX_BULK_OPERATIONS; i++) {
+    const op = ops[i];
+    const outcome: OperationOutcome = { index: i, raw: op.raw, tool: op.tool, status: "failed", trackerName: (op.input as any)?.trackerName };
+    operations.push(outcome);
+    if (Date.now() - startedAt > EXEC_BUDGET_MS) {
+      outcome.status = "skipped";
+      outcome.error = "Ran out of time this message";
+      continue;
+    }
+    try {
+      const validation = validateToolInput(op.tool, op.input);
+      if (!validation.valid) {
+        outcome.error = `Validation failed: ${validation.errors.join(". ")}`;
+        continue;
+      }
+      const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
+      const beforeRows = await captureBeforeRows(op.tool, turnVerifyCtx);
+      const rawResult = await executeTool(op.tool, inputWithCtx, userId);
+      invalidateContextCache(userId);
+      const actionType = mapToolToActionType(op.tool);
+      const result = (rawResult && !rawResult.error)
+        ? await finalizeToolResult(op.tool, actionType, inputWithCtx, rawResult, turnVerifyCtx)
+        : rawResult;
+      if (!result || result.error) {
+        outcome.error = result?.error || "Action failed — data was not saved";
+        continue;
+      }
+      await recordActionLog(turnVerifyCtx, op.tool, actionType, inputWithCtx, result, beforeRows);
+      const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
+      // The storage layer's short-window duplicate guard returns the EXISTING
+      // entry for identical values — flag reuse honestly instead of counting
+      // it as a fresh write.
+      if (entityId && seenEntityIds.has(entityId)) {
+        outcome.status = "deduped";
+        outcome.entityId = entityId;
+        continue;
+      }
+      if (entityId) seenEntityIds.add(entityId);
+      outcome.status = "ok";
+      outcome.entityId = entityId || undefined;
+      if (result?.__createdTracker?.id) {
+        outcome.createdTracker = { id: result.__createdTracker.id, name: result.__createdTracker.name };
+        createdTrackers.push(outcome.createdTracker);
+      }
+      actions.push({ type: actionType, category: "ai", data: { ...op.input, _entityId: entityId || undefined } });
+      results.push(result);
+      logAction(op.tool, actionType, String((op.input as any)?.trackerName || (op.input as any)?.title || (op.input as any)?.description || op.tool), entityId, userId);
+    } catch (err: any) {
+      outcome.error = err?.message || "Unexpected failure";
+    }
+  }
+
+  logger.info("ai", `Bulk path: ${operations.filter(o => o.status === "ok").length}/${operations.length} ops ok (${Date.now() - startedAt}ms, model ${chatModel})`);
+  return { reply: buildBulkReply(operations, createdTrackers), actions, results, operations };
+}
+
+// ============================================================
 // MAIN AI PROCESSING — tool_use loop
 // ============================================================
 
@@ -11857,6 +12040,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   tables?: TableSpec[];
   report?: ReportSpec;
   artifact?: any;
+  operations?: OperationOutcome[];
 }> {
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
@@ -12589,6 +12773,24 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   }
   const initialModel = chatModel;
 
+  // ── BULK MULTI-ACTION DISPATCH ──
+  // A long "here's my day" recap (8+ independent action clauses — soccer,
+  // cannabis, shower, bathroom, chores, meds, …) routes to the two-phase
+  // bulk path: one extraction call, then every operation executed
+  // independently. Falls through to the normal agentic loop on any failure.
+  if (shouldUseBulkPath(userMessage)) {
+    try {
+      const bulk = await runBulkLogPath(userMessage, userId, chatModel, {
+        trackerNames: (trackers || []).map((t: any) => String(t.name)).filter(Boolean),
+        profileNames: (allProfiles || []).map((p: any) => String(p.name)).filter(Boolean),
+        habitNames: (habits || []).map((h: any) => String(h.name)).filter(Boolean),
+      });
+      if (bulk) return bulk;
+    } catch (err: any) {
+      logger.warn("ai", `Bulk path crashed (${err?.message}) — continuing with the agentic loop`);
+    }
+  }
+
   try {
     // Build the tool_use conversation loop.
     //
@@ -12642,6 +12844,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     }
     const allActions: ParsedAction[] = [];
     const allResults: any[] = [];
+    // Per-operation outcome report (success AND failure) so the client can
+    // render an honest per-action checklist — same shape as the bulk path.
+    const allOperations: OperationOutcome[] = [];
     const richCharts: ChartSpec[] = [];
     const richTables: TableSpec[] = [];
     let richReport: ReportSpec | undefined;
@@ -12651,14 +12856,17 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     let iterations = 0;
     let totalToolCalls = 0;
     const MAX_ITERATIONS = 15; // Each iteration is a full AI round-trip; increased to handle 10+ action messages
-    const MAX_TOOL_CALLS = 30; // Safety limit on total tool executions per message
+    const MAX_TOOL_CALLS = 60; // Safety limit on total tool executions per message (50-action messages + reads)
     // Wall-clock guard ("Load failed" fix): long multi-tool chains (up to 15
     // model round-trips) can outlive the browser/proxy connection even under
     // the platform's function limit — the client then shows a generic dropped-
     // connection error while writes silently continue server-side. Stop
     // starting NEW round-trips after 90s and report what completed honestly.
     const startedAt = Date.now();
-    const WALL_CLOCK_BUDGET_MS = 90_000;
+    // On Vercel the function itself is killed at maxDuration (60s) — a 90s
+    // budget there guarantees a dropped connection instead of an honest
+    // partial reply. Stay under the platform ceiling when deployed.
+    const WALL_CLOCK_BUDGET_MS = process.env.VERCEL ? 50_000 : 90_000;
     let ranOutOfTime = false;
     // Envelope verification context — one per chat turn; memoizes the user's
     // profile-id set across all tool calls in the turn (see server/ai-envelope).
@@ -12678,7 +12886,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         try {
           response = await getClient().messages.create({
             model: chatModel,
-            max_tokens: 4096,
+            // 8192 lets the model emit 30-40 tool_use blocks in ONE response,
+            // so long multi-action messages don't need extra round-trips.
+            max_tokens: 8192,
             system: systemPrompt,
             tools: TOOL_DEFINITIONS,
             messages,
@@ -12755,6 +12965,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         // Safety limit: stop executing tools if we've hit the per-message cap
         if (totalToolCalls >= MAX_TOOL_CALLS) {
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify({ error: "Tool call limit reached for this message. Please send a new message for additional actions." }), is_error: true });
+          if (!READ_ONLY_TOOLS.has(toolUse.name)) {
+            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Tool call limit reached" });
+          }
           continue;
         }
         totalToolCalls++;
@@ -12767,6 +12980,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             const errorResult = { error: `Validation failed: ${validation.errors.join(". ")}`, validationErrors: validation.errors };
             toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify(errorResult), is_error: true });
             // Don't push to allActions for validation failures — nothing was actually done
+            if (!READ_ONLY_TOOLS.has(toolUse.name)) {
+              allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: errorResult.error });
+            }
             continue;
           }
           if (validation.warnings.length > 0) {
@@ -12869,6 +13085,18 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             content: JSON.stringify(isSuccess ? summarizeResult(result) : (result?.error ? { error: result.error } : { error: "Action failed — data was not saved. Tell the user it didn't work." })),
             is_error: !isSuccess,
           });
+          if (!READ_ONLY_TOOLS.has(toolUse.name)) {
+            allOperations.push({
+              index: allOperations.length,
+              raw: opRawLabel(toolUse),
+              tool: toolUse.name,
+              status: isSuccess ? "ok" : "failed",
+              error: isSuccess ? undefined : (result?.error || "Action failed — data was not saved"),
+              entityId: isSuccess ? (entityId || undefined) : undefined,
+              trackerName: inp.trackerName ? String(inp.trackerName) : undefined,
+              createdTracker: isSuccess && (result as any)?.__createdTracker?.id ? (result as any).__createdTracker : undefined,
+            });
+          }
         } catch (err: any) {
           console.error(`Tool ${toolUse.name} failed:`, err.message);
           toolResults.push({
@@ -12877,6 +13105,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             content: JSON.stringify({ error: err.message }),
             is_error: true,
           });
+          if (!READ_ONLY_TOOLS.has(toolUse.name)) {
+            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: err.message });
+          }
         }
       }
 
@@ -13223,6 +13454,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       tables: richTables.length > 0 ? richTables : undefined,
       report: richReport,
       artifact: artifact || undefined,
+      operations: allOperations.length > 0 ? allOperations : undefined,
     };
   } catch (err: any) {
     console.error("AI engine error:", err.message);

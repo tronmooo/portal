@@ -80,6 +80,8 @@ export default defineConfig({
       'tests/notifications-v2.test.ts',
       'tests/medication-doses.test.ts',
       'tests/ai-button-parity.test.ts',
+      'tests/action-split.test.ts',
+      'tests/bulk-extraction-normalize.test.ts',
       'tests/dashboard-buttons.test.ts',
       'tests/design-kit.test.tsx',
       'tests/typography-hygiene.test.ts',

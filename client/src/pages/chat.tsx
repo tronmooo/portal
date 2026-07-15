@@ -1923,6 +1923,7 @@ export default function ChatPage() {
         timestamp: new Date().toISOString(),
         actions: data.actions,
         results: data.results,
+        operations: data.operations,
         documentPreview: data.documentPreview,
         documentPreviews: data.documentPreviews,
         charts: data.charts,
@@ -3220,10 +3221,28 @@ export default function ChatPage() {
                   </div>
                 )}
 
+                {/* Per-operation outcome checklist — only the ones that did
+                    NOT succeed (successes already render as action cards).
+                    Multi-action messages get honest per-item failure/skip
+                    reporting instead of a vague "some failed". */}
+                {msg.operations && msg.operations.some((op: any) => op.status !== "ok") && (
+                  <div className="mt-2 space-y-1 text-xs">
+                    {msg.operations.filter((op: any) => op.status !== "ok").map((op: any, oi: number) => (
+                      <div key={oi} className="flex items-start gap-1.5">
+                        <span aria-hidden>{op.status === "deduped" ? "↩️" : op.status === "skipped" ? "⏸️" : "❌"}</span>
+                        <span className="text-muted-foreground">
+                          <span className="font-medium">{op.trackerName || op.raw || op.tool}</span>
+                          {op.status === "deduped" ? " — duplicate of an entry logged moments ago" : op.error ? ` — ${op.error}` : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* Structured confirmation cards */}
                 {msg.results && msg.results.length > 0 && (
                   <div className="mt-2 space-y-1.5">
-                    {msg.results.slice(0, 10).map((result: any, ri: number) => {
+                    {msg.results.slice(0, 50).map((result: any, ri: number) => {
                       if (!result || result.error) return null;
                       const name = result.title || result.name || result.description || "";
                       const type = result.type || result.category || "";
