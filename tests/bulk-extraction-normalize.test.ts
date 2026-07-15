@@ -9,6 +9,7 @@ import {
   parseExtractedOperations,
   buildExtractionSystemPrompt,
   buildBulkReply,
+  summarizeOpDetail,
   type OperationOutcome,
 } from "../server/ai-bulk-log";
 import { validateToolInput } from "../server/ai-engine";
@@ -86,6 +87,32 @@ describe("buildExtractionSystemPrompt", () => {
     expect(prompt).toContain("NEVER drop, merge, or refuse");
     expect(prompt.toLowerCase()).toContain("bathroom");
   });
+
+  it("pins detail preservation and explicit-habit-only routing", () => {
+    const prompt = buildExtractionSystemPrompt({
+      nowISO: "2026-07-15T12:00:00Z",
+      trackerNames: [],
+      profileNames: [],
+      habitNames: [],
+    });
+    // "I smoked a blunt" must keep method:"blunt"; times must ride in at.
+    expect(prompt).toContain('method:"blunt"');
+    expect(prompt).toContain("8:15 AM");
+    // Activity reports never become habit check-ins.
+    expect(prompt).toContain("explicit habit language");
+    expect(prompt).toContain("ALWAYS log_tracker_entry");
+    // Profiles come only from the current message.
+    expect(prompt).toContain("ONLY when THIS message names someone else");
+  });
+});
+
+describe("summarizeOpDetail", () => {
+  it("keeps every stated quantity, method, and timestamp", () => {
+    expect(summarizeOpDetail({ trackerName: "Soccer", values: { duration: 60 } })).toBe("duration 60");
+    expect(summarizeOpDetail({ trackerName: "Cannabis", values: { count: 1, method: "blunt" } })).toBe("count 1, method blunt");
+    expect(summarizeOpDetail({ trackerName: "Bathroom Visits", values: { count: 1 }, at: "8:15 AM" })).toBe("count 1, at 8:15 AM");
+    expect(summarizeOpDetail({ description: "electric bill", amount: 120 })).toBe("$120");
+  });
 });
 
 describe("buildBulkReply", () => {
@@ -117,6 +144,18 @@ describe("buildBulkReply", () => {
     expect(reply).toContain("not run");
   });
 
+  it("ok lines carry the recorded details so dropped data is visible", () => {
+    const ops: OperationOutcome[] = [
+      { index: 0, raw: "played soccer for an hour", tool: "log_tracker_entry", status: "ok", trackerName: "Soccer", detail: "duration 60" },
+      { index: 1, raw: "smoked a blunt", tool: "log_tracker_entry", status: "ok", trackerName: "Cannabis", detail: "count 1, method blunt" },
+      { index: 2, raw: "went to the bathroom", tool: "log_tracker_entry", status: "ok", trackerName: "Bathroom Visits", detail: "count 1, at 8:15 AM" },
+    ];
+    const reply = buildBulkReply(ops, []);
+    expect(reply).toContain("duration 60");
+    expect(reply).toContain("method blunt");
+    expect(reply).toContain("8:15 AM");
+  });
+
   it("marks storage-level duplicates honestly", () => {
     const ops: OperationOutcome[] = [
       ok(0, "Coffee"),
@@ -128,7 +167,14 @@ describe("buildBulkReply", () => {
 });
 
 describe("log_tracker_entry `at` validation — bare clock times", () => {
-  it('parses "8:15 AM" as today at 08:15 instead of dropping it', () => {
+  // Bare times compose against the USER'S timezone (default America/Los_Angeles
+  // when no x-timezone header has been seen), not the server clock — the
+  // server is UTC on Vercel. Assert the wall-clock reading in that zone.
+  const TZ = "America/Los_Angeles";
+  const wallClock = (iso: string) =>
+    new Date(iso).toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
+
+  it('parses "8:15 AM" as today at 08:15 (user tz) instead of dropping it', () => {
     const v = validateToolInput("log_tracker_entry", {
       trackerName: "Bathroom Visits",
       values: { count: 1 },
@@ -136,21 +182,16 @@ describe("log_tracker_entry `at` validation — bare clock times", () => {
     });
     expect(v.valid).toBe(true);
     expect(v.normalized.at, "at should be preserved, not dropped to now").toBeTruthy();
-    const when = new Date(v.normalized.at);
-    const today = new Date();
-    expect(when.getFullYear()).toBe(today.getFullYear());
-    expect(when.getMonth()).toBe(today.getMonth());
-    expect(when.getDate()).toBe(today.getDate());
-    expect(when.getHours()).toBe(8);
-    expect(when.getMinutes()).toBe(15);
+    expect(wallClock(v.normalized.at)).toBe("08:15");
+    const dayInTz = new Date(v.normalized.at).toLocaleDateString("en-CA", { timeZone: TZ });
+    expect(dayInTz).toBe(new Date().toLocaleDateString("en-CA", { timeZone: TZ }));
   });
 
   it('parses "10pm" and "12:30 p.m." correctly', () => {
     const v1 = validateToolInput("log_tracker_entry", { trackerName: "Sleep", values: { count: 1 }, at: "10pm" });
-    expect(new Date(v1.normalized.at).getHours()).toBe(22);
+    expect(wallClock(v1.normalized.at)).toBe("22:00");
     const v2 = validateToolInput("log_tracker_entry", { trackerName: "Lunch", values: { count: 1 }, at: "12:30 p.m." });
-    expect(new Date(v2.normalized.at).getHours()).toBe(12);
-    expect(new Date(v2.normalized.at).getMinutes()).toBe(30);
+    expect(wallClock(v2.normalized.at)).toBe("12:30");
   });
 
   it("still accepts ISO dates and drops unparseable values with a warning", () => {

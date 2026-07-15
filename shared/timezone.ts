@@ -60,6 +60,21 @@ export function addDays(dateStr: string, days: number): string {
 }
 
 /**
+ * Returns the UTC instant (ISO string) for "today at HH:MM" in the given
+ * timezone. Used when the user supplies a bare clock time ("8:15 AM") —
+ * composing with the SERVER's local clock would be wrong on UTC hosts.
+ */
+export function todayAtTimeISO(hours: number, minutes: number, timezone: string = DEFAULT_TIMEZONE): string {
+  const ymd = getUserToday(timezone);
+  // First guess: interpret the wall-clock time as UTC, then correct by the
+  // zone's offset at that instant (standard Intl round-trip trick).
+  const guess = new Date(`${ymd}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00Z`);
+  const inTz = new Date(guess.toLocaleString('en-US', { timeZone: timezone }));
+  const inUtc = new Date(guess.toLocaleString('en-US', { timeZone: 'UTC' }));
+  return new Date(guess.getTime() - (inTz.getTime() - inUtc.getTime())).toISOString();
+}
+
+/**
  * Returns a formatted locale string for the system prompt / human-readable display.
  * e.g. "Tuesday, April 7, 2026 at 6:30 PM"
  */

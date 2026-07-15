@@ -34,6 +34,23 @@ export interface OperationOutcome {
   entityId?: string;
   trackerName?: string;
   createdTracker?: { id: string; name: string };
+  /** Compact human-readable summary of what was recorded ("duration 60, method blunt, at 8:15 AM"). */
+  detail?: string;
+}
+
+/** Compact "duration 60, method blunt, at 8:15 AM" summary of an operation's
+ * input — proves in the reply that no stated detail was dropped. */
+export function summarizeOpDetail(input: Record<string, any>): string {
+  const parts: string[] = [];
+  const values = (input?.values && typeof input.values === "object") ? input.values : {};
+  for (const [k, v] of Object.entries(values)) {
+    if (k === "_notes" || v == null || typeof v === "object") continue;
+    parts.push(`${k} ${v}`);
+    if (parts.length >= 4) break;
+  }
+  if (input?.amount != null) parts.push(`$${input.amount}`);
+  if (input?.at) parts.push(`at ${input.at}`);
+  return parts.join(", ");
 }
 
 /** Hard cap on operations per message — matches the engine's MAX_TOOL_CALLS. */
@@ -97,8 +114,9 @@ ROUTING RULES:
 - A future to-do ("need to call the dentist") → create_task({ title, dueDate? }). An appointment with a time → create_event.
 - "at 8:15 AM" style times → pass through the at parameter (bare time strings are fine).
 - Journaling as an activity ("journaled") → log_tracker_entry trackerName "Journaling". An actual journal passage ("journal that today was great: ...") → journal_entry.
-- If the action clearly matches one of the user's existing habits by name, use checkin_habit({ name }) INSTEAD of a tracker entry.
-- forProfile: set ONLY when the action is about someone else ("Rex", "Mom").
+- checkin_habit ONLY on explicit habit language ("mark off X", "checked in X", "completed my X habit"). A plain activity report ("I did/took/smoked/went/played X") is ALWAYS log_tracker_entry — even when a habit with a similar name exists.
+- NEVER drop a stated detail: every number, unit, duration, count, method, and timestamp must land in values/at ("for an hour" → duration:60; "once" → count:1; "a blunt" → method:"blunt"; "at 8:15 AM" → at:"8:15 AM").
+- forProfile: set ONLY when THIS message names someone else ("Rex", "Mom"). Never infer a profile from anything else.
 
 EXISTING TRACKERS: ${trackers}
 EXISTING HABITS: ${habits}
@@ -132,7 +150,8 @@ function summarizeInput(input: Record<string, any>): string {
 }
 
 function opLabel(op: OperationOutcome): string {
-  return op.trackerName || op.raw || op.tool;
+  const name = op.trackerName || op.raw || op.tool;
+  return op.detail ? `${name} — ${op.detail}` : name;
 }
 
 /** Deterministic reply enumerating every operation — never claims more or

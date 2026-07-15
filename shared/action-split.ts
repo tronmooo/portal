@@ -64,10 +64,19 @@ export function countActionClauses(message: string): number {
 }
 
 /** Messages with at least this many action clauses route to the bulk
- * extraction path. Below it, the general agentic loop (which now handles
- * multi-action prompts too) is the better tool. */
-export const BULK_ACTION_THRESHOLD = 8;
+ * extraction path (plan → execute → verify). Below it, the general agentic
+ * loop (which now handles multi-action prompts too) is the better tool. */
+export const BULK_ACTION_THRESHOLD = 4;
+
+/** Signals that the message asks for something BEYOND logging activity
+ * reports — CRUD commands, habit check-ins, reminders, questions. Those
+ * need the full agentic loop (all ~120 tools); the bulk path only executes
+ * a whitelist of write tools and would silently drop the rest. */
+const MIXED_COMMAND_SIGNAL =
+  /\b(delete|remove|undo|revert|rename|update|change|edit|cancel|reschedule|schedule|remind me|mark(ed)? off|check(ed)? (in|off)|make (this|it) a habit|add a (task|habit|reminder|goal)|create a|set (a|my|the)|show me|list|search|find|open|pull up)\b|\?/i;
 
 export function shouldUseBulkPath(message: string): boolean {
-  return countActionClauses(message) >= BULK_ACTION_THRESHOLD;
+  const m = String(message || "");
+  if (MIXED_COMMAND_SIGNAL.test(m)) return false;
+  return countActionClauses(m) >= BULK_ACTION_THRESHOLD;
 }

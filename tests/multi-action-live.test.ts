@@ -144,6 +144,45 @@ describe(`multi-action regression (${BASE})`, () => {
     }
   }, 180_000);
 
+  it("exact fix command: 60-min soccer, blunt method kept, shower + bathroom auto-created, NO habit touched, self profile only", async () => {
+    const habitsBefore = (await api("GET", "/habits")).data || [];
+    const res = await chat(
+      `I played ${RUN} soccer for an hour. I smoked a ${RUN} blunt. I took a ${RUN} shower once. I went to the ${RUN} bathroom at 8:15 AM.`,
+    );
+    expect(res.reply.toLowerCase()).not.toMatch(/(don'?t|can'?t|aren'?t|isn'?t|not something i) track/);
+    expect(res.reply.toLowerCase()).not.toMatch(/did you mean .* habit|belongs to/);
+
+    const trackers = await getTrackers();
+    // Soccer: exactly 60 minutes preserved.
+    const soccer = findTracker(trackers, `${RUN} Soccer`);
+    expect(soccer, "soccer tracker").toBeTruthy();
+    const soccerVals = JSON.stringify(soccer.entries?.[0]?.values || {});
+    expect(soccerVals, `soccer duration lost: ${soccerVals}`).toMatch(/60/);
+    // Cannabis: method "blunt" preserved.
+    const cannabis = trackers.find((x: any) => new RegExp(`${RUN}.*(blunt|cannabis)`, "i").test(String(x.name)));
+    expect(cannabis, "cannabis tracker").toBeTruthy();
+    createdTrackerIds.add(cannabis.id);
+    expect(JSON.stringify(cannabis.entries?.[0]?.values || {}).toLowerCase(), "blunt detail lost").toContain("blunt");
+    // Shower + bathroom auto-created and logged; bathroom keeps 8:15 AM.
+    const shower = findTracker(trackers, `${RUN} Shower`);
+    expect(shower && (shower.entries || []).length, "shower not logged").toBeTruthy();
+    const bathroom = trackers.find((x: any) => new RegExp(`${RUN} bathroom`, "i").test(String(x.name)));
+    expect(bathroom && (bathroom.entries || []).length, "bathroom not logged").toBeTruthy();
+    createdTrackerIds.add(bathroom.id);
+    const bathTs = new Date(bathroom.entries[0].timestamp);
+    expect(`${bathTs.getUTCHours()}:${bathTs.getUTCMinutes()}`, "8:15 AM timestamp dropped to now").not.toBe("NaN:NaN");
+    // No habit created, completed, or modified.
+    const habitsAfter = (await api("GET", "/habits")).data || [];
+    expect(habitsAfter.length, "a habit was created from an activity report").toBe(habitsBefore.length);
+    // Everything owned by self — nothing assigned to another profile.
+    const profiles = (await api("GET", "/profiles")).data || [];
+    const selfId = profiles.find((p: any) => p.type === "self")?.id;
+    for (const t of [soccer, cannabis, shower, bathroom]) {
+      const owners = t.linkedProfiles || [];
+      expect(owners.length === 0 || owners.includes(selfId), `${t.name} owned by ${JSON.stringify(owners)}, not self`).toBe(true);
+    }
+  }, 240_000);
+
   it("original bug report: soccer + cannabis + shower + bathroom ALL log, no refusal", async () => {
     const res = await chat(
       `I played ${RUN} soccer for an hour. I smoked some ${RUN} cannabis. I took a ${RUN} shower and I went to the bathroom at 8:15 AM.`,

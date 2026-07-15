@@ -97,6 +97,7 @@ export interface ChatMessage {
     entityId?: string;
     trackerName?: string;
     createdTracker?: { id: string; name: string };
+    detail?: string;
   }>;
   attachment?: {
     name: string;

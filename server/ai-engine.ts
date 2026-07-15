@@ -30,11 +30,12 @@ import { passesProfileFilter } from "@shared/profile-filter";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
+import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
 import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
-import { DEFAULT_TIMEZONE } from "@shared/timezone";
+import { DEFAULT_TIMEZONE, todayAtTimeISO } from "@shared/timezone";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
 import {
@@ -43,6 +44,7 @@ import {
   buildExtractionSystemPrompt,
   parseExtractedOperations,
   buildBulkReply,
+  summarizeOpDetail,
   type ExtractedOperation,
   type OperationOutcome,
 } from "./ai-bulk-log";
@@ -990,15 +992,26 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     }
   }
 
-  // ---- Habit check-in (expanded): "done meditation", "mark off my run", "I went on my morning run" ----
+  // ---- Habit check-in (EXPLICIT language only): "done meditation", "mark off my run" ----
+  // First-person activity reports ("I went on my morning run", "I did X")
+  // intentionally do NOT match — they are tracker logs, not habit check-ins
+  // (user directive 2026-07-15: "I did / I took / I smoked / I went" are
+  // events; habits only move on explicit language like "mark off").
   const habitCheckinMatch = lower.match(/^(?:done|did|completed?|checked?\s*in|✓|✅)\s+(.+)/)
-    || lower.match(/^(?:mark|check)\s+off\s+(?:my\s+|that\s+(?:i\s+)?)?(.+?)(?:\s+(?:habit|today|for today|on my (?:habits?|list)))?$/)
-    || lower.match(/^i\s+(?:went\s+on|did|completed|finished)\s+(?:my\s+)?(.+?)(?:\s+today|\s+this morning|\s+tonight)?$/)
-    || lower.match(/^(?:more often (?:that|than)\s+)?i\s+went\s+(?:on|for)\s+(?:my\s+)?(.+?)$/);
+    || lower.match(/^(?:mark|check)\s+off\s+(?:my\s+|that\s+(?:i\s+)?)?(.+?)(?:\s+(?:habit|today|for today|on my (?:habits?|list)))?$/);
   if (habitCheckinMatch) {
     const habitName = habitCheckinMatch[1].trim();
     const habits = await storage.getHabits();
-    const habit = matchHabitByName(habits, habitName);
+    // Never check in ANOTHER profile's habit from an unqualified message —
+    // match only habits owned by self (or unowned). The Rex-hijack fix.
+    let selfScoped = habits;
+    try {
+      const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
+      if (selfProf) {
+        selfScoped = habits.filter(h => !(h.linkedProfiles || []).length || (h.linkedProfiles || []).includes(selfProf.id));
+      }
+    } catch { /* profile fetch failed — keep full list rather than break check-ins */ }
+    const habit = matchHabitByName(selfScoped, habitName);
     if (habit) {
       const checkin = await storage.checkinHabit(habit.id);
       actions.push({ type: "checkin_habit", category: "habit", data: { habitName: habit.name } });
@@ -3245,7 +3258,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- CRUD: Habits ---
   {
     name: "create_habit",
-    description: "Create a new habit to track. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).",
+    description: "Create a new habit — ONLY when the user EXPLICITLY asks for a recurring habit/routine ('make this a habit', 'add a habit to meditate', 'remind me to stretch every day'). A past-tense activity report ('I took a shower', 'I smoked a blunt', 'I went to the bathroom') is NEVER a habit — log it with log_tracker_entry. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3263,7 +3276,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "checkin_habit",
-    description: "Check in to a habit — mark it DONE for today. Use this whenever the user says 'I did X', 'mark X done', 'completed X habit', 'checked off X'. Find by habit name. Set forProfile when checking in someone else's habit (e.g. 'Joe', 'Rex', 'Mom').",
+    description: "Check in to a habit — mark it DONE for today. ONLY when the user EXPLICITLY references the habit: 'mark X done', 'mark off X', 'completed X habit', 'checked off X', 'check in X'. A plain activity report ('I did X', 'I took a shower', 'I went to the bathroom') is NOT a habit check-in — log it with log_tracker_entry instead. Find by habit name. Set forProfile ONLY when the user names that person in THIS message ('mark off Joe's water habit') — never infer a profile from conversation history or from who owns a similar-sounding habit.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -4506,8 +4519,8 @@ BEHAVIOR:
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - BIAS TO ACTION: When the user asks to create, schedule, add, mark off, complete, or check in something, DO IT immediately. NEVER ask clarifying questions for simple CRUD. Just execute.
-  - "I went on my morning run" → checkin_habit(name: "Morning Run") — DO NOT ask 3 options
   - "Mark off my run" → checkin_habit(name: "Running" or "Morning Run" — find closest match) — DO NOT ask which one
+  - "I went on my morning run" / "I did X" / "I took X" / "I smoked X" / "I went to X" → log_tracker_entry — these are ACTIVITY REPORTS, not habit check-ins. Habits only move on EXPLICIT language ("mark off", "check in", "my X habit").
   - "schedule a doctor appointment" → create_task immediately
   - If ambiguous between 2 items with similar names, pick the closest match and do it. You can mention in your response what you picked.
   - NEVER present numbered options for simple check-ins, completions, or mark-offs. That is hostile UX.
@@ -4593,11 +4606,14 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 
 ━━━ UNIVERSAL LOGGING — EVERYTHING IS TRACKABLE ━━━
 Portol is a life OS with generic trackers. There is NO list of "supported" activities and NO activity you refuse to log. NEVER reply "X isn't something I track", "I don't track that", or any variant — that response is ALWAYS wrong. Every statement of something the user did, consumed, or experienced becomes a log_tracker_entry call; if no tracker exists yet, the tool auto-creates one.
-- "I smoked some cannabis" → log_tracker_entry(trackerName:"Cannabis", values:{amount or method if given, else sessions:1})
-- "I took a shower" → log_tracker_entry(trackerName:"Shower", values:{count:1, duration if given})
+- "I smoked some cannabis" → log_tracker_entry(trackerName:"Cannabis", values:{count:1}); "I smoked a blunt" → log_tracker_entry(trackerName:"Cannabis", values:{count:1, method:"blunt"})
+- "I took a shower" / "I took a shower once" → log_tracker_entry(trackerName:"Shower", values:{count:1, duration if given})
 - "I went to the bathroom at 8:15 AM" → log_tracker_entry(trackerName:"Bathroom Visits", values:{count:1}, at:"8:15 AM")
 - "brushed my teeth" → Teeth Brushing; "vacuumed" → Vacuuming; "washed dishes" → Dishes; "practiced guitar for an hour" → Guitar Practice {duration:60}; "read for 45 minutes" → Reading {minutes:45}
 When the user attaches a clock time or date to an action, pass it via the at parameter. Substances, hygiene, bodily functions, chores, and hobbies are all first-class trackable domains — log them without commentary, hedging, or asking permission to "set up" tracking.
+- ACTIVITY ≠ HABIT: "I did / I took / I smoked / I went / I played" are ACTIVITY REPORTS → log_tracker_entry, ALWAYS — even when a habit with a similar name exists (on any profile). NEVER call checkin_habit or create_habit for them, never ask "did you mean the habit?", and never derail the rest of the message over a habit. Habits move ONLY on explicit language: "mark off X", "check in X", "completed my X habit", "make this a habit", "every day", "remind me".
+- NEVER DROP DETAILS: every number, unit, duration, count, method, and timestamp the user states MUST appear in the entry ("for an hour" → duration:60; "once" → count:1; "a blunt" → method:"blunt"; "at 8:15 AM" → at:"8:15 AM"). Losing a stated detail is a logging failure.
+- PROFILE OWNERSHIP: entries belong to the user (self) unless THIS message explicitly names someone else ("Rex threw up", "log water for Mom"). NEVER pick a profile from conversation history, from the active dashboard filter chatter, or from which profile happens to own a similar tracker/habit name.
 
 ━━━ TRACKER CRUD ━━━
 - create tracker: create_tracker(name, category, fields, forProfile?)
@@ -5360,15 +5376,18 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
       if (normalized.at != null && String(normalized.at).trim()) {
         let atStr = String(normalized.at).trim();
         // A bare clock time ("8:15 AM", "10pm") is Invalid Date to new Date()
-        // and was silently dropped to "now" — compose it with today's date.
+        // and was silently dropped to "now" — compose it with today's date in
+        // the USER'S timezone (the server clock is UTC on Vercel).
         const bareTime = atStr.match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)$/i);
         if (bareTime) {
           let hours = parseInt(bareTime[1], 10) % 12;
           if (/^p/i.test(bareTime[3])) hours += 12;
           const minutes = bareTime[2] ? parseInt(bareTime[2], 10) : 0;
-          const today = new Date();
-          today.setHours(hours, minutes, 0, 0);
-          atStr = today.toISOString();
+          // Defensive read: `storage` is a lazy proxy that throws without DB
+          // env (pure unit tests) — fall back to the default timezone.
+          let atTz = DEFAULT_TIMEZONE;
+          try { atTz = (storage as any)._timezone || DEFAULT_TIMEZONE; } catch { /* no storage in unit tests */ }
+          atStr = todayAtTimeISO(hours, minutes, atTz);
         }
         const when = new Date(atStr);
         if (isNaN(when.getTime())) {
@@ -8702,6 +8721,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_habit": {
+      // EXPLICIT INTENT ONLY (user directive 2026-07-15): never convert an
+      // activity report into a habit. "I took a shower" is a tracker log;
+      // a habit requires language like "make this a habit", "every day",
+      // "remind me". Guard runs only when the original message is available.
+      const habitMsg = String((input as any).__userMessage || "");
+      if (habitMsg && !hasExplicitHabitCreateIntent(habitMsg)) {
+        return {
+          error: `The user didn't ask for a habit — do NOT create one. Log the activity with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
+          code: "NOT_A_HABIT_REQUEST",
+        };
+      }
       // Deduplication: check if a habit with the same name already exists for the same profile
       const existingHabits = await storage.getHabits();
       let targetProfileId: string | undefined;
@@ -8794,26 +8824,44 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "checkin_habit": {
       const habits = await storage.getHabits();
-      // Filter by profile if specified
+      // HABIT ≠ ACTIVITY LOG (user directive 2026-07-15): a habit is only
+      // checked in when the user EXPLICITLY says so ("mark off my run",
+      // "completed my water habit"). A plain activity report ("I went to the
+      // bathroom at 8:15 AM") must be a tracker entry — previously it matched
+      // ANOTHER PROFILE'S "Go to the bathroom 3x daily" habit and derailed
+      // the whole message into a clarifying question.
+      const checkinMsg = String((input as any).__userMessage || "");
+      if (checkinMsg && !hasExplicitHabitCheckinIntent(checkinMsg)) {
+        return {
+          error: `The user reported an activity, not a habit check-in — do NOT touch habits. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
+          code: "NOT_A_HABIT_CHECKIN",
+        };
+      }
+      // Scope to the named profile, else to self-owned/unowned habits.
+      // NEVER fall back to other profiles' habits — an unqualified message
+      // can only ever move the user's own streaks.
       let eligible = habits;
       if (input.forProfile) {
         const allProfs = await storage.getProfiles();
         const prof = matchProfileByName(allProfs, input.forProfile);
         if (prof) eligible = habits.filter(h => (h.linkedProfiles || []).includes(prof.id));
       } else {
-        // Default: prefer habits linked to self profile
         const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
         if (selfProf) {
-          const selfHabits = habits.filter(h => (h.linkedProfiles || []).includes(selfProf.id));
-          if (selfHabits.length > 0) eligible = selfHabits;
+          eligible = habits.filter(h => !(h.linkedProfiles || []).length || (h.linkedProfiles || []).includes(selfProf.id));
         }
       }
-      // Fuzzy, stem-aware match so "I pooped" resolves the "POOP" habit and
-      // "did my running" resolves "Run". Falls back to the full habit list when
-      // the profile-scoped list has no match.
-      const habit = matchHabitByName(eligible, input.name || "")
-        ?? matchHabitByName(habits, input.name || "");
-      if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
+      // Fuzzy, stem-aware match so "mark off my pooping" resolves the "POOP"
+      // habit and "check off running" resolves "Run" — but ONLY within the
+      // profile-scoped list. The old fall-back to the FULL habit list is gone:
+      // it let unqualified messages check in other people's habits.
+      const habit = matchHabitByName(eligible, input.name || "");
+      if (!habit) {
+        return {
+          error: `No habit named "${input.name || "unknown"}" on ${input.forProfile ? `${input.forProfile}'s` : "the user's"} profile. Do NOT create a habit and do NOT check in another profile's habit — if the user reported doing something, log it with log_tracker_entry instead.`,
+          code: "HABIT_NOT_FOUND",
+        };
+      }
       return storage.checkinHabit(habit.id);
     }
 
@@ -11972,7 +12020,7 @@ async function runBulkLogPath(
 
   for (let i = 0; i < ops.length && i < MAX_BULK_OPERATIONS; i++) {
     const op = ops[i];
-    const outcome: OperationOutcome = { index: i, raw: op.raw, tool: op.tool, status: "failed", trackerName: (op.input as any)?.trackerName };
+    const outcome: OperationOutcome = { index: i, raw: op.raw, tool: op.tool, status: "failed", trackerName: (op.input as any)?.trackerName, detail: summarizeOpDetail(op.input) || undefined };
     operations.push(outcome);
     if (Date.now() - startedAt > EXEC_BUDGET_MS) {
       outcome.status = "skipped";

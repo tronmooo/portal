@@ -85,12 +85,29 @@ describe("shouldUseBulkPath routing", () => {
     }
   });
 
-  it("does NOT bulk-route the 4-action reported message (agentic loop handles it)", () => {
-    expect(shouldUseBulkPath(REPORTED_MESSAGE)).toBe(false);
+  it("bulk-routes the 4-action reported message (plan → execute → verify)", () => {
+    expect(shouldUseBulkPath(REPORTED_MESSAGE)).toBe(true);
+  });
+
+  it("bulk-routes the exact fix command with blunt/shower/bathroom details", () => {
+    const msg = "I played soccer for an hour. I smoked a blunt. I took a shower once. I went to the bathroom at 8:15 AM.";
+    expect(countActionClauses(msg)).toBe(4);
+    expect(shouldUseBulkPath(msg)).toBe(true);
   });
 
   it("bulk-routes the 20-action recap", () => {
     expect(shouldUseBulkPath(TWENTY_ACTION_MESSAGE)).toBe(true);
+  });
+
+  it("does NOT bulk-route mixed commands — CRUD/habit/question content needs the full loop", () => {
+    for (const msg of [
+      "I ran 3 miles. I ate lunch. I took a nap. I read a book. Delete my old Soccer tracker.",
+      "I ran 3 miles. I ate lunch. I took a nap. Mark off my meditation habit.",
+      "I ran 3 miles. I ate lunch. I took a nap. I read a book. How much did I spend today?",
+      "I ran 3 miles. I ate lunch. I took a nap. Remind me to stretch every day.",
+    ]) {
+      expect(shouldUseBulkPath(msg), msg).toBe(false);
+    }
   });
 
   it("bulk-routes generated 10/20/50-action messages", () => {
@@ -101,8 +118,8 @@ describe("shouldUseBulkPath routing", () => {
     }
   });
 
-  it("threshold sits above typical conversational multi-action messages", () => {
-    expect(BULK_ACTION_THRESHOLD).toBeGreaterThanOrEqual(5);
-    expect(BULK_ACTION_THRESHOLD).toBeLessThanOrEqual(12);
+  it("threshold catches 4-action recaps without swallowing 1-3 action chat", () => {
+    expect(BULK_ACTION_THRESHOLD).toBeGreaterThanOrEqual(3);
+    expect(BULK_ACTION_THRESHOLD).toBeLessThanOrEqual(8);
   });
 });
