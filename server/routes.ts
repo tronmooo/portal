@@ -5205,6 +5205,15 @@ Rules:
     const created = await storage.createReminder({ title: sanitize(rawTitle), fireAt, profileId });
     res.status(201).json(created);
   }));
+  // Dismiss/complete a reminder from the UI (briefing Reminders popup "Done").
+  // Reminders are one-shot rows with no completed flag, so done = delete. The
+  // AI tools (update_reminder/delete_reminder) already used the same storage
+  // methods; this is the first REST surface for it.
+  app.delete("/api/reminders/:id", asyncHandler(async (req, res) => {
+    const ok = await storage.deleteReminder(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Reminder not found" });
+    res.json({ success: true });
+  }));
   app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
     {
       const parsed = insertObligationSchema.partial().safeParse(req.body);

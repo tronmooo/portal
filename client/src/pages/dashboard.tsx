@@ -18,6 +18,7 @@ import {
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
+import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { computeNetWorth } from "@shared/net-worth";
 import { computeNowItems, type NowItem } from "@shared/now-rank";
 import {
@@ -1024,27 +1025,8 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
 
 // ─── Section: KPI Stats ──────────────────────────────────────────────────────
 
-// localStorage helpers for per-document 30-day snooze. Keeps the implementation
-// client-side so we don't need a new schema field. Values are { docId: expiry-ms }
-// and entries that have passed their expiry are dropped on read.
-const DOC_SNOOZE_LS_KEY = "portol_doc_snooze_v1";
-function loadDocSnoozeMap(): Record<string, number> {
-  try {
-    const raw = localStorage.getItem(DOC_SNOOZE_LS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, number>;
-    const now = Date.now();
-    let dirty = false;
-    for (const k of Object.keys(parsed)) {
-      if (parsed[k] <= now) { delete parsed[k]; dirty = true; }
-    }
-    if (dirty) localStorage.setItem(DOC_SNOOZE_LS_KEY, JSON.stringify(parsed));
-    return parsed;
-  } catch { return {}; }
-}
-function saveDocSnoozeMap(m: Record<string, number>) {
-  try { localStorage.setItem(DOC_SNOOZE_LS_KEY, JSON.stringify(m)); } catch {}
-}
+// Per-document 30-day snooze moved to lib/docSnooze.ts so the briefing's
+// Document Expirations popup shares the same dismiss state as this KPI section.
 
 function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }: { stats: DashboardStats; enhanced: any; filterIds?: string[]; filterMode?: string }) {
   const [, navigate] = useLocation();
@@ -5374,10 +5356,13 @@ export default function DashboardPage() {
   const { data: enhanced, isFetching: enhancedFetching } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
     queryFn: async () => {
-      try {
-        const res = await apiRequest("GET", `/api/dashboard-enhanced${statsProfileParam}`);
-        return res.json();
-      } catch (err) { console.error("[dashboard-enhanced] fetch failed:", err); return null; }
+      // BUG-20260715-everyone-zeros: this used to swallow failures and return
+      // null, which react-query cached as a SUCCESS — Bills/Docs/Net-worth then
+      // rendered 0/— for the whole staleTime window with no retry. Let the
+      // error propagate so the query stays in error state and refetches on the
+      // next mount/focus instead of pinning zeros.
+      const res = await apiRequest("GET", `/api/dashboard-enhanced${statsProfileParam}`);
+      return res.json();
     },
     retry: false,
     // PERF (2026-05-30 Phase 2): see /api/stats hook above. Bootstrap

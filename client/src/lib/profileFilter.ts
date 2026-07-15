@@ -283,6 +283,24 @@ export function reconcileProfileFilter(
 export function setFilterEveryone() {
   _state = { mode: "everyone", selectedIds: [], selectedNames: [] };
   saveToStorage();
+  // BUG-20260715-everyone-zeros: entering Everyone must always re-aggregate.
+  // Every dashboard query is keyed [endpoint, mode, ...ids]; the "everyone"
+  // slots can hold junk that then renders as 0 in every category: entries
+  // hydrated from the persisted localStorage snapshot (up to 24h old), or
+  // fetched during the pre-hydration boot window (which can race auth and
+  // cache empty results as success). Within the 60s global staleTime nothing
+  // refetches, so the zeros stick. Invalidating the everyone-keyed slots on
+  // every switch forces active views to refetch fresh aggregate data.
+  // Dynamic import avoids a static cycle (queryClient ↔ profileFilter).
+  try {
+    void import("./queryClient").then(({ queryClient }) => {
+      queryClient.invalidateQueries({
+        predicate: (q) =>
+          String(q.queryKey?.[0] || "").startsWith("/api/") &&
+          q.queryKey?.[1] === "everyone",
+      });
+    }).catch(() => {});
+  } catch { /* SSR / test envs without the module graph */ }
 }
 
 /** Set filter to specific profile IDs */

@@ -11,6 +11,7 @@ import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { loadDocSnoozeMap } from "@/lib/docSnooze";
 import { ChevronDown } from "lucide-react";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import { BillsPopup, EventsPopup, DocsPopup, ProjectsPopup, NotesPopup, RemindersPopup } from "@/components/dashboard/BriefingPopups";
@@ -141,19 +142,25 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   const in45 = new Date(Date.now() + 45 * 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
   const in14 = new Date(Date.now() + 14 * 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
 
-  const { data: tasks = [] } = useQuery<any[]>({
+  // NOTE (BUG-20260715-everyone-zeros): none of these query functions may
+  // swallow errors into a cached-as-success empty value (`.catch(() => [])`).
+  // A transient failure — e.g. the pre-auth boot window racing token restore —
+  // then renders as "0 in every category" for the whole staleTime window.
+  // Letting the error propagate keeps react-query in error state (data stays
+  // undefined → section shows empty NOW but refetches on mount/focus/switch).
+  const { data: tasks = [], isPending: tasksPending } = useQuery<any[]>({
     queryKey: ["/api/tasks", mode, ...ids],
     queryFn: () => apiRequest("GET", `/api/tasks${param}`).then(r => r.json()),
     staleTime: 30_000,
   });
-  const { data: habits = [] } = useQuery<any[]>({
+  const { data: habits = [], isPending: habitsPending } = useQuery<any[]>({
     queryKey: ["/api/habits", mode, ...ids],
     queryFn: () => apiRequest("GET", `/api/habits${param}`).then(r => r.json()),
     staleTime: 30_000,
   });
   // 45-day window: agenda + calendar preview slice ≤14d from it; birthdays /
   // appointments / important dates get the longer horizon. One fetch.
-  const { data: timeline = [] } = useQuery<any[]>({
+  const { data: timeline = [], isPending: timelinePending } = useQuery<any[]>({
     queryKey: ["/api/calendar/timeline", todayStr, in45, mode, ...ids],
     queryFn: () => apiRequest("GET", `/api/calendar/timeline${param}${amp}start=${todayStr}&end=${in45}`).then(r => r.json()),
     staleTime: 60_000,
@@ -165,22 +172,22 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   // refetch instead of showing another profile's cached reminders.
   const { data: reminders = [] } = useQuery<any[]>({
     queryKey: ["/api/reminders", mode, ...ids],
-    queryFn: () => apiRequest("GET", `/api/reminders${param}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", `/api/reminders${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
-  const { data: goals = [] } = useQuery<any[]>({
+  const { data: goals = [], isPending: goalsPending } = useQuery<any[]>({
     queryKey: ["/api/goals", mode, ...ids],
     queryFn: () => apiRequest("GET", `/api/goals${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
   const { data: journal = [] } = useQuery<any[]>({
     queryKey: ["/api/journal", mode, ...ids],
-    queryFn: () => apiRequest("GET", `/api/journal${param}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", `/api/journal${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
   const { data: notifications = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications", mode, ...ids],
-    queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
 
@@ -225,7 +232,14 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   const missedCount = habitRows.filter(h => !h.doneToday).length;
 
   const bills = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil <= 21).slice(0, 10);
-  const docs = (enhanced?.expiringDocuments || []).slice(0, 10);
+  // Docs: respect the shared 30-day dismisses (same map the KPI section and
+  // DocsPopup use) so a dismissed alert disappears everywhere at once. The
+  // tile counts the 30-day "expiring soon" window (expired + ≤30d); the
+  // section/popup still list the longer 90-day horizon grouped by urgency.
+  const docSnooze = loadDocSnoozeMap();
+  const allExpiringDocs = (enhanced?.expiringDocuments || []).filter((d: any) => !docSnooze[d.documentId]);
+  const docs = allExpiringDocs.slice(0, 10);
+  const docsSoonCount = allExpiringDocs.filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil <= 30).length;
 
   const calendarDays: Array<{ day: string; items: any[] }> = [];
   for (const item of tl) {
@@ -275,7 +289,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   if (overdueTasks.length === 0) aiBrief.push({ text: "No overdue tasks.", tone: "pos" });
   else aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => setPopup("tasks") });
   const soonestDoc = docs.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-  if (soonestDoc) aiBrief.push({ text: `${soonestDoc.name || soonestDoc.fieldName || "A document"} expires in ${soonestDoc.daysUntil} days.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => setPopup("docs") });
+  if (soonestDoc) aiBrief.push({ text: `${soonestDoc.documentName || soonestDoc.name || soonestDoc.fieldName || "A document"} ${soonestDoc.daysUntil < 0 ? `expired ${Math.abs(soonestDoc.daysUntil)} days ago` : soonestDoc.daysUntil === 0 ? "expires today" : `expires in ${soonestDoc.daysUntil} days`}.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => setPopup("docs") });
   if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => setPopup("habits") });
   const soonestBill = bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
   if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) due ${soonestBill.daysUntil === 0 ? "today" : `in ${soonestBill.daysUntil}d`}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => setPopup("bills") });
@@ -284,15 +298,18 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
 
   return (
     <div data-testid="executive-briefing">
-      {/* Top stat tiles (photo-2 style) — every tile drills into its module. */}
+      {/* Top stat tiles (photo-2 style) — every tile drills into its module.
+          Loading-vs-empty (BUG-20260715-everyone-zeros): while a tile's query
+          is still pending (cold Everyone switch, cold reload) it shows "…",
+          never a hard 0 — a wall of zeros reads as "aggregation is broken". */}
       <div className="flex flex-wrap gap-2 mb-2" data-testid="brief-stat-row">
-        <StatTile label="Score" value={hasScoreInputs ? String(score) : "—"} sub={hasScoreInputs ? `${scoreLabel} · ${overdueTasks.length} critical` : "No data yet"} accent={!hasScoreInputs ? "240 10% 60%" : score >= 90 ? "155 65% 45%" : score >= 75 ? "43 96% 56%" : "0 72% 58%"} onClick={() => setPopup("tasks")} testId="brief-stat-score" />
-        <StatTile label="Tasks" value={String(pending.length)} sub={`${agendaTasks.length} today · ${overdueTasks.length} overdue`} accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
-        <StatTile label="Habits" value={`${habitRows.length - missedCount}/${habitRows.length}`} sub={missedCount > 0 ? `${missedCount} still due` : "all done"} accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
-        <StatTile label="Bills" value={String(bills.length)} sub={`$${Math.round(billsUpcomingTotal).toLocaleString()} upcoming`} accent={ACCENTS.bills} onClick={() => setPopup("bills")} testId="brief-stat-bills" />
-        <StatTile label="Docs" value={String(docs.length)} sub={docs.length ? "expiring soon" : "all good"} accent={ACCENTS.docs} onClick={() => setPopup("docs")} testId="brief-stat-docs" />
-        <StatTile label="Events" value={String(eventCount)} sub="next 14 days" accent={ACCENTS.calendar} onClick={() => setPopup("events")} testId="brief-stat-events" />
-        <StatTile label="Projects" value={String(projects.length)} sub={`${doneToday} done today`} accent={ACCENTS.projects} onClick={() => setPopup("projects")} testId="brief-stat-projects" />
+        <StatTile label="Score" value={tasksPending ? "…" : hasScoreInputs ? String(score) : "—"} sub={tasksPending ? "loading" : hasScoreInputs ? `${scoreLabel} · ${overdueTasks.length} critical` : "No data yet"} accent={!hasScoreInputs ? "240 10% 60%" : score >= 90 ? "155 65% 45%" : score >= 75 ? "43 96% 56%" : "0 72% 58%"} onClick={() => setPopup("tasks")} testId="brief-stat-score" />
+        <StatTile label="Tasks" value={tasksPending ? "…" : String(pending.length)} sub={tasksPending ? "loading" : `${agendaTasks.length} today · ${overdueTasks.length} overdue`} accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
+        <StatTile label="Habits" value={habitsPending ? "…" : `${habitRows.length - missedCount}/${habitRows.length}`} sub={habitsPending ? "loading" : missedCount > 0 ? `${missedCount} still due` : "all done"} accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
+        <StatTile label="Bills" value={enhanced === undefined ? "…" : String(bills.length)} sub={enhanced === undefined ? "loading" : `$${Math.round(billsUpcomingTotal).toLocaleString()} upcoming`} accent={ACCENTS.bills} onClick={() => setPopup("bills")} testId="brief-stat-bills" />
+        <StatTile label="Docs" value={enhanced === undefined ? "…" : String(docsSoonCount)} sub={enhanced === undefined ? "loading" : docsSoonCount ? "≤30d window" : "all good"} accent={ACCENTS.docs} onClick={() => setPopup("docs")} testId="brief-stat-docs" />
+        <StatTile label="Events" value={timelinePending ? "…" : String(eventCount)} sub="next 14 days" accent={ACCENTS.calendar} onClick={() => setPopup("events")} testId="brief-stat-events" />
+        <StatTile label="Projects" value={goalsPending ? "…" : String(projects.length)} sub={goalsPending ? "loading" : `${doneToday} done today`} accent={ACCENTS.projects} onClick={() => setPopup("projects")} testId="brief-stat-projects" />
       </div>
 
       <div className="md:columns-2 xl:columns-3 gap-2">
@@ -422,7 +439,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
             <div className="divide-y divide-border/30">
               {docs.map((d: any) => (
                 <Row key={d.documentId || d.id}
-                  cells={[d.expirationDate?.slice(5, 10) || "—", d.name || d.fieldName || "Document", `${d.daysUntil}d`]}
+                  cells={[d.expirationDate?.slice(5, 10) || "—", d.documentName || d.name || d.fieldName || "Document", `${d.daysUntil}d`]}
                   urgent={typeof d.daysUntil === "number" && d.daysUntil <= 21}
                   valueTone={typeof d.daysUntil === "number" && d.daysUntil <= 45 ? "warn" : undefined}
                   onClick={() => setPopup("docs")} />
@@ -525,7 +542,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
       {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={enhanced?.financeSnapshot?.upcomingBills || []} />}
       {popup === "events" && <EventsPopup open onClose={() => setPopup(null)} items={tl} todayStr={todayStr} />}
-      {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={enhanced?.expiringDocuments || []} />}
+      {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={allExpiringDocs} />}
       {popup === "projects" && <ProjectsPopup open onClose={() => setPopup(null)} goals={goals} />}
       {popup === "notes" && <NotesPopup open onClose={() => setPopup(null)} notes={(journal || []).slice(0, 20)} />}
       {popup === "reminders" && <RemindersPopup open onClose={() => setPopup(null)} reminders={reminders} />}

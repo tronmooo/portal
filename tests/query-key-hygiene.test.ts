@@ -61,6 +61,11 @@ const ALLOWLIST = new Set<string>([
   // Trackers hub — reads all docs, then filters into `profileFilteredDocs`
   // (passesProfileFilter) before any display; the combined feed also filters.
   "pages/trackers.tsx::documents",
+  // Briefing detail popups — lookup maps keyed BY ID to enrich rows that are
+  // already profile-scoped upstream (bills/docs come from the filtered
+  // dashboard-enhanced snapshot); nothing from these lists renders directly.
+  "components/dashboard/BriefingPopups.tsx::obligations",
+  "components/dashboard/BriefingPopups.tsx::documents",
 ]);
 
 function walk(dir: string): string[] {
