@@ -2429,7 +2429,8 @@ If unsure, return "profile_fact".`,
       const cachedStats = getCached(statsCacheKey);
       const cachedEnhanced = getCached(enhancedCacheKey);
 
-      const [stats, profiles, incomes, expensesForBudget, budgets, obligationsAll, assetPartyLinks, liabilityProfileLinks] = await Promise.all([
+      const [stats, profiles, incomes, expensesForBudget, budgets, obligationsAll, assetPartyLinks, liabilityProfileLinks,
+        tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll, remindersAll] = await Promise.all([
         cachedStats ?? dedupe(statsCacheKey, async () => {
           const s = await storage.getStats(undefined, filterIds);
           setCache(statsCacheKey, s, 60 * 1000);
@@ -2446,6 +2447,21 @@ If unsure, return "profile_fact".`,
         (storage as any).getObligations ? (storage as any).getObligations() : Promise.resolve([] as any[]),
         (storage as any).getAssetPartyLinks ? (storage as any).getAssetPartyLinks() : Promise.resolve([] as any[]),
         (storage as any).getLiabilityProfileLinks ? (storage as any).getLiabilityProfileLinks() : Promise.resolve([] as any[]),
+        // [PERF 2026-07-16, user report "tiles stuck on loading"] The Executive
+        // briefing + Upcoming section fired ~14 MORE GETs (tasks/habits/goals/
+        // journal/events/documents/trackers/reminders) in parallel with this
+        // bootstrap — on a weak mobile link those requests fight the bootstrap
+        // download and several stall out. Nearly all of these tables are ALREADY
+        // fetched inside getStats/getDashboardEnhanced under the request memo,
+        // so returning them here is free — one round trip instead of fifteen.
+        storage.getTasks(),
+        storage.getHabits(),
+        (storage as any).getGoals ? (storage as any).getGoals() : Promise.resolve([] as any[]),
+        (storage as any).getJournalEntries ? (storage as any).getJournalEntries() : Promise.resolve([] as any[]),
+        storage.getEvents(),
+        storage.getDocuments(),
+        storage.getTrackers(),
+        (storage as any).listReminders ? (storage as any).listReminders() : Promise.resolve([] as any[]),
       ]);
 
       const enhanced = cachedEnhanced ?? await dedupe(enhancedCacheKey, async () => {
@@ -2509,9 +2525,39 @@ If unsure, return "profile_fact".`,
             )).slice(0, 100),
         assetPartyLinks: assetPartyLinks || [],
         liabilityProfileLinks: liabilityProfileLinks || [],
+        // [PERF 2026-07-16] Briefing/Upcoming seed datasets — each filtered with
+        // the SAME canonical rule its GET endpoint applies (passesProfileFilter
+        // over linkedProfiles; scalar profileId for reminders), so seeding a
+        // profile-scoped cache key can never leak another profile's rows.
+        tasks: scopeByLinkedProfiles(tasksAll),
+        habits: scopeByLinkedProfiles(habitsAll),
+        goals: scopeByLinkedProfiles(goalsAll),
+        journal: scopeByLinkedProfiles(journalAll),
+        events: scopeByLinkedProfiles(eventsAll),
+        documents: scopeByLinkedProfiles(documentsAll),
+        // Mirror GET /api/trackers exactly: hidden categories stripped, then
+        // the canonical orphan rule (filterByProfileScope) — NOT the plain
+        // linkedProfiles rule — so the seeded key matches a real fetch.
+        trackers: await (async () => {
+          let t = (trackersAll || []).filter((x: any) => !HIDDEN_TRACKER_CATEGORIES.has(String(x.category || "").toLowerCase().trim()));
+          if (filterIds && filterIds.length > 0) t = await filterByProfileScope(t, filterIds, userId);
+          return t;
+        })(),
+        reminders: (!filterIds || filterIds.length === 0)
+          ? (remindersAll || [])
+          : (remindersAll || []).filter((r: any) =>
+              passesProfileFilter(r.profileId ? [r.profileId] : [], { selectedIds: filterIds, allProfiles: profiles })
+            ),
         month,
         filterIds: filterIds || [],
       };
+
+      function scopeByLinkedProfiles<T extends { linkedProfiles?: string[] }>(rows: T[]): T[] {
+        if (!filterIds || filterIds.length === 0) return rows || [];
+        return (rows || []).filter((x: any) =>
+          passesProfileFilter(x.linkedProfiles, { selectedIds: filterIds!, allProfiles: profiles })
+        );
+      }
     });
 
     setCache(cacheKey, data, 60 * 1000); // match /api/stats TTL

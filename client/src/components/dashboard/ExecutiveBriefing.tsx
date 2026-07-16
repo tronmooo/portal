@@ -143,9 +143,15 @@ function dayLabel(dateStr: string, todayStr: string): string {
 const BIRTHDAY_RE = /birthday|anniversar|🎂|🎉/i;
 const APPT_RE = /appt|appointment|doctor|dentist|dental|vet\b|exam|check[- ]?up|physical|therapy/i;
 
-export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
+export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, ready = true }: {
   filterMode: string; filterIds: string[];
   stats: DashboardStats | undefined; enhanced: any;
+  /** Gate for this component's own queries (PERF 2026-07-16): the dashboard
+   * passes bootstrapSettled so these resolve from the bootstrap-seeded cache
+   * instead of firing 7 network requests that race the bootstrap download on
+   * weak mobile links. Defaults true so other callers are unaffected; the
+   * dashboard's gate self-releases after 8s even if bootstrap hangs. */
+  ready?: boolean;
 }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -166,11 +172,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   // undefined → section shows empty NOW but refetches on mount/focus/switch).
   const { data: tasks = [], isPending: tasksPending } = useQuery<any[]>({
     queryKey: ["/api/tasks", mode, ...ids],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/tasks${param}`).then(r => r.json()),
     staleTime: 30_000,
   });
   const { data: habits = [], isPending: habitsPending } = useQuery<any[]>({
     queryKey: ["/api/habits", mode, ...ids],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/habits${param}`).then(r => r.json()),
     staleTime: 30_000,
   });
@@ -178,6 +186,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   // appointments / important dates get the longer horizon. One fetch.
   const { data: timeline = [], isPending: timelinePending } = useQuery<any[]>({
     queryKey: ["/api/calendar/timeline", todayStr, in45, mode, ...ids],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/calendar/timeline${param}${amp}start=${todayStr}&end=${in45}`).then(r => r.json()),
     staleTime: 60_000,
   });
@@ -188,21 +197,25 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   // refetch instead of showing another profile's cached reminders.
   const { data: reminders = [] } = useQuery<any[]>({
     queryKey: ["/api/reminders", mode, ...ids],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/reminders${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
   const { data: goals = [], isPending: goalsPending } = useQuery<any[]>({
     queryKey: ["/api/goals", mode, ...ids],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/goals${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
   const { data: journal = [] } = useQuery<any[]>({
     queryKey: ["/api/journal", mode, ...ids],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/journal${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
   const { data: notifications = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications", mode, ...ids],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()),
     staleTime: 60_000,
   });

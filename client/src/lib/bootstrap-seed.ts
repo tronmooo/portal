@@ -10,6 +10,7 @@
 // Key shapes must stay in lockstep with the components' queryKey definitions
 // (client/src/pages/dashboard.tsx) — if a key changes there, change it here.
 import { queryClient } from "./queryClient";
+import { goalsQueryKey } from "@shared/query-keys";
 
 export function seedDashboardCaches(
   b: any,
@@ -33,4 +34,20 @@ export function seedDashboardCaches(
   seed(["/api/obligations", mode, ...ids], b.obligations);
   seed(["/api/asset-party-links"], b.assetPartyLinks);
   seed(["/api/liability-profile-links"], b.liabilityProfileLinks);
+  // [PERF 2026-07-16, user report "tiles stuck on loading"] Briefing/Upcoming
+  // datasets ride in the same bootstrap response now, so the Executive
+  // briefing's and Upcoming section's queries (gated on bootstrap settling)
+  // resolve from these seeds instead of firing 14 more network requests that
+  // fight the bootstrap download on weak mobile links. Key shapes mirror the
+  // consuming components exactly (ExecutiveBriefing.tsx, dashboard.tsx).
+  seed(["/api/tasks", mode, ...ids], b.tasks);
+  seed(["/api/habits", mode, ...ids], b.habits);
+  seed(["/api/goals", mode, ...ids], b.goals);
+  seed([...goalsQueryKey(ids)], b.goals);
+  seed(["/api/journal", mode, ...ids], b.journal);
+  seed(["/api/events", mode, ...ids], b.events);
+  seed(["/api/documents", mode, ...ids], b.documents);
+  seed(["/api/trackers", mode, ...ids], b.trackers);
+  seed(["/api/trackers", mode, ...ids, "trends"], b.trackers);
+  seed(["/api/reminders", mode, ...ids], b.reminders);
 }

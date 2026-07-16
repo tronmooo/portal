@@ -4484,7 +4484,7 @@ function UpcomingDateRow({
   );
 }
 
-function UpcomingSection({ filterIds = [], filterMode = "everyone" }: { filterIds?: string[]; filterMode?: string }) {
+function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true }: { filterIds?: string[]; filterMode?: string; ready?: boolean }) {
   // PR M — Scope upcoming dates to the selected profile(s). When filterMode is
   // "selected" we pass ?profileIds=... to every list endpoint and split the
   // react-query cache by filterMode + filterIds so switching profiles doesn't
@@ -4494,22 +4494,27 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone" }: { filterId
   const { data: profiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
   const { data: documents = [] } = useQuery<any[]>({
     queryKey: ["/api/documents", filterMode, ...filterIds],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/documents${profileParam}`).then(r => r.json()),
   });
   const { data: tasks = [] } = useQuery<any[]>({
     queryKey: ["/api/tasks", filterMode, ...filterIds],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
   });
   const { data: events = [] } = useQuery<any[]>({
     queryKey: ["/api/events", filterMode, ...filterIds],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()),
   });
   const { data: obligations = [] } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
   const { data: goals = [] } = useQuery<any[]>({
     queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
   });
   // Chat-created reminders ("remind me to take evening medication") must show
@@ -4517,6 +4522,7 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone" }: { filterId
   // Reminders section (user report 2026-07-15).
   const { data: reminders = [] } = useQuery<any[]>({
     queryKey: ["/api/reminders", filterMode, ...filterIds],
+    enabled: ready,
     queryFn: () => apiRequest("GET", `/api/reminders${profileParam}`).then(r => r.json()),
   });
 
@@ -5183,11 +5189,12 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
   );
 }
 
-function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton }: {
+function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton, ready = true }: {
   enhanced: any;
   stats: any;
   allProfiles: any[];
   showSkeleton?: boolean;
+  ready?: boolean;
 }) {
   if (showSkeleton) return <SkeletonGrid cols={3} rows={2} h="h-14" />;
   return (
@@ -5198,7 +5205,7 @@ function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton }: {
           row opens its module's popup, exactly like the personal view.
           Household-only extras (combined net-worth hero + per-person cards)
           follow below the briefing. */}
-      <ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />
+      <ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} ready={ready} />
       <HouseholdGroupHeader icon={Users} label="Household" />
       <HouseholdHero allProfiles={allProfiles} />
       <ProfileSummaryGrid allProfiles={allProfiles} />
@@ -5588,13 +5595,13 @@ export default function DashboardPage() {
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
         break;
       case "upcoming-dates":
-        content = <UpcomingSection filterIds={filterIds} filterMode={filterMode} />;
+        content = <UpcomingSection filterIds={filterIds} filterMode={filterMode} ready={bootstrapSettled} />;
         break;
       case "quick-actions":
         content = <QuickActionsSection filterMode={filterMode} filterIds={filterIds} />;
         break;
       case "exec-briefing":
-        content = <ExecutiveBriefing filterMode={filterMode} filterIds={filterIds} stats={stats} enhanced={enhanced} />;
+        content = <ExecutiveBriefing filterMode={filterMode} filterIds={filterIds} stats={stats} enhanced={enhanced} ready={bootstrapSettled} />;
         break;
       case "notifications":
         content = <NotificationsSection filterMode={filterMode} filterIds={filterIds} />;
@@ -5750,6 +5757,7 @@ export default function DashboardPage() {
           stats={stats}
           allProfiles={allProfiles}
           showSkeleton={showDashSkeleton && !stats}
+          ready={bootstrapSettled}
         />
         )
       ) : (() => {

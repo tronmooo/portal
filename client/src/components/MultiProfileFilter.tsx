@@ -127,10 +127,11 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
       staleTime: 60_000,
     });
   }, []);
-  const prefetchTopProfiles = useCallback(() => {
-    const list = (profiles || []).filter((p: any) => !filter.selectedIds.includes(p.id)).slice(0, 4);
-    for (const p of list) prefetchProfileDashboard(p.id);
-  }, [profiles, filter.selectedIds, prefetchProfileDashboard]);
+  // NOTE (2026-07-16 audit): prefetching the top-4 profiles' bootstraps when
+  // the picker OPENED pushed ~700KB of JSON down the pipe at once — actively
+  // harmful on weak mobile links (it competed with whatever the user was
+  // actually loading). Prefetch is now per-row only, on hover/touch, which
+  // fires for exactly the profile the user is about to pick.
 
   // Validate stored filter IDs against actual profiles — only refresh display names
   // when the underlying profile name changed. Never drop IDs based on a transient
@@ -278,7 +279,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
     <>
       {/* Desktop: Popover dropdown (desktopOpen state — isolated from Sheet) */}
       <div className="hidden md:block">
-        <Popover open={desktopOpen} onOpenChange={(o) => { setDesktopOpen(o); if (o) prefetchTopProfiles(); }}>
+        <Popover open={desktopOpen} onOpenChange={setDesktopOpen}>
           <PopoverTrigger asChild>
             <Button
               variant="outline"
@@ -334,7 +335,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
           )}
           <ChevronDown className="h-3 w-3 text-muted-foreground ml-0.5" />
         </Button>
-        <Sheet open={mobileOpen} onOpenChange={(o) => { setMobileOpen(o); if (o) prefetchTopProfiles(); }}>
+        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetContent side="bottom" className="max-h-[70vh] rounded-t-2xl px-2 pb-6 flex flex-col">
             <SheetHeader className="px-2 pb-2 shrink-0">
               <div className="flex items-center justify-between">
