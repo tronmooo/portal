@@ -350,6 +350,11 @@ export interface ComputedData {
   bmi?: number;
   bloodPressureCategory?: "normal" | "elevated" | "high_stage1" | "high_stage2" | "crisis";
   sleepQuality?: "poor" | "fair" | "good" | "excellent";
+  validated?: boolean;
+  /** Per-value provenance from the estimation engine (shared/estimation-engine
+   * Enrichment): which fields were calculated vs estimated, confidence,
+   * methods, and the assumptions registry. Lives here — never in values. */
+  enrichment?: any;
 }
 
 export const insertTrackerSchema = z.object({

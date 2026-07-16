@@ -226,3 +226,105 @@ describe("stride + summary", () => {
     expect(s).toContain("steps");
   });
 });
+
+// ─── Canonical-units upgrade (user report 2026-07-16: "60 min" primary in a
+// miles history + "_enrichment: [object Object]" leaking into the UI) ────────
+
+import {
+  enrichStrengthEntry,
+  applyEnrichmentToValues,
+  splitEnrichmentFromValues,
+} from "@shared/estimation-engine";
+
+describe("applyEnrichmentToValues — canonical primary always present", () => {
+  it("duration-only run gets an estimated distance applied into values", () => {
+    const values: Record<string, any> = { duration: 60 };
+    const e = enrichWalkRunEntry("running", values, {});
+    const applied = applyEnrichmentToValues(values, e);
+    expect(applied).toContain("distance");
+    expect(values.distance, "distance (miles) must be stored so the history never mixes units").toBeCloseTo(6, 0);
+    // provenance still marks it estimated
+    expect(e.estimated.distance.source).toBe("estimated");
+  });
+
+  it("never overwrites explicit values and skips sub-threshold estimates", () => {
+    const values: Record<string, any> = { distance: 1, steps: 2400 };
+    const e = enrichWalkRunEntry("walking", values, {});
+    applyEnrichmentToValues(values, e);
+    expect(values.distance).toBe(1);
+    expect(values.steps).toBe(2400);
+    const low = { canonical: {}, calculated: {}, estimated: { steps: { value: 99, source: "estimated" as const, confidence: 0.1 } }, assumptions: [] };
+    const v2: Record<string, any> = {};
+    expect(applyEnrichmentToValues(v2, low)).toEqual([]);
+    expect(v2.steps).toBeUndefined();
+  });
+});
+
+describe("splitEnrichmentFromValues", () => {
+  it("moves the provenance blob out of values", () => {
+    const e = enrichWalkRunEntry("walking", { distance: 1 }, {});
+    const raw = { distance: 1, steps: 2100, _enrichment: e };
+    const split = splitEnrichmentFromValues(raw);
+    expect(split.values._enrichment).toBeUndefined();
+    expect(split.values.distance).toBe(1);
+    expect(split.enrichment).toBe(e);
+    expect(splitEnrichmentFromValues({ a: 1 }).enrichment).toBeNull();
+    expect(splitEnrichmentFromValues(null).values).toEqual({});
+  });
+});
+
+describe("cycling", () => {
+  it("duration-only ride estimates miles from default speed, no steps", () => {
+    const values: Record<string, any> = { duration: 30 };
+    const e = enrichWalkRunEntry("cycling", values, {});
+    expect(e.estimated.distance.value).toBeCloseTo(6, 0); // 30 min @ 5 min/mile ≈ 12 mph
+    expect(e.estimated.steps, "cycling has no step metric").toBeUndefined();
+  });
+
+  it("distance + duration gives calculated speed and estimated calories", () => {
+    const e = enrichWalkRunEntry("cycling", { distance: 12, duration: 60 }, { weightKg: 80 });
+    expect(e.calculated.speedMph.value).toBe(12);
+    expect(e.calculated.speedMph.source).toBe("calculated");
+    expect(e.estimated.caloriesBurned.value).toBeGreaterThan(400); // MET 8 × 80kg × 1h = 640
+  });
+});
+
+describe("calories → distance (weakest signal)", () => {
+  it("estimates miles from calories alone using profile weight", () => {
+    const e = enrichWalkRunEntry("running", { caloriesBurned: 480 }, { weightKg: 75 });
+    // 480 / (1.6 × 75) = 4 miles
+    expect(e.estimated.distance.value).toBeCloseTo(4, 0);
+    expect(e.estimated.distance.confidence).toBeLessThanOrEqual(0.5);
+    expect(e.assumptions.some(a => a.field === "distance")).toBe(true);
+  });
+
+  it("does not fire when a better signal exists", () => {
+    const e = enrichWalkRunEntry("running", { caloriesBurned: 480, duration: 30 }, { weightKg: 75 });
+    expect(e.estimated.distance?.method || "").not.toContain("kcal/mile");
+  });
+});
+
+describe("sleep minutes → hours", () => {
+  it('"slept 430 minutes" stores 7.17 hours as calculated', () => {
+    const e = enrichSleepEntry({ minutes: 430 });
+    expect(e.calculated.hours.value).toBeCloseTo(7.17, 2);
+    expect(e.calculated.hours.source).toBe("calculated");
+    const values: Record<string, any> = { minutes: 430 };
+    applyEnrichmentToValues(values, e);
+    expect(values.hours).toBeCloseTo(7.17, 2);
+  });
+});
+
+describe("strength volume", () => {
+  it("weight × reps × sets → calculated totalVolume", () => {
+    const e = enrichStrengthEntry({ weight: 185, reps: 5, sets: 3 });
+    expect(e.calculated.totalVolume.value).toBe(2775);
+    expect(e.calculated.totalVolume.source).toBe("calculated");
+    expect(e.calculated.totalVolume.confidence).toBe(1);
+  });
+
+  it("defaults sets to 1 and respects an explicit volume", () => {
+    expect(enrichStrengthEntry({ weight: 100, reps: 10 }).calculated.totalVolume.value).toBe(1000);
+    expect(enrichStrengthEntry({ weight: 100, reps: 10, totalVolume: 999 }).calculated.totalVolume).toBeUndefined();
+  });
+});

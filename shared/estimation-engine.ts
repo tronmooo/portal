@@ -209,7 +209,14 @@ const RUN_STRIDE_COEFF = 0.65;
 const DEFAULT_STRIDE_M = 0.76;   // population average walking stride
 const DEFAULT_WALK_PACE_MIN_PER_MILE = 20;
 const DEFAULT_RUN_PACE_MIN_PER_MILE = 10;
+const DEFAULT_CYCLE_PACE_MIN_PER_MILE = 5; // ~12 mph casual ride
 const DEFAULT_WEIGHT_KG = 70;
+/** Net energy cost per kg of body weight per mile, by activity. */
+const KCAL_PER_KG_PER_MILE: Record<CardioActivity, number> = {
+  walking: 0.8,
+  running: 1.6,
+  cycling: 0.65,
+};
 
 export function estimateStrideMeters(heightCm: number | null, activity: "walking" | "running"): { stride: number; basis: "height" | "default" } {
   const coeff = activity === "running" ? RUN_STRIDE_COEFF : WALK_STRIDE_COEFF;
@@ -219,7 +226,9 @@ export function estimateStrideMeters(heightCm: number | null, activity: "walking
   return { stride: activity === "running" ? DEFAULT_STRIDE_M * 1.35 : DEFAULT_STRIDE_M, basis: "default" };
 }
 
-// ─── Walking / running enrichment ────────────────────────────────────────────
+// ─── Walking / running / cycling enrichment ─────────────────────────────────
+
+export type CardioActivity = "walking" | "running" | "cycling";
 
 export interface ActivityProfileContext {
   heightCm?: number | null;
@@ -242,12 +251,13 @@ const round = (n: number, dp = 0) => { const f = 10 ** dp; return Math.round(n *
  * an assumption), each with confidence + registered assumptions.
  */
 export function enrichWalkRunEntry(
-  activity: "walking" | "running",
+  activity: CardioActivity,
   explicit: Record<string, any>,
   ctx: ActivityProfileContext = {},
 ): Enrichment {
   const out = emptyEnrichment(activity);
   const personal = ctx.personal && ctx.personal.samples > 0 ? ctx.personal : null;
+  const hasSteps = activity !== "cycling"; // cycling has no step metric
 
   // ── explicit facts, converted to working units ──
   let miles = numeric(explicit.distance ?? explicit.miles ?? explicit.distanceMiles);
@@ -270,7 +280,7 @@ export function enrichWalkRunEntry(
   if (minutes != null) out.canonical.durationSeconds = round(minutes * 60);
 
   // ── stride / steps-per-mile source hierarchy: personal history → height → default ──
-  const strideInfo = estimateStrideMeters(ctx.heightCm ?? null, activity);
+  const strideInfo = estimateStrideMeters(ctx.heightCm ?? null, activity === "running" ? "running" : "walking");
   const stepsPerMileFromStride = METERS_PER_MILE / strideInfo.stride;
   const stepsPerMile = personal?.stepsPerMile ?? stepsPerMileFromStride;
   const stepsBasis: { source: ValueSource; confidence: number; method: string } = personal?.stepsPerMile
@@ -279,7 +289,9 @@ export function enrichWalkRunEntry(
       ? { source: "estimated", confidence: 0.65, method: `stride length estimated from height (${round(strideInfo.stride, 2)} m)` }
       : { source: "estimated", confidence: 0.45, method: `population-average stride (${round(strideInfo.stride, 2)} m)` };
 
-  const paceDefault = activity === "running" ? DEFAULT_RUN_PACE_MIN_PER_MILE : DEFAULT_WALK_PACE_MIN_PER_MILE;
+  const paceDefault = activity === "running" ? DEFAULT_RUN_PACE_MIN_PER_MILE
+    : activity === "cycling" ? DEFAULT_CYCLE_PACE_MIN_PER_MILE
+    : DEFAULT_WALK_PACE_MIN_PER_MILE;
   const paceSource: { pace: number; source: ValueSource; confidence: number; method: string } = personal?.paceMinutesPerMile
     ? { pace: personal.paceMinutesPerMile, source: "estimated", confidence: 0.75, method: `personal average pace (${personal.paceMinutesPerMile} min/mile)` }
     : { pace: paceDefault, source: "estimated", confidence: 0.45, method: `default ${activity} pace (${paceDefault} min/mile)` };
@@ -315,8 +327,25 @@ export function enrichWalkRunEntry(
     out.canonical.distanceMeters = round(estMiles * METERS_PER_MILE, 1);
   }
 
+  // distance from calories alone ("I burned 480 calories running") — the
+  // weakest signal, used only when nothing better was stated.
+  if (!distanceExplicit && !stepsExplicit && !durationExplicit && explicitCalories != null && explicitCalories > 0) {
+    const weightKg = ctx.weightKg && ctx.weightKg > 20 ? ctx.weightKg : DEFAULT_WEIGHT_KG;
+    const weightKnown = !!(ctx.weightKg && ctx.weightKg > 20);
+    const kcalPerMile = KCAL_PER_KG_PER_MILE[activity] * weightKg;
+    const estMiles = explicitCalories / kcalPerMile;
+    const conf = weightKnown ? 0.5 : 0.38;
+    if (estMiles > 0.05 && estMiles < 200 && conf >= MIN_SAVE_CONFIDENCE) {
+      const method = `calories ÷ ${round(kcalPerMile)} kcal/mile (${weightKnown ? "profile" : "default"} weight ${round(weightKg)}kg)`;
+      out.estimated.distance = { value: round(estMiles, 2), source: "estimated", confidence: conf, method };
+      out.assumptions.push({ field: "distance", assumption: method, valueUsed: `${round(kcalPerMile)} kcal/mile`, confidence: conf });
+      workingMiles = estMiles;
+      out.canonical.distanceMeters = round(estMiles * METERS_PER_MILE, 1);
+    }
+  }
+
   // steps from distance.
-  if (!stepsExplicit && workingMiles != null) {
+  if (hasSteps && !stepsExplicit && workingMiles != null) {
     const conf = distanceExplicit ? stepsBasis.confidence : Math.max(0.3, stepsBasis.confidence - 0.15);
     if (conf >= MIN_SAVE_CONFIDENCE) {
       out.estimated.steps = { value: Math.round(workingMiles * stepsPerMile), source: stepsBasis.source, confidence: conf, method: stepsBasis.method };
@@ -343,6 +372,7 @@ export function enrichWalkRunEntry(
     const mph = 60 / paceMin;
     let met: number;
     if (activity === "running") met = Math.max(6, 1.61 * mph);
+    else if (activity === "cycling") met = mph >= 14 ? 10 : mph >= 12 ? 8 : mph >= 10 ? 6.8 : 4;
     else met = mph >= 3.5 ? 5.0 : mph >= 2.8 ? 3.5 : 3.0;
     if (intensity === "intense" || intensity === "hard" || intensity === "vigorous") met *= 1.15;
     if (intensity === "light" || intensity === "easy") met *= 0.85;
@@ -412,6 +442,13 @@ export function enrichSleepEntry(explicit: Record<string, any>): Enrichment {
   const out = emptyEnrichment("sleep");
   const hours = numeric(explicit.hours);
   if (hours != null) { out.canonical.durationSeconds = round(hours * 3600); return out; }
+  // "slept 430 minutes" → 7.17 hours: an exact conversion, not an estimate.
+  const minutes = numeric(explicit.minutes ?? explicit.durationMinutes ?? explicit.duration);
+  if (minutes != null && minutes > 0) {
+    out.calculated.hours = { value: round(minutes / 60, 2), source: "calculated", confidence: 1, method: "minutes converted to hours" };
+    out.canonical.durationSeconds = round(minutes * 60);
+    return out;
+  }
   const bed = explicit.bedtime ? String(explicit.bedtime) : null;
   const wake = explicit.wakeTime ? String(explicit.wakeTime) : null;
   if (bed && wake) {
@@ -422,6 +459,61 @@ export function enrichSleepEntry(explicit: Record<string, any>): Enrichment {
     }
   }
   return out;
+}
+
+// ─── Strength (weight × reps × sets → total volume) ─────────────────────────
+
+/** "Bench pressed 185 lbs for 5 reps, 3 sets" → totalVolume 2775 (calculated —
+ * all inputs exact). Works for any strength-shaped entry regardless of the
+ * tracker's name (Bench Press, Squats, Deadlift stay separate trackers). */
+export function enrichStrengthEntry(explicit: Record<string, any>): Enrichment {
+  const out = emptyEnrichment("strength");
+  const weight = numeric(explicit.weight ?? explicit.weightLbs ?? explicit.lbs);
+  const reps = numeric(explicit.reps ?? explicit.repetitions);
+  const sets = numeric(explicit.sets) ?? 1;
+  if (weight != null && weight > 0 && reps != null && reps > 0 && explicit.totalVolume == null && explicit.volume == null) {
+    out.calculated.totalVolume = {
+      value: round(weight * reps * sets),
+      source: "calculated",
+      confidence: 1,
+      method: `${weight} × ${reps} reps × ${sets} set${sets === 1 ? "" : "s"}`,
+    };
+  }
+  return out;
+}
+
+// ─── Applying enrichment to the stored entry ─────────────────────────────────
+
+/**
+ * Copy calculated + estimated values into the entry's real fields so the
+ * tracker's canonical primary metric (distance for walk/run/cycle, hours for
+ * sleep, ounces for hydration) is ALWAYS present — a duration-only "jogged 60
+ * minutes" must still store distance, or the history mixes "60 min" rows with
+ * "2 mi" rows and trend deltas compare different units (user screenshot,
+ * 2026-07-16). Explicit values are never overwritten; sub-threshold-confidence
+ * estimates are not applied. Returns the field names that were filled in.
+ */
+export function applyEnrichmentToValues(values: Record<string, any>, e: Enrichment | null | undefined): string[] {
+  if (!values || !e) return [];
+  const applied: string[] = [];
+  for (const [k, pv] of [...Object.entries(e.calculated), ...Object.entries(e.estimated)]) {
+    if (values[k] != null && values[k] !== "") continue;
+    if (!isFinite(pv.value) || pv.confidence < MIN_SAVE_CONFIDENCE) continue;
+    values[k] = pv.value;
+    applied.push(k);
+  }
+  return applied;
+}
+
+/**
+ * Pull the provenance blob out of entry values before persistence. Provenance
+ * belongs in the entry's `computed` column — leaving an object inside `values`
+ * renders as "_enrichment: [object Object]" in every values-chip UI.
+ */
+export function splitEnrichmentFromValues(values: Record<string, any> | null | undefined): { values: Record<string, any>; enrichment: Enrichment | null } {
+  if (!values || typeof values !== "object") return { values: values || {}, enrichment: null };
+  const { _enrichment, ...rest } = values as Record<string, any>;
+  return { values: rest, enrichment: (_enrichment as Enrichment) || null };
 }
 
 // ─── Compact human summary for replies/cards ─────────────────────────────────
@@ -435,6 +527,7 @@ const FIELD_LABELS: Record<string, (v: number) => string> = {
   speedMph: (v) => `${v} mph`,
   ounces: (v) => `${v} oz`,
   hours: (v) => `${v} h`,
+  totalVolume: (v) => `${Math.round(v).toLocaleString()} total volume`,
 };
 
 /** "≈2,150 steps, ≈20 min (estimated)" — for the chat reply and cards. */

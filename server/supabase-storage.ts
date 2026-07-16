@@ -2463,8 +2463,15 @@ export class SupabaseStorage implements IStorage {
     const tracker = await this.getTracker(data.trackerId);
     if (!tracker) return undefined;
 
+    // Provenance metadata (per-value source/confidence/assumptions from the
+    // estimation engine) rides in on values._enrichment but belongs on the
+    // entry's `computed` column — an object left inside values renders as
+    // "_enrichment: [object Object]" in every values-chip UI and pollutes the
+    // duplicate-detection key below.
+    const { _enrichment: enrichmentMeta, ...cleanValues } = { ...data.values } as Record<string, any>;
+
     // Validate and normalize entry values against tracker field definitions
-    let values = { ...data.values };
+    let values = cleanValues;
     let validated = true;
     const fieldNames = new Set(tracker.fields.map(f => f.name.toLowerCase()));
     const COMMON_ALIASES: Record<string, string[]> = {
@@ -2529,7 +2536,11 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    const computed = { ...computeSecondaryData(tracker.name, tracker.category, values), validated };
+    const computed = {
+      ...computeSecondaryData(tracker.name, tracker.category, values),
+      validated,
+      ...(enrichmentMeta ? { enrichment: enrichmentMeta } : {}),
+    };
     const id = randomUUID();
     // W4-4: honor an explicit entry timestamp when the caller supplies one
     // (already parsed to ISO upstream); otherwise stamp NOW().

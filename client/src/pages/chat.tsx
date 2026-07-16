@@ -2952,6 +2952,7 @@ export default function ChatPage() {
                       // _enrichment); estimated values render with a ≈ so
                       // the user always sees exact vs estimated distinctly.
                       const enrichment = (action.data?.values as any)?._enrichment;
+                      const estimatedKeys = new Set(Object.keys(enrichment?.estimated || {}));
                       const estimatedParts: string[] = enrichment?.estimated
                         ? Object.entries(enrichment.estimated as Record<string, any>)
                             .map(([k, pv]) => `≈${(pv as any)?.value} ${k} (est.)`)
@@ -2960,7 +2961,10 @@ export default function ChatPage() {
                       const entryValues = isTrackerEntry && action.data?.values
                         ? [
                             ...Object.entries(action.data.values as Record<string,any>)
-                              .filter(([k]) => !k.startsWith('_') && k !== 'item')
+                              // Estimated fields are applied into values for storage,
+                              // but render ONLY via the ≈ (est.) parts below — never
+                              // as plain values that look user-stated.
+                              .filter(([k, v]) => !k.startsWith('_') && k !== 'item' && !estimatedKeys.has(k) && typeof v !== 'object')
                               .map(([k, v]) => `${v} ${k}`)
                               .slice(0, 4),
                             ...estimatedParts,

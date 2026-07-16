@@ -36,6 +36,8 @@ import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
   enrichSleepEntry,
+  enrichStrengthEntry,
+  applyEnrichmentToValues,
   derivePersonalMetrics,
   parseHeightToCm,
   parseWeightToKg,
@@ -6801,7 +6803,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       try {
         const canonType = canonActivity?.type;
         input.values = input.values || {};
-        if (canonType === "walking" || canonType === "running") {
+        if (canonType === "walking" || canonType === "running" || canonType === "cycling") {
+          // The model routinely invents caloriesBurned for cardio ("jogged an
+          // hour" → caloriesBurned: 600) despite being told to pass only
+          // explicit facts. A fabricated explicit value blocks the engine's
+          // provenance-labeled estimate — drop it unless the user actually
+          // talked about calories.
+          const cardioMsg = String((input as any).__userMessage || "");
+          if (cardioMsg && !/calor|kcal|burn/i.test(cardioMsg)) {
+            delete (input.values as any).caloriesBurned;
+            delete (input.values as any).calories;
+          }
           const targetProf: any = profiles.find(p => p.id === targetProfileId);
           const pf = targetProf?.fields || {};
           const heightCm = parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches);
@@ -6816,11 +6828,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           entryEnrichment = enrichHydrationEntry(input.values);
         } else if (canonType === "sleep") {
           entryEnrichment = enrichSleepEntry(input.values);
-          // A calculated sleep duration is exact — surface it as the primary
-          // hours field so the sleep card/chart reads it.
-          if (entryEnrichment.calculated.hours && input.values.hours == null) {
-            input.values.hours = entryEnrichment.calculated.hours.value;
-          }
+        } else if (input.values.weight != null && input.values.reps != null) {
+          // Strength-shaped entry on any tracker (Bench Press, Squats, …):
+          // weight × reps × sets → total volume, calculated exactly.
+          entryEnrichment = enrichStrengthEntry(input.values);
         }
         if (entryEnrichment && (
           Object.keys(entryEnrichment.calculated).length ||
@@ -6828,9 +6839,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           Object.keys(entryEnrichment.canonical).length ||
           entryEnrichment.assumptions.length
         )) {
+          // Canonical-unit guarantee: fill derived/estimated fields into the
+          // entry's REAL fields (never overwriting explicit ones) so the
+          // tracker's primary metric is always present — a duration-only
+          // "jogged 60 minutes" still stores distance in miles instead of
+          // leaving a "60 min" row in a miles history. Provenance for every
+          // applied field stays in the enrichment blob (persisted on the
+          // entry's computed column by the storage layer).
+          const applied = applyEnrichmentToValues(input.values, entryEnrichment);
           (input.values as any)._enrichment = entryEnrichment;
           const note = summarizeEnrichment(entryEnrichment);
-          if (note) logger.info("ai", `Enrichment [${input.trackerName}]: ${note}`);
+          if (note) logger.info("ai", `Enrichment [${input.trackerName}]: ${note}${applied.length ? ` (applied: ${applied.join(", ")})` : ""}`);
         } else {
           entryEnrichment = null;
         }

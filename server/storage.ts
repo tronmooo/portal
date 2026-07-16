@@ -1084,8 +1084,10 @@ export class MemStorage implements IStorage {
   async logEntry(data: InsertTrackerEntry): Promise<TrackerEntry | undefined> {
     const tracker = this.trackers.get(data.trackerId);
     if (!tracker) return undefined;
-    const computed = computeSecondaryData(tracker.name, tracker.category, data.values);
-    const entry: TrackerEntry = { id: randomUUID(), values: data.values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: data.timestamp || new Date().toISOString() };
+    // Mirror supabase-storage: provenance metadata moves from values into computed.
+    const { _enrichment: enrichmentMeta, ...values } = { ...data.values } as Record<string, any>;
+    const computed = { ...computeSecondaryData(tracker.name, tracker.category, values), ...(enrichmentMeta ? { enrichment: enrichmentMeta } : {}) } as any;
+    const entry: TrackerEntry = { id: randomUUID(), values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: data.timestamp || new Date().toISOString() };
     tracker.entries.push(entry);
     let desc = `Logged ${tracker.name}: ${JSON.stringify(data.values)}`;
     if (computed.caloriesBurned) desc += ` (~${computed.caloriesBurned} cal burned)`;

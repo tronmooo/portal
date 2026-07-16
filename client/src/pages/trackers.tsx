@@ -1881,8 +1881,8 @@ function findAnyNumericValue(
     "sbp", "dbp",
   ]);
   for (const [k, v] of Object.entries(values)) {
-    if (skip.has(k)) continue;
-    if (v == null || v === "") continue;
+    if (skip.has(k) || k.startsWith("_")) continue;
+    if (v == null || v === "" || typeof v === "object") continue;
     const n = typeof v === "number" ? v : Number(v);
     if (!isNaN(n) && isFinite(n)) return { key: k, num: n };
   }
@@ -4934,7 +4934,11 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
           const trackerNameLower = (tracker.name || "").toLowerCase().trim();
           const secondaryVals = Object.entries(entry.values).filter(([k, v]) => {
             if (v == null || v === "") return false;
-            if (k === "_notes" || k === "notes" || k === "item") return false;
+            // Reserved metadata keys and structured objects (e.g. the
+            // estimation engine's provenance blob) never render as chips —
+            // "_enrichment: [object Object]" was showing on history rows.
+            if (k.startsWith("_") || typeof v === "object") return false;
+            if (k === "notes" || k === "item") return false;
             if (k === effectivePrimKey) return false;
             if (k === "systolic" || k === "diastolic"
                 || k === "systolic_pressure" || k === "diastolic_pressure") return false;
@@ -4950,10 +4954,16 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
             : "(empty)";
           const nextEntry = filtered[idx + 1];
           const nextDeclared = nextEntry?.values[primaryField];
-          const nextAny = (nextDeclared == null || nextDeclared === "") && nextEntry
-            ? findAnyNumericValue(nextEntry.values)?.num ?? null
-            : (typeof nextDeclared === "number" ? nextDeclared : null);
-          const delta = typeof val === "number" && typeof nextAny === "number" ? val - nextAny : null;
+          const nextFallback = (nextDeclared == null || nextDeclared === "") && nextEntry
+            ? findAnyNumericValue(nextEntry.values)
+            : null;
+          const nextKey = nextFallback ? nextFallback.key : primaryField;
+          const nextAny = nextFallback ? nextFallback.num : (typeof nextDeclared === "number" ? nextDeclared : null);
+          // Only diff same-unit values: comparing this row's duration against
+          // the next row's miles produced garbage deltas like "+58.0".
+          const delta = typeof val === "number" && typeof nextAny === "number" && effectivePrimKey === nextKey
+            ? val - nextAny
+            : null;
 
           return (
             <HistoryEntryRow
