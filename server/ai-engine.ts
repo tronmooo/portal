@@ -5083,6 +5083,7 @@ RESPONSE FORMAT (CRITICAL — the UI renders rich entry cards from your tool cal
   - "Logged for Jim."
   - "Both entries saved."
   NEVER list the items you logged. NEVER repeat tracker names. NEVER write "✅…" bullets. NEVER write route paths like "/trackers + Jim's Health tab". NEVER write paragraphs.
+  EXCEPTION — owner name: when a write result carries owner (someone other than the user), the short reply MUST include that name possessively — "Color set on Mike's Test Truck." still fits the one-liner budget. Never spend the sentence on the item alone while dropping whose it is.
   EXCEPTION — duplicate note: when a result's verification.duplicate_count > 0, add ONE short sentence like "Saved — note you already have a similar entry." This is the only allowed addition to the short reply.
   EXCEPTION — bulk preview: after preview_bulk_action, relay the preview message IN FULL (counts, sample names, "nothing deleted yet, confirm to proceed") — a bulk preview is a question to the user, not a completed write.
   EXCEPTION — system reports: after execute_bulk_action, repair_relations, or refresh_dashboard, relay the result's message sentence (totals/counts) instead of a bare "Done.".
