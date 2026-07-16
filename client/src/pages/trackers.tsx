@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -5956,15 +5957,17 @@ export default function TrackersPage() {
   // Skeleton loading state — MUST be after all hooks
   if (showTrackerSkeleton && !trackers && isPending) {
     return (
-      <div className="p-3 md:p-5 space-y-3">
-        <div className="h-7 w-32 rounded skeleton-shimmer" />
-        <div className="flex gap-2 overflow-x-hidden">
-          {[...Array(4)].map((_, i) => <div key={i} className="h-7 w-20 rounded-full skeleton-shimmer shrink-0" />)}
+      <StuckLoadingGuard active>
+        <div className="p-3 md:p-5 space-y-3">
+          <div className="h-7 w-32 rounded skeleton-shimmer" />
+          <div className="flex gap-2 overflow-x-hidden">
+            {[...Array(4)].map((_, i) => <div key={i} className="h-7 w-20 rounded-full skeleton-shimmer shrink-0" />)}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+            {[...Array(8)].map((_, i) => <div key={i} className="h-16 rounded-lg skeleton-shimmer" />)}
+          </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-          {[...Array(8)].map((_, i) => <div key={i} className="h-16 rounded-lg skeleton-shimmer" />)}
-        </div>
-      </div>
+      </StuckLoadingGuard>
     );
   }
 

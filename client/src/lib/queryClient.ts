@@ -207,9 +207,16 @@ export const queryClient = new QueryClient({
           const msg = error.message;
           if (msg.includes("401") || msg.includes("403") || msg.includes("404")) return false;
           if (msg.includes("500") || msg.includes("502") || msg.includes("503")) return failureCount < 2;
+          // Rate-limited or timed out (stuck-skeleton fix, 2026-07-16): both
+          // are transient by definition — retry instead of freezing the
+          // section in an error state the UI renders as eternal "loading".
+          if (msg.includes("429") || msg.toLowerCase().includes("timed out")) return failureCount < 2;
         }
         return failureCount < 1;
       },
+      // Back off meaningfully between retries (1s, 3s) so a 429 retry doesn't
+      // instantly re-trip the limiter.
+      retryDelay: (attempt) => Math.min(1_000 * 3 ** attempt, 10_000),
     },
     mutations: {
       retry: false,

@@ -5425,7 +5425,10 @@ export default function DashboardPage() {
       const res = await apiRequest("GET", `/api/dashboard-enhanced${statsProfileParam}`);
       return res.json();
     },
-    retry: false,
+    // One retry (stuck-skeleton fix, 2026-07-16): with retry:false a single
+    // transient failure left enhanced undefined — and every tile fed by it
+    // said "loading" — until the next focus/mount.
+    retry: 1,
     // PERF (2026-05-30 Phase 2): see /api/stats hook above. Bootstrap
     // pre-fills this cache entry; this hook becomes a no-op on the happy path.
     enabled: bootstrapSettled,

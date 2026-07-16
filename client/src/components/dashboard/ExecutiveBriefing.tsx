@@ -6,10 +6,10 @@
 // HabitsPopup are the same components the dashboard KPI tiles always used
 // (extracted to TaskHabitPopups.tsx), documents/bills/calendar/journal rows
 // deep-link to their existing surfaces. Nothing here duplicates functionality.
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
 import { ChevronDown } from "lucide-react";
@@ -191,6 +191,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     staleTime: 60_000,
   });
 
+  // STUCK-LOADING DEADLINE (2026-07-16): if any tile-feeding query is still
+  // unresolved after 12s (wedged fetch, failed enhanced, cold instance), show
+  // the Retry banner instead of letting "loading" tiles sit forever.
+  const anyBriefPending = tasksPending || habitsPending || timelinePending || goalsPending || enhanced === undefined;
+  const [briefStuck, setBriefStuck] = useState(false);
+  useEffect(() => {
+    if (!anyBriefPending) { setBriefStuck(false); return; }
+    const t = setTimeout(() => setBriefStuck(true), 12_000);
+    return () => clearTimeout(t);
+  }, [anyBriefPending]);
+
   const payBill = useMutation({
     mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
     onSuccess: () => {
@@ -304,6 +315,19 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
 
   return (
     <div data-testid="executive-briefing">
+      {/* STUCK-LOADING BANNER (2026-07-16): a tile must never say "loading"
+          forever. If any feeding query is still unresolved after 12s, surface
+          a Retry that cancels wedged requests and refetches what's on screen. */}
+      {briefStuck && (
+        <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2" data-testid="brief-stuck-banner">
+          <span className="text-xs text-muted-foreground">Some sections are taking too long to load.</span>
+          <button
+            className="text-xs font-medium text-primary hover:underline shrink-0"
+            onClick={() => { setBriefStuck(false); void recoverWedgedQueries(); }}
+            data-testid="brief-stuck-retry"
+          >Retry</button>
+        </div>
+      )}
       {/* Top stat tiles (photo-2 style) — every tile drills into its module.
           Loading-vs-empty (BUG-20260715-everyone-zeros): while a tile's query
           is still pending (cold Everyone switch, cold reload) it shows "…",
