@@ -34,6 +34,14 @@ export type ApiResponse<T = any> = {
   headers: Headers;
 };
 
+// The server enforces a rolling 60-writes/min budget per user. The suite's
+// write bursts (CRUD/guardrail files) can momentarily exceed it, and a 429 is
+// a clean rejection (nothing was written), so waiting out the window and
+// retrying is side-effect-free. Without this, gate runs failed
+// nondeterministically on the suite's own rate limiter — different files each
+// run — which is contention, not a product regression.
+const RATE_LIMIT_BACKOFFS_MS = [3_000, 8_000, 15_000, 25_000];
+
 export async function api<T = any>(
   method: string,
   path: string,
@@ -41,18 +49,24 @@ export async function api<T = any>(
   opts: { token?: string } = {},
 ): Promise<ApiResponse<T>> {
   const token = opts.token ?? (await getSmokeToken());
-  const r = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await r.text();
-  let parsed: any = text;
-  try { parsed = JSON.parse(text); } catch { /* leave as string */ }
-  return { status: r.status, ok: r.ok, data: parsed, headers: r.headers };
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await r.text();
+    let parsed: any = text;
+    try { parsed = JSON.parse(text); } catch { /* leave as string */ }
+    if (r.status === 429 && attempt < RATE_LIMIT_BACKOFFS_MS.length) {
+      await new Promise(res => setTimeout(res, RATE_LIMIT_BACKOFFS_MS[attempt]));
+      continue;
+    }
+    return { status: r.status, ok: r.ok, data: parsed, headers: r.headers };
+  }
 }
 
 /** Convenience: assert a request succeeded. */
