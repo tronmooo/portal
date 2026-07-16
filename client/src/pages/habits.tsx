@@ -64,6 +64,16 @@ function HabitCard({ habit }: { habit: Habit }) {
           : h
         )
       );
+      // Confirm instantly — the ring/count already flipped optimistically and
+      // the message is computed from local state, not the server reply.
+      // Toasting in onSuccess bound it to the roundtrip (8s+ on a cold
+      // serverless write): "the notification comes 30 seconds later".
+      const newCount = todayCheckins + 1;
+      if (newCount >= targetPerDay) {
+        toast({ title: `✨ ${habit.name} complete!`, description: targetPerDay > 1 ? `All ${targetPerDay} done for today.` : "Keep the streak going!" });
+      } else {
+        toast({ title: `${habit.name} — ${newCount} / ${targetPerDay}`, description: `${targetPerDay - newCount} more to go today` });
+      }
       return { prev };
     },
     onSuccess: (serverHabit: any) => {
@@ -73,12 +83,6 @@ function HabitCard({ habit }: { habit: Habit }) {
         queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
           (old || []).map((h: any) => h.id === habit.id ? { ...h, ...serverHabit } : h)
         );
-      }
-      const newCount = todayCheckins + 1;
-      if (newCount >= targetPerDay) {
-        toast({ title: `✨ ${habit.name} complete!`, description: targetPerDay > 1 ? `All ${targetPerDay} done for today.` : "Keep the streak going!" });
-      } else {
-        toast({ title: `${habit.name} — ${newCount} / ${targetPerDay}`, description: `${targetPerDay - newCount} more to go today` });
       }
     },
     onError: (err: Error, _v: unknown, ctx: any) => {
@@ -95,8 +99,15 @@ function HabitCard({ habit }: { habit: Habit }) {
 
   // Undo a check-in by deleting the checkin entry
   const uncheckinMutation = useMutation<any, Error, string>({
-    mutationFn: (checkinId: string) =>
-      apiRequest("DELETE", `/api/habits/${habit.id}/checkin/${checkinId}`),
+    mutationFn: async (checkinId: string) => {
+      // Idempotent undo: 404 = the check-in is already gone (stale render or
+      // double tap). The desired state holds — not an error.
+      try {
+        await apiRequest("DELETE", `/api/habits/${habit.id}/checkin/${checkinId}`);
+      } catch (e: any) {
+        if (!String(e?.message || "").startsWith("404")) throw e;
+      }
+    },
     onMutate: async (checkinId: string) => {
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
@@ -111,10 +122,9 @@ function HabitCard({ habit }: { habit: Habit }) {
           : h
         )
       );
-      return { prev };
-    },
-    onSuccess: () => {
+      // Instant confirmation (see checkinMutation note).
       toast({ title: `${habit.name} check-in undone` });
+      return { prev };
     },
     onError: (err: Error, _v: unknown, ctx: any) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }

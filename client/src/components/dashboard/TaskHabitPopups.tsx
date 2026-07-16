@@ -81,14 +81,30 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   const isLoading = isPending;
 
   const createMutation = useMutation({
-    mutationFn: (payload: Record<string, any>) => apiRequest("POST", "/api/tasks", { status: "todo", priority: "medium", ...payload }),
+    mutationFn: (payload: Record<string, any>) => apiRequest("POST", "/api/tasks", { status: "todo", priority: "medium", ...payload }).then(r => r.json()),
     onMutate: async (payload: Record<string, any>) => {
       await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
       const prev = queryClient.getQueryData(["/api/tasks", filterMode, ...filterIds]);
+      const tempId = 'tmp-' + Date.now();
       queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) =>
-        [{ id: 'tmp-' + Date.now(), status: 'todo', priority: 'medium', tags: [], linkedProfiles: [], ...payload }, ...(old || [])]
+        [{ id: tempId, status: 'todo', priority: 'medium', tags: [], linkedProfiles: [], ...payload }, ...(old || [])]
       );
-      return { prev };
+      // Confirm INSTANTLY, matching the optimistic UI. The toast used to fire
+      // in onSettled, so on a cold serverless write it arrived seconds after
+      // the row appeared (user report: "notification comes 30 seconds later")
+      // — and onSettled also runs on FAILURE, so a failed create showed
+      // "Failed to create task" immediately followed by "Task added".
+      toast({ title: "Task added" });
+      return { prev, tempId };
+    },
+    onSuccess: (serverTask: any, _v, ctx: any) => {
+      // Swap the tmp row for the real row the moment the create resolves —
+      // shrinks the window in which a tap on the new task targets a synthetic
+      // id (the tmp-…-404 red-error class) from "until refetch" to ~0.
+      if (serverTask?.id && ctx?.tempId) {
+        queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) =>
+          (old || []).map((t: any) => t.id === ctx.tempId ? serverTask : t));
+      }
     },
     onError: (_e, _v, ctx: any) => {
       if (ctx?.prev) {
@@ -98,7 +114,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       }
       toast({ title: "Failed to create task", variant: "destructive" });
     },
-    onSettled: () => { invalidateDomain("tasks"); toast({ title: "Task added" }); },
+    onSettled: () => { invalidateDomain("tasks"); },
   });
 
   // ─ Helper: optimistically adjust stats.activeTasks & dashboard-enhanced ─
@@ -121,8 +137,20 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     });
   };
 
+  // Optimistic rows carry a synthetic id ("tmp-…"/"temp-…") until the server
+  // create lands and the refetch swaps in the real row. Acting on one PATCHes
+  // /api/tasks/tmp-… → 404 → a red "Failed to update task" even though the
+  // task exists (caught live: HTTP 404 PATCH /api/tasks/tmp-17841…). On a cold
+  // serverless write that window is seconds long, so fast taps hit it easily.
+  const STILL_SAVING = "STILL_SAVING";
+  const isTempId = (id: any) => /^te?mp-/.test(String(id));
+  const stillSavingToast = () => toast({ title: "Still saving…", description: "That item is a moment from being created — try again in a second." });
+
   const toggleMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string; title?: string }) => apiRequest("PATCH", `/api/tasks/${id}`, { status }),
+    mutationFn: ({ id, status }: { id: string; status: string; title?: string }) => {
+      if (isTempId(id)) throw new Error(STILL_SAVING);
+      return apiRequest("PATCH", `/api/tasks/${id}`, { status });
+    },
     onMutate: async ({ id, status }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/tasks", filterMode, ...filterIds] });
       const prev = queryClient.getQueryData<any[]>(["/api/tasks", filterMode, ...filterIds]);
@@ -140,22 +168,31 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       if (wasDone !== isDone) {
         patchStatsTaskDelta(isDone ? -1 : +1);
       }
+      // Instant confirmation (see create-task note): the UI already flipped,
+      // so the toast must not wait for the server roundtrip — and must never
+      // fire from onSettled, which also runs when the request FAILED.
+      toast({ title: status === 'done' ? "Task completed" : "Task updated" });
       return { prev, prevStats, prevDash };
     },
-    onError: (_e, _v, ctx: any) => {
+    onError: (e: any, _v, ctx: any) => {
       if (ctx?.prev !== undefined) queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx.prev);
       if (ctx?.prevStats !== undefined) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], ctx.prevStats);
       if (ctx?.prevDash !== undefined) queryClient.setQueryData(["/api/dashboard-enhanced", filterMode, ...filterIds], ctx.prevDash);
+      if (String(e?.message) === STILL_SAVING) { stillSavingToast(); return; }
       toast({ title: "Failed to update task", variant: "destructive" });
     },
-    onSettled: (_d, _e, variables) => {
+    onSettled: () => {
       invalidateDomain("tasks");
-      toast({ title: variables.status === 'done' ? "Task completed" : "Task updated" });
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: ({ id }: { id: string }) => apiRequest("DELETE", `/api/tasks/${id}`),
+    mutationFn: ({ id }: { id: string }) => {
+      // Deleting a temp row would no-op on the server while the real task is
+      // still being created — it would then "come back" on refetch.
+      if (isTempId(id)) throw new Error(STILL_SAVING);
+      return apiRequest("DELETE", `/api/tasks/${id}`);
+    },
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/tasks", filterMode, ...filterIds] });
       const prev = queryClient.getQueryData<any[]>(["/api/tasks", filterMode, ...filterIds]);
@@ -167,25 +204,29 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       if (removed && String(removed.status || "").toLowerCase() !== "done") {
         patchStatsTaskDelta(-1);
       }
+      // Instant confirmation (see create-task note).
+      toast({ title: "Task deleted" });
       return { prev, prevStats, prevDash };
     },
-    onError: (_e, _v, ctx: any) => {
+    onError: (e: any, _v, ctx: any) => {
       if (ctx?.prev !== undefined) queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx.prev);
       if (ctx?.prevStats !== undefined) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], ctx.prevStats);
       if (ctx?.prevDash !== undefined) queryClient.setQueryData(["/api/dashboard-enhanced", filterMode, ...filterIds], ctx.prevDash);
+      if (String(e?.message) === STILL_SAVING) { stillSavingToast(); return; }
       toast({ title: "Failed to delete task", variant: "destructive" });
     },
     onSettled: () => {
       invalidateDomain("tasks");
-      toast({ title: "Task deleted" });
     },
   });
 
   // Generic field update (priority, dueDate, description, recurrence-via-tags).
   // Patches the cached list optimistically so edits feel instant.
   const updateMutation = useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: Record<string, any> }) =>
-      apiRequest("PATCH", `/api/tasks/${id}`, patch).then(r => r.json()),
+    mutationFn: ({ id, patch }: { id: string; patch: Record<string, any> }) => {
+      if (isTempId(id)) throw new Error(STILL_SAVING);
+      return apiRequest("PATCH", `/api/tasks/${id}`, patch).then(r => r.json());
+    },
     onMutate: async ({ id, patch }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/tasks", filterMode, ...filterIds] });
       const prev = queryClient.getQueryData<any[]>(["/api/tasks", filterMode, ...filterIds]);
@@ -193,8 +234,9 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
         (old || []).map((t: any) => t.id === id ? { ...t, ...patch } : t));
       return { prev };
     },
-    onError: (_e, _v, ctx: any) => {
+    onError: (e: any, _v, ctx: any) => {
       if (ctx?.prev !== undefined) queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx.prev);
+      if (String(e?.message) === STILL_SAVING) { stillSavingToast(); return; }
       toast({ title: "Couldn't update task", variant: "destructive" });
     },
     onSettled: () => { invalidateDomain("tasks"); },
@@ -956,8 +998,15 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   // Un-check (toggle off) today's completion. The design's check button toggles,
   // so tapping a completed habit must remove today's check-in.
   const deleteCheckinMutation = useMutation({
-    mutationFn: ({ id, checkinId }: { id: string; checkinId: string }) =>
-      apiRequest("DELETE", `/api/habits/${id}/checkin/${checkinId}`),
+    mutationFn: async ({ id, checkinId }: { id: string; checkinId: string }) => {
+      // Idempotent un-check: 404 = already gone (stale render / double tap);
+      // the desired state holds, so don't surface a red error for it.
+      try {
+        await apiRequest("DELETE", `/api/habits/${id}/checkin/${checkinId}`);
+      } catch (e: any) {
+        if (!String(e?.message || "").startsWith("404")) throw e;
+      }
+    },
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });

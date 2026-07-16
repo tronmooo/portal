@@ -107,11 +107,39 @@ export default function WellnessPage() {
       if (next) {
         if (!existing) await apiRequest("POST", `/api/habits/${id}/checkin`, { date: today });
       } else if (existing) {
-        await apiRequest("DELETE", `/api/habits/${id}/checkin/${existing.id}`);
+        // Idempotent untoggle: a 404 means the check-in is already gone (the
+        // rendered state was stale — e.g. a slow refetch after a previous
+        // toggle). The desired state already holds, so that is NOT an error;
+        // surfacing it as one is the "red error but it worked" report.
+        try {
+          await apiRequest("DELETE", `/api/habits/${id}/checkin/${existing.id}`);
+        } catch (e: any) {
+          if (!String(e?.message || "").startsWith("404")) throw e;
+        }
       }
     },
-    onMutate: ({ id }) => setTogglingHabitId(id),
-    onError: () => toast({ title: "Failed to update habit", variant: "destructive" }),
+    onMutate: async ({ id, next }) => {
+      setTogglingHabitId(id);
+      // Optimistic flip: without this the ring/checkbox waited for the write +
+      // refetch (8s+ on a cold serverless instance), so taps felt ignored and
+      // users tapped again — the stale second tap is what produced the 404s.
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+        (old || []).map((h: any) => h.id === id
+          ? {
+              ...h,
+              checkins: next
+                ? [...(h.checkins || []).filter((c: any) => c.date !== today), { id: "tmp-" + Date.now(), date: today }]
+                : (h.checkins || []).filter((c: any) => c.date !== today),
+            }
+          : h));
+      return { prev };
+    },
+    onError: (_e, _v, ctx: any) => {
+      if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
+      toast({ title: "Failed to update habit", variant: "destructive" });
+    },
     onSettled: () => {
       setTogglingHabitId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
@@ -140,10 +168,40 @@ export default function WellnessPage() {
   const toggleMed = useMutation({
     mutationFn: async ({ id, next }: { id: string; next: boolean }) => {
       if (next) await apiRequest("POST", `/api/obligations/${id}/pay`, { date: today });
-      else await apiRequest("DELETE", `/api/obligations/${id}/last-payment`, {});
+      else {
+        // Idempotent untoggle: 404 = "No payments to undo" — the med is
+        // already unmarked (stale render / double tap). Desired state holds;
+        // don't turn it into a red "Couldn't update medication".
+        try {
+          await apiRequest("DELETE", `/api/obligations/${id}/last-payment`, {});
+        } catch (e: any) {
+          if (!String(e?.message || "").startsWith("404")) throw e;
+        }
+      }
     },
-    onMutate: ({ id }) => setTogglingMedId(id),
-    onError: () => toast({ title: "Couldn't update medication", variant: "destructive" }),
+    onMutate: async ({ id, next }) => {
+      setTogglingMedId(id);
+      // Optimistic flip of the payment record the med card derives "taken
+      // today" from — same rationale as toggleHabit above.
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/obligations"] });
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/obligations"] }, (old) =>
+        Array.isArray(old)
+          ? old.map((o: any) => o.id === id
+              ? {
+                  ...o,
+                  payments: next
+                    ? [...(o.payments || []), { id: "tmp-" + Date.now(), date: today, amount: o.amount }]
+                    : (o.payments || []).filter((p: any) => String(p.date || "").slice(0, 10) !== today),
+                }
+              : o)
+          : old);
+      return { prev };
+    },
+    onError: (_e, _v, ctx: any) => {
+      if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
+      toast({ title: "Couldn't update medication", variant: "destructive" });
+    },
     onSettled: () => {
       setTogglingMedId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });

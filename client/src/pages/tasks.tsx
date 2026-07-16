@@ -267,8 +267,14 @@ function TaskItem({
   const { toast } = useToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
+  // Optimistic rows carry a synthetic "tmp-"/"temp-" id until the create
+  // settles; PATCH/DELETE against one 404s ("red error but it worked" class).
+  const isTempTask = /^te?mp-/.test(String(task.id));
+  const stillSaving = () => toast({ title: "Still saving…", description: "This task is a moment from being created — try again in a second." });
+
   const toggleMutation = useMutation<any,Error,void>({
     mutationFn: async () => {
+      if (isTempTask) throw new Error("STILL_SAVING");
       const newStatus = task.status === "done" ? "todo" : "done";
       const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, { status: newStatus });
       return res.json();
@@ -281,11 +287,15 @@ function TaskItem({
       queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
         old?.map(t => t.id === task.id ? { ...t, status: newStatus } : t)
       );
+      // Confirm instantly — the row already flipped optimistically. Toasting
+      // in onSuccess bound the confirmation to the server roundtrip (8s+ on a
+      // cold serverless write), which read as "the notification comes 30
+      // seconds later". On failure the destructive toast below replaces this.
+      toast({ title: task.status === "done" ? `"${task.title}" reopened` : `"${task.title}" completed` });
       return { prevQueries };
     },
     onSuccess: () => {
       invalidateTaskQueries();
-      toast({ title: task.status === "done" ? `"${task.title}" reopened` : `"${task.title}" completed` });
     },
     onError: (err: Error, _vars, context: any) => {
       // Rollback optimistic update on error
@@ -294,6 +304,7 @@ function TaskItem({
           queryClient.setQueryData(key, data);
         }
       }
+      if (err.message === "STILL_SAVING") { stillSaving(); return; }
       toast({ title: `Failed to update "${task.title}"`, description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -306,10 +317,9 @@ function TaskItem({
       queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
         (old || []).map(t => t.id === task.id ? { ...t, status: "todo" as const } : t)
       );
-      return { prevQueries };
-    },
-    onSuccess: () => {
+      // Instant confirmation (see toggleMutation note).
       toast({ title: `"${task.title}" restored` });
+      return { prevQueries };
     },
     onError: (err: Error, _v: unknown, ctx: any) => {
       if (ctx?.prevQueries) { for (const [key, data] of ctx.prevQueries) queryClient.setQueryData(key, data); }
@@ -319,23 +329,26 @@ function TaskItem({
   });
 
   const deleteMutation = useMutation<any,Error,void>({
-    mutationFn: () => apiRequest("DELETE", `/api/tasks/${task.id}`),
+    mutationFn: async () => {
+      if (isTempTask) throw new Error("STILL_SAVING");
+      return apiRequest("DELETE", `/api/tasks/${task.id}`);
+    },
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
       const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
       queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
         (old || []).filter(t => t.id !== task.id)
       );
-      return { prevQueries };
-    },
-    onSuccess: () => {
+      // Instant confirmation (see toggleMutation note); Undo still restores.
       toast({
         title: `"${task.title}" deleted`,
         action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction>,
       });
+      return { prevQueries };
     },
     onError: (err: Error, _v: unknown, ctx: any) => {
       if (ctx?.prevQueries) { for (const [key, data] of ctx.prevQueries) queryClient.setQueryData(key, data); }
+      if (err.message === "STILL_SAVING") { stillSaving(); return; }
       toast({ title: `Failed to delete "${task.title}"`, description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => { invalidateTaskQueries(); },
