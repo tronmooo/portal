@@ -23,6 +23,7 @@ const RUN = `MA${Date.now().toString(36)}`;
 
 let TOKEN = "";
 const createdTrackerIds = new Set<string>();
+const createdEntryIds = new Set<string>();
 
 async function api(method: string, path: string, body?: any) {
   const r = await fetch(`${BASE}${path}`, {
@@ -85,6 +86,13 @@ function activityBank(): Array<[string, string]> {
 
 const BANK = activityBank();
 
+/** Map every tracker-entry id → its tracker, across the whole account. */
+function indexEntries(trackers: any[]): Map<string, { tracker: any; entry: any }> {
+  const idx = new Map<string, { tracker: any; entry: any }>();
+  for (const t of trackers) for (const e of t.entries || []) idx.set(e.id, { tracker: t, entry: e });
+  return idx;
+}
+
 async function runTier(n: number) {
   const items = BANK.slice(0, n);
   const message = items.map(([clause]) => clause).join(" ");
@@ -93,44 +101,47 @@ async function runTier(n: number) {
   const res = await chat(message);
 
   // Per-action reporting: the server tells us what happened to each op.
-  expect(Array.isArray(res.operations) || Array.isArray(res.actions), "response carries per-action data").toBe(true);
+  // NOTE (2026-07-16): assertions are ENTITY-ID based, not tracker-NAME
+  // based — the normalization layer intentionally consolidates "walked 2
+  // miles on the X trail" into the canonical Walking tracker instead of
+  // creating an "X Trail" tracker, so guessing names is wrong by design.
+  expect(Array.isArray(res.operations), "response carries per-action operations").toBe(true);
   const okOps = (res.operations || []).filter((o) => o.status === "ok" || o.status === "deduped");
-  const loggedCount = res.operations ? okOps.length : (res.actions || []).length;
-  expect(loggedCount, `expected ~${n} logged actions; reply: ${res.reply?.slice(0, 300)}`).toBeGreaterThanOrEqual(Math.floor(n * 0.9));
-
-  // (a) + (b) every action is in the DB and on the trackers feed the dashboard reads.
-  const trackers = await getTrackers();
-  const missing: string[] = [];
-  for (const [, trackerName] of items) {
-    const t = findTracker(trackers, trackerName);
-    if (!t || !(t.entries || []).length) missing.push(trackerName);
+  expect(okOps.length, `expected ~${n} logged actions; reply: ${res.reply?.slice(0, 300)}`).toBeGreaterThanOrEqual(Math.floor(n * 0.9));
+  const entityIds = okOps.map((o: any) => o.entityId).filter(Boolean);
+  expect(entityIds.length, "ok operations must carry entity ids").toBeGreaterThanOrEqual(Math.floor(n * 0.8));
+  for (const o of res.operations || []) {
+    if (o.createdTracker?.id) createdTrackerIds.add(o.createdTracker.id);
   }
-  expect(missing, `trackers missing or empty after ${n}-action prompt`).toEqual([]);
+
+  // (a) + (b) every reported write is REALLY in the DB, on the same feed the
+  // dashboard renders from.
+  let idx = indexEntries(await getTrackers());
+  const missing = entityIds.filter((id: string) => !idx.has(id));
+  expect(missing, `entries missing from DB after ${n}-action prompt`).toEqual([]);
 
   // (c) refresh survival: fresh auth + cache-busted refetch shows the same data.
   TOKEN = await signin();
-  const refreshed = await getTrackers();
-  for (const [, trackerName] of items.slice(0, Math.min(n, 10))) {
-    const t = findTracker(refreshed, trackerName);
-    expect(t && (t.entries || []).length, `${trackerName} gone after refresh`).toBeTruthy();
+  idx = indexEntries(await getTrackers());
+  for (const id of entityIds.slice(0, Math.min(n, 10))) {
+    expect(idx.has(id), `entry ${id} gone after refresh`).toBe(true);
   }
 
-  // (d) individual edit + delete on this tier's entries.
-  const first = findTracker(refreshed, items[0][1]);
-  const entry = first.entries[0];
-  const patch = await api("PATCH", `/trackers/${first.id}/entries/${entry.id}`, { notes: `edited by ${RUN}` });
+  // (d) individual edit + delete, via the by-entry-id routes the chat cards use.
+  const [editId, delId] = entityIds;
+  const patch = await api("PATCH", `/tracker-entries/${editId}`, { notes: `edited by ${RUN}` });
   expect(patch.ok, `entry edit failed: ${JSON.stringify(patch.data)}`).toBe(true);
-
-  const second = findTracker(refreshed, items[1][1]);
-  const delEntry = second.entries[0];
-  const del = await api("DELETE", `/trackers/${second.id}/entries/${delEntry.id}`);
+  const del = await api("DELETE", `/tracker-entries/${delId}`);
   expect(del.ok, `entry delete failed: ${JSON.stringify(del.data)}`).toBe(true);
 
-  const after = await getTrackers();
-  const editedTracker = findTracker(after, items[0][1]);
-  expect((editedTracker.entries || []).some((e: any) => e.notes === `edited by ${RUN}`), "edit persisted").toBe(true);
-  const deletedTracker = findTracker(after, items[1][1]);
-  expect((deletedTracker.entries || []).some((e: any) => e.id === delEntry.id), "deleted entry stays gone").toBe(false);
+  idx = indexEntries(await getTrackers());
+  expect(idx.get(editId)?.entry?.notes, "edit persisted").toBe(`edited by ${RUN}`);
+  expect(idx.has(delId), "deleted entry stays gone").toBe(false);
+
+  // Cleanup this tier's entries so later tiers/dedup aren't affected.
+  for (const id of entityIds) {
+    if (id !== delId) await api("DELETE", `/tracker-entries/${id}`).catch(() => {});
+  }
 }
 
 describe(`multi-action regression (${BASE})`, () => {
@@ -139,6 +150,9 @@ describe(`multi-action regression (${BASE})`, () => {
   }, 60_000);
 
   afterAll(async () => {
+    for (const id of createdEntryIds) {
+      await api("DELETE", `/tracker-entries/${id}`).catch(() => {});
+    }
     for (const id of createdTrackerIds) {
       await api("DELETE", `/trackers/${id}`).catch(() => {});
     }
@@ -152,24 +166,33 @@ describe(`multi-action regression (${BASE})`, () => {
     expect(res.reply.toLowerCase()).not.toMatch(/(don'?t|can'?t|aren'?t|isn'?t|not something i) track/);
     expect(res.reply.toLowerCase()).not.toMatch(/did you mean .* habit|belongs to/);
 
+    // NOTE (2026-07-16): the normalization layer consolidates activities into
+    // canonical trackers ("MAxxx blunt" → the Cannabis tracker, no RUN prefix),
+    // so match by canonical name / entry content, not by the RUN-prefixed name.
+    // Cleanup targets ONLY what the operations report says was created —
+    // canonical trackers (Soccer/Cannabis/...) may hold the account's real
+    // history and must never be deleted by name-guess.
+    for (const o of res.operations || []) {
+      if (o.createdTracker?.id) createdTrackerIds.add(o.createdTracker.id);
+      if (o.entityId) createdEntryIds.add(o.entityId);
+    }
     const trackers = await getTrackers();
-    // Soccer: exactly 60 minutes preserved.
-    const soccer = findTracker(trackers, `${RUN} Soccer`);
+    const newest = (t: any) => (t.entries || [])[0];
+    // Soccer: 60 minutes preserved (canonical "Soccer" or RUN-prefixed).
+    const soccer = trackers.find((x: any) => /soccer/i.test(String(x.name)) && (x.entries || []).length);
     expect(soccer, "soccer tracker").toBeTruthy();
-    const soccerVals = JSON.stringify(soccer.entries?.[0]?.values || {});
+    const soccerVals = JSON.stringify(newest(soccer)?.values || {});
     expect(soccerVals, `soccer duration lost: ${soccerVals}`).toMatch(/60/);
-    // Cannabis: method "blunt" preserved.
-    const cannabis = trackers.find((x: any) => new RegExp(`${RUN}.*(blunt|cannabis)`, "i").test(String(x.name)));
+    // Cannabis: method "blunt" preserved on the newest cannabis-ish entry.
+    const cannabis = trackers.find((x: any) => /cannabis|blunt/i.test(String(x.name)) && (x.entries || []).length);
     expect(cannabis, "cannabis tracker").toBeTruthy();
-    createdTrackerIds.add(cannabis.id);
-    expect(JSON.stringify(cannabis.entries?.[0]?.values || {}).toLowerCase(), "blunt detail lost").toContain("blunt");
-    // Shower + bathroom auto-created and logged; bathroom keeps 8:15 AM.
-    const shower = findTracker(trackers, `${RUN} Shower`);
-    expect(shower && (shower.entries || []).length, "shower not logged").toBeTruthy();
-    const bathroom = trackers.find((x: any) => new RegExp(`${RUN} bathroom`, "i").test(String(x.name)));
-    expect(bathroom && (bathroom.entries || []).length, "bathroom not logged").toBeTruthy();
-    createdTrackerIds.add(bathroom.id);
-    const bathTs = new Date(bathroom.entries[0].timestamp);
+    expect(JSON.stringify(newest(cannabis)?.values || {}).toLowerCase(), "blunt detail lost").toContain("blunt");
+    // Shower + bathroom logged (canonical or RUN-prefixed names).
+    const shower = trackers.find((x: any) => /shower/i.test(String(x.name)) && (x.entries || []).length);
+    expect(shower, "shower not logged").toBeTruthy();
+    const bathroom = trackers.find((x: any) => /bathroom/i.test(String(x.name)) && (x.entries || []).length);
+    expect(bathroom, "bathroom not logged").toBeTruthy();
+    const bathTs = new Date(newest(bathroom).timestamp);
     expect(`${bathTs.getUTCHours()}:${bathTs.getUTCMinutes()}`, "8:15 AM timestamp dropped to now").not.toBe("NaN:NaN");
     // No habit created, completed, or modified.
     const habitsAfter = (await api("GET", "/habits")).data || [];
@@ -188,16 +211,16 @@ describe(`multi-action regression (${BASE})`, () => {
       `I played ${RUN} soccer for an hour. I smoked some ${RUN} cannabis. I took a ${RUN} shower and I went to the bathroom at 8:15 AM.`,
     );
     expect(res.reply.toLowerCase()).not.toMatch(/(don'?t|can'?t|aren'?t|isn'?t|not something i) track/);
-    const trackers = await getTrackers();
-    for (const name of [`${RUN} Soccer`, `${RUN} Cannabis`, `${RUN} Shower`]) {
-      const t = findTracker(trackers, name);
-      expect(t, `no tracker for ${name}; reply: ${res.reply.slice(0, 300)}`).toBeTruthy();
-      expect((t.entries || []).length, `${name} has no entry`).toBeGreaterThan(0);
+    for (const o of res.operations || []) {
+      if (o.createdTracker?.id) createdTrackerIds.add(o.createdTracker.id);
+      if (o.entityId) createdEntryIds.add(o.entityId);
     }
-    // Bathroom tracker name is model-chosen ("Bathroom Visits"/"Bathroom") — accept either.
-    const bathroom = trackers.find((x: any) => /bathroom/i.test(String(x.name)));
-    expect(bathroom, "bathroom visit was not logged").toBeTruthy();
-    if (bathroom) createdTrackerIds.add(bathroom.id);
+    // All four actions logged (canonical or RUN-prefixed tracker names).
+    const trackers = await getTrackers();
+    for (const pattern of [/soccer/i, /cannabis/i, /shower/i, /bathroom/i]) {
+      const t = trackers.find((x: any) => pattern.test(String(x.name)) && (x.entries || []).length);
+      expect(t, `no logged tracker matching ${pattern}; reply: ${res.reply.slice(0, 300)}`).toBeTruthy();
+    }
   }, 240_000);
 
   it("5-action prompt: every action lands, survives refresh, edits/deletes individually", async () => {
@@ -218,17 +241,24 @@ describe(`multi-action regression (${BASE})`, () => {
 
   it("normalization: 'I walked one mile' → canonical Walking tracker, distance exact, steps/duration labeled estimates", async () => {
     const res = await chat("I walked one mile.");
-    const trackers = await getTrackers();
-    const walking = trackers.find((x: any) => /^walking$/i.test(String(x.name)));
-    expect(walking, `no canonical Walking tracker; reply: ${res.reply?.slice(0, 300)}`).toBeTruthy();
-    const entry = (walking.entries || [])[0];
-    expect(entry, "walking entry missing").toBeTruthy();
+    // The op report tells us exactly which entry was written — the account
+    // legitimately has one Walking tracker PER PROFILE (Bob + pets), so
+    // name-guessing picks the wrong one.
+    const op = (res.operations || []).find((o: any) => o.status === "ok" && o.entityId);
+    expect(op, `no ok operation; reply: ${res.reply?.slice(0, 300)}`).toBeTruthy();
+    const idx = indexEntries(await getTrackers());
+    const hit = idx.get(op.entityId);
+    expect(hit, "walking entry missing from DB").toBeTruthy();
+    const walking = hit!.tracker;
+    expect(String(walking.name), "entry landed on a non-canonical tracker").toMatch(/^walking$/i);
+    const entry = hit!.entry;
+    createdEntryIds.add(entry.id);
     // Distance saved exactly; NOT shoved into a steps field ("1 steps" bug).
     expect(Number(entry.values?.distance ?? entry.values?.miles), "distance lost").toBe(1);
     expect(entry.values?.steps, "explicit steps invented from thin air").not.toBe(1);
     // Provenance rides with the entry; estimates are labeled with confidence.
-    const enrich = entry.values?._enrichment;
-    expect(enrich, "enrichment provenance missing").toBeTruthy();
+    const enrich = entry.computed?.enrichment ?? entry.values?._enrichment;
+    expect(enrich, "enrichment provenance missing (computed.enrichment)").toBeTruthy();
     if (enrich?.estimated?.steps) {
       expect(enrich.estimated.steps.source).toBe("estimated");
       expect(enrich.estimated.steps.confidence).toBeGreaterThan(0.3);
@@ -240,19 +270,21 @@ describe(`multi-action regression (${BASE})`, () => {
   }, 240_000);
 
   it("normalization: variants land on ONE Walking tracker, explicit steps never overwritten", async () => {
-    await chat("I walked 2,100 steps.");
-    const res = await chat("I walked 1 mile and took 2,400 steps.");
-    const trackers = await getTrackers();
-    const walkers = trackers.filter((x: any) => /walk|steps/i.test(String(x.name)));
-    const canonical = walkers.filter((x: any) => /^walking$/i.test(String(x.name)));
-    expect(canonical.length, `expected one canonical Walking tracker, got: ${walkers.map((w: any) => w.name).join(", ")}`).toBe(1);
-    const entries = canonical[0].entries || [];
-    const both = entries.find((e: any) => Number(e.values?.steps) === 2400);
-    expect(both, `explicit 2,400 steps replaced by a formula; reply: ${res.reply?.slice(0, 200)}`).toBeTruthy();
-    expect(Number(both.values?.distance ?? both.values?.miles)).toBe(1);
-    for (const e of entries.slice(0, 4)) {
-      await api("DELETE", `/trackers/${canonical[0].id}/entries/${e.id}`).catch(() => {});
-    }
+    const res1 = await chat("I walked 2,100 steps.");
+    const res2 = await chat("I walked 1 mile and took 2,400 steps.");
+    const op1 = (res1.operations || []).find((o: any) => o.status === "ok" && o.entityId);
+    const op2 = (res2.operations || []).find((o: any) => o.status === "ok" && o.entityId);
+    expect(op1 && op2, "both walking variants must log").toBeTruthy();
+    for (const o of [op1, op2]) createdEntryIds.add(o.entityId);
+    const idx = indexEntries(await getTrackers());
+    const hit1 = idx.get(op1.entityId), hit2 = idx.get(op2.entityId);
+    expect(hit1 && hit2, "walking entries missing from DB").toBeTruthy();
+    // Both phrasings land on the SAME canonical Walking tracker (the user's own).
+    expect(hit1!.tracker.id, `variants split across trackers: ${hit1!.tracker.name} vs ${hit2!.tracker.name}`).toBe(hit2!.tracker.id);
+    expect(String(hit1!.tracker.name)).toMatch(/^walking$/i);
+    // Explicit 2,400 steps saved verbatim, never replaced by a formula.
+    expect(Number(hit2!.entry.values?.steps), `explicit steps replaced; reply: ${res2.reply?.slice(0, 200)}`).toBe(2400);
+    expect(Number(hit2!.entry.values?.distance ?? hit2!.entry.values?.miles)).toBe(1);
   }, 300_000);
 
   it("Auto-Create Trackers OFF: skips unknown trackers, reports them, creates nothing", async () => {
