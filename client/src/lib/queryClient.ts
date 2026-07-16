@@ -271,7 +271,16 @@ const MAX_AGE_MS = 24 * 60 * 60_000; // 24h — anything older is re-fetched
    to user B. */
 function currentSessionUserId(): string | null {
   try {
-    return decodeSessionUserId(sessionStorage.getItem("portol_session"));
+    // PERF Phase 1.1/1.2: tokens now live primarily in localStorage (see
+    // lib/auth.tsx readStoredSessionRaw — same read order used here to stay a
+    // single source of truth), and an expired-but-refreshable token still
+    // identifies the cache owner (allowExpired) so the persisted snapshot
+    // survives the ~1h access-token lifetime instead of being purged on every
+    // real app open.
+    let raw: string | null = null;
+    try { raw = localStorage.getItem("portol_session"); } catch { /* sandboxed */ }
+    if (!raw) raw = sessionStorage.getItem("portol_session");
+    return decodeSessionUserId(raw, undefined, /* allowExpired */ true);
   } catch {
     return null;
   }

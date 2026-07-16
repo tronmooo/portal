@@ -26,16 +26,29 @@ export interface PersistedBlob {
  * Decode the Supabase access-token subject (user id) from a stored session
  * JSON string. Returns null when the session is missing, malformed, or expired
  * — i.e. whenever we cannot positively identify the current user.
+ *
+ * `allowExpired` (PERF Phase 1.2, 2026-07-16): cache OWNERSHIP checks may
+ * accept an expired access token when a refresh token is present. The token
+ * still positively identifies which user's session occupies this browser —
+ * expiry is an authentication concern, not an identification one, and every
+ * API request is still authenticated server-side. Without this, the persisted
+ * query cache was purged on every launch after the ~1h token lifetime (i.e.
+ * on virtually every real "open the app"), which is exactly the
+ * skeletons-on-open symptom the persistence exists to prevent. If the refresh
+ * later fails, the auth-cleared path wipes all client caches anyway.
  */
 export function decodeSessionUserId(
   rawSession: string | null,
   nowSec: number = Math.floor(Date.now() / 1000),
+  allowExpired: boolean = false,
 ): string | null {
   if (!rawSession) return null;
   try {
-    const tokens = JSON.parse(rawSession) as { access_token?: string; expires_at?: number };
+    const tokens = JSON.parse(rawSession) as { access_token?: string; refresh_token?: string; expires_at?: number };
     if (!tokens?.access_token) return null;
-    if (tokens.expires_at && tokens.expires_at < nowSec) return null;
+    if (tokens.expires_at && tokens.expires_at < nowSec) {
+      if (!allowExpired || !tokens.refresh_token) return null;
+    }
     const payload = String(tokens.access_token).split(".")[1];
     if (!payload) return null;
     const decoded = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));

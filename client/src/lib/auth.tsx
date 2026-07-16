@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef, ty
 // endpoint directly via URL redirect.
 import { apiRequest } from "./queryClient";
 import { queryClient, clearAllClientCaches, resetQueryCacheForUserSwitch } from "./queryClient";
-import { clearChatCache } from "@/pages/chat";
+import { clearChatCache } from "@/lib/chat-cache";
 import { setActiveUserForFilter, clearProfileFilterForUser } from "@/lib/profileFilter";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -50,28 +50,54 @@ function decodeJwt(token: string): { sub?: string; email?: string; exp?: number 
   }
 }
 
-// Token storage — memory + sessionStorage for persistence across page refreshes.
-// sessionStorage works in most sandboxed iframes (unlike localStorage).
+// Token storage — memory + localStorage + sessionStorage.
+//
+// PERF Phase 1.1 (2026-07-16, PERF_PLAN_LAUNCH): tokens used to live ONLY in
+// sessionStorage, which dies with the tab — every new tab, browser restart,
+// or iOS PWA/app relaunch started with no session, so every real "app open"
+// showed the full-page spinner AND purged the persisted query cache (its
+// owner id could not be resolved). localStorage is now the primary store so
+// returning users render instantly; sessionStorage is still written as a
+// fallback for sandboxed iframes where localStorage throws, and is read for
+// one-release migration of existing sessions. Cross-tab logout/user-switch
+// safety already exists (LOGOUT_BROADCAST_KEY + ACTIVE_USER_ID_KEY handlers).
+const SESSION_KEY = 'portol_session';
 let memoryTokens: { access_token: string; refresh_token: string; expires_at: number } | null = null;
+
+/** Read the raw persisted session JSON: localStorage first (survives app
+ *  relaunch), then sessionStorage (legacy slot + sandboxed-iframe fallback). */
+export function readStoredSessionRaw(): string | null {
+  try {
+    const v = localStorage.getItem(SESSION_KEY);
+    if (v) return v;
+  } catch { /* sandboxed — fall through */ }
+  try {
+    return sessionStorage.getItem(SESSION_KEY);
+  } catch { /* no storage at all */ }
+  return null;
+}
 
 function persistTokens(tokens: typeof memoryTokens) {
   memoryTokens = tokens;
   if (tokens) {
-    try { sessionStorage.setItem('portol_session', JSON.stringify(tokens)); } catch { /* sandboxed */ }
+    const json = JSON.stringify(tokens);
+    try { localStorage.setItem(SESSION_KEY, json); } catch { /* sandboxed */ }
+    try { sessionStorage.setItem(SESSION_KEY, json); } catch { /* sandboxed */ }
   } else {
-    try { sessionStorage.removeItem('portol_session'); } catch { /* sandboxed */ }
+    try { localStorage.removeItem(SESSION_KEY); } catch { /* sandboxed */ }
+    try { sessionStorage.removeItem(SESSION_KEY); } catch { /* sandboxed */ }
   }
 }
 
 function loadPersistedTokens(): typeof memoryTokens {
   if (memoryTokens) return memoryTokens;
   try {
-    const stored = sessionStorage.getItem('portol_session');
+    const stored = readStoredSessionRaw();
     if (stored) {
       memoryTokens = JSON.parse(stored);
       return memoryTokens;
     }
-  } catch { /* sandboxed — no session persistence available */ }
+  } catch { /* corrupt/unavailable — no session persistence */ }
   return null;
 }
 
@@ -105,14 +131,25 @@ function warnIfRefreshTokenNotRotated(oldToken: string | undefined, newToken: st
 // shell + persisted query cache can render instantly.
 function provisionalUserFromStorage(): { user: User | null; session: Session | null } {
   try {
-    const stored = sessionStorage.getItem('portol_session');
+    const stored = readStoredSessionRaw();
     if (!stored) return { user: null, session: null };
     const tokens = JSON.parse(stored) as { access_token: string; refresh_token: string; expires_at: number };
     // Decode the JWT to get user id + email without trusting the server yet.
-    // If it's already expired we don't show a provisional user — the refresh
-    // flow needs to run first.
+    //
+    // PERF Phase 1.1: an EXPIRED access token no longer blocks the provisional
+    // fast path, as long as a refresh token exists. Supabase access tokens
+    // last ~1h, so "open the app the next morning" always used to hit the
+    // full-page spinner + cache purge. Rendering provisionally is safe: the
+    // first API calls 401, the interceptor's single-flight refresh
+    // (refreshSessionOnce) swaps in fresh tokens and retries; if the refresh
+    // token is genuinely dead, the interceptor clears the session and the
+    // auth-cleared event routes the user to sign-in. The data shown meanwhile
+    // is the SAME user's persisted cache, never another account's
+    // (cache-isolation.ts ownership check).
     const now = Math.floor(Date.now() / 1000);
-    if (tokens.expires_at && tokens.expires_at < now) return { user: null, session: null };
+    if (tokens.expires_at && tokens.expires_at < now && !tokens.refresh_token) {
+      return { user: null, session: null };
+    }
     const payload = tokens.access_token.split('.')[1];
     const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
     if (!decoded?.sub) return { user: null, session: null };
@@ -258,8 +295,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function checkAuthConfig() {
     try {
-      const res = await fetch(`${API_BASE}/api/auth/config`);
-      const data = await res.json();
+      // PERF Phase 1.3 (PERF_PLAN_LAUNCH 2026-07-16): /api/auth/config returns
+      // deployment constants (authRequired + Supabase URL/anon key — the anon
+      // key is public by design), yet the app used to BLOCK its very first
+      // paint on this round trip — a cold serverless start made "Loading
+      // Portol..." sit for seconds before anything happened. Cache the config
+      // in localStorage: returning visits apply it synchronously and
+      // revalidate in the background; only the first-ever visit waits.
+      const AUTH_CONFIG_KEY = "portol_auth_config_v1";
+      let data: any = null;
+      try {
+        const cached = localStorage.getItem(AUTH_CONFIG_KEY);
+        if (cached) data = JSON.parse(cached);
+      } catch { /* unavailable/corrupt — fetch below */ }
+
+      const fetchFreshConfig = async (): Promise<any | null> => {
+        const res = await fetch(`${API_BASE}/api/auth/config`);
+        const fresh = await res.json();
+        try { localStorage.setItem(AUTH_CONFIG_KEY, JSON.stringify(fresh)); } catch { /* ignore */ }
+        return fresh;
+      };
+
+      if (data && typeof data.authRequired === "boolean") {
+        // Background revalidate — a deployment flipping authRequired or
+        // rotating the Supabase project converges on the next launch, and
+        // within this session too if the value changed.
+        void fetchFreshConfig().then((fresh) => {
+          if (!fresh) return;
+          if (fresh.supabaseUrl && fresh.supabaseAnonKey) {
+            supabaseConfig = { url: fresh.supabaseUrl, anonKey: fresh.supabaseAnonKey };
+          }
+          if (typeof fresh.authRequired === "boolean" && fresh.authRequired !== data.authRequired) {
+            setAuthRequired(fresh.authRequired);
+            if (!fresh.authRequired) setLoading(false);
+          }
+        }).catch(() => { /* offline — cached config stands */ });
+      } else {
+        data = await fetchFreshConfig();
+      }
+
       setAuthRequired(data.authRequired);
 
       if (!data.authRequired) {
@@ -327,27 +401,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Check if token is expired
       const now = Math.floor(Date.now() / 1000);
       if (tokens.expires_at && tokens.expires_at < now) {
-        // Try refresh — wrap in its own try-catch since apiRequest throws on non-2xx
-        try {
-          const refreshRes = await apiRequest("POST", "/api/auth/refresh", {
-            refresh_token: tokens.refresh_token,
-          });
-          const refreshData = await refreshRes.json();
-          if (refreshData.session) {
-            persistTokens(refreshData.session);
-            setUser(refreshData.user);
-            setSession(refreshData.session);
-          } else {
-            persistTokens(null);
-          }
-        } catch (e: any) {
-          // Only discard tokens when the refresh token is genuinely rejected.
-          // On a pure network failure (cold instance / offline) keep them so a
-          // later attempt can refresh without forcing a fresh sign-in.
-          const m = (e?.message || "").toLowerCase();
-          const networkErr = m.includes("load failed") || m.includes("failed to fetch") || m.includes("networkerror") || m.includes("network request failed");
-          if (!networkErr) persistTokens(null);
+        // SINGLE-FLIGHT (PERF Phase 1.1): with the expired-token provisional
+        // fast path, dashboard queries can already be 401-ing through the
+        // interceptor's refreshSessionOnce() while we get here. Refresh tokens
+        // ROTATE on use — two concurrent refresh calls means the loser burns a
+        // dead token and wipes the session. Sharing refreshSessionOnce()
+        // guarantees exactly one refresh no matter who asks first.
+        const newSession = await refreshSessionOnce();
+        if (newSession?.access_token) {
+          const claims = decodeJwt(newSession.access_token);
+          if (claims?.sub) setUser({ id: claims.sub, email: claims.email || "" });
+          setSession(newSession);
         }
+        // On failure we deliberately KEEP the stored tokens: refreshSessionOnce
+        // can't distinguish "refresh token rejected" from a network blip on a
+        // cold instance. A genuinely dead token gets cleared by the fetch
+        // interceptor's 401 path (persistTokens(null) + auth-cleared event)
+        // the moment any API call needs it.
         setLoading(false);
       } else {
         // Verify token. A NETWORK failure here (cold serverless instance, flaky
@@ -538,9 +608,9 @@ let originalFetch: typeof fetch | null = null;
    first call had just restored. Net effect: returning to the app logged the
    user out / blanked every query into permanent skeletons.
    Now every concurrent 401 awaits the SAME refresh promise. */
-let refreshInFlight: Promise<{ access_token: string; refresh_token: string } | null> | null = null;
+let refreshInFlight: Promise<Session | null> | null = null;
 
-function refreshSessionOnce(): Promise<{ access_token: string; refresh_token: string } | null> {
+function refreshSessionOnce(): Promise<Session | null> {
   if (refreshInFlight) return refreshInFlight;
   const oldRefreshToken = memoryTokens?.refresh_token;
   if (!oldRefreshToken) return Promise.resolve(null);

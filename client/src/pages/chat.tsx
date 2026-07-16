@@ -1532,37 +1532,11 @@ function SlowResponseHint() {
   return <span className="text-xs text-muted-foreground animate-in fade-in">Still working… complex requests take longer</span>;
 }
 
-const WELCOME_MSG: ChatMessage = {
-  id: "welcome",
-  role: "assistant",
-  content: "Hi! I'm your Portol AI. Ask me to log health data, track expenses, create events, add tasks, open documents, and more. What would you like to do?",
-  timestamp: new Date().toISOString(),
-};
-// Persist chat history to sessionStorage so it survives page reloads
-function loadChatHistory(): ChatMessage[] {
-  try {
-    const stored = sessionStorage.getItem("portol_chat_history");
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch { /* ignore parse errors */ }
-  return [WELCOME_MSG];
-}
-function saveChatHistory(messages: ChatMessage[]) {
-  try {
-    // Keep last 100 messages to avoid storage bloat
-    const toSave = messages.slice(-100);
-    sessionStorage.setItem("portol_chat_history", JSON.stringify(toSave));
-  } catch { /* storage full — ignore */ }
-}
-let _chatCache: ChatMessage[] = loadChatHistory();
-
-/** Clear module-level chat cache — must be called on sign-out to prevent data leakage between users */
-export function clearChatCache() {
-  _chatCache = [WELCOME_MSG];
-  try { sessionStorage.removeItem("portol_chat_history"); } catch {}
-}
+// Chat history cache moved to lib/chat-cache.ts (PERF Phase 1.5): auth.tsx
+// needs clearChatCache() at sign-out, and importing it from this page dragged
+// the whole chat chunk into the entry bundle. Re-exported for compatibility.
+export { clearChatCache } from "@/lib/chat-cache";
+import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCache } from "@/lib/chat-cache";
 
 // ─────────────────────────────────────────────
 // Confirmation card with inline Edit + Undo
@@ -1817,12 +1791,12 @@ export default function ChatPage() {
     return () => { if (batchIntervalRef.current) clearInterval(batchIntervalRef.current); };
   }, []);
   const { toast } = useToast();
-  const [messages, setMessagesRaw] = useState<ChatMessage[]>(_chatCache);
+  const [messages, setMessagesRaw] = useState<ChatMessage[]>(getChatCache);
   // Wrap setMessages to also persist to module-level cache
   const setMessages = (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
     setMessagesRaw(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
-      _chatCache = next; // Persist across navigation
+      setChatCache(next); // Persist across navigation
       saveChatHistory(next); // Persist across page reloads
       return next;
     });
