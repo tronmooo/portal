@@ -1,11 +1,14 @@
-// ── Executive briefing (2026-07-08, v2 multi-column) ─────────────────────────
-// Dense, colorful command-center layout: compact spreadsheet-like sections in
-// a responsive masonry (1/2/3 columns), each with a colored accent dot, thin
-// dividers, mono headers, minimal whitespace. Every section is collapsible and
-// every row opens the EXISTING popup/surface for its module — TasksPopup and
-// HabitsPopup are the same components the dashboard KPI tiles always used
-// (extracted to TaskHabitPopups.tsx), documents/bills/calendar/journal rows
-// deep-link to their existing surfaces. Nothing here duplicates functionality.
+// ── Executive briefing (2026-07-16, v3 attention-first top) ──────────────────
+// Top of the board answers "what needs my attention today, what's coming up,
+// and what's going wrong" — not just totals. Row 1: Attention Required (the
+// Score replacement, most prominent) / Tasks / Events; row 2: Bills /
+// Documents / Habits; then a full-width Today's Overview strip. Projects moved
+// down into the section grid. Below that, the dense multi-column command-center
+// sections remain: compact spreadsheet-like sections in a responsive masonry
+// (1/2/3 columns), each collapsible, and every row opens the EXISTING
+// popup/surface for its module — TasksPopup and HabitsPopup are the same
+// components the dashboard KPI tiles always used (TaskHabitPopups.tsx); the
+// rest live in BriefingPopups.tsx. Nothing here duplicates functionality.
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -14,10 +17,14 @@ import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
 import { ChevronDown } from "lucide-react";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
-import { BillsPopup, EventsPopup, DocsPopup, ProjectsPopup, NotesPopup, RemindersPopup } from "@/components/dashboard/BriefingPopups";
+import {
+  BillsPopup, EventsPopup, DocsPopup, ProjectsPopup, NotesPopup, RemindersPopup,
+  AttentionPopup, TodayOverviewPopup, fmtClock,
+  type AttentionEntry, type TodayEntry,
+} from "@/components/dashboard/BriefingPopups";
 import type { DashboardStats } from "@shared/schema";
 
-type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | "projects" | "notes" | "reminders" | null;
+type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | "projects" | "notes" | "reminders" | "attention" | "today" | null;
 
 // Per-section accent colors (HSL) — the "colorful, visually organized" pass.
 const ACCENTS: Record<string, string> = {
@@ -70,23 +77,32 @@ function Section({ id, title, count, summary, children, defaultOpen = true, test
   );
 }
 
-// Photo-2-style top stat tile — big count, small sub-line, clickable.
-function StatTile({ label, value, sub, accent, onClick, testId }: {
-  label: string; value: string; sub?: string; accent: string;
-  onClick: () => void; testId: string;
+// Top stat tile (2026-07-16 redesign) — big count plus a small unit next to it
+// ("3 due today"), a decision-oriented sub-line, clickable. `prominent` gives
+// the Attention tile the strongest visual weight on the board.
+function StatTile({ label, value, unit, sub, accent, onClick, testId, prominent }: {
+  label: string; value: string; unit?: string; sub?: string; accent: string;
+  onClick: () => void; testId: string; prominent?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
       data-testid={testId}
-      className="flex-1 min-w-[7.5rem] rounded-xl border px-2.5 py-2 text-left card-lift transition-all"
-      style={{ borderColor: `hsl(${accent} / 0.30)`, background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, hsl(var(--card)) 75%)` }}
+      className="rounded-xl border px-2.5 py-2 text-left card-lift transition-all"
+      style={{
+        borderColor: `hsl(${accent} / ${prominent ? 0.55 : 0.30})`,
+        background: `linear-gradient(135deg, hsl(${accent} / ${prominent ? 0.20 : 0.12}) 0%, hsl(var(--card)) 75%)`,
+        ...(prominent ? { boxShadow: `0 0 16px hsl(${accent} / 0.18)` } : {}),
+      }}
     >
       <div className="flex items-center gap-1.5">
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
       </div>
-      <div className="metric-value text-xl mt-0.5" style={{ color: `hsl(${accent})` }}>{value}</div>
+      <div className="flex items-baseline gap-1 mt-0.5 min-w-0">
+        <span className={`metric-value ${prominent ? "text-2xl" : "text-xl"}`} style={{ color: `hsl(${accent})` }}>{value}</span>
+        {unit && <span className="text-[11px] font-medium truncate" style={{ color: `hsl(${accent})` }}>{unit}</span>}
+      </div>
       {sub && <div className="text-[10px] text-muted-foreground truncate">{sub}</div>}
     </button>
   );
@@ -228,13 +244,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
   const birthdays = events.filter((i: any) => BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
   const appointments = events.filter((i: any) => APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
   const importantDates = events.filter((i: any) => !BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`) && !APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 10);
-  // EVENTS count (top tile) must count only real calendar EVENTS in the next
-  // 14 days — not tasks / bills / obligations that also live in the timeline.
-  // Counting `tl.length` made the tile read "3 events" for a profile whose only
-  // timeline items were a mortgage bill and a task (BUG-20260709: "3 events even
-  // when Mike has no events"). Every timeline item is already profile-scoped by
-  // the server, so this is purely a count-semantics fix.
-  const eventCount = tl.filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) <= in14).length;
+  // EVENTS tile counts only real calendar EVENTS — not tasks / bills /
+  // obligations that also live in the timeline (BUG-20260709: "3 events even
+  // when Mike has no events"). `eventsToday` below keeps that semantics.
 
   const habitRows = (habits || []).slice(0, 12).map((h: any) => {
     const doneToday = (h.checkins || []).some((c: any) => (c.date || "").slice(0, 10) === todayStr);
@@ -285,19 +297,134 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
     else setPopup("events");
   };
 
-  // ── Executive Score (transparent derivation, presentation-only): start at
-  // 100, subtract for overdue tasks / missed habits / overdue bills.
   const overdueBillCount = bills.filter((b: any) => b.status === "overdue").length;
-  const score = Math.max(40, Math.min(100,
-    100 - Math.min(40, overdueTasks.length * 8) - Math.min(20, missedCount * 4) - Math.min(30, overdueBillCount * 10)));
-  const scoreLabel = score >= 90 ? "Excellent" : score >= 75 ? "Good" : "Needs attention";
-  // Only show a score when there is actually something to evaluate. A brand-new
-  // or empty profile has no tasks / habits / bills, so a "100 · Excellent" tile
-  // reads as fake/leaked data (BUG-20260709: empty profile looked populated).
-  // With no inputs, show an em dash instead.
-  const hasScoreInputs = pending.length > 0 || habitRows.length > 0 || bills.length > 0;
   const billsUpcomingTotal = bills.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
   const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
+
+  // ── Top-card derivations (2026-07-16 redesign: attention over totals) ───────
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const fmtShort = (d: string) => new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const nowClock = new Date().toTimeString().slice(0, 5);
+  const nowMs = Date.now();
+
+  // Tasks: high-priority count includes overdue ones (unlike the section list).
+  const highCount = pending.filter((t: any) => ["high", "urgent"].includes(String(t.priority || "").toLowerCase())).length;
+  const habitsDone = habitRows.length - missedCount;
+
+  // Events: what's left today, and the single next thing on the calendar.
+  const eventsToday = todayItems.filter((i: any) => i.type === "event");
+  const nextTodayEvent = eventsToday
+    .filter((i: any) => i.time && i.time >= nowClock)
+    .sort((a: any, b: any) => String(a.time).localeCompare(String(b.time)))[0]
+    || eventsToday.find((i: any) => !i.time);
+  const nextFutureEvent = events.slice().sort((a: any, b: any) => String(a.date || "").localeCompare(String(b.date || "")))[0];
+  const nextEventLabel = nextTodayEvent
+    ? `Next: ${nextTodayEvent.title}${nextTodayEvent.time ? ` · ${fmtClock(nextTodayEvent.time)}` : ""}`
+    : nextFutureEvent
+      ? `Next: ${nextFutureEvent.title} · ${dayLabel(String(nextFutureEvent.date).slice(0, 10), todayStr)}`
+      : "nothing scheduled";
+
+  // Bills: risk + timing, not just a count.
+  const nextBill = bills.filter((b: any) => b.status !== "overdue")
+    .slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+  const nextBillDate = nextBill
+    ? fmtShort(String(nextBill.dueDate || "").slice(0, 10) || new Date(nowMs + (nextBill.daysUntil || 0) * 86400000).toLocaleDateString("en-CA"))
+    : null;
+
+  // Documents: expired or ≤30d, soonest first.
+  const docExpiryPhrase = (d: number) =>
+    d < 0 ? (d === -1 ? "expired yesterday" : `expired ${Math.abs(d)} days ago`)
+    : d === 0 ? "expires today" : d === 1 ? "expires tomorrow" : `expires in ${d} days`;
+  const nextDoc = allExpiringDocs
+    .filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil <= 30)
+    .slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+
+  // ── Attention Required: every urgent issue across the profile, one list. ────
+  const firedReminders = activeReminders.filter((r: any) => r.fireAt && new Date(r.fireAt).getTime() < nowMs);
+  const attention: AttentionEntry[] = [];
+  for (const t of overdueTasks) attention.push({
+    id: `task-${t.id}`, title: t.title, severity: "critical", group: "Overdue tasks",
+    reason: `Overdue — was due ${fmtShort(String(t.dueDate))}`, go: () => setPopup("tasks"),
+  });
+  for (const b of bills) {
+    if (b.status === "overdue") attention.push({
+      id: `bill-${b.id}`, title: b.name, severity: "critical", group: "Bills requiring action",
+      reason: `$${Number(b.amount).toLocaleString()} overdue`, go: () => setPopup("bills"),
+    });
+    else if (b.daysUntil === 0) attention.push({
+      id: `bill-${b.id}`, title: b.name, severity: "warning", group: "Bills requiring action",
+      reason: `$${Number(b.amount).toLocaleString()} due today`, go: () => setPopup("bills"),
+    });
+  }
+  for (const d of allExpiringDocs) {
+    if (typeof d.daysUntil !== "number" || d.daysUntil > 30) continue;
+    attention.push({
+      id: `doc-${d.documentId}-${d.fieldName || ""}`,
+      title: d.documentName || d.name || d.fieldName || "Document",
+      severity: d.daysUntil < 0 ? "critical" : "warning", group: "Expiring documents",
+      reason: docExpiryPhrase(d.daysUntil), go: () => setPopup("docs"),
+    });
+  }
+  for (const h of habitRows) if (!h.doneToday) attention.push({
+    id: `habit-${h.id}`, title: h.name, severity: "warning", group: "Habits still due today",
+    reason: "Not checked in yet", go: () => setPopup("habits"),
+  });
+  for (const n of alerts) attention.push({
+    id: `alert-${n.id}`, title: n.title, severity: "critical", group: "Alerts",
+    reason: "Critical notification", go: () => goNotif(n),
+  });
+  for (const r of firedReminders) attention.push({
+    id: `rem-${r.id}`, title: r.title || r.message || r.content || "Reminder", severity: "warning",
+    group: "Reminders", reason: "Fired — not dismissed", go: () => setPopup("reminders"),
+  });
+  const attnCritical = attention.filter(i => i.severity === "critical").length;
+  // Sub-line: the top two contributors, most severe first.
+  const attnParts: string[] = [];
+  if (overdueTasks.length) attnParts.push(`${plural(overdueTasks.length, "overdue task")}`);
+  if (overdueBillCount) attnParts.push(`${plural(overdueBillCount, "overdue bill")}`);
+  const billsDueTodayCount = bills.filter((b: any) => b.status !== "overdue" && b.daysUntil === 0).length;
+  if (billsDueTodayCount) attnParts.push(`${plural(billsDueTodayCount, "bill")} due today`);
+  if (alerts.length) attnParts.push(`${plural(alerts.length, "alert")}`);
+  if (nextDoc) attnParts.push(`${plural(attention.filter(i => i.group === "Expiring documents").length, "expiring doc")}`);
+  if (missedCount) attnParts.push(`${plural(missedCount, "habit")} due`);
+  if (firedReminders.length) attnParts.push(`${plural(firedReminders.length, "reminder")} fired`);
+
+  // ── Today's Overview: everything scheduled today, one chronological list. ───
+  const tomorrowStr = new Date(nowMs + 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+  const remindersToday = activeReminders.filter((r: any) => {
+    const f = r.fireAt ? new Date(r.fireAt) : null;
+    return f && !isNaN(f.getTime()) && f.toLocaleDateString("en-CA") === todayStr;
+  });
+  const todayEntries: TodayEntry[] = [
+    // Timeline supplies events/bills for today; tasks come from /api/tasks so
+    // completed-vs-pending state is authoritative (skip timeline task rows).
+    ...todayItems.filter((i: any) => i.type !== "task").map((i: any) => ({
+      id: String(i.id), title: i.title, kind: String(i.type), time: i.time || null,
+      urgent: i.type === "bill" || i.type === "obligation",
+      go: () => setPopup(i.type === "bill" || i.type === "obligation" ? "bills" : "events"),
+    })),
+    ...agendaTasks.map((t: any) => ({ id: `task-${t.id}`, title: t.title, kind: "task", time: null, go: () => setPopup("tasks") })),
+    ...habitRows.map(h => ({ id: `habit-${h.id}`, title: h.name, kind: "habit", time: null, done: h.doneToday, go: () => setPopup("habits") })),
+    ...remindersToday.map((r: any) => ({
+      id: `rem-${r.id}`, title: r.title || r.message || r.content || "Reminder", kind: "reminder",
+      time: r.fireAt ? new Date(r.fireAt).toTimeString().slice(0, 5) : null, go: () => setPopup("reminders"),
+    })),
+  ];
+  const tomorrowEntries: TodayEntry[] = tl
+    .filter((i: any) => (i.date || "").slice(0, 10) === tomorrowStr).slice(0, 8)
+    .map((i: any) => ({ id: `tmw-${i.id}`, title: i.title, kind: String(i.type), time: i.time || null }));
+  const todayRemainingTasks = agendaTasks.length;
+  const todayDone = doneToday + habitsDone;
+  const todayTotal = todayEntries.length + doneToday;
+  const todayPct = todayTotal > 0 ? Math.round((todayDone / todayTotal) * 100) : 0;
+  const timedRemaining = todayEntries.filter(e => e.time && !e.done).sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  const nextTimed = timedRemaining.find(e => String(e.time) >= nowClock);
+  const todayNextLabel = nextTimed
+    ? `Next: ${nextTimed.title} · ${fmtClock(nextTimed.time)}`
+    : agendaTasks[0] ? `Next: ${agendaTasks[0].title}`
+    : nextFutureEvent ? `Next: ${nextFutureEvent.title} · ${dayLabel(String(nextFutureEvent.date).slice(0, 10), todayStr)}`
+    : "Nothing scheduled today";
+  const firstCritical = attention.find(i => i.severity === "critical");
 
   // AI Executive Brief — honest, instant bullets derived from the data above
   // (no per-load AI call). The AI chat can still create/modify any of the
@@ -328,19 +455,81 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
           >Retry</button>
         </div>
       )}
-      {/* Top stat tiles (photo-2 style) — every tile drills into its module.
+      {/* Attention-first top grid (2026-07-16 redesign): row 1 = Attention /
+          Tasks / Events, row 2 = Bills / Documents / Habits, then a full-width
+          Today's Overview strip. Every card answers "what needs my attention,
+          what's coming up, what's going wrong" — not just totals. The opaque
+          Score tile is replaced by Attention Required (most prominent card);
+          Projects moved down into the section grid (Open Projects).
           Loading-vs-empty (BUG-20260715-everyone-zeros): while a tile's query
           is still pending (cold Everyone switch, cold reload) it shows "…",
           never a hard 0 — a wall of zeros reads as "aggregation is broken". */}
-      <div className="flex flex-wrap gap-2 mb-2" data-testid="brief-stat-row">
-        <StatTile label="Score" value={tasksPending ? "…" : hasScoreInputs ? String(score) : "—"} sub={tasksPending ? "loading" : hasScoreInputs ? `${scoreLabel} · ${overdueTasks.length} critical` : "No data yet"} accent={!hasScoreInputs ? "240 10% 60%" : score >= 90 ? "155 65% 45%" : score >= 75 ? "43 96% 56%" : "0 72% 58%"} onClick={() => setPopup("tasks")} testId="brief-stat-score" />
-        <StatTile label="Tasks" value={tasksPending ? "…" : String(pending.length)} sub={tasksPending ? "loading" : `${agendaTasks.length} today · ${overdueTasks.length} overdue`} accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
-        <StatTile label="Habits" value={habitsPending ? "…" : `${habitRows.length - missedCount}/${habitRows.length}`} sub={habitsPending ? "loading" : missedCount > 0 ? `${missedCount} still due` : "all done"} accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
-        <StatTile label="Bills" value={enhanced === undefined ? "…" : String(bills.length)} sub={enhanced === undefined ? "loading" : `$${Math.round(billsUpcomingTotal).toLocaleString()} upcoming`} accent={ACCENTS.bills} onClick={() => setPopup("bills")} testId="brief-stat-bills" />
-        <StatTile label="Docs" value={enhanced === undefined ? "…" : String(docsSoonCount)} sub={enhanced === undefined ? "loading" : docsSoonCount ? "≤30d window" : "all good"} accent={ACCENTS.docs} onClick={() => setPopup("docs")} testId="brief-stat-docs" />
-        <StatTile label="Events" value={timelinePending ? "…" : String(eventCount)} sub="next 14 days" accent={ACCENTS.calendar} onClick={() => setPopup("events")} testId="brief-stat-events" />
-        <StatTile label="Projects" value={goalsPending ? "…" : String(projects.length)} sub={goalsPending ? "loading" : `${doneToday} done today`} accent={ACCENTS.projects} onClick={() => setPopup("projects")} testId="brief-stat-projects" />
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2" data-testid="brief-stat-row">
+        <StatTile prominent label="Attention"
+          value={tasksPending || enhanced === undefined ? "…" : String(attention.length)}
+          unit={tasksPending || enhanced === undefined ? undefined : attention.length > 0 ? (attention.length === 1 ? "item needs review" : "items need review") : undefined}
+          sub={tasksPending || enhanced === undefined ? "loading" : attention.length === 0 ? "Nothing needs review" : attnParts.slice(0, 2).join(" · ")}
+          accent={attention.length === 0 ? "155 65% 45%" : attnCritical > 0 ? "0 72% 58%" : "43 96% 56%"}
+          onClick={() => setPopup("attention")} testId="brief-stat-attention" />
+        <StatTile label="Tasks"
+          value={tasksPending ? "…" : String(agendaTasks.length)} unit={tasksPending ? undefined : "due today"}
+          sub={tasksPending ? "loading"
+            : overdueTasks.length || highCount ? `${overdueTasks.length} overdue · ${highCount} high priority`
+            : doneToday > 0 ? `${plural(doneToday, "task")} completed today`
+            : `${plural(pending.length, "open task")}`}
+          accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
+        <StatTile label="Events"
+          value={timelinePending ? "…" : String(eventsToday.length)} unit={timelinePending ? undefined : "today"}
+          sub={timelinePending ? "loading" : nextEventLabel}
+          accent={ACCENTS.calendar} onClick={() => setPopup("events")} testId="brief-stat-events" />
+        <StatTile label="Bills"
+          value={enhanced === undefined ? "…" : `$${Math.round(billsUpcomingTotal).toLocaleString()}`}
+          unit={enhanced === undefined ? undefined : "due soon"}
+          sub={enhanced === undefined ? "loading"
+            : overdueBillCount ? `${plural(overdueBillCount, "overdue bill")}${nextBillDate ? ` · next due ${nextBillDate}` : ""}`
+            : nextBillDate ? `next due ${nextBillDate}`
+            : "nothing due in 3 weeks"}
+          accent={ACCENTS.bills} onClick={() => setPopup("bills")} testId="brief-stat-bills" />
+        <StatTile label="Documents"
+          value={enhanced === undefined ? "…" : String(docsSoonCount)}
+          unit={enhanced === undefined ? undefined : docsSoonCount === 1 ? "needs attention" : "need attention"}
+          sub={enhanced === undefined ? "loading" : nextDoc ? `${nextDoc.documentName || nextDoc.name || "Document"} ${docExpiryPhrase(nextDoc.daysUntil)}` : "all good"}
+          accent={ACCENTS.docs} onClick={() => setPopup("docs")} testId="brief-stat-documents" />
+        {/* Zero habits ≠ "all done" — it means nothing is scheduled. */}
+        <StatTile label="Habits"
+          value={habitsPending ? "…" : habitRows.length === 0 ? "—" : `${habitsDone} of ${habitRows.length}`}
+          unit={habitsPending || habitRows.length === 0 ? undefined : "completed"}
+          sub={habitsPending ? "loading" : habitRows.length === 0 ? "No habits scheduled today" : missedCount > 0 ? `${missedCount} remaining today` : "all done today"}
+          accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
       </div>
+
+      {/* Today's Overview — full-width strip replacing the old Projects tile:
+          next action, remaining work, the most urgent issue, day progress. */}
+      <button onClick={() => setPopup("today")} data-testid="brief-today-card"
+        className="w-full rounded-xl border px-3 py-2.5 text-left card-lift transition-all mb-2"
+        style={{ borderColor: "hsl(262 80% 66% / 0.30)", background: "linear-gradient(135deg, hsl(262 80% 66% / 0.10) 0%, hsl(var(--card)) 70%)" }}>
+        <div className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: "hsl(262 80% 66%)", boxShadow: "0 0 5px hsl(262 80% 66% / 0.7)" }} />
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Today</span>
+          {todayTotal > 0 && <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">{todayPct}% done</span>}
+        </div>
+        <div className="mt-1 text-sm font-medium truncate" style={{ color: "hsl(262 80% 66%)" }}>
+          {tasksPending || timelinePending ? "…" : todayNextLabel}
+        </div>
+        <div className="text-[11px] text-muted-foreground mt-0.5 truncate">
+          {plural(todayRemainingTasks, "task")} remaining
+          {habitRows.length > 0 ? ` · ${plural(missedCount, "habit")} remaining` : ""}
+          {todayDone > 0 ? ` · ${todayDone} done` : ""}
+        </div>
+        {firstCritical && (
+          <div className="text-[11px] text-red-500 mt-0.5 truncate">⚠ {firstCritical.title} — {firstCritical.reason}</div>
+        )}
+        {todayTotal > 0 && (
+          <div className="mt-1.5 h-1 rounded-full bg-muted overflow-hidden">
+            <div className="h-full rounded-full" style={{ width: `${todayPct}%`, background: "hsl(262 80% 66%)" }} />
+          </div>
+        )}
+      </button>
 
       <div className="md:columns-2 xl:columns-3 gap-2">
         <Section id="alerts" title="AI Executive Brief" count={aiBrief.length} testId="brief-ai" defaultOpen>
@@ -586,6 +775,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced }: {
       {popup === "projects" && <ProjectsPopup open onClose={() => setPopup(null)} goals={goals} />}
       {popup === "notes" && <NotesPopup open onClose={() => setPopup(null)} notes={(journal || []).slice(0, 20)} />}
       {popup === "reminders" && <RemindersPopup open onClose={() => setPopup(null)} reminders={reminders} />}
+      {popup === "attention" && <AttentionPopup open onClose={() => setPopup(null)} items={attention} />}
+      {popup === "today" && (
+        <TodayOverviewPopup open onClose={() => setPopup(null)} entries={todayEntries}
+          tomorrow={tomorrowEntries} completedTasks={doneToday}
+          alerts={attention.filter(i => i.severity === "critical").slice(0, 3).map(i => `${i.title} — ${i.reason}`)} />
+      )}
     </div>
   );
 }

@@ -33,6 +33,13 @@ function fmtTime(iso?: string | null): string {
   if (isNaN(d.getTime())) return "";
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
+/** "14:30" → "2:30 PM". Calendar rows store bare HH:MM strings, not ISO. */
+export function fmtClock(t?: string | null): string {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ""));
+  if (!m) return String(t || "");
+  const h = parseInt(m[1], 10);
+  return `${h % 12 || 12}:${m[2]} ${h >= 12 ? "PM" : "AM"}`;
+}
 /** "Expires in 7 days" / "Expires today" / "Expired 3 days ago" */
 function expiryLabel(daysUntil: number): string {
   if (daysUntil === 0) return "Expires today";
@@ -630,6 +637,169 @@ export function RemindersPopup({ open, onClose, reminders }: { open: boolean; on
           </div>
         );
       })}
+    </PopupShell>
+  );
+}
+
+// ── Attention Required ───────────────────────────────────────────────────────
+// The Score replacement (2026-07-16 redesign): one popup that combines every
+// urgent issue across the profile — overdue tasks, bills needing action,
+// expiring documents, habits still due, critical alerts, fired reminders.
+// Items are computed by ExecutiveBriefing (it already holds all the queries);
+// each row's `go` closes this popup and opens the owning module's popup.
+export type AttentionEntry = {
+  id: string;
+  title: string;
+  reason: string;             // why it was flagged, human sentence
+  severity: "critical" | "warning";
+  group: string;              // grouped section label ("Overdue tasks", …)
+  go?: () => void;            // open the owning module surface
+};
+
+export function AttentionPopup({ open, onClose, items }: {
+  open: boolean; onClose: () => void; items: AttentionEntry[];
+}) {
+  const [filter, setFilter] = useState<"all" | "critical" | "warning">("all");
+  const critical = items.filter(i => i.severity === "critical").length;
+  const visible = filter === "all" ? items : items.filter(i => i.severity === filter);
+  const groups: Array<{ label: string; rows: AttentionEntry[] }> = [];
+  for (const i of visible) {
+    const g = groups.find(x => x.label === i.group);
+    if (g) g.rows.push(i); else groups.push({ label: i.group, rows: [i] });
+  }
+  const pills: Array<{ key: typeof filter; label: string }> = [
+    { key: "all", label: `All · ${items.length}` },
+    { key: "critical", label: `Urgent · ${critical}` },
+    { key: "warning", label: `Upcoming · ${items.length - critical}` },
+  ];
+  return (
+    <PopupShell open={open} onClose={onClose} title="Attention Required" icon={AlertTriangle}
+      accent="0 72% 58%" count={items.length}
+      subtitle={items.length ? `${critical} urgent · ${items.length - critical} upcoming — everything that needs review, in one place` : undefined}>
+      <div className="flex items-center gap-1 px-1 pt-1 pb-1.5">
+        {pills.map(p => (
+          <button key={p.key} onClick={() => setFilter(p.key)} data-testid={`attention-filter-${p.key}`}
+            className={`text-[10px] font-medium px-2 py-0.5 rounded-full border transition-colors ${
+              filter === p.key ? "border-red-500/50 bg-red-500/10 text-red-500" : "border-border text-muted-foreground hover:bg-muted"}`}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+      {visible.length === 0 ? <EmptyNote label={items.length === 0 ? "Nothing needs your attention. 🎉" : "Nothing in this filter."} /> :
+        groups.map(g => (
+          <div key={g.label}>
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-2 pb-1">
+              {g.label} · {g.rows.length}
+            </div>
+            {g.rows.map(i => (
+              <div key={i.id} data-testid={`attention-item-${i.id}`}
+                className={`mb-1 rounded-md border border-border/40 border-l-2 ${i.severity === "critical" ? "border-l-red-500" : "border-l-amber-500"} bg-card/50 px-2.5 py-1.5`}>
+                <div className="flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate">{i.title}</p>
+                    <div className="flex items-center flex-wrap gap-1 mt-0.5">
+                      <Chip tone={i.severity === "critical" ? "neg" : "warn"}>{i.reason}</Chip>
+                    </div>
+                  </div>
+                  {i.go && <ActionBtn label="Open" icon={ArrowRight} onClick={i.go} testId={`attention-open-${i.id}`} />}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+    </PopupShell>
+  );
+}
+
+// ── Today's Overview ─────────────────────────────────────────────────────────
+// The full-width executive popup: everything happening TODAY — tasks, events,
+// bills, habits, reminders — merged into one Morning/Afternoon/Evening/Anytime
+// timeline, plus alerts and a tomorrow preview. Rows open their module popup.
+export type TodayEntry = {
+  id: string;
+  title: string;
+  kind: string;               // task | event | bill | obligation | habit | reminder
+  time?: string | null;       // bare HH:MM when scheduled, null = anytime
+  done?: boolean;
+  urgent?: boolean;
+  go?: () => void;
+};
+
+const KIND_TONE: Record<string, "neg" | "warn" | "pos" | "muted"> = {
+  bill: "neg", obligation: "neg", reminder: "warn", habit: "pos",
+};
+
+function TodayRow({ e }: { e: TodayEntry }) {
+  return (
+    <button onClick={e.go} disabled={!e.go} data-testid={`today-row-${e.id}`}
+      className={`w-full flex items-baseline gap-2 px-2.5 py-1.5 mb-1 rounded-md border border-border/40 bg-card/50 text-left ${e.go ? "hover:bg-muted/30" : ""}`}>
+      <span className="text-[10px] uppercase text-muted-foreground w-14 shrink-0 truncate tabular-nums">{e.time ? fmtClock(e.time) : ""}</span>
+      <span className={`flex-1 text-xs truncate ${e.done ? "line-through text-muted-foreground" : e.urgent ? "text-red-500 font-medium" : ""}`}>
+        {e.done ? "✓ " : ""}{e.title}
+      </span>
+      <Chip tone={e.done ? "muted" : KIND_TONE[e.kind] || "muted"}>{e.kind}</Chip>
+    </button>
+  );
+}
+
+export function TodayOverviewPopup({ open, onClose, entries, tomorrow, completedTasks, alerts }: {
+  open: boolean; onClose: () => void;
+  entries: TodayEntry[];      // everything scheduled today (habits incl. done)
+  tomorrow: TodayEntry[];     // preview of tomorrow's calendar
+  completedTasks: number;     // tasks completed today (not in `entries`)
+  alerts: string[];           // critical attention headlines
+}) {
+  const hourOf = (t?: string | null) => { const m = /^(\d{1,2}):/.exec(String(t || "")); return m ? parseInt(m[1], 10) : null; };
+  const byTime = (a: TodayEntry, b: TodayEntry) => String(a.time || "99").localeCompare(String(b.time || "99"));
+  const remaining = entries.filter(e => !e.done);
+  const doneCount = entries.filter(e => e.done).length + completedTasks;
+  const nowClock = new Date().toTimeString().slice(0, 5);
+  const timed = remaining.filter(e => e.time).sort(byTime);
+  const next = timed.find(e => String(e.time) >= nowClock) || remaining.find(e => !e.time) || timed[timed.length - 1];
+  const buckets: Array<{ label: string; test: (h: number | null) => boolean }> = [
+    { label: "Morning", test: h => h !== null && h < 12 },
+    { label: "Afternoon", test: h => h !== null && h >= 12 && h < 17 },
+    { label: "Evening", test: h => h !== null && h >= 17 },
+    { label: "Anytime", test: h => h === null },
+  ];
+  const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  return (
+    <PopupShell open={open} onClose={onClose} title="Today's Overview" icon={CalendarDays}
+      accent="262 80% 66%" count={entries.length}
+      subtitle={`${dateLabel} · ${remaining.length} remaining · ${doneCount} done`}
+      footerLabel="Open Calendar" footerHref="/calendar">
+      {alerts.length > 0 && (
+        <div className="mb-1.5 rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5" data-testid="today-alerts">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-red-500 mb-0.5">Important alerts</p>
+          {alerts.slice(0, 3).map((a, i) => <p key={i} className="text-xs text-red-500 truncate">⚠ {a}</p>)}
+        </div>
+      )}
+      {next && (
+        <div className="mb-1.5 rounded-md border px-2.5 py-1.5" data-testid="today-next"
+          style={{ borderColor: "hsl(262 80% 66% / 0.35)", background: "hsl(262 80% 66% / 0.08)" }}>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-0.5">Next action</p>
+          <p className="text-xs font-medium truncate" style={{ color: "hsl(262 80% 66%)" }}>
+            {next.title}{next.time ? ` · ${fmtClock(next.time)}` : ""}
+          </p>
+        </div>
+      )}
+      {entries.length === 0 ? <EmptyNote label="Nothing scheduled today." /> :
+        buckets.map(b => {
+          const rows = entries.filter(e => b.test(hourOf(e.time))).sort(byTime);
+          if (rows.length === 0) return null;
+          return (
+            <div key={b.label}>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-2 pb-1">{b.label} · {rows.length}</div>
+              {rows.map(e => <TodayRow key={e.id} e={e} />)}
+            </div>
+          );
+        })}
+      {tomorrow.length > 0 && (
+        <div data-testid="today-tomorrow">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-2 pb-1">Tomorrow preview · {tomorrow.length}</div>
+          {tomorrow.map(e => <TodayRow key={e.id} e={e} />)}
+        </div>
+      )}
     </PopupShell>
   );
 }
