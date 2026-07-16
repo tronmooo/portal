@@ -12126,7 +12126,9 @@ async function runBulkLogPath(
 
   // ── Phase B: execute every operation independently ──
   const startedAt = Date.now();
-  const EXEC_BUDGET_MS = process.env.VERCEL ? 40_000 : 75_000;
+  // 75s everywhere: the platform ceiling is 300s (vercel.json maxDuration),
+  // so the old 40s Vercel special-case (from the 60s-cap era) is gone.
+  const EXEC_BUDGET_MS = 75_000;
   const turnVerifyCtx = buildTurnVerifyContext(storage);
   const actions: ParsedAction[] = [];
   const results: any[] = [];
@@ -13027,10 +13029,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // connection error while writes silently continue server-side. Stop
     // starting NEW round-trips after 90s and report what completed honestly.
     const startedAt = Date.now();
-    // On Vercel the function itself is killed at maxDuration (60s) — a 90s
-    // budget there guarantees a dropped connection instead of an honest
-    // partial reply. Stay under the platform ceiling when deployed.
-    const WALL_CLOCK_BUDGET_MS = process.env.VERCEL ? 50_000 : 90_000;
+    // The platform ceiling is 300s (vercel.json maxDuration — restored from
+    // the 60s regression that forced a temporary 50s Vercel budget here), so
+    // 90s fits everywhere with the 170s client abort well above it. The
+    // three-tier ordering is pinned by tests/chat-timeout-envelope.test.ts.
+    const WALL_CLOCK_BUDGET_MS = 90_000;
     let ranOutOfTime = false;
     // Envelope verification context — one per chat turn; memoizes the user's
     // profile-id set across all tool calls in the turn (see server/ai-envelope).
