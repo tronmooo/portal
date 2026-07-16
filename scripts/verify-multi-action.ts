@@ -78,7 +78,7 @@ const linkedTo = (row: any, profileId?: string) =>
   row?.profileId === profileId ||
   (row?.profileIds || []).includes(profileId);
 
-interface TurnLog { label: string; elapsedMs: number; status: number; tools: string[]; reply: string }
+interface TurnLog { label: string; elapsedMs: number; status: number; tools: string[]; reply: string; raw: any }
 const turnLogs: TurnLog[] = [];
 
 async function chat(label: string, message: string, history: Array<{ role: string; content: string }> = []): Promise<TurnLog> {
@@ -90,7 +90,7 @@ async function chat(label: string, message: string, history: Array<{ role: strin
     ...(Array.isArray(d.results) ? d.results.map((x: any) => x?.action) : []),
     ...(Array.isArray(d.actions) ? d.actions.map((a: any) => a?.type) : []),
   ].filter((x: any) => typeof x === "string"))] as string[];
-  const log = { label, elapsedMs, status: r.status, tools, reply: String(d.reply || "") };
+  const log = { label, elapsedMs, status: r.status, tools, reply: String(d.reply || ""), raw: d };
   turnLogs.push(log);
   console.log(`\n── ${label} ── ${(elapsedMs / 1000).toFixed(1)}s, HTTP ${r.status}, ${tools.length} tool types`);
   console.log(`   tools: ${tools.join(", ") || "(none)"}`);
@@ -239,6 +239,23 @@ async function check(phase: string, label: string, fn: () => Promise<boolean>) {
     (await anyTrackerEntryToday(/shower|hygiene/i, /1|shower|true|taken/i))
     || (await list("/trackers")).some((t) => entryToday(t, /shower/i))
     || /shower/i.test(d.reply));
+
+  // ═══ Command E — owner attribution (the "Jim's Honda CRV" regression) ═════
+  // Real user report 2026-07-15: updating a vehicle nested under Jim badged
+  // the card "YOU" and the reply said "your Honda CRV". The server now
+  // resolves the nested-asset parent chain: action data carries _ownerName
+  // and the reply names the real owner.
+  await chat("E-setup: vehicle under Mike", `Add a vehicle called "${TAG} Test Truck" for Mike.`);
+  const e = await chat("E: update another person's vehicle", `The color of my ${TAG} Test Truck is blue.`);
+  await check("E", "color persisted on the truck profile", async () => {
+    const p = findBy((await list("/profiles")), new RegExp(`${TAG} Test Truck`, "i"), "name");
+    return !!p && /blue/i.test(J(p.fields || p));
+  });
+  await check("E", "action data attributes the truck to Mike (_ownerName)", async () => {
+    const acts = Array.isArray(e.raw?.actions) ? e.raw.actions : [];
+    return acts.some((a: any) => a?.data?._ownerName && /mike/i.test(String(a.data._ownerName)));
+  });
+  await check("E", "reply names Mike as the owner (not 'your')", async () => /mike/i.test(e.reply));
 
   // ═══ Refresh persistence — fresh auth session, re-read everything ═════════
   await getSmokeToken(true); // force new token = new app session after refresh

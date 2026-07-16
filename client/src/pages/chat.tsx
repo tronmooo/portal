@@ -398,6 +398,33 @@ function actionLabel(type: string) {
   return ACTION_LABELS[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Deep-link for a chat action card — tapping the card opens the page where
+// the entity lives (2026-07-15 user request: "when I press the profile it
+// should bring me to the profile — every chat command should do that").
+// Profile-row entities (people, pets, vehicles, assets, liabilities) go to
+// their detail page; tracker entries open their tracker on /trackers; list
+// entities land on their module page.
+function actionRoute(type: string, data: any): string | null {
+  const id = data?._entityId;
+  switch (type) {
+    case "create_profile": case "update_profile": case "create_liability": case "revalue_asset":
+      return id ? `/profiles/${id}` : "/profiles";
+    case "create_tracker":
+      return id ? `/trackers?tracker=${id}` : "/trackers";
+    case "log_entry": case "log_tracker_entry": case "add_tracker_entry": case "update_tracker_entry": case "delete_tracker_entry":
+      return data?._trackerId ? `/trackers?tracker=${data._trackerId}` : "/trackers";
+    case "create_task": case "complete_task": return "/tasks";
+    case "create_event": case "complete_event": case "create_reminder": return "/calendar";
+    case "log_expense": case "log_income": case "log_paycheck": case "set_budget": return "/finance";
+    case "create_obligation": case "pay_obligation": case "add_liability_payment": return "/obligations";
+    case "create_habit": case "checkin_habit": case "uncomplete_habit": case "delete_habit": return "/habits";
+    case "journal_entry": return "/journal";
+    case "create_goal": return "/goals";
+    case "save_memory": return null;
+    default: return null;
+  }
+}
+
 // ── "+ New" doc/sheet button in the chat composer ────────────────────────────
 // Lives next to the paperclip. Opens a small popover with two tiles; clicking
 // either navigates to /editor/new/<type>?source=chat. The editor itself saves
@@ -1540,10 +1567,10 @@ export function clearChatCache() {
 // ─────────────────────────────────────────────
 // Confirmation card with inline Edit + Undo
 // ─────────────────────────────────────────────
-function ConfirmationCard({ name, type, amount, date, profile, warnings, entityId, endpoint, isDeleted, result, onDeleted }: {
+function ConfirmationCard({ name, type, amount, date, profile, warnings, entityId, endpoint, isDeleted, result, onDeleted, href }: {
   name: string; type: string; amount: string | null; date: string; profile: string;
   warnings: string[]; entityId?: string; endpoint: string | null; isDeleted?: boolean;
-  result: any; onDeleted: () => void;
+  result: any; onDeleted: () => void; href?: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(name);
@@ -1673,7 +1700,16 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
         </div>
       ) : (
         <div className="flex items-start gap-2 px-3 py-2">
-          <div className="flex-1 min-w-0 space-y-0.5">
+          {/* Tappable body — opens the entity's page (profile detail, tracker,
+              module list) when a destination is known. */}
+          <div
+            className={`flex-1 min-w-0 space-y-0.5 ${href ? "cursor-pointer active:opacity-70 transition-opacity" : ""}`}
+            role={href ? "link" : undefined}
+            tabIndex={href ? 0 : undefined}
+            data-testid="confirmation-card-link"
+            onClick={href ? () => hashNavigate(href) : undefined}
+            onKeyDown={href ? (e) => { if (e.key === "Enter" || e.key === " ") hashNavigate(href); } : undefined}
+          >
             <div className="font-medium text-foreground truncate">{editName}</div>
             <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
               {type && <span className="capitalize">{type}</span>}
@@ -2944,9 +2980,15 @@ export default function ChatPage() {
                       // Build a meaningful title — always uppercase tracker/type label
                       const isTrackerEntry = action.type === 'log_entry' || (action.type as string) === 'log_tracker_entry';
                       const trackerName = (action.data?.trackerName || '').toUpperCase();
-                      const whoFor = action.data?.forProfile
-                        ? String(action.data.forProfile).charAt(0).toUpperCase() + String(action.data.forProfile).slice(1)
-                        : 'You';
+                      // Prefer the server-resolved REAL owner (walks nested-asset
+                      // parent chains — Jim's Honda CRV badges JIM even when the
+                      // user said "my Honda CRV") over the raw tool input.
+                      const ownerName = (action.data as any)?._ownerName;
+                      const whoFor = ownerName
+                        ? String(ownerName).charAt(0).toUpperCase() + String(ownerName).slice(1)
+                        : action.data?.forProfile
+                          ? String(action.data.forProfile).charAt(0).toUpperCase() + String(action.data.forProfile).slice(1)
+                          : 'You';
                       // Format values: "250 cal, 31g carbs, 4g protein".
                       // Underscore keys are reserved metadata (_notes,
                       // _enrichment); estimated values render with a ≈ so
@@ -2981,6 +3023,8 @@ export default function ChatPage() {
                           ? `$${Number(action.data.amount).toFixed(2)}`
                           : '';
                       const isArtifact = action.type === 'create_artifact' && action.data && !isUndone;
+                      // Where tapping the card takes you (null = not linkable).
+                      const cardRoute = !isUndone ? actionRoute(action.type, action.data) : null;
                       return (
                         <div key={i} data-testid={`action-card-${action.type}-${i}`}>
                           <div
@@ -2998,8 +3042,16 @@ export default function ChatPage() {
                                 ? <X className="h-3.5 w-3.5 text-red-500" />
                                 : <Check className="h-3.5 w-3.5 text-green-600" />}
                             </div>
-                            {/* Content */}
-                            <div className="flex-1 min-w-0">
+                            {/* Content — tappable: opens the entity's page
+                                (profile detail, its tracker, module list). */}
+                            <div
+                              className={`flex-1 min-w-0 ${cardRoute ? 'cursor-pointer active:opacity-70 transition-opacity' : ''}`}
+                              role={cardRoute ? 'link' : undefined}
+                              tabIndex={cardRoute ? 0 : undefined}
+                              data-testid={`action-card-link-${action.type}-${i}`}
+                              onClick={cardRoute ? () => hashNavigate(cardRoute) : undefined}
+                              onKeyDown={cardRoute ? (e) => { if (e.key === 'Enter' || e.key === ' ') hashNavigate(cardRoute); } : undefined}
+                            >
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <p className={`text-xs font-semibold ${
                                   isUndone ? 'line-through text-muted-foreground' : 'text-foreground'
@@ -3263,21 +3315,38 @@ export default function ChatPage() {
                       const name = result.title || result.name || result.description || "";
                       const type = result.type || result.category || "";
                       const amount = result.amount != null ? `$${Number(result.amount).toFixed(2)}` : null;
+                      // Prefer the server-resolved real owner name (nested-asset
+                      // aware) over raw ids/inputs for the "→ person" chip.
+                      const profile = result.owner || result.forProfile || result.linkedProfiles?.[0] || "";
                       const date = result.date || result.dueDate || result.nextDueDate || "";
-                      const profile = result.forProfile || result.linkedProfiles?.[0] || "";
                       const warnings = result._validationWarnings || [];
                       const entityId = result.id;
                       const isDeleted = result._deleted;
-                      
+
                       if (!name && !amount) return null;
-                      
+
                       // Determine entity endpoint for edit/undo
                       const ep = result.status !== undefined ? "tasks"
                         : result.amount !== undefined ? "expenses"
                         : result.frequency !== undefined ? "obligations"
                         : result.date !== undefined ? "events"
                         : null;
-                      
+                      // Tap destination: profile rows (people/pets/vehicles/assets/
+                      // liabilities carry parentProfileId or a profile type) open
+                      // their detail page; tracker entries open their tracker;
+                      // list entities open their module page.
+                      const isProfileRow = entityId && (
+                        Object.prototype.hasOwnProperty.call(result, "parentProfileId")
+                        || ["person", "pet", "vehicle", "asset", "liability", "property", "medical", "self"].includes(String(result.type || ""))
+                      );
+                      const href = isProfileRow ? `/profiles/${entityId}`
+                        : result.trackerId ? `/trackers?tracker=${result.trackerId}`
+                        : ep === "tasks" ? "/tasks"
+                        : ep === "expenses" ? "/finance"
+                        : ep === "obligations" ? "/obligations"
+                        : ep === "events" ? "/calendar"
+                        : null;
+
                       return (
                         <ConfirmationCard
                           key={`${ri}-${entityId}`}
@@ -3291,6 +3360,7 @@ export default function ChatPage() {
                           endpoint={ep}
                           isDeleted={isDeleted}
                           result={result}
+                          href={href}
                           onDeleted={() => { result._deleted = true; setMessages(prev => prev.map(m => ({ ...m }))); }}
                         />
                       );

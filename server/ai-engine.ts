@@ -4748,6 +4748,7 @@ BEFORE calling ANY delete tool (delete_profile, delete_task, delete_expense, del
 This is a HARD RULE — never silently delete anything the user didn't explicitly ask to delete.
 
 ━━━ HONESTY RULES ━━━
+- OWNERSHIP PHRASING: write results may include an "owner" field — the person who actually owns the touched item, resolved through nested assets (a Honda CRV nested under Jim is JIM'S car). When owner is someone other than the user, name them: "Color updated to white on Jim's Honda CRV 2021" — NEVER call another person's asset, vehicle, or liability "your".
 - If a tool returns {error: "..."} → tell the user it FAILED. Never say "Done!" on failure.
 - If item not found → say "I couldn't find [X]" with specific name. Offer to search.
 - If action succeeded → confirm with: what was done, for whom, the item name, and the new state.
@@ -5208,6 +5209,10 @@ function summarizeSingleItem(item: any): any {
       ...(item.entity ? { entity: item.entity } : {}),
       ...(item.verification ? { verification: item.verification } : {}),
       ...(item._validationWarnings ? { warnings: item._validationWarnings } : {}),
+      // Real owner of the touched entity (resolved through nested-asset parent
+      // chains) — lets the model say "Jim's Honda CRV", never "your Honda CRV"
+      // for someone else's item.
+      ...(item.owner ? { owner: item.owner } : {}),
       // Raw keys the model already leans on in follow-up turns:
       ...(item.candidates ? { candidates: item.candidates } : {}),
       ...(item.suggestedAssetLink ? { suggestedAssetLink: item.suggestedAssetLink } : {}),
@@ -13195,12 +13200,36 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // button. _previousState is set by tools that support reversal
             // (currently update_profile).
             const previousState = (result as any)?._previousState;
+            // Owner attribution: figure out WHOSE entity this write touched.
+            // Profile-row writes (assets/vehicles/liabilities ARE profiles)
+            // start the parent walk at the written row itself; everything else
+            // starts at its linked/for profile. Never let attribution break
+            // the write.
+            let ownerInfo: { id: string; name: string; isSelf: boolean } | null = null;
+            try {
+              const isProfileRowWrite = ["create_profile", "update_profile", "create_liability", "revalue_asset"].includes(toolUse.name);
+              const startRow = isProfileRowWrite
+                ? { id: result.id, parentProfileId: (result as any).parentProfileId, type: (result as any).type, name: (result as any).name }
+                : (() => {
+                    const pid = (Array.isArray((result as any).linkedProfiles) && (result as any).linkedProfiles[0])
+                      || (result as any).profileId || (result as any).forProfile;
+                    return typeof pid === "string" && pid ? { id: pid } : undefined;
+                  })();
+              ownerInfo = resolveEntityOwner(startRow, allProfiles, selfProfileId);
+              // Tell the model who the real owner is so it phrases the reply
+              // as "Jim's Honda CRV", never "your Honda CRV" for someone
+              // else's item.
+              if (ownerInfo && !ownerInfo.isSelf) (result as any).owner = ownerInfo.name;
+            } catch { /* attribution is best-effort */ }
             allActions.push({
               type: actionType,
               category: "ai",
               data: {
                 ...inp,
                 _entityId: entityId || undefined,
+                // Deep-link + badge metadata for the chat action card.
+                ...(ownerInfo ? { _ownerName: ownerInfo.name, _ownerProfileId: ownerInfo.id } : {}),
+                ...((result as any)?.trackerId ? { _trackerId: (result as any).trackerId } : {}),
                 ...(previousState ? { _previousState: previousState } : {}),
               },
             });
@@ -13766,6 +13795,39 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
 // unrecognized fall through to "retrieve").
 function mapToolToActionType(toolName: string): ParsedAction["type"] {
   return TOOL_ACTION_MAP[toolName] || "retrieve";
+}
+
+// ── Owner attribution (2026-07-15 user report: "that's Jim's Honda CRV, not
+// mine") ── resolve the ROOT owner of the entity a write touched by walking
+// nested-asset parent chains (Honda CRV → Jim). The chat card badge can then
+// show the real person ("JIM") instead of defaulting to "You", and the model
+// can phrase its reply as "Jim's Honda CRV" instead of "your Honda CRV".
+// `startRow` may be a profile row not yet in `profiles` (a create from this
+// same turn) — it's used as the walk's starting point directly.
+// Exported for tests (tests/ai-owner-attribution.test.ts).
+export function resolveEntityOwner(
+  startRow: { id?: string; parentProfileId?: string | null; type?: string; name?: string } | undefined,
+  profiles: any[],
+  selfProfileId: string,
+): { id: string; name: string; isSelf: boolean } | null {
+  if (!startRow?.id) return null;
+  const byId = new Map(profiles.map((p: any) => [p.id, p]));
+  let row: any = byId.get(startRow.id) || startRow;
+  const seen = new Set<string>();
+  while (row?.parentProfileId && byId.has(row.parentProfileId) && !seen.has(row.id)) {
+    seen.add(row.id);
+    row = byId.get(row.parentProfileId);
+  }
+  if (!row?.id || !row?.name) return null;
+  // Parent exists but isn't in the list (created later in this same turn) —
+  // we can't resolve the true root; skip attribution rather than guess.
+  if (row.parentProfileId && !byId.has(row.parentProfileId)) return null;
+  const isSelf = row.id === selfProfileId || row.type === "self";
+  // A parentless asset-shaped root (standalone kayak, unassigned loan) is the
+  // account owner's own item — badge it "You" like the rest of the app does.
+  const assetish = ["asset", "vehicle", "liability", "property", "subscription", "loan"].includes(String(row.type || ""));
+  if (!isSelf && assetish) return { id: row.id, name: "You", isSelf: true };
+  return { id: row.id, name: isSelf ? "You" : String(row.name), isSelf };
 }
 
 // Fallback rule-based parsing when AI is unavailable

@@ -5549,6 +5549,24 @@ export default function TrackersPage() {
   const [, navigate] = useLocation();
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
+  // Deep-link from chat action cards: /trackers?tracker=<id> auto-opens that
+  // tracker's detail view (2026-07-15 user request: tapping a tracker card in
+  // chat should bring you to the tracker). The param is stripped afterwards so
+  // back/refresh doesn't keep re-opening it.
+  useEffect(() => {
+    if (!trackers || trackers.length === 0) return;
+    try {
+      const hash = window.location.hash || "";
+      const q = hash.includes("?") ? hash.split("?")[1] : (window.location.search || "").replace(/^\?/, "");
+      const tid = q ? new URLSearchParams(q).get("tracker") : null;
+      if (tid && trackers.some((t) => t.id === tid)) {
+        setSelectedTrackerId(tid);
+        const cleanedHash = hash.includes("?") ? hash.split("?")[0] : hash;
+        window.history.replaceState(null, "", `${window.location.pathname}${cleanedHash}`);
+      }
+    } catch { /* malformed URL — ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trackers?.length]);
   // Resolve selectedTracker from the live query cache so it refreshes after mutations
   const selectedTracker = selectedTrackerId ? (trackers || []).find(t => t.id === selectedTrackerId) || null : null;
   // Linked-page view mode. Persisted so the user's choice (compact list vs
