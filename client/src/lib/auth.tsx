@@ -529,6 +529,52 @@ export function useAuth() {
 // Patch the global fetch to add auth headers automatically
 let originalFetch: typeof fetch | null = null;
 
+/* SINGLE-FLIGHT REFRESH (stuck-skeleton fix, 2026-07-16).
+   When the app resumes with an expired access token, ~25 dashboard queries
+   fire in parallel and ALL get 401. Previously each one launched its OWN
+   /api/auth/refresh with the SAME refresh token — but refresh tokens rotate
+   on use, so the first call consumed it and the other two dozen failed with
+   a dead token, hit the persistTokens(null) path, and wiped the session the
+   first call had just restored. Net effect: returning to the app logged the
+   user out / blanked every query into permanent skeletons.
+   Now every concurrent 401 awaits the SAME refresh promise. */
+let refreshInFlight: Promise<{ access_token: string; refresh_token: string } | null> | null = null;
+
+function refreshSessionOnce(): Promise<{ access_token: string; refresh_token: string } | null> {
+  if (refreshInFlight) return refreshInFlight;
+  const oldRefreshToken = memoryTokens?.refresh_token;
+  if (!oldRefreshToken) return Promise.resolve(null);
+  refreshInFlight = (async () => {
+    try {
+      const refreshRes = await originalFetch!(`${API_BASE}/api/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: oldRefreshToken }),
+      });
+      if (!refreshRes.ok) return null;
+      const refreshData = await refreshRes.json().catch(() => null);
+      // Bug #15: validate refresh response shape before persisting.
+      // If body is malformed (no access_token), persistTokens(undefined) would
+      // wipe memoryTokens and we'd retry with a stale/empty Authorization header.
+      const newSession = refreshData?.session;
+      if (newSession?.access_token && newSession?.refresh_token) {
+        // Rotation canary — observability only, no behavior change.
+        warnIfRefreshTokenNotRotated(oldRefreshToken, newSession.refresh_token);
+        persistTokens(newSession);
+        return newSession;
+      }
+      return null; // malformed response
+    } catch {
+      return null;
+    } finally {
+      // Release AFTER settling so late 401s from the same storm reuse the
+      // result via the awaited promise, then the next expiry starts fresh.
+      setTimeout(() => { refreshInFlight = null; }, 0);
+    }
+  })();
+  return refreshInFlight;
+}
+
 export function installAuthInterceptor() {
   if (originalFetch) return; // Already installed
   originalFetch = window.fetch;
@@ -549,37 +595,19 @@ export function installAuthInterceptor() {
 
     const response = await originalFetch!(input, init);
 
-    // If we get a 401, clear the session
+    // If we get a 401, refresh (single-flight) and retry once
     if (response.status === 401 && url.includes("/api/") && !url.includes("/api/auth/")) {
-      // Try refresh first
       if (memoryTokens?.refresh_token) {
-        const oldRefreshToken = memoryTokens.refresh_token;
-        try {
-          const refreshRes = await originalFetch!(`${API_BASE}/api/auth/refresh`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ refresh_token: oldRefreshToken }),
-          });
-          if (refreshRes.ok) {
-            const refreshData = await refreshRes.json().catch(() => null);
-            // Bug #15: validate refresh response shape before persisting.
-            // If body is malformed (no access_token), persistTokens(undefined) would
-            // wipe memoryTokens and we'd retry with a stale/empty Authorization header.
-            const newSession = refreshData?.session;
-            if (newSession?.access_token && newSession?.refresh_token) {
-              // Rotation canary — observability only, no behavior change.
-              warnIfRefreshTokenNotRotated(oldRefreshToken, newSession.refresh_token);
-              persistTokens(newSession);
-              // Retry the original request with the freshly-persisted token
-              const retryHeaders = new Headers(init?.headers);
-              retryHeaders.set("Authorization", `Bearer ${newSession.access_token}`);
-              return originalFetch!(input, { ...init, headers: retryHeaders });
-            }
-            // Malformed refresh response — fall through to clear session
-          }
-        } catch { /* fall through */ }
+        const newSession = await refreshSessionOnce();
+        if (newSession?.access_token) {
+          // Retry the original request with the freshly-persisted token
+          const retryHeaders = new Headers(init?.headers);
+          retryHeaders.set("Authorization", `Bearer ${newSession.access_token}`);
+          return originalFetch!(input, { ...init, headers: retryHeaders });
+        }
       }
-      // Refresh failed — clear session and notify the app so it can redirect.
+      // Refresh failed (or no refresh token) — clear session and notify the
+      // app so it can redirect.
       // Bug #16: previously this cleared tokens silently, leaving the UI stuck
       // in a 401-loop with no feedback. Dispatch an event so AuthProvider/UI
       // can react (show toast, redirect to /auth, etc.).

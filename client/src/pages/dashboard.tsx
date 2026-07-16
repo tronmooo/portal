@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
 import { formatApiError } from "@/lib/formatError";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -364,6 +364,20 @@ function SkeletonGrid({ cols = 4, rows = 1, h = "h-14" }: { cols?: number; rows?
       {Array.from({ length: cols * rows }).map((_, i) => (
         <Skeleton key={`skel-${i}`} className={`${h} rounded-lg`} />
       ))}
+    </div>
+  );
+}
+
+// Rendered in place of a skeleton once loading has been stuck past the
+// deadline — a skeleton must never be the permanent state (2026-07-16).
+function DashLoadTimeoutCard({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-4 flex flex-col items-center gap-2 text-center" data-testid="dash-load-timeout">
+      <p className="text-sm text-muted-foreground">The dashboard is taking too long to load.</p>
+      <div className="flex gap-2">
+        <Button size="sm" variant="secondary" onClick={onRetry} data-testid="dash-load-retry">Retry</Button>
+        <Button size="sm" variant="outline" onClick={() => window.location.reload()}>Refresh</Button>
+      </div>
     </div>
   );
 }
@@ -5321,7 +5335,9 @@ export default function DashboardPage() {
       return b ?? null;
     },
     placeholderData: undefined,
-    retry: false,
+    // One retry: a single transient failure of THE gating request used to
+    // blank the whole dashboard with no recovery path.
+    retry: 1,
   });
   // Gate dependent hooks on bootstrap settling (success or error). Using
   // isFetched (not isSuccess) means a bootstrap failure still releases the
@@ -5329,7 +5345,20 @@ export default function DashboardPage() {
   // Also keep them disabled while the self-redirect is pending so they don't
   // fetch with stale everyone-mode params and immediately refetch with the
   // redirected self filter (Phase 3 loop fix).
-  const bootstrapSettled = bootstrapQuery.isFetched;
+  //
+  // GATE DEADLINE (stuck-skeleton fix, 2026-07-16): the bootstrap is a single
+  // point of failure — if its request wedges (mobile Safari orphans in-flight
+  // fetches on suspend; a cold serverless instance can stall), every section
+  // stayed skeleton FOREVER because stats/enhanced never got enabled. After
+  // 8s un-settled, release the gate anyway: stats/enhanced fetch their own
+  // (server-cached) data independently.
+  const [bootstrapDeadline, setBootstrapDeadline] = useState(false);
+  useEffect(() => {
+    if (bootstrapQuery.isFetched) { setBootstrapDeadline(false); return; }
+    const t = setTimeout(() => setBootstrapDeadline(true), 8_000);
+    return () => clearTimeout(t);
+  }, [bootstrapQuery.isFetched, filterMode, filterIds.join(","), currentMonth]);
+  const bootstrapSettled = bootstrapQuery.isFetched || bootstrapDeadline;
 
   const { data: stats, isPending: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
@@ -5359,6 +5388,31 @@ export default function DashboardPage() {
     const dsk = setTimeout(() => setShowDashSkeleton(true), 200);
     return () => clearTimeout(dsk);
   }, [statsLoading]);
+  // SKELETON DEADLINE (stuck-skeleton fix, 2026-07-16): a skeleton must never
+  // be permanent. If stats still hasn't landed after 12s, swap the skeleton
+  // for a visible "couldn't load — Retry" card. Retry cancels any wedged
+  // in-flight request first (react-query refuses to restart a query that
+  // still *thinks* it's fetching — the orphaned-fetch-on-resume trap).
+  const [dashLoadStuck, setDashLoadStuck] = useState(false);
+  useEffect(() => {
+    if (!statsLoading) { setDashLoadStuck(false); return; }
+    const t = setTimeout(() => setDashLoadStuck(true), 12_000);
+    return () => clearTimeout(t);
+  }, [statsLoading]);
+  const retryDashboardLoad = useCallback(async () => {
+    setDashLoadStuck(false);
+    try {
+      await queryClient.cancelQueries({
+        predicate: (q) => {
+          const k = String(q.queryKey?.[0] || "");
+          return (k.startsWith("/api/dashboard") || k === "/api/stats") && q.state.fetchStatus === "fetching";
+        },
+      });
+    } catch { /* cancel is best-effort */ }
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-bootstrap"], refetchType: "active" });
+    queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "active" });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "active" });
+  }, []);
 
   const { data: enhanced, isFetching: enhancedFetching } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
@@ -5477,8 +5531,9 @@ export default function DashboardPage() {
         content = <HeroKPISection enhanced={enhanced} stats={stats} filterMode={filterMode} filterIds={filterIds} refetching={enhancedFetching} />;
         break;
       case "kpis":
-        content = (showDashSkeleton && !stats) ? <SkeletonGrid cols={3} rows={2} h="h-14" /> :
-          stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={filterIds} filterMode={filterMode} /> : null;
+        content = (showDashSkeleton && !stats)
+          ? (dashLoadStuck ? <DashLoadTimeoutCard onRetry={retryDashboardLoad} /> : <SkeletonGrid cols={3} rows={2} h="h-14" />)
+          : stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={filterIds} filterMode={filterMode} /> : null;
         break;
       case "hero-briefing":
         content = <HeroBriefing enhanced={enhanced} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} />;
@@ -5684,12 +5739,16 @@ export default function DashboardPage() {
           Swimlane group headers (💰 Money / 📅 Today / ❤️ Health) are emitted before the first
           section of each group, so the page visually segments into related clusters. */}
       {filterMode === "everyone" ? (
+        (showDashSkeleton && !stats && dashLoadStuck) ? (
+          <DashLoadTimeoutCard onRetry={retryDashboardLoad} />
+        ) : (
         <HouseholdDashboard
           enhanced={enhanced}
           stats={stats}
           allProfiles={allProfiles}
           showSkeleton={showDashSkeleton && !stats}
         />
+        )
       ) : (() => {
         const afterGridIds = new Set(["activity"]);
         const beforeGrid = fullWidthSections.filter(s => !afterGridIds.has(s.id));

@@ -445,8 +445,22 @@ function cacheBustMiddleware(req: any, res: any, next: any) {
 const inFlight = new Map<string, Promise<any>>();
 function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
   if (inFlight.has(key)) return inFlight.get(key) as Promise<T>;
-  const p = fn().finally(() => inFlight.delete(key));
+  const p = fn().finally(() => {
+    inFlight.delete(key);
+    clearTimeout(watchdog);
+  });
   inFlight.set(key, p);
+  // Watchdog (stuck-skeleton fix, 2026-07-16): the map is module-scoped and
+  // survives across requests on a warm instance. If fn() hangs without ever
+  // settling (an upstream Supabase call with no timeout), .finally never runs
+  // and EVERY subsequent identical request is handed the same dead promise
+  // until the instance recycles. Evict the key after 30s so later requests
+  // start a fresh attempt — the original caller still just waits on p.
+  const watchdog = setTimeout(() => {
+    if (inFlight.get(key) === p) inFlight.delete(key);
+  }, 30_000);
+  // Don't let the watchdog keep a serverless instance alive.
+  (watchdog as any).unref?.();
   return p;
 }
 function bustCache(prefix: string): void {
