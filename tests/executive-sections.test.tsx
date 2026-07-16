@@ -6,7 +6,7 @@
 // actually exercise the new sections with live React + providers.
 import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Router } from "wouter";
 import { QuickActionsSection, WeeklySummarySection } from "../client/src/pages/dashboard";
@@ -77,11 +77,22 @@ describe("ExecutiveBriefing", () => {
     for (const id of ["brief-agenda", "brief-tasks", "brief-habits", "brief-reminders", "brief-dates", "brief-docs", "brief-bills", "brief-calendar", "brief-projects", "brief-activity", "brief-notes"]) {
       expect(screen.getByTestId(id), id).toBeTruthy();
     }
-    // Photo-2 stat tile row + AI Executive Brief render.
+    // Attention-first top grid (Attention/Tasks/Events + Bills/Documents/Habits)
+    // plus the full-width Today's Overview strip + AI Executive Brief render.
     expect(screen.getByTestId("brief-stat-row")).toBeTruthy();
-    for (const id of ["brief-stat-score", "brief-stat-tasks", "brief-stat-habits", "brief-stat-bills", "brief-stat-docs", "brief-stat-events", "brief-stat-projects"]) {
+    for (const id of ["brief-stat-attention", "brief-stat-tasks", "brief-stat-events", "brief-stat-bills", "brief-stat-documents", "brief-stat-habits", "brief-today-card"]) {
       expect(screen.getByTestId(id), id).toBeTruthy();
     }
+    // Once the (backend-less) queries settle, the bill due today from
+    // `enhanced` must surface on the Attention tile — not a vague score.
+    await waitFor(() => {
+      expect(screen.getByTestId("brief-stat-attention").textContent).not.toContain("loading");
+    });
+    const attnTxt = screen.getByTestId("brief-stat-attention").textContent || "";
+    expect(attnTxt).toContain("1");
+    expect(attnTxt).toContain("bill due today");
+    // Zero habits must NOT read "all done" — nothing is scheduled.
+    expect(screen.getByTestId("brief-stat-habits").textContent).toContain("No habits scheduled");
     expect(screen.getByTestId("brief-ai")).toBeTruthy();
     // Bills row + Pay button render from enhanced data (no fetch needed).
     expect(screen.getByTestId("brief-bills").textContent).toContain("Phone");
