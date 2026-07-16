@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1881,8 +1882,8 @@ function findAnyNumericValue(
     "sbp", "dbp",
   ]);
   for (const [k, v] of Object.entries(values)) {
-    if (skip.has(k)) continue;
-    if (v == null || v === "") continue;
+    if (skip.has(k) || k.startsWith("_")) continue;
+    if (v == null || v === "" || typeof v === "object") continue;
     const n = typeof v === "number" ? v : Number(v);
     if (!isNaN(n) && isFinite(n)) return { key: k, num: n };
   }
@@ -4934,7 +4935,11 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
           const trackerNameLower = (tracker.name || "").toLowerCase().trim();
           const secondaryVals = Object.entries(entry.values).filter(([k, v]) => {
             if (v == null || v === "") return false;
-            if (k === "_notes" || k === "notes" || k === "item") return false;
+            // Reserved metadata keys and structured objects (e.g. the
+            // estimation engine's provenance blob) never render as chips —
+            // "_enrichment: [object Object]" was showing on history rows.
+            if (k.startsWith("_") || typeof v === "object") return false;
+            if (k === "notes" || k === "item") return false;
             if (k === effectivePrimKey) return false;
             if (k === "systolic" || k === "diastolic"
                 || k === "systolic_pressure" || k === "diastolic_pressure") return false;
@@ -4950,10 +4955,16 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
             : "(empty)";
           const nextEntry = filtered[idx + 1];
           const nextDeclared = nextEntry?.values[primaryField];
-          const nextAny = (nextDeclared == null || nextDeclared === "") && nextEntry
-            ? findAnyNumericValue(nextEntry.values)?.num ?? null
-            : (typeof nextDeclared === "number" ? nextDeclared : null);
-          const delta = typeof val === "number" && typeof nextAny === "number" ? val - nextAny : null;
+          const nextFallback = (nextDeclared == null || nextDeclared === "") && nextEntry
+            ? findAnyNumericValue(nextEntry.values)
+            : null;
+          const nextKey = nextFallback ? nextFallback.key : primaryField;
+          const nextAny = nextFallback ? nextFallback.num : (typeof nextDeclared === "number" ? nextDeclared : null);
+          // Only diff same-unit values: comparing this row's duration against
+          // the next row's miles produced garbage deltas like "+58.0".
+          const delta = typeof val === "number" && typeof nextAny === "number" && effectivePrimKey === nextKey
+            ? val - nextAny
+            : null;
 
           return (
             <HistoryEntryRow
@@ -5538,6 +5549,24 @@ export default function TrackersPage() {
   const [, navigate] = useLocation();
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [selectedTrackerId, setSelectedTrackerId] = useState<string | null>(null);
+  // Deep-link from chat action cards: /trackers?tracker=<id> auto-opens that
+  // tracker's detail view (2026-07-15 user request: tapping a tracker card in
+  // chat should bring you to the tracker). The param is stripped afterwards so
+  // back/refresh doesn't keep re-opening it.
+  useEffect(() => {
+    if (!trackers || trackers.length === 0) return;
+    try {
+      const hash = window.location.hash || "";
+      const q = hash.includes("?") ? hash.split("?")[1] : (window.location.search || "").replace(/^\?/, "");
+      const tid = q ? new URLSearchParams(q).get("tracker") : null;
+      if (tid && trackers.some((t) => t.id === tid)) {
+        setSelectedTrackerId(tid);
+        const cleanedHash = hash.includes("?") ? hash.split("?")[0] : hash;
+        window.history.replaceState(null, "", `${window.location.pathname}${cleanedHash}`);
+      }
+    } catch { /* malformed URL — ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trackers?.length]);
   // Resolve selectedTracker from the live query cache so it refreshes after mutations
   const selectedTracker = selectedTrackerId ? (trackers || []).find(t => t.id === selectedTrackerId) || null : null;
   // Linked-page view mode. Persisted so the user's choice (compact list vs
@@ -5946,15 +5975,17 @@ export default function TrackersPage() {
   // Skeleton loading state — MUST be after all hooks
   if (showTrackerSkeleton && !trackers && isPending) {
     return (
-      <div className="p-3 md:p-5 space-y-3">
-        <div className="h-7 w-32 rounded skeleton-shimmer" />
-        <div className="flex gap-2 overflow-x-hidden">
-          {[...Array(4)].map((_, i) => <div key={i} className="h-7 w-20 rounded-full skeleton-shimmer shrink-0" />)}
+      <StuckLoadingGuard active>
+        <div className="p-3 md:p-5 space-y-3">
+          <div className="h-7 w-32 rounded skeleton-shimmer" />
+          <div className="flex gap-2 overflow-x-hidden">
+            {[...Array(4)].map((_, i) => <div key={i} className="h-7 w-20 rounded-full skeleton-shimmer shrink-0" />)}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+            {[...Array(8)].map((_, i) => <div key={i} className="h-16 rounded-lg skeleton-shimmer" />)}
+          </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-          {[...Array(8)].map((_, i) => <div key={i} className="h-16 rounded-lg skeleton-shimmer" />)}
-        </div>
-      </div>
+      </StuckLoadingGuard>
     );
   }
 

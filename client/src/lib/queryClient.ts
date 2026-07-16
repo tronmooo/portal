@@ -207,9 +207,16 @@ export const queryClient = new QueryClient({
           const msg = error.message;
           if (msg.includes("401") || msg.includes("403") || msg.includes("404")) return false;
           if (msg.includes("500") || msg.includes("502") || msg.includes("503")) return failureCount < 2;
+          // Rate-limited or timed out (stuck-skeleton fix, 2026-07-16): both
+          // are transient by definition — retry instead of freezing the
+          // section in an error state the UI renders as eternal "loading".
+          if (msg.includes("429") || msg.toLowerCase().includes("timed out")) return failureCount < 2;
         }
         return failureCount < 1;
       },
+      // Back off meaningfully between retries (1s, 3s) so a 429 retry doesn't
+      // instantly re-trip the limiter.
+      retryDelay: (attempt) => Math.min(1_000 * 3 ** attempt, 10_000),
     },
     mutations: {
       retry: false,
@@ -410,6 +417,43 @@ export function hydrateQueryCache(): void {
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Wedged-query recovery (stuck-skeleton fix, 2026-07-16).
+
+   Mobile Safari orphans in-flight fetches when it suspends a tab: the promise
+   never resolves OR rejects, and the setTimeout driving our AbortController is
+   frozen too, so the 60s abort never fires. On resume the query observer is
+   still fetchStatus:"fetching", and React Query refuses to start a second
+   fetch for a query it believes is already fetching — refetchOnWindowFocus,
+   refetchOnReconnect, invalidateQueries, and pull-to-refresh ALL no-op.
+   Result: whatever that query gates renders skeleton forever.
+
+   The fix: on resume, CANCEL any query that has been in-flight since before
+   the tab was hidden (cancel resolves the orphaned promise via the abort
+   signal), then invalidate actively-observed /api/* queries so on-screen data
+   refetches. Cached data stays rendered throughout — no skeleton wipe.
+--------------------------------------------------------------------------- */
+let hiddenAt = 0;
+
+export async function recoverWedgedQueries(): Promise<void> {
+  try {
+    const wedged = queryClient.getQueryCache().getAll().filter((q) =>
+      q.state.fetchStatus === "fetching" &&
+      String(q.queryKey?.[0] || "").startsWith("/api/"),
+    );
+    if (wedged.length > 0) {
+      await queryClient.cancelQueries({
+        predicate: (q) => q.state.fetchStatus === "fetching" && String(q.queryKey?.[0] || "").startsWith("/api/"),
+      });
+    }
+    // Refetch what's on screen; everything else just goes stale.
+    queryClient.invalidateQueries({
+      predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/"),
+      refetchType: "active",
+    });
+  } catch { /* recovery is best-effort — never throw from a lifecycle handler */ }
+}
+
 // Wire up the snapshot loop. queryCache.subscribe fires on every cache event;
 // we throttle to once per 1.5s so a refetch storm doesn't write to localStorage
 // 25 times in a row.
@@ -417,7 +461,20 @@ if (typeof window !== "undefined") {
   queryClient.getQueryCache().subscribe(() => scheduleSnapshot());
   // Also snapshot on tab hide — catches the case where user switches away.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") snapshotCache();
+    if (document.visibilityState === "hidden") {
+      hiddenAt = Date.now();
+      snapshotCache();
+    } else if (document.visibilityState === "visible") {
+      // Only run recovery after a real absence (≥15s) — quick tab flips
+      // shouldn't cancel healthy in-flight requests.
+      if (hiddenAt && Date.now() - hiddenAt >= 15_000) void recoverWedgedQueries();
+      hiddenAt = 0;
+    }
+  });
+  // bfcache restore (iOS back/forward, app switcher): the page resumes with
+  // whatever promise graveyard it was frozen with — same recovery applies.
+  window.addEventListener("pageshow", (e: PageTransitionEvent) => {
+    if (e.persisted) void recoverWedgedQueries();
   });
 }
 

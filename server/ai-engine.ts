@@ -30,12 +30,37 @@ import { passesProfileFilter } from "@shared/profile-filter";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
+import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
+import { resolveCanonicalActivity } from "@shared/canonical-activity";
+import {
+  enrichWalkRunEntry,
+  enrichHydrationEntry,
+  enrichSleepEntry,
+  enrichStrengthEntry,
+  applyEnrichmentToValues,
+  derivePersonalMetrics,
+  parseHeightToCm,
+  parseWeightToKg,
+  summarizeEnrichment,
+  type Enrichment,
+} from "@shared/estimation-engine";
 import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
-import { DEFAULT_TIMEZONE } from "@shared/timezone";
+import { DEFAULT_TIMEZONE, todayAtTimeISO } from "@shared/timezone";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
+import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
+import {
+  EXTRACT_ACTIONS_TOOL,
+  MAX_BULK_OPERATIONS,
+  buildExtractionSystemPrompt,
+  parseExtractedOperations,
+  buildBulkReply,
+  summarizeOpDetail,
+  type ExtractedOperation,
+  type OperationOutcome,
+} from "./ai-bulk-log";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -980,15 +1005,26 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     }
   }
 
-  // ---- Habit check-in (expanded): "done meditation", "mark off my run", "I went on my morning run" ----
+  // ---- Habit check-in (EXPLICIT language only): "done meditation", "mark off my run" ----
+  // First-person activity reports ("I went on my morning run", "I did X")
+  // intentionally do NOT match — they are tracker logs, not habit check-ins
+  // (user directive 2026-07-15: "I did / I took / I smoked / I went" are
+  // events; habits only move on explicit language like "mark off").
   const habitCheckinMatch = lower.match(/^(?:done|did|completed?|checked?\s*in|✓|✅)\s+(.+)/)
-    || lower.match(/^(?:mark|check)\s+off\s+(?:my\s+|that\s+(?:i\s+)?)?(.+?)(?:\s+(?:habit|today|for today|on my (?:habits?|list)))?$/)
-    || lower.match(/^i\s+(?:went\s+on|did|completed|finished)\s+(?:my\s+)?(.+?)(?:\s+today|\s+this morning|\s+tonight)?$/)
-    || lower.match(/^(?:more often (?:that|than)\s+)?i\s+went\s+(?:on|for)\s+(?:my\s+)?(.+?)$/);
+    || lower.match(/^(?:mark|check)\s+off\s+(?:my\s+|that\s+(?:i\s+)?)?(.+?)(?:\s+(?:habit|today|for today|on my (?:habits?|list)))?$/);
   if (habitCheckinMatch) {
     const habitName = habitCheckinMatch[1].trim();
     const habits = await storage.getHabits();
-    const habit = matchHabitByName(habits, habitName);
+    // Never check in ANOTHER profile's habit from an unqualified message —
+    // match only habits owned by self (or unowned). The Rex-hijack fix.
+    let selfScoped = habits;
+    try {
+      const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
+      if (selfProf) {
+        selfScoped = habits.filter(h => !(h.linkedProfiles || []).length || (h.linkedProfiles || []).includes(selfProf.id));
+      }
+    } catch { /* profile fetch failed — keep full list rather than break check-ins */ }
+    const habit = matchHabitByName(selfScoped, habitName);
     if (habit) {
       const checkin = await storage.checkinHabit(habit.id);
       actions.push({ type: "checkin_habit", category: "habit", data: { habitName: habit.name } });
@@ -2735,15 +2771,15 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Trackers ---
   {
     name: "log_tracker_entry",
-    description: "Log values to a tracker (health, fitness, habits, metrics — NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries). CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}). When ONE message contains BOTH a BP reading AND a heart rate ('124/78 with a resting heart rate of 59'), make TWO log_tracker_entry calls — one to 'Blood Pressure' {systolic,diastolic} AND one to 'Heart Rate' {bpm}. NEVER silently drop the heart rate.\n- Supplements / vitamins / medications → EACH item gets its OWN tracker named EXACTLY after the item: 'Multivitamin', 'Fish Oil', 'Vitamin D', 'Creatine', 'Amoxicillin', 'Lisinopril'. NEVER bucket different items into one generic 'Supplements' (or 'Vitamins'/'Medications') tracker. If the user logs several in one message (e.g. 'multivitamin, fish oil, and amoxicillin'), make a SEPARATE log_tracker_entry call for EACH, one per its own tracker. ALWAYS reuse an existing tracker whose name is that item (an existing 'Multivitamin' tracker → append the entry, do NOT create a new tracker). Use values:{dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency, taken:true} — include dosage+unit whenever the user states OR clearly implies one (do not invent a dosage that wasn't given). Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER} (or glasses). Put the numeric amount directly in the ounces field.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
+    description: "Log values to a tracker for ANY repeatable life event, activity, or personal metric the user reports — health, fitness, hygiene (showers, bathroom visits, brushing teeth), substances (cannabis, alcohol, nicotine, caffeine), chores (vacuuming, dishes, laundry), hobbies (reading, guitar, gaming), personal care, social activities, habits, metrics — if the user says they did/consumed/experienced it, it is loggable. There is NO fixed list of supported activities; NEVER refuse to log something as 'not tracked'. (NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries.) CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}). When ONE message contains BOTH a BP reading AND a heart rate ('124/78 with a resting heart rate of 59'), make TWO log_tracker_entry calls — one to 'Blood Pressure' {systolic,diastolic} AND one to 'Heart Rate' {bpm}. NEVER silently drop the heart rate.\n- Supplements / vitamins / medications → EACH item gets its OWN tracker named EXACTLY after the item: 'Multivitamin', 'Fish Oil', 'Vitamin D', 'Creatine', 'Amoxicillin', 'Lisinopril'. NEVER bucket different items into one generic 'Supplements' (or 'Vitamins'/'Medications') tracker. If the user logs several in one message (e.g. 'multivitamin, fish oil, and amoxicillin'), make a SEPARATE log_tracker_entry call for EACH, one per its own tracker. ALWAYS reuse an existing tracker whose name is that item (an existing 'Multivitamin' tracker → append the entry, do NOT create a new tracker). Use values:{dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency, taken:true} — include dosage+unit whenever the user states OR clearly implies one (do not invent a dosage that wasn't given). Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER} (or glasses). Put the numeric amount directly in the ounces field.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
     input_schema: {
       type: "object" as const,
       properties: {
         trackerName: { type: "string", description: "Name of the tracker — MUST be the specific activity: 'Basketball' for basketball, 'Tennis' for tennis, 'Running' for running, 'Soccer' for soccer, 'Swimming' for swimming, 'Yoga' for yoga. Never use 'Running' for a non-running sport." },
-        values: { type: "object", description: "Key-value pairs to log. ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
+        values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. OTHER SPORTS/ACTIVITIES: ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
-        at: { type: "string", description: "Optional date/time the entry actually happened (ISO date or natural language like 'June 3 2025'). Set this when the user says the entry was on a specific past or future date. Omit for 'now'." },
+        at: { type: "string", description: "Optional date/time the entry actually happened (ISO date, natural language like 'June 3 2025', or a bare clock time like '8:15 AM' which is treated as today at that time). ALWAYS set this when the user attaches a time to the action ('at 8:15 AM', 'this morning at 7', 'yesterday'). Omit for 'now'." },
       },
       required: ["trackerName", "values"],
     },
@@ -3235,7 +3271,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- CRUD: Habits ---
   {
     name: "create_habit",
-    description: "Create a new habit to track. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).",
+    description: "Create a new habit — ONLY when the user EXPLICITLY asks for a recurring habit/routine ('make this a habit', 'add a habit to meditate', 'remind me to stretch every day'). A past-tense activity report ('I took a shower', 'I smoked a blunt', 'I went to the bathroom') is NEVER a habit — log it with log_tracker_entry. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3253,7 +3289,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "checkin_habit",
-    description: "Check in to a habit — mark it DONE for today. Use this whenever the user says 'I did X', 'mark X done', 'completed X habit', 'checked off X'. Find by habit name. Set forProfile when checking in someone else's habit (e.g. 'Joe', 'Rex', 'Mom').",
+    description: "Check in to a habit — mark it DONE for today. ONLY when the user EXPLICITLY references the habit: 'mark X done', 'mark off X', 'completed X habit', 'checked off X', 'check in X'. A plain activity report ('I did X', 'I took a shower', 'I went to the bathroom') is NOT a habit check-in — log it with log_tracker_entry instead. Find by habit name. Set forProfile ONLY when the user names that person in THIS message ('mark off Joe's water habit') — never infer a profile from conversation history or from who owns a similar-sounding habit.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -4474,7 +4510,8 @@ BEHAVIOR:
   "skip next month" → skip:"next" (or skip:"2026-09" for a specific month). "pause until January" → pause:true, pauseUntil:"2027-01-01". "resume it" → resume:true.
   To PAY a specific month's occurrence use pay_obligation with forMonth:"YYYY-MM" or dueDate:"YYYY-MM-DD".
   Answer informational questions directly from the bill's stored fields: "when is my next phone bill?" → its next due date; "how much am I paying annually?" → amount times periods per year (monthly x12, weekly x52, quarterly x4, yearly x1). Never invent numbers.
-- MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. If a user sends 10 or even 20 actions, you MUST execute ALL of them as separate tool calls. Do not merge or skip any. You can handle up to 20 tool calls in a single response.
+- MULTI-ACTION: When a message contains multiple actions (e.g., "schedule X and also add expense Y"), execute ALL of them — never drop an action. Every independent sentence or clause describing something the user did is its own operation. If a user sends 10, 20, or even 50 actions, you MUST execute ALL of them as separate tool calls — count the clauses and match that count in tool calls. Emit ALL the tool calls in a SINGLE response whenever possible (parallel tool use) instead of one per round. NEVER handle some items and verbally decline the rest — off-catalog activities (cannabis, shower, bathroom, chores) are logged via log_tracker_entry like everything else. If you run out of room in one response, continue emitting the remaining tool calls in the next round until every item is handled.
+- COMPLETE COVERAGE — STATED FACTS COUNT TOO (CRITICAL): Multi-fact messages often mix commands with plain statements of what happened ("I went to bed at 11, woke at 7, took one shower, and I'm about to eat three cheeseburgers"). EVERY discrete loggable fact gets its own tool call — sleep, meals/drinks, showers/hygiene, naps, workouts, moods, symptoms, medications. Everyday activities with no obvious existing tracker (a shower, a meditation session, a dog walk) are still logged via log_tracker_entry with a sensible trackerName (e.g. trackerName:"Showers", values:{count:1}) — the tool auto-creates the tracker when it doesn't exist yet. Before you reply, re-scan the user's message clause by clause and confirm each clause either (a) produced a tool call, or (b) is explicitly acknowledged in your reply as not logged and why ("I didn't log the shower — say 'track my showers' if you want that recorded"). NEVER silently ignore a stated fact.
 - ATTRIBUTION IN BATCHES: When an item says "for <Name>" ("grocery expense $47.82 for Robert", "vet bill for Rex"), you MUST set forProfile:"<Name>" on that tool call. In a long multi-action message it is easy to forget this — do NOT. And NEVER tell the user something was attributed to a person unless you actually passed forProfile for it.
 - LIABILITY PAYMENT — MATCH THE LOAN, DON'T SUBSTITUTE: add_liability_payment must target the SPECIFIC loan the user named. If the user says "car loan payment" and no auto loan exists, do NOT apply it to a mortgage, student loan, or any other loan just because it's "the only one" — that corrupts the wrong balance. Instead report that no matching loan was found and ask whether to create it. Same for "mortgage payment" when only a car loan exists, etc.
 - ACTION COUNTING: In your response, accurately count how many distinct actions you performed. Count each tool call separately. If the user sent 10 items and you performed 10 tool calls, say "I've handled all 10 items." Never undercount.
@@ -4496,8 +4533,8 @@ BEHAVIOR:
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - BIAS TO ACTION: When the user asks to create, schedule, add, mark off, complete, or check in something, DO IT immediately. NEVER ask clarifying questions for simple CRUD. Just execute.
-  - "I went on my morning run" → checkin_habit(name: "Morning Run") — DO NOT ask 3 options
   - "Mark off my run" → checkin_habit(name: "Running" or "Morning Run" — find closest match) — DO NOT ask which one
+  - "I went on my morning run" / "I did X" / "I took X" / "I smoked X" / "I went to X" → log_tracker_entry — these are ACTIVITY REPORTS, not habit check-ins. Habits only move on EXPLICIT language ("mark off", "check in", "my X habit").
   - "schedule a doctor appointment" → create_task immediately
   - If ambiguous between 2 items with similar names, pick the closest match and do it. You can mention in your response what you picked.
   - NEVER present numbered options for simple check-ins, completions, or mark-offs. That is hostile UX.
@@ -4580,6 +4617,23 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 - "I went to X" / "I attended X" → complete_event
 - "remove X from my schedule" → complete_event(removeFromSchedule:true)
 - "cancel X" → delete_event OR update_event(changes:{status:"cancelled"})
+
+━━━ UNIVERSAL LOGGING — EVERYTHING IS TRACKABLE ━━━
+Portol is a life OS with generic trackers. There is NO list of "supported" activities and NO activity you refuse to log. NEVER reply "X isn't something I track", "I don't track that", or any variant — that response is ALWAYS wrong. Every statement of something the user did, consumed, or experienced becomes a log_tracker_entry call; if no tracker exists yet, the tool auto-creates one.
+- "I smoked some cannabis" → log_tracker_entry(trackerName:"Cannabis", values:{count:1}); "I smoked a blunt" → log_tracker_entry(trackerName:"Cannabis", values:{count:1, method:"blunt"})
+- "I took a shower" / "I took a shower once" → log_tracker_entry(trackerName:"Shower", values:{count:1, duration if given})
+- "I went to the bathroom at 8:15 AM" → log_tracker_entry(trackerName:"Bathroom Visits", values:{count:1}, at:"8:15 AM")
+- "brushed my teeth" → Teeth Brushing; "vacuumed" → Vacuuming; "washed dishes" → Dishes; "practiced guitar for an hour" → Guitar Practice {duration:60}; "read for 45 minutes" → Reading {minutes:45}
+When the user attaches a clock time or date to an action, pass it via the at parameter. Substances, hygiene, bodily functions, chores, and hobbies are all first-class trackable domains — log them without commentary, hedging, or asking permission to "set up" tracking.
+
+━━━ NORMALIZATION & ESTIMATES (walking/running/steps/hydration/sleep) ━━━
+- ONE canonical tracker per activity: "I walked 1 mile", "I walked 2,100 steps", "walked for 22 minutes", "walked 1.6 kilometers" are ALL the "Walking" tracker (the server enforces this). Never create "Walking Distance"/"Steps Walked"/"Daily Walk" variants.
+- Pass only the explicit facts; the server's estimation engine converts units and derives the rest (steps from distance via the user's own stride/history, pace from distance+duration, calories from weight+pace) with per-value confidence.
+- ESTIMATE HONESTY: the tool result's estimateNote lists derived/estimated values. Reply like "Logged a 1-mile walk — about 2,150 steps and ~20 minutes based on your walking history." NEVER present an estimated number as something the user said, and NEVER invent numbers not in the tool result.
+- Explicit user values are never overwritten by estimates: "1 mile and 2,400 steps" saves BOTH exactly as given.
+- ACTIVITY ≠ HABIT: "I did / I took / I smoked / I went / I played" are ACTIVITY REPORTS → log_tracker_entry, ALWAYS — even when a habit with a similar name exists (on any profile). NEVER call checkin_habit or create_habit for them, never ask "did you mean the habit?", and never derail the rest of the message over a habit. Habits move ONLY on explicit language: "mark off X", "check in X", "completed my X habit", "make this a habit", "every day", "remind me".
+- NEVER DROP DETAILS: every number, unit, duration, count, method, and timestamp the user states MUST appear in the entry ("for an hour" → duration:60; "once" → count:1; "a blunt" → method:"blunt"; "at 8:15 AM" → at:"8:15 AM"). Losing a stated detail is a logging failure.
+- PROFILE OWNERSHIP: entries belong to the user (self) unless THIS message explicitly names someone else ("Rex threw up", "log water for Mom"). NEVER pick a profile from conversation history, from the active dashboard filter chatter, or from which profile happens to own a similar tracker/habit name.
 
 ━━━ TRACKER CRUD ━━━
 - create tracker: create_tracker(name, category, fields, forProfile?)
@@ -4668,6 +4722,7 @@ Example: "Joe completed his water habit, delete his stretching task, create a go
 → Tool 2: delete_habit(name:"Stretching") OR delete_task(title:"Stretching") — if ambiguous, DELETE BOTH and say so
 → Tool 3: create_goal(title:"Lose 5 pounds", type:"weight_loss", target:5, unit:"lbs", forProfile:"Joe")
 All 3 must execute. Report: ✅ Water habit checked in for Joe, ✅ Stretching deleted, ✅ Goal created.
+This applies at ANY scale: a 20-sentence "here's my day" recap is 20 operations — log every one (soccer AND cannabis AND shower AND bathroom AND chores), emitting as many tool calls per response as you can. In your final reply, enumerate what you logged per item; if any tool call failed, name the failed item honestly.
 
 PROFILE CONTEXT INHERITANCE: If the user sets a profile context ("Joe completed..., his task..., his habit..."),
 apply forProfile:"Joe" to ALL subsequent actions in the same message until profile changes.
@@ -4693,6 +4748,7 @@ BEFORE calling ANY delete tool (delete_profile, delete_task, delete_expense, del
 This is a HARD RULE — never silently delete anything the user didn't explicitly ask to delete.
 
 ━━━ HONESTY RULES ━━━
+- OWNERSHIP PHRASING: write results may include an "owner" field — the person who actually owns the touched item, resolved through nested assets (a Honda CRV nested under Jim is JIM'S car). When owner is someone other than the user, name them: "Color updated to white on Jim's Honda CRV 2021" — NEVER call another person's asset, vehicle, or liability "your".
 - If a tool returns {error: "..."} → tell the user it FAILED. Never say "Done!" on failure.
 - If item not found → say "I couldn't find [X]" with specific name. Offer to search.
 - If action succeeded → confirm with: what was done, for whom, the item name, and the new state.
@@ -5027,6 +5083,7 @@ RESPONSE FORMAT (CRITICAL — the UI renders rich entry cards from your tool cal
   - "Logged for Jim."
   - "Both entries saved."
   NEVER list the items you logged. NEVER repeat tracker names. NEVER write "✅…" bullets. NEVER write route paths like "/trackers + Jim's Health tab". NEVER write paragraphs.
+  EXCEPTION — owner name: when a write result carries owner (someone other than the user), the short reply MUST include that name possessively — "Color set on Mike's Test Truck." still fits the one-liner budget. Never spend the sentence on the item alone while dropping whose it is.
   EXCEPTION — duplicate note: when a result's verification.duplicate_count > 0, add ONE short sentence like "Saved — note you already have a similar entry." This is the only allowed addition to the short reply.
   EXCEPTION — bulk preview: after preview_bulk_action, relay the preview message IN FULL (counts, sample names, "nothing deleted yet, confirm to proceed") — a bulk preview is a question to the user, not a completed write.
   EXCEPTION — system reports: after execute_bulk_action, repair_relations, or refresh_dashboard, relay the result's message sentence (totals/counts) instead of a bare "Done.".
@@ -5153,6 +5210,10 @@ function summarizeSingleItem(item: any): any {
       ...(item.entity ? { entity: item.entity } : {}),
       ...(item.verification ? { verification: item.verification } : {}),
       ...(item._validationWarnings ? { warnings: item._validationWarnings } : {}),
+      // Real owner of the touched entity (resolved through nested-asset parent
+      // chains) — lets the model say "Jim's Honda CRV", never "your Honda CRV"
+      // for someone else's item.
+      ...(item.owner ? { owner: item.owner } : {}),
       // Raw keys the model already leans on in follow-up turns:
       ...(item.candidates ? { candidates: item.candidates } : {}),
       ...(item.suggestedAssetLink ? { suggestedAssetLink: item.suggestedAssetLink } : {}),
@@ -5225,7 +5286,7 @@ interface ValidationResult {
   errors: string[];
 }
 
-function validateToolInput(toolName: string, input: Record<string, any>): ValidationResult {
+export function validateToolInput(toolName: string, input: Record<string, any>): ValidationResult {
   const warnings: string[] = [];
   const errors: string[] = [];
   const normalized = { ...input };
@@ -5339,7 +5400,22 @@ function validateToolInput(toolName: string, input: Record<string, any>): Valida
       // (ISO or natural language). On parse failure, warn and drop it so the
       // executor falls back to NOW(). Do NOT infer from the raw message here.
       if (normalized.at != null && String(normalized.at).trim()) {
-        const when = new Date(String(normalized.at).trim());
+        let atStr = String(normalized.at).trim();
+        // A bare clock time ("8:15 AM", "10pm") is Invalid Date to new Date()
+        // and was silently dropped to "now" — compose it with today's date in
+        // the USER'S timezone (the server clock is UTC on Vercel).
+        const bareTime = atStr.match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)$/i);
+        if (bareTime) {
+          let hours = parseInt(bareTime[1], 10) % 12;
+          if (/^p/i.test(bareTime[3])) hours += 12;
+          const minutes = bareTime[2] ? parseInt(bareTime[2], 10) : 0;
+          // Defensive read: `storage` is a lazy proxy that throws without DB
+          // env (pure unit tests) — fall back to the default timezone.
+          let atTz = DEFAULT_TIMEZONE;
+          try { atTz = (storage as any)._timezone || DEFAULT_TIMEZONE; } catch { /* no storage in unit tests */ }
+          atStr = todayAtTimeISO(hours, minutes, atTz);
+        }
+        const when = new Date(atStr);
         if (isNaN(when.getTime())) {
           warnings.push(`Couldn't parse entry date "${normalized.at}" — using now instead`);
           normalized.at = undefined;
@@ -6672,6 +6748,21 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       } catch { /* never block the primary log on the split guard */ }
 
       const trackers = await storage.getTrackers();
+
+      // ── CANONICAL ACTIVITY RESOLUTION (normalization layer, 2026-07-15) ──
+      // "Walking Distance", "Steps Walked", "Daily Walk" etc. are all ONE
+      // canonical Walking tracker — never separate trackers. Keep the raw
+      // name only when the user already has a custom tracker under it and
+      // no canonical tracker exists (don't strand their data).
+      const canonActivity = resolveCanonicalActivity(input.trackerName || "");
+      if (canonActivity && canonActivity.trackerName.toLowerCase() !== String(input.trackerName || "").toLowerCase()) {
+        const rawHasTracker = trackers.some(t => trackerNamesMatch(t.name, input.trackerName));
+        const canonHasTracker = trackers.some(t => trackerNamesMatch(t.name, canonActivity.trackerName));
+        if (!rawHasTracker || canonHasTracker) {
+          logger.info("ai", `Canonical activity: "${input.trackerName}" → "${canonActivity.trackerName}"`);
+          input.trackerName = canonActivity.trackerName;
+        }
+      }
       const trackerName = (input.trackerName || "").toLowerCase();
 
       // Resolve forProfile FIRST so we can match the right tracker
@@ -6705,6 +6796,72 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!targetProfileId) {
         const selfProfile = profiles.find(p => p.type === "self");
         if (selfProfile) targetProfileId = selfProfile.id;
+      }
+
+      // ── ESTIMATION / NORMALIZATION LAYER (2026-07-15) ──
+      // The model passes only what the user stated; deterministic code
+      // (shared/estimation-engine) converts units, derives exact values
+      // (distance + duration → pace = calculated) and estimates the rest
+      // (distance → steps via stride/history = estimated), with provenance,
+      // confidence, and an assumptions registry. Estimates NEVER overwrite
+      // explicit values, and all personal context (height, weight, walking
+      // history) comes from the TARGET profile only — never another profile.
+      let entryEnrichment: Enrichment | null = null;
+      try {
+        const canonType = canonActivity?.type;
+        input.values = input.values || {};
+        if (canonType === "walking" || canonType === "running" || canonType === "cycling") {
+          // The model routinely invents caloriesBurned for cardio ("jogged an
+          // hour" → caloriesBurned: 600) despite being told to pass only
+          // explicit facts. A fabricated explicit value blocks the engine's
+          // provenance-labeled estimate — drop it unless the user actually
+          // talked about calories.
+          const cardioMsg = String((input as any).__userMessage || "");
+          if (cardioMsg && !/calor|kcal|burn/i.test(cardioMsg)) {
+            delete (input.values as any).caloriesBurned;
+            delete (input.values as any).calories;
+          }
+          const targetProf: any = profiles.find(p => p.id === targetProfileId);
+          const pf = targetProf?.fields || {};
+          const heightCm = parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches);
+          const weightKg = parseWeightToKg(pf.weight ?? pf.weightLbs ?? pf.weight_lbs ?? pf.weightKg);
+          const histTracker = trackers.find(t => trackerNamesMatch(t.name, input.trackerName));
+          const histEntries = (histTracker?.entries || [])
+            .filter((e: any) => !e.profileId || e.profileId === targetProfileId)
+            .slice(0, 60);
+          const personal = derivePersonalMetrics(histEntries);
+          entryEnrichment = enrichWalkRunEntry(canonType, input.values, { heightCm, weightKg, personal });
+        } else if (canonType === "hydration") {
+          entryEnrichment = enrichHydrationEntry(input.values);
+        } else if (canonType === "sleep") {
+          entryEnrichment = enrichSleepEntry(input.values);
+        } else if (input.values.weight != null && input.values.reps != null) {
+          // Strength-shaped entry on any tracker (Bench Press, Squats, …):
+          // weight × reps × sets → total volume, calculated exactly.
+          entryEnrichment = enrichStrengthEntry(input.values);
+        }
+        if (entryEnrichment && (
+          Object.keys(entryEnrichment.calculated).length ||
+          Object.keys(entryEnrichment.estimated).length ||
+          Object.keys(entryEnrichment.canonical).length ||
+          entryEnrichment.assumptions.length
+        )) {
+          // Canonical-unit guarantee: fill derived/estimated fields into the
+          // entry's REAL fields (never overwriting explicit ones) so the
+          // tracker's primary metric is always present — a duration-only
+          // "jogged 60 minutes" still stores distance in miles instead of
+          // leaving a "60 min" row in a miles history. Provenance for every
+          // applied field stays in the enrichment blob (persisted on the
+          // entry's computed column by the storage layer).
+          const applied = applyEnrichmentToValues(input.values, entryEnrichment);
+          (input.values as any)._enrichment = entryEnrichment;
+          const note = summarizeEnrichment(entryEnrichment);
+          if (note) logger.info("ai", `Enrichment [${input.trackerName}]: ${note}${applied.length ? ` (applied: ${applied.join(", ")})` : ""}`);
+        } else {
+          entryEnrichment = null;
+        }
+      } catch (e: any) {
+        logger.warn("ai", `Enrichment failed for "${input.trackerName}" (non-fatal): ${e?.message || e}`);
       }
 
       // Find the right tracker: prefer one linked to the target profile
@@ -6888,7 +7045,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const knownFieldNames = new Set((tracker.fields || []).map((f: any) => String(f.name).toLowerCase()));
         const unknownFields: string[] = [];
         for (const k of Object.keys(normalizedValues)) {
-          if (k === "_notes") continue;
+          if (k.startsWith("_")) continue; // reserved metadata (_notes, _enrichment)
           if (knownFieldNames.has(k.toLowerCase())) continue;
           unknownFields.push(k);
         }
@@ -6960,6 +7117,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           (entry as any).__trackerName = tracker.name;
           (entry as any).__knownFields = [...knownFieldNames];
         }
+        // Estimate honesty: give the model a ready-made summary so the reply
+        // says "estimated ≈2,150 steps", never presenting estimates as exact.
+        if (entry && entryEnrichment) {
+          const note = summarizeEnrichment(entryEnrichment);
+          if (note) (entry as any).estimateNote = `Derived/estimated (tell the user estimates are estimates): ${note}`;
+        }
         return entry;
       }
       // ─── EXPENSE GUARD (2026-06-10, user report) ─────────────────────
@@ -6992,7 +7155,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
 
-      // Auto-create tracker if not found — infer category from name.
+      // Auto-create tracker if not found — gated by the user's Auto-Create
+      // Trackers setting (default ON; only an explicit "false" disables it).
+      // When OFF, nothing is created or logged — the structured error tells
+      // the model exactly what to say and how the user can proceed.
+      const autoCreatePref = await storage.getPreference("ai_auto_create_trackers").catch(() => null);
+      if (autoCreatePref === "false") {
+        return {
+          error: `No "${input.trackerName}" tracker exists and Auto-Create Trackers is off (Settings → AI). Say "create a ${input.trackerName} tracker" to add it explicitly, or turn the setting back on.`,
+          code: "AUTO_CREATE_DISABLED",
+          trackerName: input.trackerName,
+        };
+      }
+
+      // Infer category from name.
       //
       // ORDER MATTERS. The keyword scan is a first-match-wins waterfall,
       // so put MORE SPECIFIC buckets ahead of MORE GENERAL ones. The order
@@ -7107,6 +7283,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // first entry is written.
         const { values: nv } = normalizeTrackerEntry(newTracker as any, entryValues);
         const entry = await storage.logEntry({ trackerId: newTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        // Surface what was auto-created so callers (bulk path, chat UI) can
+        // report "created a new X tracker" honestly.
+        if (entry) (entry as any).__createdTracker = { id: newTracker.id, name: newTracker.name };
+        if (entry && entryEnrichment) {
+          const note = summarizeEnrichment(entryEnrichment);
+          if (note) (entry as any).estimateNote = `Derived/estimated (tell the user estimates are estimates): ${note}`;
+        }
         return entry;
       } catch (err: any) {
         const msg = err?.message || String(err);
@@ -8655,6 +8838,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_habit": {
+      // EXPLICIT INTENT ONLY (user directive 2026-07-15): never convert an
+      // activity report into a habit. "I took a shower" is a tracker log;
+      // a habit requires language like "make this a habit", "every day",
+      // "remind me". Guard runs only when the original message is available.
+      const habitMsg = String((input as any).__userMessage || "");
+      if (habitMsg && !hasExplicitHabitCreateIntent(habitMsg)) {
+        return {
+          error: `The user didn't ask for a habit — do NOT create one. Log the activity with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
+          code: "NOT_A_HABIT_REQUEST",
+        };
+      }
       // Deduplication: check if a habit with the same name already exists for the same profile
       const existingHabits = await storage.getHabits();
       let targetProfileId: string | undefined;
@@ -8747,26 +8941,44 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "checkin_habit": {
       const habits = await storage.getHabits();
-      // Filter by profile if specified
+      // HABIT ≠ ACTIVITY LOG (user directive 2026-07-15): a habit is only
+      // checked in when the user EXPLICITLY says so ("mark off my run",
+      // "completed my water habit"). A plain activity report ("I went to the
+      // bathroom at 8:15 AM") must be a tracker entry — previously it matched
+      // ANOTHER PROFILE'S "Go to the bathroom 3x daily" habit and derailed
+      // the whole message into a clarifying question.
+      const checkinMsg = String((input as any).__userMessage || "");
+      if (checkinMsg && !hasExplicitHabitCheckinIntent(checkinMsg)) {
+        return {
+          error: `The user reported an activity, not a habit check-in — do NOT touch habits. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
+          code: "NOT_A_HABIT_CHECKIN",
+        };
+      }
+      // Scope to the named profile, else to self-owned/unowned habits.
+      // NEVER fall back to other profiles' habits — an unqualified message
+      // can only ever move the user's own streaks.
       let eligible = habits;
       if (input.forProfile) {
         const allProfs = await storage.getProfiles();
         const prof = matchProfileByName(allProfs, input.forProfile);
         if (prof) eligible = habits.filter(h => (h.linkedProfiles || []).includes(prof.id));
       } else {
-        // Default: prefer habits linked to self profile
         const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
         if (selfProf) {
-          const selfHabits = habits.filter(h => (h.linkedProfiles || []).includes(selfProf.id));
-          if (selfHabits.length > 0) eligible = selfHabits;
+          eligible = habits.filter(h => !(h.linkedProfiles || []).length || (h.linkedProfiles || []).includes(selfProf.id));
         }
       }
-      // Fuzzy, stem-aware match so "I pooped" resolves the "POOP" habit and
-      // "did my running" resolves "Run". Falls back to the full habit list when
-      // the profile-scoped list has no match.
-      const habit = matchHabitByName(eligible, input.name || "")
-        ?? matchHabitByName(habits, input.name || "");
-      if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
+      // Fuzzy, stem-aware match so "mark off my pooping" resolves the "POOP"
+      // habit and "check off running" resolves "Run" — but ONLY within the
+      // profile-scoped list. The old fall-back to the FULL habit list is gone:
+      // it let unqualified messages check in other people's habits.
+      const habit = matchHabitByName(eligible, input.name || "");
+      if (!habit) {
+        return {
+          error: `No habit named "${input.name || "unknown"}" on ${input.forProfile ? `${input.forProfile}'s` : "the user's"} profile. Do NOT create a habit and do NOT check in another profile's habit — if the user reported doing something, log it with log_tracker_entry instead.`,
+          code: "HABIT_NOT_FOUND",
+        };
+      }
       return storage.checkinHabit(habit.id);
     }
 
@@ -11844,6 +12056,144 @@ function parseArtifactFromResponse(text: string, profileId: string): { chatText:
 }
 
 // ============================================================
+// BULK MULTI-ACTION PATH — one extraction call, deterministic execution
+// ============================================================
+// Long "here's my day" recaps (8+ independent actions, up to 50+) cannot
+// survive the general agentic loop inside the serverless time budget: each
+// round-trip re-sends the full system prompt + ~120 tools. Instead: ONE
+// forced-tool extraction call converts the message into a queue of write
+// operations, then each is executed independently through the same
+// validate → execute → verify → ledger plumbing the loop uses. One failure
+// never aborts the rest; every operation reports its own outcome.
+function opRawLabel(toolUse: { name: string; input?: any }): string {
+  const inp = (toolUse.input || {}) as Record<string, any>;
+  return String(inp.trackerName || inp.title || inp.description || inp.name || toolUse.name);
+}
+
+async function runBulkLogPath(
+  userMessage: string,
+  userId: string | undefined,
+  chatModel: string,
+  ctx: { trackerNames: string[]; profileNames: string[]; habitNames: string[] },
+): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[] } | null> {
+  const heuristicCount = countActionClauses(userMessage);
+  const tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
+  const extractionSystem = buildExtractionSystemPrompt({
+    nowISO: new Date().toLocaleString("en-US", { timeZone: tz, dateStyle: "full", timeStyle: "short" }),
+    timezone: tz,
+    trackerNames: ctx.trackerNames,
+    profileNames: ctx.profileNames,
+    habitNames: ctx.habitNames,
+  });
+
+  // ── Phase A: extract every action in ONE model call ──
+  const extractOnce = async (messages: Anthropic.Messages.MessageParam[]): Promise<{ ops: ExtractedOperation[]; response: Anthropic.Messages.Message } | null> => {
+    const response = await getClient().messages.create({
+      model: chatModel,
+      max_tokens: 16000,
+      system: extractionSystem,
+      tools: [EXTRACT_ACTIONS_TOOL],
+      tool_choice: { type: "tool", name: "extract_actions" },
+      messages,
+    });
+    const toolUse = response.content.find((b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use");
+    if (!toolUse) return null;
+    return { ops: parseExtractedOperations(toolUse.input), response };
+  };
+
+  let ops: ExtractedOperation[] = [];
+  try {
+    const first = await extractOnce([{ role: "user", content: userMessage }]);
+    if (!first) return null;
+    ops = first.ops;
+    // Coverage check: the deterministic clause count is a floor estimate. If
+    // extraction came back clearly short, retry once with a corrective nudge.
+    if (ops.length < heuristicCount - 2) {
+      logger.warn("ai", `Bulk extraction returned ${ops.length} ops for ~${heuristicCount} clauses — retrying once`);
+      const retry = await extractOnce([
+        { role: "user", content: userMessage },
+        { role: "assistant", content: first.response.content },
+        { role: "user", content: [
+          { type: "tool_result", tool_use_id: (first.response.content.find((b) => b.type === "tool_use") as any)?.id || "retry", content: `You extracted only ${ops.length} operations but the message contains about ${heuristicCount} independent actions. Re-extract with EVERY action included — do not drop any.` },
+        ] as any },
+      ]);
+      if (retry && retry.ops.length > ops.length) ops = retry.ops;
+    }
+  } catch (err: any) {
+    logger.warn("ai", `Bulk extraction failed (${err?.message}) — falling back to the agentic loop`);
+    return null;
+  }
+  if (ops.length === 0) return null;
+
+  // ── Phase B: execute every operation independently ──
+  const startedAt = Date.now();
+  // 75s everywhere: the platform ceiling is 300s (vercel.json maxDuration),
+  // so the old 40s Vercel special-case (from the 60s-cap era) is gone.
+  const EXEC_BUDGET_MS = 75_000;
+  const turnVerifyCtx = buildTurnVerifyContext(storage);
+  const actions: ParsedAction[] = [];
+  const results: any[] = [];
+  const operations: OperationOutcome[] = [];
+  const createdTrackers: Array<{ id: string; name: string }> = [];
+  const seenEntityIds = new Set<string>();
+
+  for (let i = 0; i < ops.length && i < MAX_BULK_OPERATIONS; i++) {
+    const op = ops[i];
+    const outcome: OperationOutcome = { index: i, raw: op.raw, tool: op.tool, status: "failed", trackerName: (op.input as any)?.trackerName, detail: summarizeOpDetail(op.input) || undefined };
+    operations.push(outcome);
+    if (Date.now() - startedAt > EXEC_BUDGET_MS) {
+      outcome.status = "skipped";
+      outcome.error = "Ran out of time this message";
+      continue;
+    }
+    try {
+      const validation = validateToolInput(op.tool, op.input);
+      if (!validation.valid) {
+        outcome.error = `Validation failed: ${validation.errors.join(". ")}`;
+        continue;
+      }
+      const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
+      const beforeRows = await captureBeforeRows(op.tool, turnVerifyCtx);
+      const rawResult = await executeTool(op.tool, inputWithCtx, userId);
+      invalidateContextCache(userId);
+      const actionType = mapToolToActionType(op.tool);
+      const result = (rawResult && !rawResult.error)
+        ? await finalizeToolResult(op.tool, actionType, inputWithCtx, rawResult, turnVerifyCtx)
+        : rawResult;
+      if (!result || result.error) {
+        outcome.error = result?.error || "Action failed — data was not saved";
+        continue;
+      }
+      await recordActionLog(turnVerifyCtx, op.tool, actionType, inputWithCtx, result, beforeRows);
+      const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
+      // The storage layer's short-window duplicate guard returns the EXISTING
+      // entry for identical values — flag reuse honestly instead of counting
+      // it as a fresh write.
+      if (entityId && seenEntityIds.has(entityId)) {
+        outcome.status = "deduped";
+        outcome.entityId = entityId;
+        continue;
+      }
+      if (entityId) seenEntityIds.add(entityId);
+      outcome.status = "ok";
+      outcome.entityId = entityId || undefined;
+      if (result?.__createdTracker?.id) {
+        outcome.createdTracker = { id: result.__createdTracker.id, name: result.__createdTracker.name };
+        createdTrackers.push(outcome.createdTracker);
+      }
+      actions.push({ type: actionType, category: "ai", data: { ...op.input, _entityId: entityId || undefined } });
+      results.push(result);
+      logAction(op.tool, actionType, String((op.input as any)?.trackerName || (op.input as any)?.title || (op.input as any)?.description || op.tool), entityId, userId);
+    } catch (err: any) {
+      outcome.error = err?.message || "Unexpected failure";
+    }
+  }
+
+  logger.info("ai", `Bulk path: ${operations.filter(o => o.status === "ok").length}/${operations.length} ops ok (${Date.now() - startedAt}ms, model ${chatModel})`);
+  return { reply: buildBulkReply(operations, createdTrackers), actions, results, operations };
+}
+
+// ============================================================
 // MAIN AI PROCESSING — tool_use loop
 // ============================================================
 
@@ -11857,6 +12207,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   tables?: TableSpec[];
   report?: ReportSpec;
   artifact?: any;
+  operations?: OperationOutcome[];
 }> {
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
@@ -12589,6 +12940,24 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   }
   const initialModel = chatModel;
 
+  // ── BULK MULTI-ACTION DISPATCH ──
+  // A long "here's my day" recap (8+ independent action clauses — soccer,
+  // cannabis, shower, bathroom, chores, meds, …) routes to the two-phase
+  // bulk path: one extraction call, then every operation executed
+  // independently. Falls through to the normal agentic loop on any failure.
+  if (shouldUseBulkPath(userMessage)) {
+    try {
+      const bulk = await runBulkLogPath(userMessage, userId, chatModel, {
+        trackerNames: (trackers || []).map((t: any) => String(t.name)).filter(Boolean),
+        profileNames: (allProfiles || []).map((p: any) => String(p.name)).filter(Boolean),
+        habitNames: (habits || []).map((h: any) => String(h.name)).filter(Boolean),
+      });
+      if (bulk) return bulk;
+    } catch (err: any) {
+      logger.warn("ai", `Bulk path crashed (${err?.message}) — continuing with the agentic loop`);
+    }
+  }
+
   try {
     // Build the tool_use conversation loop.
     //
@@ -12642,6 +13011,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     }
     const allActions: ParsedAction[] = [];
     const allResults: any[] = [];
+    // Per-operation outcome report (success AND failure) so the client can
+    // render an honest per-action checklist — same shape as the bulk path.
+    const allOperations: OperationOutcome[] = [];
     const richCharts: ChartSpec[] = [];
     const richTables: TableSpec[] = [];
     let richReport: ReportSpec | undefined;
@@ -12651,13 +13023,17 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     let iterations = 0;
     let totalToolCalls = 0;
     const MAX_ITERATIONS = 15; // Each iteration is a full AI round-trip; increased to handle 10+ action messages
-    const MAX_TOOL_CALLS = 30; // Safety limit on total tool executions per message
+    const MAX_TOOL_CALLS = 60; // Safety limit on total tool executions per message (50-action messages + reads)
     // Wall-clock guard ("Load failed" fix): long multi-tool chains (up to 15
     // model round-trips) can outlive the browser/proxy connection even under
     // the platform's function limit — the client then shows a generic dropped-
     // connection error while writes silently continue server-side. Stop
     // starting NEW round-trips after 90s and report what completed honestly.
     const startedAt = Date.now();
+    // The platform ceiling is 300s (vercel.json maxDuration — restored from
+    // the 60s regression that forced a temporary 50s Vercel budget here), so
+    // 90s fits everywhere with the 170s client abort well above it. The
+    // three-tier ordering is pinned by tests/chat-timeout-envelope.test.ts.
     const WALL_CLOCK_BUDGET_MS = 90_000;
     let ranOutOfTime = false;
     // Envelope verification context — one per chat turn; memoizes the user's
@@ -12678,7 +13054,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         try {
           response = await getClient().messages.create({
             model: chatModel,
-            max_tokens: 4096,
+            // 8192 lets the model emit 30-40 tool_use blocks in ONE response,
+            // so long multi-action messages don't need extra round-trips.
+            max_tokens: 8192,
             system: systemPrompt,
             tools: TOOL_DEFINITIONS,
             messages,
@@ -12755,6 +13133,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         // Safety limit: stop executing tools if we've hit the per-message cap
         if (totalToolCalls >= MAX_TOOL_CALLS) {
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify({ error: "Tool call limit reached for this message. Please send a new message for additional actions." }), is_error: true });
+          if (!READ_ONLY_TOOLS.has(toolUse.name)) {
+            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Tool call limit reached" });
+          }
           continue;
         }
         totalToolCalls++;
@@ -12767,6 +13148,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             const errorResult = { error: `Validation failed: ${validation.errors.join(". ")}`, validationErrors: validation.errors };
             toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify(errorResult), is_error: true });
             // Don't push to allActions for validation failures — nothing was actually done
+            if (!READ_ONLY_TOOLS.has(toolUse.name)) {
+              allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: errorResult.error });
+            }
             continue;
           }
           if (validation.warnings.length > 0) {
@@ -12820,12 +13204,36 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // button. _previousState is set by tools that support reversal
             // (currently update_profile).
             const previousState = (result as any)?._previousState;
+            // Owner attribution: figure out WHOSE entity this write touched.
+            // Profile-row writes (assets/vehicles/liabilities ARE profiles)
+            // start the parent walk at the written row itself; everything else
+            // starts at its linked/for profile. Never let attribution break
+            // the write.
+            let ownerInfo: { id: string; name: string; isSelf: boolean } | null = null;
+            try {
+              const isProfileRowWrite = ["create_profile", "update_profile", "create_liability", "revalue_asset"].includes(toolUse.name);
+              const startRow = isProfileRowWrite
+                ? { id: result.id, parentProfileId: (result as any).parentProfileId, type: (result as any).type, name: (result as any).name }
+                : (() => {
+                    const pid = (Array.isArray((result as any).linkedProfiles) && (result as any).linkedProfiles[0])
+                      || (result as any).profileId || (result as any).forProfile;
+                    return typeof pid === "string" && pid ? { id: pid } : undefined;
+                  })();
+              ownerInfo = resolveEntityOwner(startRow, allProfiles, selfProfileId);
+              // Tell the model who the real owner is so it phrases the reply
+              // as "Jim's Honda CRV", never "your Honda CRV" for someone
+              // else's item.
+              if (ownerInfo && !ownerInfo.isSelf) (result as any).owner = ownerInfo.name;
+            } catch { /* attribution is best-effort */ }
             allActions.push({
               type: actionType,
               category: "ai",
               data: {
                 ...inp,
                 _entityId: entityId || undefined,
+                // Deep-link + badge metadata for the chat action card.
+                ...(ownerInfo ? { _ownerName: ownerInfo.name, _ownerProfileId: ownerInfo.id } : {}),
+                ...((result as any)?.trackerId ? { _trackerId: (result as any).trackerId } : {}),
                 ...(previousState ? { _previousState: previousState } : {}),
               },
             });
@@ -12869,6 +13277,18 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             content: JSON.stringify(isSuccess ? summarizeResult(result) : (result?.error ? { error: result.error } : { error: "Action failed — data was not saved. Tell the user it didn't work." })),
             is_error: !isSuccess,
           });
+          if (!READ_ONLY_TOOLS.has(toolUse.name)) {
+            allOperations.push({
+              index: allOperations.length,
+              raw: opRawLabel(toolUse),
+              tool: toolUse.name,
+              status: isSuccess ? "ok" : "failed",
+              error: isSuccess ? undefined : (result?.error || "Action failed — data was not saved"),
+              entityId: isSuccess ? (entityId || undefined) : undefined,
+              trackerName: inp.trackerName ? String(inp.trackerName) : undefined,
+              createdTracker: isSuccess && (result as any)?.__createdTracker?.id ? (result as any).__createdTracker : undefined,
+            });
+          }
         } catch (err: any) {
           console.error(`Tool ${toolUse.name} failed:`, err.message);
           toolResults.push({
@@ -12877,6 +13297,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             content: JSON.stringify({ error: err.message }),
             is_error: true,
           });
+          if (!READ_ONLY_TOOLS.has(toolUse.name)) {
+            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: err.message });
+          }
         }
       }
 
@@ -13223,6 +13646,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       tables: richTables.length > 0 ? richTables : undefined,
       report: richReport,
       artifact: artifact || undefined,
+      operations: allOperations.length > 0 ? allOperations : undefined,
     };
   } catch (err: any) {
     console.error("AI engine error:", err.message);
@@ -13375,6 +13799,39 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
 // unrecognized fall through to "retrieve").
 function mapToolToActionType(toolName: string): ParsedAction["type"] {
   return TOOL_ACTION_MAP[toolName] || "retrieve";
+}
+
+// ── Owner attribution (2026-07-15 user report: "that's Jim's Honda CRV, not
+// mine") ── resolve the ROOT owner of the entity a write touched by walking
+// nested-asset parent chains (Honda CRV → Jim). The chat card badge can then
+// show the real person ("JIM") instead of defaulting to "You", and the model
+// can phrase its reply as "Jim's Honda CRV" instead of "your Honda CRV".
+// `startRow` may be a profile row not yet in `profiles` (a create from this
+// same turn) — it's used as the walk's starting point directly.
+// Exported for tests (tests/ai-owner-attribution.test.ts).
+export function resolveEntityOwner(
+  startRow: { id?: string; parentProfileId?: string | null; type?: string; name?: string } | undefined,
+  profiles: any[],
+  selfProfileId: string,
+): { id: string; name: string; isSelf: boolean } | null {
+  if (!startRow?.id) return null;
+  const byId = new Map(profiles.map((p: any) => [p.id, p]));
+  let row: any = byId.get(startRow.id) || startRow;
+  const seen = new Set<string>();
+  while (row?.parentProfileId && byId.has(row.parentProfileId) && !seen.has(row.id)) {
+    seen.add(row.id);
+    row = byId.get(row.parentProfileId);
+  }
+  if (!row?.id || !row?.name) return null;
+  // Parent exists but isn't in the list (created later in this same turn) —
+  // we can't resolve the true root; skip attribution rather than guess.
+  if (row.parentProfileId && !byId.has(row.parentProfileId)) return null;
+  const isSelf = row.id === selfProfileId || row.type === "self";
+  // A parentless asset-shaped root (standalone kayak, unassigned loan) is the
+  // account owner's own item — badge it "You" like the rest of the app does.
+  const assetish = ["asset", "vehicle", "liability", "property", "subscription", "loan"].includes(String(row.type || ""));
+  if (!isSelf && assetish) return { id: row.id, name: "You", isSelf: true };
+  return { id: row.id, name: isSelf ? "You" : String(row.name), isSelf };
 }
 
 // Fallback rule-based parsing when AI is unavailable

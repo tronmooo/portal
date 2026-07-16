@@ -69,6 +69,7 @@ tests/smoke/
 | `npm run smoke:reset` | Wipe-only (without reseeding) |
 | `npm run smoke:verify` | Print fixture counts (sanity check) |
 | `npm run smoke:post-deploy` | Fast probe against the live Vercel URL |
+| `npm run test:multiaction` | Multi-action AI chat regression tiers (5/10/20/50 actions per message) against a live deployment — verifies every action writes to the DB, feeds the dashboard, survives refresh, and is individually editable/deletable. Env: `MULTIACTION_BASE_URL` (default `https://portol.me/api`), `MULTIACTION_EMAIL`/`MULTIACTION_PASSWORD`. Needs a server with `ANTHROPIC_API_KEY`; not part of gating `npm test`. Deterministic companions `tests/action-split.test.ts` + `tests/bulk-extraction-normalize.test.ts` ARE gating. |
 
 ## Pre-push gate
 

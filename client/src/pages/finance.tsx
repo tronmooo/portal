@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -772,11 +773,13 @@ export default function FinancePage() {
   // ── Early returns (after ALL hooks including useMemo) ──
   if (isLoading) {
     return (
-      <div className="p-4 space-y-3">
-        <div className="h-8 w-48 rounded skeleton-shimmer" />
-        <div className="h-20 rounded skeleton-shimmer" />
-        <div className="h-20 rounded skeleton-shimmer" />
-      </div>
+      <StuckLoadingGuard active onRetry={() => refetch()}>
+        <div className="p-4 space-y-3">
+          <div className="h-8 w-48 rounded skeleton-shimmer" />
+          <div className="h-20 rounded skeleton-shimmer" />
+          <div className="h-20 rounded skeleton-shimmer" />
+        </div>
+      </StuckLoadingGuard>
     );
   }
 

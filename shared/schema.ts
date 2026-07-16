@@ -85,6 +85,20 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   actions?: ParsedAction[];
+  /** Per-operation outcome report for multi-action messages — one row per
+   * requested write (success AND failure), so the UI can show exactly which
+   * actions landed. Mirrors OperationOutcome in server/ai-bulk-log.ts. */
+  operations?: Array<{
+    index: number;
+    raw: string;
+    tool: string;
+    status: "ok" | "failed" | "skipped" | "deduped";
+    error?: string;
+    entityId?: string;
+    trackerName?: string;
+    createdTracker?: { id: string; name: string };
+    detail?: string;
+  }>;
   attachment?: {
     name: string;
     mimeType: string;
@@ -336,6 +350,11 @@ export interface ComputedData {
   bmi?: number;
   bloodPressureCategory?: "normal" | "elevated" | "high_stage1" | "high_stage2" | "crisis";
   sleepQuality?: "poor" | "fair" | "good" | "excellent";
+  validated?: boolean;
+  /** Per-value provenance from the estimation engine (shared/estimation-engine
+   * Enrichment): which fields were calculated vs estimated, confidence,
+   * methods, and the assumptions registry. Lives here — never in values. */
+  enrichment?: any;
 }
 
 export const insertTrackerSchema = z.object({

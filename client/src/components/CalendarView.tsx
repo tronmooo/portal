@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
@@ -1324,6 +1325,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
 
       {/* Calendar Grid — conditional on viewMode */}
       {timelineLoading && timelineItems.length === 0 && (
+        <StuckLoadingGuard active>
         <div className="rounded-lg border border-border/40 overflow-hidden" data-testid="calendar-loading">
           {/* Weekday header skeleton */}
           <div className="grid grid-cols-7 border-b border-border">
@@ -1343,6 +1345,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             </div>
           ))}
         </div>
+        </StuckLoadingGuard>
       )}
       {viewMode === "month" && (
       <div className="lg:grid lg:grid-cols-3 lg:gap-3 lg:items-start" data-testid="calendar-month-layout">
