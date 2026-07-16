@@ -21,6 +21,7 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import {
   reconcileProfileFilter, setFilterEveryone, setFilterSelected, toggleFilterProfile,
 } from "@/lib/profileFilter";
+import { prefetchScopeBootstrap } from "@/lib/scope-prefetch";
 
 interface LiteProfile { id: string; type: string; name: string; avatar?: string }
 
@@ -81,6 +82,13 @@ export function HubProfileSwitcher() {
           <DropdownMenuItem
             key={p.id}
             onClick={() => setFilterSelected([p.id], [p.name])}
+            // PERF Phase 2.1: warm this person's dashboard-bootstrap BEFORE the
+            // click commits the switch (hover on desktop, touchstart on mobile
+            // — same pattern as MultiProfileFilter, which got this in df6f0ec
+            // while this switcher, the one actually on screen, did not).
+            // prefetchScopeBootstrap dedupes, so hover+click costs one request.
+            onMouseEnter={() => prefetchScopeBootstrap("selected", [p.id])}
+            onTouchStart={() => prefetchScopeBootstrap("selected", [p.id])}
             data-testid={`hub-switch-${p.id}`}
           >
             <span className="w-5 h-5 mr-2 rounded-full bg-muted flex items-center justify-center text-[10px] font-bold overflow-hidden">
