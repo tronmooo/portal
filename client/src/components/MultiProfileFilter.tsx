@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -102,6 +103,34 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
     toggleFilterProfile(id, name);
     notify();
   }, [notify]);
+
+  // PROFILE-SWITCH PREFETCH (2026-07-16, user report "switching between
+  // profiles is very slow"): warm the dashboard-bootstrap cache for a profile
+  // BEFORE the user commits the switch — on hover (desktop) and when the
+  // picker opens (mobile has no hover; warm the first few rows). The key +
+  // URL mirror dashboard.tsx's bootstrap query exactly, and the fetched
+  // payload seeds the same sibling caches, so completing the switch renders
+  // from cache instead of a 3-5s cold aggregation.
+  const prefetched = useRef(new Set<string>());
+  const prefetchProfileDashboard = useCallback((id: string) => {
+    if (!id || prefetched.current.has(id)) return;
+    prefetched.current.add(id);
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    void queryClient.prefetchQuery({
+      queryKey: ["/api/dashboard-bootstrap", "selected", id, currentMonth],
+      queryFn: async () => {
+        const r = await apiRequest("GET", `/api/dashboard-bootstrap?profileIds=${id}&month=${currentMonth}`);
+        const b = await r.json();
+        seedDashboardCaches(b, "selected", [id], currentMonth);
+        return b ?? null;
+      },
+      staleTime: 60_000,
+    });
+  }, []);
+  const prefetchTopProfiles = useCallback(() => {
+    const list = (profiles || []).filter((p: any) => !filter.selectedIds.includes(p.id)).slice(0, 4);
+    for (const p of list) prefetchProfileDashboard(p.id);
+  }, [profiles, filter.selectedIds, prefetchProfileDashboard]);
 
   // Validate stored filter IDs against actual profiles — only refresh display names
   // when the underlying profile name changed. Never drop IDs based on a transient
@@ -226,6 +255,8 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
               checked ? 'bg-primary/10 font-medium border border-primary/30' : 'hover:bg-accent active:bg-accent border border-transparent'
             }`}
             onClick={() => handleToggle(p.id, p.name)}
+            onMouseEnter={() => prefetchProfileDashboard(p.id)}
+            onTouchStart={() => prefetchProfileDashboard(p.id)}
             data-testid={`filter-profile-${p.id}`}
             style={{ minHeight: '52px', WebkitTapHighlightColor: 'transparent' }}
           >
@@ -247,7 +278,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
     <>
       {/* Desktop: Popover dropdown (desktopOpen state — isolated from Sheet) */}
       <div className="hidden md:block">
-        <Popover open={desktopOpen} onOpenChange={setDesktopOpen}>
+        <Popover open={desktopOpen} onOpenChange={(o) => { setDesktopOpen(o); if (o) prefetchTopProfiles(); }}>
           <PopoverTrigger asChild>
             <Button
               variant="outline"
@@ -303,7 +334,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
           )}
           <ChevronDown className="h-3 w-3 text-muted-foreground ml-0.5" />
         </Button>
-        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+        <Sheet open={mobileOpen} onOpenChange={(o) => { setMobileOpen(o); if (o) prefetchTopProfiles(); }}>
           <SheetContent side="bottom" className="max-h-[70vh] rounded-t-2xl px-2 pb-6 flex flex-col">
             <SheetHeader className="px-2 pb-2 shrink-0">
               <div className="flex items-center justify-between">

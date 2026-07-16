@@ -294,11 +294,20 @@ setInterval(() => {
 // ── Server-side response cache ────────────────────────────────────────────────
 // IMPORTANT: This is an in-memory Map. On serverless platforms (Vercel),
 // each function instance has its own memory — a write that busts the cache
-// on instance A does NOT bust it on instance B. The result is users see
-// stale data after mutations (toast says "marked paid" but the bill is still
-// listed). Workaround: disable the cache entirely on Vercel. Local dev keeps
-// it on for perf since a single Node process handles everything.
-const CACHE_ENABLED = !process.env.VERCEL && !process.env.VERCEL_ENV;
+// on instance A does NOT bust it on instance B.
+//
+// HISTORY: that staleness ("deleted items still show up") originally forced
+// the cache OFF on Vercel entirely — which silently made EVERY dashboard/
+// stats/bootstrap request a full ~10-20-query Supabase aggregation in prod
+// (profile switches took 3-6s; user report 2026-07-16 "why does everything
+// take so long"). The cross-instance coherence problem has since been solved
+// properly by migration 010: every per-user cache key embeds the user's DATA
+// VERSION via cacheUserKey() (bumped by the write middleware on any write,
+// resolved per-GET below), so a write on ANY instance changes the key every
+// other instance computes within ~2s — stale entries stop being addressable.
+// With that in place the cache is safe (and essential) in production.
+// Emergency escape hatch: set DISABLE_RESPONSE_CACHE=1.
+const CACHE_ENABLED = !process.env.DISABLE_RESPONSE_CACHE;
 const responseCache = new Map<string, { data: any; expiresAt: number }>();
 // Cache keys MUST be per-user. authMiddleware guarantees req.userId on every
 // authenticated data route in Supabase mode (it 401s otherwise), so the
