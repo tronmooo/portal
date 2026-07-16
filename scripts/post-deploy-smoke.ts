@@ -76,6 +76,47 @@ const probes: Probe[] = [
       if (leaks.length) throw new Error(`leaked: ${leaks.map(l => l.name + "/" + l.category).join(",")}`);
     },
   },
+  // ── PERF Phase 5.1 (PERF_PLAN_LAUNCH_2026-07-16.md): latency budgets ───────
+  // Warm-path budgets for the endpoints that gate what users feel: app open
+  // (dashboard-bootstrap) and People switching (profiles/lite). Each probe
+  // hits the endpoint once to warm the instance + response cache, then
+  // asserts the SECOND hit lands under budget — a deploy that regresses the
+  // warm path 2x fails the gate. Budgets are deliberately loose enough to
+  // absorb network jitter from CI; override via SMOKE_PERF_BUDGET_MS_* envs.
+  {
+    name: "perf: warm /dashboard-bootstrap under budget",
+    run: async () => {
+      const budget = Number(process.env.SMOKE_PERF_BUDGET_MS_BOOTSTRAP || 2000);
+      const month = new Date().toISOString().slice(0, 7);
+      await api("GET", `/dashboard-bootstrap?month=${month}`); // warm instance + cache
+      const t0 = Date.now();
+      expectOk(await api("GET", `/dashboard-bootstrap?month=${month}`));
+      const ms = Date.now() - t0;
+      if (ms > budget) throw new Error(`warm bootstrap took ${ms}ms (budget ${budget}ms)`);
+    },
+  },
+  {
+    name: "perf: warm /profiles/lite under budget",
+    run: async () => {
+      const budget = Number(process.env.SMOKE_PERF_BUDGET_MS_PROFILES_LITE || 1200);
+      await api("GET", "/profiles/lite"); // warm
+      const t0 = Date.now();
+      expectOk(await api("GET", "/profiles/lite"));
+      const ms = Date.now() - t0;
+      if (ms > budget) throw new Error(`warm profiles/lite took ${ms}ms (budget ${budget}ms)`);
+    },
+  },
+  {
+    name: "perf: warm /stats under budget",
+    run: async () => {
+      const budget = Number(process.env.SMOKE_PERF_BUDGET_MS_STATS || 1500);
+      await api("GET", "/stats"); // warm
+      const t0 = Date.now();
+      expectOk(await api("GET", "/stats"));
+      const ms = Date.now() - t0;
+      if (ms > budget) throw new Error(`warm stats took ${ms}ms (budget ${budget}ms)`);
+    },
+  },
 ];
 
 (async () => {

@@ -133,6 +133,16 @@ service role, RLS mostly bypassed.
 
 Ordered by (user-visible impact ÷ risk). Each phase is shippable alone.
 
+> **Status (2026-07-16, same-day execution pass):** Phases 0, 1, 2 shipped in
+> full. Phase 3: advisor migration applied to the live DB + per-table
+> slow-query logging shipped; the 3.2 aggregation RPC is deliberately deferred
+> — live measurement showed today's data volumes are small (profiles 517 rows
+> / 184 kB; the 47 MB documents table already excludes blobs on list paths),
+> so cold starts + fan-out, not scans, dominate — the RPC becomes the priority
+> as real users add data. Phase 4: entry trimmed 185→155 kB gzip (chat chunk
+> extracted); the mega-page tab-splits remain follow-up. Phase 5: perf budgets
+> in post-deploy smoke + the AI/read function split shipped.
+
 ### Phase 0 — Measure first (half a day)
 0.1 Add `performance.mark`/`measure` around: bundle-eval → auth-restored →
     first-data-paint → bootstrap-landed → profile-switch → switch-painted.
@@ -241,7 +251,7 @@ Ordered by (user-visible impact ÷ risk). Each phase is shippable alone.
 | Profile/People switch | multi-second skeletons | < 300 ms perceived (old data stays, ≤ 3 requests) |
 | `/api/dashboard-bootstrap` | 4.6 s cold / 0.3–3.5 s warm | < 800 ms p95 (RPC + shared cache) |
 | `/api/profiles` (full) | 6.4 s | hot paths use `lite` < 400 ms |
-| Entry JS | 185 KB gzip (includes chat page) | < 130 KB gzip after chat extraction |
+| Entry JS | 185 KB gzip (includes chat page) | **155 KB shipped** (chat extracted; < 130 KB after mega-page splits) |
 
 ## Appendix — build measurements (vite build on this branch, 2026-07-16)
 

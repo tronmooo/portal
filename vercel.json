@@ -7,6 +7,30 @@
   ],
   "rewrites": [
     {
+      "source": "/api/chat/:path*",
+      "destination": "/api/ai"
+    },
+    {
+      "source": "/api/chat",
+      "destination": "/api/ai"
+    },
+    {
+      "source": "/api/upload/:path*",
+      "destination": "/api/ai"
+    },
+    {
+      "source": "/api/upload",
+      "destination": "/api/ai"
+    },
+    {
+      "source": "/api/smart-fill/:path*",
+      "destination": "/api/ai"
+    },
+    {
+      "source": "/api/smart-fill",
+      "destination": "/api/ai"
+    },
+    {
       "source": "/api/:path*",
       "destination": "/api"
     },
@@ -61,6 +85,10 @@
   ],
   "functions": {
     "api/index.js": {
+      "maxDuration": 60,
+      "memory": 1024
+    },
+    "api/ai.js": {
       "maxDuration": 300,
       "memory": 1024
     }
