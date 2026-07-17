@@ -167,8 +167,25 @@ export const queryClient = new QueryClient({
            full reload restores instantly instead of showing skeletons.
          - networkMode: "always" → queries continue even on flaky network
            instead of leaving in-flight requests hanging forever. */
-      refetchOnWindowFocus: true,
-      refetchOnReconnect: "always",
+      /* COME-BACK STORM FIX (2026-07-17, user report "everything is slow when
+         I come back to the app"): refetchOnWindowFocus/onReconnect used to
+         refetch every one of the dashboard's ~25 active scoped queries in
+         parallel the moment the tab regained focus. On serverless (one Vercel
+         function, one region) that fan-out cold-starts several instances and
+         saturates the DB pool, so on a weak mobile link the slow requests queue
+         past the StuckLoadingGuard deadline and their cards sit on "loading".
+         The come-back path now refreshes the whole dashboard through the SINGLE
+         /api/dashboard-bootstrap aggregate + seed instead (see the
+         visibilitychange / pageshow handlers below → refreshDashboardOnReturn),
+         the same one-request strategy the boot and scope-switch paths use.
+         Per-query focus refetch is therefore off; freshness is preserved by the
+         bootstrap reseed on return, refetchOnMount on navigation, and the
+         active-scoped invalidation every mutation already fires. */
+      refetchOnWindowFocus: false,
+      // Only refetch queries that are actually stale on reconnect (not the
+      // blanket "always", which re-fired even fresh queries and re-created the
+      // storm whenever the mobile radio blipped).
+      refetchOnReconnect: true,
       // refetchOnMount: true means "if the cached data is stale at the time
       // the component mounts, refetch in the background while showing the
       // cached data immediately." Crucially this is what makes invalidated
@@ -444,21 +461,49 @@ export function hydrateQueryCache(): void {
 --------------------------------------------------------------------------- */
 let hiddenAt = 0;
 
+// Cancel any /api/* query that is still marked "fetching" — on resume these are
+// almost always orphaned promises Safari froze while the tab was suspended
+// (React Query refuses to start a second fetch for a query it believes is
+// already fetching, so cancelling is what un-sticks them). Cancel resolves the
+// orphaned promise via the abort signal.
+async function cancelWedgedQueries(): Promise<void> {
+  const wedged = queryClient.getQueryCache().getAll().filter((q) =>
+    q.state.fetchStatus === "fetching" &&
+    String(q.queryKey?.[0] || "").startsWith("/api/"),
+  );
+  if (wedged.length > 0) {
+    await queryClient.cancelQueries({
+      predicate: (q) => q.state.fetchStatus === "fetching" && String(q.queryKey?.[0] || "").startsWith("/api/"),
+    });
+  }
+}
+
+// Explicit "Retry" path (StuckLoadingGuard button): un-stick wedged fetches,
+// then refetch everything on screen. This one DOES fan out per-query, which is
+// fine because the user asked for a full retry of a section that's stuck.
 export async function recoverWedgedQueries(): Promise<void> {
   try {
-    const wedged = queryClient.getQueryCache().getAll().filter((q) =>
-      q.state.fetchStatus === "fetching" &&
-      String(q.queryKey?.[0] || "").startsWith("/api/"),
-    );
-    if (wedged.length > 0) {
-      await queryClient.cancelQueries({
-        predicate: (q) => q.state.fetchStatus === "fetching" && String(q.queryKey?.[0] || "").startsWith("/api/"),
-      });
-    }
+    await cancelWedgedQueries();
     // Refetch what's on screen; everything else just goes stale.
     queryClient.invalidateQueries({
       predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/"),
       refetchType: "active",
+    });
+  } catch { /* recovery is best-effort — never throw from a lifecycle handler */ }
+}
+
+// Automatic come-back path (tab refocus / bfcache restore). Un-stick any wedged
+// fetches, then refresh the dashboard through the SINGLE /api/dashboard-bootstrap
+// aggregate + seed instead of fanning out ~25 individual scoped refetches — the
+// storm that made "coming back to the app" slow and left cards on "loading".
+// See client/src/lib/scope-prefetch.ts:refreshDashboardOnReturn.
+export async function refreshOnAppReturn(): Promise<void> {
+  try {
+    await cancelWedgedQueries();
+    // Dynamic import: scope-prefetch imports this module, so a static import
+    // here would be a cycle (same pattern as clearAllClientCaches → profileFilter).
+    void import("./scope-prefetch").then((m) => {
+      try { m.refreshDashboardOnReturn(); } catch { /* best-effort */ }
     });
   } catch { /* recovery is best-effort — never throw from a lifecycle handler */ }
 }
@@ -474,16 +519,16 @@ if (typeof window !== "undefined") {
       hiddenAt = Date.now();
       snapshotCache();
     } else if (document.visibilityState === "visible") {
-      // Only run recovery after a real absence (≥15s) — quick tab flips
-      // shouldn't cancel healthy in-flight requests.
-      if (hiddenAt && Date.now() - hiddenAt >= 15_000) void recoverWedgedQueries();
+      // Only refresh after a real absence (≥15s) — quick tab flips shouldn't
+      // cancel healthy in-flight requests or spend a bootstrap round-trip.
+      if (hiddenAt && Date.now() - hiddenAt >= 15_000) void refreshOnAppReturn();
       hiddenAt = 0;
     }
   });
   // bfcache restore (iOS back/forward, app switcher): the page resumes with
-  // whatever promise graveyard it was frozen with — same recovery applies.
+  // whatever promise graveyard it was frozen with — same come-back refresh.
   window.addEventListener("pageshow", (e: PageTransitionEvent) => {
-    if (e.persisted) void recoverWedgedQueries();
+    if (e.persisted) void refreshOnAppReturn();
   });
 }
 

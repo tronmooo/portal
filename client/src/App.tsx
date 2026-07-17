@@ -497,11 +497,14 @@ function KeepAlive() {
         const awayMs = Date.now() - hiddenAt;
         if (hiddenAt > 0 && awayMs >= 15_000) {
           ping(); // Re-warm Vercel cold-started function immediately
-          // Invalidate dashboard + stats so they refresh with fresh data
-          setTimeout(() => {
-            queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
-            queryClient.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'] });
-          }, 800); // slight delay to let warmup respond first
+          // NOTE: the come-back data refresh is handled centrally in
+          // queryClient.ts (visibilitychange → refreshOnAppReturn), which
+          // reloads the whole dashboard through the SINGLE /api/dashboard-
+          // bootstrap aggregate. We deliberately no longer invalidate
+          // /api/stats + /api/dashboard-enhanced here — that fired two extra
+          // per-query refetches on top of the bootstrap and predated the
+          // storm fix. The warmup ping above still runs so the bootstrap
+          // request lands on a warm function.
         }
         hiddenAt = 0;
       }

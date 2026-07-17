@@ -13,6 +13,7 @@
 //    cold switch fires one aggregate request instead of dozens).
 import { queryClient, apiRequest } from "./queryClient";
 import { seedDashboardCaches } from "./bootstrap-seed";
+import { getProfileFilter } from "./profileFilter";
 import { perfMark, perfMeasure } from "./perf-marks";
 
 // ── Profile detail warmup ────────────────────────────────────────────────────
@@ -62,4 +63,26 @@ export function prefetchScopeBootstrap(mode: "everyone" | "selected", ids: strin
     },
     staleTime: 60_000,
   });
+}
+
+// ── App-return refresh ───────────────────────────────────────────────────────
+// Called when the user comes back to the tab (visibility → visible / bfcache
+// restore). Refreshes the WHOLE dashboard through the single /api/dashboard-
+// bootstrap aggregate for the currently-active profile scope, exactly like the
+// boot and scope-switch paths do.
+//
+// Why this exists: with refetchOnWindowFocus, returning to the tab used to
+// refetch every one of the dashboard's ~25 scoped queries in parallel. On
+// serverless (one Vercel function, one region) that fan-out cold-starts several
+// instances and saturates the DB pool, so on a weak mobile link the slow
+// requests queue past the StuckLoadingGuard deadline and their cards sit on
+// "loading". Routing the come-back through the aggregate turns that storm into
+// ONE request whose payload seeds every card's cache (seedDashboardCaches).
+// prefetchScopeBootstrap's own freshness guard means a quick return (<60s)
+// reuses cache and spends no request at all.
+export function refreshDashboardOnReturn(): void {
+  try {
+    const { mode, selectedIds } = getProfileFilter();
+    prefetchScopeBootstrap(mode, mode === "selected" ? selectedIds : []);
+  } catch { /* best-effort — never throw from a lifecycle handler */ }
 }
