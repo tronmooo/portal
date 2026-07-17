@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { warmProfileDetail } from "@/lib/scope-prefetch";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
@@ -6612,7 +6613,15 @@ export default function TrackersPage() {
                     );
                   }
                   return (
-                    <Link key={`${r.kind}-${r.id}`} href={r.href}>
+                    // PERF (2026-07-17 live drive): opening an asset/liability
+                    // detail cold measured ~8s — warm the server's
+                    // profile-bootstrap cache the moment the user aims at a row.
+                    <Link
+                      key={`${r.kind}-${r.id}`}
+                      href={r.href}
+                      onMouseEnter={() => warmProfileDetail(r.id)}
+                      onTouchStart={() => warmProfileDetail(r.id)}
+                    >
                       {rowInner}
                     </Link>
                   );
@@ -6812,7 +6821,7 @@ export default function TrackersPage() {
                   const valueLabel = (currentVal == null || currentVal === 0) && purchaseVal != null && purchaseVal > 0 ? 'purchase' : null;
 
                   return (
-                    <Link key={child.id} href={`/profiles/${child.id}`} className="block" style={{ height: 160 }}>
+                    <Link key={child.id} href={`/profiles/${child.id}`} className="block" style={{ height: 160 }} onMouseEnter={() => warmProfileDetail(child.id)} onTouchStart={() => warmProfileDetail(child.id)}>
                       <div
                         className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] grid"
                         style={{
@@ -7010,7 +7019,7 @@ export default function TrackersPage() {
                 const isRecurring = isSubscription || liabilityFamily(liab.type_key) === 'recurring';
                 const hasProgress = original != null && original > 0 && balance != null;
                 return (
-                  <Link key={liab.id} href={`/profiles/${liab.id}`} className="block h-full">
+                  <Link key={liab.id} href={`/profiles/${liab.id}`} className="block h-full" onMouseEnter={() => warmProfileDetail(liab.id)} onTouchStart={() => warmProfileDetail(liab.id)}>
                     <div
                       className="rounded-xl p-2.5 cursor-pointer transition-all hover:border-[hsl(0_72%_55%/0.45)] active:scale-[0.98] h-full flex flex-col"
                       style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.12) 0%, hsl(var(--card)) 55%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 14px hsl(${accentHsl} / 0.06)` }}

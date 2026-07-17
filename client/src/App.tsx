@@ -559,6 +559,24 @@ function DataPrefetch() {
         return b ?? null;
       },
     }).catch(() => { /* best-effort */ });
+
+    // PERF (2026-07-17 live drive): switching to "Everyone" showed 7s of
+    // skeletons — it's the heaviest scope and the boot prefetch above only
+    // warms the SAVED scope (usually one person). Once the boot path is idle,
+    // warm the aggregate scope too, so the most common switch target renders
+    // from cache. One extra request per session, off the critical path.
+    if (mode !== 'everyone') {
+      const warmEveryone = () => {
+        import('@/lib/scope-prefetch')
+          .then((m) => m.prefetchScopeBootstrap('everyone', []))
+          .catch(() => { /* best-effort */ });
+      };
+      if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(warmEveryone, { timeout: 8000 });
+      } else {
+        setTimeout(warmEveryone, 3000);
+      }
+    }
   }, [user]);
   return null;
 }
