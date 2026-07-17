@@ -1629,18 +1629,32 @@ export async function registerRoutes(
       return res.status(429).json({ error: "Too many summary requests. Please wait." });
     }
     try {
-      const { filterMode, filterIds, scopeLabel } = req.body as {
+      const { filterMode, filterIds, scopeLabel, force } = req.body as {
         filterMode?: "all" | "selected" | "everyone";
         filterIds?: string[];
         scopeLabel?: string;
+        force?: boolean;
       };
       const ids = Array.isArray(filterIds) ? filterIds.filter((s) => typeof s === "string") : [];
       const useFilter = filterMode === "selected" && ids.length > 0;
-      const enhanced: any = await storage.getDashboardEnhanced(undefined, useFilter ? ids : undefined);
 
       // Today bounds in user's TZ
       const tz = getTimezone(req);
       const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+
+      // PERF (2026-07-17 live drive): every scope switch regenerated the
+      // briefing via a fresh LLM call — 5-7s of skeleton lines that made an
+      // otherwise-instant dashboard feel slow. The briefing is a DAILY digest:
+      // cache it per user+scope+day (4h TTL, NOT data-version-stamped — the
+      // manual Refresh button passes force:true to regenerate on demand), so
+      // returning to a scope you've already seen today renders it instantly.
+      const briefingKey = `aisummary:${userId}:${useFilter ? ids.slice().sort().join(",") : "everyone"}:${todayISO}`;
+      if (!force) {
+        const cachedBriefing = getCached(briefingKey);
+        if (cachedBriefing) return res.json(cachedBriefing);
+      }
+
+      const enhanced: any = await storage.getDashboardEnhanced(undefined, useFilter ? ids : undefined);
       const inNextDays = (iso: string, days: number) => {
         if (!iso) return false;
         try {
@@ -1689,12 +1703,14 @@ ${JSON.stringify(ctx, null, 2)}`;
         messages: [{ role: "user", content: prompt }],
       });
       const text = resp.content[0]?.type === "text" ? (resp.content[0] as any).text.trim() : "";
-      res.json({
+      const payload = {
         summary: text || "No summary available.",
         scope: ctx.scope,
         scopedIds: useFilter ? ids : null,
         generatedAt: new Date().toISOString(),
-      });
+      };
+      if (text) setCache(briefingKey, payload, 4 * 60 * 60 * 1000);
+      res.json(payload);
     } catch (err: any) {
       log.error("[AISummary]", err?.message || "unknown");
       res.status(500).json({ error: "Couldn't generate summary right now." });
