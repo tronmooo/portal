@@ -253,6 +253,28 @@ Ordered by (user-visible impact ÷ risk). Each phase is shippable alone.
 | `/api/profiles` (full) | 6.4 s | hot paths use `lite` < 400 ms |
 | Entry JS | 185 KB gzip (includes chat page) | **155 KB shipped** (chat extracted; < 130 KB after mega-page splits) |
 
+## Appendix 0 — LIVE verification results (2026-07-17, production portol.me)
+
+Measured with a Playwright drive (smoke account) against the deployed app,
+plus the post-deploy smoke gate. "Loading gone" = how long any spinner or
+skeleton stayed visible.
+
+| Flow | Result |
+|---|---|
+| Reopen the app (warm localStorage) | **1.0–1.5 s to settled, NO full-page loader**, residual skeleton 35–588 ms |
+| Switch between people | **54–112 ms**, loading gone in ≤10 ms |
+| Tabs: Linked / Assets / Liabilities / Finance / Dashboard | **13–126 ms** |
+| People → Info tab | **719–813 ms** |
+| Reopen an asset/liability detail | **34–40 ms** |
+| Warm API: bootstrap / profiles-lite / stats | **429 / 349 / 191 ms** (budgets enforced in deploy gate) |
+| First-ever open of an asset/liability detail | 5–7.5 s cold (hover pre-warm ships; revisits instant) |
+| First-ever visit to a scope (AI briefing writes itself) | 5–9 s skeleton for the briefing TEXT only — numbers are instant; briefing now cached per scope+day (repeats ~0.5 s per instance) |
+
+Remaining known gap: the response cache (incl. the briefing cache) is
+per-serverless-instance — a request landing on a fresh instance regenerates.
+The fix is the already-planned shared cache (Vercel KV/Upstash, item 3.3),
+which needs credentials/provisioning.
+
 ## Appendix — build measurements (vite build on this branch, 2026-07-16)
 
 Critical path on cold load (what index.html actually pulls before first render):
