@@ -32,7 +32,20 @@ function extractConst(src: string, name: string): number {
 
 describe("chat timeout envelope", () => {
   const vercel = JSON.parse(read("vercel.json"));
-  const maxDurationMs = vercel.functions["api/index.js"].maxDuration * 1000;
+  // Chat is served by the split AI function (vercel.json rewrites /api/chat →
+  // /api/ai) with its own long budget; api/index.js is the general API and
+  // deliberately keeps a short 60s limit. Measure the function that actually
+  // hosts the chat envelope, falling back to the monolith if the split is
+  // ever removed.
+  const chatFn = vercel.functions["api/ai.js"] ?? vercel.functions["api/index.js"];
+  const maxDurationMs = chatFn.maxDuration * 1000;
+  it("chat rewrites point /api/chat at the AI function this test measures", () => {
+    const rewrites: Array<{ source: string; destination: string }> = vercel.rewrites || [];
+    const chatRewrite = rewrites.find((r) => r.source === "/api/chat");
+    if (vercel.functions["api/ai.js"]) {
+      expect(chatRewrite?.destination).toBe("/api/ai");
+    }
+  });
   const serverBudgetMs = extractConst(read("server/ai-engine.ts"), "WALL_CLOCK_BUDGET_MS");
   const clientChatTimeoutMs = extractConst(read("client/src/lib/queryClient.ts"), "CHAT_TIMEOUT_MS");
 
