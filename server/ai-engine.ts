@@ -51,6 +51,7 @@ import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO } from "@shared/timezone";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
+import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
 import {
   EXTRACT_ACTIONS_TOOL,
@@ -253,14 +254,17 @@ async function webSearch(query: string, numResults = 5): Promise<string> {
 
 // Perplexity Sonar API — live web search + LLM in one call. Returns a JSON
 // estimate with a real number, used as the primary source for lookup-value.
-async function perplexityValuation(profile: { type: string; name: string; fields: Record<string, any> }): Promise<{ estimatedValue: number; confidence: string; method: string; details: string } | null> {
+// The prompt is the full asset dossier (all fields + related upgrades/repairs/
+// documents/notes/summary) with prior-valuation outputs stripped — see
+// server/valuation.ts for why both of those matter.
+async function perplexityValuation(
+  profile: { type: string; name: string; fields: Record<string, any> },
+  context?: AssetValuationContext,
+): Promise<AssetValuation | null> {
   const apiKey = process.env.PERPLEXITY_API_KEY;
   if (!apiKey) return null;
-  const fieldDesc = Object.entries(profile.fields || {})
-    .filter(([k, v]) => v && !k.startsWith("_") && typeof v !== "object")
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(", ");
-  const userMsg = `What is the current US market resale value of this ${profile.type}: "${profile.name}"${fieldDesc ? " (" + fieldDesc + ")" : ""}? Search current listings (eBay, Swappa, KBB, Zillow, Edmunds, etc.) and respond with ONLY a JSON object: {"value": <number>, "confidence": "high|medium|low", "method": "<source·e.g. Swappa, KBB>", "range": "$X - $Y"}. ALWAYS return a positive number — never 0. If unsure, give your best informed estimate based on similar items.`;
+  const dossier = buildValuationDossier(profile, context);
+  const userMsg = `Determine the current US market resale value of the ${profile.type} described below. Search current listings and pricing sources (eBay, Swappa, KBB, Edmunds, Zillow, CARFAX, etc.).\n\n${dossier}\n\n${VALUATION_RESPONSE_SPEC}`;
   try {
     const resp = await fetch("https://api.perplexity.ai/chat/completions", {
       method: "POST",
@@ -268,10 +272,10 @@ async function perplexityValuation(profile: { type: string; name: string; fields
       body: JSON.stringify({
         model: "sonar",
         messages: [
-          { role: "system", content: "You are an expert asset appraiser. Always respond with a single JSON object and a positive numeric value." },
+          { role: "system", content: "You are an expert asset appraiser. Always respond with a single JSON object and a positive numeric value. Recompute every estimate from the provided details — never repeat a prior estimate." },
           { role: "user", content: userMsg },
         ],
-        max_tokens: 300,
+        max_tokens: 600,
         temperature: 0.2,
       }),
       signal: AbortSignal.timeout(20000),
@@ -282,17 +286,7 @@ async function perplexityValuation(profile: { type: string; name: string; fields
     }
     const json: any = await resp.json();
     const text: string = json?.choices?.[0]?.message?.content || "";
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return null;
-    const parsed = JSON.parse(m[0]);
-    const v = Number(parsed.value) || 0;
-    if (v <= 0) return null;
-    return {
-      estimatedValue: v,
-      confidence: parsed.confidence || "medium",
-      method: parsed.method ? `Live search: ${parsed.method}` : "Live search",
-      details: parsed.range || "",
-    };
+    return parseValuationResponse(text, { defaultMethod: "Live search", methodPrefix: "Live search: " });
   } catch (e: any) {
     console.warn("[Valuation] Perplexity call failed:", e?.message || e);
     return null;
@@ -309,7 +303,10 @@ export function isValuableType(t: string | undefined | null): boolean {
   return !!t && VALUABLE_TYPES.has(t);
 }
 
-export async function estimateAssetValue(profile: { type: string; name: string; fields: Record<string, any> }): Promise<{ estimatedValue: number; confidence: string; method: string; details: string } | null> {
+export async function estimateAssetValue(
+  profile: { type: string; name: string; fields: Record<string, any> },
+  context?: AssetValuationContext,
+): Promise<AssetValuation | null> {
   // HARD GUARD: refuse to value non-valuable profile types. Without this,
   // perplexityValuation below blindly searches the web for a market price
   // for any name (including people, pets, etc.) and confidently returns a
@@ -319,19 +316,16 @@ export async function estimateAssetValue(profile: { type: string; name: string; 
 
   // PRIMARY: Perplexity Sonar (live web search + LLM in one call). This is the
   // same API the chat uses, so it works reliably from Vercel cloud IPs.
-  const ppx = await perplexityValuation(profile);
+  const ppx = await perplexityValuation(profile, context);
   if (ppx && ppx.estimatedValue > 0) return ppx;
 
   // FALLBACK: legacy Anthropic + DDG/Brave path (kept for resilience).
   const valuableTypes = ["vehicle", "asset", "property", "investment"];
   if (!valuableTypes.includes(profile.type)) return null;
 
-  const fieldDesc = Object.entries(profile.fields || {})
-    .filter(([k, v]) => v && !k.startsWith("_"))
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(", ");
+  const dossier = buildValuationDossier(profile, context);
 
-  if (!fieldDesc && !profile.name) return null;
+  if (!profile.name && !Object.keys(profile.fields || {}).length) return null;
 
   // Build search query based on asset type
   let searchQuery = "";
@@ -371,35 +365,40 @@ export async function estimateAssetValue(profile: { type: string; name: string; 
     // Unified prompt: always require a numeric estimate. If search returned
     // useful pricing, prefer those numbers; if it's just URLs/titles, fall
     // back to expert-appraiser knowledge. NEVER return 0 — that surfaces
-    // "$0 / Unknown" in the UI which is useless to the user.
-    const prompt = `You are an expert asset appraiser. Estimate the current US market value of this ${profile.type}.\n\nAsset: "${profile.name}"\nDetails: ${fieldDesc || "(no extra details)"}\n${searchResults ? `\n--- LIVE WEB SEARCH RESULTS ---\n${searchResults}\n--- END SEARCH RESULTS ---\n` : ""}\nReturn ONLY a JSON object:\n{"value": <number>, "confidence": "high|medium|low", "method": "<brief source/method>", "range": "$X - $Y"}\n\nRules (CRITICAL):\n- ALWAYS return a positive numeric value — NEVER 0. If search results lack prices, fall back to your training knowledge for a reasonable used/resale value.\n- For Apple iPhones (e.g. iPhone 15), use typical used resale: iPhone 15 base ~$500-600 used, iPhone 15 Pro ~$700-800, iPhone 15 Pro Max ~$850-950.\n- For vehicles, use year/make/model/mileage to infer KBB-style value.\n- For homes, use city/state/type for a regional estimate.\n- For other electronics, use brand/model/condition.\n- Use confidence="high" only if you have an exact match; "medium" if similar; "low" if approximate.\n- method examples: "KBB", "Zillow", "AI estimate (used resale)", "Live search"\n- range must be a sensible band around value, e.g. "$450 - $650".`;
+    // "$0 / Unknown" in the UI which is useless to the user. The dossier
+    // carries the complete profile (fields + upgrades + repairs + docs +
+    // notes + summary) with prior estimates stripped so the model can't
+    // anchor on its own previous answer.
+    const prompt = `You are an expert asset appraiser. Estimate the current US market value of the ${profile.type} described below.\n\n${dossier}\n${searchResults ? `\n--- LIVE WEB SEARCH RESULTS ---\n${searchResults}\n--- END SEARCH RESULTS ---\n` : ""}\n${VALUATION_RESPONSE_SPEC}`;
 
     const response = await getClient().messages.create({
       model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
-      max_tokens: 300,
+      max_tokens: 600,
       messages: [{ role: "user", content: prompt }],
     });
 
     const text = response.content[0]?.type === "text" ? response.content[0].text : "";
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      const v = Number(parsed.value) || 0;
-      const method = parsed.method || (searchResults ? "web data" : "AI estimate");
-      return {
-        estimatedValue: v,
-        confidence: parsed.confidence || (searchResults ? "medium" : "low"),
-        method,
-        details: parsed.range || "",
-      };
-    }
+    const parsed = parseValuationResponse(text, {
+      defaultMethod: searchResults ? "web data" : "AI estimate",
+    });
+    if (parsed) return parsed;
   } catch (e) {
     console.error("[Valuation] Failed:", e);
   }
   // Last-resort floor: never block the UI with a hard failure. Return a 0 with low
   // confidence and a clear method label so the route can persist a placeholder and
   // the user can manually edit it. The route layer also accepts 0 (Phase 8 fix).
-  return { estimatedValue: 0, confidence: "low", method: "No data available — please enter manually", details: "" };
+  return {
+    estimatedValue: 0,
+    lowValue: 0,
+    highValue: 0,
+    confidence: "low",
+    method: "No data available — please enter manually",
+    details: "",
+    factorsConsidered: [],
+    missingInfo: [],
+    valuationDate: new Date().toISOString(),
+  };
 }
 
 // ============================================================
@@ -10497,7 +10496,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const profile = matchProfileByName(profiles, input.profileName);
       if (!profile) return { error: "Profile not found: " + input.profileName };
 
-      const valuation = await estimateAssetValue({ type: profile.type, name: profile.name, fields: profile.fields });
+      // Value from the COMPLETE record: related expenses (upgrades/repairs),
+      // documents, notes, and timeline all feed the estimate, same as the
+      // Look up value button. Best-effort — fall back to bare fields.
+      let revalueCtx: AssetValuationContext | undefined;
+      try {
+        const detail = await storage.getProfileDetail(profile.id);
+        if (detail) {
+          revalueCtx = {
+            notes: (detail as any).notes,
+            expenses: detail.relatedExpenses?.map(e => ({ description: e.description, amount: e.amount, category: e.category, date: e.date })),
+            documents: detail.relatedDocuments?.map(d => ({ name: d.name, type: d.type, extractedData: d.extractedData as any })),
+            timeline: detail.timeline?.slice(-10),
+          };
+        }
+      } catch { /* fall back to fields-only valuation */ }
+
+      const valuation = await estimateAssetValue({ type: profile.type, name: profile.name, fields: profile.fields }, revalueCtx);
       if (!valuation || valuation.estimatedValue === 0) {
         return { error: "Could not estimate value for " + profile.name };
       }
@@ -10510,7 +10525,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           valuationMethod: valuation.method,
           valuationConfidence: valuation.confidence,
           valuationRange: valuation.details,
-          valuationDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          valuationLow: valuation.lowValue || undefined,
+          valuationHigh: valuation.highValue || undefined,
+          valuationFactors: valuation.factorsConsidered,
+          valuationMissingInfo: valuation.missingInfo,
+          valuationDate: valuation.valuationDate,
           previousValue: oldValue,
         },
       });

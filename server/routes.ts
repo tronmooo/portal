@@ -3682,26 +3682,53 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
   // Wave 9: Look up current market value for an asset profile.
   // POST /api/profiles/:id/lookup-value
-  // - Runs estimateAssetValue (live web search + AI) on the profile's fields
+  // - Loads the COMPLETE asset record (fields + related expenses/documents/
+  //   notes/timeline + the AI summary) and runs estimateAssetValue
+  //   (live web search + AI) over all of it. Prior valuation outputs are
+  //   stripped from the prompt inside the engine so the model never anchors
+  //   on its own previous answer — meaningfully different details produce a
+  //   different estimate.
+  // - Always computed fresh: this endpoint has no result cache, and it busts
+  //   the AI summary cache after persisting so no stale value survives.
   // - Persists the result onto the profile (currentValue, valuationMethod,
-  //   valuationConfidence, valuationRange, valuationDate, previousValue)
+  //   valuationConfidence, valuationRange, valuationLow/High,
+  //   valuationFactors, valuationMissingInfo, valuationDate, previousValue)
   // - Returns the new valuation so the client can show it without refetching
   app.post("/api/profiles/:id/lookup-value", asyncHandler(async (req, res) => {
     try {
       const { id } = req.params;
-      const profile = await storage.getProfile(id);
-      if (!profile) return res.status(404).json({ error: "Profile not found" });
+      const detail = await storage.getProfileDetail(id);
+      if (!detail) return res.status(404).json({ error: "Profile not found" });
 
       const valuableTypes = ["vehicle", "asset", "property", "investment"];
-      if (!valuableTypes.includes(profile.type)) {
-        return res.status(400).json({ error: `Cannot estimate value for type '${profile.type}'` });
+      if (!valuableTypes.includes(detail.type)) {
+        return res.status(400).json({ error: `Cannot estimate value for type '${detail.type}'` });
       }
 
-      const valuation = await estimateAssetValue({
-        type: profile.type,
-        name: profile.name,
-        fields: profile.fields || {},
-      });
+      // Include the existing AI summary (if any) as context — it often
+      // condenses maintenance gaps, mileage, and status the user cares about.
+      let aiSummaryText: string | null = null;
+      try {
+        const cachedSummary = await storage.getPreference(`profile_ai_${id}`);
+        if (cachedSummary) aiSummaryText = JSON.parse(cachedSummary)?.summary || null;
+      } catch { /* summary is optional context */ }
+
+      const valuation = await estimateAssetValue(
+        { type: detail.type, name: detail.name, fields: detail.fields || {} },
+        {
+          notes: (detail as any).notes,
+          aiSummary: aiSummaryText,
+          expenses: (detail.relatedExpenses || []).map(e => ({
+            description: e.description, amount: e.amount, category: e.category, date: e.date,
+          })),
+          documents: (detail.relatedDocuments || []).map(d => ({
+            name: d.name, type: d.type, extractedData: d.extractedData as any,
+          })),
+          timeline: (detail.timeline || []).slice(-10).map(t => ({
+            type: t.type, title: t.title, timestamp: t.timestamp,
+          })),
+        },
+      );
 
       if (!valuation) {
         return res.status(422).json({
@@ -3713,19 +3740,23 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       // We persist with low confidence so the user can edit manually instead of
       // hitting a hard 422 error. The AI fallback path always returns a record.
 
-      const oldValue = (profile.fields as any)?.currentValue
-                    ?? (profile.fields as any)?.purchasePrice
+      const oldValue = (detail.fields as any)?.currentValue
+                    ?? (detail.fields as any)?.purchasePrice
                     ?? 0;
 
       // DATA IS NOT DELETED — we merge into existing fields and preserve
       // previousValue so the user can compare against the prior estimate.
       const updatedFields = {
-        ...(profile.fields || {}),
+        ...(detail.fields || {}),
         currentValue: valuation.estimatedValue,
         valuationMethod: valuation.method,
         valuationConfidence: valuation.confidence,
         valuationRange: valuation.details,
-        valuationDate: new Date().toISOString(),
+        valuationLow: valuation.lowValue || undefined,
+        valuationHigh: valuation.highValue || undefined,
+        valuationFactors: valuation.factorsConsidered,
+        valuationMissingInfo: valuation.missingInfo,
+        valuationDate: valuation.valuationDate,
         previousValue: oldValue,
       };
       await storage.updateProfile(id, { fields: updatedFields });
@@ -3736,10 +3767,14 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       res.json({
         previousValue: Number(oldValue) || 0,
         currentValue: valuation.estimatedValue,
+        low: valuation.lowValue || null,
+        high: valuation.highValue || null,
         confidence: valuation.confidence,
         method: valuation.method,
         range: valuation.details,
-        valuationDate: updatedFields.valuationDate,
+        factorsConsidered: valuation.factorsConsidered,
+        missingInfo: valuation.missingInfo,
+        valuationDate: valuation.valuationDate,
       });
     } catch (err: any) {
       log.error("[LookupValue]", err?.message || "unknown error");

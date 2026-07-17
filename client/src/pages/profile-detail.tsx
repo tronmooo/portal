@@ -1978,7 +1978,16 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
   // Only shown for asset-like profile types (asset/vehicle/property/investment).
   const canLookupValue = ["asset", "vehicle", "property", "investment"].includes(profileType);
   const [lookupBusy, setLookupBusy] = useState(false);
-  const [lookupResult, setLookupResult] = useState<null | { value: number; confidence: string; method: string; range: string; previousValue: number }>(null);
+  const [lookupResult, setLookupResult] = useState<null | {
+    value: number;
+    confidence: string;
+    method: string;
+    range: string;
+    previousValue: number;
+    factorsConsidered: string[];
+    missingInfo: string[];
+    valuationDate: string | null;
+  }>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
 
   const handleLookupValue = useCallback(async () => {
@@ -1997,6 +2006,9 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
           method: data.method,
           range: data.range,
           previousValue: data.previousValue,
+          factorsConsidered: Array.isArray(data.factorsConsidered) ? data.factorsConsidered : [],
+          missingInfo: Array.isArray(data.missingInfo) ? data.missingInfo : [],
+          valuationDate: data.valuationDate || null,
         });
         // Refresh the profile detail and AI summary so the new value flows everywhere.
         queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId] });
@@ -2064,6 +2076,9 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
             {lookupResult.range && <span>Range: {lookupResult.range}</span>}
             <span>Confidence: {lookupResult.confidence}</span>
             <span>Source: {lookupResult.method}</span>
+            {lookupResult.valuationDate && (
+              <span>Valued: {new Date(lookupResult.valuationDate).toLocaleDateString()}</span>
+            )}
             {lookupResult.previousValue > 0 && lookupResult.previousValue !== lookupResult.value && (
               <span>
                 vs prior ${lookupResult.previousValue.toLocaleString()}{" "}
@@ -2072,6 +2087,18 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
               </span>
             )}
           </div>
+          {lookupResult.factorsConsidered.length > 0 && (
+            <div className="text-muted-foreground" data-testid="text-lookup-factors">
+              <span className="font-medium text-foreground/80">Based on:</span>{" "}
+              {lookupResult.factorsConsidered.join(" · ")}
+            </div>
+          )}
+          {lookupResult.missingInfo.length > 0 && (
+            <div className="text-muted-foreground" data-testid="text-lookup-missing">
+              <span className="font-medium text-foreground/80">Add for a better estimate:</span>{" "}
+              {lookupResult.missingInfo.join(" · ")}
+            </div>
+          )}
         </div>
       )}
     </>
