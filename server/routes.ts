@@ -6,6 +6,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { detectMoodFromText } from "@shared/mood-detect";
 import { computeKeyFindings } from "@shared/tracker-insights";
 import { ownedAssetIds } from "@shared/cost-of-ownership";
 import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "@shared/ownership-model";
@@ -5821,6 +5822,10 @@ Rules:
       return res.status(400).json({ error: "Journal content is required" });
     }
     req.body.content = sanitize(req.body.content);
+    // Mood auto-detection (user request 2026-07-16): when the writer didn't
+    // pick a mood, stamp one from the text — same shared detector the chat
+    // fast-path and the journal composer use.
+    if (!req.body.mood) req.body.mood = detectMoodFromText(req.body.content);
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     let newEntry = await storage.createJournalEntry(parsed.data);

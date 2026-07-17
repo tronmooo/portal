@@ -31,6 +31,7 @@ import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from 
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
+import { detectMoodFromText } from "@shared/mood-detect";
 import { resolveCanonicalActivity } from "@shared/canonical-activity";
 import {
   enrichWalkRunEntry,
@@ -852,15 +853,9 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
       // More instructions after the journal text — this is a multi-action
       // message; the model must handle ALL of it.
     } else {
-    const contentLC = content.toLowerCase();
-    let mood: string = 'neutral';
-    if (/amazing|incredible|fantastic|best/.test(contentLC)) mood = 'amazing';
-    else if (/great|wonderful|excellent|energized|motivated|awesome/.test(contentLC)) mood = 'great';
-    else if (/good|fine|nice|happy|pleasant/.test(contentLC)) mood = 'good';
-    else if (/okay|alright|decent/.test(contentLC)) mood = 'okay';
-    else if (/bad|rough|sore|tired|down|upset|stressed/.test(contentLC)) mood = 'bad';
-    else if (/awful|horrible|dreadful|sick/.test(contentLC)) mood = 'awful';
-    else if (/terrible|miserable|worst/.test(contentLC)) mood = 'terrible';
+    // Shared detector (shared/mood-detect.ts) — same stamping as the journal
+    // page's composer and the POST /api/journal fallback.
+    const mood: string = detectMoodFromText(content);
     const profiles = await storage.getProfiles();
     const profile = profiles.find(p => p.name.toLowerCase() === profileName.toLowerCase())
       || profiles.find(p => p.name.toLowerCase().includes(profileName.toLowerCase()));

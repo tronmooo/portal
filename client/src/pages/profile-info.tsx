@@ -340,7 +340,17 @@ function SingleProfileInfo({ id }: { id: string }) {
           )}
         </Card>
 
-        <Card className="p-4 flex flex-col" data-testid="info-journal">
+        {/* The whole card opens the journal (user report 2026-07-16: "when I
+            press that it should show me everything I said"); the button
+            deep-links straight into the free-write composer. */}
+        <Card
+          className="p-4 flex flex-col cursor-pointer hover:bg-muted/30 transition-colors"
+          data-testid="info-journal"
+          role="button"
+          tabIndex={0}
+          onClick={() => navigate("/journal")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") navigate("/journal"); }}
+        >
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
@@ -353,9 +363,14 @@ function SingleProfileInfo({ id }: { id: string }) {
           ) : (
             <p className="text-xs text-muted-foreground flex-1">No journal entries yet.</p>
           )}
-          <Button size="sm" className="mt-3 self-start h-8 text-xs" onClick={() => navigate("/journal?new=1")} data-testid="info-write-entry">
-            <Pencil className="h-3.5 w-3.5 mr-1.5" /> Write entry
-          </Button>
+          <div className="mt-3 flex items-center gap-2">
+            <Button size="sm" className="h-8 text-xs" onClick={(e) => { e.stopPropagation(); navigate("/journal?new=1"); }} data-testid="info-write-entry">
+              <Pencil className="h-3.5 w-3.5 mr-1.5" /> Write entry
+            </Button>
+            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={(e) => { e.stopPropagation(); navigate("/journal"); }} data-testid="info-view-journal">
+              View all
+            </Button>
+          </div>
         </Card>
       </div>
     </div>

@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle, MessageCircle, Pencil, Search, PenLine } from "lucide-react";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel, Profile } from "@shared/schema";
+import { detectMoodFromText } from "@shared/mood-detect";
 import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -75,6 +76,7 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
               <span className="text-base font-semibold" style={{ color: mood.color }}>{mood.label}</span>
               <p className="text-xs text-muted-foreground">
                 {dateObj.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+                {" · "}{dateObj.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
               </p>
             </div>
           </div>
@@ -168,17 +170,27 @@ export default function JournalPage() {
   useEffect(() => { document.title = "Journal — Portol"; }, []);
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
-  // QA Bug 7: open create form when arriving via command palette ?new=1
+  // QA Bug 7 + user report 2026-07-16 ("Write entry doesn't let me write"):
+  // ?new=1 opens the FREE-WRITE composer (a plain text box), not the
+  // mood-gated guided template, and the check re-fires on hash changes so a
+  // second tap on "Write entry" works even when the page is already mounted.
   useEffect(() => {
-    const hash = window.location.hash || "";
-    const q = hash.includes("?") ? hash.split("?")[1] : "";
-    if (q && new URLSearchParams(q).get("new") === "1") {
-      setShowCreate(true);
-      const cleaned = hash.split("?")[0];
-      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
-    }
+    const check = () => {
+      const hash = window.location.hash || "";
+      const q = hash.includes("?") ? hash.split("?")[1] : "";
+      if (q && new URLSearchParams(q).get("new") === "1") {
+        setEntryMode("free");
+        setShowCreate(true);
+        const cleaned = hash.split("?")[0];
+        window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
+      }
+    };
+    check();
+    window.addEventListener("hashchange", check);
+    return () => window.removeEventListener("hashchange", check);
   }, []);
   const [editingEntry, setEditingEntry] = useState<JournalEntry | null>(null);
+  const [moodFilter, setMoodFilter] = useState<MoodLevel | "all">("all");
   const [mood, setMood] = useState<MoodLevel | null>(null);
   const [energy, setEnergy] = useState(3);
   const [grateful1, setGrateful1] = useState("");
@@ -253,11 +265,13 @@ export default function JournalPage() {
     try {
       const tags = freeTags.split(",").map((s) => s.trim()).filter(Boolean);
       if (draftId) {
-        await apiRequest("PATCH", `/api/journal/${draftId}`, { content: freeText, tags, ...(mood ? { mood } : {}) });
+        await apiRequest("PATCH", `/api/journal/${draftId}`, { content: freeText, tags, mood: mood || detectMoodFromText(freeText) });
       } else {
         const r = await apiRequest("POST", "/api/journal", {
           content: freeText,
-          mood: mood || "neutral",
+          // Mood auto-detection (user request): no manual pick needed — the
+          // shared detector stamps the mood from what was written.
+          mood: mood || detectMoodFromText(freeText),
           tags,
           ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
         });
@@ -328,9 +342,10 @@ export default function JournalPage() {
   };
 
   const handleSaveJournal = () => {
-    if (!mood) { toast({ title: "Select a mood", description: "Choose how you're feeling", variant: "destructive" }); return; }
     const hasContent = grateful1.trim() || grateful2.trim() || grateful3.trim() || makeAmazing.trim() || affirmation.trim();
     if (!hasContent) { toast({ title: "Write something", description: "Fill in at least one section", variant: "destructive" }); return; }
+    // Mood never blocks a save — when not picked, detect it from the text.
+    const effectiveMood = mood || detectMoodFromText([grateful1, grateful2, grateful3, makeAmazing, affirmation].join(" "));
     const parts: string[] = [];
     const gratitudeLines = [grateful1, grateful2, grateful3].filter(g => g.trim());
     if (gratitudeLines.length > 0) parts.push(`I AM GRATEFUL FOR:\n${gratitudeLines.map(g => `• ${g}`).join('\n')}`);
@@ -338,10 +353,10 @@ export default function JournalPage() {
     if (affirmation.trim()) parts.push(`DAILY AFFIRMATION:\n${affirmation}`);
     const content = parts.join('\n\n');
     if (editingEntry) {
-      editMutation.mutate({ mood, content, energy });
+      editMutation.mutate({ mood: effectiveMood, content, energy });
     } else {
       createMutation.mutate({
-        mood, content, energy,
+        mood: effectiveMood, content, energy,
         ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
       });
     }
@@ -503,6 +518,25 @@ export default function JournalPage() {
                     className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/35 resize-y text-foreground leading-relaxed min-h-[220px]"
                     data-testid="input-journal-free-text"
                   />
+                  {/* Live mood detection: shows what will be stamped, tap to override. */}
+                  {freeText.trim() && (() => {
+                    const detected = mood || detectMoodFromText(freeText);
+                    const cfg = MOOD_CONFIG[detected] || MOOD_CONFIG.neutral;
+                    const DIcon = cfg.icon;
+                    return (
+                      <div className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground" data-testid="journal-detected-mood">
+                        <DIcon className="h-3.5 w-3.5" style={{ color: cfg.color }} />
+                        <span>{mood ? "Mood" : "Detected mood"}: <span className="font-medium" style={{ color: cfg.color }}>{cfg.label}</span></span>
+                        <div className="flex gap-1 ml-1">
+                          {(Object.keys(MOOD_CONFIG) as MoodLevel[]).map((m) => (
+                            <button key={m} onClick={() => setMood(m)} title={MOOD_CONFIG[m].label}
+                              className={`w-3.5 h-3.5 rounded-full border ${m === detected ? "ring-1 ring-offset-1 ring-offset-background" : "opacity-40 hover:opacity-100"}`}
+                              style={{ background: MOOD_CONFIG[m].color, borderColor: MOOD_CONFIG[m].color }} />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </Card>
               <Card className="overflow-hidden">
@@ -705,16 +739,44 @@ export default function JournalPage() {
               data-testid="input-journal-search"
             />
           </div>
+          {/* Mood filter chips (user request 2026-07-16: "filter and all that") */}
+          <div className="flex gap-1.5 overflow-x-auto pb-1" data-testid="journal-mood-filter">
+            <button onClick={() => setMoodFilter("all")}
+              className={`px-2.5 py-1 rounded-full text-[11px] border shrink-0 ${moodFilter === "all" ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-muted/40"}`}>
+              All moods
+            </button>
+            {(Object.entries(MOOD_CONFIG) as [MoodLevel, typeof MOOD_CONFIG.amazing][]).map(([key, cfg]) => (
+              <button key={key} onClick={() => setMoodFilter(moodFilter === key ? "all" : key)}
+                className={`px-2.5 py-1 rounded-full text-[11px] border shrink-0 flex items-center gap-1 ${moodFilter === key ? "border-transparent text-white" : "border-border text-muted-foreground hover:bg-muted/40"}`}
+                style={moodFilter === key ? { background: cfg.color } : undefined}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: cfg.color }} />{cfg.label}
+              </button>
+            ))}
+          </div>
           {(() => {
             const q = searchQuery.trim().toLowerCase();
-            const visible = q
+            let visible = q
               ? entries.filter((e: any) =>
                   (e.content || "").toLowerCase().includes(q) ||
                   (e.tags || []).some((t: string) => t.toLowerCase().includes(q)))
               : entries;
-            if (visible.length === 0) return <p className="text-sm text-muted-foreground text-center py-6">No entries match "{searchQuery}".</p>;
-            return visible.map(entry => (
-              <JournalCard key={entry.id} entry={entry} onEdit={handleEditEntry} />
+            if (moodFilter !== "all") visible = visible.filter((e: any) => e.mood === moodFilter);
+            if (visible.length === 0) return <p className="text-sm text-muted-foreground text-center py-6">No entries match{q ? ` "${searchQuery}"` : ""}{moodFilter !== "all" ? ` · ${MOOD_CONFIG[moodFilter].label} mood` : ""}.</p>;
+            // Group by calendar day so the list reads like a real journal.
+            const groups: Array<{ day: string; items: any[] }> = [];
+            for (const e of visible) {
+              const day = new Date(e.createdAt || e.date).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+              const g = groups[groups.length - 1];
+              if (g && g.day === day) g.items.push(e);
+              else groups.push({ day, items: [e] });
+            }
+            return groups.map((g) => (
+              <div key={g.day} className="space-y-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground pt-1">{g.day}</p>
+                {g.items.map((entry) => (
+                  <JournalCard key={entry.id} entry={entry} onEdit={handleEditEntry} />
+                ))}
+              </div>
             ));
           })()}
         </div>

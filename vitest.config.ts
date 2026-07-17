@@ -86,6 +86,7 @@ export default defineConfig({
       'tests/estimation-engine.test.ts',
       'tests/canonical-activity.test.ts',
       'tests/habit-intent.test.ts',
+      'tests/mood-detect.test.ts',
       'tests/dashboard-buttons.test.ts',
       'tests/design-kit.test.tsx',
       'tests/typography-hygiene.test.ts',
