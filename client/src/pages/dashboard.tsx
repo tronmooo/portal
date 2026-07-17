@@ -4223,13 +4223,17 @@ function AISummaryWidget({
   const lastKey = useRef<string>("");
   const filterKey = `${filterMode}:${filterIds.join(",")}`;
 
-  const generateSummary = async () => {
+  // force=true (the Refresh button) bypasses the server's per-scope daily
+  // briefing cache; scope-change regenerations hit the cache and render
+  // instantly when this scope was already briefed today (2026-07-17 perf).
+  const generateSummary = async (force?: boolean) => {
     setLoading(true);
     try {
       const resp = await apiRequest("POST", "/api/ai/summary", {
         filterMode,
         filterIds,
         scopeLabel,
+        force: force === true,
       });
       const data = await resp.json().catch(() => ({} as any));
       const text = (data?.summary || "").toString().trim();
@@ -4311,7 +4315,7 @@ function AISummaryWidget({
             variant="ghost"
             size="sm"
             className="h-6 text-xs gap-1"
-            onClick={generateSummary}
+            onClick={() => generateSummary(true)}
             disabled={loading}
             data-testid="button-refresh-ai-summary"
           >
