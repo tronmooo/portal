@@ -61,9 +61,17 @@ async function buildForVercel() {
     conditions: ["import", "require", "node"],
   });
 
-  // Create the Vercel function entry point — NO top-level await
+  // Create the Vercel function entry points — NO top-level await
   // Use dynamic import in the handler itself
-  await writeFile("api/index.js", `
+  //
+  // PERF Phase 5.2 (PERF_PLAN_LAUNCH_2026-07-16.md): TWO functions sharing the
+  // same bundle. api/ai.js serves the long-running AI routes (chat / upload /
+  // smart-fill, up to 300s each); api/index.js serves everything else. With a
+  // single function, a burst of heavy AI requests saturated its concurrency
+  // and queued the cheap dashboard GETs behind minutes-long chat turns. The
+  // rewrites below route by path, so the express app inside is unchanged —
+  // it still sees the original /api/... URL either way.
+  const FUNCTION_STUB = `
 let handlerReady = null;
 
 async function loadHandler() {
@@ -88,7 +96,9 @@ export default async function(req, res) {
     res.end(JSON.stringify({ error: "Load failed: " + e.message }));
   }
 }
-`.trim());
+`.trim();
+  await writeFile("api/index.js", FUNCTION_STUB);
+  await writeFile("api/ai.js", FUNCTION_STUB);
 
   // 3. Copy static files to public/ for Vercel
   console.log("Preparing deployment directory...");
@@ -110,6 +120,16 @@ export default async function(req, res) {
     // request — the single largest API latency factor (2026-06-10 audit).
     regions: ["pdx1"],
     rewrites: [
+      // AI routes (long-running, up to 300s) go to their own function so a
+      // burst of chat/upload requests can't queue dashboard reads behind it
+      // (Phase 5.2). Order matters: first match wins, so these precede the
+      // catch-all. The express app sees the original /api/... URL either way.
+      { source: "/api/chat/:path*", destination: "/api/ai" },
+      { source: "/api/chat", destination: "/api/ai" },
+      { source: "/api/upload/:path*", destination: "/api/ai" },
+      { source: "/api/upload", destination: "/api/ai" },
+      { source: "/api/smart-fill/:path*", destination: "/api/ai" },
+      { source: "/api/smart-fill", destination: "/api/ai" },
       { source: "/api/:path*", destination: "/api" },
       // SPA fallback: any non-asset, non-api, non-file path → index.html
       // Lets users refresh /dashboard, /trackers, /profiles/abc directly without hitting Vercel 404.
@@ -139,8 +159,18 @@ export default async function(req, res) {
       }
     ],
     functions: {
+      // Fast read/write API: 60s is generous once AI traffic is out of this
+      // function. (Committed vercel.json previously said 300 while this
+      // generator said 60 — the split makes both true on purpose: fast lane
+      // bounded, AI lane long.)
       "api/index.js": {
         maxDuration: 60,
+        memory: 1024
+      },
+      // Chat / upload / smart-fill: multi-round AI turns, client waits up to
+      // 170s (queryClient CHAT_TIMEOUT_MS) — server budget stays above that.
+      "api/ai.js": {
+        maxDuration: 300,
         memory: 1024
       }
     }

@@ -14,6 +14,11 @@ import { registerSW } from "virtual:pwa-register";
 import { hashNavigate } from "./lib/hashNavigate";
 import { hydrateQueryCache } from "./lib/queryClient";
 import { installStaleChunkHandlers } from "./components/ErrorBoundary";
+import { perfMark, perfMeasure } from "./lib/perf-marks";
+
+// PERF Phase 0: how long did the network+parse of the entry bundle take?
+perfMark("bundle-evaluated");
+perfMeasure("boot:html-to-bundle");
 
 // P1.2: register the vite-plugin-pwa service worker (autoUpdate: new deploys
 // activate immediately and refresh the page). Registered here — not via an
@@ -82,4 +87,6 @@ hydrateQueryCache();
   window.history.replaceState(null, "", `/${target}`);
 })();
 
+perfMark("react-mount-start");
 createRoot(document.getElementById("root")!).render(<App />);
+perfMeasure("boot:bundle-to-mount", "bundle-evaluated");

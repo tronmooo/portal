@@ -279,6 +279,21 @@ export function reconcileProfileFilter(
   saveToStorage();
 }
 
+// PERF Phase 2.2 (2026-07-16): the moment the scope changes, warm the new
+// scope's dashboard-bootstrap and seed every scoped query key from its payload
+// (lib/scope-prefetch.ts). Without this a switch re-keys ~45 dashboard queries
+// against an empty cache — a wall of skeletons plus a serverless fan-out.
+// Dynamic import mirrors setFilterEveryone's queryClient pattern below (this
+// module must stay dependency-light; auth.tsx imports it at boot).
+function warmScope(mode: FilterMode, ids: string[]): void {
+  try {
+    const idsCopy = [...ids];
+    void import("./scope-prefetch").then((m) => {
+      try { m.prefetchScopeBootstrap(mode, idsCopy); } catch { /* best-effort */ }
+    }).catch(() => {});
+  } catch { /* SSR / test envs without the module graph */ }
+}
+
 /** Set filter to "everyone" (no filtering) */
 export function setFilterEveryone() {
   _state = { mode: "everyone", selectedIds: [], selectedNames: [] };
@@ -299,6 +314,10 @@ export function setFilterEveryone() {
           String(q.queryKey?.[0] || "").startsWith("/api/") &&
           q.queryKey?.[1] === "everyone",
       });
+      // AFTER the everyone-keyed slots are invalidated (order matters — a
+      // prefetch fired first would be immediately re-marked stale), warm the
+      // aggregate scope in one bootstrap round trip.
+      warmScope("everyone", []);
     }).catch(() => {});
   } catch { /* SSR / test envs without the module graph */ }
 }
@@ -307,6 +326,7 @@ export function setFilterEveryone() {
 export function setFilterSelected(ids: string[], names: string[]) {
   _state = { mode: "selected", selectedIds: [...ids], selectedNames: [...names] };
   saveToStorage();
+  warmScope("selected", ids);
 }
 
 /** Toggle a single profile in/out of the selection */
@@ -329,6 +349,7 @@ export function toggleFilterProfile(id: string, name: string) {
     }
   }
   saveToStorage();
+  warmScope(_state.mode, _state.selectedIds);
 }
 
 // P2.5: the legacy passesFilter() helper was deleted — it hid orphan items

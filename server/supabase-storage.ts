@@ -8,12 +8,39 @@ import { randomUUID } from "crypto";
 // construction shaves real cold-start time off scoped storage routes.
 let _sharedClient: SupabaseClient | null = null;
 let _sharedKey: string | null = null;
+
+// PERF Phase 0.3 (PERF_PLAN_LAUNCH_2026-07-16.md): per-table slow-query
+// attribution. routes.ts logs [slow-request] per ENDPOINT (>1s); a slow
+// endpoint fans out to 10-20 table fetches, so without this there's no way to
+// tell WHICH table burned the time from production logs. Wrapping the client's
+// fetch (Supabase REST path segment = table name) attributes it precisely.
+const SLOW_QUERY_MS = 1_000;
+function slowQueryLoggingFetch(input: any, init?: any): Promise<Response> {
+  const started = Date.now();
+  const done = (res: Response | null, err?: unknown) => {
+    const ms = Date.now() - started;
+    if (ms >= SLOW_QUERY_MS) {
+      let table = "unknown";
+      try {
+        const raw = typeof input === "string" ? input : input?.url ?? String(input);
+        const path = new URL(raw).pathname;              // /rest/v1/<table-or-rpc>
+        table = path.split("/").filter(Boolean).pop() || "unknown";
+      } catch { /* leave "unknown" */ }
+      console.warn(`[slow-query] ${table} ${ms}ms${err ? " (failed)" : res && !res.ok ? ` (HTTP ${res.status})` : ""}`);
+    }
+  };
+  return fetch(input, init).then(
+    (res) => { done(res); return res; },
+    (err) => { done(null, err); throw err; },
+  );
+}
+
 export function getSharedSupabaseClient(url: string, serviceKey: string): SupabaseClient {
   const key = `${url}::${serviceKey.slice(0, 8)}`;
   if (_sharedClient && _sharedKey === key) return _sharedClient;
   _sharedClient = createClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { "x-client-info": "portol-server" } },
+    global: { headers: { "x-client-info": "portol-server" }, fetch: slowQueryLoggingFetch },
   });
   _sharedKey = key;
   return _sharedClient;

@@ -18,6 +18,7 @@ import { initErrorReporter } from "@/lib/errorReporter";
 // Initialize error reporter immediately
 initErrorReporter();
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
+import { perfMark, perfMeasure } from "@/lib/perf-marks";
 import { Button } from "@/components/ui/button";
 import { Sun, Moon, Settings, Calendar, Lock, LogOut } from "lucide-react";
 import { Loader2 } from "lucide-react";
@@ -42,9 +43,13 @@ import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
 // Keep lightweight pages as direct imports
 import NotFound from "@/pages/not-found";
-import ChatPage from "@/pages/chat";
 
 // Lazy load heavy pages
+// PERF Phase 1.5 (2026-07-16): ChatPage was a static import — 3.7k lines of
+// page code riding in the entry bundle for every user on every route. It now
+// lazy-loads like every other page and is FIRST in the idle-time preload list
+// (it's the "/" route), so signed-in users still get an instant chat tab.
+const _chatImport = () => import("@/pages/chat");
 const _dashImport = () => import("@/pages/dashboard");
 const _trackImport = () => import("@/pages/trackers");
 const _profDispatchImport = () => import("@/pages/profile-route-dispatch");
@@ -68,6 +73,7 @@ const _editImport  = () => import("@/pages/editor");
 const _insightsImport = () => import("@/pages/insights");
 const _shareViewImport = () => import("@/pages/share-view");
 
+const ChatPage         = lazy(_chatImport);
 const DashboardPage    = lazy(_dashImport);
 const TrackersPage     = lazy(_trackImport);
 const ProfileRouteDispatch = lazy(_profDispatchImport);
@@ -96,6 +102,7 @@ const ShareViewPage    = lazy(_shareViewImport);
 // never used. They now run from <RoutePreloader /> below, only once the user
 // is authenticated, and during browser idle time.
 const MAIN_TAB_IMPORTS = [
+  _chatImport,
   _dashImport,
   _trackImport,
   _profInfoImport,
@@ -538,6 +545,7 @@ function DataPrefetch() {
     // bootstrap key the dashboard hook reads, AND so the side-effect inside
     // bootstrap's queryFn (setQueryData for stats/enhanced/profiles/incomes/
     // budgetSummary) runs once instead of being duplicated by the dashboard.
+    perfMark('bootstrap-prefetch-start');
     queryClient.prefetchQuery({
       queryKey: ['/api/dashboard-bootstrap', mode, ...ids, month],
       queryFn: async () => {
@@ -547,6 +555,7 @@ function DataPrefetch() {
         // (see lib/bootstrap-seed.ts) — the page paints without firing
         // its ~12 individual GETs.
         seedDashboardCaches(b, mode, ids, month);
+        perfMeasure('boot:bootstrap-landed', 'bootstrap-prefetch-start');
         return b ?? null;
       },
     }).catch(() => { /* best-effort */ });

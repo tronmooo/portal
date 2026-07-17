@@ -65,9 +65,16 @@ export default function ProfileInfoPage() {
 // When no single person is selected, send the Info tab to the Self profile.
 function InfoSelfRedirect() {
   const [, navigate] = useLocation();
+  // PERF Phase 2.3 (2026-07-16): this redirect only needs id+type to find the
+  // Self profile, but it fetched the FULL /api/profiles (select * incl. heavy
+  // JSONB — measured 6.4s in production) before navigating. Use the lite
+  // endpoint (same key shape the hub switcher + route dispatcher share), and
+  // when the bootstrap already seeded the full list, resolve with ZERO network.
+  const fullProfilesCache = queryClient.getQueryData<any[]>(["/api/profiles"]);
   const { data: profiles, isLoading } = useQuery<any[]>({
-    queryKey: ["/api/profiles"],
-    queryFn: async () => (await apiRequest("GET", "/api/profiles")).json(),
+    queryKey: ["/api/profiles", "lite"],
+    queryFn: async () => (await apiRequest("GET", "/api/profiles/lite")).json(),
+    initialData: fullProfilesCache as any[] | undefined,
     staleTime: 30_000,
   });
   const self = (profiles || []).find((p: any) => p.type === "self");
