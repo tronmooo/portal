@@ -15,6 +15,25 @@ import { queryClient, apiRequest } from "./queryClient";
 import { seedDashboardCaches } from "./bootstrap-seed";
 import { perfMark, perfMeasure } from "./perf-marks";
 
+// ── Profile detail warmup ────────────────────────────────────────────────────
+// First open of an asset/liability detail measured ~8s in production
+// (2026-07-17 live drive): the /api/profile-bootstrap/:id aggregation runs
+// ~12 Supabase queries cold. Firing it on hover/touchstart of the row warms
+// the SERVER's 30s response cache, so the page's own fetch (which owns the
+// client cache shape — flattenProfile + sibling-key seeding lives in
+// profile-detail.tsx) becomes a near-instant cache hit. Deliberately
+// fire-and-forget with NO client cache writes: zero shape risk.
+const detailWarmed = new Map<string, number>();
+export function warmProfileDetail(id: string): void {
+  if (!id) return;
+  const last = detailWarmed.get(id) || 0;
+  if (Date.now() - last < 25_000) return; // inside the server's 30s cache window
+  detailWarmed.set(id, Date.now());
+  apiRequest("GET", `/api/profile-bootstrap/${id}`).catch(() => {
+    detailWarmed.delete(id); // let a later hover retry after a failure
+  });
+}
+
 export function prefetchScopeBootstrap(mode: "everyone" | "selected", ids: string[]): void {
   const month = new Date().toISOString().slice(0, 7);
   const cleanIds = mode === "selected" ? ids.filter(Boolean) : [];

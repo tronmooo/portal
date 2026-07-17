@@ -72,7 +72,15 @@ export function HubProfileSwitcher() {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuItem onClick={() => setFilterEveryone()} data-testid="hub-switch-everyone">
+        <DropdownMenuItem
+          onClick={() => setFilterEveryone()}
+          // Everyone is the heaviest scope (aggregates every profile) and is
+          // never the boot-time scope, so it was always cold — measured 7s of
+          // skeletons on the 2026-07-17 live drive. Warm it like the person rows.
+          onMouseEnter={() => prefetchScopeBootstrap("everyone", [])}
+          onTouchStart={() => prefetchScopeBootstrap("everyone", [])}
+          data-testid="hub-switch-everyone"
+        >
           <Users className="h-3.5 w-3.5 mr-2" />
           <span className="flex-1">Everyone</span>
           {scope.mode === "everyone" && <Check className="h-3.5 w-3.5 text-primary" />}
