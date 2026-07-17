@@ -244,7 +244,7 @@ import {
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { generateSmartInsights } from "./insights-engine";
-import { requireAdmin } from "./auth";
+import { requireAdmin, resolveUserFromRequest } from "./auth";
 
 const isProd = process.env.NODE_ENV === "production";
 const log = {
@@ -416,6 +416,38 @@ const KNOWN_ENTITY_TYPES = new Set([
   "expense","task","document","event","tracker","habit","goal","obligation","artifact","profile","journal","domain","memory"
 ]);
 
+// Read-only POST endpoints: they use POST for a request body (AI generators,
+// analyzers, error beacons) but never WRITE user data, so they must NOT bust the
+// per-user response cache. Busting on these (e.g. every /api/ai/summary scope
+// switch) needlessly cold-started the 60s stats/enhanced/bootstrap caches — the
+// exact "app feels slow after using AI" symptom. Verified read-only by handler
+// inspection (2026-07-17): none call storage.create/update/delete/insert.
+// NOTE: any POST that DOES mutate (smart-fill/render, weekly-review/generate,
+// finance-import/commit, chat, upload, …) is intentionally absent so it still busts.
+const READONLY_POST_PATHS = new Set<string>([
+  "/api/ai/summary",
+  "/api/ai-transform",
+  "/api/receipt-extract",
+  "/api/client-errors",
+  "/api/smart-fill/analyze",
+  "/api/wellness/insights",
+  "/api/finance-import/prompt",
+  "/api/finance-import/preview",
+]);
+function isReadOnlyPost(req: any): boolean {
+  return req.method === "POST" && READONLY_POST_PATHS.has(req.path);
+}
+
+// Pure predicate (exported for tests): does a request mutate user data and thus
+// need the per-user response cache busted? True for every non-idempotent method
+// and the AI-tool mutators (chat/upload), EXCEPT the read-only POST allowlist.
+export function shouldBustCaches(method: string, path: string): boolean {
+  const req = { method, path };
+  const isMutation = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+  const isAiMutator = path === "/api/chat" || path.startsWith("/api/upload") || path === "/api/chat/confirm-extraction";
+  return (isMutation || isAiMutator) && !isReadOnlyPost(req);
+}
+
 // Middleware: clear server cache on ANY mutation (POST/PATCH/PUT/DELETE)
 // This ensures deleted documents, updated profiles, etc. are immediately reflected.
 //
@@ -425,9 +457,9 @@ const KNOWN_ENTITY_TYPES = new Set([
 // caches synchronously BEFORE handing control to the route for chat/upload paths
 // that mutate data via internal AI tool calls (not just direct REST writes).
 function cacheBustMiddleware(req: any, res: any, next: any) {
-  const isMutation = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
-  const isAiMutator = req.path === '/api/chat' || req.path.startsWith('/api/upload') || req.path === '/api/chat/confirm-extraction';
-  if (isMutation || isAiMutator) {
+  // Read-only POST generators/analyzers never write data — skip the bust so an
+  // AI summary or receipt scan can't cold-start every other user-scoped cache.
+  if (shouldBustCaches(req.method, req.path)) {
     // Bust BEFORE the handler runs as well as on finish. The pre-handler bust
     // prevents a GET racing mid-handler from re-caching pre-write data; the
     // finish bust catches long writes (AI chat) that mutate during the handler.
@@ -691,16 +723,59 @@ export async function registerRoutes(
   // Also fired immediately after login to pre-populate cache in the background
   app.get("/api/warmup", asyncHandler(async (req, res) => {
     res.json({ ok: true, ts: Date.now() });
-    // Pre-populate expensive caches in background (after response sent)
-    const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (uid !== "anon") {
-      const ckStats = `stats:${uid}:all`;
-      const ckEnh = `enhanced:${uid}:all`;
-      const ckProf = `profiles:${uid}`;
-      if (!getCached(ckStats)) storage.getStats().then(s => setCache(ckStats, s, 5*60*1000)).catch(()=>{}); // version-stamped key: fresh by construction
-      if (!getCached(ckEnh)) storage.getDashboardEnhanced().then(d => setCache(ckEnh, d, 5*60*1000)).catch(()=>{}); // version-stamped key: fresh by construction
-      if (!getCached(ckProf)) storage.getProfiles().then(p => setCache(ckProf, p, 5*60*1000)).catch(()=>{}); // version-stamped key: fresh by construction
-    }
+
+    // /api/warmup is PUBLIC (auth is skipped for it) so the client can pay the
+    // serverless cold-start before the user has a session. The old handler
+    // unconditionally called storage.getStats()/getDashboardEnhanced()/
+    // getProfiles(); when unauthenticated those ran against the global
+    // "anonymous" storage singleton and hit Postgres with user_id = "anonymous",
+    // producing the production error `invalid input syntax for type uuid:
+    // "anonymous"`. (The old `uid !== "anon"` guard was dead code — cacheUserKey
+    // returns `nouser-<random>` for anonymous requests, never "anon".)
+    //
+    // New behavior:
+    //   - Anonymous warmup: return early. The serverless function is already
+    //     warm by virtue of having executed; we do NOT touch the DB.
+    //   - Authed warmup: resolve the real user from the bearer token (reusing
+    //     the 60s token cache — no extra GoTrue round-trip), then pre-populate
+    //     the per-user response cache for the SAVED profile scope the client
+    //     sends via ?profileIds= (falling back to the aggregate). This warms
+    //     exactly the keys the dashboard will read on first paint.
+    const authed = await resolveUserFromRequest(req);
+    if (!authed) return; // anonymous → no DB work, no uuid error
+
+    const profileIdsParam = req.query.profileIds as string | undefined;
+    const profileId = req.query.profileId as string | undefined;
+    const filterIds = profileIdsParam
+      ? profileIdsParam.split(",").filter(Boolean)
+      : (profileId ? [profileId] : undefined);
+    const filterKey = filterIds?.join(",") || "all";
+
+    const { createScopedStorage, requestStorageContext } = await import("./storage");
+    const scoped = createScopedStorage(authed.userId);
+    requestStorageContext.run(scoped, async () => {
+      try {
+        // Version-stamp the cache keys exactly like cacheUserKey() does for a
+        // GET, so a warmed entry is addressable by the real request that follows
+        // and can never serve a stale (pre-write) version.
+        const v = await currentDataVersion(authed.userId);
+        const uid = `${authed.userId}@v${v}`;
+        const ckStats = `stats:${uid}:${filterKey}`;
+        const ckEnh = `enhanced:${uid}:${filterKey}`;
+        const ckProf = `profiles:${uid}`;
+        try { (scoped as any).enableRequestMemo?.(); } catch {}
+        if (!getCached(ckStats)) {
+          try { setCache(ckStats, await scoped.getStats(undefined, filterIds), 60 * 1000); } catch {}
+        }
+        if (!getCached(ckEnh)) {
+          try { setCache(ckEnh, await scoped.getDashboardEnhanced(undefined, filterIds), 60 * 1000); } catch {}
+        }
+        if (!getCached(ckProf)) {
+          try { setCache(ckProf, await scoped.getProfiles(), 60 * 1000); } catch {}
+        }
+        try { (scoped as any).disableRequestMemo?.(); } catch {}
+      } catch { /* best-effort warm */ }
+    });
   }));
 
   // Resolve the per-user data version for GET requests (memoized 2s per

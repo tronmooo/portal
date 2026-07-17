@@ -126,6 +126,42 @@ function cacheUser(token: string, userId: string, email: string | undefined): vo
 export function clearTokenCache(): void { tokenUserCache.clear(); }
 
 /**
+ * Best-effort resolution of the authenticated user from a request's bearer
+ * token WITHOUT rejecting when absent/invalid. Returns null instead of a 401 so
+ * public endpoints (e.g. /api/warmup) can OPTIONALLY personalize when a valid
+ * token is present and otherwise stay anonymous. Reuses the same 60s token
+ * cache as authMiddleware so an authed warmup costs no extra GoTrue round-trip.
+ *
+ * Critically, this never returns the "anonymous" placeholder — callers that
+ * pass the result into user-scoped storage/DB queries will therefore never
+ * compare the literal string "anonymous" against a uuid column (the source of
+ * the production `invalid input syntax for type uuid: "anonymous"` error).
+ */
+export async function resolveUserFromRequest(
+  req: Request,
+): Promise<{ userId: string; email: string | undefined } | null> {
+  if (!isSupabaseStorage()) return null;
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
+  const token = authHeader.replace("Bearer ", "").trim();
+  if (!token || token.length < 20) return null;
+
+  const cached = getCachedUser(token);
+  if (cached) return { userId: cached.userId, email: cached.email };
+
+  const supabase = getSupabaseAuth();
+  if (!supabase) return null;
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) return null;
+    cacheUser(token, user.id, user.email);
+    return { userId: user.id, email: user.email };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Auth middleware — extracts user from Supabase JWT in Authorization header.
  * If Supabase is not configured, allows all requests (local dev mode).
  */

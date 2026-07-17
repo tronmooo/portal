@@ -2435,12 +2435,31 @@ export class SupabaseStorage implements IStorage {
     };
 
     let insertErr = (await insertWithName(finalName)).error;
-    // BACKSTOP for the UNIQUE (user_id, name) constraint: if the name still
-    // collided (a race, or a soft-deleted row the pre-check missed), retry once
-    // with a guaranteed-unique suffix so a user's log never hard-fails with a
-    // raw "duplicate key" error. Pre-emptive disambiguation above handles the
-    // common case; this guarantees forward progress.
+    // BACKSTOP for the UNIQUE (user_id, name) constraint. A 23505 here means the
+    // pre-check missed a colliding row — almost always a CONCURRENT createTracker
+    // for the same name that committed between our getTrackers() read and our
+    // insert (the AI tool path can fire the same "log X" twice; the client can
+    // retry a timed-out request whose write actually landed).
+    //
+    // The old backstop blindly suffixed and re-inserted, so every such race
+    // spawned a brand-new "Running abcd" tracker — the duplicate-insert storm on
+    // idx_trackers_name_user. Instead, make creation IDEMPOTENT: re-read and
+    // REUSE the tracker that won the race whenever it's a legitimate match for
+    // what we were asked to create. Only suffix when the surviving row genuinely
+    // belongs to a DIFFERENT profile (the real "Calories for Me vs Bob" case),
+    // never weakening the uniqueness constraint.
     if (insertErr && /duplicate key|23505|idx_trackers_name_user|already exists/i.test(insertErr.message || insertErr.code || "")) {
+      const fresh = await this.getTrackers();
+      const wanted = new Set<string>(requestedProfiles.length ? requestedProfiles : linkedProfiles);
+      const reusable = fresh.find(t => {
+        if (t.name.toLowerCase() !== data.name.toLowerCase()) return false;
+        if (wanted.size === 0) return true; // no profile constraint → any same-name row
+        const lp = t.linkedProfiles || [];
+        return lp.some((pid: string) => wanted.has(pid));
+      });
+      if (reusable) return reusable; // race winner already created it → idempotent no-op
+      // Genuine cross-profile name collision (or a soft-deleted row the pre-check
+      // missed): suffix ONCE to make forward progress without a raw 23505.
       finalName = `${finalName} ${id.slice(0, 4)}`;
       insertErr = (await insertWithName(finalName)).error;
     }

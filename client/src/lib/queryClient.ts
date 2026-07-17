@@ -286,23 +286,33 @@ function currentSessionUserId(): string | null {
   }
 }
 
-function isSafeToPersist(queryKey: any): boolean {
+/* CURATED PERSISTENCE (2026-07-17 perf): only the handful of keys that drive
+   first-paint are persisted — the bootstrap payload plus the stats / enhanced /
+   profiles it seeds. The old behavior serialized EVERY /api/* success entry on
+   every cache event, which (a) wrote megabytes to localStorage on a hot path
+   dozens of times per session and (b) tripped a 2.5MB all-or-nothing cap where a
+   single heavy dashboard payload disabled ALL fast-restore. Curating to these
+   keys keeps the snapshot tiny and the restore instant; the individual list
+   pages re-fetch on mount as before. */
+const ESSENTIAL_PERSIST_PREFIXES = [
+  "/api/dashboard-bootstrap",
+  "/api/stats",
+  "/api/dashboard-enhanced",
+  "/api/profiles",
+];
+export function isEssentialToPersist(queryKey: any): boolean {
   const first = String(queryKey?.[0] || "");
-  // Don't persist anything that's user-identity-bound at the URL level; React
-  // Query's queryKey already segments by filter/profile so general /api/*
-  // entries are safe.
-  if (!first.startsWith("/api/")) return false;
-  // Skip auth/session
   if (first.includes("/auth") || first.includes("/session")) return false;
-  return true;
+  return ESSENTIAL_PERSIST_PREFIXES.some((p) => first === p);
 }
 
-// P5.3: warn-once flag for the oversize-snapshot skip below (module scope =
-// once per session; snapshotCache runs on a 1.5s throttle so a per-call warn
-// would flood the console).
-let oversizeSnapshotWarned = false;
+// Per-entry / total localStorage budgets. A single oversize payload is dropped
+// on its OWN (see snapshotCache) so it can never disable persistence of the
+// other essential keys — the failure mode the old total-only cap created.
+const MAX_ENTRY_BYTES = 800_000;   // ~0.8MB per curated entry
+const MAX_TOTAL_BYTES = 2_500_000; // ~2.5MB total (localStorage quota margin)
 
-function snapshotCache(): void {
+export function snapshotCache(): void {
   try {
     // Never persist data for a user we can't positively identify from the live
     // session. If nobody is signed in (signed out / expired), drop any existing
@@ -313,41 +323,45 @@ function snapshotCache(): void {
       return;
     }
     const all = queryClient.getQueryCache().getAll();
-    const out: Array<{ k: any; d: any; t: number }> = [];
+    const candidates: Array<{ k: any; d: any; t: number; bytes: number }> = [];
     for (const q of all) {
       if (!q.state.data) continue;
       if (q.state.status !== "success") continue;
-      if (!isSafeToPersist(q.queryKey)) continue;
-      out.push({ k: q.queryKey, d: q.state.data, t: q.state.dataUpdatedAt });
+      if (!isEssentialToPersist(q.queryKey)) continue;
+      let bytes = 0;
+      try { bytes = JSON.stringify(q.state.data).length; } catch { continue; }
+      // Drop this one heavy payload but keep collecting the rest — heavy data
+      // must not disable all useful fast-restore.
+      if (bytes > MAX_ENTRY_BYTES) continue;
+      candidates.push({ k: q.queryKey, d: q.state.data, t: q.state.dataUpdatedAt, bytes });
     }
-    // Cap size to avoid blowing localStorage (~5MB browser quota).
+    // Freshest first, then fill up to the total budget so the newest scope's
+    // fast-restore data is preferred if we ever have to trim.
+    candidates.sort((a, b) => b.t - a.t);
+    const out: Array<{ k: any; d: any; t: number }> = [];
+    let total = 0;
+    for (const c of candidates) {
+      if (total + c.bytes > MAX_TOTAL_BYTES) continue;
+      total += c.bytes;
+      out.push({ k: c.k, d: c.d, t: c.t });
+    }
+    // Nothing curated is loaded yet (very early boot) — leave any existing blob
+    // in place rather than wiping a good restore snapshot.
+    if (out.length === 0) return;
     // Stamp the snapshot with the owning user id (see currentSessionUserId).
-    const json = JSON.stringify({ uid, entries: out });
-    if (json.length > 2_500_000) { // ~2.5MB cap
-      // P5.3: don't fail silently — warn once per session so the "skeleton
-      // flash after reload" symptom is diagnosable. Snapshots run every 1.5s,
-      // so the flag keeps this from spamming the console.
-      if (!oversizeSnapshotWarned) {
-        oversizeSnapshotWarned = true;
-        console.warn(
-          `[queryClient] query-cache snapshot is ${(json.length / 1_000_000).toFixed(1)}MB ` +
-          `(> 2.5MB cap) — skipping localStorage persistence. The cache won't ` +
-          `survive a full reload this session.`
-        );
-      }
-      return;
-    }
-    localStorage.setItem(STORAGE_KEY, json);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ uid, entries: out }));
   } catch { /* localStorage may be unavailable (private browsing) */ }
 }
 
-let snapshotTimer: ReturnType<typeof setTimeout> | null = null;
-function scheduleSnapshot(): void {
-  if (snapshotTimer) return;
-  snapshotTimer = setTimeout(() => {
-    snapshotTimer = null;
-    snapshotCache();
-  }, 1500); // throttle to once per 1.5s
+// Serialize during idle time (never on the hot cache-event path). requestIdleCallback
+// runs snapshotCache when the main thread is free; setTimeout is the fallback.
+function idleSnapshot(): void {
+  const w = window as any;
+  if (typeof w.requestIdleCallback === "function") {
+    w.requestIdleCallback(() => snapshotCache(), { timeout: 2000 });
+  } else {
+    setTimeout(snapshotCache, 0);
+  }
 }
 
 // A-2: user-scoped UI state in localStorage that must not survive logout.
@@ -450,25 +464,37 @@ export async function recoverWedgedQueries(): Promise<void> {
       q.state.fetchStatus === "fetching" &&
       String(q.queryKey?.[0] || "").startsWith("/api/"),
     );
-    if (wedged.length > 0) {
-      await queryClient.cancelQueries({
-        predicate: (q) => q.state.fetchStatus === "fetching" && String(q.queryKey?.[0] || "").startsWith("/api/"),
-      });
-    }
-    // Refetch what's on screen; everything else just goes stale.
-    queryClient.invalidateQueries({
-      predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/"),
+    // Nothing is actually stuck — do NOT touch the cache. Normal return-to-app
+    // refresh is handled by React Query's refetchOnWindowFocus + staleTime; a
+    // blanket invalidate here (the old behavior) fired a redundant refetch wave
+    // on every tab return, competing with focus refetch and the KeepAlive ping.
+    if (wedged.length === 0) return;
+
+    // Cancel ONLY the orphaned in-flight queries — cancel resolves their frozen
+    // promises via the abort signal so React Query will start fresh fetches.
+    const wedgedKeys = wedged.map((q) => q.queryKey);
+    await queryClient.cancelQueries({
+      predicate: (q) => q.state.fetchStatus === "fetching" && String(q.queryKey?.[0] || "").startsWith("/api/"),
+    });
+    // Refetch ONLY what we just unwedged (and only if actively observed), so a
+    // stuck query recovers without triggering a blanket /api sweep.
+    await queryClient.invalidateQueries({
+      predicate: (q) => wedgedKeys.some((k) => JSON.stringify(k) === JSON.stringify(q.queryKey)),
       refetchType: "active",
     });
   } catch { /* recovery is best-effort — never throw from a lifecycle handler */ }
 }
 
-// Wire up the snapshot loop. queryCache.subscribe fires on every cache event;
-// we throttle to once per 1.5s so a refetch storm doesn't write to localStorage
-// 25 times in a row.
+// Persistence is driven by IDLE + lifecycle events, NOT by every cache event.
+// A periodic idle tick captures fresh data mid-session; pagehide/visibility
+// hidden flush synchronously before the tab is frozen or closed.
 if (typeof window !== "undefined") {
-  queryClient.getQueryCache().subscribe(() => scheduleSnapshot());
-  // Also snapshot on tab hide — catches the case where user switches away.
+  // Periodic idle snapshot — captures the latest curated data during a long
+  // session without hooking the hot query-cache event stream.
+  setInterval(idleSnapshot, 30_000);
+  // Flush synchronously when the tab is being frozen/closed — these fire before
+  // the browser can discard the page, so the snapshot must be synchronous.
+  window.addEventListener("pagehide", () => { snapshotCache(); });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       hiddenAt = Date.now();

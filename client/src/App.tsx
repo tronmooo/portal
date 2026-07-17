@@ -4,6 +4,7 @@ import { parse as parseRoutePattern } from "regexparam";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
+import { warmup } from "@/lib/warmup";
 import { hashNavigate } from "./lib/hashNavigate";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -483,12 +484,20 @@ function KeepAlive() {
   useEffect(() => {
     if (!user) return;
     const ping = () => {
-      fetch("/api/warmup", { headers: getAuthHeader() }).catch(() => {});
+      warmup(getAuthHeader());
     };
-    ping(); // Immediate ping to pre-warm cache on mount
+    ping(); // Immediate ping to pre-warm cache on mount (deduped — the boot-time
+            // authed warmup from auth.tsx already covers the first ~15s, so this
+            // mount ping collapses into it instead of stacking a 4th request).
     const id = setInterval(ping, 90_000); // Then every 90 seconds
 
-    // ── Visibility recovery: when user returns after ≥15s absence, warm server + refresh data
+    // ── Visibility recovery: when the user returns after ≥15s absence, re-warm
+    // the (possibly cold-started) serverless function. Data refresh is NOT forced
+    // here — React Query's refetchOnWindowFocus + staleTime already refetch stale
+    // on-screen queries once on return, and queryClient's recoverWedgedQueries
+    // handles genuinely stuck in-flight requests. The old forced invalidate of
+    // stats/dashboard-enhanced stacked a second refetch wave on top of both,
+    // which is the redundant load this collapses to a single strategy.
     let hiddenAt = 0;
     const onVisChange = () => {
       if (document.visibilityState === 'hidden') {
@@ -497,11 +506,6 @@ function KeepAlive() {
         const awayMs = Date.now() - hiddenAt;
         if (hiddenAt > 0 && awayMs >= 15_000) {
           ping(); // Re-warm Vercel cold-started function immediately
-          // Invalidate dashboard + stats so they refresh with fresh data
-          setTimeout(() => {
-            queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
-            queryClient.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'] });
-          }, 800); // slight delay to let warmup respond first
         }
         hiddenAt = 0;
       }

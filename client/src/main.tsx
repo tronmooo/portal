@@ -13,6 +13,7 @@ import "@fontsource/jetbrains-mono/500.css";
 import { registerSW } from "virtual:pwa-register";
 import { hashNavigate } from "./lib/hashNavigate";
 import { hydrateQueryCache } from "./lib/queryClient";
+import { warmup } from "./lib/warmup";
 import { installStaleChunkHandlers } from "./components/ErrorBoundary";
 import { perfMark, perfMeasure } from "./lib/perf-marks";
 
@@ -41,15 +42,11 @@ registerSW({
 // even mounts. On Vercel the API is a serverless function that cold-starts after
 // inactivity; the very first request (often /api/auth/signin or /api/auth/me)
 // otherwise eats the whole cold start and can fail with "Load failed". Firing a
-// public /api/warmup the instant the bundle loads means the function is already
-// warming while the user reads the sign-in screen, so their first real request
-// hits a warm instance. Fire-and-forget; failures are irrelevant.
-try {
-  const warm = () => { fetch("/api/warmup", { method: "GET", cache: "no-store", keepalive: true }).catch(() => {}); };
-  warm();
-  // A second nudge shortly after, in case the first hit a different cold instance.
-  setTimeout(warm, 1500);
-} catch { /* ignore */ }
+// single public /api/warmup the instant the bundle loads means the function is
+// already warming while the user reads the sign-in screen. Deduped via
+// lib/warmup so the authed warmup fired right after session-restore supersedes
+// this one instead of stacking a redundant request on the same cold instance.
+warmup();
 
 // Install BEFORE anything else — catches lazy-import failures thrown from
 // route Switches, sentinels, or any code path that bypasses the React tree.

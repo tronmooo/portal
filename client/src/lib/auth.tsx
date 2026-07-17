@@ -6,6 +6,7 @@ import { apiRequest } from "./queryClient";
 import { queryClient, clearAllClientCaches, resetQueryCacheForUserSwitch } from "./queryClient";
 import { clearChatCache } from "@/lib/chat-cache";
 import { setActiveUserForFilter, clearProfileFilterForUser } from "@/lib/profileFilter";
+import { warmup } from "@/lib/warmup";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -371,8 +372,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(callbackData.user);
             setSession(memoryTokens);
             setLoading(false);
-            // Pre-warm cache in background after OAuth login
-            fetch(`${API_BASE}/api/warmup`, { headers: { Authorization: `Bearer ${accessToken}` } }).catch(() => {});
+            // Pre-warm cache in background after OAuth login (deduped; supersedes
+            // the public warmup fired at bundle load).
+            warmup({ Authorization: `Bearer ${accessToken}` });
             return;
           }
         } catch {
@@ -436,8 +438,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const data = await res.json();
           setUser(data.user);
           setSession(tokens);
-          // Pre-warm server cache immediately after restoring session
-          fetch(`${API_BASE}/api/warmup`, { headers: { Authorization: `Bearer ${tokens.access_token}` } }).catch(() => {});
+          // Pre-warm server cache immediately after restoring session (deduped;
+          // supersedes the public warmup fired at bundle load).
+          warmup({ Authorization: `Bearer ${tokens.access_token}` });
         } else if (res && (res.status === 401 || res.status === 403)) {
           persistTokens(null); // token genuinely rejected → sign out
         } else {
