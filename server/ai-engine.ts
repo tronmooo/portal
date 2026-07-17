@@ -6522,16 +6522,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const adherence = taking ? "taken" : (input.missed === true ? "missed" : "skipped");
       // Delegate to log_tracker_entry — same dedup/profile/audit path as every
       // other tracker write, just with the adherence fields pre-filled.
+      const doseValues = {
+        drugName: tracker.name,
+        adherence,
+        ...(input.dosage ? { dosage: String(input.dosage) } : {}),
+        ...(input.time_taken ? { timeTaken: String(input.time_taken) } : {}),
+        ...(input.reason ? { sideEffects: String(input.reason) } : {}),
+        ...(input.notes ? { notes: String(input.notes) } : {}),
+      };
       const result = await executeTool("log_tracker_entry", {
         trackerName: tracker.name,
-        values: {
-          drugName: tracker.name,
-          adherence,
-          ...(input.dosage ? { dosage: String(input.dosage) } : {}),
-          ...(input.time_taken ? { timeTaken: String(input.time_taken) } : {}),
-          ...(input.reason ? { sideEffects: String(input.reason) } : {}),
-          ...(input.notes ? { notes: String(input.notes) } : {}),
-        },
+        values: doseValues,
         ...(input.forProfile ? { forProfile: input.forProfile } : {}),
         __userMessage: (input as any).__userMessage,
       }, userId);
@@ -6539,6 +6540,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return {
         ...result,
         adherence,
+        // BUG (2026-07-17 user report "it did not log that it was Tylenol"):
+        // the chat action card renders from the tool's INPUT, and this tool's
+        // input has no trackerName/values — the card showed a nameless
+        // "Entry". Return the resolved display fields so the action assembly
+        // (_displayData passthrough) can label the card "TYLENOL — taken".
+        _displayData: { trackerName: tracker.name, values: doseValues },
         message: taking
           ? `Logged a taken dose of ${tracker.name}${input.time_taken ? ` (${input.time_taken})` : ""}.`
           : `Logged a ${adherence} dose of ${tracker.name}${input.reason ? ` — ${input.reason}` : ""}.`,
@@ -13230,6 +13237,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               category: "ai",
               data: {
                 ...inp,
+                // Display hints resolved by the tool itself (e.g.
+                // log_medication_dose resolves the actual tracker "Tylenol"
+                // from a bare "I took a Tylenol" — the input alone can't
+                // label the card). Tool-resolved values override raw input.
+                ...((result as any)?._displayData || {}),
                 _entityId: entityId || undefined,
                 // Deep-link + badge metadata for the chat action card.
                 ...(ownerInfo ? { _ownerName: ownerInfo.name, _ownerProfileId: ownerInfo.id } : {}),
