@@ -276,7 +276,11 @@ async function perplexityValuation(
           { role: "user", content: userMsg },
         ],
         max_tokens: 600,
-        temperature: 0.2,
+        // temperature 0: the model only EXTRACTS source point estimates; the
+        // canonical value is computed deterministically in code. Zero temp
+        // minimizes extraction drift so repeated refreshes over the same
+        // evidence stay stable (see shared/property-valuation.ts).
+        temperature: 0,
       }),
       signal: AbortSignal.timeout(20000),
     });
@@ -374,6 +378,7 @@ export async function estimateAssetValue(
     const response = await getClient().messages.create({
       model: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
       max_tokens: 600,
+      temperature: 0, // deterministic source extraction — see canonical estimator
       messages: [{ role: "user", content: prompt }],
     });
 
@@ -6007,7 +6012,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
               currentValue: valuation.estimatedValue,
               valuationMethod: valuation.method,
               valuationConfidence: valuation.confidence,
-              valuationRange: valuation.details,
+              // Labeled source inputs — supporting detail, NOT a competing answer.
+              valuationSources: valuation.sources ?? [],
+              valuationInputSpread: valuation.inputSpread ?? null,
               valuationDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
             },
           });
@@ -10524,9 +10531,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           currentValue: valuation.estimatedValue,
           valuationMethod: valuation.method,
           valuationConfidence: valuation.confidence,
-          valuationRange: valuation.details,
-          valuationLow: valuation.lowValue || undefined,
-          valuationHigh: valuation.highValue || undefined,
+          // Labeled source inputs — supporting detail, NOT a competing answer.
+          valuationSources: valuation.sources ?? [],
+          valuationInputSpread: valuation.inputSpread ?? null,
           valuationFactors: valuation.factorsConsidered,
           valuationMissingInfo: valuation.missingInfo,
           valuationDate: valuation.valuationDate,
@@ -10540,7 +10547,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         currentValue: valuation.estimatedValue,
         confidence: valuation.confidence,
         method: valuation.method,
-        range: valuation.details,
+        sources: valuation.sources ?? [],
         change: valuation.estimatedValue - Number(oldValue),
       };
     }

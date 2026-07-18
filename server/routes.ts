@@ -145,6 +145,7 @@ async function syncLiabilityObligation(profileId: string): Promise<void> {
   }
 }
 import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue, classifyCapture, reextractDocument } from "./ai-engine";
+import { parseValuationResponse, VALUATION_RESPONSE_SPEC } from "./valuation";
 import { analyzeSmartFill, renderFilledPdf, type SmartFillSource, type FillFieldInput } from "./smart-fill";
 import { aiDecide, aiPickIndex } from "./ai-decide";
 
@@ -3514,39 +3515,35 @@ If unsure, return "profile_fact".`,
         }
       } catch { /* brave unavailable — proceed without */ }
 
-      const prompt = `You are an expert asset appraiser. Based on the following profile information, estimate the current fair market value.
+      const prompt = `You are an expert asset appraiser. Determine the current fair market value of the ${profile.type} below.
 
 Profile: ${profile.name} (${profile.type})
 Known details: ${JSON.stringify(f, null, 2)}${webContext}
 
-Provide:
-1. A single estimated current market value (number in USD)
-2. A confidence level (low/medium/high)
-3. A brief 1-sentence explanation of how you arrived at this value
-
-Respond ONLY in JSON format:
-{"value": 25000, "confidence": "medium", "explanation": "Based on...", "range": {"low": 22000, "high": 28000}}`;
+${VALUATION_RESPONSE_SPEC}`;
 
       const resp = await client.messages.create({
         // Same model used elsewhere in the codebase. Note: claude-sonnet-4-5-20250929
         // was retired/erroring (2026-05-24); use 4-6 as the safe default. The env
         // override still works for emergencies but should also be set to a live ID.
         model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
-        max_tokens: 512,
+        max_tokens: 600,
+        temperature: 0, // deterministic source extraction — canonical value computed in code
         messages: [{ role: "user", content: prompt }],
       });
 
       const text = resp.content[0].type === "text" ? resp.content[0].text : "";
-      // Extract JSON from response
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("No JSON in response");
-      const result = JSON.parse(match[0]);
+      // Canonical value computed deterministically from the model's extracted
+      // sources — never a free-form value/range chosen in prose.
+      const valuation = parseValuationResponse(text, { defaultMethod: "web data" });
+      if (!valuation) throw new Error("No valuation in response");
 
       res.json({
-        estimatedValue: result.value,
-        confidence: result.confidence,
-        explanation: result.explanation,
-        range: result.range,
+        estimatedValue: valuation.estimatedValue,
+        confidence: valuation.confidence,
+        explanation: valuation.method,
+        sources: valuation.sources ?? [],
+        inputSpread: valuation.inputSpread ?? null,
         searchQuery,
         profileName: profile.name,
       });
@@ -3766,8 +3763,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
   // - Always computed fresh: this endpoint has no result cache, and it busts
   //   the AI summary cache after persisting so no stale value survives.
   // - Persists the result onto the profile (currentValue, valuationMethod,
-  //   valuationConfidence, valuationRange, valuationLow/High,
-  //   valuationFactors, valuationMissingInfo, valuationDate, previousValue)
+  //   valuationConfidence, valuationSources + valuationInputSpread as labeled
+  //   inputs, valuationFactors, valuationMissingInfo, valuationDate,
+  //   previousValue). currentValue is the single canonical value used everywhere.
   // - Returns the new valuation so the client can show it without refetching
   app.post("/api/profiles/:id/lookup-value", asyncHandler(async (req, res) => {
     try {
@@ -3826,9 +3824,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         currentValue: valuation.estimatedValue,
         valuationMethod: valuation.method,
         valuationConfidence: valuation.confidence,
-        valuationRange: valuation.details,
-        valuationLow: valuation.lowValue || undefined,
-        valuationHigh: valuation.highValue || undefined,
+        // Labeled source inputs — supporting detail, NOT a competing answer.
+        valuationSources: valuation.sources ?? [],
+        valuationInputSpread: valuation.inputSpread ?? null,
         valuationFactors: valuation.factorsConsidered,
         valuationMissingInfo: valuation.missingInfo,
         valuationDate: valuation.valuationDate,
@@ -3842,11 +3840,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       res.json({
         previousValue: Number(oldValue) || 0,
         currentValue: valuation.estimatedValue,
-        low: valuation.lowValue || null,
-        high: valuation.highValue || null,
         confidence: valuation.confidence,
         method: valuation.method,
-        range: valuation.details,
+        sources: valuation.sources ?? [],
+        inputSpread: valuation.inputSpread ?? null,
         factorsConsidered: valuation.factorsConsidered,
         missingInfo: valuation.missingInfo,
         valuationDate: valuation.valuationDate,

@@ -97,8 +97,13 @@ describe("POST /api/profiles/:id/lookup-value", () => {
           ok: true,
           json: async () => ({
             choices: [{ message: { content: JSON.stringify({
-              value: 20100, low: 18500, high: 22000, confidence: "medium",
-              method: "KBB, Edmunds", factors: ["80,000 miles", "new tires"],
+              sources: [
+                { source: "KBB", value: 20500 },
+                { source: "Edmunds", value: 19800 },
+                { source: "CarGurus", value: 20100 },
+              ],
+              confidence: "medium",
+              factors: ["80,000 miles", "new tires"],
               missing: ["trim level", "service records"],
             }) } }],
           }),
@@ -127,12 +132,15 @@ describe("POST /api/profiles/:id/lookup-value", () => {
     expect(res.status).toBe(200);
     const data = await res.json();
 
-    // Response: midpoint, range, confidence, factors, missing info, date.
-    expect(data.currentValue).toBe(20100);
-    expect(data.low).toBe(18500);
-    expect(data.high).toBe(22000);
-    expect(data.range).toBe("$18,500 - $22,000");
-    expect(data.confidence).toBe("medium");
+    // Response: ONE canonical value + labeled source inputs — no competing range.
+    expect(data.currentValue).toBe(20100); // weighted median of the 3 comps
+    expect(data.low).toBeUndefined();
+    expect(data.high).toBeUndefined();
+    expect(data.range).toBeUndefined();
+    expect(Array.isArray(data.sources)).toBe(true);
+    expect(data.sources.map((s: any) => s.source).sort()).toEqual(["CarGurus", "Edmunds", "Kelley Blue Book"]);
+    expect(data.inputSpread).toEqual({ low: 19800, high: 20500 });
+    expect(data.confidence).toBe("high"); // tight agreement → code-derived confidence
     expect(data.factorsConsidered).toEqual(["80,000 miles", "new tires"]);
     expect(data.missingInfo).toEqual(["trim level", "service records"]);
     expect(data.previousValue).toBe(21400);
@@ -158,7 +166,9 @@ describe("POST /api/profiles/:id/lookup-value", () => {
     expect(saved.previousValue).toBe(21400);
     expect(saved.valuationFactors).toEqual(["80,000 miles", "new tires"]);
     expect(saved.valuationMissingInfo).toEqual(["trim level", "service records"]);
-    expect(saved.valuationRange).toBe("$18,500 - $22,000");
+    // Persisted as labeled source inputs, not a min-max range answer.
+    expect(saved.valuationSources.map((s: any) => s.source).sort()).toEqual(["CarGurus", "Edmunds", "Kelley Blue Book"]);
+    expect(saved.valuationInputSpread).toEqual({ low: 19800, high: 20500 });
     const other = stubState.profiles.get("profile-other").fields;
     expect(other.currentValue).toBe(21400); // untouched
 

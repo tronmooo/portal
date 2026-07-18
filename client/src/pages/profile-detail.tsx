@@ -1982,7 +1982,7 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     value: number;
     confidence: string;
     method: string;
-    range: string;
+    sources: Array<{ source: string; value: number; asOf?: string | null }>;
     previousValue: number;
     factorsConsidered: string[];
     missingInfo: string[];
@@ -2004,7 +2004,7 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
           value: data.currentValue,
           confidence: data.confidence,
           method: data.method,
-          range: data.range,
+          sources: Array.isArray(data.sources) ? data.sources : [],
           previousValue: data.previousValue,
           factorsConsidered: Array.isArray(data.factorsConsidered) ? data.factorsConsidered : [],
           missingInfo: Array.isArray(data.missingInfo) ? data.missingInfo : [],
@@ -2073,7 +2073,6 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
             <span className="font-semibold tabular-nums">${lookupResult.value.toLocaleString()}</span>
           </div>
           <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5">
-            {lookupResult.range && <span>Range: {lookupResult.range}</span>}
             <span>Confidence: {lookupResult.confidence}</span>
             <span>Source: {lookupResult.method}</span>
             {lookupResult.valuationDate && (
@@ -2087,6 +2086,12 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
               </span>
             )}
           </div>
+          {lookupResult.sources.length > 0 && (
+            <div className="text-muted-foreground" data-testid="text-lookup-sources">
+              <span className="font-medium text-foreground/80">Source estimates (inputs):</span>{" "}
+              {lookupResult.sources.map((s) => `${s.source} $${Math.round(s.value).toLocaleString()}`).join(" · ")}
+            </div>
+          )}
           {lookupResult.factorsConsidered.length > 0 && (
             <div className="text-muted-foreground" data-testid="text-lookup-factors">
               <span className="font-medium text-foreground/80">Based on:</span>{" "}
@@ -2512,7 +2517,7 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
   const [draft, setDraft] = useState(displayValue);
   const [saving, setSaving] = useState(false);
   const [finding, setFinding] = useState(false);
-  const [foundValue, setFoundValue] = useState<{ estimatedValue: number; confidence: string; explanation: string; range?: { low: number; high: number } } | null>(null);
+  const [foundValue, setFoundValue] = useState<{ estimatedValue: number; confidence: string; explanation: string; sources?: Array<{ source: string; value: number }> } | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const { toast } = useToast();
 
@@ -2651,7 +2656,6 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
           <div className="flex items-center justify-between">
             <span className="font-medium text-primary">
               AI estimate: ${foundValue.estimatedValue.toLocaleString()}
-              {foundValue.range && <span className="text-muted-foreground font-normal ml-1">(${foundValue.range.low.toLocaleString()}–${foundValue.range.high.toLocaleString()})</span>}
             </span>
             <span className={`text-xs px-1.5 py-0.5 rounded-full ${foundValue.confidence === "high" ? "bg-green-500/15 text-green-600" : foundValue.confidence === "medium" ? "bg-amber-500/15 text-amber-600" : "bg-muted text-muted-foreground"}`}>
               {foundValue.confidence}
@@ -3295,7 +3299,12 @@ function InfoTab({
             </div>
             <div className="mt-2 space-y-0.5">
               {f.valuationMethod && <p className="text-xs-loose text-muted-foreground">Method: {f.valuationMethod}</p>}
-              {f.valuationRange && <p className="text-xs-loose text-muted-foreground">Range: {f.valuationRange}</p>}
+              {Array.isArray(f.valuationSources) && f.valuationSources.length > 0 && (
+                <p className="text-xs-loose text-muted-foreground">
+                  Source estimates (inputs): {f.valuationSources.map((s: any) => `${s.source} $${Math.round(Number(s.value) || 0).toLocaleString()}`).join(" · ")}
+                </p>
+              )}
+              {f.valuationConfidence && <p className="text-xs-loose text-muted-foreground">Confidence: {f.valuationConfidence} · estimate, not a guaranteed appraisal</p>}
               {f.valuationDate && <p className="text-xs-loose text-muted-foreground">Valued: {f.valuationDate}</p>}
             </div>
           </Card>
