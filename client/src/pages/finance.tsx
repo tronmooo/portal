@@ -16,7 +16,11 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { MoneyOverview } from "@/components/finance/MoneyOverview";
-import { NetWorthPopup, CashFlowPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
+import { NetWorthPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
+import {
+  CashFlowWaterfallPopup, SpendPopup, IncomePopup, BillsDuePopup,
+  SavingsRatePopup, CashFlowOverviewPopup,
+} from "@/components/finance/MoneyPopups";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,6 +58,35 @@ const categoryColors: Record<string, string> = {
 };
 
 const EXPENSE_CATEGORIES = ["entertainment", "food", "general", "health", "housing", "pet", "transport", "utilities", "vehicle"];
+
+// Six-month in/out/net series shared by the Money overview cards AND the Cash
+// Flow Overview popup, so both surfaces plot identical numbers. Outflow is
+// summed per calendar month from real expenses; inflow uses the current
+// monthly income (no per-month income history yet — honest flat baseline).
+function buildCashTrend(expenses: any[], monthlyIncome: number): Array<{ month: string; inflow: number; outflow: number; net: number }> {
+  const now = new Date();
+  const monthKeys: Array<{ key: string; label: string }> = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    monthKeys.push({
+      key: `${d.getFullYear()}-${d.getMonth()}`,
+      label: d.toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }),
+    });
+  }
+  const outByMonth: Record<string, number> = {};
+  for (const e of (Array.isArray(expenses) ? expenses : [])) {
+    const raw = (e as any).date || (e as any).createdAt;
+    if (!raw) continue;
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) continue;
+    const k = `${d.getFullYear()}-${d.getMonth()}`;
+    outByMonth[k] = (outByMonth[k] || 0) + (Number((e as any).amount) || 0);
+  }
+  return monthKeys.map(m => {
+    const outflow = Math.round(outByMonth[m.key] || 0);
+    return { month: m.label, inflow: Math.round(monthlyIncome), outflow, net: Math.round(monthlyIncome) - outflow };
+  });
+}
 
 /** Order profile-picker options: self ("Me") pinned first, everyone else A→Z. */
 function sortProfilesForSelect(a: { type?: string; name?: string }, b: { type?: string; name?: string }) {
@@ -230,7 +263,11 @@ export default function FinancePage() {
   // leads with the snapshot. Default collapsed.
   const [showMore, setShowMore] = useState(false);
   // Command-center drill-down popups (the SAME dashboard popups — reused).
-  const [financePopup, setFinancePopup] = useState<"networth" | "cashflow" | "budget" | null>(null);
+  // Every Money KPI card now opens its OWN bespoke popup (2026-07 redesign) —
+  // previously spend/income/bills/savings all funneled into "cashflow".
+  const [financePopup, setFinancePopup] = useState<
+    "networth" | "cashflow" | "budget" | "spend" | "income" | "bills" | "savings" | "overview" | null
+  >(null);
 
   // ── Cashflow entry state ─────────────────────────────────────────────────
   const [addCashflowOpen, setAddCashflowOpen] = useState(false);
@@ -1053,31 +1090,9 @@ export default function FinancePage() {
         const soonBill = bills14.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
         if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling $${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
 
-        // Multi-month cash-flow trend (last 6 months) from real expenses. Outflow
-        // is summed per calendar month; inflow uses the current monthly income
-        // (no per-month income history yet — honest flat baseline); net = in−out.
-        const now = new Date();
-        const monthKeys: Array<{ key: string; label: string }> = [];
-        for (let i = 5; i >= 0; i--) {
-          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-          monthKeys.push({
-            key: `${d.getFullYear()}-${d.getMonth()}`,
-            label: d.toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }),
-          });
-        }
-        const outByMonth: Record<string, number> = {};
-        for (const e of (Array.isArray(expenses) ? expenses : [])) {
-          const raw = (e as any).date || (e as any).createdAt;
-          if (!raw) continue;
-          const d = new Date(raw);
-          if (isNaN(d.getTime())) continue;
-          const k = `${d.getFullYear()}-${d.getMonth()}`;
-          outByMonth[k] = (outByMonth[k] || 0) + (Number((e as any).amount) || 0);
-        }
-        const cashTrend = monthKeys.map(m => {
-          const outflow = Math.round(outByMonth[m.key] || 0);
-          return { month: m.label, inflow: Math.round(monthlyIncome), outflow, net: Math.round(monthlyIncome) - outflow };
-        });
+        // Multi-month cash-flow trend (last 6 months) — shared helper so the
+        // Cash Flow Overview popup plots the exact same series.
+        const cashTrend = buildCashTrend(expenses as any[], monthlyIncome);
         // Per-KPI mini-chart series.
         const spendSeries = cashTrend.map(c => c.outflow);
         const incomeSeries = cashTrend.map(c => c.inflow);
@@ -1112,22 +1127,56 @@ export default function FinancePage() {
             onOpenNetWorth={() => setFinancePopup("networth")}
             onOpenCashFlow={() => setFinancePopup("cashflow")}
             onOpenBudget={() => setFinancePopup("budget")}
+            onOpenSpend={() => setFinancePopup("spend")}
+            onOpenIncome={() => setFinancePopup("income")}
+            onOpenBills={() => setFinancePopup("bills")}
+            onOpenSavings={() => setFinancePopup("savings")}
+            onOpenOverview={() => setFinancePopup("overview")}
             onCategoryClick={(cat) => { setFilterCategory(cat); setSearchQuery(""); }}
           />
         );
       })()}
 
-      {/* Command-center drill-down popups — the SAME components the dashboard
-          KPI tiles use, mounted here so every Finance card/KPI opens a real,
-          detailed pop-up (Net Worth breakdown, Cash Flow, Budget manager). */}
+      {/* Money drill-down popups (2026-07 redesign): every KPI card opens its
+          OWN bespoke popup — waterfall for cash flow, heat calendar for spend,
+          source streams for income, due-date timeline for bills, gauge for
+          savings rate, analytics donut+trend for the overview. Net Worth and
+          Budget keep their full CRUD popups from HeroKPIPopups. */}
       {(() => {
         const fc: "all" | "selected" | "everyone" = (filterMode === "selected" ? "selected" : "everyone");
+        const snap = enhanced?.financeSnapshot || {};
         const monthlyIncome = (incomes || []).reduce((s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
+        const spendMtd = Number(snap.totalMonthlySpend || 0);
+        const recurringOut = Number(snap.monthlyObligationTotal || 0);
+        const spendByCat: Record<string, number> = snap.spendByCategory || {};
+        const upcomingBills = Array.isArray(snap.upcomingBills) ? snap.upcomingBills : [];
+        const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
+        const ymNow = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+        const monthExpenses = (Array.isArray(expenses) ? expenses : []).filter((e: any) => String(e.date || "").slice(0, 7) === ymNow);
+        const cashTrend = buildCashTrend(expenses as any[], monthlyIncome);
+        const closer = (o: boolean) => !o && setFinancePopup(null);
         return (
           <>
-            <NetWorthPopup open={financePopup === "networth"} onOpenChange={(o) => !o && setFinancePopup(null)} filterMode={fc} filterIds={filterIds} />
-            <CashFlowPopup open={financePopup === "cashflow"} onOpenChange={(o) => !o && setFinancePopup(null)} filterMode={fc} filterIds={filterIds} />
-            <BudgetPopup open={financePopup === "budget"} onOpenChange={(o) => !o && setFinancePopup(null)} filterMode={fc} filterIds={filterIds} monthlyIncome={monthlyIncome} />
+            <NetWorthPopup open={financePopup === "networth"} onOpenChange={closer} filterMode={fc} filterIds={filterIds} />
+            <BudgetPopup open={financePopup === "budget"} onOpenChange={closer} filterMode={fc} filterIds={filterIds} monthlyIncome={monthlyIncome} />
+            <CashFlowWaterfallPopup open={financePopup === "cashflow"} onOpenChange={closer}
+              monthLabel={monthLabel} cashIn={monthlyIncome} spendMtd={spendMtd} recurringOut={recurringOut}
+              incomes={incomes || []} spendByCategory={spendByCat} />
+            <SpendPopup open={financePopup === "spend"} onOpenChange={closer}
+              monthLabel={monthLabel} spendMtd={spendMtd}
+              spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
+              spendByCategory={spendByCat} monthExpenses={monthExpenses} />
+            <IncomePopup open={financePopup === "income"} onOpenChange={closer}
+              incomes={incomes || []} monthlyIncome={monthlyIncome} />
+            <BillsDuePopup open={financePopup === "bills"} onOpenChange={closer}
+              bills={upcomingBills}
+              onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
+              payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null} />
+            <SavingsRatePopup open={financePopup === "savings"} onOpenChange={closer}
+              incomeMtd={monthlyIncome} spendMtd={spendMtd} />
+            <CashFlowOverviewPopup open={financePopup === "overview"} onOpenChange={closer}
+              cashIn={monthlyIncome} cashOut={spendMtd + recurringOut}
+              cashTrend={cashTrend} monthLabel={monthLabel} />
           </>
         );
       })()}

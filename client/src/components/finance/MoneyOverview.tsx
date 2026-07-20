@@ -139,6 +139,14 @@ export function MoneyOverview(props: {
   onOpenNetWorth?: () => void;
   onOpenCashFlow?: () => void;
   onOpenBudget?: () => void;
+  // Per-card drill-downs (2026-07): each KPI card opens its OWN popup. When a
+  // handler is absent the card falls back to the older shared behavior so
+  // existing mounts keep working.
+  onOpenSpend?: () => void;
+  onOpenIncome?: () => void;
+  onOpenBills?: () => void;
+  onOpenSavings?: () => void;
+  onOpenOverview?: () => void;
   onCategoryClick?: (category: string) => void;
 }) {
   const {
@@ -148,6 +156,7 @@ export function MoneyOverview(props: {
     cashTrend = [], spendSeries, incomeSeries, billsSeries,
     onAddExpense, onPayBill, payingId,
     onOpenNetWorth, onOpenCashFlow, onOpenBudget, onCategoryClick,
+    onOpenSpend, onOpenIncome, onOpenBills, onOpenSavings, onOpenOverview,
   } = props;
   const cashFlow = cashIn - cashOut;
   const worstBudget = budgets.slice().sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1)))[0];
@@ -177,24 +186,25 @@ export function MoneyOverview(props: {
           trend={spendTrendPct != null ? `${spendTrendPct >= 0 ? "▲" : "▼"} ${Math.abs(spendTrendPct).toFixed(0)}% mo` : undefined}
           sub={worstBudget ? `${worstBudget.category} ${worstPct}%` : undefined}
           series={spendSeries} chartKind="bars"
-          onClick={() => onCategoryClick?.("all")} testId="money-spend" />
+          onClick={() => (onOpenSpend ? onOpenSpend() : onCategoryClick?.("all"))} testId="money-spend" />
         <KpiCard label="Income · MTD" value={money(incomeMtd)} tone="pos" sub="this month"
           series={incomeSeries} chartKind="bars"
-          onClick={() => onOpenCashFlow?.()} testId="money-income" />
+          onClick={() => (onOpenIncome ?? onOpenCashFlow)?.()} testId="money-income" />
         <KpiCard label="Bills Due" value={String(bills.length)} tone={bills.some(b => b.status === "overdue") ? "neg" : "warn"}
           sub={`${money(billsTotal)} upcoming`} series={billsSeries} chartKind="bars"
-          onClick={() => onOpenCashFlow?.()} testId="money-bills-kpi" />
+          onClick={() => (onOpenBills ?? onOpenCashFlow)?.()} testId="money-bills-kpi" />
         <KpiCard label="Savings Rate" value={savingsRate != null ? `${savingsRate}%` : "—"}
           tone={savingsRate != null && savingsRate >= 15 ? "pos" : savingsRate != null && savingsRate < 0 ? "neg" : "neutral"}
-          sub="income − spend" onClick={() => onOpenCashFlow?.()} testId="money-savings" />
+          sub="income − spend" onClick={() => (onOpenSavings ?? onOpenCashFlow)?.()} testId="money-savings" />
       </div>
 
       {/* Cash Flow Overview + Spending by Category */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <Card className="p-4" data-testid="money-cashflow-overview">
+        <Card className="p-4 cursor-pointer card-lift" data-testid="money-cashflow-overview"
+          onClick={() => (onOpenOverview ?? onOpenCashFlow)?.()}>
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cash Flow Overview</span>
-            <button className="text-[10px] text-primary hover:underline" onClick={() => onOpenCashFlow?.()} data-testid="money-view-cashflow">View →</button>
+            <button className="text-[10px] text-primary hover:underline" onClick={(e) => { e.stopPropagation(); (onOpenOverview ?? onOpenCashFlow)?.(); }} data-testid="money-view-cashflow">View →</button>
           </div>
           <div className="flex items-center gap-4">
             <DonutRing inflow={cashIn} outflow={cashOut} net={cashFlow} />
