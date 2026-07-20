@@ -253,6 +253,42 @@ const log = {
   error: (...args: any[]) => console.error("[Portol]", ...args),
 };
 
+// PERF timing helper (2026-07-20 perf-incident). The recurring "why does a basic
+// update take 30 seconds" question was always answered with guesses because no
+// endpoint reported WHERE its time went. This captures per-phase durations
+// (auth / db-fanout / AI call / cache write) for the heavy read+AI endpoints and
+// emits them two ways:
+//   1. a `Server-Timing` response header — the browser devtools Network → Timing
+//      panel renders each phase inline, so a real trace of a slow request needs
+//      no extra tooling; and
+//   2. a single structured `[perf]` log line, but ONLY when the request is slow
+//      (>800ms), so the fast cache-hit path stays silent and adds no log noise.
+// Zero cost for endpoints that don't opt in.
+function makePerfTimer() {
+  const start = Date.now();
+  let last = start;
+  const phases: Array<{ name: string; ms: number }> = [];
+  return {
+    mark(name: string) {
+      const now = Date.now();
+      phases.push({ name, ms: now - last });
+      last = now;
+    },
+    finish(res: any, label: string) {
+      const total = Date.now() - start;
+      const header = [
+        ...phases.map((p) => `${p.name.replace(/[^a-zA-Z0-9_]/g, "_")};dur=${p.ms}`),
+        `total;dur=${total}`,
+      ].join(", ");
+      try { if (!res.headersSent) res.setHeader("Server-Timing", header); } catch { /* header best-effort */ }
+      if (total > 800) {
+        log.warn(`[perf] ${label} ${total}ms — ${phases.map((p) => `${p.name}=${p.ms}ms`).join(" ")}`);
+      }
+      return total;
+    },
+  };
+}
+
 // Simple rate limiter
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_MAX_ENTRIES = 10000;
@@ -2411,13 +2447,14 @@ If unsure, return "profile_fact".`,
   }));
 
   app.get("/api/stats", asyncHandler(async (req, res) => {
+    const perf = makePerfTimer();
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = cacheUserKey(req as AuthenticatedRequest);
     const cacheKey = `stats:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = getCached(cacheKey);
-    if (cached) return res.json(cached);
+    if (cached) { perf.mark("cache-hit"); perf.finish(res, "GET /api/stats (cached)"); return res.json(cached); }
     // PERF 2026-05-30: enable per-request memo so getStats's internal ~10
     // Supabase fanouts share fetched tables (profiles/expenses/trackers/...).
     // Cold /api/stats?profileIds=Craig was measured at 8-12s before; with
@@ -2426,30 +2463,35 @@ If unsure, return "profile_fact".`,
     // dedupe: concurrent identical requests share one DB query
     const stats = await dedupe(cacheKey, () => storage.getStats(undefined, filterIds));
     try { (storage as any).disableRequestMemo?.(); } catch {}
+    perf.mark("db-fanout");
     // 60-second cache. cacheBustMiddleware drops it synchronously on any mutation
     // (including AI-driven /api/chat and /api/upload paths), so this cannot serve
     // stale data after a write. Longer TTL = many more page navigations served
     // from cache without re-aggregating ~10 supabase queries each time.
     setCache(cacheKey, stats, 60 * 1000);
+    perf.finish(res, "GET /api/stats (cold)");
     res.json(stats);
   }));
 
   app.get("/api/dashboard-enhanced", asyncHandler(async (req, res) => {
+    const perf = makePerfTimer();
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = cacheUserKey(req as AuthenticatedRequest);
     const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = getCached(cacheKey);
-    if (cached) return res.json(cached);
+    if (cached) { perf.mark("cache-hit"); perf.finish(res, "GET /api/dashboard-enhanced (cached)"); return res.json(cached); }
     // PERF 2026-05-30: same memo treatment as /api/stats so getDashboardEnhanced's
     // internal fanouts share fetched tables.
     try { (storage as any).enableRequestMemo?.(); } catch {}
     // dedupe: concurrent identical requests share one DB query
     const data = await dedupe(cacheKey, () => storage.getDashboardEnhanced(undefined, filterIds));
     try { (storage as any).disableRequestMemo?.(); } catch {}
+    perf.mark("db-fanout");
     // 60-second cache (same rationale as /api/stats above).
     setCache(cacheKey, data, 60 * 1000);
+    perf.finish(res, "GET /api/dashboard-enhanced (cold)");
     res.json(data);
   }));
 
@@ -3558,6 +3600,7 @@ Respond ONLY in JSON format:
   }));
 
   app.get("/api/profiles/:id/ai-summary", asyncHandler(async (req, res) => {
+    const perf = makePerfTimer();
     try {
       const { id } = req.params;
       const force = req.query.force === "true";
@@ -3576,6 +3619,8 @@ Respond ONLY in JSON format:
                 // generation path normalized these) could omit the arrays, which
                 // crashed the client's `.length` access and blanked the profile
                 // page. Always return a well-formed shape.
+                perf.mark("cache-hit");
+                perf.finish(res, `GET /api/profiles/:id/ai-summary (cached)`);
                 return res.json({
                   summary: parsed.summary || "No summary available.",
                   actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
@@ -3588,9 +3633,11 @@ Respond ONLY in JSON format:
         }
       }
 
+      perf.mark("cache-check");
       // Load the full profile detail
       const detail = await storage.getProfileDetail(id);
       if (!detail) return res.status(404).json({ error: "Profile not found" });
+      perf.mark("load-detail");
 
       // Build compact data snapshot for the profile
       const now = new Date();
@@ -3719,6 +3766,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         ],
         system: systemPrompt,
       });
+      perf.mark("ai-generate");
 
       // Extract text from response
       const textBlock = response.content.find(b => b.type === "text");
@@ -3747,6 +3795,8 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       // Cache the result
       await storage.setPreference(cacheKey, JSON.stringify(result));
+      perf.mark("cache-write");
+      perf.finish(res, `GET /api/profiles/:id/ai-summary (cold)`);
 
       res.json(result);
     } catch (err: any) {

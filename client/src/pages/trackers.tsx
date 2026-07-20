@@ -1027,11 +1027,18 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
       return { prev, tempId };
     },
     onSuccess: () => {
-      // BUG-T05/UI01: refetchType:"all" so the count badge updates even when
-      // the page-level trackers query is technically inactive at the moment.
-      qc.invalidateQueries({ queryKey: ['/api/trackers'], refetchType: "all" });
-      qc.invalidateQueries({ queryKey: ['/api/stats'], refetchType: "all" });
-      qc.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'], refetchType: "all" });
+      // PERF 2026-07-20 (perf-incident): the optimistic onMutate already patched
+      // the temp entry into EVERY cached /api/trackers slot (active + inactive)
+      // via setQueriesData, so the count badge updates instantly without a
+      // forced network refetch. Use default (active-only) invalidation to
+      // reconcile the on-screen list; stats + dashboard-enhanced are marked
+      // stale but NOT refetched here — they aren't mounted on the trackers page,
+      // and forcing an "all" refetch re-ran their ~10-query aggregations (two
+      // cold serverless calls) on every single log. They refetch fresh when the
+      // dashboard next mounts (server cache was already busted on the write).
+      qc.invalidateQueries({ queryKey: ['/api/trackers'] });
+      qc.invalidateQueries({ queryKey: ['/api/stats'] });
+      qc.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'] });
       toast({ title: `${drugName} logged`, description: `${dosageLabel ? `${dosageLabel} ` : ''}taken at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` });
     },
     onError: (_e, _v, ctx) => {
@@ -1341,15 +1348,16 @@ function AddEntryDialog({
       toast({ title: "Failed to log entry", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      // BUG-T05/UI01: force a network refetch so the entry count badge (which
-      // reads tracker.entries.length straight from the cached list) updates
-      // immediately after a log. The default invalidate only marks queries as
-      // stale — inactive list queries on the trackers page wouldn't refetch
-      // until the user re-focused the page, leaving "3 entries" stuck while the
-      // newest entry was already on the server.
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "all" });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "all" });
+      // PERF 2026-07-20 (perf-incident): the count badge already updates from
+      // the optimistic onMutate patch (setQueriesData writes the temp entry into
+      // every cached /api/trackers slot), so a forced "all" refetch is no
+      // longer needed for correctness. Default (active-only) invalidation
+      // reconciles the mounted list; stats + dashboard-enhanced are marked stale
+      // but not refetched from here — forcing them re-ran two cold ~10-query
+      // aggregations on every log for endpoints that aren't even on this page.
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     },
   });
 
@@ -1389,9 +1397,12 @@ function AddEntryDialog({
     },
     onError: (err) => toast({ title: "Failed to log", description: formatApiError(err), variant: "destructive" }),
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "all" });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "all" });
+      // PERF 2026-07-20 (perf-incident): active-only invalidation. See the add
+      // and dose mutations above for the full rationale — stats +
+      // dashboard-enhanced no longer force a cold refetch after each quick-log.
+      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
     },
   });
   const showQuick = !!quickField && (pres.metricKind === "additive" || pres.metricKind === "categorical");

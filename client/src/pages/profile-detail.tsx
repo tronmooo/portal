@@ -1951,20 +1951,34 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     refetchOnWindowFocus: false,
   });
 
-  // When the underlying profile changes (any field edit, AI write, etc) refetch
-  // the summary. The server clears its 2h cache on PATCH, so this triggers a
-  // fresh generation reflecting the latest values (e.g. updated mileage).
-  // Skip on first render (when aiSummary hasn't loaded yet) to avoid a double-fetch.
+  // PERF 2026-07-20 (perf-incident): a field edit (mileage, currentValue, …)
+  // used to AUTO-invalidate this query, which — because the card is mounted and
+  // the server clears its cache on PATCH — forced a COLD AI regeneration on
+  // every ordinary CRUD save. That single Anthropic call is the dominant cost
+  // that made a "basic update" feel like 30 seconds. AI must not sit on the CRUD
+  // path. So we no longer regenerate on edit; instead we mark the summary as
+  // possibly outdated and let the user refresh it on demand (the Refresh button
+  // already exists, and any explicit AI action like Look-up-value still forces a
+  // regen). The last generated summary stays visible in the meantime.
+  const [summaryStale, setSummaryStale] = useState(false);
   useEffect(() => {
     if (!profileUpdatedAt) return;
     if (!aiSummary) return;
     const summaryAt = new Date(aiSummary.generatedAt).getTime();
     const profileAt = new Date(profileUpdatedAt).getTime();
-    // If the profile was updated after the summary was generated, refetch.
     if (Number.isFinite(profileAt) && Number.isFinite(summaryAt) && profileAt > summaryAt) {
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "ai-summary"] });
+      setSummaryStale(true);
     }
   }, [profileUpdatedAt, profileId, aiSummary]);
+  // Clear the stale flag whenever a fresh summary lands (manual Refresh / force).
+  useEffect(() => {
+    if (!aiSummary || !profileUpdatedAt) return;
+    const summaryAt = new Date(aiSummary.generatedAt).getTime();
+    const profileAt = new Date(profileUpdatedAt).getTime();
+    if (Number.isFinite(summaryAt) && Number.isFinite(profileAt) && summaryAt >= profileAt) {
+      setSummaryStale(false);
+    }
+  }, [aiSummary, profileUpdatedAt]);
 
   const handleRefresh = useCallback(() => {
     // Force regeneration on the next fetch, then refetch through the normal
@@ -2220,6 +2234,17 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
         {/* Generated timestamp */}
         <p className="text-xs text-muted-foreground pt-1" data-testid="text-ai-summary-generated">
           Generated {generatedAgo}
+          {summaryStale && (
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={isFetching}
+              className="ml-2 text-primary/80 hover:text-primary underline underline-offset-2 disabled:opacity-50"
+              data-testid="button-ai-summary-stale-refresh"
+            >
+              · profile changed — refresh
+            </button>
+          )}
         </p>
       </CardContent>
     </Card>
@@ -2554,10 +2579,12 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
         fields: { [fieldKey]: draft },
       });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      // Any field edit (mileage, currentValue, etc) can change the AI summary's
-      // narrative — invalidate so the next render refetches a fresh summary
-      // (server also clears its 2h cache on PATCH).
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "ai-summary"] });
+      // PERF 2026-07-20 (perf-incident): do NOT invalidate the AI summary here.
+      // That forced a cold Anthropic regeneration on every field edit — AI on the
+      // ordinary CRUD path. The summary now shows a "profile changed — refresh"
+      // affordance (see AISummaryCard) so the user regenerates on demand instead.
+      // stats + dashboard-enhanced are marked stale (default, active-only) so they
+      // refresh when next mounted, without a forced refetch from this page.
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       onSaved();
