@@ -5,6 +5,11 @@ mutation, every modal, and every cross-page propagation path — not just page
 load. Print one copy per audit run; fill in **Actual**, **Pass/Fail**, and
 **Bug notes** for every row.
 
+> **Spreadsheet version:** `docs/PERFORMANCE_QA_CHECKLIST.xlsx` — same rows,
+> one tab per route, with auto pass/fail formulas and a Summary tab that rolls
+> up live fail counts per tab. Prefer it for actual audit runs; this markdown
+> file is the canonical spec for the targets.
+
 - **Audit date:** ____________
 - **Auditor:** ____________
 - **Build/commit:** ____________
