@@ -52,7 +52,7 @@ import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO } from "@shared/timezone";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, type AssetValuation, type AssetValuationContext } from "./valuation";
-import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
+import { shouldUseBulkPath, shouldUseFastLogPath, countActionClauses } from "@shared/action-split";
 import {
   EXTRACT_ACTIONS_TOOL,
   MAX_BULK_OPERATIONS,
@@ -12756,6 +12756,46 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       );
     };
     profiles = allProfiles.filter(profileInScope);
+  }
+
+  // ── FAST ROUTER (stage 1) ─────────────────────────────────────────────
+  // A simple logging command ("I took one fish oil supplement today",
+  // "logged a 3-mile run") is really ONE database write. Today it pays the
+  // full price of the general agentic loop: the entire user database is
+  // stringified into the system prompt below, then 2+ non-streaming Sonnet
+  // round-trips run before the UI shows anything (15-40s+).
+  //
+  // Instead, route these through the same extract→execute→deterministic-reply
+  // engine the bulk path uses (runBulkLogPath), but with a FAST model and —
+  // critically — BEFORE the full-database context build below. One cheap
+  // structured extraction call, then the write lands directly with a
+  // deterministic reply (no second AI round for a summary), targeting ~1-3s.
+  //
+  // Safety: this is purely additive. If extraction yields no successful
+  // action (not actually a simple log, or a tool the whitelist doesn't
+  // cover), we fall through to the untouched agentic loop below. It can only
+  // make simple commands faster, never break the harder ones. The 4+ clause
+  // bulk dispatch further down is left exactly as-is.
+  if (shouldUseFastLogPath(userMessage)) {
+    try {
+      const fastModel =
+        process.env.ANTHROPIC_FAST_MODEL ||
+        process.env.ANTHROPIC_CLASSIFIER_MODEL ||
+        "claude-haiku-4-5-20251001";
+      const fast = await runBulkLogPath(userMessage, userId, fastModel, {
+        trackerNames: (trackers || []).map((t: any) => String(t.name)).filter(Boolean),
+        profileNames: (allProfiles || []).map((p: any) => String(p.name)).filter(Boolean),
+        habitNames: (habits || []).map((h: any) => String(h.name)).filter(Boolean),
+      });
+      // Only short-circuit when something actually persisted. On zero
+      // successful actions, fall through so the full loop can try harder.
+      if (fast && Array.isArray(fast.actions) && fast.actions.length > 0) {
+        logger.info("ai", `Fast router handled ${fast.actions.length} action(s) — skipped context build + agentic loop`);
+        return fast;
+      }
+    } catch (err: any) {
+      logger.warn("ai", `Fast router crashed (${err?.message}) — continuing with the agentic loop`);
+    }
   }
 
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)

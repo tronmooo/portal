@@ -8,6 +8,7 @@ import {
   splitActionClauses,
   countActionClauses,
   shouldUseBulkPath,
+  shouldUseFastLogPath,
   BULK_ACTION_THRESHOLD,
 } from "@shared/action-split";
 
@@ -71,6 +72,49 @@ describe("splitActionClauses", () => {
   });
 });
 
+describe("shouldUseFastLogPath routing (fast router — stage 1)", () => {
+  it("fast-routes simple 1-3 action logging commands", () => {
+    for (const msg of [
+      "I took one fish oil supplement today",
+      "I ran 3 miles today",
+      "I ate a chicken sandwich for lunch",
+      "I drank 2 coffees and walked a mile",
+    ]) {
+      expect(shouldUseFastLogPath(msg), msg).toBe(true);
+    }
+  });
+
+  it("does NOT fast-route questions or CRUD/reminder commands (they need the full loop)", () => {
+    for (const msg of [
+      "add a task to buy milk",
+      "remind me to call the dentist Friday at 10am",
+      "how much did I spend today?",
+      "delete my old Soccer tracker",
+      "show me my trackers",
+    ]) {
+      expect(shouldUseFastLogPath(msg), msg).toBe(false);
+    }
+  });
+
+  it("does NOT fast-route 4+ action recaps (those go to the bulk path)", () => {
+    expect(shouldUseFastLogPath(REPORTED_MESSAGE)).toBe(false);
+    expect(shouldUseFastLogPath(TWENTY_ACTION_MESSAGE)).toBe(false);
+  });
+
+  it("is mutually exclusive with the bulk path", () => {
+    const messages = [
+      "I took one fish oil supplement today",
+      REPORTED_MESSAGE,
+      TWENTY_ACTION_MESSAGE,
+      "how much did I spend today?",
+      "I ran 3 miles today",
+    ];
+    for (const msg of messages) {
+      expect(shouldUseFastLogPath(msg) && shouldUseBulkPath(msg), msg).toBe(false);
+    }
+  });
+});
+
 describe("shouldUseBulkPath routing", () => {
   it("does NOT bulk-route single-intent messages", () => {
     for (const msg of [
@@ -116,6 +160,13 @@ describe("shouldUseBulkPath routing", () => {
       expect(countActionClauses(msg), `${n}-action message`).toBeGreaterThanOrEqual(n - 2);
       expect(shouldUseBulkPath(msg), `${n}-action message`).toBe(true);
     }
+  });
+
+  it("fast-routes the reported single supplement log to the fast path (not bulk)", () => {
+    const msg = "I took one fish oil supplement today";
+    expect(countActionClauses(msg)).toBe(1);
+    expect(shouldUseBulkPath(msg)).toBe(false);
+    expect(shouldUseFastLogPath(msg)).toBe(true);
   });
 
   it("threshold catches 4-action recaps without swallowing 1-3 action chat", () => {

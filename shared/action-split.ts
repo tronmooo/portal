@@ -80,3 +80,22 @@ export function shouldUseBulkPath(message: string): boolean {
   if (MIXED_COMMAND_SIGNAL.test(m)) return false;
   return countActionClauses(m) >= BULK_ACTION_THRESHOLD;
 }
+
+/** Fast router: a SIMPLE logging command — one to a few pure activity
+ * reports ("I took one fish oil supplement", "logged a 3-mile run", "drank
+ * 2 coffees") that sit BELOW the bulk threshold and carry no question or
+ * CRUD/read/reminder signal. These are the common case, and today they pay
+ * the full price of the general agentic loop (giant context + multiple
+ * sequential model rounds) for what is really one database write. Route them
+ * to the same extract→execute engine the bulk path uses, but with a fast
+ * model and no full-database context, so a simple log resolves in ~1-3s
+ * instead of 15-40s. Mutually exclusive with shouldUseBulkPath by clause
+ * count; questions and mixed commands are excluded by MIXED_COMMAND_SIGNAL.
+ * On any miss the engine returns no actions and the caller falls through to
+ * the full agentic loop, so this can only speed things up, never break them. */
+export function shouldUseFastLogPath(message: string): boolean {
+  const m = String(message || "");
+  if (MIXED_COMMAND_SIGNAL.test(m)) return false;
+  const n = countActionClauses(m);
+  return n >= 1 && n < BULK_ACTION_THRESHOLD;
+}
