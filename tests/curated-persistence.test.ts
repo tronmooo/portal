@@ -58,6 +58,9 @@ describe("isEssentialToPersist — only first-paint keys", () => {
     expect(isEssentialToPersist(["/api/stats", "everyone"])).toBe(true);
     expect(isEssentialToPersist(["/api/dashboard-enhanced", "everyone"])).toBe(true);
     expect(isEssentialToPersist(["/api/profiles"])).toBe(true);
+    // Tab datasets not derivable from the bootstrap payload (2026-07-20).
+    expect(isEssentialToPersist(["/api/memories"])).toBe(true);
+    expect(isEssentialToPersist(["/api/artifacts"])).toBe(true);
     expect(isEssentialToPersist(["/api/expenses"])).toBe(false);
     expect(isEssentialToPersist(["/api/trackers", "everyone"])).toBe(false);
     expect(isEssentialToPersist(["/api/documents"])).toBe(false);

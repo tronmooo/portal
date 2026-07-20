@@ -299,6 +299,14 @@ const ESSENTIAL_PERSIST_PREFIXES = [
   "/api/stats",
   "/api/dashboard-enhanced",
   "/api/profiles",
+  // [PERF 2026-07-20 "tabs should already be loaded"] The two hub-tab datasets
+  // NOT derivable from the bootstrap payload (which main.tsx re-seeds at boot
+  // via seedFromHydratedBootstrap): memories (Info tab) and artifacts
+  // (Documents/Artifacts tab). Persisting them makes those tabs paint
+  // instantly on a fresh app open too; per-entry/total byte caps below still
+  // bound the snapshot.
+  "/api/memories",
+  "/api/artifacts",
 ];
 export function isEssentialToPersist(queryKey: any): boolean {
   const first = String(queryKey?.[0] || "");

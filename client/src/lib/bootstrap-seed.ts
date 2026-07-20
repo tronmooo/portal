@@ -17,10 +17,24 @@ export function seedDashboardCaches(
   mode: string,
   ids: string[],
   month: string,
+  // [PERF 2026-07-20 "tabs should already be loaded"] When re-seeding from a
+  // PERSISTED bootstrap snapshot (see seedFromHydratedBootstrap), stamp the
+  // seeds with the snapshot's own timestamp so staleTime treats them as old
+  // data — cached numbers paint instantly, a background refetch replaces them.
+  // Never clobber a key that already holds fresher data.
+  opts?: { updatedAt?: number },
 ): void {
   if (!b || typeof b !== "object") return;
+  const updatedAt = opts?.updatedAt;
   const seed = (key: unknown[], data: unknown) => {
-    if (data !== undefined && data !== null) queryClient.setQueryData(key, data);
+    if (data === undefined || data === null) return;
+    if (updatedAt !== undefined) {
+      const state = queryClient.getQueryState(key);
+      if (state && state.dataUpdatedAt >= updatedAt) return;
+      queryClient.setQueryData(key, data, { updatedAt });
+    } else {
+      queryClient.setQueryData(key, data);
+    }
   };
   seed(["/api/stats", mode, ...ids], b.stats);
   seed(["/api/dashboard-enhanced", mode, ...ids], b.enhanced);
@@ -50,4 +64,39 @@ export function seedDashboardCaches(
   seed(["/api/trackers", mode, ...ids], b.trackers);
   seed(["/api/trackers", mode, ...ids, "trends"], b.trackers);
   seed(["/api/reminders", mode, ...ids], b.reminders);
+  // [PERF 2026-07-20] Finance tab's last cold query — key shape mirrors
+  // finance.tsx exactly. Older bootstrap payloads (server not yet redeployed,
+  // or a persisted pre-upgrade snapshot) simply don't carry the field and the
+  // seed() null-guard skips it.
+  seed(["/api/paychecks", mode, ...ids], b.paychecks);
+}
+
+// [PERF 2026-07-20, user report "when I go to different tabs on the dashboard,
+// I should already be loaded"] The bootstrap payload is one of the few entries
+// persisted to localStorage (queryClient.ts ESSENTIAL_PERSIST_PREFIXES), but
+// the per-tab keys it seeds are NOT — they only exist as a side effect of the
+// bootstrap queryFn running. On a fresh app open the hydrated snapshot restored
+// the bootstrap blob and then every tab (Trackers / Finance / Wellness /
+// Assets / Calendar…) still mounted cold, showing skeletons until the network
+// round trip landed. Re-running the seeding over every hydrated bootstrap
+// entry makes each tab paint instantly from last session's data; the seeds
+// carry the snapshot's timestamp, so React Query still refetches in the
+// background on mount.
+//
+// Call AFTER hydrateQueryCache() and BEFORE React mounts (main.tsx).
+export function seedFromHydratedBootstrap(): void {
+  try {
+    for (const q of queryClient.getQueryCache().getAll()) {
+      const k = q.queryKey as unknown[];
+      // Key shape (App.tsx DataPrefetch / scope-prefetch.ts):
+      // ["/api/dashboard-bootstrap", mode, ...ids, month]
+      if (k?.[0] !== "/api/dashboard-bootstrap" || k.length < 3) continue;
+      const b = q.state.data;
+      if (!b || typeof b !== "object") continue;
+      const mode = String(k[1]);
+      const month = String(k[k.length - 1]);
+      const ids = k.slice(2, -1).map(String);
+      seedDashboardCaches(b, mode, ids, month, { updatedAt: q.state.dataUpdatedAt });
+    }
+  } catch { /* seeding is best-effort — never block boot */ }
 }

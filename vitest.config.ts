@@ -97,6 +97,7 @@ export default defineConfig({
       'tests/cache-bust-predicate.test.ts',
       'tests/recover-wedged-queries.test.ts',
       'tests/curated-persistence.test.ts',
+      'tests/bootstrap-reseed.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

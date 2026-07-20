@@ -2522,7 +2522,7 @@ If unsure, return "profile_fact".`,
       const cachedEnhanced = getCached(enhancedCacheKey);
 
       const [stats, profiles, incomes, expensesForBudget, budgets, obligationsAll, assetPartyLinks, liabilityProfileLinks,
-        tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll, remindersAll] = await Promise.all([
+        tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll, remindersAll, paychecksAll] = await Promise.all([
         cachedStats ?? dedupe(statsCacheKey, async () => {
           const s = await storage.getStats(undefined, filterIds);
           setCache(statsCacheKey, s, 60 * 1000);
@@ -2554,6 +2554,9 @@ If unsure, return "profile_fact".`,
         storage.getDocuments(),
         storage.getTrackers(),
         (storage as any).listReminders ? (storage as any).listReminders() : Promise.resolve([] as any[]),
+        // [PERF 2026-07-20] Finance tab seed — the page's last remaining
+        // mount-time query that wasn't in the bootstrap payload.
+        (storage as any).getPaychecks ? (storage as any).getPaychecks() : Promise.resolve([] as any[]),
       ]);
 
       const enhanced = cachedEnhanced ?? await dedupe(enhancedCacheKey, async () => {
@@ -2640,6 +2643,15 @@ If unsure, return "profile_fact".`,
           : (remindersAll || []).filter((r: any) =>
               passesProfileFilter(r.profileId ? [r.profileId] : [], { selectedIds: filterIds, allProfiles: profiles })
             ),
+        // Mirror GET /api/paychecks' scoping rule EXACTLY (linkedProfiles
+        // membership OR scalar profileId match) so the seeded key can never
+        // diverge from a real fetch.
+        paychecks: (!filterIds || filterIds.length === 0)
+          ? (paychecksAll || [])
+          : (paychecksAll || []).filter((item: any) => {
+              const linked = item.linkedProfiles || [];
+              return filterIds.some((id: string) => linked.includes(id) || item.profileId === id);
+            }),
         month,
         filterIds: filterIds || [],
       };

@@ -569,17 +569,23 @@ function DataPrefetch() {
     // warms the SAVED scope (usually one person). Once the boot path is idle,
     // warm the aggregate scope too, so the most common switch target renders
     // from cache. One extra request per session, off the critical path.
-    if (mode !== 'everyone') {
-      const warmEveryone = () => {
-        import('@/lib/scope-prefetch')
-          .then((m) => m.prefetchScopeBootstrap('everyone', []))
-          .catch(() => { /* best-effort */ });
-      };
-      if (typeof window.requestIdleCallback === 'function') {
-        window.requestIdleCallback(warmEveryone, { timeout: 8000 });
-      } else {
-        setTimeout(warmEveryone, 3000);
-      }
+    //
+    // PERF (2026-07-20 "tabs should already be loaded"): in the same idle
+    // window, warm the handful of tab queries the bootstrap payload does NOT
+    // carry (profiles/lite, memories, artifacts, and the Info tab's profile
+    // detail) so every hub tab is populated before the user ever taps it.
+    const warmIdle = () => {
+      import('@/lib/scope-prefetch')
+        .then((m) => {
+          if (mode !== 'everyone') m.prefetchScopeBootstrap('everyone', []);
+          m.warmSecondaryTabData(mode === 'selected' ? ids : []);
+        })
+        .catch(() => { /* best-effort */ });
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(warmIdle, { timeout: 8000 });
+    } else {
+      setTimeout(warmIdle, 3000);
     }
   }, [user]);
   return null;

@@ -13,6 +13,7 @@ import "@fontsource/jetbrains-mono/500.css";
 import { registerSW } from "virtual:pwa-register";
 import { hashNavigate } from "./lib/hashNavigate";
 import { hydrateQueryCache } from "./lib/queryClient";
+import { seedFromHydratedBootstrap } from "./lib/bootstrap-seed";
 import { warmup } from "./lib/warmup";
 import { installStaleChunkHandlers } from "./components/ErrorBoundary";
 import { perfMark, perfMeasure } from "./lib/perf-marks";
@@ -59,6 +60,12 @@ installStaleChunkHandlers();
 // dashboard renders with cached data instantly instead of flashing a skeleton.
 // hydrate is a no-op if nothing was persisted, or if data is older than 24h.
 hydrateQueryCache();
+// PERF (2026-07-20): the hydrated snapshot contains the bootstrap payload but
+// not the per-tab query keys it seeds — without this, every hub tab mounted
+// cold on a fresh app open even though all its data was sitting in the blob.
+// Re-seed them now (stamped with the snapshot's age) so tab switches paint
+// instantly and background refetches keep the numbers honest.
+seedFromHydratedBootstrap();
 
 // Hash-router URL normalization.
 // The app uses wouter's useHashLocation, so the canonical URL shape is
