@@ -4791,11 +4791,16 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       setShowAddExpense(false);
       setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor("");
       setExpDate(new Date().toISOString().slice(0, 10));
+      // Actively refresh only the expense-owned + finance views the user is on.
+      // The app-wide KPI aggregates fan out to ~14 tables server-side, so mark
+      // them stale (refetchType:"none") instead of hot-refetching on every write:
+      // the global mutation onSuccess already stales all /api/*, and
+      // refetchOnMount refreshes the dashboard tiles when the user next opens it.
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "none" });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to add expense", description: formatApiError(err), variant: "destructive" }),
@@ -4812,11 +4817,13 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     onSuccess: () => {
       toast({ title: `"${expDesc}" expense updated`, description: `$${Number(expAmount).toFixed(2)}` });
       setEditingExpense(null);
+      // See createExpenseMutation: entity + finance views refetch actively; the
+      // heavy app-wide aggregates are stale-marked and refresh on dashboard mount.
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "none" });
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to update expense", description: formatApiError(err), variant: "destructive" }),
@@ -4846,11 +4853,13 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     onSuccess: (_data, variables) => {
       toast({ title: `"${variables.desc || "Expense"}" deleted` });
       setDeleteExpenseId(null);
+      // See createExpenseMutation: entity + finance views refetch actively; the
+      // heavy app-wide aggregates are stale-marked and refresh on dashboard mount.
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "none" });
       onChanged();
     },
     onError: (err: Error, _vars, ctx: any) => {

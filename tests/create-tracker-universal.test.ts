@@ -11,17 +11,21 @@ import { SupabaseStorage } from "../server/supabase-storage";
 
 function makeStorage(opts: { rejectMetricDef?: boolean }) {
   const captured: { inserts: any[] } = { inserts: [] };
-  const trackersInsert = (row: any) => {
+  // createTracker now UPSERTs (onConflict user_id,name, ignoreDuplicates) and
+  // reads back the row via .select().maybeSingle(). The mock returns the row on
+  // success (fresh insert) so createTracker treats it as created, not a conflict.
+  const trackersUpsert = (row: any) => {
     captured.inserts.push(row);
     if (opts.rejectMetricDef && "metric_definition" in row) {
-      return Promise.resolve({ error: { message: "Could not find the 'metric_definition' column of 'trackers' in the schema cache" } });
+      return { select: () => ({ maybeSingle: async () => ({ data: null, error: { message: "Could not find the 'metric_definition' column of 'trackers' in the schema cache" } }) }) };
     }
-    return Promise.resolve({ error: null });
+    return { select: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) };
   };
   const client: any = {
     from: (table: string) => ({
-      insert: (row: any) => (table === "trackers" ? trackersInsert(row) : Promise.resolve({ error: null })),
+      upsert: (row: any) => (table === "trackers" ? trackersUpsert(row) : { select: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }),
       // junction-table link inserts + any other calls succeed quietly
+      insert: () => Promise.resolve({ error: null }),
       select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
     }),
   };
@@ -94,17 +98,21 @@ function makeStorageDup(opts: {
 }) {
   const captured: { inserts: any[] } = { inserts: [] };
   const committedNames = new Set(opts.existing.map((t) => t.name.toLowerCase()));
+  // Simulate the (user_id, name) unique index under UPSERT + ignoreDuplicates:
+  // a conflicting name is a clean no-op that returns NO row and NO error (the
+  // dup-key spam fix), instead of the old raw 23505 error.
+  const trackersUpsert = (row: any) => {
+    captured.inserts.push(row);
+    if (opts.enforceUnique && committedNames.has(String(row.name).toLowerCase())) {
+      return { select: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) };
+    }
+    committedNames.add(String(row.name).toLowerCase());
+    return { select: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) };
+  };
   const client: any = {
     from: (table: string) => ({
-      insert: (row: any) => {
-        if (table !== "trackers") return Promise.resolve({ error: null });
-        captured.inserts.push(row);
-        if (opts.enforceUnique && committedNames.has(String(row.name).toLowerCase())) {
-          return Promise.resolve({ error: { code: "23505", message: `duplicate key value violates unique constraint "idx_trackers_name_user"` } });
-        }
-        committedNames.add(String(row.name).toLowerCase());
-        return Promise.resolve({ error: null });
-      },
+      upsert: (row: any) => (table === "trackers" ? trackersUpsert(row) : { select: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }),
+      insert: () => Promise.resolve({ error: null }),
     }),
   };
   const storage: any = Object.create(SupabaseStorage.prototype);
