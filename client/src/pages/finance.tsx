@@ -348,11 +348,16 @@ export default function FinancePage() {
       return { prev, tempId };
     },
     onSuccess: (result) => {
+      // On the finance page the cash-flow + budget tiles are on screen, so they
+      // refetch actively. The app-wide dashboard aggregates (stats,
+      // dashboard-enhanced) fan out to ~14 tables server-side and aren't visible
+      // here, so mark them stale (refetchType:"none") — they refresh on the next
+      // dashboard mount (refetchOnMount) instead of on every expense write.
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
       queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "none" });
       toast({ title: `$${result.amount.toFixed(2)} expense added`, description: result.description });
     },
     onError: (err: Error, _v, ctx) => {

@@ -423,6 +423,9 @@ export class SupabaseStorage implements IStorage {
   private supabase: SupabaseClient;
   private userId: string;
   _timezone: string = 'America/Los_Angeles'; // user's timezone for date calculations
+  // Emit a single debug line the first time a tracker-name heal actually writes,
+  // so we can confirm the .neq() guard drops UPDATE volume to near-zero post-deploy.
+  private static healLoggedOnce = false;
 
   // PERF (2026-05-29): per-instance in-flight Promise cache for heavy list
   // methods. The bootstrap handler (and other multi-aggregate endpoints)
@@ -2303,9 +2306,18 @@ export class SupabaseStorage implements IStorage {
       if (!ownerNames.length) return t;
       const cleaned = stripTrackerOwnerSuffix(t.name, ownerNames);
       if (cleaned === t.name) return t;
-      // Persist the rename once (awaited in aggregate below).
+      if (!SupabaseStorage.healLoggedOnce) {
+        SupabaseStorage.healLoggedOnce = true;
+        console.debug(`[healOwnerSuffixedTrackerNames] healing tracker name "${t.name}" → "${cleaned}"`);
+      }
+      // Persist the rename once (awaited in aggregate below). The DB-side guard
+      // `.neq("name", cleaned)` (WHERE name <> $1) means Postgres writes NOTHING
+      // when the row is already clean — so even if a stale `cleaned` slips past
+      // the JS guard above, we don't generate a no-op UPDATE (no dead tuple, no
+      // WAL, no trigger fire). Root cause of the 84k UPDATE / 1,843 INSERT write
+      // amplification on ~300 tracker rows.
       renames.push(
-        (async () => { await this.supabase.from("trackers").update({ name: cleaned }).eq("id", t.id).eq("user_id", this.userId); })(),
+        (async () => { await this.supabase.from("trackers").update({ name: cleaned }).eq("id", t.id).eq("user_id", this.userId).neq("name", cleaned); })(),
       );
       return { ...t, name: cleaned };
     });
@@ -2416,7 +2428,13 @@ export class SupabaseStorage implements IStorage {
     // exist" schema error on a brand-new tracker.
     // Insert helper — builds the row for a given name and retries WITHOUT the
     // optional metric_definition column if a deployment hasn't migrated it.
-    const insertWithName = async (nm: string): Promise<{ error: any }> => {
+    //
+    // BUG-20260709-tracker-dupkey (dup-key error spam): the create is now an
+    // idempotent UPSERT on the (user_id, name) unique index (idx_trackers_name_user)
+    // with ignoreDuplicates, so a concurrent/repeat create no longer trips a raw
+    // 23505 in the Postgres log (observed 100+/sec). A conflict is a clean no-op
+    // (returns no row, no error) instead of a failed round trip that logs an error.
+    const insertWithName = async (nm: string): Promise<{ error: any; row: any }> => {
       const base: any = {
         id, user_id: this.userId, name: nm, category: data.category || "custom",
         unit: data.unit || null, icon: data.icon || null, fields: safeFields,
@@ -2425,30 +2443,30 @@ export class SupabaseStorage implements IStorage {
       const full = (data as any).metricDefinition
         ? { ...base, metric_definition: (data as any).metricDefinition }
         : base;
-      let err = (await this.supabase.from("trackers").insert(full)).error;
+      const upsert = (row: any) => this.supabase.from("trackers")
+        .upsert(row, { onConflict: "user_id,name", ignoreDuplicates: true })
+        .select().maybeSingle();
+      let { data: row, error: err } = await upsert(full);
       if (err && full !== base &&
           /metric_definition|column .* does not exist|schema cache|could not find/i.test(err.message || "")) {
         console.warn(`[createTracker] optional column rejected (${err.message}); retrying with base columns`);
-        err = (await this.supabase.from("trackers").insert(base)).error;
+        ({ data: row, error: err } = await upsert(base));
       }
-      return { error: err };
+      return { error: err, row };
     };
 
-    let insertErr = (await insertWithName(finalName)).error;
-    // BACKSTOP for the UNIQUE (user_id, name) constraint. A 23505 here means the
-    // pre-check missed a colliding row — almost always a CONCURRENT createTracker
-    // for the same name that committed between our getTrackers() read and our
-    // insert (the AI tool path can fire the same "log X" twice; the client can
-    // retry a timed-out request whose write actually landed).
-    //
-    // The old backstop blindly suffixed and re-inserted, so every such race
-    // spawned a brand-new "Running abcd" tracker — the duplicate-insert storm on
-    // idx_trackers_name_user. Instead, make creation IDEMPOTENT: re-read and
-    // REUSE the tracker that won the race whenever it's a legitimate match for
-    // what we were asked to create. Only suffix when the surviving row genuinely
-    // belongs to a DIFFERENT profile (the real "Calories for Me vs Bob" case),
-    // never weakening the uniqueness constraint.
-    if (insertErr && /duplicate key|23505|idx_trackers_name_user|already exists/i.test(insertErr.message || insertErr.code || "")) {
+    let { error: insertErr, row: insertedRow } = await insertWithName(finalName);
+    // Conflict on the UNIQUE (user_id, name) index. With the upsert above this is
+    // the normal signal that the pre-check missed a colliding row — the upsert
+    // ignored the duplicate and returned no row. The 23505 error branch is kept
+    // as defense-in-depth (a raw duplicate-key that slips past the upsert) but
+    // should now be unreachable in normal operation. Either way, make creation
+    // IDEMPOTENT: re-read and REUSE the tracker that won the race whenever it's a
+    // legitimate match, and only suffix when the surviving row genuinely belongs
+    // to a DIFFERENT profile — never weakening the uniqueness constraint.
+    const conflicted = (!insertErr && !insertedRow) ||
+      (insertErr && /duplicate key|23505|idx_trackers_name_user|already exists/i.test(insertErr.message || insertErr.code || ""));
+    if (conflicted) {
       const fresh = await this.getTrackers();
       const wanted = new Set<string>(requestedProfiles.length ? requestedProfiles : linkedProfiles);
       const reusable = fresh.find(t => {
