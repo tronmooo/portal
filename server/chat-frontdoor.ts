@@ -28,17 +28,28 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { providerAvailable, selectModels, callModel, type TaskKind } from "./model-router";
 
-// Signals that a message needs the tool-agent: it either changes data
-// or asks about the user's own stored records (which require read tools).
-// Deliberately broad — false positives just keep a message on Claude.
+// Signals that a message needs the tool-agent: it either changes data, logs
+// something, or asks about the user's own stored records (which require tools).
+// Deliberately VERY broad — a false positive just keeps a message on Claude
+// (safe), while a false negative silently drops the user's data. For a
+// life-logging app, natural first-person statements ("I ate…", "had a coffee",
+// "ran 2 miles") are logging intents and MUST reach the agent.
 const AGENT_SIGNAL = new RegExp(
   [
-    // mutation verbs
-    "\\b(add|log|logged|create|new|update|edit|change|set|delete|remove|clear|rename",
-    "|mark|complete|finish|pay|paid|spend|spent|buy|bought|book|schedule|remind|snooze",
-    "|track|start|stop|save|upload|attach|link|move|assign|split|merge)\\b",
+    // explicit mutation / tracking verbs
+    "\\b(add|log|logged|logging|create|new|update|edit|change|set|delete|remove|clear|rename",
+    "|mark|complete|completed|finish|finished|pay|paid|spend|spent|buy|bought|book|booked|schedule|remind|reminder|snooze",
+    "|track|tracked|start|started|stop|stopped|save|saved|upload|attach|link|move|assign|split|merge)\\b",
+    // natural logging verbs — consumption, activity, health, mood (first-person life events)
+    "|\\b(ate|eat|eaten|drank|drink|drinking|had|have|took|take|taken|did|do|done|went|go|going|ran|run|running",
+    "|walked|walk|jogged|jog|swam|swim|biked|bike|cycled|cycle|lifted|lift|exercised|exercise|worked|workout",
+    "|slept|sleep|sleeping|napped|nap|woke|weigh|weighed|weighing|felt|feel|feeling|meditated|meditate",
+    "|stretched|stretch|smoked|smoke|vaped|vape|dosed|earned|received|deposited|withdrew|sold)\\b",
+    // consumption / meal / activity nouns that imply a log even without a verb
+    "|\\b(coffee|espresso|latte|tea|water|breakfast|lunch|dinner|snack|meal|calorie|calories|protein|carbs",
+    "|steps|miles|km|reps|sets|lbs|kg|pounds|kilograms|mg|ml|glass|glasses|cup|cups|serving|servings)\\b",
     // references to the user's own data / app entities
-    "|\\b(my|our|mine)\\b",
+    "|\\b(my|our|mine|me|i'm|i've|im|ive)\\b",
     "|\\b(task|tasks|todo|reminder|reminders|expense|expenses|spending|budget|bill|bills",
     "|obligation|obligations|income|net worth|networth|balance|balances|asset|assets|liabilit",
     "|tracker|trackers|habit|habits|goal|goals|event|events|calendar|appointment|profile|profiles",
@@ -64,7 +75,13 @@ export function needsAgent(message: string): boolean {
  * add a second code path.
  */
 export function frontDoorEnabled(): boolean {
-  if (process.env.AI_CHAT_FRONTDOOR === "0") return false; // explicit kill switch
+  // OFF by default. The main chat MUST stay on the Claude tool-agent — it is the
+  // only path that can log/read the user's data. Natural-language logging ("I ate
+  // …", "had a coffee", "ran 2 miles") cannot be reliably told apart from a
+  // question by any classifier, and a wrong guess silently drops the user's data
+  // and fabricates a confirmation. Require an explicit opt-in, and even then only
+  // when a routed provider is actually enabled and configured.
+  if (process.env.AI_CHAT_FRONTDOOR !== "1") return false;
   return providerAvailable("openai") || providerAvailable("gemini");
 }
 

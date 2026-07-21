@@ -68,6 +68,11 @@ function geminiModel(kind: TaskKind): string {
 
 export function providerAvailable(p: Provider): boolean {
   if (p === "anthropic") return !!process.env.ANTHROPIC_API_KEY;
+  // Non-Claude providers are OFF by default so the app's behaviour is exactly
+  // as it was before routing existed (Claude-only). Turn them on explicitly with
+  // AI_ROUTER_ENABLE=1 once the alternate keys are verified good. This guarantees
+  // a bad/absent key can never silently change or degrade existing features.
+  if (process.env.AI_ROUTER_ENABLE !== "1") return false;
   if (process.env.AI_ROUTER_DISABLE === "1") return false;
   if (p === "openai") return !!process.env.OPENAI_API_KEY;
   if (p === "gemini") return !!process.env.GEMINI_API_KEY;
