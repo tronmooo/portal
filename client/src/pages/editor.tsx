@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type
 // Lazy-loaded so doc-mode users don't pay the bundle cost.
 const UniverSheet = lazy(() => import("@/components/UniverSheet"));
 import { useTheme } from "@/components/theme-provider";
+import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { useLocation, useRoute } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEditor, EditorContent } from "@tiptap/react";
@@ -1110,11 +1111,11 @@ export default function EditorPage() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   if (loadingExisting && !isNew) {
-    return <div className="h-screen flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
+    return <div className="h-dvh flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
   }
 
   return (
-    <div className="h-screen flex flex-col bg-background">
+    <div className="h-dvh flex flex-col bg-background">
       {/* ───────────────────── Mobile-only top bar ─────────────────────
           Matches Google Sheets / Google Docs mobile chrome (IMG_0418-0420).
           For SHEETS: ‹ ↶ ↷ 👤+ 💬 ⋯
@@ -1427,6 +1428,9 @@ export default function EditorPage() {
               Univer canvas gets the black-cell / gray-gridline / gray-header
               treatment from IMG_0418/0419 without touching desktop. */}
           <div className="flex-1 min-h-0 gsheet-mobile-skin md:[&]:bg-transparent">
+            {/* Univer is a large third-party canvas engine — isolate its
+                crashes so the editor chrome (back button, save) survives. */}
+            <SectionErrorBoundary name="editor-sheet" inline>
             <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm"><Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading spreadsheet engine…</div>}>
               <UniverSheet
                 key={savedId || "new"}
@@ -1441,6 +1445,7 @@ export default function EditorPage() {
                 }}
               />
             </Suspense>
+            </SectionErrorBoundary>
           </div>
           {/* Mobile-only Google-Sheets-style bottom tab bar (IMG_0418).
               ☰ menu  │  Sheet1 ▾ (active pill, green text)  │  + add sheet
@@ -1499,7 +1504,9 @@ export default function EditorPage() {
               className="max-w-3xl mx-auto px-4 md:px-6 py-4 md:py-8 doc-mobile-black md:!bg-transparent md:!text-foreground min-h-full"
               data-testid="doc-editor-canvas"
             >
-              <EditorContent editor={editor} className="prose prose-sm max-w-none focus:outline-none [&_.ProseMirror]:min-h-[60vh] [&_.ProseMirror]:outline-none" />
+              <SectionErrorBoundary name="editor-doc" inline>
+                <EditorContent editor={editor} className="prose prose-sm max-w-none focus:outline-none [&_.ProseMirror]:min-h-[60vh] [&_.ProseMirror]:outline-none" />
+              </SectionErrorBoundary>
             </div>
           </div>
           {/* Mobile-only sticky bottom formatting toolbar — redesigned to match

@@ -11,6 +11,7 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { useToast } from "@/hooks/use-toast";
 import { HeartPulse, Plus } from "lucide-react";
@@ -142,9 +143,8 @@ export default function WellnessPage() {
     },
     onSettled: () => {
       setTogglingHabitId(null);
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Cache bus: ripples to every habit-linked surface in one call.
+      invalidateDomain("habits");
     },
   });
 
@@ -153,9 +153,7 @@ export default function WellnessPage() {
     mutationFn: async ({ trackerId, field, amount }: { trackerId: string; field: string; amount: number }) =>
       apiRequest("POST", `/api/trackers/${trackerId}/entries`, { values: { [field]: amount } }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("trackers");
       toast({ title: "Logged" });
     },
     onError: () => toast({ title: "Couldn't log entry", variant: "destructive" }),
@@ -204,9 +202,7 @@ export default function WellnessPage() {
     },
     onSettled: () => {
       setTogglingMedId(null);
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("obligations");
     },
   });
 

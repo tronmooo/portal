@@ -13,6 +13,7 @@ import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
 import { ChevronDown } from "lucide-react";
@@ -235,8 +236,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
     onSuccess: () => {
       toast({ title: "Payment recorded" });
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Cache bus: obligations domain also refreshes stats/cashflow/loans so
+      // every linked surface updates in one shot.
+      invalidateDomain("obligations");
     },
     onError: () => toast({ title: "Payment failed", variant: "destructive" }),
   });

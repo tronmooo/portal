@@ -923,9 +923,9 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
       }),
     onSuccess: (_d, vars) => {
       setNewHabitName(''); setAddingHabit(false);
-      queryClient.invalidateQueries({ queryKey: ['/api/habits'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
+      // Cache bus: habits domain covers /api/habits + dashboard-enhanced +
+      // stats (+ activity/insights) in one consolidated shot.
+      invalidateDomain('habits');
       toast({ title: 'Habit created', description: vars.name });
     },
     onError: (err: any) => toast({ title: 'Failed to create habit', description: formatApiError(err), variant: 'destructive' }),
@@ -974,10 +974,18 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
       const prevStats = queryClient.getQueryData<any>(["/api/stats", filterMode, ...filterIds]);
-      // Optimistically add today's check-in to the habit.
+      // Optimistically add today's check-in to the habit AND bump its streak so
+      // the flame/streak chip paints instantly; the server-computed streak
+      // reconciles on the onSettled invalidation.
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
         (old || []).map((h: any) => h.id === id
-          ? { ...h, checkins: [...(h.checkins || []), { date: today, id: 'tmp-' + Date.now() }] }
+          ? {
+              ...h,
+              checkins: [...(h.checkins || []), { date: today, id: 'tmp-' + Date.now() }],
+              currentStreak: (h.checkins || []).some((c: any) => c.date === today)
+                ? h.currentStreak
+                : Number(h.currentStreak || 0) + 1,
+            }
           : h)
       );
       // Recompute completion% from the (now-updated) cache.
@@ -1011,9 +1019,17 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
       const prevStats = queryClient.getQueryData<any>(["/api/stats", filterMode, ...filterIds]);
+      // Mirror of the check-in path: drop today's check-in and walk the streak
+      // back optimistically; server confirms via the onSettled invalidation.
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
         (old || []).map((h: any) => h.id === id
-          ? { ...h, checkins: (h.checkins || []).filter((c: any) => c.date !== today) }
+          ? {
+              ...h,
+              checkins: (h.checkins || []).filter((c: any) => c.date !== today),
+              currentStreak: (h.checkins || []).some((c: any) => c.date === today)
+                ? Math.max(0, Number(h.currentStreak || 0) - 1)
+                : h.currentStreak,
+            }
           : h)
       );
       const updated = queryClient.getQueryData<any[]>(["/api/habits", filterMode, ...filterIds]);

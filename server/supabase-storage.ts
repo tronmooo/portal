@@ -414,6 +414,29 @@ function generateInsights(
   return insights;
 }
 
+// ---- [P0] Per-user insights cache ----
+// generateInsights() walks every tracker × every entry (O(N×M)) plus six more
+// table scans each time getInsights() runs. Recomputing that on every fetch is
+// pure waste — the inputs change at human speed. Cache the computed result per
+// (user, profile-filter) for 60s in a module-level Map so it survives across
+// the per-request SupabaseStorage instances created on a warm container.
+//
+// NOTE: per-instance caching is BEST-EFFORT under serverless — every warm
+// Vercel instance has its own Map, so a request landing on a cold/other
+// instance recomputes once. That's acceptable: warm instances serve most
+// traffic, and the recompute is merely the status quo ante.
+//
+// Invalidation: tracker/entry mutations through this storage layer bust the
+// user's entries eagerly (see bustInsightsCacheFor call sites); every other
+// mutation is covered by the 60s TTL, which the QA spec accepts.
+const INSIGHTS_CACHE_TTL_MS = 60_000;
+const insightsCache = new Map<string, { at: number; insights: Insight[] }>();
+function bustInsightsCacheFor(userId: string): void {
+  for (const key of insightsCache.keys()) {
+    if (key.startsWith(`${userId}:`)) insightsCache.delete(key);
+  }
+}
+
 
 // ============================================================
 // SUPABASE STORAGE IMPLEMENTATION
@@ -1556,8 +1579,10 @@ export class SupabaseStorage implements IStorage {
 
     // ── RECURSIVE: Delete all child profiles first (vehicles, assets, subscriptions, etc.) ──
     // Each child profile deletion triggers its own cascade, so their data goes away too.
-    const allProfiles = await this.getProfiles();
-    const childProfiles = allProfiles.filter(p => 
+    // [P2] Lite projection: this scan only reads parentProfileId (+ name/type
+    // for the log line), so skip the heavy jsonb columns of the full select.
+    const allProfiles = await this.getProfilesLite();
+    const childProfiles = allProfiles.filter(p =>
       p.parentProfileId === id
     );
     for (const child of childProfiles) {
@@ -1593,181 +1618,180 @@ export class SupabaseStorage implements IStorage {
     console.warn(`[deleteProfile] delete_profile_cascade not deployed — legacy non-transactional cascade path for ${id}`);
 
     // ── Cascade delete: remove ALL linked entities — no exceptions ──
+    // [P0] BATCHED fallback. The previous implementation looped over every
+    // linked row with one awaited round trip per row — a profile with 300
+    // items paid ~300 sequential Supabase calls and risked the serverless
+    // function timeout. Semantics are UNCHANGED from that loop (Bug #7 rules):
+    //   • trackers linked to the profile are deleted ENTIRELY (entries first);
+    //   • multi-owner tables (expenses/tasks/habits/events/documents/
+    //     artifacts/goals/incomes/journal) delete a row only when this profile
+    //     is the SOLE owner; co-owned rows just get this id stripped from
+    //     linked_profiles;
+    //   • incomes soft-delete (deleted_at) instead of hard delete (Bug #8).
+    // Sole-owner rows collapse into chunked bulk .in() deletes; co-owned rows
+    // still need one update each (each row keeps a DIFFERENT linked_profiles
+    // value) but run concurrently. Independent tables run under Promise.all;
+    // FK ordering is respected WITHIN each group (tracker_entries before
+    // trackers, habit_checkins before habits) and the profile row itself is
+    // deleted only after every child group settles.
     const errors: string[] = [];
-
-    try { // 1. Delete ALL trackers linked to this profile — completely
-      // When a profile is deleted, ALL its trackers are deleted entirely.
-      // No "shared" concept — if you delete Jane Doe, her Hemoglobin tracker goes away.
-      // Delete entries by profile_id (new entries) AND by tracker_id (catches old entries without profile_id)
-      const allTrackers = await this.getTrackers();
-      for (const tracker of allTrackers) {
-        if (!tracker.linkedProfiles.includes(id)) continue;
-        // Delete ALL entries for this tracker (not just ones with profile_id)
-        await this.supabase.from("tracker_entries").delete().eq("tracker_id", tracker.id).eq("user_id", this.userId);
-        await this.supabase.from("trackers").delete().eq("id", tracker.id).eq("user_id", this.userId);
+    const nowIso = new Date().toISOString();
+    // Chunk id lists so a bulk .in() filter never builds an over-long URL
+    // (PostgREST encodes filters in the query string; ~100 UUIDs ≈ 4KB).
+    const chunk = <T>(arr: T[], size = 100): T[][] => {
+      const out: T[][] = [];
+      for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+      return out;
+    };
+    const bulkDeleteByIds = async (table: string, ids: string[]): Promise<void> => {
+      for (const c of chunk(ids)) {
+        const { error } = await this.supabase.from(table).delete().in("id", c).eq("user_id", this.userId);
+        if (error) throw error;
       }
-      // Also catch any orphaned entries with this profile_id on trackers not directly linked
-      await this.supabase.from("tracker_entries").delete().eq("profile_id", id).eq("user_id", this.userId);
-    } catch (e) { errors.push("trackers"); }
-
-    // Bug #7: previously this block deleted entire rows whenever a row was
-    // linked to the deleted profile — even if other profiles co-owned it. So
-    // deleting Bob would also delete every expense, task, habit, event,
-    // document, obligation, artifact, or goal that Alice and Bob co-owned,
-    // wiping data Alice still needed. Now we follow the journal pattern at
-    // step 10: if the deleted profile is the SOLE owner (linkedProfiles
-    // length <= 1) delete the row; if it's a co-owner, strip just that id
-    // from linkedProfiles and update. PROFILE_EXCLUSIVE entities (habit, goal
-    // — see PROFILE_EXCLUSIVE set above) always have <= 1 owner so the
-    // "strip" branch is a no-op for them in practice.
-
-    try { // 2. Expenses (multi-owner: preserve shared rows)
-      const allExpenses = await this.getExpenses();
-      for (const exp of allExpenses) {
-        const lp = exp.linkedProfiles || [];
-        if (!lp.includes(id)) continue;
-        if (lp.length <= 1) {
-          await this.supabase.from("expenses").delete().eq("id", exp.id).eq("user_id", this.userId);
-        } else {
-          await this.supabase.from("expenses").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", exp.id).eq("user_id", this.userId);
+    };
+    // Multi-owner cascade for one table: bulk-delete (or soft-delete) the
+    // sole-owner rows, strip this profile id from co-owned rows.
+    const cascadeSharedTable = async (
+      table: string,
+      tag: string,
+      rows: Array<{ id: string; linkedProfiles?: string[] | null }> | null,
+      opts: { softDelete?: boolean; beforeDelete?: (soleIds: string[]) => Promise<void> } = {},
+    ): Promise<void> => {
+      if (!rows) return; // list fetch already failed and tagged the error
+      try {
+        const soleIds: string[] = [];
+        const coOwned: Array<{ rowId: string; remaining: string[] }> = [];
+        for (const r of rows) {
+          const lp = (r.linkedProfiles || []) as string[];
+          if (!lp.includes(id)) continue;
+          if (lp.length <= 1) soleIds.push(r.id);
+          else coOwned.push({ rowId: r.id, remaining: lp.filter(pid => pid !== id) });
         }
-      }
-    } catch (e) { errors.push("expenses"); }
-
-    try { // 3. Tasks (multi-owner: preserve shared rows)
-      const allTasks = await this.getTasks();
-      for (const task of allTasks) {
-        const lp = task.linkedProfiles || [];
-        if (!lp.includes(id)) continue;
-        if (lp.length <= 1) {
-          await this.supabase.from("tasks").delete().eq("id", task.id).eq("user_id", this.userId);
-        } else {
-          await this.supabase.from("tasks").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", task.id).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("tasks"); }
-
-    try { // 4. Habits + check-ins (PROFILE_EXCLUSIVE, but use same shape for safety)
-      const allHabits = await this.getHabits();
-      for (const habit of allHabits) {
-        const lp = (habit.linkedProfiles || []) as string[];
-        if (!lp.includes(id)) continue;
-        if (lp.length <= 1) {
-          await this.supabase.from("habit_checkins").delete().eq("habit_id", habit.id).eq("user_id", this.userId);
-          await this.supabase.from("habits").delete().eq("id", habit.id).eq("user_id", this.userId);
-        } else {
-          await this.supabase.from("habits").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", habit.id).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("habits"); }
-
-    // 5. Obligations retired — recurring bills are liability profiles now and are
-    //    deleted through the normal profile-deletion path, so there is no
-    //    separate obligations table to clean up here.
-
-    try { // 6. Events (multi-owner: preserve shared rows)
-      const allEvents = await this.getEvents();
-      for (const ev of allEvents) {
-        const lp = ev.linkedProfiles || [];
-        if (!lp.includes(id)) continue;
-        if (lp.length <= 1) {
-          await this.supabase.from("events").delete().eq("id", ev.id).eq("user_id", this.userId);
-        } else {
-          await this.supabase.from("events").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", ev.id).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("events"); }
-
-    try { // 7. Documents (multi-owner: preserve shared rows)
-      const allDocuments = await this.getDocuments();
-      for (const doc of allDocuments) {
-        const lp = (doc.linkedProfiles || []) as string[];
-        if (!lp.includes(id)) continue;
-        if (lp.length <= 1) {
-          await this.supabase.from("documents").delete().eq("id", doc.id).eq("user_id", this.userId);
-        } else {
-          await this.supabase.from("documents").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", doc.id).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("documents"); }
-
-    try { // 8. Artifacts (multi-owner: preserve shared rows)
-      const allArtifacts = await this.getArtifacts();
-      for (const art of allArtifacts) {
-        const lp = (art.linkedProfiles || []) as string[];
-        if (!lp.includes(id)) continue;
-        if (lp.length <= 1) {
-          await this.supabase.from("artifacts").delete().eq("id", art.id).eq("user_id", this.userId);
-        } else {
-          await this.supabase.from("artifacts").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", art.id).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("artifacts"); }
-
-    try { // 9. Goals (PROFILE_EXCLUSIVE; use same shape for safety)
-      const allGoals = await this.getGoals();
-      for (const goal of allGoals) {
-        const lp = ((goal as any).linkedProfiles || []) as string[];
-        if (!lp.includes(id)) continue;
-        if (lp.length <= 1) {
-          await this.supabase.from("goals").delete().eq("id", goal.id).eq("user_id", this.userId);
-        } else {
-          await this.supabase.from("goals").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", goal.id).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("goals"); }
-
-    try { // 9b. Incomes (multi-owner: preserve shared rows) — Bug #8: incomes
-      // were never part of the cascade at all, so deleted profiles left orphan
-      // income rows still pointing at them in linked_profiles.
-      const allIncomes = await this.getIncomes();
-      for (const inc of allIncomes) {
-        const lp = (inc.linkedProfiles || []) as string[];
-        if (!lp.includes(id)) continue;
-        if (lp.length <= 1) {
-          await this.supabase.from("incomes").update({ deleted_at: new Date().toISOString() }).eq("id", inc.id).eq("user_id", this.userId);
-        } else {
-          await this.supabase.from("incomes").update({ linked_profiles: lp.filter(pid => pid !== id) }).eq("id", inc.id).eq("user_id", this.userId);
-        }
-      }
-    } catch (e) { errors.push("incomes"); }
-
-    try { // 10. Delete/unlink journal entries
-      const { data: journalRows } = await this.supabase.from("journal_entries").select("id, linked_profiles").eq("user_id", this.userId);
-      for (const row of journalRows || []) {
-        const lp: string[] = row.linked_profiles || [];
-        if (lp.includes(id)) {
-          if (lp.length <= 1) {
-            await this.supabase.from("journal_entries").delete().eq("id", row.id).eq("user_id", this.userId);
+        if (soleIds.length > 0) {
+          if (opts.beforeDelete) await opts.beforeDelete(soleIds);
+          if (opts.softDelete) {
+            for (const c of chunk(soleIds)) {
+              const { error } = await this.supabase.from(table).update({ deleted_at: nowIso }).in("id", c).eq("user_id", this.userId);
+              if (error) throw error;
+            }
           } else {
-            await this.supabase.from("journal_entries").update({ linked_profiles: lp.filter((pid: string) => pid !== id) }).eq("id", row.id).eq("user_id", this.userId);
+            await bulkDeleteByIds(table, soleIds);
           }
         }
-      }
-    } catch (e) { errors.push("journal"); }
+        // Each co-owned row gets a different linked_profiles value, so these
+        // can't collapse into one statement — but they CAN run concurrently.
+        // (Works for both JSONB and text[] linked_profiles columns: the value
+        // travels in the JSON request body, not as a PostgREST filter literal.)
+        await Promise.all(coOwned.map(async ({ rowId, remaining }) => {
+          const { error } = await this.supabase.from(table).update({ linked_profiles: remaining }).eq("id", rowId).eq("user_id", this.userId);
+          if (error) throw error;
+        }));
+      } catch (e) { errors.push(tag); }
+    };
 
-    try { // 11. Delete entity_links junction table rows referencing this profile
-      await this.supabase.from("entity_links").delete()
-        .or(`and(source_type.eq.profile,source_id.eq.${id}),and(target_type.eq.profile,target_id.eq.${id})`)
-        .eq("user_id", this.userId);
-    } catch (e) { errors.push("entity_links"); }
+    // Fetch every candidate list in ONE parallel batch (was ~10 sequential
+    // list fetches interleaved with the per-row writes).
+    const safeList = async <T>(tag: string, fn: () => Promise<T[]>): Promise<T[] | null> => {
+      try { return await fn(); } catch { errors.push(tag); return null; }
+    };
+    const [allTrackers, allExpenses, allTasks, allHabits, allEvents, allDocuments, allArtifacts, allGoals, allIncomes, journalRows] = await Promise.all([
+      safeList("trackers", () => this.getTrackers()),
+      safeList("expenses", () => this.getExpenses()),
+      safeList("tasks", () => this.getTasks()),
+      safeList("habits", () => this.getHabits()),
+      safeList("events", () => this.getEvents()),
+      safeList("documents", () => this.getDocuments()),
+      safeList("artifacts", () => this.getArtifacts()),
+      safeList("goals", () => this.getGoals()),
+      safeList("incomes", () => this.getIncomes()),
+      safeList("journal", async () => {
+        const { data, error } = await this.supabase.from("journal_entries").select("id, linked_profiles").eq("user_id", this.userId);
+        if (error) throw error;
+        return data || [];
+      }),
+    ]);
 
-    try { // 12. Asset/Liability ownership + collateral link rows.
-      // Belt-and-suspenders: clean up explicitly so the profile-row DELETE
-      // doesn't have to rely on FK CASCADE firing through the owner-
-      // enforcement triggers (which are patched to no-op when the profile
-      // is gone, but cleaning up directly here is safer and avoids any
-      // trigger churn in the same transaction).
-      await this.supabase.from("asset_party_links").delete()
-        .or(`asset_profile_id.eq.${id},party_profile_id.eq.${id}`)
-        .eq("user_id", this.userId);
-      await this.supabase.from("liability_profile_links").delete()
-        .or(`liability_profile_id.eq.${id},party_profile_id.eq.${id}`)
-        .eq("user_id", this.userId);
-      await this.supabase.from("liability_asset_links").delete()
-        .or(`liability_profile_id.eq.${id},asset_profile_id.eq.${id}`)
-        .eq("user_id", this.userId);
-    } catch (e) { errors.push("ownership_links"); }
+    // 1. Trackers — deleted ENTIRELY when linked to this profile. No "shared"
+    // concept: if you delete Jane Doe, her Hemoglobin tracker goes away.
+    const cascadeTrackers = async (): Promise<void> => {
+      if (!allTrackers) return;
+      try {
+        const trackerIds = allTrackers.filter(t => (t.linkedProfiles || []).includes(id)).map(t => t.id);
+        // FK ordering: entries (children) before trackers (parents).
+        for (const c of chunk(trackerIds)) {
+          const { error } = await this.supabase.from("tracker_entries").delete().in("tracker_id", c).eq("user_id", this.userId);
+          if (error) throw error;
+        }
+        // Also catch orphaned entries carrying this profile_id on trackers
+        // that aren't directly linked.
+        const { error: orphanErr } = await this.supabase.from("tracker_entries").delete().eq("profile_id", id).eq("user_id", this.userId);
+        if (orphanErr) throw orphanErr;
+        await bulkDeleteByIds("trackers", trackerIds);
+      } catch (e) { errors.push("trackers"); }
+    };
+
+    // 11. Entity_links junction rows referencing this profile.
+    const cascadeEntityLinks = async (): Promise<void> => {
+      try {
+        const { error } = await this.supabase.from("entity_links").delete()
+          .or(`and(source_type.eq.profile,source_id.eq.${id}),and(target_type.eq.profile,target_id.eq.${id})`)
+          .eq("user_id", this.userId);
+        if (error) throw error;
+      } catch (e) { errors.push("entity_links"); }
+    };
+
+    // 12. Asset/Liability ownership + collateral link rows.
+    // Belt-and-suspenders: clean up explicitly so the profile-row DELETE
+    // doesn't have to rely on FK CASCADE firing through the owner-
+    // enforcement triggers (which are patched to no-op when the profile
+    // is gone, but cleaning up directly here is safer and avoids any
+    // trigger churn in the same transaction).
+    const cascadeOwnershipLinks = async (): Promise<void> => {
+      try {
+        const [a, b, c] = await Promise.all([
+          this.supabase.from("asset_party_links").delete()
+            .or(`asset_profile_id.eq.${id},party_profile_id.eq.${id}`)
+            .eq("user_id", this.userId),
+          this.supabase.from("liability_profile_links").delete()
+            .or(`liability_profile_id.eq.${id},party_profile_id.eq.${id}`)
+            .eq("user_id", this.userId),
+          this.supabase.from("liability_asset_links").delete()
+            .or(`liability_profile_id.eq.${id},asset_profile_id.eq.${id}`)
+            .eq("user_id", this.userId),
+        ]);
+        const firstErr = a.error || b.error || c.error;
+        if (firstErr) throw firstErr;
+      } catch (e) { errors.push("ownership_links"); }
+    };
+
+    // Run every independent table cascade concurrently. (Obligations retired —
+    // recurring bills are liability child profiles deleted via the recursive
+    // child-profile pass above, so there's no obligations table step here.)
+    await Promise.all([
+      cascadeTrackers(),
+      cascadeSharedTable("expenses", "expenses", allExpenses),
+      cascadeSharedTable("tasks", "tasks", allTasks),
+      cascadeSharedTable("habits", "habits", allHabits as any, {
+        // FK ordering: check-ins (children) before habits (parents).
+        beforeDelete: async (soleIds) => {
+          for (const c of chunk(soleIds)) {
+            const { error } = await this.supabase.from("habit_checkins").delete().in("habit_id", c).eq("user_id", this.userId);
+            if (error) throw error;
+          }
+        },
+      }),
+      cascadeSharedTable("events", "events", allEvents),
+      cascadeSharedTable("documents", "documents", allDocuments as any),
+      cascadeSharedTable("artifacts", "artifacts", allArtifacts as any),
+      cascadeSharedTable("goals", "goals", allGoals as any),
+      // Bug #8: incomes were once missing from the cascade entirely. Soft-
+      // delete sole-owner incomes (deleted_at), strip co-owners.
+      cascadeSharedTable("incomes", "incomes", allIncomes as any, { softDelete: true }),
+      cascadeSharedTable("journal_entries", "journal",
+        journalRows ? (journalRows as any[]).map(r => ({ id: r.id, linkedProfiles: r.linked_profiles || [] })) : null),
+      cascadeEntityLinks(),
+      cascadeOwnershipLinks(),
+    ]);
 
     if (errors.length > 0) {
       console.warn(`[deleteProfile] Cascade delete partial failures for profile ${id}: ${errors.join(", ")}`);
@@ -2464,6 +2488,7 @@ export class SupabaseStorage implements IStorage {
       insertErr = (await insertWithName(finalName)).error;
     }
     if (insertErr) throw insertErr;
+    bustInsightsCacheFor(this.userId); // [P0] tracker set changed → recompute insights
     // Link to profiles via junction table
     for (const pId of linkedProfiles) {
       await this.linkProfileTo(pId, "tracker", id);
@@ -2497,6 +2522,7 @@ export class SupabaseStorage implements IStorage {
       updErr = (await this.supabase.from("trackers").update(baseUpdate).eq("id", id).eq("user_id", this.userId)).error;
     }
     if (updErr) throw updErr;
+    bustInsightsCacheFor(this.userId); // [P0] tracker changed → recompute insights
     // [P2.2] Ownership patches go through the single writer (setOwners), not a
     // raw linked_profiles write alongside the rest of the patch.
     if (data.linkedProfiles !== undefined) {
@@ -2600,6 +2626,7 @@ export class SupabaseStorage implements IStorage {
       timestamp: ts,
     });
     if (error) throw error;
+    bustInsightsCacheFor(this.userId); // [P0] new entry → recompute insights
     this.logActivity("tracker", `Logged ${tracker.name}`);
     return {
       id,
@@ -2663,12 +2690,14 @@ export class SupabaseStorage implements IStorage {
       .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId)
       .select().maybeSingle();
     if (error || !data) return undefined;
+    bustInsightsCacheFor(this.userId); // [P0] entry changed → recompute insights
     return this.rowToTrackerEntry(data);
   }
 
   async deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean> {
     const { error } = await this.supabase.from("tracker_entries").delete()
       .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId);
+    if (!error) bustInsightsCacheFor(this.userId); // [P0] entry removed → recompute insights
     return !error;
   }
 
@@ -2678,6 +2707,7 @@ export class SupabaseStorage implements IStorage {
     /* D1: clean up entity_links rows that reference this tracker */
     await this.cleanupEntityLinks("tracker", id);
     const { error } = await this.supabase.from("trackers").delete().eq("id", id).eq("user_id", this.userId);
+    if (!error) bustInsightsCacheFor(this.userId); // [P0] tracker removed → recompute insights
     return !error;
   }
 
@@ -5719,13 +5749,26 @@ export class SupabaseStorage implements IStorage {
   // INSIGHTS
   // ============================================================
   async getInsights(filterProfileId?: string): Promise<Insight[]> {
-    const profiles = await this.getProfiles();
-    const allTrackers = await this.getTrackers();
-    const allTasks = await this.getTasks();
-    const allExpenses = await this.getExpenses();
-    const allHabits = await this.getHabits();
-    const allObligations = await this.getObligations();
-    const journal = await this.getJournalEntries();
+    // [P0] Serve from the module-level per-user cache (60s TTL) — see the
+    // comment block above insightsCache. Keyed per profile-filter so a scoped
+    // request can never leak another scope's cached result.
+    const cacheKey = `${this.userId}:${filterProfileId || "all"}`;
+    const hit = insightsCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < INSIGHTS_CACHE_TTL_MS) return hit.insights;
+
+    // PERF: fetch all seven inputs in parallel — this was 7 sequential
+    // round trips before. getProfilesLite() is safe here because
+    // generateInsights() never reads any per-profile field (verified: the
+    // profiles argument is unused inside the function).
+    const [profiles, allTrackers, allTasks, allExpenses, allHabits, allObligations, journal] = await Promise.all([
+      this.getProfilesLite(),
+      this.getTrackers(),
+      this.getTasks(),
+      this.getExpenses(),
+      this.getHabits(),
+      this.getObligations(),
+      this.getJournalEntries(),
+    ]);
     // Strict profile filter — no orphan fallback
     const fp = filterProfileId;
     const matchFp = (lp: string[]) => {
@@ -5737,7 +5780,11 @@ export class SupabaseStorage implements IStorage {
     const expenses = allExpenses.filter(e => matchFp(e.linkedProfiles));
     const habits = allHabits.filter(h => matchFp(h.linkedProfiles || []));
     const obligations = allObligations.filter(o => matchFp(o.linkedProfiles));
-    return generateInsights(profiles, trackers, tasks, expenses, habits, obligations, journal);
+    const insights = generateInsights(profiles, trackers, tasks, expenses, habits, obligations, journal);
+    // Bound the map so a many-user warm instance can't grow it unboundedly.
+    if (insightsCache.size > 1000) insightsCache.clear();
+    insightsCache.set(cacheKey, { at: Date.now(), insights });
+    return insights;
   }
 
   // ============================================================

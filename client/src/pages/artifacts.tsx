@@ -15,6 +15,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { passesProfileFilter } from "@shared/profile-filter";
 import {
@@ -1046,6 +1047,7 @@ export default function ArtifactsPage() {
       )}
 
       {/* Wave 8: Pinned artifacts shelf (horizontal scroll) */}
+      <SectionErrorBoundary name="artifacts-pinned" inline>
       {pinnedItems.length > 0 && (
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5 px-1">
@@ -1067,8 +1069,12 @@ export default function ArtifactsPage() {
           </div>
         </div>
       )}
+      </SectionErrorBoundary>
 
-      {/* Content */}
+      {/* Content — the main data section: card rendering over merged
+          documents + artifacts. A single malformed item can no longer blank
+          the whole page (SectionErrorBoundary shows an inline retry). */}
+      <SectionErrorBoundary name="artifacts-list" inline>
       {isLoading ? (
         <div className="space-y-3">
           {[1, 2, 3, 4, 5].map(i => (
@@ -1114,6 +1120,7 @@ export default function ArtifactsPage() {
           ))}
         </div>
       )}
+      </SectionErrorBoundary>
 
       {/* Artifact detail dialog — re-derive from allItems so optimistic
           cache updates (e.g. checklist toggles) reflect immediately in the
@@ -1135,11 +1142,16 @@ export default function ArtifactsPage() {
                     )}
                     <span className="text-xs text-muted-foreground">{formatDate(liveSelected.date)}</span>
                   </div>
-                  <ArtifactRenderer
-                    artifact={liveSelected.source}
-                    artifactId={liveSelected.id}
-                    isArtifact={liveSelected.isArtifact}
-                  />
+                  {/* Renderer executes arbitrary artifact content (mermaid,
+                      charts, markdown, sanitized HTML) — the most crash-prone
+                      surface on this page, so it gets its own boundary. */}
+                  <SectionErrorBoundary name="artifact-renderer" inline>
+                    <ArtifactRenderer
+                      artifact={liveSelected.source}
+                      artifactId={liveSelected.id}
+                      isArtifact={liveSelected.isArtifact}
+                    />
+                  </SectionErrorBoundary>
                 </div>
               )}
             </DialogContent>

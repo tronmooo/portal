@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -39,7 +40,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ToastAction } from "@/components/ui/toast";
+import { showUndoToast } from "@/lib/undo-delete";
 import { ListTodo, Calendar, AlertCircle, ArrowLeft, Plus, Trash2, CheckCircle2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Task, Profile } from "@shared/schema";
@@ -52,13 +53,10 @@ const PRIORITY_COLORS: Record<string, string> = {
   high: "bg-red-500/10 text-red-600 dark:text-red-400",
 };
 
-const invalidateTaskQueries = () => {
-  queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-  queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-  // Also invalidate dashboard so KPIs recompute after task changes
-  queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-};
+// Cache bus: the "tasks" domain ripples to every linked surface (task lists,
+// dashboard KPIs, stats, activity feed, calendar timeline, insights) in one
+// call instead of a hand-maintained key list.
+const invalidateTaskQueries = () => invalidateDomain("tasks");
 
 // ── Create / Edit Dialog ─────────────────────────────────────────────────────
 
@@ -148,7 +146,15 @@ function TaskDialog({
       }
       return { prev, tempId };
     },
-    onSuccess: () => {
+    onSuccess: (data, _v, ctx) => {
+      // Swap the optimistic temp row for the real server row (real id) so
+      // toggle/delete on the fresh task works before the refetch settles
+      // (temp ids are guarded with a "Still saving…" toast).
+      if (!isEdit && data?.id && ctx?.tempId) {
+        queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) =>
+          Array.isArray(old) ? old.map((t: any) => t?.id === ctx.tempId ? { ...t, ...data, _optimistic: undefined } : t) : old
+        );
+      }
       invalidateTaskQueries();
       toast({ title: isEdit ? `"${title.trim()}" updated` : `"${title.trim()}" created`, description: dueDate ? `Due ${new Date(dueDate + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : undefined });
     },
@@ -339,10 +345,12 @@ function TaskItem({
       queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
         (old || []).filter(t => t.id !== task.id)
       );
-      // Instant confirmation (see toggleMutation note); Undo still restores.
-      toast({
+      // Instant confirmation (see toggleMutation note). Undo rides the
+      // shared helper (8s window) and hits the server's soft-delete restore
+      // endpoint, so the row and its history come back intact.
+      showUndoToast({
         title: `"${task.title}" deleted`,
-        action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction>,
+        onUndo: () => restoreMutation.mutate(),
       });
       return { prevQueries };
     },

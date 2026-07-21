@@ -194,12 +194,22 @@ export const queryClient = new QueryClient({
          long lists not keyed by profile filter) can opt back in explicitly
          with `placeholderData: keepPreviousData`. */
       placeholderData: undefined,
-      // 60s — matches the server's stats/enhanced/bootstrap cache TTL, so a
-      // window-focus/mount refetch of the ~25 active dashboard queries can't
-      // out-run the server cache anyway. Chat writes and mutations surface via
-      // predicate INVALIDATION (which ignores staleTime), so this does not
-      // delay data propagation — it only halves the idle focus-refetch wave.
-      staleTime: 60_000,
+      // REFETCH-STACKING TUNE (2026-07-21): raised 60s → 3 min. Freshness in
+      // this app is INVALIDATION-driven, not staleTime-driven: every mutation
+      // path (cache-bus invalidateDomains, per-mutation invalidateQueries —
+      // 600+ call sites) explicitly invalidates the domains it touched, and
+      // invalidation ignores staleTime entirely. So a longer staleTime does
+      // NOT delay post-write propagation. What it fixes: with 60s,
+      // refetchOnMount + refetchOnWindowFocus re-ran queries that a mutation
+      // had JUST refetched via invalidation ("refetch stacking") whenever the
+      // user backgrounded/returned or navigated right after a write. 3 min
+      // keeps window-focus recovery (iOS wake — see recoverWedgedQueries
+      // below, which handles wedged fetches independently of staleTime) while
+      // collapsing the redundant waves. Cross-device/co-owner writes now
+      // surface within ≤3 min on focus instead of ≤60s — an accepted,
+      // moderate trade; anything needing tighter freshness can set a
+      // per-query staleTime override.
+      staleTime: 180_000,
       gcTime: 60 * 60_000,               // Keep unused data for 60 min
       networkMode: "always",             // Don't hang on flaky network
       retry: (failureCount, error) => {

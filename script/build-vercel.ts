@@ -98,7 +98,16 @@ export default async function(req, res) {
 }
 `.trim();
   await writeFile("api/index.js", FUNCTION_STUB);
-  await writeFile("api/ai.js", FUNCTION_STUB);
+  // The AI function additionally opts into response streaming: /api/chat can
+  // return SSE (routes.ts `?stream=1` / Accept: text/event-stream), and the
+  // Node runtime buffers the whole body unless this flag is set — which would
+  // silently turn the stream back into a 170s buffered wait. Keep in sync
+  // with the checked-in api/ai.js.
+  await writeFile(
+    "api/ai.js",
+    FUNCTION_STUB +
+      "\n\n// Chat SSE streaming (routes.ts /api/chat?stream=1) requires response streaming.\nexport const config = { supportsResponseStreaming: true };\n"
+  );
 
   // 3. Copy static files to public/ for Vercel
   console.log("Preparing deployment directory...");

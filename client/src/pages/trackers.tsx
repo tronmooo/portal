@@ -5,6 +5,8 @@ import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
+import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
@@ -1029,9 +1031,10 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
     onSuccess: () => {
       // BUG-T05/UI01: refetchType:"all" so the count badge updates even when
       // the page-level trackers query is technically inactive at the moment.
+      // (The bus uses "active", so this one key keeps its stronger refetch.)
       qc.invalidateQueries({ queryKey: ['/api/trackers'], refetchType: "all" });
-      qc.invalidateQueries({ queryKey: ['/api/stats'], refetchType: "all" });
-      qc.invalidateQueries({ queryKey: ['/api/dashboard-enhanced'], refetchType: "all" });
+      // Cache bus: ripples to stats, dashboard, goals, activity, insights.
+      invalidateDomain("trackers");
       toast({ title: `${drugName} logged`, description: `${dosageLabel ? `${dosageLabel} ` : ''}taken at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` });
     },
     onError: (_e, _v, ctx) => {
@@ -1318,16 +1321,27 @@ function AddEntryDialog({
     onMutate: async (vars) => {
       await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/trackers"] });
-      const tempEntry = { id: 'temp-' + Date.now(), values: vars.values, notes: vars.notes, timestamp: new Date().toISOString(), computed: {} };
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const tempEntry = { id: tempId, values: vars.values, notes: vars.notes, timestamp: new Date().toISOString(), computed: {} };
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
         (old || []).map((t: any) => t.id === tracker.id
           ? { ...t, entries: [...(t.entries || []), tempEntry] }
           : t
         )
       );
-      return { prev };
+      return { prev, tempId };
     },
-    onSuccess: () => {
+    onSuccess: (created: any, _vars, ctx: any) => {
+      // Swap the optimistic temp entry for the real server entry (real id) so
+      // deleting it right away works before the background refetch settles.
+      if (created?.id && ctx?.tempId) {
+        queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
+          (old || []).map((t: any) => t.id === tracker.id
+            ? { ...t, entries: (t.entries || []).map((e: any) => e?.id === ctx.tempId ? { ...e, ...created } : e) }
+            : t
+          )
+        );
+      }
       setValues({});
       setNotes("");
       setCustomFields({});
@@ -1346,10 +1360,10 @@ function AddEntryDialog({
       // immediately after a log. The default invalidate only marks queries as
       // stale — inactive list queries on the trackers page wouldn't refetch
       // until the user re-focused the page, leaving "3 entries" stuck while the
-      // newest entry was already on the server.
+      // newest entry was already on the server. (Bus uses "active" — keep this
+      // one key at "all"; the bus handles the cross-surface ripple.)
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "all" });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "all" });
+      invalidateDomain("trackers");
     },
   });
 
@@ -1378,20 +1392,47 @@ function AddEntryDialog({
     if (/cal/.test(u)) return [100, 250, 500];
     return [1, 5, 10];
   })();
-  const quickLog = useMutation<any, Error, number>({
+  const quickLog = useMutation<any, Error, number, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async (amount: number) => {
       const res = await apiRequest("POST", `/api/trackers/${tracker.id}/entries`, { values: { [quickField as string]: amount } });
       return res.json();
     },
-    onSuccess: (_d, amount) => {
+    onMutate: async (amount) => {
+      // Optimistic insert so the entry/count paints immediately (same pattern
+      // as the full entry form above).
+      await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/trackers"] });
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const tempEntry = { id: tempId, values: { [quickField as string]: amount }, timestamp: new Date().toISOString(), computed: {} };
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
+        (old || []).map((t: any) => t.id === tracker.id
+          ? { ...t, entries: [...(t.entries || []), tempEntry] }
+          : t
+        )
+      );
+      return { prev, tempId };
+    },
+    onSuccess: (created, amount, ctx) => {
+      // Swap the temp entry for the real server row.
+      if (created?.id && ctx?.tempId) {
+        queryClient.setQueriesData<any[]>({ queryKey: ["/api/trackers"] }, (old) =>
+          (old || []).map((t: any) => t.id === tracker.id
+            ? { ...t, entries: (t.entries || []).map((e: any) => e?.id === ctx.tempId ? { ...e, ...created } : e) }
+            : t
+          )
+        );
+      }
       toast({ title: pres.metricKind === "categorical" ? `Logged ${amount}` : `+${amount}${pres.unit ? " " + pres.unit : ""} logged` });
       onOpenChange(false);
     },
-    onError: (err) => toast({ title: "Failed to log", description: formatApiError(err), variant: "destructive" }),
+    onError: (err, _amount, ctx) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: "Failed to log", description: formatApiError(err), variant: "destructive" });
+    },
     onSettled: () => {
+      // BUG-T05/UI01 (see entry form above): trackers key stays at "all".
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "all" });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "all" });
+      invalidateDomain("trackers");
     },
   });
   const showQuick = !!quickField && (pres.metricKind === "additive" || pres.metricKind === "categorical");
@@ -1591,9 +1632,12 @@ function AddEntryDialog({
 function DeleteEntryButton({
   trackerId,
   entryId,
+  entry,
 }: {
   trackerId: string;
   entryId: string;
+  /** Full entry row — captured so the delete toast can offer Undo (P2). */
+  entry?: any;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -1615,16 +1659,44 @@ function DeleteEntryButton({
       return { prev };
     },
     onSuccess: () => {
-      toast({ title: "Entry deleted" });
+      // P2 undo: re-create the entry via the existing POST endpoint. The
+      // insert schema accepts values/notes/mood/tags/profile/timestamp, so
+      // nothing user-entered is lost (id + computed are re-derived server-side).
+      if (entry) {
+        showUndoToast({
+          title: "Entry deleted",
+          onUndo: () => recreateDeleted({
+            url: `/api/trackers/${trackerId}/entries`,
+            body: {
+              values: entry.values || {},
+              notes: entry.notes || undefined,
+              mood: entry.mood || undefined,
+              tags: entry.tags || undefined,
+              forProfile: entry.forProfile || undefined,
+              profileId: entry.profileId || undefined,
+              timestamp: entry.timestamp || undefined,
+            },
+            domains: ["trackers"],
+            queryKeyHead: "/api/trackers",
+            applyOptimistic: (old: any) => Array.isArray(old)
+              ? old.map((t: any) => t.id === trackerId
+                  ? { ...t, entries: [...(t.entries || []), entry] }
+                  : t)
+              : old,
+            successTitle: "Entry restored",
+            errorTitle: "Couldn't restore entry",
+          }),
+        });
+      } else {
+        toast({ title: "Entry deleted" });
+      }
     },
     onError: (err: Error, _v: any, ctx: any) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: "Failed to delete entry", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("trackers");
     },
   });
 
@@ -1645,7 +1717,7 @@ function DeleteEntryButton({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. The entry will be permanently removed.
+              The entry will be removed. You can undo this action briefly after deletion.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -3044,11 +3116,8 @@ function EntryEditor({
       toast({ title: "Update failed", description: err.message, variant: "destructive" });
     },
     onSettled: () => {
-      // refetchType "active" so the open detail view refetches immediately
-      // instead of going stale-but-not-refetched until the next focus.
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "active" });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "active" });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "active" });
+      // Cache bus uses refetchType "active" — same semantics this site wanted.
+      invalidateDomain("trackers");
     },
   });
 
@@ -3261,7 +3330,7 @@ function EntryRow({
         <button onClick={() => setEditing(true)} className="p-0.5 rounded hover:bg-muted transition-colors" title="Edit entry">
           <Pencil className="h-3 w-3 text-muted-foreground hover:text-foreground" />
         </button>
-        <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+        <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} entry={entry} />
       </div>
     </div>
   );
@@ -3513,9 +3582,7 @@ function CreateTrackerDialog({
       return { prev, tempId };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("trackers");
       setName("");
       setCategory("custom");
       setUnit("");
@@ -3827,9 +3894,7 @@ function DeleteTrackerDialog({
       return { prev };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("trackers");
       onOpenChange(false);
       toast({ title: "Tracker deleted", description: `${trackerName} has been removed` });
     },
@@ -4818,7 +4883,7 @@ function HistoryEntryRow({
           <Pencil className="h-3.5 w-3.5 text-muted-foreground/60 group-hover:text-foreground transition-colors" />
         </button>
         <div onClick={(e) => e.stopPropagation()}>
-          <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+          <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} entry={entry} />
         </div>
       </div>
     </div>
@@ -5095,10 +5160,9 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/goals", data).then(r => r.json()),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      // Cache bus: goals + trackers domains cover goal lists, tracker links,
+      // dashboard KPIs and stats in one ripple.
+      invalidateDomains("goals", "trackers");
       const name = formTitle;
       setCreating(false); resetForm();
       toast({ title: `"${name}" goal created`, description: formTarget ? `Target: ${formTarget} ${formUnit}` : undefined });
@@ -5108,10 +5172,7 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
   const updateMutation = useMutation({
     mutationFn: ({ id, title, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, { title, ...data }).then(r => r.json()),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomains("goals", "trackers");
       setEditGoal(null); resetForm();
       toast({ title: `"${variables.title || "Goal"}" updated` });
     },
@@ -5126,10 +5187,7 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
       return { prev };
     },
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomains("goals", "trackers");
       setEditGoal(null);
       toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
@@ -5245,8 +5303,7 @@ function TrackerDetailDialog({
       await apiRequest("PATCH", `/api/trackers/${tracker.id}`, { name });
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/trackers"] });
-      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("trackers");
       toast({ title: "Tracker renamed" });
       setIsRenaming(false);
     },
@@ -5269,9 +5326,7 @@ function TrackerDetailDialog({
       return { prev };
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/trackers"] });
-      qc.invalidateQueries({ queryKey: ["/api/stats"] });
-      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("trackers");
       toast({ title: "Tracker deleted" });
       onClose();
     },
@@ -5709,8 +5764,7 @@ export default function TrackersPage() {
       if (hasUnlinked) {
         migrationDone.current = true;
         apiRequest("POST", "/api/trackers/migrate-to-self").then(() => {
-          queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-          queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+          invalidateDomains("trackers", "profiles");
         }).catch(() => {});
       }
     }
@@ -5743,11 +5797,9 @@ export default function TrackersPage() {
     },
     onSuccess: () => {
       toast({ title: "Document uploaded & processing" });
-      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Extraction can create trackers and touch profiles — bust all three
+      // domains via the bus.
+      invalidateDomains("documents", "trackers", "profiles");
     },
     onError: (err: Error) => {
       toast({ title: "Upload failed", description: formatApiError(err), variant: "destructive" });
@@ -5766,11 +5818,7 @@ export default function TrackersPage() {
     },
     onSuccess: () => {
       toast({ title: "Document deleted" });
-      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomains("documents", "trackers", "profiles");
     },
     onError: (err: Error, _v: any, ctx: any) => {
       if (ctx?.prev) queryClient.setQueryData(["/api/documents"], ctx.prev);

@@ -19,6 +19,7 @@ import { initErrorReporter } from "@/lib/errorReporter";
 // Initialize error reporter immediately
 initErrorReporter();
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
+import { invalidateDomains, type Domain } from "@/lib/cache-bus";
 import { perfMark, perfMeasure } from "@/lib/perf-marks";
 import { Button } from "@/components/ui/button";
 import { Sun, Moon, Settings, Calendar, Lock, LogOut } from "lucide-react";
@@ -283,12 +284,69 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// ── Pull-to-refresh scoping (PERF 2026-07-21) ───────────────────────────────
+// Maps the current wouter (hash) location to the cache-bus domain(s) whose
+// data that route displays. A pull only refreshes those domains instead of
+// every cached query in the app — the old unfiltered invalidateQueries()
+// refetched EVERYTHING (network storm on iOS). Routes with no mapping fall
+// back to the bus's "everything" domain, which is still bounded to /api/*
+// keys and refetchType:"active" (only queries with on-screen observers).
+function pullRefreshDomains(location: string): Domain[] | null {
+  const path = location.split("?")[0].replace(/\/$/, "") || "/";
+  const table: Record<string, Domain[]> = {
+    "/dashboard": ["dashboard", "tasks", "habits", "events", "obligations"],
+    "/finance": ["expenses", "incomes", "obligations", "budgets", "dashboard"],
+    "/dashboard/finance": ["expenses", "incomes", "obligations", "budgets", "dashboard"],
+    "/tasks": ["tasks"],
+    "/dashboard/tasks": ["tasks"],
+    "/habits": ["habits"],
+    "/dashboard/habits": ["habits"],
+    "/journal": ["journal"],
+    "/dashboard/journal": ["journal"],
+    "/goals": ["goals"],
+    "/dashboard/goals": ["goals"],
+    "/obligations": ["obligations"],
+    "/bills": ["obligations"],
+    "/dashboard/obligations": ["obligations"],
+    "/wellness": ["trackers", "habits", "dashboard"],
+    "/health": ["trackers", "habits", "dashboard"],
+    "/dashboard/health": ["trackers", "habits", "dashboard"],
+    "/trackers": ["trackers"],
+    "/linked": ["assets", "liabilities", "trackers"],
+    "/liabilities": ["liabilities", "trackers"],
+    "/calendar": ["events", "tasks", "obligations"],
+    "/profiles": ["profiles"],
+    "/insights": ["dashboard"],
+    "/artifacts": ["documents", "profiles"],
+    "/dashboard/documents": ["documents", "profiles"],
+    "/dashboard/artifacts": ["documents", "profiles"],
+    "/notifications": ["notifications"],
+  };
+  if (table[path]) return table[path];
+  if (path.startsWith("/profiles/") || path.startsWith("/profile/")) return ["profiles"];
+  if (path.startsWith("/documents/")) return ["documents"];
+  // "/", chat, settings, editor, share, unknown → no mapping (broad fallback)
+  return null;
+}
+
+// /api/artifacts has no cache-bus domain (the bus predates artifacts), so the
+// artifacts routes bust that key directly alongside their domain refresh.
+function isArtifactsRoute(location: string): boolean {
+  const path = location.split("?")[0].replace(/\/$/, "") || "/";
+  return path === "/artifacts" || path === "/dashboard/artifacts" || path === "/dashboard/documents";
+}
+
 function PullToRefresh() {
   const pullRef = useRef<HTMLDivElement>(null);
   const startY = useRef<number | null>(null);
   const [pulling, setPulling] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const threshold = 80;
+  // Latest route, readable from the once-bound touch handlers below without
+  // re-attaching listeners on every navigation.
+  const [location] = useLocation();
+  const locationRef = useRef(location);
+  locationRef.current = location;
 
   useEffect(() => {
     const main = document.getElementById('main-content');
@@ -321,8 +379,20 @@ function PullToRefresh() {
       setPulling(false);
       if (dy >= threshold) {
         setRefreshing(true);
-        // Invalidate all React Query cache via the imported client instance.
-        await queryClient.invalidateQueries();
+        // Scope the refresh to the current route's data domains (see
+        // pullRefreshDomains above). Unmapped routes fall back to the bus's
+        // "everything" domain — /api/*-bounded, active observers only —
+        // instead of the old unfiltered invalidateQueries() that refetched
+        // every cached query app-wide.
+        const loc = locationRef.current;
+        const domains = pullRefreshDomains(loc);
+        const work: Promise<unknown>[] = [
+          invalidateDomains(...(domains ?? (["everything"] as Domain[]))),
+        ];
+        if (isArtifactsRoute(loc)) {
+          work.push(queryClient.invalidateQueries({ queryKey: ["/api/artifacts"], refetchType: "active" }));
+        }
+        await Promise.allSettled(work);
         setTimeout(() => setRefreshing(false), 1200);
       }
     };

@@ -2,6 +2,7 @@ import { formatApiError } from "@/lib/formatError";
 import { stopProp } from "@/lib/event-utils";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { getFilterLabel } from "@/lib/profileFilter";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +14,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ToastAction } from "@/components/ui/toast";
+import { showUndoToast } from "@/lib/undo-delete";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
@@ -90,10 +91,11 @@ function HabitCard({ habit }: { habit: Habit }) {
       toast({ title: `Failed to log ${habit.name}`, description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Cache bus: "habits" ripples to dashboard KPIs, stats, activity,
+      // insights. Timeline isn't in the habits domain — keep explicit
+      // (habit checkin dots render on the calendar).
+      invalidateDomain("habits");
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
     },
   });
 
@@ -131,10 +133,8 @@ function HabitCard({ habit }: { habit: Habit }) {
       toast({ title: `Failed to undo ${habit.name}`, description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("habits");
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
     },
   });
 
@@ -158,8 +158,7 @@ function HabitCard({ habit }: { habit: Habit }) {
       toast({ title: "Failed to rename", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("habits");
     },
   });
 
@@ -183,17 +182,14 @@ function HabitCard({ habit }: { habit: Habit }) {
       toast({ title: "Failed to update frequency", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("habits");
     },
   });
 
   const restoreMutation = useMutation<any,Error,void>({
     mutationFn: () => apiRequest("PATCH", `/api/habits/${habit.id}/restore`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("habits");
       toast({ title: `"${habit.name}" restored` });
     },
     onError: (err: Error) => {
@@ -212,16 +208,19 @@ function HabitCard({ habit }: { habit: Habit }) {
       return { prev };
     },
     onSuccess: () => {
-      toast({ title: `"${habit.name}" deleted`, action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction> });
+      // Undo rides the shared helper (8s window) and hits the server's
+      // soft-delete restore endpoint (PATCH /api/habits/:id/restore).
+      showUndoToast({
+        title: `"${habit.name}" deleted`,
+        onUndo: () => restoreMutation.mutate(),
+      });
     },
     onError: (err: Error, _v: unknown, ctx: any) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: `Failed to delete "${habit.name}"`, description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/habits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("habits");
       // Calendar timeline reads habit checkins to render the dot grid — with
       // checkins now cascade-deleted server-side, the timeline view needs
       // to refetch or it shows ghost completion dots for the gone habit.
@@ -448,7 +447,7 @@ export default function HabitsPage() {
       frequency: "daily",
       ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
     }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] }); const saved = newName.trim(); setNewName(""); setSelectedProfileId(activeCreateProfileId || ""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
+    onSuccess: () => { invalidateDomain("habits"); queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] }); const saved = newName.trim(); setNewName(""); setSelectedProfileId(activeCreateProfileId || ""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
     onError: (err: Error) => toast({ title: "Failed to create habit", description: formatApiError(err), variant: "destructive" }),
   });
 

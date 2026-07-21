@@ -9,6 +9,7 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { Button } from "@/components/ui/button";
@@ -168,8 +169,12 @@ function ExpandCard({ summary, urgentBorder, children, testId }: {
 }
 
 const invalidateFinance = () => {
-  for (const k of ["/api/obligations", "/api/dashboard-enhanced", "/api/stats", "/api/dashboard-bootstrap", "/api/calendar/timeline"])
-    queryClient.invalidateQueries({ queryKey: [k] });
+  // Cache bus: obligations domain covers /api/obligations + dashboard-enhanced
+  // + stats + cashflow + loans/schedule. Bootstrap + timeline have no matching
+  // domain entry, so they stay explicit.
+  invalidateDomain("obligations");
+  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-bootstrap"] });
+  queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
 };
 
 // ── Bills & Obligations ──────────────────────────────────────────────────────
@@ -345,8 +350,9 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
     onSuccess: () => {
       toast({ title: "Expiration updated", description: "The document now carries the renewed date." });
       setRenewId(null);
-      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Cache bus: documents domain covers /api/documents + dashboard-enhanced
+      // + stats + activity.
+      invalidateDomain("documents");
     },
     onError: (e: any) => toast({ title: "Couldn't update", description: e?.message, variant: "destructive" }),
   });
@@ -499,7 +505,9 @@ export function ProjectsPopup({ open, onClose, goals }: { open: boolean; onClose
     onSuccess: (_d, vars) => {
       toast({ title: vars.body.status === "completed" ? "Goal completed 🎉" : "Progress updated" });
       setProgressId(null);
-      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      // Cache bus: goals domain also refreshes stats + dashboard-enhanced so
+      // the goal KPI/section tiles move with the popup.
+      invalidateDomain("goals");
     },
     onError: (e: any) => toast({ title: "Update failed", description: e?.message, variant: "destructive" }),
   });

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
+import { useState, useRef, useEffect, useCallback, useDeferredValue, useMemo, lazy, memo, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
@@ -28,8 +28,23 @@ const SmartFillDialog = lazy(() =>
 );
 const DocumentViewer = lazy(() => import("@/components/DocumentViewer"));
 const ChatChartBody = lazy(() => import("@/components/ChatChartRenderer"));
+
+// SmartFillDialog preload (QA audit, same-file fix): the lazy chunk otherwise
+// pays its fetch + JS-parse cost on first OPEN. Warm it on pointerdown of the
+// attach button instead — pointerdown fires before click, and the user then
+// spends seconds in the file picker, so the chunk is parsed long before the
+// dialog can possibly mount. Repeat calls are no-ops (dynamic import dedupes,
+// and React.lazy resolves from the warm module cache).
+let smartFillDialogPreloaded = false;
+function preloadSmartFillDialog() {
+  if (smartFillDialogPreloaded) return;
+  smartFillDialogPreloaded = true;
+  import("@/components/SmartFillDialog").catch(() => { smartFillDialogPreloaded = false; });
+}
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { ChatComposer, type ChatComposerHandle } from "@/components/chat/ChatComposer";
+import { streamChat } from "@/components/chat/chat-stream";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -57,11 +72,9 @@ import {
   Loader2,
   Check,
   Calendar,
-  Camera,
   Target,
   Flame,
   BookOpen,
-  RotateCcw,
   Pencil,
   Moon,
   Heart,
@@ -74,7 +87,6 @@ import {
   ChevronDown,
   Table as TableIcon,
   FileBarChart,
-  Mic,
   Search,
   Copy,
 } from "lucide-react";
@@ -1075,7 +1087,11 @@ function ExtractionConfirmation({
 interface StagedAttachment {
   name: string;
   mimeType: string;
-  data: string; // base64 — empty string while processing
+  // PERF (defect #8): base64 no longer lives in React state — it's stored in
+  // attachmentDataRef keyed by previewUrl and read via getAttachmentData() at
+  // send time, so multi-MB strings stop riding through reconciliation on every
+  // setAttachments. This field stays for shape-compat and is always "".
+  data: string;
   previewUrl: string;
   profileId: string; // "none" | profileId
   processing?: boolean; // true while image is being EXIF-corrected/compressed
@@ -1721,68 +1737,869 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
   );
 }
 
-function useSpeechInput(onResult: (text: string) => void, onError?: (title: string, description?: string) => void) {
-  const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<any>(null);
+// ── Image processing (module scope — pure, no component state) ───────────────
+// PERF (2026-07-21, QA scorecard defect #7): prefer createImageBitmap with
+// imageOrientation:'from-image' — decode happens off the main thread and EXIF
+// rotation is applied natively, so a 10MB iPhone photo no longer blocks paint
+// while a DataView walks EXIF and a canvas redraws synchronously. Encoding
+// uses async convertToBlob/toBlob instead of synchronous toDataURL. The legacy
+// FileReader+canvas path below remains the fallback for browsers without
+// (working) createImageBitmap orientation support.
+const IMG_BUDGET_MB = 3.6; // stay safely under Vercel's ~4.5MB request body limit
+// Highest quality first; step down only if the encoded image is too big.
+const IMG_ATTEMPTS: Array<{ dim: number; q: number }> = [
+  { dim: 3072, q: 0.92 },
+  { dim: 3072, q: 0.85 },
+  { dim: 2048, q: 0.85 },
+  { dim: 1600, q: 0.8 },
+];
+const b64SizeMB = (b64: string) => b64.length * 0.75 / 1024 / 1024;
 
-  const start = useCallback(async () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      onError?.("Voice input not supported", "Use Chrome or Safari for voice input.");
-      return;
+const blobToBase64 = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
+// Encode an (already orientation-corrected) bitmap to JPEG base64 within the
+// upload size budget.
+async function bitmapToJpegBase64(bitmap: ImageBitmap): Promise<string> {
+  let out = "";
+  for (const a of IMG_ATTEMPTS) {
+    let w = bitmap.width, h = bitmap.height;
+    if (w > a.dim || h > a.dim) {
+      const scale = a.dim / Math.max(w, h);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
     }
+    let blob: Blob | null = null;
+    if (typeof OffscreenCanvas !== "undefined") {
+      const canvas = new OffscreenCanvas(w, h);
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(bitmap, 0, 0, w, h);
+        blob = await canvas.convertToBlob({ type: "image/jpeg", quality: a.q });
+      }
+    }
+    if (!blob) {
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d")!;
+      ctx.imageSmoothingEnabled = true;
+      (ctx as any).imageSmoothingQuality = "high";
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", a.q));
+    }
+    if (!blob) throw new Error("Image encode failed");
+    out = await blobToBase64(blob);
+    if (b64SizeMB(out) <= IMG_BUDGET_MB) break;
+  }
+  return out;
+}
 
-    // If running in Capacitor, request native mic permission
-    if ((window as any).Capacitor?.isNativePlatform()) {
+// Preferred entry point for staged image files.
+async function processImageFile(file: File): Promise<string> {
+  if (typeof createImageBitmap === "function") {
+    let bitmap: ImageBitmap | null = null;
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch {
+      bitmap = null; // options unsupported or decode failed — use legacy path
+    }
+    if (bitmap) {
       try {
-        // Dynamic import with variable to prevent Rollup from resolving at build time
-        const modPath = '@capacitor-community/microphone';
-        const mod = await (Function('p', 'return import(p)'))(modPath);
-        const permission = await mod.Microphone.requestPermission();
-        if (permission.microphone !== 'granted') {
-          onError?.("Microphone permission required", "Enable microphone access in your device settings.");
-          return;
-        }
-      } catch { /* Capacitor plugin not installed, fallback to web */ }
+        const out = await bitmapToJpegBase64(bitmap);
+        bitmap.close();
+        console.log(`[upload] Image processed (bitmap): base64 ${b64SizeMB(out).toFixed(1)}MB`);
+        return out;
+      } catch (err) {
+        try { bitmap.close(); } catch {}
+        console.warn("[upload] Bitmap encode failed, falling back to legacy path:", err);
+      }
     }
+  }
+  return correctImageOrientation(file);
+}
 
-    // Check browser microphone permission
-    if (navigator.permissions) {
+// Process image: correct EXIF orientation + resize/compress to fit upload limits
+// ALWAYS runs through canvas to ensure images stay under ~3MB base64 (Vercel body limit safety)
+const correctImageOrientation = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result as ArrayBuffer;
+      const dataView = new DataView(arrayBuffer);
+      
+      // Read EXIF orientation
+      let orientation = 1;
       try {
-        const result = await navigator.permissions.query({ name: 'microphone' as PermissionName });
-        if (result.state === 'denied') {
-          onError?.("Microphone access denied", "Enable microphone in your browser settings.");
-          return;
+        if (dataView.getUint16(0, false) === 0xFFD8) { // JPEG
+          let offset = 2;
+          while (offset < dataView.byteLength - 2) {
+            const marker = dataView.getUint16(offset, false);
+            offset += 2;
+            if (marker === 0xFFE1) { // APP1 (EXIF)
+              const exifOffset = offset + 2;
+              if (dataView.getUint32(exifOffset, false) === 0x45786966) { // "Exif"
+                const tiffOffset = exifOffset + 6;
+                const littleEndian = dataView.getUint16(tiffOffset, false) === 0x4949;
+                const ifdOffset = tiffOffset + dataView.getUint32(tiffOffset + 4, littleEndian);
+                const entries = dataView.getUint16(ifdOffset, littleEndian);
+                for (let i = 0; i < entries; i++) {
+                  const entryOffset = ifdOffset + 2 + i * 12;
+                  if (entryOffset + 12 > dataView.byteLength) break;
+                  if (dataView.getUint16(entryOffset, littleEndian) === 0x0112) { // Orientation tag
+                    orientation = dataView.getUint16(entryOffset + 8, littleEndian);
+                    break;
+                  }
+                }
+              }
+              break;
+            } else if ((marker & 0xFF00) === 0xFF00) {
+              offset += dataView.getUint16(offset, false);
+            } else break;
+          }
         }
-      } catch { /* permissions API not supported for microphone in this browser */ }
-    }
+      } catch { /* keep orientation = 1 if parsing fails */ }
 
-    const rec = new SpeechRecognition();
-    rec.continuous = false;
-    rec.interimResults = false;
-    rec.lang = 'en-US';
-    rec.onresult = (e: any) => {
-      const transcript = e.results[0][0].transcript;
-      onResult(transcript);
-      setListening(false);
+      // ALWAYS process through canvas: applies EXIF rotation AND keeps the
+      // upload under Vercel's ~4.5MB body limit. We prefer HIGH resolution and
+      // quality so faint document text (e.g. a vet schedule) stays legible for
+      // the vision model — degrading the image is a top cause of misreads —
+      // and only step down if the encoded size exceeds the budget.
+      const img = new Image();
+      img.onload = () => {
+        const renderAt = (maxDim: number): HTMLCanvasElement => {
+          let w = img.width, h = img.height;
+          if (w > maxDim || h > maxDim) {
+            const scale = maxDim / Math.max(w, h);
+            w = Math.round(w * scale);
+            h = Math.round(h * scale);
+          }
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d')!;
+          // Set canvas size based on rotation
+          if (orientation >= 5) { canvas.width = h; canvas.height = w; }
+          else { canvas.width = w; canvas.height = h; }
+          // Apply EXIF transform
+          switch (orientation) {
+            case 2: ctx.transform(-1, 0, 0, 1, w, 0); break;
+            case 3: ctx.transform(-1, 0, 0, -1, w, h); break;
+            case 4: ctx.transform(1, 0, 0, -1, 0, h); break;
+            case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
+            case 6: ctx.transform(0, 1, -1, 0, h, 0); break;
+            case 7: ctx.transform(0, -1, -1, 0, h, w); break;
+            case 8: ctx.transform(0, -1, 1, 0, 0, w); break;
+          }
+          ctx.imageSmoothingEnabled = true;
+          (ctx as any).imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, w, h);
+          return canvas;
+        };
+
+        const sizeMB = (b64: string) => b64.length * 0.75 / 1024 / 1024;
+        const BUDGET_MB = 3.6; // stay safely under Vercel's ~4.5MB request body limit
+        // Highest quality first; fall back only if the encoded image is too big.
+        const attempts: Array<{ dim: number; q: number }> = [
+          { dim: 3072, q: 0.92 },
+          { dim: 3072, q: 0.85 },
+          { dim: 2048, q: 0.85 },
+          { dim: 1600, q: 0.8 },
+        ];
+        let compressed = '';
+        for (const a of attempts) {
+          compressed = renderAt(a.dim).toDataURL('image/jpeg', a.q).split(',')[1];
+          if (sizeMB(compressed) <= BUDGET_MB) break;
+        }
+        console.log(`[upload] Image processed: ${img.width}x${img.height} → base64 ${sizeMB(compressed).toFixed(1)}MB`);
+        resolve(compressed);
+      };
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
     };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
-    recognitionRef.current = rec;
-    rec.start();
-    setListening(true);
-  }, [onResult, onError]);
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+};
 
-  const stop = useCallback(() => {
-    recognitionRef.current?.stop();
-    setListening(false);
-  }, []);
 
-  const supported = typeof window !== 'undefined' && (
-    !!(window as any).SpeechRecognition || !!(window as any).webkitSpeechRecognition
+// ── Memoized message row ─────────────────────────────────────────────────────
+// PERF (2026-07-21, QA scorecard defect #3): each row renders bubbles, images,
+// action cards and tool cards; wrapping the row in React.memo keeps unrelated
+// state changes (composer keystrokes, search toggles, editing another row's
+// entry) from re-rendering the entire transcript. Entry-edit state is only
+// passed to the row that owns the entry being edited (stable EMPTY_* sentinels
+// otherwise), and every callback prop is referentially stable (useCallback /
+// setState identity) so React.memo's shallow compare actually holds.
+const EMPTY_ENTRY_VALS: Record<string, any> = {};
+const EMPTY_ENTRY_NEW_FIELD = { name: "", value: "" };
+
+// Coerce numeric-looking strings from the inline entry editor to numbers.
+const coerceVal = (raw: string): any => {
+  const t = raw.trim();
+  const n = Number(t);
+  return t !== "" && !isNaN(n) && String(n) === t ? n : raw;
+};
+
+interface MessageRowProps {
+  msg: ChatMessage;
+  setActiveArtifact: (artifact: any) => void;
+  setSmartFillFile: (file: { name: string; mimeType: string; base64: string } | null) => void;
+  handleConfirmExtraction: (data: any) => Promise<boolean>;
+  handleSkipExtraction: (extractionId: string) => void;
+  setMessages: (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
+  /** Re-send a user message whose POST failed (bubble stays visible, marked failed). */
+  onRetry: (msg: ChatMessage) => void;
+  editingEntryId: string | null;
+  entryEditVals: Record<string, any>;
+  entryNewField: { name: string; value: string };
+  setEditingEntryId: (id: string | null) => void;
+  setEntryEditVals: React.Dispatch<React.SetStateAction<Record<string, any>>>;
+  setEntryNewField: React.Dispatch<React.SetStateAction<{ name: string; value: string }>>;
+  saveEntryEdit: (action: any, entryId: string) => void;
+}
+
+const MessageRow = memo(function MessageRow({
+  msg,
+  setActiveArtifact,
+  setSmartFillFile,
+  handleConfirmExtraction,
+  handleSkipExtraction,
+  setMessages,
+  onRetry,
+  editingEntryId,
+  entryEditVals,
+  entryNewField,
+  setEditingEntryId,
+  setEntryEditVals,
+  setEntryNewField,
+  saveEntryEdit,
+}: MessageRowProps) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  return (
+    <div
+      className={`message-in flex ${
+        msg.role === "user" ? "justify-end" : "justify-start"
+      }`}
+    >
+      <div
+        className={`max-w-[85%] rounded-2xl px-4 py-3 ${
+          msg.role === "user"
+            ? "bg-primary text-primary-foreground"
+            : "bg-card border border-border"
+        }`}
+        data-testid={`message-${msg.role}-${msg.id}`}
+      >
+        {msg.role === "assistant" && (
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <Bot className="h-3.5 w-3.5 text-primary" />
+            <span className="text-xs font-medium text-primary">
+              Portol
+            </span>
+            {msg.content?.trim() && (
+              <CopyButton value={msg.content} iconOnly className="ml-auto opacity-60 hover:opacity-100" />
+            )}
+          </div>
+        )}
+
+        {/* Attachment preview in user message. The wrapper reserves the
+            image's max display height up front (intrinsic size is unknown —
+            arbitrary user uploads) so decode/load doesn't shift the transcript
+            layout (CLS, defect #6). */}
+        {msg.attachment &&
+          msg.attachment.mimeType.startsWith("image/") && (
+            <div className="mb-2 rounded-lg overflow-hidden h-48">
+              <img
+                src={
+                  msg.attachment.previewUrl ||
+                  `data:${msg.attachment.mimeType};base64,${msg.attachment.data}`
+                }
+                alt={msg.attachment.name}
+                height={192}
+                loading="lazy"
+                decoding="async"
+                className="h-48 max-h-48 w-auto max-w-full object-contain rounded-lg"
+              />
+            </div>
+          )}
+        {msg.attachment &&
+          !msg.attachment.mimeType.startsWith("image/") && (
+            <div className="mb-2 flex items-center gap-2 p-2 rounded-lg bg-muted/30">
+              <FileText className="h-5 w-5 text-muted-foreground" />
+              <span className="text-xs truncate">
+                {msg.attachment.name}
+              </span>
+            </div>
+          )}
+
+        <div className={`text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2 ${msg.role === "user" ? "text-primary-foreground" : "text-foreground"}`}>
+          {msg.content}
+        </div>
+
+        {msg.role === "user" && msg.content?.trim() && (
+          <div className="flex justify-end mt-1">
+            <CopyButton
+              value={msg.content}
+              iconOnly
+              className="opacity-60 hover:opacity-100 text-primary-foreground/80 hover:text-primary-foreground hover:bg-primary-foreground/10"
+            />
+          </div>
+        )}
+
+        {/* Failed-send marker (defect #1): the optimistically pushed bubble
+            stays visible when the POST errors, with a one-tap retry. */}
+        {msg.role === "user" && (msg as any).failed && (
+          <div className="mt-1.5 flex items-center justify-end gap-2">
+            <span className="text-[11px] text-primary-foreground/70">Not sent</span>
+            <button
+              type="button"
+              onClick={() => onRetry(msg)}
+              className="text-[11px] font-semibold underline underline-offset-2 text-primary-foreground/90 hover:text-primary-foreground"
+              data-testid={`button-retry-${msg.id}`}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Document previews - inline with zoom & share */}
+        <ChatDocumentPreviews
+          documentPreview={msg.documentPreview}
+          documentPreviews={msg.documentPreviews}
+        />
+
+        {/* Inline charts */}
+        {(msg as any).charts?.length > 0 && (
+          <div className="space-y-1">
+            {(msg as any).charts.map((chart: ChartSpec2, ci: number) => <ChatChart key={ci} spec={chart} />)}
+          </div>
+        )}
+
+        {/* Inline tables */}
+        {(msg as any).tables?.length > 0 && (
+          <div className="space-y-1">
+            {(msg as any).tables.map((table: TableSpec2, ti: number) => <ChatTable key={ti} spec={table} />)}
+          </div>
+        )}
+
+        {/* Inline report */}
+        {(msg as any).report && <ChatReport spec={(msg as any).report as ReportSpec2} />}
+
+        {/* Artifact preview card */}
+        {(msg as any).artifact && (
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={`View artifact: ${(msg as any).artifact.title}`}
+            className="mt-2 border border-primary/30 rounded-lg overflow-hidden cursor-pointer"
+            onClick={() => setActiveArtifact((msg as any).artifact)}
+            onKeyDown={onEnterOrSpace(() => setActiveArtifact((msg as any).artifact))}
+          >
+            <div className="flex items-center gap-2 px-3 py-2 bg-primary/5">
+              <BarChart3 className="h-4 w-4 text-primary" />
+              <span className="text-sm font-medium">{(msg as any).artifact.title}</span>
+              <Badge variant="outline" className="text-xs ml-auto">{(msg as any).artifact.type}</Badge>
+            </div>
+            <div className="px-3 py-2 text-xs text-muted-foreground">Click to view artifact</div>
+          </div>
+        )}
+
+        {/* Extraction confirmation UI */}
+        {msg.pendingExtraction && msg.pendingExtraction.extractedFields.length > 0 && (
+          <ExtractionConfirmation
+            extraction={msg.pendingExtraction}
+            onConfirm={handleConfirmExtraction}
+            onSkip={() => { if (msg.pendingExtraction?.extractionId) handleSkipExtraction(msg.pendingExtraction.extractionId); }}
+          />
+        )}
+
+        {/* Smart Fill chip — inline action on assistant message */}
+        {msg.smartFillSuggestion && (
+          <button
+            type="button"
+            onClick={() => setSmartFillFile({
+              name: msg.smartFillSuggestion!.fileName,
+              mimeType: msg.smartFillSuggestion!.mimeType,
+              base64: msg.smartFillSuggestion!.base64,
+            })}
+            className="mt-3 w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-primary/30 bg-primary/5 hover:bg-primary/10 transition text-left"
+            data-testid="chip-smart-fill"
+          >
+            <Sparkles className="h-4 w-4 text-primary flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium truncate">{msg.smartFillSuggestion.label || "Open Smart Fill"}</div>
+              <div className="text-[11px] text-muted-foreground truncate">{msg.smartFillSuggestion.fileName}</div>
+            </div>
+            <span className="text-[11px] font-medium text-primary">Open →</span>
+          </button>
+        )}
+
+        {/* Action badges */}
+        {msg.actions && msg.actions.length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            {msg.actions.filter(a => [
+              'log_entry', 'log_tracker_entry', 'add_tracker_entry',
+              'log_expense', 'create_task', 'create_event', 'create_reminder',
+              'create_habit', 'checkin_habit', 'create_obligation',
+              'create_goal', 'create_profile', 'update_profile',
+              'create_tracker', 'journal_entry', 'create_artifact',
+              'complete_task', 'complete_event', 'pay_obligation',
+              'delete_task', 'delete_habit', 'delete_tracker_entry',
+              'update_tracker_entry', 'uncomplete_habit', 'save_memory',
+              // 2026-07: the ~40 previously-unmapped write tools now
+              // surface as typed action cards (undo only where an
+              // endpoint is wired in undoEndpoints below).
+              'create_liability', 'add_liability_payment', 'log_income',
+              'log_paycheck', 'update_entity', 'delete_entity',
+              'link_entities', 'set_budget', 'revalue_asset',
+              'manage_domain', 'manage_document',
+            ].includes(a.type)).map((action, i) => {
+              const entityId = action.data?._entityId;
+              const isUndone = action.data?._undone;
+              // All create/log actions can be undone
+              // Mapping covers BOTH the raw tool name AND the mapped ParsedAction type
+              const undoEndpoints: Record<string, string> = {
+                // By ParsedAction type (what gets stored in action.type)
+                create_task: "tasks",
+                log_expense: "expenses",
+                create_event: "events",
+                create_reminder: "events", // mirrored onto the calendar; undo removes the event
+
+                create_habit: "habits",
+                create_obligation: "obligations",
+                create_goal: "goals",
+                create_profile: "profiles",
+                journal_entry: "journal",
+                create_artifact: "artifacts",
+                create_tracker: "trackers",
+                log_entry: "tracker-entries",      // log_tracker_entry maps to log_entry
+                log_income: "incomes",             // DELETE /api/incomes/:id exists
+                // Also by raw tool name (fallback)
+                log_tracker_entry: "tracker-entries",
+                add_tracker_entry: "tracker-entries",
+              };
+              // update_profile is reverted in-place by re-applying previous fields,
+              // not by deleting the row. Detect it separately so the action card can
+              // render a Revert button.
+              const previousState = (action.data as any)?._previousState;
+              const canRevert = action.type === 'update_profile' && !isUndone && previousState && previousState.profileId;
+              const canUndo = !!(entityId && !isUndone && undoEndpoints[action.type]);
+              // Build a meaningful title — always uppercase tracker/type label
+              const isTrackerEntry = action.type === 'log_entry' || (action.type as string) === 'log_tracker_entry';
+              const trackerName = (action.data?.trackerName || '').toUpperCase();
+              // Prefer the server-resolved REAL owner (walks nested-asset
+              // parent chains — Jim's Honda CRV badges JIM even when the
+              // user said "my Honda CRV") over the raw tool input.
+              const ownerName = (action.data as any)?._ownerName;
+              const whoFor = ownerName
+                ? String(ownerName).charAt(0).toUpperCase() + String(ownerName).slice(1)
+                : action.data?.forProfile
+                  ? String(action.data.forProfile).charAt(0).toUpperCase() + String(action.data.forProfile).slice(1)
+                  : 'You';
+              // Format values: "250 cal, 31g carbs, 4g protein".
+              // Underscore keys are reserved metadata (_notes,
+              // _enrichment); estimated values render with a ≈ so
+              // the user always sees exact vs estimated distinctly.
+              const enrichment = (action.data?.values as any)?._enrichment;
+              const estimatedKeys = new Set(Object.keys(enrichment?.estimated || {}));
+              const estimatedParts: string[] = enrichment?.estimated
+                ? Object.entries(enrichment.estimated as Record<string, any>)
+                    .map(([k, pv]) => `≈${(pv as any)?.value} ${k} (est.)`)
+                    .slice(0, 3)
+                : [];
+              const entryValues = isTrackerEntry && action.data?.values
+                ? [
+                    ...Object.entries(action.data.values as Record<string,any>)
+                      // Estimated fields are applied into values for storage,
+                      // but render ONLY via the ≈ (est.) parts below — never
+                      // as plain values that look user-stated.
+                      .filter(([k, v]) => !k.startsWith('_') && k !== 'item' && !estimatedKeys.has(k) && typeof v !== 'object')
+                      .map(([k, v]) => `${v} ${k}`)
+                      .slice(0, 4),
+                    ...estimatedParts,
+                  ].join(' · ')
+                : '';
+              const entryItem = isTrackerEntry && action.data?.values?.item
+                ? String(action.data.values.item) : '';
+              const entityTitle = isTrackerEntry
+                ? (entryItem || trackerName || 'Entry')
+                : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || (action as any).title || '').toUpperCase() || actionLabel(action.type).toUpperCase();
+              const entityDetails = isTrackerEntry
+                ? entryValues
+                : action.data?.amount
+                  ? `$${Number(action.data.amount).toFixed(2)}`
+                  : '';
+              const isArtifact = action.type === 'create_artifact' && action.data && !isUndone;
+              // Where tapping the card takes you (null = not linkable).
+              const cardRoute = !isUndone ? actionRoute(action.type, action.data) : null;
+              return (
+                <div key={i} data-testid={`action-card-${action.type}-${i}`}>
+                  <div
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
+                      isUndone
+                        ? "border-red-500/20 bg-red-500/5 opacity-60"
+                        : "border-green-500/25 bg-green-500/6"
+                    } ${isArtifact ? 'rounded-b-none border-b-0' : ''}`}
+                  >
+                    {/* Status icon */}
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
+                      isUndone ? "bg-red-500/15" : "bg-green-500/15"
+                    }`}>
+                      {isUndone
+                        ? <X className="h-3.5 w-3.5 text-red-500" />
+                        : <Check className="h-3.5 w-3.5 text-green-600" />}
+                    </div>
+                    {/* Content — tappable: opens the entity's page
+                        (profile detail, its tracker, module list). */}
+                    <div
+                      className={`flex-1 min-w-0 ${cardRoute ? 'cursor-pointer active:opacity-70 transition-opacity' : ''}`}
+                      role={cardRoute ? 'link' : undefined}
+                      tabIndex={cardRoute ? 0 : undefined}
+                      data-testid={`action-card-link-${action.type}-${i}`}
+                      onClick={cardRoute ? () => hashNavigate(cardRoute) : undefined}
+                      onKeyDown={cardRoute ? (e) => { if (e.key === 'Enter' || e.key === ' ') hashNavigate(cardRoute); } : undefined}
+                    >
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className={`text-xs font-semibold ${
+                          isUndone ? 'line-through text-muted-foreground' : 'text-foreground'
+                        }`}>
+                          {entityTitle || actionLabel(action.type).toUpperCase()}
+                        </p>
+                        {/* WHO badge — always show */}
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                          whoFor === 'You' ? 'bg-primary/15 text-primary' : 'bg-amber-500/15 text-amber-600'
+                        }`}>
+                          {whoFor.toUpperCase()}
+                        </span>
+                        {isTrackerEntry && trackerName && (
+                          <span className="text-[9px] text-muted-foreground/60 font-medium">
+                            via {trackerName}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {entityDetails || actionLabel(action.type)}
+                        {isUndone && ' · DELETED'}
+                      </p>
+                    </div>
+                    {/* Edit button — tracker entries only (change duration,
+                        intensity, calories; add/remove fields). Persists via the
+                        lenient PATCH-by-entry-id endpoint and reflects app-wide. */}
+                    {isTrackerEntry && entityId && !isUndone && (
+                      <button
+                        className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-primary/50 text-primary bg-primary/5 hover:bg-primary/15 active:scale-95 transition-all"
+                        title="Edit this entry"
+                        data-testid={`button-edit-entry-${i}`}
+                        onClick={stopProp(() => {
+                          if (editingEntryId === entityId) { setEditingEntryId(null); return; }
+                          const v: Record<string, any> = {};
+                          for (const [k, val] of Object.entries(action.data?.values || {})) { if (k !== "_notes") v[k] = val; }
+                          setEntryEditVals(v);
+                          setEntryNewField({ name: "", value: "" });
+                          setEditingEntryId(entityId);
+                        })}
+                      >
+                        ✎ Edit
+                      </button>
+                    )}
+                    {/* Undo button */}
+                    {canUndo && (
+                      <button
+                        className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-destructive/50 text-destructive bg-destructive/5 hover:bg-destructive/15 active:scale-95 transition-all"
+                        title="Delete this entry"
+                        data-testid={`button-undo-${action.type}-${i}`}
+                        onClick={stopProp(async () => {
+                          const ep = undoEndpoints[action.type];
+                          if (!ep || !entityId) return;
+                          try {
+                            await apiRequest("DELETE", `/api/${ep}/${entityId}`);
+                            action.data = { ...action.data, _undone: true };
+                            // Force re-render by creating new array
+                            setMessages(prev => prev.map(m => ({
+                              ...m,
+                              actions: m.actions ? [...m.actions] : m.actions
+                            })));
+                            // Optimistically remove from cache (prefix match).
+                            queryClient.setQueriesData({ queryKey: [`/api/${ep}`] }, (old: any) =>
+                              Array.isArray(old) ? old.filter((item: any) => item?.id !== entityId) : old
+                            );
+                            // Surgical invalidation — affected list + dashboard rollups
+                            queryClient.invalidateQueries({ queryKey: [`/api/${ep}`] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                            toast({
+                              title: `Deleted: ${entityTitle || actionLabel(action.type)}`,
+                              description: `Removed from ${whoFor}'s ${trackerName || 'data'}`,
+                            });
+                          } catch {
+                            toast({ title: "Delete failed — try again", variant: "destructive" });
+                          }
+                        })}
+                      >
+                        × Delete
+                      </button>
+                    )}
+                    {/* Revert button — update_profile only. Re-applies the field
+                        values that were overwritten so the change is undone in place. */}
+                    {canRevert && (
+                      <button
+                        className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-amber-500/50 text-amber-600 bg-amber-500/5 hover:bg-amber-500/15 active:scale-95 transition-all"
+                        title="Restore the previous values"
+                        data-testid={`button-revert-${action.type}-${i}`}
+                        onClick={stopProp(async () => {
+                          const ps = (action.data as any)?._previousState;
+                          if (!ps?.profileId) return;
+                          try {
+                            // Fetch current profile so we can compose a precise revert
+                            // (strip keys that didn't exist before, restore those that did).
+                            const cur = await apiRequest("GET", `/api/profiles/${ps.profileId}`).then(r => r.json());
+                            const restoredFields: Record<string, any> = { ...(cur?.fields || {}) };
+                            // P1 universal-delete: storage now MERGES the incoming `fields`
+                            // onto the existing record (so a missing key is a no-op, not a
+                            // delete). To actually remove keys during a revert we must
+                            // pass them in `fieldsToDelete` instead of relying on shallow
+                            // overwrite. Track keys to delete as we walk the previous state.
+                            const fieldsToDelete: string[] = [];
+                            for (const [k, v] of Object.entries(ps.fields || {})) {
+                              if (v === undefined) {
+                                delete restoredFields[k];
+                                fieldsToDelete.push(k);
+                              } else {
+                                restoredFields[k] = v;
+                              }
+                            }
+                            const body: any = { fields: restoredFields };
+                            if (fieldsToDelete.length > 0) body.fieldsToDelete = fieldsToDelete;
+                            if (ps.notes !== undefined) body.notes = ps.notes;
+                            if (ps.tags !== undefined) body.tags = ps.tags;
+                            if (ps.type !== undefined) body.type = ps.type;
+                            await apiRequest("PATCH", `/api/profiles/${ps.profileId}`, body);
+                            action.data = { ...action.data, _undone: true };
+                            setMessages(prev => prev.map(m => ({
+                              ...m,
+                              actions: m.actions ? [...m.actions] : m.actions,
+                            })));
+                            queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                            toast({
+                              title: "Reverted",
+                              description: `Restored ${cur?.name || 'profile'} to its previous state`,
+                            });
+                          } catch {
+                            toast({ title: "Revert failed — try again", variant: "destructive" });
+                          }
+                        })}
+                      >
+                        ↶ Revert
+                      </button>
+                    )}
+                  </div>
+                  {/* Inline entry editor — appears under the card when Edit is tapped */}
+                  {isTrackerEntry && editingEntryId === entityId && (
+                    <div className="mt-1 rounded-xl border border-primary/30 bg-primary/5 p-2.5 space-y-1.5" data-testid={`entry-editor-${i}`}>
+                      {Object.keys(entryEditVals).filter((k) => k !== "_notes").map((k) => (
+                        <div key={k} className="flex items-center gap-1.5">
+                          <label className="text-[10px] text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
+                          <input
+                            className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+                            value={entryEditVals[k] ?? ""}
+                            onChange={(e) => { const val = coerceVal(e.target.value); setEntryEditVals((p) => ({ ...p, [k]: val })); }}
+                            data-testid={`entry-edit-field-${k}`}
+                          />
+                          <button
+                            type="button"
+                            className="p-1 rounded hover:bg-destructive/15"
+                            title={`Remove "${k}"`}
+                            onClick={() => setEntryEditVals((p) => { const n = { ...p }; delete n[k]; return n; })}
+                          >
+                            <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                          </button>
+                        </div>
+                      ))}
+                      {/* Add a field */}
+                      <div className="flex items-center gap-1.5 border-t border-border/40 pt-1.5">
+                        <input
+                          className="w-24 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+                          placeholder="field"
+                          value={entryNewField.name}
+                          onChange={(e) => setEntryNewField((p) => ({ ...p, name: e.target.value }))}
+                        />
+                        <input
+                          className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+                          placeholder="value"
+                          value={entryNewField.value}
+                          onChange={(e) => setEntryNewField((p) => ({ ...p, value: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === "Enter" && entryNewField.name.trim()) { setEntryEditVals((p) => ({ ...p, [entryNewField.name.trim()]: coerceVal(entryNewField.value) })); setEntryNewField({ name: "", value: "" }); } }}
+                        />
+                        <button
+                          type="button"
+                          className="shrink-0 h-7 px-2 rounded-lg text-xs font-semibold border border-border hover:bg-muted disabled:opacity-40"
+                          disabled={!entryNewField.name.trim()}
+                          onClick={() => { const name = entryNewField.name.trim(); if (!name) return; setEntryEditVals((p) => ({ ...p, [name]: coerceVal(entryNewField.value) })); setEntryNewField({ name: "", value: "" }); }}
+                        >
+                          + Add
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button type="button" className="h-7 px-2.5 rounded-lg text-xs font-semibold text-muted-foreground hover:bg-muted" onClick={() => setEditingEntryId(null)}>Cancel</button>
+                        <button type="button" className="h-7 px-3 rounded-lg text-xs font-bold border border-primary/50 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => saveEntryEdit(action, entityId)} data-testid={`entry-editor-save-${i}`}>Save</button>
+                      </div>
+                    </div>
+                  )}
+                  {/* Inline artifact preview */}
+                  {isArtifact && (() => {
+                    // Find the saved artifact by id (server returns it on the
+                    // action) so clicks open the real artifact rather than just
+                    // bouncing to the Artifacts list. Fallback: navigate to /artifacts.
+                    const aid = (action.data as any)?.id || (action.data as any)?.artifactId;
+                    const atype = (action.data as any)?.type;
+                    const open = () => {
+                      if (atype === "doc" || atype === "sheet") {
+                        if (aid) hashNavigate(`/editor/${aid}`);
+                        else hashNavigate("/artifacts");
+                        return;
+                      }
+                      // Other types: open the side panel viewer directly when we
+                      // have the full payload, else go to /artifacts.
+                      if (action.data) setActiveArtifact(action.data as any);
+                      else hashNavigate("/artifacts");
+                    };
+                    return (
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Open artifact"
+                      className="border border-green-500/25 border-t-0 rounded-b-xl overflow-hidden cursor-pointer"
+                      onClick={open}
+                      onKeyDown={onEnterOrSpace(open)}
+                    >
+                      <div className="p-3 max-h-[200px] overflow-hidden relative bg-card">
+                        <ArtifactPreview data={action.data} />
+                        <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-card to-transparent" />
+                      </div>
+                      <div className="px-3 py-1.5 bg-muted/30 border-t border-border/30 flex items-center justify-between">
+                        <button
+                          className="text-xs text-primary hover:text-primary/80 font-medium transition-colors"
+                          onClick={(e) => { e.stopPropagation(); open(); }}
+                        >
+                          Open artifact →
+                        </button>
+                        <span className="text-[10px] text-muted-foreground">click anywhere to open</span>
+                      </div>
+                    </div>
+                    );
+                  })()}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Per-operation outcome checklist — only the ones that did
+            NOT succeed (successes already render as action cards).
+            Multi-action messages get honest per-item failure/skip
+            reporting instead of a vague "some failed". */}
+        {msg.operations && msg.operations.some((op: any) => op.status !== "ok") && (
+          <div className="mt-2 space-y-1 text-xs">
+            {msg.operations.filter((op: any) => op.status !== "ok").map((op: any, oi: number) => (
+              <div key={oi} className="flex items-start gap-1.5">
+                <span aria-hidden>{op.status === "deduped" ? "↩️" : op.status === "skipped" ? "⏸️" : "❌"}</span>
+                <span className="text-muted-foreground">
+                  <span className="font-medium">{op.trackerName || op.raw || op.tool}</span>
+                  {op.status === "deduped" ? " — duplicate of an entry logged moments ago" : op.error ? ` — ${op.error}` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Structured confirmation cards */}
+        {msg.results && msg.results.length > 0 && (
+          <div className="mt-2 space-y-1.5">
+            {msg.results.slice(0, 50).map((result: any, ri: number) => {
+              if (!result || result.error) return null;
+              const name = result.title || result.name || result.description || "";
+              const type = result.type || result.category || "";
+              const amount = result.amount != null ? `$${Number(result.amount).toFixed(2)}` : null;
+              // Prefer the server-resolved real owner name (nested-asset
+              // aware) over raw ids/inputs for the "→ person" chip.
+              const profile = result.owner || result.forProfile || result.linkedProfiles?.[0] || "";
+              const date = result.date || result.dueDate || result.nextDueDate || "";
+              const warnings = result._validationWarnings || [];
+              const entityId = result.id;
+              const isDeleted = result._deleted;
+
+              if (!name && !amount) return null;
+
+              // Determine entity endpoint for edit/undo
+              const ep = result.status !== undefined ? "tasks"
+                : result.amount !== undefined ? "expenses"
+                : result.frequency !== undefined ? "obligations"
+                : result.date !== undefined ? "events"
+                : null;
+              // Tap destination: profile rows (people/pets/vehicles/assets/
+              // liabilities carry parentProfileId or a profile type) open
+              // their detail page; tracker entries open their tracker;
+              // list entities open their module page.
+              const isProfileRow = entityId && (
+                Object.prototype.hasOwnProperty.call(result, "parentProfileId")
+                || ["person", "pet", "vehicle", "asset", "liability", "property", "medical", "self"].includes(String(result.type || ""))
+              );
+              const href = isProfileRow ? `/profiles/${entityId}`
+                : result.trackerId ? `/trackers?tracker=${result.trackerId}`
+                : ep === "tasks" ? "/tasks"
+                : ep === "expenses" ? "/finance"
+                : ep === "obligations" ? "/obligations"
+                : ep === "events" ? "/calendar"
+                : null;
+
+              return (
+                <ConfirmationCard
+                  key={`${ri}-${entityId}`}
+                  name={name}
+                  type={type}
+                  amount={amount}
+                  date={date}
+                  profile={profile}
+                  warnings={warnings}
+                  entityId={entityId}
+                  endpoint={ep}
+                  isDeleted={isDeleted}
+                  result={result}
+                  href={href}
+                  onDeleted={() => { result._deleted = true; setMessages(prev => prev.map(m => ({ ...m }))); }}
+                />
+              );
+            })}
+          </div>
+        )}
+
+        {/* Timestamp */}
+        <div className="mt-1.5 flex justify-end">
+          <span className="text-xs text-muted-foreground/60">
+            {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+        </div>
+      </div>
+    </div>
   );
+});
 
-  return { listening, start, stop, supported };
+// Live streaming scratch state (P0 streaming fix). Mirrors the pieces of the
+// final assistant message that can be painted before the `final` frame lands:
+// running text, incrementally-arrived action cards, and in-flight tool labels.
+interface LiveStreamState {
+  text: string;
+  actions: NonNullable<ChatMessage["actions"]>;
+  runningTools: Array<{ tool: string; label?: string }>;
+  startedAt: string;
 }
 
 export default function ChatPage() {
@@ -1792,31 +2609,29 @@ export default function ChatPage() {
   }, []);
   const { toast } = useToast();
   const [messages, setMessagesRaw] = useState<ChatMessage[]>(getChatCache);
-  // Wrap setMessages to also persist to module-level cache
-  const setMessages = (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+  // Wrap setMessages to also persist to module-level cache. Stable identity
+  // (useCallback []) so it can be passed to memoized MessageRows.
+  const setMessages = useCallback((updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
     setMessagesRaw(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
       setChatCache(next); // Persist across navigation
       saveChatHistory(next); // Persist across page reloads
       return next;
     });
-  };
-  const [input, setInput] = useState("");
+  }, []);
+  // PERF (2026-07-21, QA scorecard defect #2): the composer draft no longer
+  // lives here — <ChatComposer/> owns it, so keystrokes don't re-render this
+  // 3.6k-line page. The parent only tracks whether the draft is empty (to
+  // show/hide starter prompts) and reaches the draft through composerRef.
+  // `attachmentNote` is the note typed while an attachment is staged (the
+  // composer is hidden then); it's seeded from the draft when files are staged.
+  const composerRef = useRef<ChatComposerHandle>(null);
+  const [composerEmpty, setComposerEmpty] = useState(true);
+  const [attachmentNote, setAttachmentNote] = useState("");
   // Once a conversation has started, the starter chips collapse into a small
   // toggle instead of staying pinned above the composer. Users can re-open them
   // on demand (recall) without them permanently occupying vertical space.
   const [showStarters, setShowStarters] = useState(false);
-  // Read prefill set by popup AI buttons (sessionStorage approved for this use)
-  useEffect(() => {
-    try {
-      const prefill = sessionStorage.getItem('portol_chat_prefill');
-      if (prefill) { setInput(prefill); sessionStorage.removeItem('portol_chat_prefill'); }
-    } catch {}
-  }, []);
-  const speech = useSpeechInput(
-    (text) => setInput(prev => prev ? prev + ' ' + text : text),
-    (title, description) => toast({ title, description, variant: 'destructive' }),
-  );
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<any>(null);
@@ -1834,8 +2649,21 @@ export default function ChatPage() {
   // Ref to hold attachments at batch-send time so onSettled can revoke URLs and clear state
   const pendingBatchAttachmentsRef = useRef<typeof attachments>([]);
 
+  // PERF (2026-07-21, QA scorecard defect #8): staged-attachment base64 payloads
+  // are held OUT of React state (keyed by the attachment's previewUrl), so
+  // multi-MB strings don't ride through reconciliation on every setAttachments.
+  // State keeps only metadata + object-URL previews; the base64 is looked up at
+  // send time via getAttachmentData().
+  const attachmentDataRef = useRef<Map<string, string>>(new Map());
+  const getAttachmentData = (att: StagedAttachment) =>
+    attachmentDataRef.current.get(att.previewUrl) || att.data || "";
+
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Tracks whether the user is at/near the bottom of the transcript so
+  // auto-scroll never fights a user who has scrolled up (defect #5).
+  const atBottomRef = useRef(true);
+  // -1 ⇒ first run after mount always snaps to the bottom (restored history).
+  const prevMsgCountRef = useRef(-1);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Synchronous send lock (#8, 2026-06-25): react-query's isPending only flips
   // on the NEXT render, so two sends fired within the same tick (fast double-tap
@@ -1847,24 +2675,63 @@ export default function ChatPage() {
   const batchIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const queryClient = useQueryClient();
 
+  // ── Live chat streaming (P0: chat had NO streaming) ────────────────────────
+  // SSE frames mutate liveStreamRef (cheap, no render) and a ~80ms trailing
+  // flush copies it into React state — token deltas never render per-chunk.
+  // The live bubble is scratch UI only: the `final` frame resolves the
+  // mutation, onSuccess appends the REAL assistant message exactly as before,
+  // and onSettled clears the scratch (after onSuccess, so there's no gap
+  // between the live bubble disappearing and the final message appearing).
+  const liveStreamRef = useRef<LiveStreamState | null>(null);
+  // Set when a new model round starts: only the LAST text-bearing round is the
+  // final reply (server-side contract), so the next delta resets the buffer.
+  const liveResetPendingRef = useRef(false);
+  const liveFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [liveStream, setLiveStream] = useState<LiveStreamState | null>(null);
+  const scheduleLiveFlush = useCallback(() => {
+    if (liveFlushTimerRef.current != null) return;
+    liveFlushTimerRef.current = setTimeout(() => {
+      liveFlushTimerRef.current = null;
+      const cur = liveStreamRef.current;
+      setLiveStream(cur ? { ...cur, actions: [...cur.actions], runningTools: [...cur.runningTools] } : null);
+    }, 80);
+  }, []);
+  const beginLiveStream = useCallback(() => {
+    liveStreamRef.current = { text: "", actions: [], runningTools: [], startedAt: new Date().toISOString() };
+    liveResetPendingRef.current = false;
+  }, []);
+  const endLiveStream = useCallback(() => {
+    liveStreamRef.current = null;
+    liveResetPendingRef.current = false;
+    if (liveFlushTimerRef.current != null) {
+      clearTimeout(liveFlushTimerRef.current);
+      liveFlushTimerRef.current = null;
+    }
+    setLiveStream(null);
+  }, []);
+  useEffect(() => () => {
+    if (liveFlushTimerRef.current != null) clearTimeout(liveFlushTimerRef.current);
+  }, []);
+
   // Inline editing of a logged tracker-entry directly from its chat result
   // card (change duration / intensity / calories, add or remove a field).
   // Keyed by the entry id so only one card is open at a time.
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [entryEditVals, setEntryEditVals] = useState<Record<string, any>>({});
   const [entryNewField, setEntryNewField] = useState<{ name: string; value: string }>({ name: "", value: "" });
-  const coerceVal = (raw: string): any => {
-    const t = raw.trim();
-    const n = Number(t);
-    return t !== "" && !isNaN(n) && String(n) === t ? n : raw;
-  };
-  const saveEntryEdit = async (action: any, entryId: string) => {
+  // Latest edit values readable from the stable saveEntryEdit callback below —
+  // keeping the callback's identity fixed is what lets React.memo hold on
+  // MessageRows while the user types inside an entry editor.
+  const entryEditValsRef = useRef(entryEditVals);
+  entryEditValsRef.current = entryEditVals;
+  const saveEntryEdit = useCallback(async (action: any, entryId: string) => {
+    const vals = entryEditValsRef.current;
     const orig = Object.keys(action?.data?.values || {}).filter((k) => k !== "_notes");
-    const valuesToDelete = orig.filter((k) => !(k in entryEditVals));
+    const valuesToDelete = orig.filter((k) => !(k in vals));
     try {
-      await apiRequest("PATCH", `/api/tracker-entries/${entryId}`, { values: entryEditVals, valuesToDelete });
+      await apiRequest("PATCH", `/api/tracker-entries/${entryId}`, { values: vals, valuesToDelete });
       // Reflect on the card immediately…
-      action.data = { ...action.data, values: { ...entryEditVals } };
+      action.data = { ...action.data, values: { ...vals } };
       setMessages((prev) => prev.map((m) => ({ ...m, actions: m.actions ? [...m.actions] : m.actions })));
       // …and across the app (trackers list, dashboard, stats).
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
@@ -1875,7 +2742,7 @@ export default function ChatPage() {
     } catch (e: any) {
       toast({ title: "Update failed", description: e?.message || "Try again", variant: "destructive" });
     }
-  };
+  }, [setMessages, queryClient, toast]);
 
   const { data: profiles = [], isLoading: profilesLoading } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -1905,25 +2772,60 @@ export default function ChatPage() {
   }, [profiles, selectedProfileId]);
 
   const chatMutation = useMutation({
-    mutationFn: async (message: string) => {
+    mutationFn: async ({ message, userMsgId }: { message: string; userMsgId: string }) => {
       // Build conversation history for multi-step context.
       // Bug fix: setMessages is async, so the `messages` closure here still reflects state
       // BEFORE the user message was appended in handleSend. So we DON'T need slice(0,-1) —
       // the user msg isn't in `messages` yet. Previously slice(0,-1) was dropping the
-      // previous assistant reply instead, breaking multi-turn context.
+      // previous assistant reply instead, breaking multi-turn context. On a
+      // RETRY the user msg IS already present, so exclude it by id explicitly.
       const history = messages
-        .filter(m => m.id !== "welcome")
+        .filter(m => m.id !== "welcome" && m.id !== userMsgId)
         .slice(-10)
         .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
       // Scope the AI to the active profile selection (empty array ⇒ household/
       // everyone, which the server treats as unscoped). See chatScopeRef above.
       const profileFilterIds = chatScopeRef.current;
-      const res = await apiRequest("POST", "/api/chat", {
-        message,
-        history,
-        ...(profileFilterIds.length > 0 ? { profileFilterIds } : {}),
-      });
-      return res.json();
+      // Streaming send (P0 fix): POST with SSE opt-in and paint frames as they
+      // arrive. streamChat resolves with the SAME body the old buffered
+      // `apiRequest → res.json()` returned — including when it talks to an
+      // old server that answers plain JSON — so onSuccess/onError below are
+      // untouched. On a mid-flight stream failure it rejects and the existing
+      // failed/retry affordance in onError takes over.
+      beginLiveStream();
+      return await streamChat(
+        {
+          message,
+          history,
+          ...(profileFilterIds.length > 0 ? { profileFilterIds } : {}),
+        },
+        {
+          onRound: () => { liveResetPendingRef.current = true; },
+          onAssistantDelta: (text) => {
+            const cur = liveStreamRef.current;
+            if (!cur) return;
+            if (liveResetPendingRef.current) { cur.text = ""; liveResetPendingRef.current = false; }
+            cur.text += text;
+            scheduleLiveFlush();
+          },
+          onToolStart: (frame) => {
+            const cur = liveStreamRef.current;
+            if (!cur) return;
+            cur.runningTools.push(frame);
+            scheduleLiveFlush();
+          },
+          onToolResult: (frame) => {
+            const cur = liveStreamRef.current;
+            if (!cur) return;
+            const idx = cur.runningTools.findIndex((t) => t.tool === frame.tool);
+            if (idx !== -1) cur.runningTools.splice(idx, 1);
+            // Merge finished tool cards incrementally — the frame carries the
+            // exact ParsedAction the final payload will contain.
+            if (frame.ok && frame.action) cur.actions.push(frame.action);
+            scheduleLiveFlush();
+          },
+        },
+      );
     },
     onSuccess: (data) => {
       const assistantMsg: any = {
@@ -1955,7 +2857,7 @@ export default function ChatPage() {
       }
       invalidateAll();
     },
-    onError: (err: Error) => {
+    onError: (err: Error, { userMsgId }) => {
       // A dropped connection ("Load failed" / timeout) does NOT mean nothing
       // happened — the server keeps executing tool calls after the socket
       // dies. Be honest about that, and refresh all data so any writes that
@@ -1965,7 +2867,9 @@ export default function ChatPage() {
         ? "That took too long or the connection dropped. Some of the changes may still have been applied — I've refreshed your data, so check the dashboard, or ask me \"what did you just change?\""
         : `Something went wrong: ${err.message || "Network error"}. Please try again.`;
       setMessages((prev) => [
-        ...prev,
+        // Keep the optimistically pushed user bubble visible, but mark it
+        // failed so the row shows a "Not sent · Retry" affordance (defect #1).
+        ...prev.map((m) => (m.id === userMsgId ? ({ ...m, failed: true } as ChatMessage) : m)),
         {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -1976,9 +2880,22 @@ export default function ChatPage() {
       invalidateAll();
     },
     // Release the synchronous send lock once the round-trip resolves (success
-    // or error), so the next message can be sent.
-    onSettled: () => { sendingRef.current = false; },
+    // or error), so the next message can be sent. The live-stream scratch is
+    // cleared HERE (after onSuccess appended the real message / onError
+    // appended the failure notice) so the swap is a single paint, no gap.
+    onSettled: () => { sendingRef.current = false; endLiveStream(); },
   });
+
+  // Retry a failed send: clear the failed flag on the same bubble and re-POST.
+  // Stable identity so memoized MessageRows don't re-render when unrelated
+  // state changes. (chatMutation.mutate is stable in react-query v5.)
+  const handleRetryMessage = useCallback((msg: ChatMessage) => {
+    if (sendingRef.current) return;
+    setMessages((prev) => prev.map((m) => (m.id === msg.id ? ({ ...m, failed: false } as ChatMessage) : m)));
+    sendingRef.current = true;
+    chatMutation.mutate({ message: msg.content, userMsgId: msg.id });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setMessages, chatMutation.mutate]);
 
   const uploadMutation = useMutation({
     mutationFn: async (payload: {
@@ -2136,14 +3053,20 @@ export default function ChatPage() {
       setBatchProcessedCount(0);
     },
     onSettled: () => {
-      // Revoke object URLs and clear attachments after mutation completes (success or error)
-      pendingBatchAttachmentsRef.current.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+      // Revoke object URLs, drop staged base64 payloads, and clear attachments
+      // after mutation completes (success or error)
+      pendingBatchAttachmentsRef.current.forEach(a => {
+        if (a.previewUrl) {
+          URL.revokeObjectURL(a.previewUrl);
+          attachmentDataRef.current.delete(a.previewUrl);
+        }
+      });
       pendingBatchAttachmentsRef.current = [];
       setAttachments([]);
     },
   });
 
-  function invalidateAll() {
+  const invalidateAll = useCallback(() => {
     // After a chat write the server has already busted its response cache, so
     // every data query must be marked stale — not a hand-maintained subset —
     // or a logged entry won't appear until the user manually refreshes.
@@ -2168,9 +3091,10 @@ export default function ChatPage() {
     // guarantees the current view settles on fresh data without a manual
     // refresh — without firing a second full background storm.
     setTimeout(() => queryClient.invalidateQueries({ predicate: isData, refetchType: "active" }), 1200);
-  }
+  }, [queryClient]);
 
-  const handleConfirmExtraction = async (data: {
+  // Stable (useCallback) so memoized MessageRows keep their shallow-equal props.
+  const handleConfirmExtraction = useCallback(async (data: {
     extractionId: string;
     confirmedFields: Array<{ key: string; value: any }>;
     targetProfileId?: string;
@@ -2219,9 +3143,9 @@ export default function ChatPage() {
       toast({ title: "Extraction failed", description: "Something went wrong — please try again.", variant: "destructive" });
       return false;
     }
-  };
+  }, [invalidateAll, toast, setMessages]);
 
-  const handleSkipExtraction = (extractionId: string) => {
+  const handleSkipExtraction = useCallback((extractionId: string) => {
     setMessages((prev) =>
       prev.map((m) =>
         m.pendingExtraction?.extractionId === extractionId
@@ -2229,119 +3153,60 @@ export default function ChatPage() {
           : m
       )
     );
-  };
+  }, [setMessages]);
 
+  // Auto-scroll (defect #5): only when a NEW message is appended AND the user
+  // is already at/near the bottom (tracked via onScroll → atBottomRef, so a
+  // reader scrolled up into history is never yanked back down). Jumps are
+  // instant at the bottom — no smooth animations queuing up and fighting each
+  // other on every mutation-pending flip like before. Sending your own message
+  // while scrolled up still brings you down to it (smoothly), matching every
+  // chat app.
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [messages, chatMutation.isPending, uploadMutation.isPending, batchUploadMutation.isPending, saveOnlyMutation.isPending]);
+    const el = scrollRef.current;
+    if (!el) return;
+    const appended = prevMsgCountRef.current === -1 || messages.length > prevMsgCountRef.current;
+    prevMsgCountRef.current = messages.length;
+    if (!appended) return;
+    const lastIsUser = messages[messages.length - 1]?.role === "user";
+    if (atBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "instant" as ScrollBehavior });
+    } else if (lastIsUser) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
+  }, [messages]);
 
-  // Process image: correct EXIF orientation + resize/compress to fit upload limits
-  // ALWAYS runs through canvas to ensure images stay under ~3MB base64 (Vercel body limit safety)
-  const correctImageOrientation = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const arrayBuffer = reader.result as ArrayBuffer;
-        const dataView = new DataView(arrayBuffer);
-        
-        // Read EXIF orientation
-        let orientation = 1;
-        try {
-          if (dataView.getUint16(0, false) === 0xFFD8) { // JPEG
-            let offset = 2;
-            while (offset < dataView.byteLength - 2) {
-              const marker = dataView.getUint16(offset, false);
-              offset += 2;
-              if (marker === 0xFFE1) { // APP1 (EXIF)
-                const exifOffset = offset + 2;
-                if (dataView.getUint32(exifOffset, false) === 0x45786966) { // "Exif"
-                  const tiffOffset = exifOffset + 6;
-                  const littleEndian = dataView.getUint16(tiffOffset, false) === 0x4949;
-                  const ifdOffset = tiffOffset + dataView.getUint32(tiffOffset + 4, littleEndian);
-                  const entries = dataView.getUint16(ifdOffset, littleEndian);
-                  for (let i = 0; i < entries; i++) {
-                    const entryOffset = ifdOffset + 2 + i * 12;
-                    if (entryOffset + 12 > dataView.byteLength) break;
-                    if (dataView.getUint16(entryOffset, littleEndian) === 0x0112) { // Orientation tag
-                      orientation = dataView.getUint16(entryOffset + 8, littleEndian);
-                      break;
-                    }
-                  }
-                }
-                break;
-              } else if ((marker & 0xFF00) === 0xFF00) {
-                offset += dataView.getUint16(offset, false);
-              } else break;
-            }
-          }
-        } catch { /* keep orientation = 1 if parsing fails */ }
+  // Keep the transcript pinned to the bottom while the live-streamed bubble
+  // grows — same at-bottom guard as the append effect above, so a reader
+  // scrolled up into history is never yanked back down by token deltas.
+  useEffect(() => {
+    if (!liveStream) return;
+    const el = scrollRef.current;
+    if (el && atBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "instant" as ScrollBehavior });
+    }
+  }, [liveStream]);
 
-        // ALWAYS process through canvas: applies EXIF rotation AND keeps the
-        // upload under Vercel's ~4.5MB body limit. We prefer HIGH resolution and
-        // quality so faint document text (e.g. a vet schedule) stays legible for
-        // the vision model — degrading the image is a top cause of misreads —
-        // and only step down if the encoded size exceeds the budget.
-        const img = new Image();
-        img.onload = () => {
-          const renderAt = (maxDim: number): HTMLCanvasElement => {
-            let w = img.width, h = img.height;
-            if (w > maxDim || h > maxDim) {
-              const scale = maxDim / Math.max(w, h);
-              w = Math.round(w * scale);
-              h = Math.round(h * scale);
-            }
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d')!;
-            // Set canvas size based on rotation
-            if (orientation >= 5) { canvas.width = h; canvas.height = w; }
-            else { canvas.width = w; canvas.height = h; }
-            // Apply EXIF transform
-            switch (orientation) {
-              case 2: ctx.transform(-1, 0, 0, 1, w, 0); break;
-              case 3: ctx.transform(-1, 0, 0, -1, w, h); break;
-              case 4: ctx.transform(1, 0, 0, -1, 0, h); break;
-              case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
-              case 6: ctx.transform(0, 1, -1, 0, h, 0); break;
-              case 7: ctx.transform(0, -1, -1, 0, h, w); break;
-              case 8: ctx.transform(0, -1, 1, 0, 0, w); break;
-            }
-            ctx.imageSmoothingEnabled = true;
-            (ctx as any).imageSmoothingQuality = 'high';
-            ctx.drawImage(img, 0, 0, w, h);
-            return canvas;
-          };
-
-          const sizeMB = (b64: string) => b64.length * 0.75 / 1024 / 1024;
-          const BUDGET_MB = 3.6; // stay safely under Vercel's ~4.5MB request body limit
-          // Highest quality first; fall back only if the encoded image is too big.
-          const attempts: Array<{ dim: number; q: number }> = [
-            { dim: 3072, q: 0.92 },
-            { dim: 3072, q: 0.85 },
-            { dim: 2048, q: 0.85 },
-            { dim: 1600, q: 0.8 },
-          ];
-          let compressed = '';
-          for (const a of attempts) {
-            compressed = renderAt(a.dim).toDataURL('image/jpeg', a.q).split(',')[1];
-            if (sizeMB(compressed) <= BUDGET_MB) break;
-          }
-          console.log(`[upload] Image processed: ${img.width}x${img.height} → base64 ${sizeMB(compressed).toFixed(1)}MB`);
-          resolve(compressed);
-        };
-        img.onerror = reject;
-        img.src = URL.createObjectURL(file);
-      };
-      reader.onerror = reject;
-      reader.readAsArrayBuffer(file);
-    });
+  const handleTranscriptScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+
+    // Staging hides the composer — carry any draft text over as the attachment
+    // note (matches the old shared-input behavior, where typed text became the
+    // note field).
+    if (attachments.length === 0) {
+      const draft = composerRef.current?.getText().trim() ?? "";
+      if (draft) {
+        setAttachmentNote(draft);
+        composerRef.current?.clear();
+      }
+    }
 
     for (const file of files) {
       if (file.size > 10 * 1024 * 1024) {
@@ -2369,7 +3234,7 @@ export default function ChatPage() {
         try {
           let base64: string;
           if (isImage) {
-            base64 = await correctImageOrientation(file);
+            base64 = await processImageFile(file);
           } else {
             base64 = await new Promise<string>((resolve, reject) => {
               const reader = new FileReader();
@@ -2378,10 +3243,13 @@ export default function ChatPage() {
               reader.readAsDataURL(file);
             });
           }
+          // Base64 goes into the ref map, NOT state (defect #8) — state only
+          // flips the processing flag so the panel enables its buttons.
+          attachmentDataRef.current.set(previewUrl, base64);
           setAttachments((prev) =>
             prev.map((att) =>
               att.previewUrl === previewUrl && att.processing
-                ? { ...att, data: base64, processing: false }
+                ? { ...att, processing: false }
                 : att
             )
           );
@@ -2393,6 +3261,7 @@ export default function ChatPage() {
             variant: "destructive",
           });
           // Remove the failed placeholder so the user can try again
+          attachmentDataRef.current.delete(previewUrl);
           setAttachments((prev) => prev.filter((att) => att.previewUrl !== previewUrl));
         }
       })();
@@ -2406,23 +3275,24 @@ export default function ChatPage() {
   const handleAttachmentSend = () => {
     if (attachments.length !== 1 || uploadMutation.isPending) return;
     const att = attachments[0];
-    if (att.processing || !att.data) {
+    const attData = getAttachmentData(att);
+    if (att.processing || !attData) {
       toast({ title: "Still preparing the photo… try again in a moment." });
       return;
     }
-    const note = input.trim();
+    const note = attachmentNote.trim();
 
     // ✨ If user wrote a Smart Fill intent in the note AND attached a form file,
     // skip the normal upload and open Smart Fill directly. Still post the user
     // message + an assistant chip so there is in-thread context.
     if (note && SMART_FILL_INTENT_RE.test(note) && isFormFile(att.mimeType)) {
-      const stripped = att.data.includes(",") ? att.data.split(",").pop() || att.data : att.data;
+      const stripped = attData.includes(",") ? attData.split(",").pop() || attData : attData;
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "user",
         content: note,
         timestamp: new Date().toISOString(),
-        attachment: { name: att.name, mimeType: att.mimeType, data: att.data, previewUrl: att.previewUrl },
+        attachment: { name: att.name, mimeType: att.mimeType, data: attData, previewUrl: att.previewUrl },
       };
       const assistantMsg: ChatMessage = {
         id: crypto.randomUUID(),
@@ -2438,21 +3308,22 @@ export default function ChatPage() {
       };
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setSmartFillFile({ name: att.name, mimeType: att.mimeType, base64: stripped });
+      attachmentDataRef.current.delete(att.previewUrl);
       setAttachments([]);
       setSelectedProfileId("none");
-      setInput("");
+      setAttachmentNote("");
       return;
     }
 
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
-      content: input.trim() || `Uploaded: ${att.name}`,
+      content: note || `Uploaded: ${att.name}`,
       timestamp: new Date().toISOString(),
       attachment: {
         name: att.name,
         mimeType: att.mimeType,
-        data: att.data,
+        data: attData,
         previewUrl: att.previewUrl,
       },
     };
@@ -2463,25 +3334,27 @@ export default function ChatPage() {
     uploadMutation.mutate({
       fileName: att.name,
       mimeType: att.mimeType,
-      fileData: att.data,
+      fileData: attData,
       profileId: profileToSend,
-      message: input.trim() || undefined,
+      message: note || undefined,
     });
 
+    attachmentDataRef.current.delete(att.previewUrl);
     setAttachments([]);
     setSelectedProfileId("none");
-    setInput("");
+    setAttachmentNote("");
   };
 
   // Save-only handler: store file linked to profile(s) with no AI processing
   const handleSaveOnly = () => {
     if (attachments.length !== 1 || saveOnlyMutation.isPending) return;
     const att = attachments[0];
-    if (att.processing || !att.data) {
+    const attData = getAttachmentData(att);
+    if (att.processing || !attData) {
       toast({ title: "Still preparing the photo… try again in a moment." });
       return;
     }
-    const note = input.trim();
+    const note = attachmentNote.trim();
 
     // Resolve profile IDs from per-attachment selection or global selection
     const rawProfileSel = att.profileId !== "none" ? att.profileId : selectedProfileId;
@@ -2499,7 +3372,7 @@ export default function ChatPage() {
       attachment: {
         name: att.name,
         mimeType: att.mimeType,
-        data: att.data,
+        data: attData,
         previewUrl: att.previewUrl,
       },
     };
@@ -2508,25 +3381,27 @@ export default function ChatPage() {
     saveOnlyMutation.mutate({
       fileName: att.name,
       mimeType: att.mimeType,
-      fileData: att.data,
+      fileData: attData,
       profileIds,
       note: note || undefined,
     });
 
+    attachmentDataRef.current.delete(att.previewUrl);
     setAttachments([]);
     setSelectedProfileId("none");
-    setInput("");
+    setAttachmentNote("");
   };
 
   // Batch upload: send using batch endpoint
   const handleBatchSend = () => {
     if (attachments.length < 2 || batchUploadMutation.isPending) return;
+    const note = attachmentNote.trim();
 
     const fileNames = attachments.map((a) => a.name).join(", ");
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
-      content: input.trim() || `Uploaded ${attachments.length} files: ${fileNames}`,
+      content: note || `Uploaded ${attachments.length} files: ${fileNames}`,
       timestamp: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -2537,10 +3412,10 @@ export default function ChatPage() {
       files: attachments.map((att) => ({
         fileName: att.name,
         mimeType: att.mimeType,
-        fileData: att.data,
+        fileData: getAttachmentData(att),
         profileId: att.profileId !== "none" ? att.profileId : undefined,
       })),
-      message: input.trim() || undefined,
+      message: note || undefined,
     });
 
     // Capture attachments in a ref so onSettled can revoke URLs and clear state
@@ -2559,9 +3434,9 @@ export default function ChatPage() {
       setBatchProcessedCount((prev) => Math.min(prev + 1, currentAttachmentCount));
     }, 2000);
 
-    // Clear input immediately; attachments will be cleared in onSettled after mutation completes
+    // Clear the note immediately; attachments will be cleared in onSettled after mutation completes
     setSelectedProfileId("none");
-    setInput("");
+    setAttachmentNote("");
   };
 
   // ── Smart Fill intent detection ────────────────────────────────────────────
@@ -2583,13 +3458,18 @@ export default function ChatPage() {
     return null;
   };
 
-  const handleSend = () => {
-    const msg = input.trim();
+  // Called by <ChatComposer/> with the draft text. Push-first (defect #1): the
+  // user bubble is appended synchronously BEFORE the POST fires, so it paints
+  // within the same frame as the tap; the pending/typing indicator keys off
+  // isPending immediately after. Returns true when the send was consumed (the
+  // composer clears its draft), false when rejected (draft is preserved).
+  const handleSend = (raw: string): boolean => {
+    const msg = raw.trim();
     const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending || saveOnlyMutation.isPending;
     // Reject re-entrant sends synchronously (sendingRef) AND while any mutation
     // is in flight (isPending). The ref catches the same-tick race isPending misses.
-    if (sendingRef.current || isPending) return;
-    if (!msg) return;
+    if (sendingRef.current || isPending) return false;
+    if (!msg) return false;
 
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
@@ -2619,29 +3499,21 @@ export default function ChatPage() {
           },
         };
         setMessages((prev) => [...prev, userMsg, assistantMsg]);
-        setInput("");
         // Auto-open the dialog so the user can begin immediately.
         setSmartFillFile({ name: recent.name, mimeType: recent.mimeType, base64: stripped });
-        return;
+        return true;
       }
     }
 
     setMessages((prev) => [...prev, userMsg]);
-    setInput("");
     sendingRef.current = true; // lock BEFORE mutate so a rapid second send can't slip through
-    chatMutation.mutate(msg);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    chatMutation.mutate({ message: msg, userMsgId: userMsg.id });
+    return true;
   };
 
   const handleSuggestion = (s: string) => {
-    setInput(s);
-    inputRef.current?.focus();
+    composerRef.current?.setText(s);
+    composerRef.current?.focus();
   };
 
   // Batch panel handlers
@@ -2658,9 +3530,10 @@ export default function ChatPage() {
   const handleRemoveAttachment = (index: number) => {
     setAttachments((prev) => {
       const newArr = [...prev];
-      // Revoke the object URL to avoid memory leaks
+      // Revoke the object URL (and drop the staged base64) to avoid memory leaks
       if (newArr[index]?.previewUrl) {
         URL.revokeObjectURL(newArr[index].previewUrl);
+        attachmentDataRef.current.delete(newArr[index].previewUrl);
       }
       newArr.splice(index, 1);
       return newArr;
@@ -2670,6 +3543,18 @@ export default function ChatPage() {
   const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending || saveOnlyMutation.isPending;
   const hasAttachments = attachments.length > 0;
   const isBatch = attachments.length > 1;
+
+  // Chat search (defect #4): the query is deferred so filtering long
+  // transcripts never runs on the keystroke's critical path, the lowercase
+  // query is computed ONCE (not twice per message per keystroke), and the
+  // filtered list is memoized so unrelated renders reuse it.
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const trimmedQuery = deferredSearchQuery.trim();
+  const filteredMessages = useMemo(() => {
+    const q = trimmedQuery.toLowerCase();
+    if (!q) return messages;
+    return messages.filter((msg) => msg.content.toLowerCase().includes(q));
+  }, [messages, trimmedQuery]);
 
   return (
     <div className="flex h-full overflow-x-hidden max-w-full" data-testid="page-chat">
@@ -2706,7 +3591,7 @@ export default function ChatPage() {
       />
 
       {/* Messages area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
+      <div ref={scrollRef} onScroll={handleTranscriptScroll} className="flex-1 overflow-y-auto px-4 py-3">
         <div className={`max-w-2xl mx-auto space-y-4 ${messages.length <= 1 ? 'min-h-[72vh] flex flex-col justify-end' : ''}`}>
 
           {/* Empty-state brand hero — fills the space above the welcome bubble
@@ -2742,617 +3627,78 @@ export default function ChatPage() {
               <button onClick={() => { setSearchOpen(false); setSearchQuery(''); }} className="text-muted-foreground hover:text-foreground text-xs">Done</button>
             </div>
           )}
-          {(() => {
-            const trimmedQuery = searchQuery.trim();
-            const filteredMessages = messages.filter(msg => !trimmedQuery || msg.content.toLowerCase().includes(trimmedQuery.toLowerCase()));
-            if (searchOpen && trimmedQuery && filteredMessages.length === 0) {
-              return (
-                <div className="flex flex-col items-center justify-center py-12 text-center text-sm text-muted-foreground gap-2" data-testid="chat-search-empty">
-                  <Search className="h-5 w-5 opacity-60" />
-                  <div>No messages match “<span className="font-medium text-foreground">{trimmedQuery}</span>”.</div>
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="mt-1 text-xs px-2.5 py-1 rounded-md border border-border/50 hover:bg-muted/60 text-foreground"
-                    data-testid="button-chat-search-clear"
-                  >
-                    Clear search
-                  </button>
-                </div>
-              );
-            }
-            return null;
-          })()}
-          {messages
-            .filter(msg => !searchQuery.trim() || msg.content.toLowerCase().includes(searchQuery.trim().toLowerCase()))
-            .map((msg) => (
-            <div
-              key={msg.id}
-              className={`message-in flex ${
-                msg.role === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
-              <div
-                className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                  msg.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-card border border-border"
-                }`}
-                data-testid={`message-${msg.role}-${msg.id}`}
+          {searchOpen && trimmedQuery && filteredMessages.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-12 text-center text-sm text-muted-foreground gap-2" data-testid="chat-search-empty">
+              <Search className="h-5 w-5 opacity-60" />
+              <div>No messages match “<span className="font-medium text-foreground">{trimmedQuery}</span>”.</div>
+              <button
+                onClick={() => setSearchQuery('')}
+                className="mt-1 text-xs px-2.5 py-1 rounded-md border border-border/50 hover:bg-muted/60 text-foreground"
+                data-testid="button-chat-search-clear"
               >
-                {msg.role === "assistant" && (
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <Bot className="h-3.5 w-3.5 text-primary" />
-                    <span className="text-xs font-medium text-primary">
-                      Portol
-                    </span>
-                    {msg.content?.trim() && (
-                      <CopyButton value={msg.content} iconOnly className="ml-auto opacity-60 hover:opacity-100" />
-                    )}
-                  </div>
-                )}
-
-                {/* Attachment preview in user message */}
-                {msg.attachment &&
-                  msg.attachment.mimeType.startsWith("image/") && (
-                    <div className="mb-2 rounded-lg overflow-hidden">
-                      <img
-                        src={
-                          msg.attachment.previewUrl ||
-                          `data:${msg.attachment.mimeType};base64,${msg.attachment.data}`
-                        }
-                        alt={msg.attachment.name}
-                        className="max-h-48 w-auto rounded-lg"
-                      />
-                    </div>
-                  )}
-                {msg.attachment &&
-                  !msg.attachment.mimeType.startsWith("image/") && (
-                    <div className="mb-2 flex items-center gap-2 p-2 rounded-lg bg-muted/30">
-                      <FileText className="h-5 w-5 text-muted-foreground" />
-                      <span className="text-xs truncate">
-                        {msg.attachment.name}
-                      </span>
-                    </div>
-                  )}
-
-                <div className={`text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2 ${msg.role === "user" ? "text-primary-foreground" : "text-foreground"}`}>
-                  {msg.content}
-                </div>
-
-                {msg.role === "user" && msg.content?.trim() && (
-                  <div className="flex justify-end mt-1">
-                    <CopyButton
-                      value={msg.content}
-                      iconOnly
-                      className="opacity-60 hover:opacity-100 text-primary-foreground/80 hover:text-primary-foreground hover:bg-primary-foreground/10"
-                    />
-                  </div>
-                )}
-
-                {/* Document previews - inline with zoom & share */}
-                <ChatDocumentPreviews
-                  documentPreview={msg.documentPreview}
-                  documentPreviews={msg.documentPreviews}
-                />
-
-                {/* Inline charts */}
-                {(msg as any).charts?.length > 0 && (
-                  <div className="space-y-1">
-                    {(msg as any).charts.map((chart: ChartSpec2, ci: number) => <ChatChart key={ci} spec={chart} />)}
-                  </div>
-                )}
-
-                {/* Inline tables */}
-                {(msg as any).tables?.length > 0 && (
-                  <div className="space-y-1">
-                    {(msg as any).tables.map((table: TableSpec2, ti: number) => <ChatTable key={ti} spec={table} />)}
-                  </div>
-                )}
-
-                {/* Inline report */}
-                {(msg as any).report && <ChatReport spec={(msg as any).report as ReportSpec2} />}
-
-                {/* Artifact preview card */}
-                {(msg as any).artifact && (
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`View artifact: ${(msg as any).artifact.title}`}
-                    className="mt-2 border border-primary/30 rounded-lg overflow-hidden cursor-pointer"
-                    onClick={() => setActiveArtifact((msg as any).artifact)}
-                    onKeyDown={onEnterOrSpace(() => setActiveArtifact((msg as any).artifact))}
-                  >
-                    <div className="flex items-center gap-2 px-3 py-2 bg-primary/5">
-                      <BarChart3 className="h-4 w-4 text-primary" />
-                      <span className="text-sm font-medium">{(msg as any).artifact.title}</span>
-                      <Badge variant="outline" className="text-xs ml-auto">{(msg as any).artifact.type}</Badge>
-                    </div>
-                    <div className="px-3 py-2 text-xs text-muted-foreground">Click to view artifact</div>
-                  </div>
-                )}
-
-                {/* Extraction confirmation UI */}
-                {msg.pendingExtraction && msg.pendingExtraction.extractedFields.length > 0 && (
-                  <ExtractionConfirmation
-                    extraction={msg.pendingExtraction}
-                    onConfirm={handleConfirmExtraction}
-                    onSkip={() => { if (msg.pendingExtraction?.extractionId) handleSkipExtraction(msg.pendingExtraction.extractionId); }}
-                  />
-                )}
-
-                {/* Smart Fill chip — inline action on assistant message */}
-                {msg.smartFillSuggestion && (
-                  <button
-                    type="button"
-                    onClick={() => setSmartFillFile({
-                      name: msg.smartFillSuggestion!.fileName,
-                      mimeType: msg.smartFillSuggestion!.mimeType,
-                      base64: msg.smartFillSuggestion!.base64,
-                    })}
-                    className="mt-3 w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-primary/30 bg-primary/5 hover:bg-primary/10 transition text-left"
-                    data-testid="chip-smart-fill"
-                  >
-                    <Sparkles className="h-4 w-4 text-primary flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{msg.smartFillSuggestion.label || "Open Smart Fill"}</div>
-                      <div className="text-[11px] text-muted-foreground truncate">{msg.smartFillSuggestion.fileName}</div>
-                    </div>
-                    <span className="text-[11px] font-medium text-primary">Open →</span>
-                  </button>
-                )}
-
-                {/* Action badges */}
-                {msg.actions && msg.actions.length > 0 && (
-                  <div className="mt-3 space-y-1.5">
-                    {msg.actions.filter(a => [
-                      'log_entry', 'log_tracker_entry', 'add_tracker_entry',
-                      'log_expense', 'create_task', 'create_event', 'create_reminder',
-                      'create_habit', 'checkin_habit', 'create_obligation',
-                      'create_goal', 'create_profile', 'update_profile',
-                      'create_tracker', 'journal_entry', 'create_artifact',
-                      'complete_task', 'complete_event', 'pay_obligation',
-                      'delete_task', 'delete_habit', 'delete_tracker_entry',
-                      'update_tracker_entry', 'uncomplete_habit', 'save_memory',
-                      // 2026-07: the ~40 previously-unmapped write tools now
-                      // surface as typed action cards (undo only where an
-                      // endpoint is wired in undoEndpoints below).
-                      'create_liability', 'add_liability_payment', 'log_income',
-                      'log_paycheck', 'update_entity', 'delete_entity',
-                      'link_entities', 'set_budget', 'revalue_asset',
-                      'manage_domain', 'manage_document',
-                    ].includes(a.type)).map((action, i) => {
-                      const entityId = action.data?._entityId;
-                      const isUndone = action.data?._undone;
-                      // All create/log actions can be undone
-                      // Mapping covers BOTH the raw tool name AND the mapped ParsedAction type
-                      const undoEndpoints: Record<string, string> = {
-                        // By ParsedAction type (what gets stored in action.type)
-                        create_task: "tasks",
-                        log_expense: "expenses",
-                        create_event: "events",
-                        create_reminder: "events", // mirrored onto the calendar; undo removes the event
-
-                        create_habit: "habits",
-                        create_obligation: "obligations",
-                        create_goal: "goals",
-                        create_profile: "profiles",
-                        journal_entry: "journal",
-                        create_artifact: "artifacts",
-                        create_tracker: "trackers",
-                        log_entry: "tracker-entries",      // log_tracker_entry maps to log_entry
-                        log_income: "incomes",             // DELETE /api/incomes/:id exists
-                        // Also by raw tool name (fallback)
-                        log_tracker_entry: "tracker-entries",
-                        add_tracker_entry: "tracker-entries",
-                      };
-                      // update_profile is reverted in-place by re-applying previous fields,
-                      // not by deleting the row. Detect it separately so the action card can
-                      // render a Revert button.
-                      const previousState = (action.data as any)?._previousState;
-                      const canRevert = action.type === 'update_profile' && !isUndone && previousState && previousState.profileId;
-                      const canUndo = !!(entityId && !isUndone && undoEndpoints[action.type]);
-                      // Build a meaningful title — always uppercase tracker/type label
-                      const isTrackerEntry = action.type === 'log_entry' || (action.type as string) === 'log_tracker_entry';
-                      const trackerName = (action.data?.trackerName || '').toUpperCase();
-                      // Prefer the server-resolved REAL owner (walks nested-asset
-                      // parent chains — Jim's Honda CRV badges JIM even when the
-                      // user said "my Honda CRV") over the raw tool input.
-                      const ownerName = (action.data as any)?._ownerName;
-                      const whoFor = ownerName
-                        ? String(ownerName).charAt(0).toUpperCase() + String(ownerName).slice(1)
-                        : action.data?.forProfile
-                          ? String(action.data.forProfile).charAt(0).toUpperCase() + String(action.data.forProfile).slice(1)
-                          : 'You';
-                      // Format values: "250 cal, 31g carbs, 4g protein".
-                      // Underscore keys are reserved metadata (_notes,
-                      // _enrichment); estimated values render with a ≈ so
-                      // the user always sees exact vs estimated distinctly.
-                      const enrichment = (action.data?.values as any)?._enrichment;
-                      const estimatedKeys = new Set(Object.keys(enrichment?.estimated || {}));
-                      const estimatedParts: string[] = enrichment?.estimated
-                        ? Object.entries(enrichment.estimated as Record<string, any>)
-                            .map(([k, pv]) => `≈${(pv as any)?.value} ${k} (est.)`)
-                            .slice(0, 3)
-                        : [];
-                      const entryValues = isTrackerEntry && action.data?.values
-                        ? [
-                            ...Object.entries(action.data.values as Record<string,any>)
-                              // Estimated fields are applied into values for storage,
-                              // but render ONLY via the ≈ (est.) parts below — never
-                              // as plain values that look user-stated.
-                              .filter(([k, v]) => !k.startsWith('_') && k !== 'item' && !estimatedKeys.has(k) && typeof v !== 'object')
-                              .map(([k, v]) => `${v} ${k}`)
-                              .slice(0, 4),
-                            ...estimatedParts,
-                          ].join(' · ')
-                        : '';
-                      const entryItem = isTrackerEntry && action.data?.values?.item
-                        ? String(action.data.values.item) : '';
-                      const entityTitle = isTrackerEntry
-                        ? (entryItem || trackerName || 'Entry')
-                        : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || (action as any).title || '').toUpperCase() || actionLabel(action.type).toUpperCase();
-                      const entityDetails = isTrackerEntry
-                        ? entryValues
-                        : action.data?.amount
-                          ? `$${Number(action.data.amount).toFixed(2)}`
-                          : '';
-                      const isArtifact = action.type === 'create_artifact' && action.data && !isUndone;
-                      // Where tapping the card takes you (null = not linkable).
-                      const cardRoute = !isUndone ? actionRoute(action.type, action.data) : null;
-                      return (
-                        <div key={i} data-testid={`action-card-${action.type}-${i}`}>
-                          <div
-                            className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
-                              isUndone
-                                ? "border-red-500/20 bg-red-500/5 opacity-60"
-                                : "border-green-500/25 bg-green-500/6"
-                            } ${isArtifact ? 'rounded-b-none border-b-0' : ''}`}
-                          >
-                            {/* Status icon */}
-                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
-                              isUndone ? "bg-red-500/15" : "bg-green-500/15"
-                            }`}>
-                              {isUndone
-                                ? <X className="h-3.5 w-3.5 text-red-500" />
-                                : <Check className="h-3.5 w-3.5 text-green-600" />}
-                            </div>
-                            {/* Content — tappable: opens the entity's page
-                                (profile detail, its tracker, module list). */}
-                            <div
-                              className={`flex-1 min-w-0 ${cardRoute ? 'cursor-pointer active:opacity-70 transition-opacity' : ''}`}
-                              role={cardRoute ? 'link' : undefined}
-                              tabIndex={cardRoute ? 0 : undefined}
-                              data-testid={`action-card-link-${action.type}-${i}`}
-                              onClick={cardRoute ? () => hashNavigate(cardRoute) : undefined}
-                              onKeyDown={cardRoute ? (e) => { if (e.key === 'Enter' || e.key === ' ') hashNavigate(cardRoute); } : undefined}
-                            >
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <p className={`text-xs font-semibold ${
-                                  isUndone ? 'line-through text-muted-foreground' : 'text-foreground'
-                                }`}>
-                                  {entityTitle || actionLabel(action.type).toUpperCase()}
-                                </p>
-                                {/* WHO badge — always show */}
-                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
-                                  whoFor === 'You' ? 'bg-primary/15 text-primary' : 'bg-amber-500/15 text-amber-600'
-                                }`}>
-                                  {whoFor.toUpperCase()}
-                                </span>
-                                {isTrackerEntry && trackerName && (
-                                  <span className="text-[9px] text-muted-foreground/60 font-medium">
-                                    via {trackerName}
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-[10px] text-muted-foreground mt-0.5">
-                                {entityDetails || actionLabel(action.type)}
-                                {isUndone && ' · DELETED'}
-                              </p>
-                            </div>
-                            {/* Edit button — tracker entries only (change duration,
-                                intensity, calories; add/remove fields). Persists via the
-                                lenient PATCH-by-entry-id endpoint and reflects app-wide. */}
-                            {isTrackerEntry && entityId && !isUndone && (
-                              <button
-                                className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-primary/50 text-primary bg-primary/5 hover:bg-primary/15 active:scale-95 transition-all"
-                                title="Edit this entry"
-                                data-testid={`button-edit-entry-${i}`}
-                                onClick={stopProp(() => {
-                                  if (editingEntryId === entityId) { setEditingEntryId(null); return; }
-                                  const v: Record<string, any> = {};
-                                  for (const [k, val] of Object.entries(action.data?.values || {})) { if (k !== "_notes") v[k] = val; }
-                                  setEntryEditVals(v);
-                                  setEntryNewField({ name: "", value: "" });
-                                  setEditingEntryId(entityId);
-                                })}
-                              >
-                                ✎ Edit
-                              </button>
-                            )}
-                            {/* Undo button */}
-                            {canUndo && (
-                              <button
-                                className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-destructive/50 text-destructive bg-destructive/5 hover:bg-destructive/15 active:scale-95 transition-all"
-                                title="Delete this entry"
-                                data-testid={`button-undo-${action.type}-${i}`}
-                                onClick={stopProp(async () => {
-                                  const ep = undoEndpoints[action.type];
-                                  if (!ep || !entityId) return;
-                                  try {
-                                    await apiRequest("DELETE", `/api/${ep}/${entityId}`);
-                                    action.data = { ...action.data, _undone: true };
-                                    // Force re-render by creating new array
-                                    setMessages(prev => prev.map(m => ({
-                                      ...m,
-                                      actions: m.actions ? [...m.actions] : m.actions
-                                    })));
-                                    // Optimistically remove from cache (prefix match).
-                                    queryClient.setQueriesData({ queryKey: [`/api/${ep}`] }, (old: any) =>
-                                      Array.isArray(old) ? old.filter((item: any) => item?.id !== entityId) : old
-                                    );
-                                    // Surgical invalidation — affected list + dashboard rollups
-                                    queryClient.invalidateQueries({ queryKey: [`/api/${ep}`] });
-                                    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-                                    toast({
-                                      title: `Deleted: ${entityTitle || actionLabel(action.type)}`,
-                                      description: `Removed from ${whoFor}'s ${trackerName || 'data'}`,
-                                    });
-                                  } catch {
-                                    toast({ title: "Delete failed — try again", variant: "destructive" });
-                                  }
-                                })}
-                              >
-                                × Delete
-                              </button>
-                            )}
-                            {/* Revert button — update_profile only. Re-applies the field
-                                values that were overwritten so the change is undone in place. */}
-                            {canRevert && (
-                              <button
-                                className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-amber-500/50 text-amber-600 bg-amber-500/5 hover:bg-amber-500/15 active:scale-95 transition-all"
-                                title="Restore the previous values"
-                                data-testid={`button-revert-${action.type}-${i}`}
-                                onClick={stopProp(async () => {
-                                  const ps = (action.data as any)?._previousState;
-                                  if (!ps?.profileId) return;
-                                  try {
-                                    // Fetch current profile so we can compose a precise revert
-                                    // (strip keys that didn't exist before, restore those that did).
-                                    const cur = await apiRequest("GET", `/api/profiles/${ps.profileId}`).then(r => r.json());
-                                    const restoredFields: Record<string, any> = { ...(cur?.fields || {}) };
-                                    // P1 universal-delete: storage now MERGES the incoming `fields`
-                                    // onto the existing record (so a missing key is a no-op, not a
-                                    // delete). To actually remove keys during a revert we must
-                                    // pass them in `fieldsToDelete` instead of relying on shallow
-                                    // overwrite. Track keys to delete as we walk the previous state.
-                                    const fieldsToDelete: string[] = [];
-                                    for (const [k, v] of Object.entries(ps.fields || {})) {
-                                      if (v === undefined) {
-                                        delete restoredFields[k];
-                                        fieldsToDelete.push(k);
-                                      } else {
-                                        restoredFields[k] = v;
-                                      }
-                                    }
-                                    const body: any = { fields: restoredFields };
-                                    if (fieldsToDelete.length > 0) body.fieldsToDelete = fieldsToDelete;
-                                    if (ps.notes !== undefined) body.notes = ps.notes;
-                                    if (ps.tags !== undefined) body.tags = ps.tags;
-                                    if (ps.type !== undefined) body.type = ps.type;
-                                    await apiRequest("PATCH", `/api/profiles/${ps.profileId}`, body);
-                                    action.data = { ...action.data, _undone: true };
-                                    setMessages(prev => prev.map(m => ({
-                                      ...m,
-                                      actions: m.actions ? [...m.actions] : m.actions,
-                                    })));
-                                    queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-                                    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-                                    toast({
-                                      title: "Reverted",
-                                      description: `Restored ${cur?.name || 'profile'} to its previous state`,
-                                    });
-                                  } catch {
-                                    toast({ title: "Revert failed — try again", variant: "destructive" });
-                                  }
-                                })}
-                              >
-                                ↶ Revert
-                              </button>
-                            )}
-                          </div>
-                          {/* Inline entry editor — appears under the card when Edit is tapped */}
-                          {isTrackerEntry && editingEntryId === entityId && (
-                            <div className="mt-1 rounded-xl border border-primary/30 bg-primary/5 p-2.5 space-y-1.5" data-testid={`entry-editor-${i}`}>
-                              {Object.keys(entryEditVals).filter((k) => k !== "_notes").map((k) => (
-                                <div key={k} className="flex items-center gap-1.5">
-                                  <label className="text-[10px] text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
-                                  <input
-                                    className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
-                                    value={entryEditVals[k] ?? ""}
-                                    onChange={(e) => { const val = coerceVal(e.target.value); setEntryEditVals((p) => ({ ...p, [k]: val })); }}
-                                    data-testid={`entry-edit-field-${k}`}
-                                  />
-                                  <button
-                                    type="button"
-                                    className="p-1 rounded hover:bg-destructive/15"
-                                    title={`Remove "${k}"`}
-                                    onClick={() => setEntryEditVals((p) => { const n = { ...p }; delete n[k]; return n; })}
-                                  >
-                                    <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                                  </button>
-                                </div>
-                              ))}
-                              {/* Add a field */}
-                              <div className="flex items-center gap-1.5 border-t border-border/40 pt-1.5">
-                                <input
-                                  className="w-24 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
-                                  placeholder="field"
-                                  value={entryNewField.name}
-                                  onChange={(e) => setEntryNewField((p) => ({ ...p, name: e.target.value }))}
-                                />
-                                <input
-                                  className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
-                                  placeholder="value"
-                                  value={entryNewField.value}
-                                  onChange={(e) => setEntryNewField((p) => ({ ...p, value: e.target.value }))}
-                                  onKeyDown={(e) => { if (e.key === "Enter" && entryNewField.name.trim()) { setEntryEditVals((p) => ({ ...p, [entryNewField.name.trim()]: coerceVal(entryNewField.value) })); setEntryNewField({ name: "", value: "" }); } }}
-                                />
-                                <button
-                                  type="button"
-                                  className="shrink-0 h-7 px-2 rounded-lg text-xs font-semibold border border-border hover:bg-muted disabled:opacity-40"
-                                  disabled={!entryNewField.name.trim()}
-                                  onClick={() => { const name = entryNewField.name.trim(); if (!name) return; setEntryEditVals((p) => ({ ...p, [name]: coerceVal(entryNewField.value) })); setEntryNewField({ name: "", value: "" }); }}
-                                >
-                                  + Add
-                                </button>
-                              </div>
-                              <div className="flex items-center justify-end gap-1.5">
-                                <button type="button" className="h-7 px-2.5 rounded-lg text-xs font-semibold text-muted-foreground hover:bg-muted" onClick={() => setEditingEntryId(null)}>Cancel</button>
-                                <button type="button" className="h-7 px-3 rounded-lg text-xs font-bold border border-primary/50 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => saveEntryEdit(action, entityId)} data-testid={`entry-editor-save-${i}`}>Save</button>
-                              </div>
-                            </div>
-                          )}
-                          {/* Inline artifact preview */}
-                          {isArtifact && (() => {
-                            // Find the saved artifact by id (server returns it on the
-                            // action) so clicks open the real artifact rather than just
-                            // bouncing to the Artifacts list. Fallback: navigate to /artifacts.
-                            const aid = (action.data as any)?.id || (action.data as any)?.artifactId;
-                            const atype = (action.data as any)?.type;
-                            const open = () => {
-                              if (atype === "doc" || atype === "sheet") {
-                                if (aid) hashNavigate(`/editor/${aid}`);
-                                else hashNavigate("/artifacts");
-                                return;
-                              }
-                              // Other types: open the side panel viewer directly when we
-                              // have the full payload, else go to /artifacts.
-                              if (action.data) setActiveArtifact(action.data as any);
-                              else hashNavigate("/artifacts");
-                            };
-                            return (
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              aria-label="Open artifact"
-                              className="border border-green-500/25 border-t-0 rounded-b-xl overflow-hidden cursor-pointer"
-                              onClick={open}
-                              onKeyDown={onEnterOrSpace(open)}
-                            >
-                              <div className="p-3 max-h-[200px] overflow-hidden relative bg-card">
-                                <ArtifactPreview data={action.data} />
-                                <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-card to-transparent" />
-                              </div>
-                              <div className="px-3 py-1.5 bg-muted/30 border-t border-border/30 flex items-center justify-between">
-                                <button
-                                  className="text-xs text-primary hover:text-primary/80 font-medium transition-colors"
-                                  onClick={(e) => { e.stopPropagation(); open(); }}
-                                >
-                                  Open artifact →
-                                </button>
-                                <span className="text-[10px] text-muted-foreground">click anywhere to open</span>
-                              </div>
-                            </div>
-                            );
-                          })()}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Per-operation outcome checklist — only the ones that did
-                    NOT succeed (successes already render as action cards).
-                    Multi-action messages get honest per-item failure/skip
-                    reporting instead of a vague "some failed". */}
-                {msg.operations && msg.operations.some((op: any) => op.status !== "ok") && (
-                  <div className="mt-2 space-y-1 text-xs">
-                    {msg.operations.filter((op: any) => op.status !== "ok").map((op: any, oi: number) => (
-                      <div key={oi} className="flex items-start gap-1.5">
-                        <span aria-hidden>{op.status === "deduped" ? "↩️" : op.status === "skipped" ? "⏸️" : "❌"}</span>
-                        <span className="text-muted-foreground">
-                          <span className="font-medium">{op.trackerName || op.raw || op.tool}</span>
-                          {op.status === "deduped" ? " — duplicate of an entry logged moments ago" : op.error ? ` — ${op.error}` : ""}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Structured confirmation cards */}
-                {msg.results && msg.results.length > 0 && (
-                  <div className="mt-2 space-y-1.5">
-                    {msg.results.slice(0, 50).map((result: any, ri: number) => {
-                      if (!result || result.error) return null;
-                      const name = result.title || result.name || result.description || "";
-                      const type = result.type || result.category || "";
-                      const amount = result.amount != null ? `$${Number(result.amount).toFixed(2)}` : null;
-                      // Prefer the server-resolved real owner name (nested-asset
-                      // aware) over raw ids/inputs for the "→ person" chip.
-                      const profile = result.owner || result.forProfile || result.linkedProfiles?.[0] || "";
-                      const date = result.date || result.dueDate || result.nextDueDate || "";
-                      const warnings = result._validationWarnings || [];
-                      const entityId = result.id;
-                      const isDeleted = result._deleted;
-
-                      if (!name && !amount) return null;
-
-                      // Determine entity endpoint for edit/undo
-                      const ep = result.status !== undefined ? "tasks"
-                        : result.amount !== undefined ? "expenses"
-                        : result.frequency !== undefined ? "obligations"
-                        : result.date !== undefined ? "events"
-                        : null;
-                      // Tap destination: profile rows (people/pets/vehicles/assets/
-                      // liabilities carry parentProfileId or a profile type) open
-                      // their detail page; tracker entries open their tracker;
-                      // list entities open their module page.
-                      const isProfileRow = entityId && (
-                        Object.prototype.hasOwnProperty.call(result, "parentProfileId")
-                        || ["person", "pet", "vehicle", "asset", "liability", "property", "medical", "self"].includes(String(result.type || ""))
-                      );
-                      const href = isProfileRow ? `/profiles/${entityId}`
-                        : result.trackerId ? `/trackers?tracker=${result.trackerId}`
-                        : ep === "tasks" ? "/tasks"
-                        : ep === "expenses" ? "/finance"
-                        : ep === "obligations" ? "/obligations"
-                        : ep === "events" ? "/calendar"
-                        : null;
-
-                      return (
-                        <ConfirmationCard
-                          key={`${ri}-${entityId}`}
-                          name={name}
-                          type={type}
-                          amount={amount}
-                          date={date}
-                          profile={profile}
-                          warnings={warnings}
-                          entityId={entityId}
-                          endpoint={ep}
-                          isDeleted={isDeleted}
-                          result={result}
-                          href={href}
-                          onDeleted={() => { result._deleted = true; setMessages(prev => prev.map(m => ({ ...m }))); }}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Timestamp */}
-                <div className="mt-1.5 flex justify-end">
-                  <span className="text-xs text-muted-foreground/60">
-                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                </div>
-              </div>
+                Clear search
+              </button>
             </div>
-          ))}
+          )}
+          {filteredMessages.map((msg) => {
+            // Only the row that owns the entry being edited receives live edit
+            // state; every other row gets stable sentinels so React.memo holds.
+            const rowIsEditing = !!editingEntryId
+              && !!msg.actions?.some((a) => (a.data as any)?._entityId === editingEntryId);
+            return (
+              <MessageRow
+                key={msg.id}
+                msg={msg}
+                setActiveArtifact={setActiveArtifact}
+                setSmartFillFile={setSmartFillFile}
+                handleConfirmExtraction={handleConfirmExtraction}
+                handleSkipExtraction={handleSkipExtraction}
+                setMessages={setMessages}
+                onRetry={handleRetryMessage}
+                editingEntryId={rowIsEditing ? editingEntryId : null}
+                entryEditVals={rowIsEditing ? entryEditVals : EMPTY_ENTRY_VALS}
+                entryNewField={rowIsEditing ? entryNewField : EMPTY_ENTRY_NEW_FIELD}
+                setEditingEntryId={setEditingEntryId}
+                setEntryEditVals={setEntryEditVals}
+                setEntryNewField={setEntryNewField}
+                saveEntryEdit={saveEntryEdit}
+              />
+            );
+          })}
 
-          {/* Typing indicator */}
+          {/* Live streaming assistant bubble (P0 fix): paints text tokens and
+              tool cards as SSE frames arrive instead of a 170s silent wait.
+              Rendered through the same MessageRow as finished messages, so
+              incremental action cards look identical to the final ones. The
+              bubble is scratch — onSuccess swaps in the real message and
+              onSettled clears this in the same paint. */}
+          {liveStream && (liveStream.text.trim() || liveStream.actions.length > 0) && (
+            <MessageRow
+              msg={{
+                id: "live-stream",
+                role: "assistant",
+                content: liveStream.text,
+                timestamp: liveStream.startedAt,
+                ...(liveStream.actions.length > 0 ? { actions: liveStream.actions } : {}),
+              } as ChatMessage}
+              setActiveArtifact={setActiveArtifact}
+              setSmartFillFile={setSmartFillFile}
+              handleConfirmExtraction={handleConfirmExtraction}
+              handleSkipExtraction={handleSkipExtraction}
+              setMessages={setMessages}
+              onRetry={handleRetryMessage}
+              editingEntryId={null}
+              entryEditVals={EMPTY_ENTRY_VALS}
+              entryNewField={EMPTY_ENTRY_NEW_FIELD}
+              setEditingEntryId={setEditingEntryId}
+              setEntryEditVals={setEntryEditVals}
+              setEntryNewField={setEntryNewField}
+              saveEntryEdit={saveEntryEdit}
+            />
+          )}
+
+          {/* Typing indicator — while a tool runs, names it (live progress)
+              instead of the anonymous bouncing dots. */}
           {isPending && (
             <div className="flex items-start gap-2">
               <div className="bg-muted rounded-lg px-3 py-2">
@@ -3362,7 +3708,18 @@ export default function ChatPage() {
                     <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '150ms'}} />
                     <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '300ms'}} />
                   </div>
-                  <SlowResponseHint />
+                  {liveStream && liveStream.runningTools.length > 0 ? (
+                    <span className="text-xs text-muted-foreground truncate max-w-[240px]" data-testid="live-tool-indicator">
+                      {(() => {
+                        const t = liveStream.runningTools[liveStream.runningTools.length - 1];
+                        const label = (t.label || "").trim();
+                        const name = t.tool.replace(/_/g, " ");
+                        return label && label !== t.tool ? `${name}: ${label}…` : `${name}…`;
+                      })()}
+                    </span>
+                  ) : (
+                    <SlowResponseHint />
+                  )}
                 </div>
               </div>
             </div>
@@ -3374,7 +3731,7 @@ export default function ChatPage() {
           has started they collapse into a small "Starter prompts" toggle so they
           don't permanently occupy space above the composer. Hidden while an
           attachment is staged. */}
-      {!hasAttachments && input.trim().length === 0 && (() => {
+      {!hasAttachments && composerEmpty && (() => {
         const conversationStarted = messages.length > 1;
         const expanded = !conversationStarted || showStarters;
         return (
@@ -3426,24 +3783,26 @@ export default function ChatPage() {
           onRemove={() => {
             if (attachments[0]?.previewUrl) {
               URL.revokeObjectURL(attachments[0].previewUrl);
+              attachmentDataRef.current.delete(attachments[0].previewUrl);
             }
             setAttachments([]);
             setSelectedProfileId("none");
-            setInput("");
+            setAttachmentNote("");
           }}
-          note={input}
-          onNoteChange={setInput}
+          note={attachmentNote}
+          onNoteChange={setAttachmentNote}
           onSend={handleAttachmentSend}
           onSaveOnly={handleSaveOnly}
           isSending={uploadMutation.isPending || saveOnlyMutation.isPending}
           onSmartFill={() => {
             const a = attachments[0];
             if (!a) return;
-            if (a.processing || !a.data) {
+            const data = getAttachmentData(a);
+            if (a.processing || !data) {
               toast({ title: "Still preparing the photo… try again in a moment." });
               return;
             }
-            const stripped = a.data.includes(",") ? a.data.split(",").pop() || a.data : a.data;
+            const stripped = data.includes(",") ? data.split(",").pop() || data : data;
             setSmartFillFile({ name: a.name, mimeType: a.mimeType, base64: stripped });
           }}
         />
@@ -3459,15 +3818,16 @@ export default function ChatPage() {
           onGlobalProfileChange={handleGlobalProfileChange}
           onRemove={handleRemoveAttachment}
           onAddMore={() => addMoreFileInputRef.current?.click()}
-          note={input}
-          onNoteChange={setInput}
+          note={attachmentNote}
+          onNoteChange={setAttachmentNote}
           onSend={handleBatchSend}
           isSending={batchUploadMutation.isPending}
           processedCount={batchProcessedCount}
           onSmartFill={(idx) => {
             const a = attachments[idx];
             if (!a) return;
-            const stripped = a.data.includes(",") ? a.data.split(",").pop() || a.data : a.data;
+            const data = getAttachmentData(a);
+            const stripped = data.includes(",") ? data.split(",").pop() || data : data;
             setSmartFillFile({ name: a.name, mimeType: a.mimeType, base64: stripped });
           }}
         />
@@ -3485,137 +3845,22 @@ export default function ChatPage() {
         </Suspense>
       )}
 
-      {/* Text input area (only shown when no attachment pending) */}
+      {/* Text input area (only shown when no attachment pending). The composer
+          owns its draft state — keystrokes no longer re-render this page. */}
       {!hasAttachments && (
-        <div className="px-3 pt-2 pb-[env(safe-area-inset-bottom,12px)] bg-background/95 backdrop-blur-sm border-t border-border/40">
-          <div className="max-w-2xl mx-auto">
-            {/* Large prominent input box */}
-            <div className="relative rounded-2xl border border-border bg-card shadow-sm focus-within:border-primary/40 focus-within:shadow-md transition-all duration-200">
-              <Textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Ask me anything..."
-                maxLength={10000}
-                className="min-h-[96px] max-h-[280px] resize-none border-0 bg-transparent px-4 pt-3.5 pb-14 text-sm leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0 rounded-2xl"
-                rows={3}
-                data-testid="input-chat"
-              />
-              {/* Action row inside the box. z-10 keeps these controls stacked
-                  ABOVE the textarea — without it, on mobile the native textarea
-                  (which extends under this row via its pb-14 padding) could
-                  swallow taps meant for the Send button, so only the Enter key
-                  worked (#2, 2026-06-25 user report). */}
-              <div className="absolute bottom-0 left-0 right-0 z-10 flex items-center justify-between px-3 pb-3">
-                <div className="flex items-center gap-0.5">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isPending}
-                    title="Attach file or image"
-                    aria-label="Attach file or image"
-                    data-testid="button-attach"
-                    className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                  >
-                    <Paperclip className="h-4 w-4" />
-                  </button>
-                  {/* Doc/Sheet creator — opens a popover with two tiles, then
-                      navigates to /editor/new/<type>?source=chat. The editor
-                      saves to the existing artifacts table; on save it surfaces
-                      both as a chat preview card and on the Artifacts page. */}
-                  <NewDocSheetButton disabled={isPending} />
-                  <button
-                    className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                    onClick={() => {
-                      // On mobile, opens camera. On desktop where `capture` is
-                      // ignored, this falls through to a normal image picker.
-                      const camera = document.getElementById('camera-capture') as HTMLInputElement | null;
-                      if (camera) {
-                        // Reset value so re-selecting the same photo re-fires onChange
-                        camera.value = '';
-                        camera.click();
-                      }
-                    }}
-                    disabled={isPending}
-                    title="Take photo / pick image"
-                    aria-label="Take photo or pick image"
-                    data-testid="button-camera"
-                  >
-                    <Camera className="h-4 w-4" />
-                  </button>
-                  {/* Search button */}
-                  <button
-                    onClick={() => setSearchOpen(v => !v)}
-                    title="Search messages"
-                    aria-label="Search messages"
-                    data-testid="button-chat-search"
-                    className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
-                      searchOpen ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
-                    }`}
-                  >
-                    <Search className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => speech.listening ? speech.stop() : speech.start()}
-                    title={!speech.supported ? 'Voice input not supported in this browser. Use Chrome or Safari.' : speech.listening ? 'Recording… click to stop' : 'Voice input'}
-                    aria-label={speech.listening ? 'Stop recording' : 'Start voice input'}
-                    data-testid="button-voice-input"
-                    className={`h-8 rounded-lg flex items-center justify-center transition-colors ${
-                      speech.listening
-                        ? 'px-2 gap-1 text-red-500 bg-red-500/10 ring-1 ring-red-500/40'
-                        : 'w-8 ' + (!speech.supported
-                          ? 'text-muted-foreground/40 cursor-not-allowed'
-                          : 'text-muted-foreground hover:text-foreground hover:bg-muted/60')
-                    }`}
-                  >
-                    {speech.listening ? (
-                      <>
-                        {/* Animated waveform bars to show the mic is live */}
-                        <span className="flex items-end gap-0.5" aria-hidden="true">
-                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-1" style={{ height: 6 }} />
-                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-2" style={{ height: 10 }} />
-                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-3" style={{ height: 14 }} />
-                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-2" style={{ height: 10 }} />
-                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-1" style={{ height: 6 }} />
-                        </span>
-                        <span className="text-[10px] font-medium uppercase tracking-wide">Rec</span>
-                      </>
-                    ) : (
-                      <Mic className="h-4 w-4" />
-                    )}
-                  </button>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {input.length > 9000 && (
-                    <span className={`text-xs tabular-nums ${input.length >= 10000 ? 'text-red-500 font-medium' : 'text-muted-foreground'}`} data-testid="chat-char-count">
-                      {input.length.toLocaleString()}/10,000
-                    </span>
-                  )}
-                  {messages.length > 1 && (
-                    <button
-                      onClick={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
-                      className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors flex items-center gap-1"
-                      aria-label="Reset chat"
-                      title="Reset chat"
-                      data-testid="button-reset-chat"
-                    >
-                      <RotateCcw className="h-3 w-3" />
-                    </button>
-                  )}
-                  <Button
-                    onClick={handleSend}
-                    disabled={!input.trim() || isPending}
-                    size="sm"
-                    className="h-8 px-4 rounded-xl text-xs font-semibold gap-1.5 hover:scale-105 active:scale-95 transition-transform"
-                    data-testid="button-send"
-                  >
-                    {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Send className="h-3.5 w-3.5" /> Send</>}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ChatComposer
+          ref={composerRef}
+          onSubmit={handleSend}
+          isPending={isPending}
+          searchOpen={searchOpen}
+          onToggleSearch={() => setSearchOpen((v) => !v)}
+          onAttach={() => fileInputRef.current?.click()}
+          onAttachPointerDown={preloadSmartFillDialog}
+          showReset={messages.length > 1}
+          onReset={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
+          onEmptyChange={setComposerEmpty}
+          newDocButton={<NewDocSheetButton disabled={isPending} />}
+        />
       )}
       </div>
 
