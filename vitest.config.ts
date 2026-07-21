@@ -20,6 +20,7 @@ export default defineConfig({
       'tests/chart-data.test.ts',
       'tests/tracker-normalize.test.ts',
       'tests/tracker-entry-update.test.ts',
+      'tests/tracker-read-no-write.test.ts',
       'tests/create-tracker-universal.test.ts',
       'tests/medication-refills.test.ts',
       'tests/tracker-presentation.test.ts',

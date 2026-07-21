@@ -2490,12 +2490,20 @@ export class SupabaseStorage implements IStorage {
     return this.healOwnerSuffixedTrackerNames(trackers);
   }
 
-  // Self-heal legacy "<Name> - <Owner>" tracker names created before the owner
-  // suffix was removed (see server/ai-engine.ts). Strips the owner suffix using
-  // the tracker's OWN linked profiles' names, returns clean names for display,
-  // and persists the rename ONCE (a direct name-column update) so the DB heals
-  // too. After the first heal the suffix is gone, so this becomes a no-op with
-  // no further writes. Never touches a suffix that isn't an owner name.
+  // Strip a legacy "<Name> - <Owner>" tracker-name suffix (created before the
+  // owner suffix was removed — see server/ai-engine.ts) using the tracker's OWN
+  // linked profiles' names. DISPLAY-ONLY: returns clean names but NEVER writes.
+  //
+  // This used to PATCH the name column on every read to "heal the DB too". That
+  // was a read-path write storm: when two trackers strip to the same canonical
+  // name (e.g. "Weight - Craig" and an existing "Weight"), the rename collides
+  // with the partial unique index idx_trackers_name_user (user_id, name) WHERE
+  // deleted_at IS NULL → 409 duplicate key. The failed write never healed the
+  // suffix, so every dashboard/getTrackers load re-fired the same rejected
+  // PATCH, and awaiting them stalled the response (skeleton hang). Canonicalizing
+  // in memory alone gives clean display without ever mutating on the read path;
+  // matches MemStorage.healTrackerName parity. Never touches a suffix that isn't
+  // an owner name.
   private async healOwnerSuffixedTrackerNames(trackers: Tracker[]): Promise<Tracker[]> {
     if (!trackers.length) return trackers;
     let profileNameById: Map<string, string>;
@@ -2505,22 +2513,13 @@ export class SupabaseStorage implements IStorage {
     } catch {
       return trackers; // never let a heal failure break tracker reads
     }
-    const renames: Array<Promise<any>> = [];
-    const healed = trackers.map(t => {
+    return trackers.map(t => {
       const ownerNames = (t.linkedProfiles || []).map(id => profileNameById.get(id)).filter(Boolean) as string[];
       if (!ownerNames.length) return t;
       const cleaned = stripTrackerOwnerSuffix(t.name, ownerNames);
       if (cleaned === t.name) return t;
-      // Persist the rename once (awaited in aggregate below).
-      renames.push(
-        (async () => { await this.supabase.from("trackers").update({ name: cleaned }).eq("id", t.id).eq("user_id", this.userId); })(),
-      );
       return { ...t, name: cleaned };
     });
-    if (renames.length) {
-      try { await Promise.all(renames); } catch { /* display already clean; retry next read */ }
-    }
-    return healed;
   }
 
   async getTracker(id: string): Promise<Tracker | undefined> {
