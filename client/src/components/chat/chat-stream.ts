@@ -83,9 +83,13 @@ function toRequestError(status: number, rawBody: string): Error {
 export async function streamChat(body: unknown, callbacks: ChatStreamCallbacks = {}): Promise<any> {
   const controller = new AbortController();
   const hardTimer = setTimeout(() => controller.abort(), STREAM_HARD_TIMEOUT_MS);
-  let idleTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
+  // The idle watchdog only arms once we're actually reading an event stream.
+  // Before that (waiting on headers — which for an OLD buffered server means
+  // waiting for the whole turn) the hard cap is the only limit, so talking to
+  // a server without SSE support never aborts early.
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
   const kickIdle = () => {
-    clearTimeout(idleTimer);
+    if (idleTimer != null) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
   };
 
@@ -114,6 +118,7 @@ export async function streamChat(body: unknown, callbacks: ChatStreamCallbacks =
     }
 
     const reader = res.body.getReader();
+    kickIdle(); // arm the heartbeat watchdog now that we're reading a stream
     const decoder = new TextDecoder();
     let buffered = "";
     let final: any = null;
@@ -194,6 +199,6 @@ export async function streamChat(body: unknown, callbacks: ChatStreamCallbacks =
     throw err;
   } finally {
     clearTimeout(hardTimer);
-    clearTimeout(idleTimer);
+    if (idleTimer != null) clearTimeout(idleTimer);
   }
 }
