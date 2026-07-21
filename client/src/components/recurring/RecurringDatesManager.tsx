@@ -42,6 +42,11 @@ import {
   REMINDER_PRESETS, RD_TAG,
   type RecurringKind, type SeriesStatus,
 } from "@shared/recurring-dates";
+import {
+  aggregateUpcomingDates, CATEGORY_LABELS, CATEGORY_ICONS, URGENCY_COLORS,
+  daysUntilLabel, type UpcomingDate, type UpcomingCategory,
+} from "@shared/upcoming-dates";
+import { useLocation } from "wouter";
 
 const KIND_ICONS: Record<RecurringKind, any> = {
   anniversary: CalendarHeart, birthday: Cake, bill: Receipt, renewal: RefreshCw,
@@ -591,6 +596,56 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
   );
 }
 
+// ─── Cross-app recurring feed ─────────────────────────────────────────────────
+// Everything ELSE in the app that recurs — liability/loan/credit-card payment
+// dates, bills and subscriptions (incl. chat-created), profile birthdays and
+// anniversaries, registrations, renewals, medication refills, reminders —
+// pulled from the same aggregator the dashboard's Upcoming section uses, so
+// this tab is the one complete list. These rows are managed by their own
+// systems (a bill pays from the liability page, a birthday comes from the
+// profile's date of birth), so they deep-link to the source instead of
+// offering series editing here.
+
+// One-off kinds that don't belong on a RECURRING dates screen.
+const ONE_OFF_CATEGORIES = new Set<UpcomingCategory>([
+  "task_due", "calendar_event", "goal_target", "travel_departure", "travel_return",
+  "reservation", "event_ticket", "court_date", "legal_filing", "habit_milestone",
+  "investment_maturity", "custom",
+]);
+
+function LinkedRecurringRow({ item, profiles }: { item: UpcomingDate; profiles: any[] }) {
+  const [, navigate] = useLocation();
+  const owner = item.relatedProfileId ? profiles.find((p: any) => p.id === item.relatedProfileId) : null;
+  const uc = URGENCY_COLORS[item.urgency];
+  const go = () => {
+    const href = String(item.href || "").replace(/^#/, "");
+    if (href) navigate(href);
+  };
+  return (
+    <button type="button" onClick={go}
+      className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-muted/40 transition-colors"
+      data-testid={`rd-linked-${item.id}`}>
+      <span className="text-base leading-none shrink-0 w-6 text-center">{CATEGORY_ICONS[item.category] || "📅"}</span>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-semibold truncate">{item.title}</p>
+        <p className="text-[10px] text-muted-foreground truncate">
+          {CATEGORY_LABELS[item.category] || item.category}
+          {owner ? ` · ${owner.name}` : ""}
+          {item.subtitle ? ` · ${item.subtitle}` : ""}
+        </p>
+      </div>
+      <div className="text-right shrink-0">
+        <p className="text-[11px] font-semibold tabular-nums">{fmtShort(item.nextDate)}</p>
+        <span className="inline-block text-[9px] font-semibold uppercase tracking-wide px-1.5 py-px rounded-full"
+          style={{ background: `hsl(${uc.bg})`, color: `hsl(${uc.fg})` }}>
+          {daysUntilLabel(item.daysUntil)}
+        </span>
+      </div>
+      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
+    </button>
+  );
+}
+
 // ─── Manager ──────────────────────────────────────────────────────────────────
 
 export function RecurringDatesManager({ filterIds, filterMode }: {
@@ -610,6 +665,31 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
   });
   const { data: profilesRaw } = useQuery<any>({ queryKey: ["/api/profiles"] });
   const profiles: any[] = Array.isArray(profilesRaw) ? profilesRaw : (profilesRaw?.data ?? []);
+
+  // Cross-app inputs — same scoped fetches the dashboard's Upcoming section
+  // uses, so the aggregate here matches it item-for-item.
+  const scoped = filterMode === "selected" && filterIds.length > 0;
+  const profileParam = scoped ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: documents = [] } = useQuery<any[]>({
+    queryKey: ["/api/documents", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/documents${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const { data: tasks = [] } = useQuery<any[]>({
+    queryKey: ["/api/tasks", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const { data: obligations = [] } = useQuery<any[]>({
+    queryKey: ["/api/obligations", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const { data: reminders = [] } = useQuery<any[]>({
+    queryKey: ["/api/reminders", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/reminders${profileParam}`).then(r => r.json()).catch(() => []),
+  });
+  const { data: goals = [] } = useQuery<any[]>({
+    queryKey: ["/api/goals", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
+  });
 
   const today = todayISO();
   const series = useMemo(() => {
@@ -634,6 +714,29 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
 
   const visible = statusFilter === "all" ? series : series.filter(s => s.status === statusFilter);
 
+  // Everything else in the app that recurs — bills/liabilities, birthdays,
+  // anniversaries, renewals, refills, reminders — over a 370-day window so
+  // every yearly date appears exactly once. Managed series above are excluded
+  // (they'd be duplicates).
+  const linkedItems = useMemo(() => {
+    const managedIds = new Set(
+      (Array.isArray(events) ? events : [])
+        .filter((e: any) => e.recurrence && e.recurrence !== "none")
+        .map((e: any) => e.id),
+    );
+    let items = aggregateUpcomingDates(
+      { profiles, documents, tasks, events, obligations, goals, reminders },
+      { windowDays: 370 },
+    ).filter(u =>
+      (u.recurring || !ONE_OFF_CATEGORIES.has(u.category)) &&
+      !(u.entityKind === "event" && managedIds.has(u.sourceId)));
+    if (scoped) {
+      const allow = new Set(filterIds);
+      items = items.filter(u => u.relatedProfileId && allow.has(u.relatedProfileId));
+    }
+    return items;
+  }, [events, profiles, documents, tasks, obligations, goals, reminders, scoped, filterIds]);
+
   return (
     <div className="space-y-2.5" data-testid="recurring-dates-manager">
       <div className="flex items-center justify-between gap-2">
@@ -656,7 +759,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
         </Button>
       </div>
 
-      {visible.length === 0 ? (
+      {visible.length === 0 && linkedItems.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border p-6 text-center">
           <Bell className="h-6 w-6 mx-auto text-muted-foreground/50 mb-2" />
           <p className="text-sm font-medium">No recurring dates{statusFilter !== "all" ? ` (${statusFilter})` : ""}</p>
@@ -677,6 +780,29 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
               onMove={() => setDialog({ kind: "move", event: ev })}
               onReassign={() => setDialog({ kind: "reassign", event: ev })} />
           ))}
+        </div>
+      )}
+
+      {/* Everything else in the app that recurs — liabilities/bills, birthdays,
+          anniversaries, renewals, refills, reminders — one complete list.
+          Rows deep-link to the system that owns them. */}
+      {statusFilter === "all" && linkedItems.length > 0 && (
+        <div className="pt-1" data-testid="rd-linked-section">
+          <div className="flex items-baseline justify-between px-1 mb-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              From across your app · {linkedItems.length}
+            </p>
+            <p className="text-[10px] text-muted-foreground">bills · birthdays · renewals · reminders</p>
+          </div>
+          <div className="rounded-2xl border border-border bg-card divide-y divide-border/50 overflow-hidden">
+            {linkedItems.map(item => (
+              <LinkedRecurringRow key={item.id} item={item} profiles={profiles} />
+            ))}
+          </div>
+          <p className="px-1 pt-1 text-[10px] text-muted-foreground">
+            These come from their own systems — tap one to manage it at the source (pay a bill on its
+            liability page, edit a birthday on the profile).
+          </p>
         </div>
       )}
 
