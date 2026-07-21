@@ -14,6 +14,7 @@ import { BROWSER_TIMEZONE } from "@/lib/queryClient";
 // where trackers.tsx getQuerySection would never see it on subsequent in-hash navs.
 import { hashNavigate } from "@/lib/hashNavigate";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import { useResumeTick } from "@/hooks/useResumeTick";
 import { HUB_TABS, activeHubTab, infoTabRoute } from "./hub-routes";
 import { HubKpiStrip } from "./HubKpiStrip";
 import { HubProfileSwitcher } from "./HubProfileSwitcher";
@@ -23,6 +24,11 @@ export function HubShell() {
   const scope = useProfileScope();
   const active = activeHubTab(location, [...scope.selectedIds]);
 
+  // STALE-CLOCK FIX (2026-07-21): re-render once per resume-after-long-absence
+  // so the date line rolls over. Without this, a PWA frozen overnight kept
+  // showing yesterday's date ("Monday, July 20" on Tuesday) because nothing
+  // ever re-rendered this component after resume.
+  useResumeTick();
   const dateLabel = new Date().toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric", timeZone: BROWSER_TIMEZONE,
   });
