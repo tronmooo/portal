@@ -4,6 +4,7 @@ import {
   frontDoorEnabled,
   shouldUseFrontDoor,
   runFrontDoorReply,
+  runFrontDoorDiag,
 } from "../server/chat-frontdoor";
 
 const KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "AI_ROUTER_DISABLE", "AI_CHAT_FRONTDOOR", "AI_FRONTDOOR_TIER"];
@@ -194,5 +195,42 @@ describe("runFrontDoorReply", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("err", { status: 500 })));
     const res = await runFrontDoorReply({ userMessage: "hello" });
     expect(res).toBeNull();
+  });
+});
+
+describe("runFrontDoorDiag — failover across providers", () => {
+  it("fails over from a bad Gemini key to OpenAI", async () => {
+    // Reproduces the real bug: an invalid Gemini key must not disable the front
+    // door — OpenAI should answer and the diag should record the Gemini failure.
+    process.env.ANTHROPIC_API_KEY = "x";
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.GEMINI_API_KEY = "AQ.not-a-real-gemini-key";
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("generativelanguage")) {
+        return new Response(JSON.stringify({ error: { message: "API key not valid" } }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "openai to the rescue" } }] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock as any);
+
+    const diag = await runFrontDoorDiag({ userMessage: "explain compound interest" });
+    expect(diag.ok).toBe(true);
+    expect(diag.modelLabel).toContain("openai:");
+    expect(diag.reply).toBe("openai to the rescue");
+    // Gemini was tried first and recorded with its error, then OpenAI succeeded.
+    expect(diag.attempts[0].model).toContain("gemini:");
+    expect(diag.attempts[0].error).toBeTruthy();
+    expect(diag.attempts[1].model).toContain("openai:");
+    expect(diag.attempts[1].error).toBeUndefined();
+  });
+
+  it("reports ok:false with all errors when every provider fails", async () => {
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.GEMINI_API_KEY = "AIza-bad";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 401 })) as any);
+    const diag = await runFrontDoorDiag({ userMessage: "explain compound interest" });
+    expect(diag.ok).toBe(false);
+    expect(diag.attempts.length).toBeGreaterThanOrEqual(2);
+    expect(diag.attempts.every(a => a.error)).toBe(true);
   });
 });

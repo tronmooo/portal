@@ -53,7 +53,7 @@ import { DEFAULT_TIMEZONE, todayAtTimeISO } from "@shared/timezone";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
-import { shouldUseFrontDoor, runFrontDoorReply } from "./chat-frontdoor";
+import { shouldUseFrontDoor, runFrontDoorDiag } from "./chat-frontdoor";
 import {
   EXTRACT_ACTIONS_TOOL,
   MAX_BULK_OPERATIONS,
@@ -12219,7 +12219,7 @@ async function runBulkLogPath(
 // MAIN AI PROCESSING — tool_use loop
 // ============================================================
 
-export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: { profileFilterIds?: string[] }): Promise<{
+export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: { profileFilterIds?: string[]; debug?: boolean }): Promise<{
   reply: string;
   actions: ParsedAction[];
   results: any[];
@@ -12231,7 +12231,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   artifact?: any;
   operations?: OperationOutcome[];
   /** Routing observability: which path/model served this reply (front door only). */
-  meta?: { route: string; model: string };
+  meta?: { route: string; model: string; attempts?: Array<{ model: string; error?: string }> };
 }> {
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
@@ -12974,22 +12974,34 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // through to the agent. See server/chat-frontdoor.ts + docs/MODEL_ROUTING.md.
   if (shouldUseFrontDoor(userMessage)) {
     try {
-      const fd = await runFrontDoorReply({
+      const diag = await runFrontDoorDiag({
         userMessage,
         history: conversationHistory,
         anthropicClient: getClient(),
       });
-      if (fd) {
-        try {
-          console.log("[chat-trace] " + JSON.stringify({
-            path: "frontdoor",
-            model: fd.modelLabel,
-            user_id: userId,
-            msg_preview: (userMessage || "").slice(0, 80),
-          }));
-        } catch { /* never let logging break the reply */ }
-        return { reply: fd.reply, actions: [], results: [], operations: [], meta: { route: "frontdoor", model: fd.modelLabel } };
+      try {
+        console.log("[chat-trace] " + JSON.stringify({
+          path: diag.ok ? "frontdoor" : "frontdoor-failed",
+          model: diag.modelLabel || null,
+          attempts: diag.attempts,
+          user_id: userId,
+          msg_preview: (userMessage || "").slice(0, 80),
+        }));
+      } catch { /* never let logging break the reply */ }
+      if (diag.ok && diag.reply) {
+        return { reply: diag.reply, actions: [], results: [], operations: [], meta: { route: "frontdoor", model: diag.modelLabel! } };
       }
+      // Front door was eligible but every provider failed. In debug mode,
+      // surface exactly why (bad key, retired model, timeout) instead of
+      // silently falling through — this is how we diagnose live.
+      if (options?.debug) {
+        return {
+          reply: "[debug] front door attempted but all providers failed; see meta.attempts.",
+          actions: [], results: [], operations: [],
+          meta: { route: "frontdoor-failed", model: "", attempts: diag.attempts },
+        };
+      }
+      // Normal mode: fall through to the Claude tool-agent.
     } catch (err: any) {
       logger.warn("ai", `Front door failed (${err?.message}) — continuing with the agentic loop`);
     }

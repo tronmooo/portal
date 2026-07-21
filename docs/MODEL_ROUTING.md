@@ -31,9 +31,20 @@ message:
   Set `AI_FRONTDOOR_TIER=reasoning` to prefer the strongest model instead
   (Claude → GPT → Gemini).
 
+The front door **fails over across providers**: it tries them in preference order
+and, if the top pick errors (bad key, retired model id, timeout), moves to the next
+one instead of giving up. Only if every provider fails does it fall through to the
+Claude tool-agent. This means a single bad key (e.g. a Gemini value that isn't a real
+`AIza…` key) no longer disables the feature — OpenAI/Claude still answer.
+
 Every reply that goes through the front door carries a `meta` field in the JSON
 response — `{"route":"frontdoor","model":"gemini:gemini-1.5-flash"}` — so the client
 (or a probe) can see exactly which provider answered. Agent-path replies omit `meta`.
+
+**Diagnostics:** POST `/api/chat` with `{ "message": "...", "debug": true }`. On a
+conversational message the response's `meta.attempts` lists every provider tried and
+the error that knocked each one out — the fastest way to tell whether a key is
+invalid. The same detail is logged server-side as `[chat-trace] path="frontdoor-failed"`.
 
 Guarantees:
 

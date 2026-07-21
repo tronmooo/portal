@@ -26,7 +26,7 @@
 // ============================================================
 
 import type Anthropic from "@anthropic-ai/sdk";
-import { providerAvailable, selectModel, callModel, type TaskKind } from "./model-router";
+import { providerAvailable, selectModels, callModel, type TaskKind } from "./model-router";
 
 // Signals that a message needs the tool-agent: it either changes data
 // or asks about the user's own stored records (which require read tools).
@@ -96,25 +96,36 @@ export interface FrontDoorResult {
   modelLabel: string;
 }
 
+export interface FrontDoorAttempt {
+  model: string;
+  error?: string;
+}
+
+export interface FrontDoorDiag {
+  ok: boolean;
+  reply?: string;
+  modelLabel?: string;
+  /** Every provider tried, in order, with the error that knocked it out (if any). */
+  attempts: FrontDoorAttempt[];
+}
+
 /**
- * Produce a conversational reply from the best available provider.
- * Returns null on any failure so the caller can fall through to the
- * Claude tool-agent. Never throws.
+ * Try each available provider in preference order until one produces a reply.
+ * A failing top pick (bad key, retired model id, timeout) no longer disables
+ * the whole front door — the next provider takes over. Never throws; returns a
+ * diagnostic describing exactly what happened.
  */
-export async function runFrontDoorReply(opts: FrontDoorOptions): Promise<FrontDoorResult | null> {
+export async function runFrontDoorDiag(opts: FrontDoorOptions): Promise<FrontDoorDiag> {
   // Conversational replies favour SPEED by default — a quick advice/explanation
   // answer from Gemini Flash / GPT-mini beats waiting on the heaviest model.
   // Set AI_FRONTDOOR_TIER=reasoning to prefer the strongest model instead.
   const envTier = process.env.AI_FRONTDOOR_TIER;
   const defaultTier: TaskKind = envTier === "reasoning" ? "reasoning" : "fast";
-  const { userMessage, history, anthropicClient, timeoutMs = 20_000, taskKind = defaultTier } = opts;
+  const { userMessage, history, anthropicClient, timeoutMs = 12_000, taskKind = defaultTier } = opts;
 
-  let spec;
-  try {
-    spec = selectModel(taskKind);
-  } catch {
-    return null; // no provider configured
-  }
+  const specs = selectModels(taskKind);
+  const attempts: FrontDoorAttempt[] = [];
+  if (specs.length === 0) return { ok: false, attempts };
 
   // Fold a short history tail into the user turn so follow-ups keep context
   // without adopting each provider's multi-turn message schema.
@@ -126,23 +137,46 @@ export async function runFrontDoorReply(opts: FrontDoorOptions): Promise<FrontDo
     ? `Conversation so far:\n${historyText}\n\nUser: ${userMessage}`
     : userMessage;
 
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const text = await callModel({
-      spec,
-      system: SYSTEM_PROMPT,
-      user,
-      maxTokens: 1024,
-      signal: ac.signal,
-      anthropicClient,
-    });
-    const reply = (text || "").trim();
-    if (!reply) return null;
-    return { reply, modelLabel: spec.label };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
+  for (const spec of specs) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const text = await callModel({
+        spec,
+        system: SYSTEM_PROMPT,
+        user,
+        maxTokens: 1024,
+        signal: ac.signal,
+        anthropicClient,
+      });
+      const reply = (text || "").trim();
+      if (!reply) {
+        attempts.push({ model: spec.label, error: "empty reply" });
+        continue;
+      }
+      attempts.push({ model: spec.label });
+      return { ok: true, reply, modelLabel: spec.label, attempts };
+    } catch (e: any) {
+      const msg = String(e?.name === "AbortError" ? `timeout after ${timeoutMs}ms` : e?.message || e).slice(0, 200);
+      attempts.push({ model: spec.label, error: msg });
+      // eslint-disable-next-line no-console
+      console.warn(`[frontdoor] ${spec.label} failed: ${msg} — trying next provider`);
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  return { ok: false, attempts };
+}
+
+/**
+ * Produce a conversational reply from the best available provider (with
+ * failover). Returns null on total failure so the caller can fall through to
+ * the Claude tool-agent. Never throws.
+ */
+export async function runFrontDoorReply(opts: FrontDoorOptions): Promise<FrontDoorResult | null> {
+  const diag = await runFrontDoorDiag(opts);
+  if (diag.ok && diag.reply && diag.modelLabel) {
+    return { reply: diag.reply, modelLabel: diag.modelLabel };
+  }
+  return null;
 }

@@ -949,8 +949,11 @@ export async function registerRoutes(
         }
       })();
       const cleanMessage = sanitize(message);
+      // Opt-in routing diagnostics: clients never send this, but a probe can pass
+      // { debug: true } to see which provider served the reply (meta.attempts).
+      const debug = req.body?.debug === true;
       const [result, classification] = await Promise.all([
-        (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, { profileFilterIds }),
+        (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, { profileFilterIds, debug }),
         classifierContextPromise.then(ctx => classifyCapture(cleanMessage, ctx).catch(err => {
           console.warn("[classifyCapture] swallowed error:", (err as Error).message);
           return null;

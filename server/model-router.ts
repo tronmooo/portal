@@ -87,29 +87,44 @@ const PREFERENCE: Record<TaskKind, Provider[]> = {
   extract: ["gemini", "openai", "anthropic"],
 };
 
+function specFor(provider: Provider, kind: TaskKind): ModelSpec {
+  if (provider === "openai") {
+    const model = openaiModel(kind);
+    return { provider, model, label: `openai:${model}` };
+  }
+  if (provider === "gemini") {
+    const model = geminiModel(kind);
+    return { provider, model, label: `gemini:${model}` };
+  }
+  const model = kind === "reasoning" ? ANTHROPIC_REASONING : ANTHROPIC_FAST;
+  return { provider: "anthropic", model, label: `claude:${model}` };
+}
+
 /**
- * Choose the best available model for a task.
+ * All available models for a task, in preference order. Callers that want
+ * resilience try them in turn — if the top pick's provider errors (e.g. a bad
+ * key or a retired model id), the next one takes over. Empty only when no
+ * provider is configured at all.
+ */
+export function selectModels(kind: TaskKind = "fast"): ModelSpec[] {
+  const specs: ModelSpec[] = [];
+  for (const provider of PREFERENCE[kind]) {
+    if (providerAvailable(provider)) specs.push(specFor(provider, kind));
+  }
+  return specs;
+}
+
+/**
+ * Choose the single best available model for a task.
  * Always returns a spec — falls back to Claude when no other provider's key
  * is configured. Throws only if not even ANTHROPIC_API_KEY is set.
  */
 export function selectModel(kind: TaskKind = "fast"): ModelSpec {
-  for (const provider of PREFERENCE[kind]) {
-    if (!providerAvailable(provider)) continue;
-    if (provider === "anthropic") {
-      const model = kind === "reasoning" ? ANTHROPIC_REASONING : ANTHROPIC_FAST;
-      return { provider, model, label: `claude:${model}` };
-    }
-    if (provider === "openai") {
-      const model = openaiModel(kind);
-      return { provider, model, label: `openai:${model}` };
-    }
-    if (provider === "gemini") {
-      const model = geminiModel(kind);
-      return { provider, model, label: `gemini:${model}` };
-    }
+  const specs = selectModels(kind);
+  if (specs.length === 0) {
+    throw new Error("No AI provider configured (set ANTHROPIC_API_KEY)");
   }
-  // Nothing available at all — surface a clear error for the caller's fallback.
-  throw new Error("No AI provider configured (set ANTHROPIC_API_KEY)");
+  return specs[0];
 }
 
 /** An explicit Anthropic model id (backward-compat) mapped onto a spec. */
