@@ -53,13 +53,10 @@ const PRIORITY_COLORS: Record<string, string> = {
   high: "bg-red-500/10 text-red-600 dark:text-red-400",
 };
 
-const invalidateTaskQueries = () => {
-  queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-  queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-  // Also invalidate dashboard so KPIs recompute after task changes
-  queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-};
+// Cache bus: the "tasks" domain ripples to every linked surface (task lists,
+// dashboard KPIs, stats, activity feed, calendar timeline, insights) in one
+// call instead of a hand-maintained key list.
+const invalidateTaskQueries = () => invalidateDomain("tasks");
 
 // ── Create / Edit Dialog ─────────────────────────────────────────────────────
 
@@ -149,7 +146,15 @@ function TaskDialog({
       }
       return { prev, tempId };
     },
-    onSuccess: () => {
+    onSuccess: (data, _v, ctx) => {
+      // Swap the optimistic temp row for the real server row (real id) so
+      // toggle/delete on the fresh task works before the refetch settles
+      // (temp ids are guarded with a "Still saving…" toast).
+      if (!isEdit && data?.id && ctx?.tempId) {
+        queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) =>
+          Array.isArray(old) ? old.map((t: any) => t?.id === ctx.tempId ? { ...t, ...data, _optimistic: undefined } : t) : old
+        );
+      }
       invalidateTaskQueries();
       toast({ title: isEdit ? `"${title.trim()}" updated` : `"${title.trim()}" created`, description: dueDate ? `Due ${new Date(dueDate + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : undefined });
     },

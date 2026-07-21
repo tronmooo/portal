@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
-import { invalidateDomain } from "@/lib/cache-bus";
+import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
 import { categoryTheme } from "@/lib/category-theme";
 import { AccentCard } from "@/components/ui/accent-card";
@@ -580,11 +580,12 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
 // own row at the very top of the dashboard (under AI Summary). The smaller
 // KPISection below becomes a secondary chip row of habits/tasks/journal/docs.
 
-function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = false, hideBudget = false }: {
+function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, refetching = false, hideBudget = false }: {
   enhanced: any;
   stats: DashboardStats | undefined;
   filterMode: string;
   filterIds: string[];
+  allProfiles?: any[];
   refetching?: boolean;
   hideBudget?: boolean;
 }) {
@@ -610,12 +611,10 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
   // enhanced.financeSnapshot.totalAssetValue (server-computed) while the Finance
   // section tile and the Net Worth popup compute from allProfiles client-side.
   // That divergence produced the $10 / $11K drift the user reported. Pull from
-  // the same /api/profiles cache the Net Worth popup uses so all three Net Worth
+  // the same /api/profiles data the Net Worth popup uses so all three Net Worth
   // surfaces (Hero KPI, Finance section, Net Worth popup) agree to the dollar.
-  const { data: allProfiles } = useQuery<any[]>({
-    queryKey: ["/api/profiles"],
-    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
-  });
+  // P1 dedupe (QA scorecard): /api/profiles is now fetched ONCE by the page
+  // component and passed down — no per-section useQuery copies.
   // BUG-20260528-budget-keep-previous-leak: budgetSummary must NOT inherit the
   // previous filter's totals during a filter swap. Default queryClient has
   // placeholderData: keepPreviousData which made a fresh profile (Lexi, no
@@ -1042,13 +1041,14 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, refetching = f
 // Per-document 30-day snooze moved to lib/docSnooze.ts so the briefing's
 // Document Expirations popup shares the same dismiss state as this KPI section.
 
-function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone" }: { stats: DashboardStats; enhanced: any; filterIds?: string[]; filterMode?: string }) {
+function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", allProfiles }: { stats: DashboardStats; enhanced: any; filterIds?: string[]; filterMode?: string; allProfiles?: any[] }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | "docs" | "habits" | null>(null);
   // In-place quick-add from the Spending / Bills dialogs (no redirect).
   const [quickAdd, setQuickAdd] = useState<QuickAddKind | null>(null);
-  const { data: kpiProfiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  // P1 dedupe (QA scorecard): profiles come from the page-level query.
+  const kpiProfiles = allProfiles ?? [];
   const kpiOwnerId = useMemo(() => {
     if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
     return (kpiProfiles.find((p: any) => p.type === "self")?.id) || "";
@@ -1509,18 +1509,10 @@ function timeGreeting(): string {
   if (h < 18) return "Good afternoon";
   return "Good evening";
 }
-function HeroBriefing({ enhanced, allProfiles, filterIds = [], filterMode = "everyone" }: { enhanced: any; allProfiles: any[]; filterIds?: string[]; filterMode?: string }) {
+function HeroBriefing({ enhanced, allProfiles, filterIds = [], filterMode = "everyone", events = [], goals = [] }: { enhanced: any; allProfiles: any[]; filterIds?: string[]; filterMode?: string; events?: any[]; goals?: any[] }) {
   const [, navigate] = useLocation();
-  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: events = [] } = useQuery<any[]>({
-    queryKey: ["/api/events", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const { data: goalsRaw } = useQuery<any>({
-    queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
-    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
+  // P1 dedupe (QA scorecard): events + goals are fetched ONCE by the page
+  // component (same query keys as before) and passed down as props.
   const items = useMemo(() => computeNowItems({
     overdueTasks: enhanced?.overdueTasks || [],
     dueSoonTasks: [...(enhanced?.tasksDueSoon || []), ...(enhanced?.upcomingTasks || [])],
@@ -1726,18 +1718,9 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
 // ─── Section: DOMAIN HUBS (Dashboard v2, Phase 4) ────────────────────────────
 // Compact navigation cards — one per life domain — each = a count + one CTA.
 // Replaces the large mixed-content sections (full lists) with drill-down links.
-function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filterMode = "everyone" }: { enhanced: any; stats: DashboardStats | undefined; allProfiles: any[]; filterIds?: string[]; filterMode?: string }) {
+function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filterMode = "everyone", events = [], goals = [] }: { enhanced: any; stats: DashboardStats | undefined; allProfiles: any[]; filterIds?: string[]; filterMode?: string; events?: any[]; goals?: any[] }) {
   const [, navigate] = useLocation();
-  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: events = [] } = useQuery<any[]>({
-    queryKey: ["/api/events", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const { data: goalsRaw } = useQuery<any>({
-    queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
-    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
+  // P1 dedupe (QA scorecard): events + goals come from the page-level queries.
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const next7Events = (Array.isArray(events) ? events : []).filter((e: any) => {
@@ -1786,22 +1769,12 @@ function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filte
 // overdue/at-risk Goals into ONE ranked list via shared/now-rank. Every action
 // hits the SAME mutation endpoints the AI chat uses (complete task / pay bill),
 // so chat and dashboard stay interchangeable (Dashboard v2 invariant).
-function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyone" }: { enhanced: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
+function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyone", events = [], goals = [] }: { enhanced: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string; events?: any[]; goals?: any[] }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
   const [acted, setActed] = useState<Set<string>>(new Set());
-  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-
-  const { data: events = [] } = useQuery<any[]>({
-    queryKey: ["/api/events", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const { data: goalsRaw } = useQuery<any>({
-    queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
-    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const goals = Array.isArray(goalsRaw) ? goalsRaw : (goalsRaw?.items || goalsRaw?.goals || []);
+  // P1 dedupe (QA scorecard): events + goals come from the page-level queries.
 
   const items = useMemo(() => computeNowItems({
     overdueTasks: enhanced?.overdueTasks || [],
@@ -1812,19 +1785,80 @@ function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyo
     goals: Array.isArray(goals) ? goals : [],
   }).filter(i => !acted.has(i.key)), [enhanced, events, goals, acted]);
 
+  // Optimistic-context pattern (see CalendarView.tsx): onMutate cancels
+  // in-flight fetches, snapshots the caches the visible lists actually read
+  // (enhanced task lists, stats badge count, /api/tasks lists), and patches
+  // them so the checkmark + badge decrement paint immediately; onError rolls
+  // back from the context; onSettled lets the cache bus reconcile from server.
+  const enhancedKey = ["/api/dashboard-enhanced", filterMode, ...filterIds];
+  const statsKey = ["/api/stats", filterMode, ...filterIds];
   const completeTask = useMutation({
     mutationFn: (id: string) => apiRequest("PATCH", `/api/tasks/${id}`, { status: "done" }),
-    onSuccess: () => {
-      ["/api/stats", "/api/dashboard-enhanced", "/api/tasks"].forEach(k => queryClient.invalidateQueries({ queryKey: [k] }));
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      await queryClient.cancelQueries({ queryKey: enhancedKey });
+      await queryClient.cancelQueries({ queryKey: statsKey });
+      const prevTasks = queryClient.getQueriesData<any[]>({ queryKey: ["/api/tasks"] });
+      const prevEnhanced = queryClient.getQueryData<any>(enhancedKey);
+      const prevStats = queryClient.getQueryData<any>(statsKey);
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/tasks"] }, (old) =>
+        Array.isArray(old) ? old.map((t: any) => t.id === id ? { ...t, status: "done" } : t) : old);
+      queryClient.setQueryData<any>(enhancedKey, (old: any) => {
+        if (!old) return old;
+        const drop = (l: any) => Array.isArray(l) ? l.filter((t: any) => t.id !== id) : l;
+        return {
+          ...old,
+          overdueTasks: drop(old.overdueTasks),
+          tasksDueSoon: drop(old.tasksDueSoon),
+          upcomingTasks: drop(old.upcomingTasks),
+          taskSnapshot: old.taskSnapshot
+            ? { ...old.taskSnapshot, open: Math.max(0, Number(old.taskSnapshot.open || 0) - 1) }
+            : old.taskSnapshot,
+        };
+      });
+      queryClient.setQueryData<any>(statsKey, (old: any) =>
+        old ? { ...old, activeTasks: Math.max(0, Number(old.activeTasks || 0) - 1) } : old);
+      return { prevTasks, prevEnhanced, prevStats };
     },
-    onError: () => toast({ title: "Couldn't complete task", variant: "destructive" }),
+    onError: (_e, _id, ctx: any) => {
+      ctx?.prevTasks?.forEach(([key, data]: [any, any]) => queryClient.setQueryData(key, data));
+      if (ctx?.prevEnhanced !== undefined) queryClient.setQueryData(enhancedKey, ctx.prevEnhanced);
+      if (ctx?.prevStats !== undefined) queryClient.setQueryData(statsKey, ctx.prevStats);
+      toast({ title: "Couldn't complete task", variant: "destructive" });
+    },
+    // Single consolidated invalidation: the bus fans out to /api/tasks,
+    // /api/stats, /api/dashboard-enhanced, activity, timeline, insights.
+    onSettled: () => { invalidateDomain("tasks"); },
   });
   const payBill = useMutation({
     mutationFn: (id: string) => apiRequest("POST", `/api/obligations/${id}/pay`, {}),
-    onSuccess: () => {
-      ["/api/obligations", "/api/dashboard-enhanced", "/api/stats", "/api/cashflow"].forEach(k => queryClient.invalidateQueries({ queryKey: [k] }));
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
+      await queryClient.cancelQueries({ queryKey: enhancedKey });
+      const prevObligations = queryClient.getQueriesData<any[]>({ queryKey: ["/api/obligations"] });
+      const prevEnhanced = queryClient.getQueryData<any>(enhancedKey);
+      // The Now queue + Bills sections read enhanced.financeSnapshot.upcomingBills;
+      // drop the paid bill there so the row clears instantly.
+      queryClient.setQueryData<any>(enhancedKey, (old: any) => {
+        if (!old?.financeSnapshot?.upcomingBills) return old;
+        return {
+          ...old,
+          financeSnapshot: {
+            ...old.financeSnapshot,
+            upcomingBills: old.financeSnapshot.upcomingBills.filter((b: any) => b.id !== id),
+          },
+        };
+      });
+      return { prevObligations, prevEnhanced };
     },
-    onError: () => toast({ title: "Couldn't mark bill paid", variant: "destructive" }),
+    onError: (_e, _id, ctx: any) => {
+      ctx?.prevObligations?.forEach(([key, data]: [any, any]) => queryClient.setQueryData(key, data));
+      if (ctx?.prevEnhanced !== undefined) queryClient.setQueryData(enhancedKey, ctx.prevEnhanced);
+      toast({ title: "Couldn't mark bill paid", variant: "destructive" });
+    },
+    // Single consolidated invalidation (obligations + stats + enhanced +
+    // cashflow + loans/schedule via the cache bus).
+    onSettled: () => { invalidateDomain("obligations"); },
   });
 
   const doAction = (it: NowItem) => {
@@ -1956,9 +1990,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     const task = allItems.find(i => i.id === taskId);
     try {
       await apiRequest("PATCH", `/api/tasks/${taskId}`, { status: "done" });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      invalidateDomain("tasks");
       toast({ title: `"${task?.title || "Task"}" completed` });
     } catch {
       toast({ title: `Failed to complete "${task?.title || "task"}"`, variant: "destructive" });
@@ -1971,9 +2003,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
       const newDate = new Date();
       newDate.setDate(newDate.getDate() + 7);
       await apiRequest("PATCH", `/api/tasks/${taskId}`, { dueDate: newDate.toISOString().slice(0, 10) });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      invalidateDomain("tasks");
       toast({ title: `"${task?.title || "Task"}" snoozed`, description: `Moved to ${newDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}` });
     } catch {
       toast({ title: `Failed to snooze "${task?.title || "task"}"`, variant: "destructive" });
@@ -1987,10 +2017,12 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     const bill = allItems.find(i => i.id === billId);
     try {
       await apiRequest("POST", `/api/obligations/${billId}/pay`, {});
-      // Invalidate every cache that surfaces bills/obligations
-      ["/api/obligations", "/api/obligation-occurrences", "/api/dashboard-enhanced", "/api/stats", "/api/cashflow", "/api/calendar/timeline"].forEach(k =>
-        queryClient.invalidateQueries({ queryKey: [k] })
-      );
+      // Invalidate every cache that surfaces bills/obligations. The bus covers
+      // obligations + stats + dashboard-enhanced + cashflow + loans/schedule;
+      // occurrences + timeline have no obligations-domain entry, keep explicit.
+      invalidateDomain("obligations");
+      queryClient.invalidateQueries({ queryKey: ["/api/obligation-occurrences"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       toast({ title: `"${bill?.title || "Bill"}" marked paid` });
     } catch {
       toast({ title: `Failed to pay "${bill?.title || "bill"}"`, variant: "destructive" });
@@ -2007,9 +2039,10 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
       await apiRequest("PATCH", `/api/obligations/${billId}`, {
         nextDueDate: newDate.toISOString().slice(0, 10),
       });
-      ["/api/obligations", "/api/obligation-occurrences", "/api/dashboard-enhanced", "/api/stats", "/api/cashflow", "/api/calendar/timeline"].forEach(k =>
-        queryClient.invalidateQueries({ queryKey: [k] })
-      );
+      // Same fan-out as handleBillPay above (bus + the two keys it lacks).
+      invalidateDomain("obligations");
+      queryClient.invalidateQueries({ queryKey: ["/api/obligation-occurrences"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
       toast({ title: `"${bill?.title || "Bill"}" snoozed`, description: `Moved to ${newDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}` });
     } catch {
       toast({ title: `Failed to snooze "${bill?.title || "bill"}"`, variant: "destructive" });
@@ -2204,7 +2237,10 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
               })()}
             </div>
           )}
-          <div className="overflow-y-auto overscroll-contain mt-3" style={{ WebkitOverflowScrolling: 'touch', height: 'calc(100vh - 160px)' }}>
+          {/* 100dvh (dynamic viewport) not 100vh — iOS Safari's collapsing URL bar
+              makes 100vh overshoot the visible area and cut off the list bottom.
+              Matches the h-dvh shell in App.tsx. */}
+          <div className="overflow-y-auto overscroll-contain mt-3" style={{ WebkitOverflowScrolling: 'touch', height: 'calc(100dvh - 160px)' }}>
             <div className="space-y-0.5 pr-2">
               {allItems.map((item) => (
                 <AttentionItem key={`sheet-${item.sourceType}-${item.id}`} {...item} />
@@ -2592,10 +2628,9 @@ function ObligationsSection({ data }: { data: any[] }) {
       toast({ title: `Failed to mark "${variables.name || "bill"}" as paid`, variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      // Cache bus: obligations domain covers stats, dashboard-enhanced,
+      // cashflow, obligations, loans/schedule in one consolidated shot.
+      invalidateDomain("obligations");
     },
   });
 
@@ -2905,9 +2940,8 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/goals", data).then(r => r.json()),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Cache bus: goals domain = /api/goals + /api/stats + /api/dashboard-enhanced.
+      invalidateDomain("goals");
       const name = formTitle;
       setCreating(false); resetForm();
       toast({ title: `"${name}" goal created`, description: formTarget ? `Target: ${formTarget} ${formUnit}` : undefined });
@@ -2916,14 +2950,25 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
   });
   const updateMutation = useMutation({
     mutationFn: ({ id, title, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, { title, ...data }).then(r => r.json()),
+    // Optimistic (CalendarView pattern): patch the goal in the cached list so
+    // progress bars / status flips paint immediately; server confirms via the
+    // cache-bus invalidation in onSettled, rollback in onError.
+    onMutate: async ({ id, title, ...data }: any) => {
+      await queryClient.cancelQueries({ queryKey: goalsKey });
+      const prev = queryClient.getQueryData<GoalItem[]>(goalsKey);
+      queryClient.setQueryData<GoalItem[]>(goalsKey, (old) =>
+        (old || []).map((g: any) => g.id === id ? { ...g, ...(title !== undefined ? { title } : {}), ...data } : g));
+      return { prev };
+    },
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       setEditGoal(null); resetForm();
       toast({ title: `"${variables.title || "Goal"}" updated` });
     },
-    onError: (err: Error, variables) => toast({ title: `Failed to update "${variables.title || "goal"}"`, description: err.message, variant: "destructive" }),
+    onError: (err: Error, variables, ctx: any) => {
+      if (ctx?.prev !== undefined) queryClient.setQueryData(goalsKey, ctx.prev);
+      toast({ title: `Failed to update "${variables.title || "goal"}"`, description: err.message, variant: "destructive" });
+    },
+    onSettled: () => { invalidateDomain("goals"); },
   });
   const deleteMutation = useMutation({
     mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
@@ -2934,9 +2979,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
       return { prev };
     },
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      invalidateDomain("goals");
       setEditGoal(null);
       toast({ title: `"${variables.title || "Goal"}" deleted` });
     },
@@ -3407,7 +3450,8 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
   const addMutation = useMutation({
     mutationFn: (data: {category: string; amount: number; notes?: string}) =>
       apiRequest("POST", "/api/budgets", { month, ...data }).then(r => r.json()),
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setAddOpen(false); setNewCat(""); setNewAmt(""); setNewNotes(""); toast({ title: "Budget added" }); },
+    // Cache bus: budgets domain (budgets + summary + enhanced) + dashboard (stats).
+    onSuccess: () => { refetch(); invalidateDomains("budgets", "dashboard"); setAddOpen(false); setNewCat(""); setNewAmt(""); setNewNotes(""); toast({ title: "Budget added" }); },
     onError: () => toast({ title: "Failed to add budget", variant: "destructive" }),
   });
 
@@ -3422,7 +3466,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
       return { prev };
     },
     onSuccess: () => {
-      refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      refetch(); invalidateDomains("budgets", "dashboard");
       toast({ title: "Budget deleted" });
     },
     onError: (_e, _v, ctx: any) => {
@@ -3434,7 +3478,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
   const updateMutation = useMutation({
     mutationFn: (data: {id: string; amount: number}) =>
       apiRequest("PATCH", `/api/budgets/${data.id}?month=${month}`, { amount: data.amount }),
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); setEditId(null); toast({ title: "Budget updated" }); },
+    onSuccess: () => { refetch(); invalidateDomains("budgets", "dashboard"); setEditId(null); toast({ title: "Budget updated" }); },
     onError: () => toast({ title: "Failed to update budget", variant: "destructive" }),
   });
 
@@ -3445,7 +3489,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
       const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
       return apiRequest("POST", "/api/budgets/copy", { fromMonth: prevMonth, toMonth: month }).then(r => r.json());
     },
-    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] }); queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] }); queryClient.invalidateQueries({ queryKey: ["/api/stats"] }); toast({ title: "Budget copied from last month" }); },
+    onSuccess: () => { refetch(); invalidateDomains("budgets", "dashboard"); toast({ title: "Budget copied from last month" }); },
     onError: () => toast({ title: "Failed to copy budget", variant: "destructive" }),
   });
 
@@ -3600,12 +3644,14 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
 
 // ─── Section: Finance Widget ─────────────────────────────────────────────────
 
-function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }: { data: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string }) {
+function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", allProfiles }: { data: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string; allProfiles?: any[] }) {
   const [, navigate] = useLocation();
   const [drill, setDrill] = useState<"spending" | "income" | "cashflow" | "networth" | "budget" | null>(null);
   // In-place add from the legacy drill-downs (no longer read-only).
   const [drillQuickAdd, setDrillQuickAdd] = useState<QuickAddKind | null>(null);
-  const { data: fwProfiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  // P1 dedupe (QA scorecard): profiles come from the page-level query (this
+  // component previously declared TWO copies of the same ["/api/profiles"] key).
+  const fwProfiles = allProfiles ?? [];
   const fwOwnerId = useMemo(() => {
     if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
     return (fwProfiles.find((p: any) => p.type === "self")?.id) || "";
@@ -3617,10 +3663,6 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone" }:
   const { data: incomes } = useQuery<any[]>({
     queryKey: ["/api/incomes", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", incomeUrl).then(r => r.json()),
-  });
-  const { data: allProfiles } = useQuery<any[]>({
-    queryKey: ["/api/profiles"],
-    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
   const { data: allObligations } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],

@@ -85,6 +85,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
 import {
   Popover,
   PopoverContent,
@@ -409,10 +410,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     },
     onSuccess: () => {
       toast({ title: "Profile picture updated" });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomains("liabilities");
     },
     onError: (err: Error) => toast({ title: "Failed to update picture", description: formatApiError(err), variant: "destructive" }),
   });
@@ -438,10 +436,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     },
     onSuccess: () => {
       toast({ title: "Profile updated" });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomains("liabilities");
       setShowEditDialog(false);
     },
     onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
@@ -485,12 +480,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     onSuccess: () => {
       toast({ title: "Loan terms saved", description: "Calendar will update with the new due date." });
       setEditingTerms(false);
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomains("liabilities", "events");
     },
     onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
@@ -516,12 +506,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         old?.filter((p: any) => p.id !== profile.id) || []
       );
       toast({ title: "Profile deleted", description: "All linked data has been removed" });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomains("liabilities", "events", "expenses");
       navigate("/profiles");
     },
     onError: (err: Error) => toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
@@ -605,17 +590,13 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       toast({ title: "Ownership updated" });
       refetchPartyLinks();
       qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "parties"] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles"] });
-      // Bug #1 + #15: also invalidate the liability profile's detail, the
-      // dashboard, the bulk links endpoint, and every affected owner's caches.
-      qc.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
-      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
-      qc.invalidateQueries({ queryKey: ["/api/rel-people"] });
-      for (const ownerId of affectedOwnerIds) {
-        qc.invalidateQueries({ queryKey: ["/api/profiles", ownerId, "detail"] });
-        qc.invalidateQueries({ queryKey: ["/api/parties", ownerId, "liabilities"] });
-      }
+      // Bug #1 + #15: the "liabilities" + "people" domains cover the liability
+      // profile's detail, the profiles list, the dashboard, rel-people, and
+      // every affected owner's detail / ["/api/parties", ownerId, "liabilities"]
+      // caches via the bus predicate — no per-owner loop needed.
+      void affectedOwnerIds;
+      invalidateDomains("liabilities", "people");
       setOwnerPopoverOpen(false);
     },
     onError: (err: Error) => toast({ title: "Failed to update ownership", description: formatApiError(err), variant: "destructive" }),
@@ -804,11 +785,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     },
     onSuccess: () => {
       toast({ title: "Payment reversed" });
-      qc.invalidateQueries({ queryKey: [`/api/liabilities/${profile.id}/payments`] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles"] });
-      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      qc.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomains("liabilities");
     },
     onError: (err: Error) =>
       toast({
@@ -837,11 +814,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     },
     onSuccess: () => {
       toast({ title: "Payment recorded" });
-      qc.invalidateQueries({ queryKey: [`/api/liabilities/${profile.id}/payments`] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles", profile.id, "detail"] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles"] });
-      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      qc.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomains("liabilities");
       setPaymentDialog((s) => ({ ...s, open: false }));
     },
     onError: (err: Error) =>
@@ -2389,16 +2362,12 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
     },
     onSuccess: (_data, vars) => {
       toast({ title: "Person linked" });
-      // Bug #2: also invalidate the linked party's own caches and the dashboard.
-      qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/parties`] });
+      // Bug #2: the "liabilities" + "people" domains cover the profiles list,
+      // the liability + party detail keys, /api/parties/* and the dashboard.
+      void vars;
       qc.invalidateQueries({ queryKey: ["/api/liabilities", liabilityId, "parties"] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles"] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles", liabilityId, "detail"] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles", vars.partyProfileId, "detail"] });
-      qc.invalidateQueries({ queryKey: ["/api/parties", vars.partyProfileId, "liabilities"] });
-      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
-      qc.invalidateQueries({ queryKey: ["/api/rel-people"] });
+      invalidateDomains("liabilities", "people");
       setPickerOpen(false);
       setSelectedPartyId("");
     },
@@ -2424,20 +2393,11 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
     },
     onSuccess: () => {
       toast({ title: "Person unlinked" });
-      // Bug #14 (liability side): broadly invalidate so every affected view refreshes.
-      qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/parties`] });
+      // Bug #14 (liability side): the "liabilities" + "people" domains cover the
+      // profiles list, detail keys, /api/parties/* and the dashboard.
       qc.invalidateQueries({ queryKey: ["/api/liabilities", liabilityId, "parties"] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles"] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles", liabilityId, "detail"] });
-      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
-      qc.invalidateQueries({ queryKey: ["/api/rel-people"] });
-      qc.invalidateQueries({
-        predicate: (q) => {
-          const k = q.queryKey;
-          return Array.isArray(k) && k[0] === "/api/parties" && k[2] === "liabilities";
-        },
-      });
+      invalidateDomains("liabilities", "people");
     },
     onError: (err: Error) =>
       toast({ title: "Could not unlink", description: formatApiError(err), variant: "destructive" }),
@@ -2682,8 +2642,7 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
     },
     onSuccess: () => {
       setChildName(""); setChildBalance(""); setChildSubtype("other"); setAdding(false);
-      queryClient.invalidateQueries({ queryKey: [`/api/relationships/graph/${liabilityId}`, "hops2"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      invalidateDomains("profiles"); // covers the relationships graph + profiles list
       toast({ title: "Nested liability added" });
     },
     onError: (e: any) => toast({ title: "Couldn't add it", description: formatApiError(e), variant: "destructive" }),
@@ -2812,9 +2771,7 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
     },
     onSuccess: () => {
       toast({ title: "Document uploaded", description: "OCR & AI extraction running." });
-      qc.invalidateQueries({ queryKey: [`/api/profiles/${liabilityId}/documents`] });
-      qc.invalidateQueries({ queryKey: ["/api/documents"] });
-      qc.invalidateQueries({ queryKey: ["/api/profiles", liabilityId, "detail"] });
+      invalidateDomains("documents", "profiles");
     },
     onError: (err: Error) =>
       toast({ title: "Upload failed", description: formatApiError(err), variant: "destructive" }),
@@ -2826,8 +2783,7 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
     },
     onSuccess: () => {
       toast({ title: "Document deleted" });
-      qc.invalidateQueries({ queryKey: [`/api/profiles/${liabilityId}/documents`] });
-      qc.invalidateQueries({ queryKey: ["/api/documents"] });
+      invalidateDomains("documents", "profiles");
     },
     onError: (err: Error) =>
       toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),

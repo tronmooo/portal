@@ -26,6 +26,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { useDocumentBlobUrl, classifyDocument } from "@/lib/document-preview";
 
 // PDF.js renderer is code-split — only loaded when a PDF is actually viewed.
@@ -771,18 +772,24 @@ export default function DocumentDetailPage() {
           panel never gets squeezed into a sliver. On md+ split 55/45 so the
           right column has room for label + value pairs without truncation. */}
       <div className="flex flex-col md:flex-row flex-1 overflow-hidden gap-4 p-4">
-        {/* Left: document preview */}
+        {/* Left: document preview — renders PDFs/images from binary payloads;
+            isolated so a decode/render crash leaves the data panel usable. */}
         <div className="flex-1 md:flex-[11] min-w-0 min-h-[280px] md:min-h-0 overflow-hidden">
-          <PreviewPanel doc={doc} />
+          <SectionErrorBoundary name="document-preview" inline>
+            <PreviewPanel doc={doc} />
+          </SectionErrorBoundary>
         </div>
 
-        {/* Right: editable data panel */}
+        {/* Right: editable data panel — isolated so malformed extractedData
+            can't take the preview down with it. */}
         <div className="flex-1 md:flex-[9] min-w-0 md:min-w-[320px] overflow-hidden">
-          <DataPanel
-            doc={doc}
-            onUpdate={(patch) => mutation.mutate(patch)}
-            isUpdating={mutation.isPending}
-          />
+          <SectionErrorBoundary name="document-data-panel" inline>
+            <DataPanel
+              doc={doc}
+              onUpdate={(patch) => mutation.mutate(patch)}
+              isUpdating={mutation.isPending}
+            />
+          </SectionErrorBoundary>
         </div>
       </div>
     </div>

@@ -414,6 +414,29 @@ function generateInsights(
   return insights;
 }
 
+// ---- [P0] Per-user insights cache ----
+// generateInsights() walks every tracker × every entry (O(N×M)) plus six more
+// table scans each time getInsights() runs. Recomputing that on every fetch is
+// pure waste — the inputs change at human speed. Cache the computed result per
+// (user, profile-filter) for 60s in a module-level Map so it survives across
+// the per-request SupabaseStorage instances created on a warm container.
+//
+// NOTE: per-instance caching is BEST-EFFORT under serverless — every warm
+// Vercel instance has its own Map, so a request landing on a cold/other
+// instance recomputes once. That's acceptable: warm instances serve most
+// traffic, and the recompute is merely the status quo ante.
+//
+// Invalidation: tracker/entry mutations through this storage layer bust the
+// user's entries eagerly (see bustInsightsCacheFor call sites); every other
+// mutation is covered by the 60s TTL, which the QA spec accepts.
+const INSIGHTS_CACHE_TTL_MS = 60_000;
+const insightsCache = new Map<string, { at: number; insights: Insight[] }>();
+function bustInsightsCacheFor(userId: string): void {
+  for (const key of insightsCache.keys()) {
+    if (key.startsWith(`${userId}:`)) insightsCache.delete(key);
+  }
+}
+
 
 // ============================================================
 // SUPABASE STORAGE IMPLEMENTATION
@@ -1556,8 +1579,10 @@ export class SupabaseStorage implements IStorage {
 
     // ── RECURSIVE: Delete all child profiles first (vehicles, assets, subscriptions, etc.) ──
     // Each child profile deletion triggers its own cascade, so their data goes away too.
-    const allProfiles = await this.getProfiles();
-    const childProfiles = allProfiles.filter(p => 
+    // [P2] Lite projection: this scan only reads parentProfileId (+ name/type
+    // for the log line), so skip the heavy jsonb columns of the full select.
+    const allProfiles = await this.getProfilesLite();
+    const childProfiles = allProfiles.filter(p =>
       p.parentProfileId === id
     );
     for (const child of childProfiles) {
@@ -2464,6 +2489,7 @@ export class SupabaseStorage implements IStorage {
       insertErr = (await insertWithName(finalName)).error;
     }
     if (insertErr) throw insertErr;
+    bustInsightsCacheFor(this.userId); // [P0] tracker set changed → recompute insights
     // Link to profiles via junction table
     for (const pId of linkedProfiles) {
       await this.linkProfileTo(pId, "tracker", id);
@@ -2497,6 +2523,7 @@ export class SupabaseStorage implements IStorage {
       updErr = (await this.supabase.from("trackers").update(baseUpdate).eq("id", id).eq("user_id", this.userId)).error;
     }
     if (updErr) throw updErr;
+    bustInsightsCacheFor(this.userId); // [P0] tracker changed → recompute insights
     // [P2.2] Ownership patches go through the single writer (setOwners), not a
     // raw linked_profiles write alongside the rest of the patch.
     if (data.linkedProfiles !== undefined) {
@@ -2600,6 +2627,7 @@ export class SupabaseStorage implements IStorage {
       timestamp: ts,
     });
     if (error) throw error;
+    bustInsightsCacheFor(this.userId); // [P0] new entry → recompute insights
     this.logActivity("tracker", `Logged ${tracker.name}`);
     return {
       id,
@@ -2663,12 +2691,14 @@ export class SupabaseStorage implements IStorage {
       .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId)
       .select().maybeSingle();
     if (error || !data) return undefined;
+    bustInsightsCacheFor(this.userId); // [P0] entry changed → recompute insights
     return this.rowToTrackerEntry(data);
   }
 
   async deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean> {
     const { error } = await this.supabase.from("tracker_entries").delete()
       .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId);
+    if (!error) bustInsightsCacheFor(this.userId); // [P0] entry removed → recompute insights
     return !error;
   }
 
@@ -2678,6 +2708,7 @@ export class SupabaseStorage implements IStorage {
     /* D1: clean up entity_links rows that reference this tracker */
     await this.cleanupEntityLinks("tracker", id);
     const { error } = await this.supabase.from("trackers").delete().eq("id", id).eq("user_id", this.userId);
+    if (!error) bustInsightsCacheFor(this.userId); // [P0] tracker removed → recompute insights
     return !error;
   }
 
@@ -5719,13 +5750,26 @@ export class SupabaseStorage implements IStorage {
   // INSIGHTS
   // ============================================================
   async getInsights(filterProfileId?: string): Promise<Insight[]> {
-    const profiles = await this.getProfiles();
-    const allTrackers = await this.getTrackers();
-    const allTasks = await this.getTasks();
-    const allExpenses = await this.getExpenses();
-    const allHabits = await this.getHabits();
-    const allObligations = await this.getObligations();
-    const journal = await this.getJournalEntries();
+    // [P0] Serve from the module-level per-user cache (60s TTL) — see the
+    // comment block above insightsCache. Keyed per profile-filter so a scoped
+    // request can never leak another scope's cached result.
+    const cacheKey = `${this.userId}:${filterProfileId || "all"}`;
+    const hit = insightsCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < INSIGHTS_CACHE_TTL_MS) return hit.insights;
+
+    // PERF: fetch all seven inputs in parallel — this was 7 sequential
+    // round trips before. getProfilesLite() is safe here because
+    // generateInsights() never reads any per-profile field (verified: the
+    // profiles argument is unused inside the function).
+    const [profiles, allTrackers, allTasks, allExpenses, allHabits, allObligations, journal] = await Promise.all([
+      this.getProfilesLite(),
+      this.getTrackers(),
+      this.getTasks(),
+      this.getExpenses(),
+      this.getHabits(),
+      this.getObligations(),
+      this.getJournalEntries(),
+    ]);
     // Strict profile filter — no orphan fallback
     const fp = filterProfileId;
     const matchFp = (lp: string[]) => {
@@ -5737,7 +5781,11 @@ export class SupabaseStorage implements IStorage {
     const expenses = allExpenses.filter(e => matchFp(e.linkedProfiles));
     const habits = allHabits.filter(h => matchFp(h.linkedProfiles || []));
     const obligations = allObligations.filter(o => matchFp(o.linkedProfiles));
-    return generateInsights(profiles, trackers, tasks, expenses, habits, obligations, journal);
+    const insights = generateInsights(profiles, trackers, tasks, expenses, habits, obligations, journal);
+    // Bound the map so a many-user warm instance can't grow it unboundedly.
+    if (insightsCache.size > 1000) insightsCache.clear();
+    insightsCache.set(cacheKey, { at: Date.now(), insights });
+    return insights;
   }
 
   // ============================================================
