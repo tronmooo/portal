@@ -314,6 +314,14 @@ export interface Tracker {
    * getDefaultMetricDefinition(category) at read time.
    */
   metricDefinition?: TrackerMetricDefinition;
+  /**
+   * PERF (2026-07-21): when a tracker is embedded in ProfileDetail its
+   * `entries` list is capped to the most recent N. entriesTotal carries the
+   * TRUE entry count so the UI can offer "Show all N" (full history loads
+   * lazily via GET /api/trackers/:id). Absent (or === entries.length) when
+   * nothing was capped. Additive — `entries` keeps its name and shape.
+   */
+  entriesTotal?: number;
 }
 
 export interface TrackerField {
@@ -1053,6 +1061,23 @@ export interface ProfileDetail extends Profile {
   // original Expense row plus `_viaAsset` (source asset) and `_ownershipPercentage`.
   // Only present on person-like profiles; empty otherwise.
   ownedAssetExpenses?: (Expense & { _viaAsset?: { id: string; name: string; type?: string }; _ownershipPercentage?: number })[];
+  // Journal entries linked to this profile (capped — see totals below).
+  relatedJournal?: JournalEntry[];
+  // PERF (2026-07-21, large-profile first paint): the related* lists above are
+  // CAPPED to the most recent N per section so a data-heavy profile doesn't
+  // ship megabytes on first paint. These sibling fields are ADDITIVE — every
+  // existing field keeps its name and shape — and carry the TRUE totals so the
+  // client can render "Show all N" affordances and exact headline counts/sums.
+  // When a list is not capped, total === list.length.
+  relatedExpensesTotal?: number;      // true count of all related expenses
+  relatedExpensesSum?: number;        // sum of ALL related expense amounts (not just the capped page)
+  relatedExpensesOwnedSum?: number;   // sum over expenses whose linkedProfiles[0] === this profile (the Finance tab's strict-ownership rule)
+  relatedExpensesOwnedCount?: number; // count under the same strict-ownership rule
+  relatedEventsTotal?: number;        // true count of all related events
+  relatedJournalTotal?: number;       // true count of all related journal entries
+  relatedDocumentsTotal?: number;     // true count of all related documents
+  timelineTotal?: number;             // timeline length before capping
+  trackerEntriesTotal?: number;       // true count of tracker entries across relatedTrackers
 }
 
 export interface TimelineEntry {

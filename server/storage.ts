@@ -838,8 +838,15 @@ export class MemStorage implements IStorage {
     const relatedExpenses = allExpenses.filter(e => e.linkedProfiles.includes(id) || profile.linkedExpenses.includes(e.id));
     const relatedTasks = allTasks.filter(t => t.linkedProfiles.includes(id) || profile.linkedTasks.includes(t.id));
     const relatedEvents = allEvents.filter(e => e.linkedProfiles.includes(id) || profile.linkedEvents.includes(e.id));
-    const relatedDocuments = allDocs.filter(d => d.linkedProfiles.includes(id) || profile.documents.includes(d.id));
+    // PERF 2026-07-21: metadata only — never embed base64 file blobs in the
+    // aggregation (SupabaseStorage already does this; MemStorage was shipping
+    // full fileData per doc, which dominated the dev-path payload).
+    const relatedDocuments = allDocs
+      .filter(d => d.linkedProfiles.includes(id) || profile.documents.includes(d.id))
+      .map(d => (d.fileData ? { ...d, fileData: "" } : d));
     const relatedObligations = allObs.filter(o => o.linkedProfiles.includes(id));
+    // Parity with SupabaseStorage: journal entries linked to this profile.
+    const relatedJournal = Array.from(this.journal.values()).filter(j => (j.linkedProfiles || []).includes(id));
 
     const timeline: TimelineEntry[] = [];
     for (const t of relatedTrackers) {
@@ -852,6 +859,7 @@ export class MemStorage implements IStorage {
     for (const e of relatedEvents) { timeline.push({ id: e.id, type: "event", title: e.title, description: e.description, timestamp: e.date }); }
     for (const d of relatedDocuments) { timeline.push({ id: d.id, type: "document", title: d.name, description: d.type, timestamp: d.createdAt }); }
     for (const o of relatedObligations) { timeline.push({ id: o.id, type: "obligation", title: o.name, description: `$${o.amount}/${o.frequency}`, timestamp: o.createdAt }); }
+    for (const j of relatedJournal) { timeline.push({ id: j.id, type: "journal", title: j.content?.slice(0, 80) || "Journal entry", description: j.mood ? `Mood: ${j.mood}` : undefined, timestamp: j.date || j.createdAt }); }
     timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     // Find child profiles (assets, subscriptions, loans nested under this profile)
@@ -860,7 +868,14 @@ export class MemStorage implements IStorage {
 
     const relatedHabits = Array.from(this.habits.values()).filter(h => (h.linkedProfiles || []).includes(id));
 
-    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, relatedHabits, childProfiles, timeline };
+    // PERF 2026-07-21: same additive caps as SupabaseStorage.getProfileDetail —
+    // newest N per section + true *Total/*Sum sibling fields (see
+    // capProfileDetailLists in supabase-storage.ts).
+    const capped = capProfileDetailLists({
+      relatedTrackers, relatedExpenses, relatedEvents, relatedDocuments, relatedJournal, timeline,
+      profileId: id,
+    });
+    return { ...profile, ...capped, relatedTasks, relatedObligations, relatedHabits, childProfiles };
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {
@@ -2433,7 +2448,7 @@ export class MemStorage implements IStorage {
 // IMPORTANT: Lazy initialization — dotenv.config() must run before first access.
 // SupabaseStorage is the only backend. SQLite was removed to eliminate
 // the maintenance burden of two diverging implementations.
-import { SupabaseStorage } from './supabase-storage';
+import { SupabaseStorage, capProfileDetailLists } from './supabase-storage';
 
 let _storageInstance: IStorage | null = null;
 
