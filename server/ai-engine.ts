@@ -12230,6 +12230,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   report?: ReportSpec;
   artifact?: any;
   operations?: OperationOutcome[];
+  /** Routing observability: which path/model served this reply (front door only). */
+  meta?: { route: string; model: string };
 }> {
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
@@ -12986,7 +12988,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             msg_preview: (userMessage || "").slice(0, 80),
           }));
         } catch { /* never let logging break the reply */ }
-        return { reply: fd.reply, actions: [], results: [], operations: [] };
+        return { reply: fd.reply, actions: [], results: [], operations: [], meta: { route: "frontdoor", model: fd.modelLabel } };
       }
     } catch (err: any) {
       logger.warn("ai", `Front door failed (${err?.message}) — continuing with the agentic loop`);

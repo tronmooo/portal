@@ -6,7 +6,7 @@ import {
   runFrontDoorReply,
 } from "../server/chat-frontdoor";
 
-const KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "AI_ROUTER_DISABLE", "AI_CHAT_FRONTDOOR"];
+const KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "AI_ROUTER_DISABLE", "AI_CHAT_FRONTDOOR", "AI_FRONTDOOR_TIER"];
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -157,6 +157,31 @@ describe("runFrontDoorReply", () => {
     const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
     expect(body.messages[1].content).toContain("compare index funds vs ETFs");
     expect(body.messages[1].content).toContain("what about the second one?");
+  });
+
+  it("defaults to the fast tier — prefers Gemini for speed when available", async () => {
+    process.env.ANTHROPIC_API_KEY = "x";
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.GEMINI_API_KEY = "AIza-test";
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "quick answer" }] } }] }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await runFrontDoorReply({ userMessage: "explain compound interest" });
+    expect(res!.modelLabel).toContain("gemini:");
+    expect(fetchMock.mock.calls[0][0]).toContain("generativelanguage.googleapis.com");
+  });
+
+  it("AI_FRONTDOOR_TIER=reasoning prefers Claude", async () => {
+    process.env.ANTHROPIC_API_KEY = "x";
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.GEMINI_API_KEY = "AIza-test";
+    process.env.AI_FRONTDOOR_TIER = "reasoning";
+    const client: any = { messages: { create: vi.fn(async () => ({ content: [{ type: "text", text: "thoughtful" }] })) } };
+    const res = await runFrontDoorReply({ userMessage: "explain compound interest", anthropicClient: client });
+    expect(res!.modelLabel).toContain("claude:");
+    expect(client.messages.create).toHaveBeenCalledOnce();
   });
 
   it("returns null (falls through to agent) when no provider is configured", async () => {

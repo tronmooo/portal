@@ -26,7 +26,14 @@ message:
   changes.
 - **Self-contained conversational/advisory messages** (explain, advise, draft,
   brainstorm — needing neither stored data nor a mutation) → routed to the **best
-  available provider** (GPT / Gemini / Claude) as a tool-free completion.
+  available provider** as a tool-free completion. By default this uses the **fast
+  tier** (Gemini Flash → GPT-mini → Claude Haiku) so quick answers come back fast.
+  Set `AI_FRONTDOOR_TIER=reasoning` to prefer the strongest model instead
+  (Claude → GPT → Gemini).
+
+Every reply that goes through the front door carries a `meta` field in the JSON
+response — `{"route":"frontdoor","model":"gemini:gemini-1.5-flash"}` — so the client
+(or a probe) can see exactly which provider answered. Agent-path replies omit `meta`.
 
 Guarantees:
 

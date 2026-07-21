@@ -102,7 +102,12 @@ export interface FrontDoorResult {
  * Claude tool-agent. Never throws.
  */
 export async function runFrontDoorReply(opts: FrontDoorOptions): Promise<FrontDoorResult | null> {
-  const { userMessage, history, anthropicClient, timeoutMs = 20_000, taskKind = "reasoning" } = opts;
+  // Conversational replies favour SPEED by default — a quick advice/explanation
+  // answer from Gemini Flash / GPT-mini beats waiting on the heaviest model.
+  // Set AI_FRONTDOOR_TIER=reasoning to prefer the strongest model instead.
+  const envTier = process.env.AI_FRONTDOOR_TIER;
+  const defaultTier: TaskKind = envTier === "reasoning" ? "reasoning" : "fast";
+  const { userMessage, history, anthropicClient, timeoutMs = 20_000, taskKind = defaultTier } = opts;
 
   let spec;
   try {
