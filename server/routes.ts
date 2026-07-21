@@ -5025,6 +5025,11 @@ Rules:
       const uid_doc = cacheUserKey(req as AuthenticatedRequest);
       items = await filterByProfileScope(items, docFilterIds, uid_doc);
     }
+    // PERF 2026-07-21: list responses are METADATA ONLY — never ship base64
+    // blobs in a list. SupabaseStorage.getDocuments already excludes file_data;
+    // this guard brings the MemStorage/dev path to parity (a 200-doc profile
+    // was shipping ~8MB of blobs here). Binary stays on /api/documents/:id/file.
+    items = items.map((d: any) => (d && d.fileData ? { ...d, fileData: "" } : d));
     res.json(paginate(items, req, res));
   }));
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {

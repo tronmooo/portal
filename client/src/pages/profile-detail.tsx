@@ -1402,11 +1402,20 @@ function MaintenanceCard({
     staleTime: 60000,
   });
 
-  // Also fetch all events to filter by linkedProfiles for descendant matching
+  // Also fetch events to filter by linkedProfiles for descendant matching.
+  // PERF 2026-07-21: profile-scoped (existing ?profileIds= filter, self +
+  // descendants once the tree lands) instead of the global list — a large
+  // account's global events payload dominated this section, and the global
+  // default page could even miss this profile's events.
+  const maintScopeIds = useMemo(() => {
+    const ids = [profile.id];
+    if (treeDataMaint) for (const d of flattenTreeNodes(treeDataMaint)) ids.push(d.id);
+    return ids;
+  }, [profile.id, treeDataMaint]);
   const { data: allEvents } = useQuery<any[]>({
-    queryKey: ["/api/events"],
+    queryKey: ["/api/events", profile.id, "maint-scope", maintScopeIds.join(",")],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/events");
+      const res = await apiRequest("GET", `/api/events?profileIds=${encodeURIComponent(maintScopeIds.join(","))}&limit=500`);
       return res.json();
     },
     staleTime: 60000,
@@ -2961,8 +2970,11 @@ function InfoTab({
   })();
 
   // ── Stats from related data ──
-  const docsCount = (profile.relatedDocuments || []).length;
-  const expensesTotal = (profile.relatedExpenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  // PERF 2026-07-21: the server caps embedded lists to the newest N and ships
+  // exact totals as additive sibling fields — prefer those so headline stats
+  // stay right for data-heavy profiles.
+  const docsCount = (profile as any).relatedDocumentsTotal ?? (profile.relatedDocuments || []).length;
+  const expensesTotal = (profile as any).relatedExpensesSum ?? (profile.relatedExpenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
   const openTasksCount = (profile.relatedTasks || []).filter((t: any) => normalizeFilter(t.status) !== normalizeFilter("done") && normalizeFilter(t.status) !== normalizeFilter("completed")).length;
   const trackersCount = (profile.relatedTrackers || []).length;
 
@@ -3597,10 +3609,13 @@ function ProductivityHubTab({
   }), [upcomingEvents, todayISO]);
 
   // Journal: query by linkedProfiles ∋ profileId.
+  // PERF 2026-07-21: profile-scoped (existing ?profileIds= filter) instead of
+  // the global list — large accounts shipped every journal entry here just to
+  // filter client-side. Prefix invalidations on ["/api/journal"] still match.
   const { data: allJournals = [] } = useQuery<any[]>({
-    queryKey: ["/api/journal"],
+    queryKey: ["/api/journal", profileId, "profile-scoped"],
     queryFn: async () => {
-      try { return await apiRequest("GET", "/api/journal").then(r => r.json()); }
+      try { return await apiRequest("GET", `/api/journal?profileIds=${encodeURIComponent(profileId)}`).then(r => r.json()); }
       catch { return []; }
     },
   });
@@ -3953,6 +3968,8 @@ function DocumentsTab({
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
   const [docSearch, setDocSearch] = useState("");
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
+  // PERF 2026-07-21: incremental reveal — don't mount hundreds of doc cards at once.
+  const [docsShown, setDocsShown] = useState(30);
   const [linkTarget, setLinkTarget] = useState<string>("profile"); // "profile" or a child profile ID
   const { view: docView, setView: setDocView } = useLinkedView(); // Wave 15: list/sheet toggle
 
@@ -3963,9 +3980,13 @@ function DocumentsTab({
   // yet be missing here if the embed and the list ever diverged. We now union
   // the embed with the live list so any document linked to this profile (or a
   // child profile) ALWAYS appears. See ARCHITECTURE.md §2 (Documents).
+  // PERF 2026-07-21: profile-scoped fetch (existing ?profileId= filter) instead
+  // of the global list — a large account's global document list dominated this
+  // tab's payload, and the global default page (100) could even MISS this
+  // profile's docs. Prefix invalidations on ["/api/documents"] still match.
   const { data: allDocsRaw } = useQuery<any[]>({
-    queryKey: ["/api/documents"],
-    queryFn: async () => (await apiRequest("GET", "/api/documents")).json(),
+    queryKey: ["/api/documents", profileId, "profile-scoped"],
+    queryFn: async () => (await apiRequest("GET", `/api/documents?profileId=${encodeURIComponent(profileId)}&limit=500`)).json(),
   });
   const documents = useMemo(() => {
     const byId = new Map<string, any>();
@@ -4222,7 +4243,7 @@ function DocumentsTab({
         />
       ) : (
         <div className="space-y-2">
-          {filteredDocs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(doc => {
+          {filteredDocs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).slice(0, docsShown).map(doc => {
             const expStatus = getExpirationStatus(doc);
             const expDate = doc.extractedData?.expirationDate || doc.extractedData?.expiry || doc.extractedData?.expiration;
             return (
@@ -4368,6 +4389,17 @@ function DocumentsTab({
               </Card>
             );
           })}
+          {filteredDocs.length > docsShown && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full h-7 text-xs"
+              onClick={() => setDocsShown(n => n + 50)}
+              data-testid="button-show-more-documents"
+            >
+              Show more ({filteredDocs.length - docsShown} remaining)
+            </Button>
+          )}
         </div>
       )}
 
@@ -4520,12 +4552,28 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   // purchase $650,000" because Test was co-linked.
   // NOTE: orphan expenses (empty linkedProfiles) are not shown on any
   // person's Finance tab. They're still visible on the global /finance page.
-  const expenses = useMemo(
-    () => (profile.relatedExpenses || []).filter((e: any) =>
+  // PERF 2026-07-21: the server caps relatedExpenses to the newest 100 (with
+  // exact totals in relatedExpensesTotal/relatedExpensesOwnedSum). When the
+  // embed is capped, lazily pull the full profile-scoped list (existing
+  // /api/expenses?profileId= endpoint) so monthly averages, category breakdown
+  // and the full transaction list stay exact. This fetch never gates first
+  // paint — the capped embed renders immediately and refines when it lands.
+  const expensesEmbedCapped =
+    ((profile as any).relatedExpensesTotal ?? 0) > (profile.relatedExpenses || []).length;
+  const { data: fullProfileExpenses } = useQuery<any[]>({
+    queryKey: ["/api/expenses", profileId, "profile-full"],
+    queryFn: async () => (await apiRequest("GET", `/api/expenses?profileId=${encodeURIComponent(profileId)}`)).json(),
+    enabled: expensesEmbedCapped,
+    staleTime: 60000,
+  });
+  const expenses = useMemo(() => {
+    const source = expensesEmbedCapped && Array.isArray(fullProfileExpenses)
+      ? fullProfileExpenses
+      : (profile.relatedExpenses || []);
+    return source.filter((e: any) =>
       Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profileId
-    ),
-    [profile.relatedExpenses, profileId],
-  );
+    );
+  }, [profile.relatedExpenses, fullProfileExpenses, expensesEmbedCapped, profileId]);
   const obligations = profile.relatedObligations;
 
   // ── type flags ─────────────────────────────────────────────────
@@ -4548,7 +4596,12 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const CHART_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
 
   // ── summary calculations ────────────────────────────────────────
-  const totalSpent = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+  // While the capped embed is all we have, the server's exact owned-sum keeps
+  // the headline right; once the full list lands the local reduce is exact.
+  const computedSpent = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+  const totalSpent = (expensesEmbedCapped && !Array.isArray(fullProfileExpenses))
+    ? ((profile as any).relatedExpensesOwnedSum ?? computedSpent)
+    : computedSpent;
 
   // Cost of ownership — expenses that belong to the assets this person OWNS.
   // Derived on the server (profile.ownedAssetExpenses); each row is a single
@@ -4826,6 +4879,9 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 
   // ── sorted expenses ────────────────────────────────────────────
   const sortedExpenses = [...expenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  // PERF 2026-07-21: incremental reveal — render the newest rows first and
+  // append on demand instead of mounting 1000+ rows in one shot.
+  const [expensesShown, setExpensesShown] = useState(50);
 
   // ── obligation urgency helper ──────────────────────────────────
   function obligationUrgency(ob: ProfileDetail["relatedObligations"][number]): "overdue" | "soon" | "ok" {
@@ -5022,7 +5078,11 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                   <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${expensesListOpen ? "rotate-180" : "-rotate-90"}`} />
                   <CardTitle className="text-sm font-semibold flex items-center gap-2">
                     <DollarSign className="h-4 w-4 text-muted-foreground" /> View All Expenses
-                    <span className="text-xs font-normal text-muted-foreground">({sortedExpenses.length})</span>
+                    <span className="text-xs font-normal text-muted-foreground">
+                      ({(expensesEmbedCapped && !Array.isArray(fullProfileExpenses))
+                        ? ((profile as any).relatedExpensesOwnedCount ?? sortedExpenses.length)
+                        : sortedExpenses.length})
+                    </span>
                   </CardTitle>
                 </button>
                 <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={openAdd} data-testid="button-add-expense">
@@ -5033,7 +5093,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
             {expensesListOpen && (
               <CardContent className="pt-0">
                 <div className="divide-y divide-border">
-                  {sortedExpenses.map(expense => (
+                  {sortedExpenses.slice(0, expensesShown).map(expense => (
                     <div key={expense.id} data-testid={`row-expense-${expense.id}`}>
                       <button
                         className="w-full text-left py-2.5 group"
@@ -5089,6 +5149,17 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                     </div>
                   ))}
                 </div>
+                {sortedExpenses.length > expensesShown && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full mt-2 h-7 text-xs"
+                    onClick={() => setExpensesShown(n => n + 100)}
+                    data-testid="button-show-more-expenses"
+                  >
+                    Show more ({sortedExpenses.length - expensesShown} remaining)
+                  </Button>
+                )}
               </CardContent>
             )}
           </>
@@ -5650,12 +5721,28 @@ function TrackerCard_Profile({
 }) {
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
+  // PERF 2026-07-21: rows rendered when expanded (incremental reveal).
+  const [entriesShown, setEntriesShown] = useState(100);
   const [deleteEntryId, setDeleteEntryId] = useState<string | null>(null);
 
   // Guard: tracker.entries may be undefined when the API returns a
   // tracker shape that omits the array. Reading .slice/.length on
   // undefined crashes the whole profile detail page.
-  const allEntries: any[] = Array.isArray(tracker.entries) ? tracker.entries : [];
+  const embeddedEntries: any[] = Array.isArray(tracker.entries) ? tracker.entries : [];
+  // PERF 2026-07-21: the detail embed caps entries to the newest 50 (true
+  // count in tracker.entriesTotal). When the user expands a capped tracker,
+  // lazily pull the full history via the existing GET /api/trackers/:id.
+  const entriesTotal = (tracker as any).entriesTotal ?? embeddedEntries.length;
+  const historyCapped = entriesTotal > embeddedEntries.length;
+  const { data: fullTracker } = useQuery<any>({
+    queryKey: ["/api/trackers", tracker.id, "full-history"],
+    queryFn: async () => (await apiRequest("GET", `/api/trackers/${tracker.id}`)).json(),
+    enabled: expanded && historyCapped,
+    staleTime: 60000,
+  });
+  const allEntries: any[] = (expanded && historyCapped && Array.isArray(fullTracker?.entries))
+    ? fullTracker.entries
+    : embeddedEntries;
   const last10 = allEntries.slice(-10);
 
   // PR P — Auto-heal tracker shape from its name when fields are missing
@@ -5851,7 +5938,7 @@ function TrackerCard_Profile({
           <>
             {/* Always show last 3 entries */}
             <div className="space-y-0 mt-1">
-              {(expanded ? sortedEntries : sortedEntries.slice(0, 3)).map(entry => (
+              {(expanded ? sortedEntries.slice(0, entriesShown) : sortedEntries.slice(0, 3)).map(entry => (
                 <div key={entry.id} className="flex items-center justify-between py-1.5 border-b border-border last:border-0 text-xs" data-testid={`entry-row-${entry.id}`}>
                   <div className="flex-1 min-w-0">
                     {(() => {
@@ -5956,8 +6043,21 @@ function TrackerCard_Profile({
                 </div>
               ))}
             </div>
+            {/* PERF 2026-07-21: incremental reveal within an expanded card so a
+                multi-year history never mounts thousands of rows at once. */}
+            {expanded && sortedEntries.length > entriesShown && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-1 h-6 text-xs w-full flex items-center gap-1 text-muted-foreground"
+                onClick={() => setEntriesShown(n => n + 100)}
+                data-testid={`button-show-more-entries-${tracker.id}`}
+              >
+                <ChevronDown className="h-3 w-3" /> Show more ({sortedEntries.length - entriesShown} remaining)
+              </Button>
+            )}
             {/* Expand/collapse button if more than 3 entries */}
-            {sortedEntries.length > 3 && (
+            {(sortedEntries.length > 3 || historyCapped) && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -5968,7 +6068,7 @@ function TrackerCard_Profile({
                 {expanded ? (
                   <><ChevronUp className="h-3 w-3" /> Hide entries</>
                 ) : (
-                  <><ChevronDown className="h-3 w-3" /> View all {sortedEntries.length} entries</>
+                  <><ChevronDown className="h-3 w-3" /> View all {entriesTotal || sortedEntries.length} entries</>
                 )}
               </Button>
             )}

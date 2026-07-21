@@ -439,6 +439,110 @@ function bustInsightsCacheFor(userId: string): void {
 
 
 // ============================================================
+// PROFILE DETAIL LIST CAPS (shared by SupabaseStorage + MemStorage)
+// ============================================================
+// PERF 2026-07-21 (large-profile first paint): a profile with years of data
+// (1000s of tracker entries / expenses / events) shipped a multi-MB detail
+// payload on every open — the JSON dominated open time, not the queries.
+// First paint only needs the recent slice of each section, so we cap each
+// embedded list to the newest N and expose TRUE totals/sums as ADDITIVE
+// sibling fields (nothing renamed or removed). Full lists stay reachable via
+// the existing per-section endpoints (/api/expenses?profileId=,
+// /api/events?profileIds=, /api/journal?profileIds=, /api/documents?profileId=,
+// /api/trackers/:id) which the client calls lazily on "Show all".
+export const PROFILE_DETAIL_CAPS = {
+  trackerEntriesPerTracker: 50, // newest entries embedded per tracker
+  expenses: 100,                // newest expenses embedded
+  pastEvents: 100,              // newest PAST events (all upcoming always kept)
+  journal: 50,                  // newest journal entries embedded
+  documents: 200,               // newest document METADATA rows (never file blobs)
+  timeline: 200,                // newest timeline entries
+} as const;
+
+export function capProfileDetailLists(input: {
+  relatedTrackers: Tracker[];
+  relatedExpenses: Expense[];
+  relatedEvents: CalendarEvent[];
+  relatedDocuments: Document[];
+  relatedJournal: JournalEntry[];
+  timeline: TimelineEntry[];
+  profileId: string;
+  /** Exact DB-side entry count when known (head-only count query); falls back to embedded count. */
+  trackerEntriesExactTotal?: number;
+}) {
+  const { relatedTrackers, relatedExpenses, relatedEvents, relatedDocuments, relatedJournal, timeline, profileId } = input;
+  const C = PROFILE_DETAIL_CAPS;
+  const ts = (d: any) => { const t = new Date(d || 0).getTime(); return Number.isFinite(t) ? t : 0; };
+
+  // Trackers: newest N entries per tracker. Sort defensively — the Supabase
+  // fetch delivers newest-first but MemStorage keeps insertion order.
+  let embeddedEntryTotal = 0;
+  const cappedTrackers = relatedTrackers.map(t => {
+    const all = t.entries || [];
+    embeddedEntryTotal += all.length;
+    if (all.length <= C.trackerEntriesPerTracker) return { ...t, entriesTotal: all.length };
+    const newestFirst = [...all].sort((a, b) => ts(b.timestamp) - ts(a.timestamp));
+    // Keep the newest N, emitted in chronological (ascending) order — the
+    // codebase convention (getTrackers, slice(-n) consumers) expects ASC.
+    return { ...t, entries: newestFirst.slice(0, C.trackerEntriesPerTracker).reverse(), entriesTotal: all.length };
+  });
+
+  // Expenses: newest N by date. Sums/counts computed over the FULL set so
+  // headline stats stay exact. The "owned" pair mirrors the Finance tab's
+  // strict-ownership rule (linkedProfiles[0] === profileId).
+  const relatedExpensesTotal = relatedExpenses.length;
+  const relatedExpensesSum = relatedExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const ownedRows = relatedExpenses.filter(e => Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profileId);
+  const relatedExpensesOwnedSum = ownedRows.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const relatedExpensesOwnedCount = ownedRows.length;
+  const cappedExpenses = relatedExpensesTotal <= C.expenses
+    ? relatedExpenses
+    : [...relatedExpenses].sort((a, b) => ts(b.date) - ts(a.date)).slice(0, C.expenses);
+
+  // Events: keep EVERY upcoming event (reminders/renewals must never drop)
+  // plus the newest N past events.
+  const relatedEventsTotal = relatedEvents.length;
+  let cappedEvents = relatedEvents;
+  if (relatedEventsTotal > C.pastEvents) {
+    const dayStart = Date.now() - 86400000; // 1-day grace so "today" never drops
+    const upcoming = relatedEvents.filter(e => ts(e.date) >= dayStart);
+    const past = relatedEvents
+      .filter(e => ts(e.date) < dayStart)
+      .sort((a, b) => ts(b.date) - ts(a.date))
+      .slice(0, C.pastEvents);
+    cappedEvents = [...upcoming, ...past];
+  }
+
+  // Journal: newest N by date (created_at fallback).
+  const relatedJournalTotal = relatedJournal.length;
+  const cappedJournal = relatedJournalTotal <= C.journal
+    ? relatedJournal
+    : [...relatedJournal].sort((a, b) => ts((b as any).date || b.createdAt) - ts((a as any).date || a.createdAt)).slice(0, C.journal);
+
+  // Documents: metadata-only rows (file blobs are never embedded), newest N.
+  const relatedDocumentsTotal = relatedDocuments.length;
+  const cappedDocuments = relatedDocumentsTotal <= C.documents
+    ? relatedDocuments
+    : [...relatedDocuments].sort((a, b) => ts(b.createdAt) - ts(a.createdAt)).slice(0, C.documents);
+
+  // Timeline: callers sort newest-first before calling — plain cap.
+  const timelineTotal = timeline.length;
+  const cappedTimeline = timeline.length <= C.timeline ? timeline : timeline.slice(0, C.timeline);
+
+  return {
+    relatedTrackers: cappedTrackers,
+    relatedExpenses: cappedExpenses,
+    relatedEvents: cappedEvents,
+    relatedDocuments: cappedDocuments,
+    relatedJournal: cappedJournal,
+    timeline: cappedTimeline,
+    relatedExpensesTotal, relatedExpensesSum, relatedExpensesOwnedSum, relatedExpensesOwnedCount,
+    relatedEventsTotal, relatedJournalTotal, relatedDocumentsTotal, timelineTotal,
+    trackerEntriesTotal: Math.max(Number(input.trackerEntriesExactTotal) || 0, embeddedEntryTotal),
+  };
+}
+
+// ============================================================
 // SUPABASE STORAGE IMPLEMENTATION
 // ============================================================
 
@@ -1103,7 +1207,7 @@ export class SupabaseStorage implements IStorage {
     const trackerIds = (trackersRes as any[]).map((r: any) => r.id);
     const obligationIds = (obligationsRes as any[]).map((r: any) => r.id);
     const habitIds = (habitsRes as any[]).map((r: any) => r.id);
-    const [trackerEntryRows, obligationPaymentRows, habitCheckinRows] = await Promise.all([
+    const [trackerEntryRows, obligationPaymentRows, habitCheckinRows, trackerEntriesExactTotal] = await Promise.all([
       // PERF 2026-07-08: cap at the 1000 most recent entries. This fetch was
       // unbounded — a profile with a dense tracker (e.g. daily weight for
       // years) shipped every row on every profile open, dominating both the
@@ -1119,6 +1223,12 @@ export class SupabaseStorage implements IStorage {
       habitIds.length > 0
         ? this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).in("habit_id", habitIds).order("date", { ascending: true }).then(r => r.data || [])
         : Promise.resolve([] as any[]),
+      // PERF 2026-07-21: exact entry count (head-only — no rows shipped) so the
+      // client can show "Show all N" even when the 1000-row fetch above and the
+      // per-tracker cap below trimmed the embedded history.
+      trackerIds.length > 0
+        ? this.supabase.from("tracker_entries").select("id", { count: "exact", head: true }).eq("user_id", this.userId).in("tracker_id", trackerIds).is("deleted_at", null).then(r => r.count ?? 0)
+        : Promise.resolve(0),
     ]);
 
     // Build lookup maps for entries/payments
@@ -1278,7 +1388,21 @@ export class SupabaseStorage implements IStorage {
 
     // `relatedJournal` is added to the returned shape so the profile detail
     // page can render a journal section. Existing keys are unchanged.
-    return { ...profile, relatedTrackers, relatedExpenses, relatedTasks, relatedEvents, relatedDocuments, relatedObligations, relatedJournal, relatedHabits, childProfiles, timeline, ownedAssetExpenses } as any;
+    //
+    // PERF 2026-07-21 (large-profile first paint): cap each embedded list to
+    // the most recent N before serialization — a data-heavy profile (1000s of
+    // entries/expenses) was shipping multi-MB JSON on every open. ALL caps are
+    // additive: field names/shapes are unchanged and sibling *Total/*Sum
+    // fields carry the true figures so the client can show exact headline
+    // stats and "Show all N" (full lists load lazily via the existing
+    // /api/expenses?profileId=, /api/events?profileIds=, /api/journal?profileIds=,
+    // /api/documents?profileId= and /api/trackers/:id endpoints).
+    const capped = capProfileDetailLists({
+      relatedTrackers, relatedExpenses, relatedEvents, relatedDocuments, relatedJournal, timeline,
+      profileId: id,
+      trackerEntriesExactTotal: trackerEntriesExactTotal as number,
+    });
+    return { ...profile, ...capped, relatedTasks, relatedObligations, relatedHabits, childProfiles, ownedAssetExpenses } as any;
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {

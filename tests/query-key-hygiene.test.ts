@@ -48,11 +48,10 @@ const ALLOWLIST = new Set<string>([
   // Artifacts library — reads all docs, then applies passesProfileFilter into
   // `profileFiltered` before rendering (see artifacts.tsx).
   "pages/artifacts.tsx::documents",
-  // A single profile's detail page — fetches the full list and filters to the
-  // route's profile id client-side.
-  "pages/profile-detail.tsx::events",
-  "pages/profile-detail.tsx::journal",
-  "pages/profile-detail.tsx::documents",
+  // A single profile's detail page — the tracker link-picker fetches the full
+  // list (shared ["/api/trackers"] cache) and filters to unlinked client-side.
+  // (events/journal/documents were profile-scoped 2026-07-21 — PERF: the
+  // global payloads dominated large accounts — so they left this list.)
   "pages/profile-detail.tsx::trackers",
   // Account / settings pages — global, not rendered under the profile filter.
   "pages/profile-info.tsx::memories",
