@@ -14,6 +14,7 @@ import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value"
 import { isRecurringBill } from "@shared/liability-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import {
@@ -93,8 +94,9 @@ function AddHoldingDialog({
     },
     onSuccess: () => {
       toast({ title: `${isLiab ? "Liability" : "Asset"} added`, description: name.trim() });
-      // Net worth / assets / liabilities are derived — refresh every finance surface.
-      qc.invalidateQueries({ predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/") });
+      // Net worth / assets / liabilities are derived — refresh every finance
+      // surface via the cache bus's nuclear domain (same predicate, one shot).
+      invalidateDomain("everything");
       onClose();
     },
     onError: (e: any) => toast({ title: "Couldn't save", description: e?.message || "Try again", variant: "destructive" }),

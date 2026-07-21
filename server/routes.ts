@@ -619,8 +619,13 @@ async function filterByProfileScope<T>(
   uid: string,
 ): Promise<T[]> {
   if (!ids || ids.length === 0) return items;
+  // [P2] passesProfileFilter only reads id + type (shared/profile-filter.ts),
+  // so the cold path can use the lite projection and skip the heavy jsonb
+  // columns of a full profiles select. The warm path reuses whatever the
+  // /api/profiles cache holds (full rows — a superset, equally valid here).
   const allProfiles: Array<{ id: string; type?: string }> =
-    getCached(`profiles:${uid}`) || await storage.getProfiles();
+    getCached(`profiles:${uid}`) ||
+    await ((storage as any).getProfilesLite?.() ?? storage.getProfiles());
   return items.filter((item: any) =>
     passesProfileFilter(item?.linkedProfiles, { selectedIds: ids, allProfiles })
   );
@@ -2652,7 +2657,13 @@ If unsure, return "profile_fact".`,
       }
     });
 
-    setCache(cacheKey, data, 60 * 1000); // match /api/stats TTL
+    // [P2] 30s TTL (was 60s). cacheBustMiddleware busts this synchronously on
+    // any same-instance mutation, and version-stamped keys (cacheUserKey)
+    // handle cross-instance writes — but both are best-effort under
+    // serverless, so the TTL is the hard staleness ceiling. The QA spec
+    // accepts 30s of bootstrap staleness; 60s exceeded that budget whenever
+    // the busting paths didn't reach a warm instance.
+    setCache(cacheKey, data, 30 * 1000);
     try { (storage as any).disableRequestMemo?.(); } catch {}
     res.json(data);
   }));

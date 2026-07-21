@@ -11927,12 +11927,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
     },
     onSuccess: () => {
       toast({ title: "Calendar event created" });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomains("profiles", "events", "expenses");
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to sync", description: formatApiError(err), variant: "destructive" }),
@@ -12602,16 +12597,7 @@ export default function ProfileDetailPage() {
       );
       toast({ title: `Profile deleted`, description: "All linked data has been removed" });
       // Cascade: profile delete also removes linked obligations, events, expenses, etc.
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomains("profiles", "obligations", "events", "expenses", "tasks", "trackers");
       navigate("/profiles");
     },
     onError: (err: Error) => {
@@ -12620,11 +12606,7 @@ export default function ProfileDetailPage() {
   });
 
   function handleSaved() {
-    queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    invalidateDomains("profiles", "events");
   }
 
   // ── Owner dropdown (asset / vehicle / loan / subscription etc.) ───────────────
@@ -12760,18 +12742,15 @@ export default function ProfileDetailPage() {
       // the UI is consistent without a refresh. Each affected person's profile
       // detail + their assets list, the global profile list, the dashboard,
       // the asset's own party links query, and the bulk party-links endpoint.
-      queryClient.invalidateQueries({ queryKey: ["/api/rel-people"] }); // legacy key (still invalidated by ProfileSharedTabs)
+      // The "people" domain covers rel-people, the relationships graph, the
+      // profiles list, this and every affected owner's detail key, and
+      // /api/parties/* via predicate. Composite ["/api/assets"|"/api/liabilities",
+      // id, "parties"] keys and the bulk-links key are not bus-covered — keep them.
+      void affectedOwnerIds;
+      invalidateDomains("people");
       queryClient.invalidateQueries({ queryKey: ["/api/assets", id, "parties"] });
       queryClient.invalidateQueries({ queryKey: ["/api/liabilities", id, "parties"] });
-      queryClient.invalidateQueries({ predicate: (q) => Array.isArray(q.queryKey) && q.queryKey[0] === "/api/relationships/graph" });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/asset-party-links"] });
-      for (const ownerId of affectedOwnerIds) {
-        queryClient.invalidateQueries({ queryKey: ["/api/profiles", ownerId, "detail"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/parties", ownerId, "assets"] });
-      }
       setOwnerPopoverOpen(false);
     },
     onError: (err: Error) => toast({ title: "Failed to update ownership", description: formatApiError(err), variant: "destructive" }),

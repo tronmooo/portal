@@ -1785,6 +1785,642 @@ function useSpeechInput(onResult: (text: string) => void, onError?: (title: stri
   return { listening, start, stop, supported };
 }
 
+
+// ── Memoized message row ─────────────────────────────────────────────────────
+// PERF (2026-07-21, QA scorecard defect #3): each row renders bubbles, images,
+// action cards and tool cards; wrapping the row in React.memo keeps unrelated
+// state changes (composer keystrokes, search toggles, editing another row's
+// entry) from re-rendering the entire transcript. Entry-edit state is only
+// passed to the row that owns the entry being edited (stable EMPTY_* sentinels
+// otherwise), and every callback prop is referentially stable (useCallback /
+// setState identity) so React.memo's shallow compare actually holds.
+const EMPTY_ENTRY_VALS: Record<string, any> = {};
+const EMPTY_ENTRY_NEW_FIELD = { name: "", value: "" };
+
+interface MessageRowProps {
+  msg: ChatMessage;
+  setActiveArtifact: (artifact: any) => void;
+  setSmartFillFile: (file: { name: string; mimeType: string; base64: string } | null) => void;
+  handleConfirmExtraction: (data: any) => Promise<boolean>;
+  handleSkipExtraction: (extractionId: string) => void;
+  setMessages: (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
+  /** Re-send a user message whose POST failed (bubble stays visible, marked failed). */
+  onRetry: (msg: ChatMessage) => void;
+  editingEntryId: string | null;
+  entryEditVals: Record<string, any>;
+  entryNewField: { name: string; value: string };
+  setEditingEntryId: (id: string | null) => void;
+  setEntryEditVals: React.Dispatch<React.SetStateAction<Record<string, any>>>;
+  setEntryNewField: React.Dispatch<React.SetStateAction<{ name: string; value: string }>>;
+  saveEntryEdit: (action: any, entryId: string) => void;
+}
+
+const MessageRow = memo(function MessageRow({
+  msg,
+  setActiveArtifact,
+  setSmartFillFile,
+  handleConfirmExtraction,
+  handleSkipExtraction,
+  setMessages,
+  onRetry,
+  editingEntryId,
+  entryEditVals,
+  entryNewField,
+  setEditingEntryId,
+  setEntryEditVals,
+  setEntryNewField,
+  saveEntryEdit,
+}: MessageRowProps) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  return (
+    <div
+      className={`message-in flex ${
+        msg.role === "user" ? "justify-end" : "justify-start"
+      }`}
+    >
+      <div
+        className={`max-w-[85%] rounded-2xl px-4 py-3 ${
+          msg.role === "user"
+            ? "bg-primary text-primary-foreground"
+            : "bg-card border border-border"
+        }`}
+        data-testid={`message-${msg.role}-${msg.id}`}
+      >
+        {msg.role === "assistant" && (
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <Bot className="h-3.5 w-3.5 text-primary" />
+            <span className="text-xs font-medium text-primary">
+              Portol
+            </span>
+            {msg.content?.trim() && (
+              <CopyButton value={msg.content} iconOnly className="ml-auto opacity-60 hover:opacity-100" />
+            )}
+          </div>
+        )}
+
+        {/* Attachment preview in user message */}
+        {msg.attachment &&
+          msg.attachment.mimeType.startsWith("image/") && (
+            <div className="mb-2 rounded-lg overflow-hidden">
+              <img
+                src={
+                  msg.attachment.previewUrl ||
+                  `data:${msg.attachment.mimeType};base64,${msg.attachment.data}`
+                }
+                alt={msg.attachment.name}
+                className="max-h-48 w-auto rounded-lg"
+              />
+            </div>
+          )}
+        {msg.attachment &&
+          !msg.attachment.mimeType.startsWith("image/") && (
+            <div className="mb-2 flex items-center gap-2 p-2 rounded-lg bg-muted/30">
+              <FileText className="h-5 w-5 text-muted-foreground" />
+              <span className="text-xs truncate">
+                {msg.attachment.name}
+              </span>
+            </div>
+          )}
+
+        <div className={`text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2 ${msg.role === "user" ? "text-primary-foreground" : "text-foreground"}`}>
+          {msg.content}
+        </div>
+
+        {msg.role === "user" && msg.content?.trim() && (
+          <div className="flex justify-end mt-1">
+            <CopyButton
+              value={msg.content}
+              iconOnly
+              className="opacity-60 hover:opacity-100 text-primary-foreground/80 hover:text-primary-foreground hover:bg-primary-foreground/10"
+            />
+          </div>
+        )}
+
+        {/* Document previews - inline with zoom & share */}
+        <ChatDocumentPreviews
+          documentPreview={msg.documentPreview}
+          documentPreviews={msg.documentPreviews}
+        />
+
+        {/* Inline charts */}
+        {(msg as any).charts?.length > 0 && (
+          <div className="space-y-1">
+            {(msg as any).charts.map((chart: ChartSpec2, ci: number) => <ChatChart key={ci} spec={chart} />)}
+          </div>
+        )}
+
+        {/* Inline tables */}
+        {(msg as any).tables?.length > 0 && (
+          <div className="space-y-1">
+            {(msg as any).tables.map((table: TableSpec2, ti: number) => <ChatTable key={ti} spec={table} />)}
+          </div>
+        )}
+
+        {/* Inline report */}
+        {(msg as any).report && <ChatReport spec={(msg as any).report as ReportSpec2} />}
+
+        {/* Artifact preview card */}
+        {(msg as any).artifact && (
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={`View artifact: ${(msg as any).artifact.title}`}
+            className="mt-2 border border-primary/30 rounded-lg overflow-hidden cursor-pointer"
+            onClick={() => setActiveArtifact((msg as any).artifact)}
+            onKeyDown={onEnterOrSpace(() => setActiveArtifact((msg as any).artifact))}
+          >
+            <div className="flex items-center gap-2 px-3 py-2 bg-primary/5">
+              <BarChart3 className="h-4 w-4 text-primary" />
+              <span className="text-sm font-medium">{(msg as any).artifact.title}</span>
+              <Badge variant="outline" className="text-xs ml-auto">{(msg as any).artifact.type}</Badge>
+            </div>
+            <div className="px-3 py-2 text-xs text-muted-foreground">Click to view artifact</div>
+          </div>
+        )}
+
+        {/* Extraction confirmation UI */}
+        {msg.pendingExtraction && msg.pendingExtraction.extractedFields.length > 0 && (
+          <ExtractionConfirmation
+            extraction={msg.pendingExtraction}
+            onConfirm={handleConfirmExtraction}
+            onSkip={() => { if (msg.pendingExtraction?.extractionId) handleSkipExtraction(msg.pendingExtraction.extractionId); }}
+          />
+        )}
+
+        {/* Smart Fill chip — inline action on assistant message */}
+        {msg.smartFillSuggestion && (
+          <button
+            type="button"
+            onClick={() => setSmartFillFile({
+              name: msg.smartFillSuggestion!.fileName,
+              mimeType: msg.smartFillSuggestion!.mimeType,
+              base64: msg.smartFillSuggestion!.base64,
+            })}
+            className="mt-3 w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-primary/30 bg-primary/5 hover:bg-primary/10 transition text-left"
+            data-testid="chip-smart-fill"
+          >
+            <Sparkles className="h-4 w-4 text-primary flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium truncate">{msg.smartFillSuggestion.label || "Open Smart Fill"}</div>
+              <div className="text-[11px] text-muted-foreground truncate">{msg.smartFillSuggestion.fileName}</div>
+            </div>
+            <span className="text-[11px] font-medium text-primary">Open →</span>
+          </button>
+        )}
+
+        {/* Action badges */}
+        {msg.actions && msg.actions.length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            {msg.actions.filter(a => [
+              'log_entry', 'log_tracker_entry', 'add_tracker_entry',
+              'log_expense', 'create_task', 'create_event', 'create_reminder',
+              'create_habit', 'checkin_habit', 'create_obligation',
+              'create_goal', 'create_profile', 'update_profile',
+              'create_tracker', 'journal_entry', 'create_artifact',
+              'complete_task', 'complete_event', 'pay_obligation',
+              'delete_task', 'delete_habit', 'delete_tracker_entry',
+              'update_tracker_entry', 'uncomplete_habit', 'save_memory',
+              // 2026-07: the ~40 previously-unmapped write tools now
+              // surface as typed action cards (undo only where an
+              // endpoint is wired in undoEndpoints below).
+              'create_liability', 'add_liability_payment', 'log_income',
+              'log_paycheck', 'update_entity', 'delete_entity',
+              'link_entities', 'set_budget', 'revalue_asset',
+              'manage_domain', 'manage_document',
+            ].includes(a.type)).map((action, i) => {
+              const entityId = action.data?._entityId;
+              const isUndone = action.data?._undone;
+              // All create/log actions can be undone
+              // Mapping covers BOTH the raw tool name AND the mapped ParsedAction type
+              const undoEndpoints: Record<string, string> = {
+                // By ParsedAction type (what gets stored in action.type)
+                create_task: "tasks",
+                log_expense: "expenses",
+                create_event: "events",
+                create_reminder: "events", // mirrored onto the calendar; undo removes the event
+
+                create_habit: "habits",
+                create_obligation: "obligations",
+                create_goal: "goals",
+                create_profile: "profiles",
+                journal_entry: "journal",
+                create_artifact: "artifacts",
+                create_tracker: "trackers",
+                log_entry: "tracker-entries",      // log_tracker_entry maps to log_entry
+                log_income: "incomes",             // DELETE /api/incomes/:id exists
+                // Also by raw tool name (fallback)
+                log_tracker_entry: "tracker-entries",
+                add_tracker_entry: "tracker-entries",
+              };
+              // update_profile is reverted in-place by re-applying previous fields,
+              // not by deleting the row. Detect it separately so the action card can
+              // render a Revert button.
+              const previousState = (action.data as any)?._previousState;
+              const canRevert = action.type === 'update_profile' && !isUndone && previousState && previousState.profileId;
+              const canUndo = !!(entityId && !isUndone && undoEndpoints[action.type]);
+              // Build a meaningful title — always uppercase tracker/type label
+              const isTrackerEntry = action.type === 'log_entry' || (action.type as string) === 'log_tracker_entry';
+              const trackerName = (action.data?.trackerName || '').toUpperCase();
+              // Prefer the server-resolved REAL owner (walks nested-asset
+              // parent chains — Jim's Honda CRV badges JIM even when the
+              // user said "my Honda CRV") over the raw tool input.
+              const ownerName = (action.data as any)?._ownerName;
+              const whoFor = ownerName
+                ? String(ownerName).charAt(0).toUpperCase() + String(ownerName).slice(1)
+                : action.data?.forProfile
+                  ? String(action.data.forProfile).charAt(0).toUpperCase() + String(action.data.forProfile).slice(1)
+                  : 'You';
+              // Format values: "250 cal, 31g carbs, 4g protein".
+              // Underscore keys are reserved metadata (_notes,
+              // _enrichment); estimated values render with a ≈ so
+              // the user always sees exact vs estimated distinctly.
+              const enrichment = (action.data?.values as any)?._enrichment;
+              const estimatedKeys = new Set(Object.keys(enrichment?.estimated || {}));
+              const estimatedParts: string[] = enrichment?.estimated
+                ? Object.entries(enrichment.estimated as Record<string, any>)
+                    .map(([k, pv]) => `≈${(pv as any)?.value} ${k} (est.)`)
+                    .slice(0, 3)
+                : [];
+              const entryValues = isTrackerEntry && action.data?.values
+                ? [
+                    ...Object.entries(action.data.values as Record<string,any>)
+                      // Estimated fields are applied into values for storage,
+                      // but render ONLY via the ≈ (est.) parts below — never
+                      // as plain values that look user-stated.
+                      .filter(([k, v]) => !k.startsWith('_') && k !== 'item' && !estimatedKeys.has(k) && typeof v !== 'object')
+                      .map(([k, v]) => `${v} ${k}`)
+                      .slice(0, 4),
+                    ...estimatedParts,
+                  ].join(' · ')
+                : '';
+              const entryItem = isTrackerEntry && action.data?.values?.item
+                ? String(action.data.values.item) : '';
+              const entityTitle = isTrackerEntry
+                ? (entryItem || trackerName || 'Entry')
+                : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || (action as any).title || '').toUpperCase() || actionLabel(action.type).toUpperCase();
+              const entityDetails = isTrackerEntry
+                ? entryValues
+                : action.data?.amount
+                  ? `$${Number(action.data.amount).toFixed(2)}`
+                  : '';
+              const isArtifact = action.type === 'create_artifact' && action.data && !isUndone;
+              // Where tapping the card takes you (null = not linkable).
+              const cardRoute = !isUndone ? actionRoute(action.type, action.data) : null;
+              return (
+                <div key={i} data-testid={`action-card-${action.type}-${i}`}>
+                  <div
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
+                      isUndone
+                        ? "border-red-500/20 bg-red-500/5 opacity-60"
+                        : "border-green-500/25 bg-green-500/6"
+                    } ${isArtifact ? 'rounded-b-none border-b-0' : ''}`}
+                  >
+                    {/* Status icon */}
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
+                      isUndone ? "bg-red-500/15" : "bg-green-500/15"
+                    }`}>
+                      {isUndone
+                        ? <X className="h-3.5 w-3.5 text-red-500" />
+                        : <Check className="h-3.5 w-3.5 text-green-600" />}
+                    </div>
+                    {/* Content — tappable: opens the entity's page
+                        (profile detail, its tracker, module list). */}
+                    <div
+                      className={`flex-1 min-w-0 ${cardRoute ? 'cursor-pointer active:opacity-70 transition-opacity' : ''}`}
+                      role={cardRoute ? 'link' : undefined}
+                      tabIndex={cardRoute ? 0 : undefined}
+                      data-testid={`action-card-link-${action.type}-${i}`}
+                      onClick={cardRoute ? () => hashNavigate(cardRoute) : undefined}
+                      onKeyDown={cardRoute ? (e) => { if (e.key === 'Enter' || e.key === ' ') hashNavigate(cardRoute); } : undefined}
+                    >
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className={`text-xs font-semibold ${
+                          isUndone ? 'line-through text-muted-foreground' : 'text-foreground'
+                        }`}>
+                          {entityTitle || actionLabel(action.type).toUpperCase()}
+                        </p>
+                        {/* WHO badge — always show */}
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                          whoFor === 'You' ? 'bg-primary/15 text-primary' : 'bg-amber-500/15 text-amber-600'
+                        }`}>
+                          {whoFor.toUpperCase()}
+                        </span>
+                        {isTrackerEntry && trackerName && (
+                          <span className="text-[9px] text-muted-foreground/60 font-medium">
+                            via {trackerName}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {entityDetails || actionLabel(action.type)}
+                        {isUndone && ' · DELETED'}
+                      </p>
+                    </div>
+                    {/* Edit button — tracker entries only (change duration,
+                        intensity, calories; add/remove fields). Persists via the
+                        lenient PATCH-by-entry-id endpoint and reflects app-wide. */}
+                    {isTrackerEntry && entityId && !isUndone && (
+                      <button
+                        className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-primary/50 text-primary bg-primary/5 hover:bg-primary/15 active:scale-95 transition-all"
+                        title="Edit this entry"
+                        data-testid={`button-edit-entry-${i}`}
+                        onClick={stopProp(() => {
+                          if (editingEntryId === entityId) { setEditingEntryId(null); return; }
+                          const v: Record<string, any> = {};
+                          for (const [k, val] of Object.entries(action.data?.values || {})) { if (k !== "_notes") v[k] = val; }
+                          setEntryEditVals(v);
+                          setEntryNewField({ name: "", value: "" });
+                          setEditingEntryId(entityId);
+                        })}
+                      >
+                        ✎ Edit
+                      </button>
+                    )}
+                    {/* Undo button */}
+                    {canUndo && (
+                      <button
+                        className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-destructive/50 text-destructive bg-destructive/5 hover:bg-destructive/15 active:scale-95 transition-all"
+                        title="Delete this entry"
+                        data-testid={`button-undo-${action.type}-${i}`}
+                        onClick={stopProp(async () => {
+                          const ep = undoEndpoints[action.type];
+                          if (!ep || !entityId) return;
+                          try {
+                            await apiRequest("DELETE", `/api/${ep}/${entityId}`);
+                            action.data = { ...action.data, _undone: true };
+                            // Force re-render by creating new array
+                            setMessages(prev => prev.map(m => ({
+                              ...m,
+                              actions: m.actions ? [...m.actions] : m.actions
+                            })));
+                            // Optimistically remove from cache (prefix match).
+                            queryClient.setQueriesData({ queryKey: [`/api/${ep}`] }, (old: any) =>
+                              Array.isArray(old) ? old.filter((item: any) => item?.id !== entityId) : old
+                            );
+                            // Surgical invalidation — affected list + dashboard rollups
+                            queryClient.invalidateQueries({ queryKey: [`/api/${ep}`] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                            toast({
+                              title: `Deleted: ${entityTitle || actionLabel(action.type)}`,
+                              description: `Removed from ${whoFor}'s ${trackerName || 'data'}`,
+                            });
+                          } catch {
+                            toast({ title: "Delete failed — try again", variant: "destructive" });
+                          }
+                        })}
+                      >
+                        × Delete
+                      </button>
+                    )}
+                    {/* Revert button — update_profile only. Re-applies the field
+                        values that were overwritten so the change is undone in place. */}
+                    {canRevert && (
+                      <button
+                        className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-amber-500/50 text-amber-600 bg-amber-500/5 hover:bg-amber-500/15 active:scale-95 transition-all"
+                        title="Restore the previous values"
+                        data-testid={`button-revert-${action.type}-${i}`}
+                        onClick={stopProp(async () => {
+                          const ps = (action.data as any)?._previousState;
+                          if (!ps?.profileId) return;
+                          try {
+                            // Fetch current profile so we can compose a precise revert
+                            // (strip keys that didn't exist before, restore those that did).
+                            const cur = await apiRequest("GET", `/api/profiles/${ps.profileId}`).then(r => r.json());
+                            const restoredFields: Record<string, any> = { ...(cur?.fields || {}) };
+                            // P1 universal-delete: storage now MERGES the incoming `fields`
+                            // onto the existing record (so a missing key is a no-op, not a
+                            // delete). To actually remove keys during a revert we must
+                            // pass them in `fieldsToDelete` instead of relying on shallow
+                            // overwrite. Track keys to delete as we walk the previous state.
+                            const fieldsToDelete: string[] = [];
+                            for (const [k, v] of Object.entries(ps.fields || {})) {
+                              if (v === undefined) {
+                                delete restoredFields[k];
+                                fieldsToDelete.push(k);
+                              } else {
+                                restoredFields[k] = v;
+                              }
+                            }
+                            const body: any = { fields: restoredFields };
+                            if (fieldsToDelete.length > 0) body.fieldsToDelete = fieldsToDelete;
+                            if (ps.notes !== undefined) body.notes = ps.notes;
+                            if (ps.tags !== undefined) body.tags = ps.tags;
+                            if (ps.type !== undefined) body.type = ps.type;
+                            await apiRequest("PATCH", `/api/profiles/${ps.profileId}`, body);
+                            action.data = { ...action.data, _undone: true };
+                            setMessages(prev => prev.map(m => ({
+                              ...m,
+                              actions: m.actions ? [...m.actions] : m.actions,
+                            })));
+                            queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                            toast({
+                              title: "Reverted",
+                              description: `Restored ${cur?.name || 'profile'} to its previous state`,
+                            });
+                          } catch {
+                            toast({ title: "Revert failed — try again", variant: "destructive" });
+                          }
+                        })}
+                      >
+                        ↶ Revert
+                      </button>
+                    )}
+                  </div>
+                  {/* Inline entry editor — appears under the card when Edit is tapped */}
+                  {isTrackerEntry && editingEntryId === entityId && (
+                    <div className="mt-1 rounded-xl border border-primary/30 bg-primary/5 p-2.5 space-y-1.5" data-testid={`entry-editor-${i}`}>
+                      {Object.keys(entryEditVals).filter((k) => k !== "_notes").map((k) => (
+                        <div key={k} className="flex items-center gap-1.5">
+                          <label className="text-[10px] text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
+                          <input
+                            className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+                            value={entryEditVals[k] ?? ""}
+                            onChange={(e) => { const val = coerceVal(e.target.value); setEntryEditVals((p) => ({ ...p, [k]: val })); }}
+                            data-testid={`entry-edit-field-${k}`}
+                          />
+                          <button
+                            type="button"
+                            className="p-1 rounded hover:bg-destructive/15"
+                            title={`Remove "${k}"`}
+                            onClick={() => setEntryEditVals((p) => { const n = { ...p }; delete n[k]; return n; })}
+                          >
+                            <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                          </button>
+                        </div>
+                      ))}
+                      {/* Add a field */}
+                      <div className="flex items-center gap-1.5 border-t border-border/40 pt-1.5">
+                        <input
+                          className="w-24 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+                          placeholder="field"
+                          value={entryNewField.name}
+                          onChange={(e) => setEntryNewField((p) => ({ ...p, name: e.target.value }))}
+                        />
+                        <input
+                          className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+                          placeholder="value"
+                          value={entryNewField.value}
+                          onChange={(e) => setEntryNewField((p) => ({ ...p, value: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === "Enter" && entryNewField.name.trim()) { setEntryEditVals((p) => ({ ...p, [entryNewField.name.trim()]: coerceVal(entryNewField.value) })); setEntryNewField({ name: "", value: "" }); } }}
+                        />
+                        <button
+                          type="button"
+                          className="shrink-0 h-7 px-2 rounded-lg text-xs font-semibold border border-border hover:bg-muted disabled:opacity-40"
+                          disabled={!entryNewField.name.trim()}
+                          onClick={() => { const name = entryNewField.name.trim(); if (!name) return; setEntryEditVals((p) => ({ ...p, [name]: coerceVal(entryNewField.value) })); setEntryNewField({ name: "", value: "" }); }}
+                        >
+                          + Add
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button type="button" className="h-7 px-2.5 rounded-lg text-xs font-semibold text-muted-foreground hover:bg-muted" onClick={() => setEditingEntryId(null)}>Cancel</button>
+                        <button type="button" className="h-7 px-3 rounded-lg text-xs font-bold border border-primary/50 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => saveEntryEdit(action, entityId)} data-testid={`entry-editor-save-${i}`}>Save</button>
+                      </div>
+                    </div>
+                  )}
+                  {/* Inline artifact preview */}
+                  {isArtifact && (() => {
+                    // Find the saved artifact by id (server returns it on the
+                    // action) so clicks open the real artifact rather than just
+                    // bouncing to the Artifacts list. Fallback: navigate to /artifacts.
+                    const aid = (action.data as any)?.id || (action.data as any)?.artifactId;
+                    const atype = (action.data as any)?.type;
+                    const open = () => {
+                      if (atype === "doc" || atype === "sheet") {
+                        if (aid) hashNavigate(`/editor/${aid}`);
+                        else hashNavigate("/artifacts");
+                        return;
+                      }
+                      // Other types: open the side panel viewer directly when we
+                      // have the full payload, else go to /artifacts.
+                      if (action.data) setActiveArtifact(action.data as any);
+                      else hashNavigate("/artifacts");
+                    };
+                    return (
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Open artifact"
+                      className="border border-green-500/25 border-t-0 rounded-b-xl overflow-hidden cursor-pointer"
+                      onClick={open}
+                      onKeyDown={onEnterOrSpace(open)}
+                    >
+                      <div className="p-3 max-h-[200px] overflow-hidden relative bg-card">
+                        <ArtifactPreview data={action.data} />
+                        <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-card to-transparent" />
+                      </div>
+                      <div className="px-3 py-1.5 bg-muted/30 border-t border-border/30 flex items-center justify-between">
+                        <button
+                          className="text-xs text-primary hover:text-primary/80 font-medium transition-colors"
+                          onClick={(e) => { e.stopPropagation(); open(); }}
+                        >
+                          Open artifact →
+                        </button>
+                        <span className="text-[10px] text-muted-foreground">click anywhere to open</span>
+                      </div>
+                    </div>
+                    );
+                  })()}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Per-operation outcome checklist — only the ones that did
+            NOT succeed (successes already render as action cards).
+            Multi-action messages get honest per-item failure/skip
+            reporting instead of a vague "some failed". */}
+        {msg.operations && msg.operations.some((op: any) => op.status !== "ok") && (
+          <div className="mt-2 space-y-1 text-xs">
+            {msg.operations.filter((op: any) => op.status !== "ok").map((op: any, oi: number) => (
+              <div key={oi} className="flex items-start gap-1.5">
+                <span aria-hidden>{op.status === "deduped" ? "↩️" : op.status === "skipped" ? "⏸️" : "❌"}</span>
+                <span className="text-muted-foreground">
+                  <span className="font-medium">{op.trackerName || op.raw || op.tool}</span>
+                  {op.status === "deduped" ? " — duplicate of an entry logged moments ago" : op.error ? ` — ${op.error}` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Structured confirmation cards */}
+        {msg.results && msg.results.length > 0 && (
+          <div className="mt-2 space-y-1.5">
+            {msg.results.slice(0, 50).map((result: any, ri: number) => {
+              if (!result || result.error) return null;
+              const name = result.title || result.name || result.description || "";
+              const type = result.type || result.category || "";
+              const amount = result.amount != null ? `$${Number(result.amount).toFixed(2)}` : null;
+              // Prefer the server-resolved real owner name (nested-asset
+              // aware) over raw ids/inputs for the "→ person" chip.
+              const profile = result.owner || result.forProfile || result.linkedProfiles?.[0] || "";
+              const date = result.date || result.dueDate || result.nextDueDate || "";
+              const warnings = result._validationWarnings || [];
+              const entityId = result.id;
+              const isDeleted = result._deleted;
+
+              if (!name && !amount) return null;
+
+              // Determine entity endpoint for edit/undo
+              const ep = result.status !== undefined ? "tasks"
+                : result.amount !== undefined ? "expenses"
+                : result.frequency !== undefined ? "obligations"
+                : result.date !== undefined ? "events"
+                : null;
+              // Tap destination: profile rows (people/pets/vehicles/assets/
+              // liabilities carry parentProfileId or a profile type) open
+              // their detail page; tracker entries open their tracker;
+              // list entities open their module page.
+              const isProfileRow = entityId && (
+                Object.prototype.hasOwnProperty.call(result, "parentProfileId")
+                || ["person", "pet", "vehicle", "asset", "liability", "property", "medical", "self"].includes(String(result.type || ""))
+              );
+              const href = isProfileRow ? `/profiles/${entityId}`
+                : result.trackerId ? `/trackers?tracker=${result.trackerId}`
+                : ep === "tasks" ? "/tasks"
+                : ep === "expenses" ? "/finance"
+                : ep === "obligations" ? "/obligations"
+                : ep === "events" ? "/calendar"
+                : null;
+
+              return (
+                <ConfirmationCard
+                  key={`${ri}-${entityId}`}
+                  name={name}
+                  type={type}
+                  amount={amount}
+                  date={date}
+                  profile={profile}
+                  warnings={warnings}
+                  entityId={entityId}
+                  endpoint={ep}
+                  isDeleted={isDeleted}
+                  result={result}
+                  href={href}
+                  onDeleted={() => { result._deleted = true; setMessages(prev => prev.map(m => ({ ...m }))); }}
+                />
+              );
+            })}
+          </div>
+        )}
+
+        {/* Timestamp */}
+        <div className="mt-1.5 flex justify-end">
+          <span className="text-xs text-muted-foreground/60">
+            {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export default function ChatPage() {
   useEffect(() => { document.title = "Chat — Portol"; }, []);
   useEffect(() => {
@@ -1792,31 +2428,29 @@ export default function ChatPage() {
   }, []);
   const { toast } = useToast();
   const [messages, setMessagesRaw] = useState<ChatMessage[]>(getChatCache);
-  // Wrap setMessages to also persist to module-level cache
-  const setMessages = (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+  // Wrap setMessages to also persist to module-level cache. Stable identity
+  // (useCallback []) so it can be passed to memoized MessageRows.
+  const setMessages = useCallback((updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
     setMessagesRaw(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
       setChatCache(next); // Persist across navigation
       saveChatHistory(next); // Persist across page reloads
       return next;
     });
-  };
-  const [input, setInput] = useState("");
+  }, []);
+  // PERF (2026-07-21, QA scorecard defect #2): the composer draft no longer
+  // lives here — <ChatComposer/> owns it, so keystrokes don't re-render this
+  // 3.6k-line page. The parent only tracks whether the draft is empty (to
+  // show/hide starter prompts) and reaches the draft through composerRef.
+  // `attachmentNote` is the note typed while an attachment is staged (the
+  // composer is hidden then); it's seeded from the draft when files are staged.
+  const composerRef = useRef<ChatComposerHandle>(null);
+  const [composerEmpty, setComposerEmpty] = useState(true);
+  const [attachmentNote, setAttachmentNote] = useState("");
   // Once a conversation has started, the starter chips collapse into a small
   // toggle instead of staying pinned above the composer. Users can re-open them
   // on demand (recall) without them permanently occupying vertical space.
   const [showStarters, setShowStarters] = useState(false);
-  // Read prefill set by popup AI buttons (sessionStorage approved for this use)
-  useEffect(() => {
-    try {
-      const prefill = sessionStorage.getItem('portol_chat_prefill');
-      if (prefill) { setInput(prefill); sessionStorage.removeItem('portol_chat_prefill'); }
-    } catch {}
-  }, []);
-  const speech = useSpeechInput(
-    (text) => setInput(prev => prev ? prev + ' ' + text : text),
-    (title, description) => toast({ title, description, variant: 'destructive' }),
-  );
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<any>(null);
@@ -1834,8 +2468,21 @@ export default function ChatPage() {
   // Ref to hold attachments at batch-send time so onSettled can revoke URLs and clear state
   const pendingBatchAttachmentsRef = useRef<typeof attachments>([]);
 
+  // PERF (2026-07-21, QA scorecard defect #8): staged-attachment base64 payloads
+  // are held OUT of React state (keyed by the attachment's previewUrl), so
+  // multi-MB strings don't ride through reconciliation on every setAttachments.
+  // State keeps only metadata + object-URL previews; the base64 is looked up at
+  // send time via getAttachmentData().
+  const attachmentDataRef = useRef<Map<string, string>>(new Map());
+  const getAttachmentData = (att: StagedAttachment) =>
+    attachmentDataRef.current.get(att.previewUrl) || att.data || "";
+
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Tracks whether the user is at/near the bottom of the transcript so
+  // auto-scroll never fights a user who has scrolled up (defect #5).
+  const atBottomRef = useRef(true);
+  // -1 ⇒ first run after mount always snaps to the bottom (restored history).
+  const prevMsgCountRef = useRef(-1);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Synchronous send lock (#8, 2026-06-25): react-query's isPending only flips
   // on the NEXT render, so two sends fired within the same tick (fast double-tap
@@ -1853,18 +2500,19 @@ export default function ChatPage() {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [entryEditVals, setEntryEditVals] = useState<Record<string, any>>({});
   const [entryNewField, setEntryNewField] = useState<{ name: string; value: string }>({ name: "", value: "" });
-  const coerceVal = (raw: string): any => {
-    const t = raw.trim();
-    const n = Number(t);
-    return t !== "" && !isNaN(n) && String(n) === t ? n : raw;
-  };
-  const saveEntryEdit = async (action: any, entryId: string) => {
+  // Latest edit values readable from the stable saveEntryEdit callback below —
+  // keeping the callback's identity fixed is what lets React.memo hold on
+  // MessageRows while the user types inside an entry editor.
+  const entryEditValsRef = useRef(entryEditVals);
+  entryEditValsRef.current = entryEditVals;
+  const saveEntryEdit = useCallback(async (action: any, entryId: string) => {
+    const vals = entryEditValsRef.current;
     const orig = Object.keys(action?.data?.values || {}).filter((k) => k !== "_notes");
-    const valuesToDelete = orig.filter((k) => !(k in entryEditVals));
+    const valuesToDelete = orig.filter((k) => !(k in vals));
     try {
-      await apiRequest("PATCH", `/api/tracker-entries/${entryId}`, { values: entryEditVals, valuesToDelete });
+      await apiRequest("PATCH", `/api/tracker-entries/${entryId}`, { values: vals, valuesToDelete });
       // Reflect on the card immediately…
-      action.data = { ...action.data, values: { ...entryEditVals } };
+      action.data = { ...action.data, values: { ...vals } };
       setMessages((prev) => prev.map((m) => ({ ...m, actions: m.actions ? [...m.actions] : m.actions })));
       // …and across the app (trackers list, dashboard, stats).
       queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
@@ -1875,7 +2523,7 @@ export default function ChatPage() {
     } catch (e: any) {
       toast({ title: "Update failed", description: e?.message || "Try again", variant: "destructive" });
     }
-  };
+  }, [setMessages, queryClient, toast]);
 
   const { data: profiles = [], isLoading: profilesLoading } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -1905,14 +2553,15 @@ export default function ChatPage() {
   }, [profiles, selectedProfileId]);
 
   const chatMutation = useMutation({
-    mutationFn: async (message: string) => {
+    mutationFn: async ({ message, userMsgId }: { message: string; userMsgId: string }) => {
       // Build conversation history for multi-step context.
       // Bug fix: setMessages is async, so the `messages` closure here still reflects state
       // BEFORE the user message was appended in handleSend. So we DON'T need slice(0,-1) —
       // the user msg isn't in `messages` yet. Previously slice(0,-1) was dropping the
-      // previous assistant reply instead, breaking multi-turn context.
+      // previous assistant reply instead, breaking multi-turn context. On a
+      // RETRY the user msg IS already present, so exclude it by id explicitly.
       const history = messages
-        .filter(m => m.id !== "welcome")
+        .filter(m => m.id !== "welcome" && m.id !== userMsgId)
         .slice(-10)
         .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
       // Scope the AI to the active profile selection (empty array ⇒ household/
@@ -1955,7 +2604,7 @@ export default function ChatPage() {
       }
       invalidateAll();
     },
-    onError: (err: Error) => {
+    onError: (err: Error, { userMsgId }) => {
       // A dropped connection ("Load failed" / timeout) does NOT mean nothing
       // happened — the server keeps executing tool calls after the socket
       // dies. Be honest about that, and refresh all data so any writes that
@@ -1965,7 +2614,9 @@ export default function ChatPage() {
         ? "That took too long or the connection dropped. Some of the changes may still have been applied — I've refreshed your data, so check the dashboard, or ask me \"what did you just change?\""
         : `Something went wrong: ${err.message || "Network error"}. Please try again.`;
       setMessages((prev) => [
-        ...prev,
+        // Keep the optimistically pushed user bubble visible, but mark it
+        // failed so the row shows a "Not sent · Retry" affordance (defect #1).
+        ...prev.map((m) => (m.id === userMsgId ? ({ ...m, failed: true } as ChatMessage) : m)),
         {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -1979,6 +2630,17 @@ export default function ChatPage() {
     // or error), so the next message can be sent.
     onSettled: () => { sendingRef.current = false; },
   });
+
+  // Retry a failed send: clear the failed flag on the same bubble and re-POST.
+  // Stable identity so memoized MessageRows don't re-render when unrelated
+  // state changes. (chatMutation.mutate is stable in react-query v5.)
+  const handleRetryMessage = useCallback((msg: ChatMessage) => {
+    if (sendingRef.current) return;
+    setMessages((prev) => prev.map((m) => (m.id === msg.id ? ({ ...m, failed: false } as ChatMessage) : m)));
+    sendingRef.current = true;
+    chatMutation.mutate({ message: msg.content, userMsgId: msg.id });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setMessages, chatMutation.mutate]);
 
   const uploadMutation = useMutation({
     mutationFn: async (payload: {
@@ -2143,7 +2805,7 @@ export default function ChatPage() {
     },
   });
 
-  function invalidateAll() {
+  const invalidateAll = useCallback(() => {
     // After a chat write the server has already busted its response cache, so
     // every data query must be marked stale — not a hand-maintained subset —
     // or a logged entry won't appear until the user manually refreshes.
@@ -2168,9 +2830,10 @@ export default function ChatPage() {
     // guarantees the current view settles on fresh data without a manual
     // refresh — without firing a second full background storm.
     setTimeout(() => queryClient.invalidateQueries({ predicate: isData, refetchType: "active" }), 1200);
-  }
+  }, [queryClient]);
 
-  const handleConfirmExtraction = async (data: {
+  // Stable (useCallback) so memoized MessageRows keep their shallow-equal props.
+  const handleConfirmExtraction = useCallback(async (data: {
     extractionId: string;
     confirmedFields: Array<{ key: string; value: any }>;
     targetProfileId?: string;
@@ -2219,9 +2882,9 @@ export default function ChatPage() {
       toast({ title: "Extraction failed", description: "Something went wrong — please try again.", variant: "destructive" });
       return false;
     }
-  };
+  }, [invalidateAll, toast, setMessages]);
 
-  const handleSkipExtraction = (extractionId: string) => {
+  const handleSkipExtraction = useCallback((extractionId: string) => {
     setMessages((prev) =>
       prev.map((m) =>
         m.pendingExtraction?.extractionId === extractionId
@@ -2229,14 +2892,34 @@ export default function ChatPage() {
           : m
       )
     );
-  };
+  }, [setMessages]);
 
+  // Auto-scroll (defect #5): only when a NEW message is appended AND the user
+  // is already at/near the bottom (tracked via onScroll → atBottomRef, so a
+  // reader scrolled up into history is never yanked back down). Jumps are
+  // instant at the bottom — no smooth animations queuing up and fighting each
+  // other on every mutation-pending flip like before. Sending your own message
+  // while scrolled up still brings you down to it (smoothly), matching every
+  // chat app.
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [messages, chatMutation.isPending, uploadMutation.isPending, batchUploadMutation.isPending, saveOnlyMutation.isPending]);
+    const el = scrollRef.current;
+    if (!el) return;
+    const appended = prevMsgCountRef.current === -1 || messages.length > prevMsgCountRef.current;
+    prevMsgCountRef.current = messages.length;
+    if (!appended) return;
+    const lastIsUser = messages[messages.length - 1]?.role === "user";
+    if (atBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "instant" as ScrollBehavior });
+    } else if (lastIsUser) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
+  }, [messages]);
+
+  const handleTranscriptScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
 
   // Process image: correct EXIF orientation + resize/compress to fit upload limits
   // ALWAYS runs through canvas to ensure images stay under ~3MB base64 (Vercel body limit safety)
@@ -2762,595 +3445,31 @@ export default function ChatPage() {
             }
             return null;
           })()}
-          {messages
-            .filter(msg => !searchQuery.trim() || msg.content.toLowerCase().includes(searchQuery.trim().toLowerCase()))
-            .map((msg) => (
-            <div
-              key={msg.id}
-              className={`message-in flex ${
-                msg.role === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
-              <div
-                className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                  msg.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-card border border-border"
-                }`}
-                data-testid={`message-${msg.role}-${msg.id}`}
-              >
-                {msg.role === "assistant" && (
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <Bot className="h-3.5 w-3.5 text-primary" />
-                    <span className="text-xs font-medium text-primary">
-                      Portol
-                    </span>
-                    {msg.content?.trim() && (
-                      <CopyButton value={msg.content} iconOnly className="ml-auto opacity-60 hover:opacity-100" />
-                    )}
-                  </div>
-                )}
-
-                {/* Attachment preview in user message */}
-                {msg.attachment &&
-                  msg.attachment.mimeType.startsWith("image/") && (
-                    <div className="mb-2 rounded-lg overflow-hidden">
-                      <img
-                        src={
-                          msg.attachment.previewUrl ||
-                          `data:${msg.attachment.mimeType};base64,${msg.attachment.data}`
-                        }
-                        alt={msg.attachment.name}
-                        className="max-h-48 w-auto rounded-lg"
-                      />
-                    </div>
-                  )}
-                {msg.attachment &&
-                  !msg.attachment.mimeType.startsWith("image/") && (
-                    <div className="mb-2 flex items-center gap-2 p-2 rounded-lg bg-muted/30">
-                      <FileText className="h-5 w-5 text-muted-foreground" />
-                      <span className="text-xs truncate">
-                        {msg.attachment.name}
-                      </span>
-                    </div>
-                  )}
-
-                <div className={`text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2 ${msg.role === "user" ? "text-primary-foreground" : "text-foreground"}`}>
-                  {msg.content}
-                </div>
-
-                {msg.role === "user" && msg.content?.trim() && (
-                  <div className="flex justify-end mt-1">
-                    <CopyButton
-                      value={msg.content}
-                      iconOnly
-                      className="opacity-60 hover:opacity-100 text-primary-foreground/80 hover:text-primary-foreground hover:bg-primary-foreground/10"
-                    />
-                  </div>
-                )}
-
-                {/* Document previews - inline with zoom & share */}
-                <ChatDocumentPreviews
-                  documentPreview={msg.documentPreview}
-                  documentPreviews={msg.documentPreviews}
-                />
-
-                {/* Inline charts */}
-                {(msg as any).charts?.length > 0 && (
-                  <div className="space-y-1">
-                    {(msg as any).charts.map((chart: ChartSpec2, ci: number) => <ChatChart key={ci} spec={chart} />)}
-                  </div>
-                )}
-
-                {/* Inline tables */}
-                {(msg as any).tables?.length > 0 && (
-                  <div className="space-y-1">
-                    {(msg as any).tables.map((table: TableSpec2, ti: number) => <ChatTable key={ti} spec={table} />)}
-                  </div>
-                )}
-
-                {/* Inline report */}
-                {(msg as any).report && <ChatReport spec={(msg as any).report as ReportSpec2} />}
-
-                {/* Artifact preview card */}
-                {(msg as any).artifact && (
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`View artifact: ${(msg as any).artifact.title}`}
-                    className="mt-2 border border-primary/30 rounded-lg overflow-hidden cursor-pointer"
-                    onClick={() => setActiveArtifact((msg as any).artifact)}
-                    onKeyDown={onEnterOrSpace(() => setActiveArtifact((msg as any).artifact))}
-                  >
-                    <div className="flex items-center gap-2 px-3 py-2 bg-primary/5">
-                      <BarChart3 className="h-4 w-4 text-primary" />
-                      <span className="text-sm font-medium">{(msg as any).artifact.title}</span>
-                      <Badge variant="outline" className="text-xs ml-auto">{(msg as any).artifact.type}</Badge>
-                    </div>
-                    <div className="px-3 py-2 text-xs text-muted-foreground">Click to view artifact</div>
-                  </div>
-                )}
-
-                {/* Extraction confirmation UI */}
-                {msg.pendingExtraction && msg.pendingExtraction.extractedFields.length > 0 && (
-                  <ExtractionConfirmation
-                    extraction={msg.pendingExtraction}
-                    onConfirm={handleConfirmExtraction}
-                    onSkip={() => { if (msg.pendingExtraction?.extractionId) handleSkipExtraction(msg.pendingExtraction.extractionId); }}
-                  />
-                )}
-
-                {/* Smart Fill chip — inline action on assistant message */}
-                {msg.smartFillSuggestion && (
-                  <button
-                    type="button"
-                    onClick={() => setSmartFillFile({
-                      name: msg.smartFillSuggestion!.fileName,
-                      mimeType: msg.smartFillSuggestion!.mimeType,
-                      base64: msg.smartFillSuggestion!.base64,
-                    })}
-                    className="mt-3 w-full flex items-center gap-2 px-3 py-2.5 rounded-xl border border-primary/30 bg-primary/5 hover:bg-primary/10 transition text-left"
-                    data-testid="chip-smart-fill"
-                  >
-                    <Sparkles className="h-4 w-4 text-primary flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{msg.smartFillSuggestion.label || "Open Smart Fill"}</div>
-                      <div className="text-[11px] text-muted-foreground truncate">{msg.smartFillSuggestion.fileName}</div>
-                    </div>
-                    <span className="text-[11px] font-medium text-primary">Open →</span>
-                  </button>
-                )}
-
-                {/* Action badges */}
-                {msg.actions && msg.actions.length > 0 && (
-                  <div className="mt-3 space-y-1.5">
-                    {msg.actions.filter(a => [
-                      'log_entry', 'log_tracker_entry', 'add_tracker_entry',
-                      'log_expense', 'create_task', 'create_event', 'create_reminder',
-                      'create_habit', 'checkin_habit', 'create_obligation',
-                      'create_goal', 'create_profile', 'update_profile',
-                      'create_tracker', 'journal_entry', 'create_artifact',
-                      'complete_task', 'complete_event', 'pay_obligation',
-                      'delete_task', 'delete_habit', 'delete_tracker_entry',
-                      'update_tracker_entry', 'uncomplete_habit', 'save_memory',
-                      // 2026-07: the ~40 previously-unmapped write tools now
-                      // surface as typed action cards (undo only where an
-                      // endpoint is wired in undoEndpoints below).
-                      'create_liability', 'add_liability_payment', 'log_income',
-                      'log_paycheck', 'update_entity', 'delete_entity',
-                      'link_entities', 'set_budget', 'revalue_asset',
-                      'manage_domain', 'manage_document',
-                    ].includes(a.type)).map((action, i) => {
-                      const entityId = action.data?._entityId;
-                      const isUndone = action.data?._undone;
-                      // All create/log actions can be undone
-                      // Mapping covers BOTH the raw tool name AND the mapped ParsedAction type
-                      const undoEndpoints: Record<string, string> = {
-                        // By ParsedAction type (what gets stored in action.type)
-                        create_task: "tasks",
-                        log_expense: "expenses",
-                        create_event: "events",
-                        create_reminder: "events", // mirrored onto the calendar; undo removes the event
-
-                        create_habit: "habits",
-                        create_obligation: "obligations",
-                        create_goal: "goals",
-                        create_profile: "profiles",
-                        journal_entry: "journal",
-                        create_artifact: "artifacts",
-                        create_tracker: "trackers",
-                        log_entry: "tracker-entries",      // log_tracker_entry maps to log_entry
-                        log_income: "incomes",             // DELETE /api/incomes/:id exists
-                        // Also by raw tool name (fallback)
-                        log_tracker_entry: "tracker-entries",
-                        add_tracker_entry: "tracker-entries",
-                      };
-                      // update_profile is reverted in-place by re-applying previous fields,
-                      // not by deleting the row. Detect it separately so the action card can
-                      // render a Revert button.
-                      const previousState = (action.data as any)?._previousState;
-                      const canRevert = action.type === 'update_profile' && !isUndone && previousState && previousState.profileId;
-                      const canUndo = !!(entityId && !isUndone && undoEndpoints[action.type]);
-                      // Build a meaningful title — always uppercase tracker/type label
-                      const isTrackerEntry = action.type === 'log_entry' || (action.type as string) === 'log_tracker_entry';
-                      const trackerName = (action.data?.trackerName || '').toUpperCase();
-                      // Prefer the server-resolved REAL owner (walks nested-asset
-                      // parent chains — Jim's Honda CRV badges JIM even when the
-                      // user said "my Honda CRV") over the raw tool input.
-                      const ownerName = (action.data as any)?._ownerName;
-                      const whoFor = ownerName
-                        ? String(ownerName).charAt(0).toUpperCase() + String(ownerName).slice(1)
-                        : action.data?.forProfile
-                          ? String(action.data.forProfile).charAt(0).toUpperCase() + String(action.data.forProfile).slice(1)
-                          : 'You';
-                      // Format values: "250 cal, 31g carbs, 4g protein".
-                      // Underscore keys are reserved metadata (_notes,
-                      // _enrichment); estimated values render with a ≈ so
-                      // the user always sees exact vs estimated distinctly.
-                      const enrichment = (action.data?.values as any)?._enrichment;
-                      const estimatedKeys = new Set(Object.keys(enrichment?.estimated || {}));
-                      const estimatedParts: string[] = enrichment?.estimated
-                        ? Object.entries(enrichment.estimated as Record<string, any>)
-                            .map(([k, pv]) => `≈${(pv as any)?.value} ${k} (est.)`)
-                            .slice(0, 3)
-                        : [];
-                      const entryValues = isTrackerEntry && action.data?.values
-                        ? [
-                            ...Object.entries(action.data.values as Record<string,any>)
-                              // Estimated fields are applied into values for storage,
-                              // but render ONLY via the ≈ (est.) parts below — never
-                              // as plain values that look user-stated.
-                              .filter(([k, v]) => !k.startsWith('_') && k !== 'item' && !estimatedKeys.has(k) && typeof v !== 'object')
-                              .map(([k, v]) => `${v} ${k}`)
-                              .slice(0, 4),
-                            ...estimatedParts,
-                          ].join(' · ')
-                        : '';
-                      const entryItem = isTrackerEntry && action.data?.values?.item
-                        ? String(action.data.values.item) : '';
-                      const entityTitle = isTrackerEntry
-                        ? (entryItem || trackerName || 'Entry')
-                        : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || (action as any).title || '').toUpperCase() || actionLabel(action.type).toUpperCase();
-                      const entityDetails = isTrackerEntry
-                        ? entryValues
-                        : action.data?.amount
-                          ? `$${Number(action.data.amount).toFixed(2)}`
-                          : '';
-                      const isArtifact = action.type === 'create_artifact' && action.data && !isUndone;
-                      // Where tapping the card takes you (null = not linkable).
-                      const cardRoute = !isUndone ? actionRoute(action.type, action.data) : null;
-                      return (
-                        <div key={i} data-testid={`action-card-${action.type}-${i}`}>
-                          <div
-                            className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
-                              isUndone
-                                ? "border-red-500/20 bg-red-500/5 opacity-60"
-                                : "border-green-500/25 bg-green-500/6"
-                            } ${isArtifact ? 'rounded-b-none border-b-0' : ''}`}
-                          >
-                            {/* Status icon */}
-                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
-                              isUndone ? "bg-red-500/15" : "bg-green-500/15"
-                            }`}>
-                              {isUndone
-                                ? <X className="h-3.5 w-3.5 text-red-500" />
-                                : <Check className="h-3.5 w-3.5 text-green-600" />}
-                            </div>
-                            {/* Content — tappable: opens the entity's page
-                                (profile detail, its tracker, module list). */}
-                            <div
-                              className={`flex-1 min-w-0 ${cardRoute ? 'cursor-pointer active:opacity-70 transition-opacity' : ''}`}
-                              role={cardRoute ? 'link' : undefined}
-                              tabIndex={cardRoute ? 0 : undefined}
-                              data-testid={`action-card-link-${action.type}-${i}`}
-                              onClick={cardRoute ? () => hashNavigate(cardRoute) : undefined}
-                              onKeyDown={cardRoute ? (e) => { if (e.key === 'Enter' || e.key === ' ') hashNavigate(cardRoute); } : undefined}
-                            >
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <p className={`text-xs font-semibold ${
-                                  isUndone ? 'line-through text-muted-foreground' : 'text-foreground'
-                                }`}>
-                                  {entityTitle || actionLabel(action.type).toUpperCase()}
-                                </p>
-                                {/* WHO badge — always show */}
-                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
-                                  whoFor === 'You' ? 'bg-primary/15 text-primary' : 'bg-amber-500/15 text-amber-600'
-                                }`}>
-                                  {whoFor.toUpperCase()}
-                                </span>
-                                {isTrackerEntry && trackerName && (
-                                  <span className="text-[9px] text-muted-foreground/60 font-medium">
-                                    via {trackerName}
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-[10px] text-muted-foreground mt-0.5">
-                                {entityDetails || actionLabel(action.type)}
-                                {isUndone && ' · DELETED'}
-                              </p>
-                            </div>
-                            {/* Edit button — tracker entries only (change duration,
-                                intensity, calories; add/remove fields). Persists via the
-                                lenient PATCH-by-entry-id endpoint and reflects app-wide. */}
-                            {isTrackerEntry && entityId && !isUndone && (
-                              <button
-                                className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-primary/50 text-primary bg-primary/5 hover:bg-primary/15 active:scale-95 transition-all"
-                                title="Edit this entry"
-                                data-testid={`button-edit-entry-${i}`}
-                                onClick={stopProp(() => {
-                                  if (editingEntryId === entityId) { setEditingEntryId(null); return; }
-                                  const v: Record<string, any> = {};
-                                  for (const [k, val] of Object.entries(action.data?.values || {})) { if (k !== "_notes") v[k] = val; }
-                                  setEntryEditVals(v);
-                                  setEntryNewField({ name: "", value: "" });
-                                  setEditingEntryId(entityId);
-                                })}
-                              >
-                                ✎ Edit
-                              </button>
-                            )}
-                            {/* Undo button */}
-                            {canUndo && (
-                              <button
-                                className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-destructive/50 text-destructive bg-destructive/5 hover:bg-destructive/15 active:scale-95 transition-all"
-                                title="Delete this entry"
-                                data-testid={`button-undo-${action.type}-${i}`}
-                                onClick={stopProp(async () => {
-                                  const ep = undoEndpoints[action.type];
-                                  if (!ep || !entityId) return;
-                                  try {
-                                    await apiRequest("DELETE", `/api/${ep}/${entityId}`);
-                                    action.data = { ...action.data, _undone: true };
-                                    // Force re-render by creating new array
-                                    setMessages(prev => prev.map(m => ({
-                                      ...m,
-                                      actions: m.actions ? [...m.actions] : m.actions
-                                    })));
-                                    // Optimistically remove from cache (prefix match).
-                                    queryClient.setQueriesData({ queryKey: [`/api/${ep}`] }, (old: any) =>
-                                      Array.isArray(old) ? old.filter((item: any) => item?.id !== entityId) : old
-                                    );
-                                    // Surgical invalidation — affected list + dashboard rollups
-                                    queryClient.invalidateQueries({ queryKey: [`/api/${ep}`] });
-                                    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-                                    toast({
-                                      title: `Deleted: ${entityTitle || actionLabel(action.type)}`,
-                                      description: `Removed from ${whoFor}'s ${trackerName || 'data'}`,
-                                    });
-                                  } catch {
-                                    toast({ title: "Delete failed — try again", variant: "destructive" });
-                                  }
-                                })}
-                              >
-                                × Delete
-                              </button>
-                            )}
-                            {/* Revert button — update_profile only. Re-applies the field
-                                values that were overwritten so the change is undone in place. */}
-                            {canRevert && (
-                              <button
-                                className="shrink-0 h-7 px-2.5 rounded-lg text-xs font-bold border border-amber-500/50 text-amber-600 bg-amber-500/5 hover:bg-amber-500/15 active:scale-95 transition-all"
-                                title="Restore the previous values"
-                                data-testid={`button-revert-${action.type}-${i}`}
-                                onClick={stopProp(async () => {
-                                  const ps = (action.data as any)?._previousState;
-                                  if (!ps?.profileId) return;
-                                  try {
-                                    // Fetch current profile so we can compose a precise revert
-                                    // (strip keys that didn't exist before, restore those that did).
-                                    const cur = await apiRequest("GET", `/api/profiles/${ps.profileId}`).then(r => r.json());
-                                    const restoredFields: Record<string, any> = { ...(cur?.fields || {}) };
-                                    // P1 universal-delete: storage now MERGES the incoming `fields`
-                                    // onto the existing record (so a missing key is a no-op, not a
-                                    // delete). To actually remove keys during a revert we must
-                                    // pass them in `fieldsToDelete` instead of relying on shallow
-                                    // overwrite. Track keys to delete as we walk the previous state.
-                                    const fieldsToDelete: string[] = [];
-                                    for (const [k, v] of Object.entries(ps.fields || {})) {
-                                      if (v === undefined) {
-                                        delete restoredFields[k];
-                                        fieldsToDelete.push(k);
-                                      } else {
-                                        restoredFields[k] = v;
-                                      }
-                                    }
-                                    const body: any = { fields: restoredFields };
-                                    if (fieldsToDelete.length > 0) body.fieldsToDelete = fieldsToDelete;
-                                    if (ps.notes !== undefined) body.notes = ps.notes;
-                                    if (ps.tags !== undefined) body.tags = ps.tags;
-                                    if (ps.type !== undefined) body.type = ps.type;
-                                    await apiRequest("PATCH", `/api/profiles/${ps.profileId}`, body);
-                                    action.data = { ...action.data, _undone: true };
-                                    setMessages(prev => prev.map(m => ({
-                                      ...m,
-                                      actions: m.actions ? [...m.actions] : m.actions,
-                                    })));
-                                    queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-                                    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                                    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-                                    toast({
-                                      title: "Reverted",
-                                      description: `Restored ${cur?.name || 'profile'} to its previous state`,
-                                    });
-                                  } catch {
-                                    toast({ title: "Revert failed — try again", variant: "destructive" });
-                                  }
-                                })}
-                              >
-                                ↶ Revert
-                              </button>
-                            )}
-                          </div>
-                          {/* Inline entry editor — appears under the card when Edit is tapped */}
-                          {isTrackerEntry && editingEntryId === entityId && (
-                            <div className="mt-1 rounded-xl border border-primary/30 bg-primary/5 p-2.5 space-y-1.5" data-testid={`entry-editor-${i}`}>
-                              {Object.keys(entryEditVals).filter((k) => k !== "_notes").map((k) => (
-                                <div key={k} className="flex items-center gap-1.5">
-                                  <label className="text-[10px] text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
-                                  <input
-                                    className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
-                                    value={entryEditVals[k] ?? ""}
-                                    onChange={(e) => { const val = coerceVal(e.target.value); setEntryEditVals((p) => ({ ...p, [k]: val })); }}
-                                    data-testid={`entry-edit-field-${k}`}
-                                  />
-                                  <button
-                                    type="button"
-                                    className="p-1 rounded hover:bg-destructive/15"
-                                    title={`Remove "${k}"`}
-                                    onClick={() => setEntryEditVals((p) => { const n = { ...p }; delete n[k]; return n; })}
-                                  >
-                                    <X className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                                  </button>
-                                </div>
-                              ))}
-                              {/* Add a field */}
-                              <div className="flex items-center gap-1.5 border-t border-border/40 pt-1.5">
-                                <input
-                                  className="w-24 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
-                                  placeholder="field"
-                                  value={entryNewField.name}
-                                  onChange={(e) => setEntryNewField((p) => ({ ...p, name: e.target.value }))}
-                                />
-                                <input
-                                  className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
-                                  placeholder="value"
-                                  value={entryNewField.value}
-                                  onChange={(e) => setEntryNewField((p) => ({ ...p, value: e.target.value }))}
-                                  onKeyDown={(e) => { if (e.key === "Enter" && entryNewField.name.trim()) { setEntryEditVals((p) => ({ ...p, [entryNewField.name.trim()]: coerceVal(entryNewField.value) })); setEntryNewField({ name: "", value: "" }); } }}
-                                />
-                                <button
-                                  type="button"
-                                  className="shrink-0 h-7 px-2 rounded-lg text-xs font-semibold border border-border hover:bg-muted disabled:opacity-40"
-                                  disabled={!entryNewField.name.trim()}
-                                  onClick={() => { const name = entryNewField.name.trim(); if (!name) return; setEntryEditVals((p) => ({ ...p, [name]: coerceVal(entryNewField.value) })); setEntryNewField({ name: "", value: "" }); }}
-                                >
-                                  + Add
-                                </button>
-                              </div>
-                              <div className="flex items-center justify-end gap-1.5">
-                                <button type="button" className="h-7 px-2.5 rounded-lg text-xs font-semibold text-muted-foreground hover:bg-muted" onClick={() => setEditingEntryId(null)}>Cancel</button>
-                                <button type="button" className="h-7 px-3 rounded-lg text-xs font-bold border border-primary/50 text-primary bg-primary/10 hover:bg-primary/20" onClick={() => saveEntryEdit(action, entityId)} data-testid={`entry-editor-save-${i}`}>Save</button>
-                              </div>
-                            </div>
-                          )}
-                          {/* Inline artifact preview */}
-                          {isArtifact && (() => {
-                            // Find the saved artifact by id (server returns it on the
-                            // action) so clicks open the real artifact rather than just
-                            // bouncing to the Artifacts list. Fallback: navigate to /artifacts.
-                            const aid = (action.data as any)?.id || (action.data as any)?.artifactId;
-                            const atype = (action.data as any)?.type;
-                            const open = () => {
-                              if (atype === "doc" || atype === "sheet") {
-                                if (aid) hashNavigate(`/editor/${aid}`);
-                                else hashNavigate("/artifacts");
-                                return;
-                              }
-                              // Other types: open the side panel viewer directly when we
-                              // have the full payload, else go to /artifacts.
-                              if (action.data) setActiveArtifact(action.data as any);
-                              else hashNavigate("/artifacts");
-                            };
-                            return (
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              aria-label="Open artifact"
-                              className="border border-green-500/25 border-t-0 rounded-b-xl overflow-hidden cursor-pointer"
-                              onClick={open}
-                              onKeyDown={onEnterOrSpace(open)}
-                            >
-                              <div className="p-3 max-h-[200px] overflow-hidden relative bg-card">
-                                <ArtifactPreview data={action.data} />
-                                <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-card to-transparent" />
-                              </div>
-                              <div className="px-3 py-1.5 bg-muted/30 border-t border-border/30 flex items-center justify-between">
-                                <button
-                                  className="text-xs text-primary hover:text-primary/80 font-medium transition-colors"
-                                  onClick={(e) => { e.stopPropagation(); open(); }}
-                                >
-                                  Open artifact →
-                                </button>
-                                <span className="text-[10px] text-muted-foreground">click anywhere to open</span>
-                              </div>
-                            </div>
-                            );
-                          })()}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Per-operation outcome checklist — only the ones that did
-                    NOT succeed (successes already render as action cards).
-                    Multi-action messages get honest per-item failure/skip
-                    reporting instead of a vague "some failed". */}
-                {msg.operations && msg.operations.some((op: any) => op.status !== "ok") && (
-                  <div className="mt-2 space-y-1 text-xs">
-                    {msg.operations.filter((op: any) => op.status !== "ok").map((op: any, oi: number) => (
-                      <div key={oi} className="flex items-start gap-1.5">
-                        <span aria-hidden>{op.status === "deduped" ? "↩️" : op.status === "skipped" ? "⏸️" : "❌"}</span>
-                        <span className="text-muted-foreground">
-                          <span className="font-medium">{op.trackerName || op.raw || op.tool}</span>
-                          {op.status === "deduped" ? " — duplicate of an entry logged moments ago" : op.error ? ` — ${op.error}` : ""}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Structured confirmation cards */}
-                {msg.results && msg.results.length > 0 && (
-                  <div className="mt-2 space-y-1.5">
-                    {msg.results.slice(0, 50).map((result: any, ri: number) => {
-                      if (!result || result.error) return null;
-                      const name = result.title || result.name || result.description || "";
-                      const type = result.type || result.category || "";
-                      const amount = result.amount != null ? `$${Number(result.amount).toFixed(2)}` : null;
-                      // Prefer the server-resolved real owner name (nested-asset
-                      // aware) over raw ids/inputs for the "→ person" chip.
-                      const profile = result.owner || result.forProfile || result.linkedProfiles?.[0] || "";
-                      const date = result.date || result.dueDate || result.nextDueDate || "";
-                      const warnings = result._validationWarnings || [];
-                      const entityId = result.id;
-                      const isDeleted = result._deleted;
-
-                      if (!name && !amount) return null;
-
-                      // Determine entity endpoint for edit/undo
-                      const ep = result.status !== undefined ? "tasks"
-                        : result.amount !== undefined ? "expenses"
-                        : result.frequency !== undefined ? "obligations"
-                        : result.date !== undefined ? "events"
-                        : null;
-                      // Tap destination: profile rows (people/pets/vehicles/assets/
-                      // liabilities carry parentProfileId or a profile type) open
-                      // their detail page; tracker entries open their tracker;
-                      // list entities open their module page.
-                      const isProfileRow = entityId && (
-                        Object.prototype.hasOwnProperty.call(result, "parentProfileId")
-                        || ["person", "pet", "vehicle", "asset", "liability", "property", "medical", "self"].includes(String(result.type || ""))
-                      );
-                      const href = isProfileRow ? `/profiles/${entityId}`
-                        : result.trackerId ? `/trackers?tracker=${result.trackerId}`
-                        : ep === "tasks" ? "/tasks"
-                        : ep === "expenses" ? "/finance"
-                        : ep === "obligations" ? "/obligations"
-                        : ep === "events" ? "/calendar"
-                        : null;
-
-                      return (
-                        <ConfirmationCard
-                          key={`${ri}-${entityId}`}
-                          name={name}
-                          type={type}
-                          amount={amount}
-                          date={date}
-                          profile={profile}
-                          warnings={warnings}
-                          entityId={entityId}
-                          endpoint={ep}
-                          isDeleted={isDeleted}
-                          result={result}
-                          href={href}
-                          onDeleted={() => { result._deleted = true; setMessages(prev => prev.map(m => ({ ...m }))); }}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Timestamp */}
-                <div className="mt-1.5 flex justify-end">
-                  <span className="text-xs text-muted-foreground/60">
-                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ))}
+          {filteredMessages.map((msg) => {
+            // Only the row that owns the entry being edited receives live edit
+            // state; every other row gets stable sentinels so React.memo holds.
+            const rowIsEditing = !!editingEntryId
+              && !!msg.actions?.some((a) => (a.data as any)?._entityId === editingEntryId);
+            return (
+              <MessageRow
+                key={msg.id}
+                msg={msg}
+                setActiveArtifact={setActiveArtifact}
+                setSmartFillFile={setSmartFillFile}
+                handleConfirmExtraction={handleConfirmExtraction}
+                handleSkipExtraction={handleSkipExtraction}
+                setMessages={setMessages}
+                onRetry={handleRetryMessage}
+                editingEntryId={rowIsEditing ? editingEntryId : null}
+                entryEditVals={rowIsEditing ? entryEditVals : EMPTY_ENTRY_VALS}
+                entryNewField={rowIsEditing ? entryNewField : EMPTY_ENTRY_NEW_FIELD}
+                setEditingEntryId={setEditingEntryId}
+                setEntryEditVals={setEntryEditVals}
+                setEntryNewField={setEntryNewField}
+                saveEntryEdit={saveEntryEdit}
+              />
+            );
+          })}
 
           {/* Typing indicator */}
           {isPending && (

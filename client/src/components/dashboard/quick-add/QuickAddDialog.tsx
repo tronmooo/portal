@@ -3,9 +3,10 @@
 // instead of redirecting to another page. Generalizes the AddHoldingDialog
 // pattern (apiRequest POST → toast → broad invalidate → close) and routes the
 // body through the pure builders in shared/quick-add.ts.
-import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -54,8 +55,26 @@ export function QuickAddDialog({
 }) {
   const cfg = CONFIG[kind];
   const { toast } = useToast();
-  const qc = useQueryClient();
   const today = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+
+  // PERF (QA scorecard): don't do non-critical work (profile list fetch /
+  // option building) in the same frame that opens the dialog — it delayed the
+  // first paint of the dialog shell. Defer it until the browser is idle
+  // (requestIdleCallback, setTimeout fallback) after the shell has painted.
+  const [deferredReady, setDeferredReady] = useState(false);
+  useEffect(() => {
+    if (!open) { setDeferredReady(false); return; }
+    const ric: (cb: () => void) => any =
+      typeof (window as any).requestIdleCallback === "function"
+        ? (cb) => (window as any).requestIdleCallback(cb, { timeout: 500 })
+        : (cb) => setTimeout(cb, 50);
+    const cancel: (id: any) => void =
+      typeof (window as any).cancelIdleCallback === "function"
+        ? (id) => (window as any).cancelIdleCallback(id)
+        : (id) => clearTimeout(id);
+    const id = ric(() => setDeferredReady(true));
+    return () => cancel(id);
+  }, [open]);
 
   // Shared field state (only the relevant ones are rendered per kind).
   const [text1, setText1] = useState("");        // description / name / content / title
@@ -71,7 +90,9 @@ export function QuickAddDialog({
   const showProfile = kind === "expense" || kind === "income" || kind === "bill";
   const { data: profiles = [] } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
-    enabled: open && showProfile,
+    // Deferred until after first paint (see above) — the Profile select simply
+    // pops in a moment later; the rest of the form is usable immediately.
+    enabled: open && showProfile && deferredReady,
   });
   const profileOptions = useMemo(
     () => (profiles || []).filter((p: any) => ["self", "person", "pet", "business"].includes(p.type)).sort(sortProfilesForSelect),
@@ -97,8 +118,9 @@ export function QuickAddDialog({
     },
     onSuccess: () => {
       toast({ title: `${cfg.successNoun} added`, description: text1.trim().slice(0, 60) });
-      // Everything finance/dashboard is derived — refresh every /api surface.
-      qc.invalidateQueries({ predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/") });
+      // Everything finance/dashboard is derived — refresh every /api surface
+      // via the cache bus's nuclear domain (same predicate, one shot).
+      invalidateDomain("everything");
       onClose();
     },
     onError: (e: any) => toast({ title: "Couldn't save", description: e?.message || "Try again", variant: "destructive" }),

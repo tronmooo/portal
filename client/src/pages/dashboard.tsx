@@ -4530,14 +4530,16 @@ function UpcomingDateRow({
   );
 }
 
-function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true }: { filterIds?: string[]; filterMode?: string; ready?: boolean }) {
+function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true, allProfiles = [], events = [], goals = [] }: { filterIds?: string[]; filterMode?: string; ready?: boolean; allProfiles?: any[]; events?: any[]; goals?: any[] }) {
   // PR M — Scope upcoming dates to the selected profile(s). When filterMode is
   // "selected" we pass ?profileIds=... to every list endpoint and split the
   // react-query cache by filterMode + filterIds so switching profiles doesn't
   // show another profile's reminders.
   const scoped = filterMode === "selected" && filterIds.length > 0;
   const profileParam = scoped ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: profiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  // P1 dedupe (QA scorecard): profiles / events / goals are fetched ONCE by the
+  // page component (same query keys) and passed down as props.
+  const profiles = allProfiles;
   const { data: documents = [] } = useQuery<any[]>({
     queryKey: ["/api/documents", filterMode, ...filterIds],
     enabled: ready,
@@ -4548,20 +4550,10 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
   });
-  const { data: events = [] } = useQuery<any[]>({
-    queryKey: ["/api/events", filterMode, ...filterIds],
-    enabled: ready,
-    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()),
-  });
   const { data: obligations = [] } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
-  });
-  const { data: goals = [] } = useQuery<any[]>({
-    queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
-    enabled: ready,
-    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
   });
   // Chat-created reminders ("remind me to take evening medication") must show
   // in the cross-app Upcoming feed, not only in the Executive briefing's
@@ -4735,9 +4727,10 @@ interface DashboardSection {
 
 // One-tap create row. Wraps the existing QuickAddDialog so a new record lands
 // on the active profile (kpiOwnerId-style resolution via the scope).
-export function QuickActionsSection({ filterMode, filterIds }: { filterMode: string; filterIds: string[] }) {
+export function QuickActionsSection({ filterMode, filterIds, allProfiles = [] }: { filterMode: string; filterIds: string[]; allProfiles?: any[] }) {
   const [kind, setKind] = useState<QuickAddKind | null>(null);
-  const { data: profiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  // P1 dedupe (QA scorecard): profiles come from the page-level query.
+  const profiles = allProfiles;
   const ownerId = useMemo(() => {
     if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
     return (profiles.find((p: any) => p.type === "self")?.id) || "";
@@ -5295,20 +5288,6 @@ export default function DashboardPage() {
     return unsub;
   }, []);
 
-  // PERF (Part C): gate behind ?perfLog=1 — measure how long a filter switch
-  // takes to surface dashboard-enhanced data. A cached filter should resolve in
-  // <500ms (the keepPreviousData + 30s staleTime + persisted-cache path). The
-  // mark is set the instant the filter changes; the elapsed time is logged when
-  // the next render carries enhanced data for that filter.
-  const perfLogEnabled = typeof window !== "undefined" && /(?:\?|&)perfLog=1\b/.test(window.location.search + window.location.hash);
-  const filterSwitchMarkRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!perfLogEnabled) return;
-    filterSwitchMarkRef.current = performance.now();
-    // eslint-disable-next-line no-console
-    console.log(`[perfLog] filter switch → ${filterMode} [${filterIds.join(",") || "everyone"}] @ ${Math.round(filterSwitchMarkRef.current)}ms`);
-  }, [perfLogEnabled, filterMode, filterIds.join(",")]);
-
   // Fetch profiles for filter
   const { data: allProfiles = [] } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
@@ -5495,15 +5474,29 @@ export default function DashboardPage() {
     // returning to the dashboard renders from cache instantly.
   });
 
-  // PERF (Part C): log elapsed time once enhanced data is present after a
-  // filter switch. Cached filters should land well under 500ms.
-  useEffect(() => {
-    if (!perfLogEnabled || !enhanced || filterSwitchMarkRef.current == null) return;
-    const elapsed = performance.now() - filterSwitchMarkRef.current;
-    filterSwitchMarkRef.current = null;
-    // eslint-disable-next-line no-console
-    console.log(`[perfLog] dashboard-enhanced ready for ${filterMode} [${filterIds.join(",") || "everyone"}] in ${Math.round(elapsed)}ms`);
-  }, [perfLogEnabled, enhanced, filterMode, filterIds.join(",")]);
+  // P1 dedupe (QA scorecard): ONE query per key for the datasets that several
+  // sections used to declare their own useQuery copies of (events ×3, goals ×3,
+  // profiles ×5 — see HeroBriefing / DomainHubs / NowQueue / Upcoming / KPI /
+  // FinanceWidget). Query keys are unchanged, so every existing invalidation
+  // (cache bus, chat, other pages) still hits the same cache slots; the data
+  // now flows down as props. Gated on bootstrapSettled so the happy path
+  // resolves from the bootstrap-seeded cache without extra round-trips, and
+  // skipped in Everyone mode where none of the consuming sections render.
+  const sharedProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: sharedEvents = [] } = useQuery<any[]>({
+    queryKey: ["/api/events", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/events${sharedProfileParam}`).then(r => r.json()).catch(() => []),
+    enabled: bootstrapSettled && filterMode !== "everyone",
+  });
+  const { data: sharedGoalsRaw } = useQuery<any>({
+    queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
+    queryFn: () => apiRequest("GET", `/api/goals${sharedProfileParam}`).then(r => r.json()).catch(() => []),
+    enabled: bootstrapSettled && filterMode !== "everyone",
+  });
+  const sharedGoals = useMemo(
+    () => Array.isArray(sharedGoalsRaw) ? sharedGoalsRaw : (sharedGoalsRaw?.items || sharedGoalsRaw?.goals || []),
+    [sharedGoalsRaw],
+  );
 
   // Load saved dashboard layout from preferences API
   const { data: savedLayoutData } = useQuery<{ value: string } | null>({
@@ -5531,9 +5524,8 @@ export default function DashboardPage() {
     mutationFn: (layout: DashboardSection[]) =>
       apiRequest("PUT", "/api/preferences/dashboard_layout", { value: serializeLayout(layout) }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/preferences"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      // Cache bus: preferences + dashboard (stats / dashboard-enhanced).
+      invalidateDomains("preferences", "dashboard");
       toast({ title: "Layout saved" });
     },
     onError: () => toast({ title: "Failed to save layout", variant: "destructive" }),
@@ -5568,7 +5560,8 @@ export default function DashboardPage() {
       if (result.success) {
         const total = Object.values(result.imported as Record<string, number>).reduce((s, v) => s + v, 0);
         toast({ title: "Import complete", description: `Imported ${total} items.` });
-        queryClient.invalidateQueries();
+        // Cache bus nuclear option — an import can touch every domain.
+        invalidateDomain("everything");
       } else {
         toast({ title: "Import failed", description: result.error, variant: "destructive" });
       }
@@ -5584,24 +5577,24 @@ export default function DashboardPage() {
     let content: React.ReactNode = null;
     switch (id) {
       case "hero-kpis":
-        content = <HeroKPISection enhanced={enhanced} stats={stats} filterMode={filterMode} filterIds={filterIds} refetching={enhancedFetching} />;
+        content = <HeroKPISection enhanced={enhanced} stats={stats} filterMode={filterMode} filterIds={filterIds} allProfiles={allProfiles} refetching={enhancedFetching} />;
         break;
       case "kpis":
         content = (showDashSkeleton && !stats)
           ? (dashLoadStuck ? <DashLoadTimeoutCard onRetry={retryDashboardLoad} /> : <SkeletonGrid cols={3} rows={2} h="h-14" />)
-          : stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={filterIds} filterMode={filterMode} /> : null;
+          : stats ? <KPISection stats={stats} enhanced={enhanced} filterIds={filterIds} filterMode={filterMode} allProfiles={allProfiles} /> : null;
         break;
       case "hero-briefing":
-        content = <HeroBriefing enhanced={enhanced} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} />;
+        content = <HeroBriefing enhanced={enhanced} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} events={sharedEvents} goals={sharedGoals} />;
         break;
       case "now-queue":
-        content = <NowQueueSection enhanced={enhanced} stats={stats} filterIds={filterIds} filterMode={filterMode} />;
+        content = <NowQueueSection enhanced={enhanced} stats={stats} filterIds={filterIds} filterMode={filterMode} events={sharedEvents} goals={sharedGoals} />;
         break;
       case "trends":
         content = <TrendsSection enhanced={enhanced} stats={stats} filterIds={filterIds} filterMode={filterMode} />;
         break;
       case "domain-hubs":
-        content = <DomainHubsSection enhanced={enhanced} stats={stats} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} />;
+        content = <DomainHubsSection enhanced={enhanced} stats={stats} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} events={sharedEvents} goals={sharedGoals} />;
         break;
       case "health":
         content = <HealthSection data={enhanced?.healthSnapshot || []} />;
@@ -5625,7 +5618,7 @@ export default function DashboardPage() {
         content = (
           <div className="space-y-3">
             <ExpiringWarrantiesCard allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} />
-            <FinanceWidget data={enhanced?.financeSnapshot} stats={stats} filterIds={filterIds} filterMode={filterMode} />
+            <FinanceWidget data={enhanced?.financeSnapshot} stats={stats} filterIds={filterIds} filterMode={filterMode} allProfiles={allProfiles} />
           </div>
         );
         break;
@@ -5641,10 +5634,10 @@ export default function DashboardPage() {
         content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
         break;
       case "upcoming-dates":
-        content = <UpcomingSection filterIds={filterIds} filterMode={filterMode} ready={bootstrapSettled} />;
+        content = <UpcomingSection filterIds={filterIds} filterMode={filterMode} ready={bootstrapSettled} allProfiles={allProfiles} events={sharedEvents} goals={sharedGoals} />;
         break;
       case "quick-actions":
-        content = <QuickActionsSection filterMode={filterMode} filterIds={filterIds} />;
+        content = <QuickActionsSection filterMode={filterMode} filterIds={filterIds} allProfiles={allProfiles} />;
         break;
       case "exec-briefing":
         content = <ExecutiveBriefing filterMode={filterMode} filterIds={filterIds} stats={stats} enhanced={enhanced} ready={bootstrapSettled} />;

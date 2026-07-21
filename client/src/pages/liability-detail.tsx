@@ -2138,12 +2138,26 @@ function LinkedAssetsCard({ liabilityId }: { liabilityId: string }) {
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/liability-asset-links/${id}`);
     },
+    // Optimistic removal (same pattern as CalendarView): drop the row from the
+    // cached list immediately, roll back on error, reconcile on settle.
+    onMutate: async (id: string) => {
+      await qc.cancelQueries({ queryKey: [`/api/liabilities/${liabilityId}/assets`] });
+      const prev = qc.getQueryData<LiabilityAssetLinkRow[]>([`/api/liabilities/${liabilityId}/assets`]);
+      qc.setQueryData<LiabilityAssetLinkRow[]>([`/api/liabilities/${liabilityId}/assets`], (old) =>
+        (old || []).filter((l) => l.id !== id)
+      );
+      return { prev };
+    },
     onSuccess: () => {
       toast({ title: "Asset unlinked" });
+    },
+    onError: (err: Error, _id, ctx: any) => {
+      if (ctx?.prev) qc.setQueryData([`/api/liabilities/${liabilityId}/assets`], ctx.prev);
+      toast({ title: "Could not unlink", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: [`/api/liabilities/${liabilityId}/assets`] });
     },
-    onError: (err: Error) =>
-      toast({ title: "Could not unlink", description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
@@ -2391,16 +2405,30 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/liability-profile-links/${id}`);
     },
+    // Optimistic removal (same pattern as CalendarView): drop the row from the
+    // cached list immediately, roll back on error, reconcile on settle.
+    onMutate: async (id: string) => {
+      await qc.cancelQueries({ queryKey: [`/api/liabilities/${liabilityId}/parties`] });
+      const prev = qc.getQueryData<LiabilityProfileLinkRow[]>([`/api/liabilities/${liabilityId}/parties`]);
+      qc.setQueryData<LiabilityProfileLinkRow[]>([`/api/liabilities/${liabilityId}/parties`], (old) =>
+        (old || []).filter((l) => l.id !== id)
+      );
+      return { prev };
+    },
     onSuccess: () => {
       toast({ title: "Person unlinked" });
+    },
+    onError: (err: Error, _id, ctx: any) => {
+      if (ctx?.prev) qc.setQueryData([`/api/liabilities/${liabilityId}/parties`], ctx.prev);
+      toast({ title: "Could not unlink", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
       // Bug #14 (liability side): the "liabilities" + "people" domains cover the
       // profiles list, detail keys, /api/parties/* and the dashboard.
       qc.invalidateQueries({ queryKey: ["/api/liabilities", liabilityId, "parties"] });
       qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
       invalidateDomains("liabilities", "people");
     },
-    onError: (err: Error) =>
-      toast({ title: "Could not unlink", description: formatApiError(err), variant: "destructive" }),
   });
 
   return (
