@@ -13148,6 +13148,21 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // profile-id set across all tool calls in the turn (see server/ai-envelope).
     const turnVerifyCtx = buildTurnVerifyContext(storage);
 
+    // ── Prompt caching (speed/cost) ──
+    // The system prompt and the full tool schema (~40 tools) are identical on
+    // every one of the up-to-15 round-trips in this loop (and across turns
+    // within the 5-min cache window). Marking them with cache_control lets
+    // Anthropic reuse the computed prefix instead of reprocessing it each call,
+    // cutting time-to-first-token and input cost. This changes NOTHING about
+    // the model, the tools, or the outputs — same answers, just less repeated
+    // work. Two cache breakpoints: end of tools, and the system block.
+    const cachedSystem = [
+      { type: "text" as const, text: systemPrompt, cache_control: { type: "ephemeral" as const } },
+    ];
+    const cachedTools = TOOL_DEFINITIONS.map((t, i) =>
+      i === TOOL_DEFINITIONS.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
+    );
+
     while (iterations < MAX_ITERATIONS) {
       iterations++;
       if (iterations > 1 && Date.now() - startedAt > WALL_CLOCK_BUDGET_MS) {
@@ -13175,8 +13190,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               // 8192 lets the model emit 30-40 tool_use blocks in ONE response,
               // so long multi-action messages don't need extra round-trips.
               max_tokens: 8192,
-              system: systemPrompt,
-              tools: TOOL_DEFINITIONS,
+              system: cachedSystem,
+              tools: cachedTools,
               messages,
             });
             modelStream.on("text", (delta) => {
@@ -13189,8 +13204,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               // 8192 lets the model emit 30-40 tool_use blocks in ONE response,
               // so long multi-action messages don't need extra round-trips.
               max_tokens: 8192,
-              system: systemPrompt,
-              tools: TOOL_DEFINITIONS,
+              system: cachedSystem,
+              tools: cachedTools,
               messages,
             });
           }
