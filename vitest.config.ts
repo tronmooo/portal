@@ -98,6 +98,7 @@ export default defineConfig({
       'tests/recover-wedged-queries.test.ts',
       'tests/curated-persistence.test.ts',
       'tests/model-router.test.ts',
+      'tests/chat-frontdoor.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

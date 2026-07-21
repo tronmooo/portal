@@ -53,6 +53,7 @@ import { DEFAULT_TIMEZONE, todayAtTimeISO } from "@shared/timezone";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
+import { shouldUseFrontDoor, runFrontDoorReply } from "./chat-frontdoor";
 import {
   EXTRACT_ACTIONS_TOOL,
   MAX_BULK_OPERATIONS,
@@ -12960,6 +12961,37 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     chatModel = SONNET_MODEL;
   }
   const initialModel = chatModel;
+
+  // ── HYBRID FRONT DOOR (multi-provider) ──
+  // Self-contained conversational/advisory messages — ones that need NEITHER
+  // the user's stored data NOR any mutation — get routed to the best available
+  // model (GPT / Gemini / Claude) as a tool-free completion. Everything that
+  // logs, updates, deletes, or reads the user's data is kept OUT of here by a
+  // deliberately broad classifier and continues to the Claude tool-agent below.
+  // Off entirely unless an OpenAI/Gemini key is configured; any failure falls
+  // through to the agent. See server/chat-frontdoor.ts + docs/MODEL_ROUTING.md.
+  if (shouldUseFrontDoor(userMessage)) {
+    try {
+      const fd = await runFrontDoorReply({
+        userMessage,
+        history: conversationHistory,
+        anthropicClient: getClient(),
+      });
+      if (fd) {
+        try {
+          console.log("[chat-trace] " + JSON.stringify({
+            path: "frontdoor",
+            model: fd.modelLabel,
+            user_id: userId,
+            msg_preview: (userMessage || "").slice(0, 80),
+          }));
+        } catch { /* never let logging break the reply */ }
+        return { reply: fd.reply, actions: [], results: [], operations: [] };
+      }
+    } catch (err: any) {
+      logger.warn("ai", `Front door failed (${err?.message}) — continuing with the agentic loop`);
+    }
+  }
 
   // ── BULK MULTI-ACTION DISPATCH ──
   // A long "here's my day" recap (8+ independent action clauses — soccer,

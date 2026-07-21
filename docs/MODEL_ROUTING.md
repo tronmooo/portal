@@ -14,13 +14,42 @@ candidates, etc. Every such call already validates the model's JSON and falls ba
 to a deterministic result, so routing to another provider degrades gracefully
 instead of breaking.
 
+## Chat: the hybrid front door
+
+`server/chat-frontdoor.ts` sits in front of the main chat agent in
+`processMessage`. A **deterministic classifier** (`needsAgent`) inspects each
+message:
+
+- **Mutation or personal-data intent** (log/add/update/delete, or any reference to
+  the user's own tasks/expenses/net worth/documents/…) → stays on the **Claude
+  tool-agent**, exactly as before. This is the reliability-critical path and never
+  changes.
+- **Self-contained conversational/advisory messages** (explain, advise, draft,
+  brainstorm — needing neither stored data nor a mutation) → routed to the **best
+  available provider** (GPT / Gemini / Claude) as a tool-free completion.
+
+Guarantees:
+
+- The classifier is biased **broad toward the agent** — a false positive just keeps
+  a message on Claude; it never sends a data operation to a tool-less model.
+- The front door is **off unless an OpenAI or Gemini key is set** (`AI_CHAT_FRONTDOOR=0`
+  is an explicit kill switch). With only `ANTHROPIC_API_KEY`, behaviour is identical
+  to before.
+- Any failure falls through to the Claude agent.
+- The routed prompt forbids inventing the user's figures, so a model that can't see
+  their data won't fabricate balances or entries.
+
+The `[chat-trace]` log line records `path:"frontdoor"` and the model used, so you can
+confirm in Vercel runtime logs which provider answered.
+
 ## What does NOT route (by design)
 
-The main agentic chat loop in `server/ai-engine.ts` stays on Claude. It is built on
-Anthropic's native tool-use protocol (`tool_use` / `tool_result` blocks), which
-does not map one-to-one onto OpenAI's or Gemini's tool formats. Migrating it is a
-separate, larger project; the router is the reusable foundation for doing that
-later.
+The main agentic **tool-use loop** in `server/ai-engine.ts` stays on Claude. It is
+built on Anthropic's native tool-use protocol (`tool_use` / `tool_result` blocks),
+which does not map one-to-one onto OpenAI's or Gemini's tool formats. Every CRUD
+operation and every read of the user's data runs there. Migrating that loop to be
+cross-provider is a separate, larger project; the router is the reusable foundation
+for doing it later.
 
 ## Environment variables
 
