@@ -43,6 +43,7 @@ import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
+import { useResumeTick } from "@/hooks/useResumeTick";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -5259,6 +5260,11 @@ export default function DashboardPage() {
   // Hub consolidation (2026-07): under the hub shell the date + profile
   // filter are owned by the shell; this page keeps only its kebab menu.
   const hubEmbedded = useHubChrome();
+  // STALE-CLOCK FIX (2026-07-21): one re-render per resume-after-long-absence
+  // so the header date (and every other now()-derived section below) rolls
+  // over after an overnight freeze instead of showing yesterday. The hook
+  // only fires after >=15s hidden — quick tab flips don't re-render.
+  useResumeTick();
   const [, navigate] = useLocation();
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);

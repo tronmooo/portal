@@ -470,26 +470,47 @@ let hiddenAt = 0;
 
 export async function recoverWedgedQueries(): Promise<void> {
   try {
-    const wedged = queryClient.getQueryCache().getAll().filter((q) =>
-      q.state.fetchStatus === "fetching" &&
-      String(q.queryKey?.[0] || "").startsWith("/api/"),
+    const isApiQuery = (q: { queryKey?: readonly unknown[] }) =>
+      String(q.queryKey?.[0] || "").startsWith("/api/");
+    const all = queryClient.getQueryCache().getAll();
+    const wedged = all.filter((q) =>
+      q.state.fetchStatus === "fetching" && isApiQuery(q),
+    );
+    // FROZEN-REJECTION FIX (2026-07-21): a fetch can also REJECT while the tab
+    // is frozen (socket killed by the OS, an abort timer firing mid-freeze).
+    // Such a query isn't "fetching" on resume — it sits in error state (or,
+    // after a cancel-with-revert, back in pending/idle with no data). Focus
+    // refetch fires ONCE at resume; if the rejection lands after that instant
+    // (5G radio still waking up), nothing ever re-triggers the query and the
+    // section's skeleton/guard sits forever. On resume we also invalidate
+    // actively-observed /api queries that are errored or dataless-idle so they
+    // get exactly one fresh attempt. Bounded: active observers only, /api only.
+    const failedWhileAway = all.filter((q) =>
+      isApiQuery(q) &&
+      q.state.fetchStatus !== "fetching" &&
+      q.isActive() &&
+      (q.state.status === "error" ||
+        (q.state.status === "pending" && q.state.data === undefined)),
     );
     // Nothing is actually stuck — do NOT touch the cache. Normal return-to-app
     // refresh is handled by React Query's refetchOnWindowFocus + staleTime; a
     // blanket invalidate here (the old behavior) fired a redundant refetch wave
     // on every tab return, competing with focus refetch and the KeepAlive ping.
-    if (wedged.length === 0) return;
+    if (wedged.length === 0 && failedWhileAway.length === 0) return;
 
-    // Cancel ONLY the orphaned in-flight queries — cancel resolves their frozen
-    // promises via the abort signal so React Query will start fresh fetches.
-    const wedgedKeys = wedged.map((q) => q.queryKey);
-    await queryClient.cancelQueries({
-      predicate: (q) => q.state.fetchStatus === "fetching" && String(q.queryKey?.[0] || "").startsWith("/api/"),
-    });
-    // Refetch ONLY what we just unwedged (and only if actively observed), so a
-    // stuck query recovers without triggering a blanket /api sweep.
+    if (wedged.length > 0) {
+      // Cancel ONLY the orphaned in-flight queries — cancel resolves their frozen
+      // promises via the abort signal so React Query will start fresh fetches.
+      await queryClient.cancelQueries({
+        predicate: (q) => q.state.fetchStatus === "fetching" && isApiQuery(q),
+      });
+    }
+    // Refetch ONLY what we just unwedged or what failed while frozen (and only
+    // if actively observed), so a stuck query recovers without triggering a
+    // blanket /api sweep.
+    const recoverKeys = [...wedged, ...failedWhileAway].map((q) => q.queryKey);
     await queryClient.invalidateQueries({
-      predicate: (q) => wedgedKeys.some((k) => JSON.stringify(k) === JSON.stringify(q.queryKey)),
+      predicate: (q) => recoverKeys.some((k) => JSON.stringify(k) === JSON.stringify(q.queryKey)),
       refetchType: "active",
     });
   } catch { /* recovery is best-effort — never throw from a lifecycle handler */ }

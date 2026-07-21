@@ -613,18 +613,47 @@ let originalFetch: typeof fetch | null = null;
    Now every concurrent 401 awaits the SAME refresh promise. */
 let refreshInFlight: Promise<Session | null> | null = null;
 
+/* RESUME-WEDGE FIX (2026-07-21): the refresh call itself must be bounded and
+   its failures classified.
+   - Bounded: it used to run with NO timeout. On PWA resume over a waking 5G
+     radio (or a cold serverless instance) the refresh request could hang
+     indefinitely — and because refreshInFlight is only released after it
+     settles, EVERY 401'd query in the app awaited that same hung promise
+     forever. That is a terminal wedge recoverWedgedQueries can't fix: it
+     cancels + refetches the query, the refetch 401s, and re-awaits the same
+     dead promise. A 15s abort guarantees the single-flight always settles.
+   - Classified: only a definitive HTTP rejection (4xx — the refresh token was
+     actually refused) should sign the user out. A timeout / network error is
+     transient; wiping the session for it logged users out on every flaky
+     resume. The interceptor reads refreshFailedDefinitively after awaiting. */
+const REFRESH_TIMEOUT_MS = 15_000;
+let refreshFailedDefinitively = false;
+
 function refreshSessionOnce(): Promise<Session | null> {
   if (refreshInFlight) return refreshInFlight;
   const oldRefreshToken = memoryTokens?.refresh_token;
-  if (!oldRefreshToken) return Promise.resolve(null);
+  if (!oldRefreshToken) {
+    // No refresh token at all — nothing to retry with; treat as definitive.
+    refreshFailedDefinitively = true;
+    return Promise.resolve(null);
+  }
   refreshInFlight = (async () => {
+    refreshFailedDefinitively = false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
     try {
       const refreshRes = await originalFetch!(`${API_BASE}/api/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: oldRefreshToken }),
+        signal: controller.signal,
       });
-      if (!refreshRes.ok) return null;
+      if (!refreshRes.ok) {
+        // 4xx = the refresh token was rejected → the session is genuinely dead.
+        // 5xx = server hiccup → transient, keep the session for the next try.
+        refreshFailedDefinitively = refreshRes.status >= 400 && refreshRes.status < 500;
+        return null;
+      }
       const refreshData = await refreshRes.json().catch(() => null);
       // Bug #15: validate refresh response shape before persisting.
       // If body is malformed (no access_token), persistTokens(undefined) would
@@ -636,10 +665,11 @@ function refreshSessionOnce(): Promise<Session | null> {
         persistTokens(newSession);
         return newSession;
       }
-      return null; // malformed response
+      return null; // malformed response — transient (do not wipe the session)
     } catch {
-      return null;
+      return null; // network error / timeout — transient
     } finally {
+      clearTimeout(timer);
       // Release AFTER settling so late 401s from the same storm reuse the
       // result via the awaited promise, then the next expiry starts fresh.
       setTimeout(() => { refreshInFlight = null; }, 0);
@@ -651,6 +681,37 @@ function refreshSessionOnce(): Promise<Session | null> {
 export function installAuthInterceptor() {
   if (originalFetch) return; // Already installed
   originalFetch = window.fetch;
+
+  // PROACTIVE RESUME REFRESH (2026-07-21): when the PWA resumes after a long
+  // absence (overnight freeze), the ~1h Supabase access token is expired, so
+  // the focus-refetch wave would otherwise 401 in a storm and all queue up on
+  // the interceptor's reactive refresh below. Kick the single-flight refresh
+  // FIRST, the moment the tab becomes visible — by the time refetches land
+  // their 401s (or, ideally, go out with the already-renewed token in
+  // memoryTokens), the refresh is done or in flight and they simply join it.
+  // Same >=15s absence threshold as recoverWedgedQueries (lib/queryClient.ts);
+  // quick tab flips never hit the network.
+  const maybeRefreshOnResume = () => {
+    const tokens = loadPersistedTokens();
+    if (!tokens?.refresh_token) return;
+    const now = Math.floor(Date.now() / 1000);
+    // Refresh if the access token is expired or about to expire (<60s left).
+    if (tokens.expires_at && tokens.expires_at <= now + 60) void refreshSessionOnce();
+  };
+  let resumeHiddenAt = 0;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      resumeHiddenAt = Date.now();
+    } else {
+      if (resumeHiddenAt && Date.now() - resumeHiddenAt >= 15_000) maybeRefreshOnResume();
+      resumeHiddenAt = 0;
+    }
+  });
+  // bfcache restore (iOS back/forward, app switcher) resumes with whatever
+  // token the page was frozen with — same proactive refresh applies.
+  window.addEventListener("pageshow", (e: PageTransitionEvent) => {
+    if (e.persisted) maybeRefreshOnResume();
+  });
 
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as globalThis.Request).url;
@@ -678,9 +739,21 @@ export function installAuthInterceptor() {
           retryHeaders.set("Authorization", `Bearer ${newSession.access_token}`);
           return originalFetch!(input, { ...init, headers: retryHeaders });
         }
+        // RESUME-WEDGE FIX (2026-07-21): a TRANSIENT refresh failure (timeout,
+        // network blip, 5xx — see refreshSessionOnce) must NOT sign the user
+        // out or hand the caller a raw 401: getQueryFn's on401:"returnNull"
+        // path would dispatch auth-cleared and bounce a valid session to the
+        // sign-in page just because the radio was still waking up. Throw a
+        // "timed out" error instead — React Query's retry policy (queryClient
+        // retry: "timed out" → 2 retries with backoff) re-runs the query, its
+        // next 401 starts a FRESH single-flight refresh, and the session
+        // survives. Only a definitive rejection falls through to the clear.
+        if (!refreshFailedDefinitively) {
+          throw new Error("Session refresh timed out. Please try again.");
+        }
       }
-      // Refresh failed (or no refresh token) — clear session and notify the
-      // app so it can redirect.
+      // Refresh definitively failed (or no refresh token) — clear session and
+      // notify the app so it can redirect.
       // Bug #16: previously this cleared tokens silently, leaving the UI stuck
       // in a 401-loop with no feedback. Dispatch an event so AuthProvider/UI
       // can react (show toast, redirect to /auth, etc.).
