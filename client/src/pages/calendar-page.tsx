@@ -2,15 +2,20 @@ import { useEffect, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import CalendarView from "@/components/CalendarView";
+import { RecurringDatesManager } from "@/components/recurring/RecurringDatesManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, CalendarDays, Repeat } from "lucide-react";
 import { Link } from "wouter";
 
 export default function CalendarPage() {
   useEffect(() => { document.title = "Calendar — Portol"; }, []);
   // Single source of truth: active scope read reactively.
   const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
+  // Calendar | Recurring tab. ?tab=recurring deep-links to the manager.
+  const [tab, setTab] = useState<"calendar" | "recurring">(() => {
+    try { return new URL(window.location.href).searchParams.get("tab") === "recurring" ? "recurring" : "calendar"; } catch { return "calendar"; }
+  });
 
   // v2 summary band — Today / This Week / Total events.
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -34,12 +39,12 @@ export default function CalendarPage() {
     return { today, week, total: list.length };
   }, [events]);
 
-  // Obligations retired: the calendar page no longer has a tab toggle — it is
-  // just the calendar. Strip any lingering ?tab=obligations param from old links.
+  // Legacy cleanup: strip old ?tab=obligations links (that tab is retired).
+  // ?tab=recurring is the Recurring Dates manager and is kept.
   useEffect(() => {
     try {
       const url = new URL(window.location.href);
-      if (url.searchParams.has("tab")) {
+      if (url.searchParams.has("tab") && url.searchParams.get("tab") !== "recurring") {
         url.searchParams.delete("tab");
         window.history.replaceState(null, "", url.toString());
       }
@@ -59,21 +64,38 @@ export default function CalendarPage() {
         />
       </div>
 
-      {/* v2 summary band */}
-      <div className="grid grid-cols-3 gap-2 mb-2" data-testid="calendar-summary">
-        {[
-          { label: "Today", value: evSummary.today, color: "200 80% 55%" },
-          { label: "This Week", value: evSummary.week, color: "262 70% 62%" },
-          { label: "Total", value: evSummary.total, color: "155 60% 48%" },
-        ].map(s => (
-          <div key={s.label} className="rounded-xl border border-border/50 bg-card/60 p-2.5 text-center">
-            <p className="text-lg font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
-            <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</p>
-          </div>
+      {/* Calendar | Recurring Dates tab toggle */}
+      <div className="flex gap-1 rounded-xl bg-muted/50 p-1 mb-2" data-testid="calendar-tabs">
+        {([["calendar", "Calendar", CalendarDays], ["recurring", "Recurring Dates", Repeat]] as const).map(([key, label, Icon]) => (
+          <button key={key} type="button" onClick={() => setTab(key)}
+            className={`flex-1 rounded-lg py-1.5 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors ${tab === key ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            data-testid={`calendar-tab-${key}`}>
+            <Icon className="h-3.5 w-3.5" /> {label}
+          </button>
         ))}
       </div>
 
-      <CalendarView externalFilterIds={filterIds} externalFilterMode={filterMode} />
+      {tab === "calendar" ? (
+        <>
+          {/* v2 summary band */}
+          <div className="grid grid-cols-3 gap-2 mb-2" data-testid="calendar-summary">
+            {[
+              { label: "Today", value: evSummary.today, color: "200 80% 55%" },
+              { label: "This Week", value: evSummary.week, color: "262 70% 62%" },
+              { label: "Total", value: evSummary.total, color: "155 60% 48%" },
+            ].map(s => (
+              <div key={s.label} className="rounded-xl border border-border/50 bg-card/60 p-2.5 text-center">
+                <p className="text-lg font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
+                <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</p>
+              </div>
+            ))}
+          </div>
+
+          <CalendarView externalFilterIds={filterIds} externalFilterMode={filterMode} />
+        </>
+      ) : (
+        <RecurringDatesManager filterIds={filterIds} filterMode={filterMode as any} />
+      )}
     </div>
   );
 }

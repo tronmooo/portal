@@ -65,6 +65,10 @@ const ALLOWLIST = new Set<string>([
   // dashboard-enhanced snapshot); nothing from these lists renders directly.
   "components/dashboard/BriefingPopups.tsx::obligations",
   "components/dashboard/BriefingPopups.tsx::documents",
+  // Recurring Dates manager — fetch-all-then-filter-locally: series are
+  // filtered by linkedProfiles against the active filterIds in-component
+  // (see the `series` useMemo), and edits need the full list regardless.
+  "components/recurring/RecurringDatesManager.tsx::events",
 ]);
 
 function walk(dir: string): string[] {

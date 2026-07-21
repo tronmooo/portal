@@ -68,6 +68,7 @@ export default defineConfig({
       'tests/money-overview.test.tsx',
       'tests/money-popups.test.tsx',
       'tests/entity-classify.test.ts',
+      'tests/recurring-dates.test.ts',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
       'tests/wellness-metrics.test.ts',

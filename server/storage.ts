@@ -2,6 +2,7 @@ import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
+import { parseRecurringMeta } from "@shared/recurring-dates";
 
 // Per-request storage context — eliminates the global userId race condition (C-1)
 // Auth middleware runs storage within this context so all downstream code
@@ -1248,12 +1249,19 @@ export class MemStorage implements IStorage {
   async getCalendarTimeline(startDate: string, endDate: string, _profileIds?: string[]): Promise<CalendarTimelineItem[]> {
     const items: CalendarTimelineItem[] = [];
 
-    // 1. Calendar events (expand recurrence)
+    // 1. Calendar events (expand recurrence). Recurring Dates per-occurrence
+    // state (rd:done/rd:skip/rd:paused/rd:archived tags — see
+    // shared/recurring-dates) applies here exactly like the Supabase timeline.
+    const rdTodayISO = new Date().toLocaleDateString("en-CA");
     for (const ev of this.events.values()) {
       const color = ev.color || EVENT_CATEGORY_COLORS[ev.category] || "#4F98A3";
+      const rdMeta = parseRecurringMeta(ev.tags);
+      if (rdMeta.archived) continue;
+      const rdShow = (dateISO: string) =>
+        !rdMeta.skippedDates.includes(dateISO) && !(rdMeta.paused && dateISO >= rdTodayISO && !rdMeta.completedDates.includes(dateISO));
       // Add base event
       const baseDate = ev.date.slice(0, 10);
-      if (baseDate >= startDate && baseDate <= endDate) {
+      if (baseDate >= startDate && baseDate <= endDate && rdShow(baseDate)) {
         items.push({
           id: `event-${ev.id}-${baseDate}`,
           type: "event",
@@ -1268,6 +1276,7 @@ export class MemStorage implements IStorage {
           location: ev.location,
           linkedProfiles: ev.linkedProfiles,
           sourceId: ev.id,
+          completed: rdMeta.completedDates.includes(baseDate),
           meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source },
         });
       }
@@ -1286,7 +1295,7 @@ export class MemStorage implements IStorage {
           const nextStr = next.toLocaleDateString('en-CA');
           if (nextStr > endDate) break;
           if (ev.recurrenceEnd && nextStr > ev.recurrenceEnd) break;
-          if (nextStr >= startDate) {
+          if (nextStr >= startDate && rdShow(nextStr)) {
             items.push({
               id: `event-${ev.id}-${nextStr}`,
               type: "event",
@@ -1301,6 +1310,7 @@ export class MemStorage implements IStorage {
               location: ev.location,
               linkedProfiles: ev.linkedProfiles,
               sourceId: ev.id,
+              completed: rdMeta.completedDates.includes(nextStr),
               meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source },
             });
           }

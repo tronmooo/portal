@@ -63,6 +63,7 @@ import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequenc
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
+import { parseRecurringMeta } from "../shared/recurring-dates";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
   type Profile, type InsertProfile,
@@ -3264,11 +3265,20 @@ export class SupabaseStorage implements IStorage {
       .filter(e => matchesProfile(e.linkedProfiles));
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
+    // Recurring Dates (shared/recurring-dates): per-occurrence state rides in
+    // the event's tags — a checked-off or skipped occurrence affects ONLY that
+    // date, never the series. Archived series leave the calendar entirely;
+    // paused series keep their history but stop emitting future occurrences.
+    const rdTodayISO = getUserToday(this._timezone);
     for (const ev of events) {
       const color = ev.color || EVENT_CATEGORY_COLORS[ev.category] || "#4F98A3";
+      const rdMeta = parseRecurringMeta(ev.tags);
+      if (rdMeta.archived) continue;
+      const rdShow = (dateISO: string) =>
+        !rdMeta.skippedDates.includes(dateISO) && !(rdMeta.paused && dateISO >= rdTodayISO && !rdMeta.completedDates.includes(dateISO));
       const baseDate = ev.date.slice(0, 10);
-      if (baseDate >= startDate && baseDate <= endDate) {
-        items.push({ id: `event-${ev.id}-${baseDate}`, type: "event", title: ev.title, date: baseDate, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
+      if (baseDate >= startDate && baseDate <= endDate && rdShow(baseDate)) {
+        items.push({ id: `event-${ev.id}-${baseDate}`, type: "event", title: ev.title, date: baseDate, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, completed: rdMeta.completedDates.includes(baseDate), meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
       }
       if (ev.recurrence !== "none") {
         // [P4.3] Expand occurrences all the way to the requested window's end
@@ -3304,8 +3314,8 @@ export class SupabaseStorage implements IStorage {
           const nextStr = next.toLocaleDateString('en-CA');
           if (nextStr > endDate) break;
           if (ev.recurrenceEnd && nextStr > ev.recurrenceEnd) break;
-          if (nextStr >= startDate) {
-            items.push({ id: `event-${ev.id}-${nextStr}`, type: "event", title: ev.title, date: nextStr, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
+          if (nextStr >= startDate && rdShow(nextStr)) {
+            items.push({ id: `event-${ev.id}-${nextStr}`, type: "event", title: ev.title, date: nextStr, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, completed: rdMeta.completedDates.includes(nextStr), meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
           }
         }
       }

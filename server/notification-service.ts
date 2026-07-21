@@ -8,6 +8,7 @@
 // route — this module is pure "compute the list".
 import type { IStorage } from "./storage";
 import { getUserToday } from "@shared/timezone";
+import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "@shared/recurring-dates";
 
 export interface AppNotification {
   id: string;
@@ -348,6 +349,53 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       });
     }
   } catch { /* reminders in the bell are best-effort */ }
+
+  // --- Recurring Dates (shared/recurring-dates) ---
+  // Managed recurring dates (anniversaries, renewals, maintenance, custom
+  // bills…) surface in the bell two ways:
+  //   1. an upcoming occurrence inside its configured reminder lead time
+  //   2. a MISSED completion-required occurrence (checked-off/skipped dates
+  //      never fire — per-occurrence state lives in the event's tags)
+  try {
+    const events = await storage.getEvents().catch(() => [] as any[]);
+    for (const ev of events) {
+      const meta = parseRecurringMeta((ev as any).tags);
+      if (!meta.isRecurringDate || meta.archived || meta.paused) continue;
+      const evLike = { date: ev.date, recurrence: ev.recurrence, recurrenceEnd: ev.recurrenceEnd, tags: (ev as any).tags };
+      if (meta.remindDays != null) {
+        const next = nextOccurrence(evLike, todayStr);
+        if (next) {
+          const nextD = parseDate(next);
+          const daysUntil = nextD ? daysDiff(nextD, today) : NaN;
+          if (Number.isFinite(daysUntil) && daysUntil >= 0 && daysUntil <= meta.remindDays) {
+            const kindLabel = kindDef(meta.kind).label;
+            notifications.push({
+              id: `rdate-${ev.id}-${next}`,
+              type: "reminder",
+              severity: daysUntil === 0 ? "warning" : "info",
+              title: ev.title,
+              message: daysUntil === 0 ? `${kindLabel} is today` : `${kindLabel} in ${daysUntil} day${daysUntil === 1 ? "" : "s"} (${next})`,
+              entityId: ev.id,
+              entityType: "event",
+              dueDate: next,
+            });
+          }
+        }
+      }
+      for (const missed of missedOccurrences(evLike, todayStr).slice(0, 3)) {
+        notifications.push({
+          id: `rdate-missed-${ev.id}-${missed}`,
+          type: "reminder",
+          severity: "warning",
+          title: `Missed: ${ev.title}`,
+          message: `The ${missed} occurrence hasn't been checked off — mark it done or skip it in Recurring Dates.`,
+          entityId: ev.id,
+          entityType: "event",
+          dueDate: missed,
+        });
+      }
+    }
+  } catch { /* recurring-date bell entries are best-effort */ }
 
   // Deduplicate: keep only the most severe notification per entityId
   const severityOrder: Record<string, number> = { critical: 0, warning: 1, info: 2 };

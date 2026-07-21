@@ -2,6 +2,7 @@
 // =============================================================================
 // Upcoming Dates — cross-app reminder aggregator
 // =============================================================================
+import { parseRecurringMeta, nextOccurrence as rdNextOccurrence } from "./recurring-dates";
 // Pulls every time-sensitive item across the app into a single normalized stream
 // so the dashboard can render one definitive "what's next" view.
 //
@@ -574,7 +575,15 @@ function extractEvents(events: any[]): UpcomingDate[] {
   const today = todayISO();
   for (const e of events || []) {
     if (!e || !e.date) continue;
-    const next = rollRecurrence(e.date, e.recurrence, today, e.recurrenceEnd);
+    // Recurring Dates (shared/recurring-dates): honor per-occurrence state.
+    // A checked-off or skipped occurrence rolls to the FOLLOWING one; paused
+    // and archived series drop out of the upcoming stream entirely.
+    const rdMeta = parseRecurringMeta(e.tags);
+    const hasRdState = rdMeta.paused || rdMeta.archived
+      || rdMeta.completedDates.length > 0 || rdMeta.skippedDates.length > 0;
+    const next = hasRdState
+      ? rdNextOccurrence({ date: e.date, recurrence: e.recurrence, recurrenceEnd: e.recurrenceEnd, tags: e.tags }, today)
+      : rollRecurrence(e.date, e.recurrence, today, e.recurrenceEnd);
     if (!next) continue;
     const daysUntil = daysBetween(today, next);
     const cat = categoryFromEvent(e);
