@@ -806,60 +806,28 @@ export async function registerRoutes(
           return res.status(429).json({ error: "Too many requests. Please slow down." });
         }
       }
-      // Bust response cache on write — BEFORE the route handler runs so the
-      // route's reads are guaranteed fresh. Covers every prefix any route uses.
+      // Cross-instance staleness: bump the per-user DB data version so
+      // version-stamped cache keys on every OTHER instance go stale within ~2s.
+      //
+      // NOTE: same-instance responseCache busting is intentionally NOT done here.
+      // cacheBustMiddleware (registered above) already scoped-busts a SUPERSET of
+      // these prefixes — pre-handler and on 'finish' — with the correct
+      // read-only-POST allowlist. Duplicating that loop here was pure redundant
+      // work on every write (and wrongly busted the read-only POST paths that
+      // cacheBustMiddleware deliberately skips). The version bump below is B's
+      // own responsibility (cacheBustMiddleware never bumps the version).
       if (uid !== "anon") {
-        bustCache(`stats:${uid}`);
-        bustCache(`enhanced:${uid}`);
-        bustCache(`enhanced:`); // legacy unscoped
-        bustCache(`profile-detail:${uid}:`);
-        bustCache(`profiles:${uid}`);
-        bustCache(`trackers:${uid}`);
-        bustCache(`trackers:`); // some routes use unscoped key
-        bustCache(`tasks:${uid}`);
-        bustCache(`expenses:${uid}`);
-        bustCache(`events:${uid}`);
-        bustCache(`habits:${uid}`);
-        bustCache(`obligations:${uid}`);
-        bustCache(`journal:${uid}`);
-        bustCache(`documents:${uid}`);
-        bustCache(`goals:${uid}`);
-        bustCache(`insights:${uid}`);
-        bustCache(`insights-data:${uid}`);
-        bustCache(`activity:${uid}`);
-        bustCache(`ai-digest:${uid}`);
-        bustCache(`artifacts:${uid}`);
-        bustCache(`notifications:${uid}`);
-        bustCache(`cashflow:${uid}`);
-        bustCache(`calendar:${uid}`);
-        // Cross-instance: bump the DB data version so version-stamped cache
-        // keys on every OTHER instance go stale within ~2s. Fire-and-forget —
-        // the local bust above already guarantees same-instance freshness.
         const bumpVersion = () => {
           versionMemo.delete(uid);
           Promise.resolve((storage as any).bumpDataVersion?.())
             .then((v: number) => { if (v) versionMemo.set(uid, { v, at: Date.now() }); })
             .catch(() => { /* next GET resolves the version from the DB */ });
         };
+        // Pre-handler bump covers fast writes; the finish bump covers long
+        // writes (AI chat, 5-30s) whose DB writes land DURING the handler, so a
+        // GET racing mid-handler can't leave stale version-stamped data behind.
         bumpVersion();
-        // Long-running writes (AI chat can take 5-30s) do their DB writes
-        // DURING the handler — a GET racing mid-handler can cache pre-write
-        // data under the already-bumped version. Re-bust + re-bump when the
-        // response finishes so anything cached mid-write goes stale too.
-        res.once("finish", () => {
-          try {
-            for (const prefix of [
-              "stats:", "enhanced:", "profile-detail:", "profiles:", "trackers:",
-              "tasks:", "expenses:", "events:", "habits:", "obligations:",
-              "journal:", "documents:", "goals:", "insights:", "insights-data:",
-              "activity:", "ai-digest:", "artifacts:", "notifications:",
-              "cashflow:", "calendar:",
-            ]) bustCache(`${prefix}${uid}`);
-          } catch { /* best-effort */ }
-          bumpVersion();
-        });
-      } else {
-        bustAllCaches();
+        res.once("finish", bumpVersion);
       }
     }
     next();

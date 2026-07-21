@@ -1948,20 +1948,12 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     refetchOnWindowFocus: false,
   });
 
-  // When the underlying profile changes (any field edit, AI write, etc) refetch
-  // the summary. The server clears its 2h cache on PATCH, so this triggers a
-  // fresh generation reflecting the latest values (e.g. updated mileage).
-  // Skip on first render (when aiSummary hasn't loaded yet) to avoid a double-fetch.
-  useEffect(() => {
-    if (!profileUpdatedAt) return;
-    if (!aiSummary) return;
-    const summaryAt = new Date(aiSummary.generatedAt).getTime();
-    const profileAt = new Date(profileUpdatedAt).getTime();
-    // If the profile was updated after the summary was generated, refetch.
-    if (Number.isFinite(profileAt) && Number.isFinite(summaryAt) && profileAt > summaryAt) {
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "ai-summary"] });
-    }
-  }, [profileUpdatedAt, profileId, aiSummary]);
+  // PERF: do NOT auto-regenerate the summary on every profile edit. Regenerating
+  // is a foreground Anthropic call (seconds to ~30s on data-rich profiles) that
+  // used to fire on each mileage/value edit, making the profile page feel frozen.
+  // The cached summary (stale-while-revalidate) stays visible after an edit; the
+  // user refreshes it explicitly via the Refresh button (handleRefresh) when they
+  // want the narrative re-run against the latest values.
 
   const handleRefresh = useCallback(() => {
     // Force regeneration on the next fetch, then refetch through the normal
@@ -2392,7 +2384,12 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
       return { prev };
     },
     onSuccess: () => {
-      invalidateDomains("profiles");
+      // Ordinary field delete: refresh the detail view, but do NOT force an
+      // AI-summary regeneration (expensive foreground Anthropic call). Mark the
+      // dashboard/stats caches stale without eagerly refetching them here.
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "none" });
       toast({ title: "Field removed" });
     },
     onError: (_err, _vars, ctx) => {
@@ -2518,7 +2515,11 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
     });
     try {
       await apiRequest("PATCH", `/api/profiles/${profileId}`, { fieldsToDelete: [fieldKey] });
-      invalidateDomains("profiles");
+      // See save(): don't auto-regenerate the AI summary on a field delete, and
+      // mark stats/enhanced stale (no foreground refetch) rather than refetching.
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "none" });
       onSaved();
       toast({ title: `"${label}" removed` });
     } catch {
@@ -2533,18 +2534,37 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
 
   const save = async () => {
     setSaving(true);
+    // Optimistic: write the new value into the detail cache immediately so the
+    // field shows the edit without waiting on the PATCH + refetch round-trip.
+    // (Mirrors InlineEditField's onMutate.) Snapshot prev for rollback on error.
+    await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+    const prev = queryClient.getQueryData(["/api/profiles", profileId, "detail"]);
+    queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
+      if (!old) return old;
+      return { ...old, fields: { ...old.fields, [fieldKey]: draft } };
+    });
+    setEditing(false);
+    setFoundValue(null);
     try {
       await apiRequest("PATCH", `/api/profiles/${profileId}`, {
         fields: { [fieldKey]: draft },
       });
-      // Any field edit (mileage, currentValue, etc) can change the AI summary's
-      // narrative — the "profiles" domain covers detail + ai-summary + dashboard
-      // (server also clears its 2h cache on PATCH).
-      invalidateDomains("profiles");
+      // Background-sync the detail (the query the page actually reads). The AI
+      // summary is intentionally NOT invalidated here — regenerating it is a slow
+      // foreground Anthropic call; the user refreshes it explicitly. Stats /
+      // dashboard-enhanced are marked stale only (refetchType "none") so they
+      // refresh the next time those pages mount, without a foreground refetch
+      // storm on the profile page.
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "none" });
       onSaved();
-      setEditing(false);
-      setFoundValue(null);
     } catch {
+      // Roll back the optimistic write and reopen the editor so the user can
+      // retry without losing their draft.
+      if (prev) queryClient.setQueryData(["/api/profiles", profileId, "detail"], prev);
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      setEditing(true);
       toast({ title: "Failed to save", variant: "destructive" });
     } finally {
       setSaving(false);

@@ -265,6 +265,54 @@ export function resolveMonthlyPayment(fields: any): number {
   return 0;
 }
 
+// The set of profile field keys that can drive an auto-generated calendar
+// event, per profile type. Kept in lockstep with the eventDefs switch in
+// SupabaseStorage.autoGenerateProfileEvents. Exported so the write path can
+// gate the (expensive: full getEvents() fetch) event generation — an edit that
+// touches none of these keys (e.g. a vehicle mileage update) can never produce
+// an event, so it skips the work entirely. `dueDay`/`due_day` are included for
+// liability/loan because Phase 4 synthesizes a nextPayment date from them.
+export function eventDrivingFieldKeys(type: string): string[] {
+  switch (type) {
+    case "person":
+    case "self":
+      return ["birthday"];
+    case "medical":
+      return ["nextVisit"];
+    case "vehicle":
+      return ["nextService"];
+    case "subscription":
+      return ["renewalDate", "nextPayment", "startDate"];
+    case "loan":
+    case "liability":
+      return ["nextPayment", "startDate", "dueDay", "due_day"];
+    case "pet":
+      return ["nextVetVisit"];
+    case "property":
+      return ["insuranceExpiry", "leaseEnd"];
+    case "investment":
+      return ["maturityDate"];
+    case "account":
+      return ["expirationDate"];
+    case "asset":
+      return ["warrantyExpiry"];
+    default:
+      return [];
+  }
+}
+
+// True when an incoming profile patch touches at least one event-driving key
+// for the profile's type — i.e. the edit could create/refresh a calendar event
+// and therefore justifies the getEvents() round-trip. A mileage/value-only edit
+// returns false and skips event generation on the hot path.
+export function profileEditTouchesEventKey(
+  type: string,
+  patchFields: Record<string, any> | undefined | null,
+): boolean {
+  if (!patchFields || typeof patchFields !== "object") return false;
+  return eventDrivingFieldKeys(type).some((k) => patchFields[k] !== undefined);
+}
+
 // ---- MIME type → file extension helper ----
 function getExtension(mimeType: string): string {
   const map: Record<string, string> = {
@@ -1692,8 +1740,19 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("profiles").update(updateData).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
 
-    // Auto-generate calendar events from updated profile date fields (dedup logic prevents duplicates)
-    await this.autoGenerateProfileEvents(id, merged.type, merged.name, merged.fields || {});
+    // Auto-generate calendar events from updated profile date fields (dedup logic
+    // prevents duplicates). PERF: this fetches ALL events to dedup, so only run it
+    // when the incoming patch actually touches an event-driving key for this type.
+    // A mileage/value-only edit can never produce an event, so skipping avoids a
+    // full getEvents() round-trip on the hot edit path. It's fire-and-forget with
+    // error logging — event creation is noncritical and must not delay the write
+    // response. `nextPayment` can be synthesized from a `dueDay` change, so both
+    // are covered by eventDrivingFieldKeys.
+    if (profileEditTouchesEventKey(merged.type, data.fields)) {
+      this.autoGenerateProfileEvents(id, merged.type, merged.name, merged.fields || {}).catch((e) =>
+        console.error(`Auto-event generation failed for profile ${id}:`, e)
+      );
+    }
 
     return this.getProfile(id);
   }
