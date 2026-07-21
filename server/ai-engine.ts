@@ -33,6 +33,8 @@ import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { resolveCanonicalActivity } from "@shared/canonical-activity";
+import { classifyEntity, isValidTrackerCategory, normalizeEntityName } from "@shared/entity-classify";
+import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
@@ -2775,6 +2777,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
         at: { type: "string", description: "Optional date/time the entry actually happened (ISO date, natural language like 'June 3 2025', or a bare clock time like '8:15 AM' which is treated as today at that time). ALWAYS set this when the user attaches a time to the action ('at 8:15 AM', 'this morning at 7', 'yesterday'). Omit for 'now'." },
+        category: { type: "string", description: "Semantic category of the tracked thing, used only if a NEW tracker gets auto-created: health | fitness | nutrition | sleep | mental | lifestyle | finance | medication | habit | productivity. The server already recognizes thousands of medications, supplements, exercises, and sports on its own — set this from your own understanding for anything unusual (a niche drug, an obscure hobby) so the tracker is never filed under 'custom'." },
       },
       required: ["trackerName", "values"],
     },
@@ -4672,6 +4675,7 @@ When the user states a numeric measurement about a person OR pet ("Rex weighs 51
 - update most recent entry: update_tracker_entry(trackerName, values, forProfile?, entryIndex?)
 - delete most recent entry: delete_tracker_entry(trackerName, forProfile?, entryIndex?)
 - rename/update tracker: update_tracker(trackerName, changes)
+- CATEGORY CLARIFICATION LOOP: when a log_tracker_entry result carries a categoryNote, the item landed in the Custom category because the server doesn't recognize it. Confirm the log as normal, then ask the user in ONE short sentence what kind of thing it is (medication? exercise? food? finance?). When they answer — now or in a later message ("Xanax is a medication") — call update_tracker(trackerName, changes:{category:"<their answer>"}). The server remembers the mapping permanently, so never ask about the same item twice. Also pass your own best-guess category on log_tracker_entry for unusual items so this rarely triggers.
 - delete entire tracker: delete_tracker(name)
 
 ━━━ JOURNAL CRUD ━━━
@@ -5502,6 +5506,42 @@ function safeLC(val: any): string {
   return (typeof val === "string" ? val : "").toLowerCase();
 }
 
+// ── LEARNED CATEGORY MAPPINGS (classification layer, 2026-07-20) ──────────────
+// When the deterministic classifier (shared/entity-classify) doesn't know an
+// entity, the category the model (or the user, via update_tracker) supplies is
+// remembered as a memory row keyed on the normalized name — so the same item
+// classifies instantly and consistently on every future request.
+const CATEGORY_MEMORY_PREFIX = "tracker-category:";
+function categoryMemoryKey(name: string): string {
+  return CATEGORY_MEMORY_PREFIX + normalizeEntityName(name);
+}
+async function lookupLearnedCategory(name: string): Promise<string | null> {
+  try {
+    const key = categoryMemoryKey(name);
+    if (key === CATEGORY_MEMORY_PREFIX) return null;
+    const mems = await storage.getMemories();
+    // Newest matching row wins so a user correction supersedes an old mapping.
+    for (let i = mems.length - 1; i >= 0; i--) {
+      if (mems[i].key === key && isValidTrackerCategory(mems[i].value)) {
+        return String(mems[i].value).toLowerCase();
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+async function rememberCategoryMapping(name: string, category: string, opts: { overwrite?: boolean } = {}): Promise<void> {
+  try {
+    if (!isValidTrackerCategory(category) || category === "custom") return;
+    const key = categoryMemoryKey(name);
+    if (key === CATEGORY_MEMORY_PREFIX) return;
+    const existing = await lookupLearnedCategory(name);
+    if (existing === category) return;
+    if (existing && !opts.overwrite) return;
+    await storage.saveMemory({ key, value: category, category: "system" } as any);
+    logger.info("ai", `Learned category mapping: "${normalizeEntityName(name)}" → ${category}`);
+  } catch { /* never block a log on mapping persistence */ }
+}
+
 // A1 fix: word-boundary profile name matching. Prevents `"Max".includes()` from
 // hitting `"Maxwell"` / `"Maxine"` and silently picking a wrong profile.
 // Resolution order: exact match → word-boundary match in either direction.
@@ -5884,7 +5924,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Update existing instead of creating duplicate
         logger.info("ai", `Profile "${input.name}" already exists (${existingProfile.id}) — updating instead of creating`);
         // P0.3e: keep update-instead-of-create writes flat too.
-        const mergedFields = { ...existingProfile.fields, ...flattenAiProfileFields(input.fields) };
+        // Field canonicalization (2026-07-20): alias keys ("value",
+        // "market_value") fold into their canonical spelling ("currentValue")
+        // and stale equal-valued alias copies are swept, so re-creating an
+        // existing asset can't pile up redundant field variants.
+        const mergedIncoming = canonicalizeProfileFields(flattenAiProfileFields(input.fields), existingProfile.fields).fields;
+        const mergedFields = sweepRedundantAliases({ ...existingProfile.fields, ...mergedIncoming }).fields;
         const mergedProfile = await storage.updateProfile(existingProfile.id, {
           fields: mergedFields,
           notes: input.notes || existingProfile.notes,
@@ -5914,7 +5959,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // P0.3e: flatten any nested objects/arrays the model stuffed into fields
       // (same shared flattener the document-extraction path uses) so profile
       // fields keep a consistent flat-scalar shape.
-      const finalFields = flattenAiProfileFields(input.fields);
+      // Field canonicalization (2026-07-20): one canonical key per concept
+      // from the very first write — "value"/"marketValue"/"estimated_value"
+      // all land in currentValue instead of creating redundant variants.
+      const finalFields = canonicalizeProfileFields(flattenAiProfileFields(input.fields)).fields;
       if ((input.type === "asset" || (!input.type && isChildType)) && !finalFields.assetSubtype) {
         const nameLC = (input.name || "").toLowerCase();
         const allText = `${nameLC} ${(input.notes || "").toLowerCase()}`;
@@ -6063,7 +6111,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // P0.3e: flatten nested AI-supplied field values first (same shared
       // flattener the extraction path uses) so revert capture and the merge
       // below both operate on the keys that will actually be written.
-      const updateFlatFields = input.changes.fields ? flattenAiProfileFields(input.changes.fields) : undefined;
+      // Field canonicalization (2026-07-20): fold alias keys into their
+      // canonical spelling AGAINST THE EXISTING RECORD, so "update the value"
+      // rewrites the profile's currentValue instead of bolting a redundant
+      // "value" field next to it.
+      const updateCanon = input.changes.fields
+        ? canonicalizeProfileFields(flattenAiProfileFields(input.changes.fields), profile.fields)
+        : undefined;
+      const updateFlatFields = updateCanon?.fields;
       const previousFields: Record<string, any> = {};
       if (updateFlatFields && profile.fields) {
         for (const key of Object.keys(updateFlatFields)) {
@@ -6099,7 +6154,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
 
       const changes: any = {};
-      if (updateFlatFields) changes.fields = { ...profile.fields, ...updateFlatFields };
+      // Merge, then sweep stale alias copies (a leftover "value" field that
+      // loosely equals currentValue is redundant noise — drop it; differing
+      // values are always kept).
+      if (updateFlatFields) changes.fields = sweepRedundantAliases({ ...profile.fields, ...updateFlatFields }).fields;
+      // Canonicalization renamed a value-ish alias into currentValue — keep the
+      // prior value in previousValue (same behavior the mirror below had before
+      // canonicalization made it a no-op for renamed keys).
+      if (changes.fields && !isPersonLike && updateCanon && Object.values(updateCanon.renamed).includes("currentValue") && changes.fields.previousValue === undefined) {
+        const prevVal = profile.fields?.currentValue ?? profile.fields?.purchasePrice;
+        if (prevVal !== undefined && !looselyEqual(prevVal, changes.fields.currentValue)) changes.fields.previousValue = prevVal;
+      }
       // VALUE NORMALIZATION: net worth reads currentValue with the HIGHEST
       // precedence (shared/asset-value resolveAssetValue) — a model writing
       // "value"/"marketValue" onto an asset that already has a currentValue
@@ -6966,6 +7031,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         } catch { /* non-fatal: still log into it below */ }
       }
 
+      // CATEGORY SELF-HEAL (classification layer, 2026-07-20): an existing
+      // tracker stuck in "custom" that the classifier (or a learned mapping)
+      // now recognizes gets its real category on this log — e.g. the "Xanax"
+      // tracker created before the medication dictionary existed moves to
+      // Medications the next time the user logs a dose.
+      if (tracker && (!tracker.category || String(tracker.category).toLowerCase() === "custom")) {
+        try {
+          const healed = classifyEntity(tracker.name, { values: input.values });
+          const healCat = healed.confidence !== "none"
+            ? healed.category
+            : await lookupLearnedCategory(tracker.name);
+          if (healCat && healCat !== "custom") {
+            const updatedCat = await storage.updateTracker(tracker.id, { category: healCat } as any);
+            if (updatedCat) tracker = updatedCat;
+            logger.info("ai", `Category self-heal: "${tracker.name}" custom → ${healCat}`);
+          }
+        } catch { /* never block a log on category healing */ }
+      }
+
       // Merge notes into values if provided
       const entryValues = { ...input.values };
       if (input.notes) entryValues._notes = input.notes;
@@ -7170,48 +7254,34 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         };
       }
 
-      // Infer category from name.
-      //
-      // ORDER MATTERS. The keyword scan is a first-match-wins waterfall,
-      // so put MORE SPECIFIC buckets ahead of MORE GENERAL ones. The order
-      // below was derived from test_ai_render.ts failures on 2026-05-21:
-      //
-      //   - mental (mood, stress, anxiety) before health  — else "mood"
-      //     matches health’s “mood” keyword and lands in Health
-      //   - medication (lisinopril-likes, prescription, refill) before
-      //     health  — else "dose" matches health’s catch-all
-      //   - lifestyle before fitness  — else "video games" matches
-      //     fitness’s “game” keyword (sports games)
-      //   - lifestyle (plant, pet, water-the-plant) carved out of health
-      //     — “plant watering” would otherwise hit health’s “water”
-      //   - habit (reading, meditation routines) sits late so explicit
-      //     activity nouns win first
-      const nameLC = (input.trackerName || "").toLowerCase();
-      let autoCategory = "custom";
-      // 1) Mental & wellness — explicit emotional/mental words.
-      if (["mood","stress","anxiety","depression","panic","meditation","mindful","mindfulness","therapy","therapist","counsel","journal","gratitude","emotion","feeling","mental","wellness","calm"].some(k => nameLC.includes(k))) autoCategory = "mental";
-      // 2) Medication — explicit drug/dose words. Catches “Lisinopril
-      // Doses”, “Prescription Refills”, “Adderall”, supplements, etc.
-      else if (["medication","prescription","prescribed","supplement","pill","tablet","capsule","softgel","gummy","injection","vaccine","refill","rx","dose","dosage","mg","mcg","ml","iu","lisinopril","metformin","adderall","ozempic","statin","heartgard","insulin","fish oil","omega","multivitamin","vitamin","creatine","magnesium","zinc","melatonin","probiotic","biotin","collagen","glucosamine","turmeric","ashwagandha"].some(k => nameLC.includes(k))) autoCategory = "medication";
-      // 3) Lifestyle — leisure/entertainment/pet/plant. Has to beat
-      // fitness ("game") and health ("water", "plant tea").
-      else if (["gaming","video game","videogame","console","playstation","xbox","nintendo","steam deck","pc gaming","leisure","entertainment","hobby","social media","tv","movie","streaming","netflix","hulu","youtube","podcast","pet ","pets ","plant","garden","feeding","feed ","litter","walking the dog","vet","veterinary","veterinarian","grooming","groomer","kennel","dog walk","cat litter","aquarium","terrarium"].some(k => nameLC.includes(k))) autoCategory = "lifestyle";
-      // 4) Nutrition — eating-specific words. Sits before fitness so
-      // "protein shake" lands in nutrition not fitness.
-      else if (["nutrition","food","diet","meal","calories","protein","carbs","fat","macros","intake","eating","snack","breakfast","lunch","dinner"].some(k => nameLC.includes(k))) autoCategory = "nutrition";
-      // 5) Fitness — movement and sport. “game” here intentionally lives
-      // AFTER lifestyle so "video games" can’t collide.
-      else if (["running","cycling","swimming","workout","exercise","walk ","walking ","basketball","tennis","soccer","football","volleyball","baseball","hockey","golf","yoga","pilates","lifting","weights","gym","crossfit","hiit","rowing","skating","skiing","surfing","martial","boxing","wrestling","climbing","hiking","dancing","sport","match","practice","drill","steps","miles","cardio","strength","training","reps","sets","pace","distance","sprint","push-up","pullup","squat","deadlift","bench"].some(k => nameLC.includes(k))) autoCategory = "fitness";
-      // 6) Health — body vitals, labs, symptoms (catchall after mental/
-      // medication/lifestyle have had their pass).
-      else if (["weight","blood","bp","sleep","heart","cholesterol","glucose","sugar","oxygen","spo2","pulse","temperature","fever","pain","hydration","water","vitamin","symptom","creatinine","a1c","bmi","vital","lab","panel"].some(k => nameLC.includes(k))) autoCategory = "health";
-      // 7) Finance.
-      else if (["spending","expense","budget","saving","invest","portfolio","net worth","income","salary","revenue","profit","debt","loan","mortgage","credit","crypto","stock","dividend","rent","bill","subscription","dollar","cash"].some(k => nameLC.includes(k))) autoCategory = "finance";
-      // 8) Habits & routines.
-      else if (["habit","routine","streak","daily","checkin","check-in","morning","evening","reading","screen time","phone usage","bedtime"].some(k => nameLC.includes(k))) autoCategory = "habit";
-      // 9) Productivity.
-      else if (["productivity","focus","work","study","learn","task","project","meeting","call","email","pomodoro","deep work","code","write","create"].some(k => nameLC.includes(k))) autoCategory = "productivity";
-
+      // ── SEMANTIC CATEGORY RESOLUTION (classification layer, 2026-07-20) ──
+      // The old inline keyword waterfall only knew a handful of hardcoded
+      // names, so "Xanax" / "Bench Press" / "Pickleball" all landed in
+      // "custom". Resolution ladder:
+      //   1. shared/entity-classify — dictionaries of hundreds of medications,
+      //      supplements, and exercises + fuzzy typo matching + the keyword
+      //      waterfall (moved into that module, same bucket ordering).
+      //   2. learned mapping — a category the user/model taught us before.
+      //   3. the model's own semantic judgment (optional `category` input) —
+      //      remembered as a learned mapping for next time.
+      //   4. "custom" — the entry result carries a categoryNote telling the
+      //      model to ask ONE concise clarification, whose answer arrives via
+      //      update_tracker(changes:{category}) and is then remembered.
+      const classification = classifyEntity(input.trackerName || "", { values: input.values });
+      let autoCategory: string = classification.category;
+      if (classification.confidence === "none") {
+        const learned = await lookupLearnedCategory(input.trackerName || "");
+        if (learned) {
+          autoCategory = learned;
+          logger.info("ai", `Category from learned mapping: "${input.trackerName}" → ${learned}`);
+        } else if (isValidTrackerCategory(input.category) && String(input.category).toLowerCase() !== "custom") {
+          autoCategory = String(input.category).toLowerCase();
+          await rememberCategoryMapping(input.trackerName || "", autoCategory);
+          logger.info("ai", `Category from model judgment: "${input.trackerName}" → ${autoCategory} (remembered)`);
+        }
+      } else {
+        logger.info("ai", `Category classified: "${input.trackerName}" → ${autoCategory} (${classification.confidence}, ${classification.matchedTerm || "keyword"})`);
+      }
       // Display name: use the tracker name VERBATIM. Every profile owns its OWN
       // clean-named tracker ("Running", "Calories") — never "Running - Craig".
       // Ownership is carried by linkedProfiles and the UI already filters by
@@ -7288,6 +7358,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Surface what was auto-created so callers (bulk path, chat UI) can
         // report "created a new X tracker" honestly.
         if (entry) (entry as any).__createdTracker = { id: newTracker.id, name: newTracker.name };
+        // Unknown entity (classification ladder exhausted): tell the model to
+        // ask ONE concise clarification. The user's answer arrives via
+        // update_tracker(changes:{category}), which remembers the mapping.
+        if (entry && autoCategory === "custom") {
+          (entry as any).categoryNote =
+            `"${trackerDisplayName}" was filed under Custom because I don't recognize what kind of thing it is. ` +
+            `After confirming the log, ask the user in ONE short sentence what it is (a medication? exercise? food? something else), ` +
+            `then call update_tracker(trackerName:"${trackerDisplayName}", changes:{category:"<medication|fitness|nutrition|health|mental|lifestyle|finance|sleep|habit|productivity>"}) — the mapping is remembered permanently.`;
+        }
         if (entry && entryEnrichment) {
           const note = summarizeEnrichment(entryEnrichment);
           if (note) (entry as any).estimateNote = `Derived/estimated (tell the user estimates are estimates): ${note}`;
@@ -7388,10 +7467,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // by simply passing `unit:"Nm"`; otherwise we pick a sensible default.
       const resolvedUnit = input.unit || effectiveTrackerUnit(resolvedFields, input.unit);
 
+      // Semantic category resolution (classification layer, 2026-07-20): the
+      // deterministic classifier upgrades a missing/"custom" category, and a
+      // model-supplied category for an entity the dictionaries DON'T know is
+      // remembered so future logs classify the same way.
+      let ctCategory = safeLC(input.category);
+      const ctClass = classifyEntity(input.name || "");
+      if ((!ctCategory || ctCategory === "custom") && ctClass.confidence !== "none") {
+        ctCategory = ctClass.category;
+      } else if (ctCategory && ctCategory !== "custom" && ctClass.confidence === "none" && isValidTrackerCategory(ctCategory)) {
+        await rememberCategoryMapping(input.name || "", ctCategory);
+      }
+      if (!isValidTrackerCategory(ctCategory)) ctCategory = ctCategory || "custom";
+
       // P0.3a: validate with the shared insert schema before writing.
       const trackerPayload = validateAiPayload(insertTrackerSchema, {
         name: input.name,
-        category: input.category || "custom",
+        category: ctCategory || "custom",
         unit: resolvedUnit,
         fields: resolvedFields,
       }, "tracker");
@@ -9937,6 +10029,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const utResult = safeMatchEntity(trackers, input.trackerName || "", t => t.name);
       if (!utResult.match) return { error: utResult.error || "Tracker not found", candidates: utResult.candidates };
       const updated = await storage.updateTracker(utResult.match.id, input.changes);
+      // Classification learning loop (2026-07-20): a user-driven category
+      // change is the strongest possible signal — remember it (overwriting any
+      // older mapping) so the same entity classifies correctly forever after.
+      const newCat = safeLC(input.changes?.category);
+      if (newCat && isValidTrackerCategory(newCat) && newCat !== "custom") {
+        await rememberCategoryMapping(utResult.match.name, newCat, { overwrite: true });
+      }
       return { updated: true, tracker: updated };
     }
 
