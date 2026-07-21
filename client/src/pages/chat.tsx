@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
+import { useState, useRef, useEffect, useCallback, useDeferredValue, useMemo, lazy, memo, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
@@ -30,6 +30,7 @@ const DocumentViewer = lazy(() => import("@/components/DocumentViewer"));
 const ChatChartBody = lazy(() => import("@/components/ChatChartRenderer"));
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { ChatComposer, type ChatComposerHandle } from "@/components/chat/ChatComposer";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -57,11 +58,9 @@ import {
   Loader2,
   Check,
   Calendar,
-  Camera,
   Target,
   Flame,
   BookOpen,
-  RotateCcw,
   Pencil,
   Moon,
   Heart,
@@ -74,7 +73,6 @@ import {
   ChevronDown,
   Table as TableIcon,
   FileBarChart,
-  Mic,
   Search,
   Copy,
 } from "lucide-react";
@@ -1075,7 +1073,11 @@ function ExtractionConfirmation({
 interface StagedAttachment {
   name: string;
   mimeType: string;
-  data: string; // base64 — empty string while processing
+  // PERF (defect #8): base64 no longer lives in React state — it's stored in
+  // attachmentDataRef keyed by previewUrl and read via getAttachmentData() at
+  // send time, so multi-MB strings stop riding through reconciliation on every
+  // setAttachments. This field stays for shape-compat and is always "".
+  data: string;
   previewUrl: string;
   profileId: string; // "none" | profileId
   processing?: boolean; // true while image is being EXIF-corrected/compressed
@@ -1721,69 +1723,195 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
   );
 }
 
-function useSpeechInput(onResult: (text: string) => void, onError?: (title: string, description?: string) => void) {
-  const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<any>(null);
+// ── Image processing (module scope — pure, no component state) ───────────────
+// PERF (2026-07-21, QA scorecard defect #7): prefer createImageBitmap with
+// imageOrientation:'from-image' — decode happens off the main thread and EXIF
+// rotation is applied natively, so a 10MB iPhone photo no longer blocks paint
+// while a DataView walks EXIF and a canvas redraws synchronously. Encoding
+// uses async convertToBlob/toBlob instead of synchronous toDataURL. The legacy
+// FileReader+canvas path below remains the fallback for browsers without
+// (working) createImageBitmap orientation support.
+const IMG_BUDGET_MB = 3.6; // stay safely under Vercel's ~4.5MB request body limit
+// Highest quality first; step down only if the encoded image is too big.
+const IMG_ATTEMPTS: Array<{ dim: number; q: number }> = [
+  { dim: 3072, q: 0.92 },
+  { dim: 3072, q: 0.85 },
+  { dim: 2048, q: 0.85 },
+  { dim: 1600, q: 0.8 },
+];
+const b64SizeMB = (b64: string) => b64.length * 0.75 / 1024 / 1024;
 
-  const start = useCallback(async () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      onError?.("Voice input not supported", "Use Chrome or Safari for voice input.");
-      return;
+const blobToBase64 = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
+// Encode an (already orientation-corrected) bitmap to JPEG base64 within the
+// upload size budget.
+async function bitmapToJpegBase64(bitmap: ImageBitmap): Promise<string> {
+  let out = "";
+  for (const a of IMG_ATTEMPTS) {
+    let w = bitmap.width, h = bitmap.height;
+    if (w > a.dim || h > a.dim) {
+      const scale = a.dim / Math.max(w, h);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
     }
-
-    // If running in Capacitor, request native mic permission
-    if ((window as any).Capacitor?.isNativePlatform()) {
-      try {
-        // Dynamic import with variable to prevent Rollup from resolving at build time
-        const modPath = '@capacitor-community/microphone';
-        const mod = await (Function('p', 'return import(p)'))(modPath);
-        const permission = await mod.Microphone.requestPermission();
-        if (permission.microphone !== 'granted') {
-          onError?.("Microphone permission required", "Enable microphone access in your device settings.");
-          return;
-        }
-      } catch { /* Capacitor plugin not installed, fallback to web */ }
+    let blob: Blob | null = null;
+    if (typeof OffscreenCanvas !== "undefined") {
+      const canvas = new OffscreenCanvas(w, h);
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(bitmap, 0, 0, w, h);
+        blob = await canvas.convertToBlob({ type: "image/jpeg", quality: a.q });
+      }
     }
-
-    // Check browser microphone permission
-    if (navigator.permissions) {
-      try {
-        const result = await navigator.permissions.query({ name: 'microphone' as PermissionName });
-        if (result.state === 'denied') {
-          onError?.("Microphone access denied", "Enable microphone in your browser settings.");
-          return;
-        }
-      } catch { /* permissions API not supported for microphone in this browser */ }
+    if (!blob) {
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d")!;
+      ctx.imageSmoothingEnabled = true;
+      (ctx as any).imageSmoothingQuality = "high";
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", a.q));
     }
-
-    const rec = new SpeechRecognition();
-    rec.continuous = false;
-    rec.interimResults = false;
-    rec.lang = 'en-US';
-    rec.onresult = (e: any) => {
-      const transcript = e.results[0][0].transcript;
-      onResult(transcript);
-      setListening(false);
-    };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
-    recognitionRef.current = rec;
-    rec.start();
-    setListening(true);
-  }, [onResult, onError]);
-
-  const stop = useCallback(() => {
-    recognitionRef.current?.stop();
-    setListening(false);
-  }, []);
-
-  const supported = typeof window !== 'undefined' && (
-    !!(window as any).SpeechRecognition || !!(window as any).webkitSpeechRecognition
-  );
-
-  return { listening, start, stop, supported };
+    if (!blob) throw new Error("Image encode failed");
+    out = await blobToBase64(blob);
+    if (b64SizeMB(out) <= IMG_BUDGET_MB) break;
+  }
+  return out;
 }
+
+// Preferred entry point for staged image files.
+async function processImageFile(file: File): Promise<string> {
+  if (typeof createImageBitmap === "function") {
+    let bitmap: ImageBitmap | null = null;
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch {
+      bitmap = null; // options unsupported or decode failed — use legacy path
+    }
+    if (bitmap) {
+      try {
+        const out = await bitmapToJpegBase64(bitmap);
+        bitmap.close();
+        console.log(`[upload] Image processed (bitmap): base64 ${b64SizeMB(out).toFixed(1)}MB`);
+        return out;
+      } catch (err) {
+        try { bitmap.close(); } catch {}
+        console.warn("[upload] Bitmap encode failed, falling back to legacy path:", err);
+      }
+    }
+  }
+  return correctImageOrientation(file);
+}
+
+// Process image: correct EXIF orientation + resize/compress to fit upload limits
+// ALWAYS runs through canvas to ensure images stay under ~3MB base64 (Vercel body limit safety)
+const correctImageOrientation = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result as ArrayBuffer;
+      const dataView = new DataView(arrayBuffer);
+      
+      // Read EXIF orientation
+      let orientation = 1;
+      try {
+        if (dataView.getUint16(0, false) === 0xFFD8) { // JPEG
+          let offset = 2;
+          while (offset < dataView.byteLength - 2) {
+            const marker = dataView.getUint16(offset, false);
+            offset += 2;
+            if (marker === 0xFFE1) { // APP1 (EXIF)
+              const exifOffset = offset + 2;
+              if (dataView.getUint32(exifOffset, false) === 0x45786966) { // "Exif"
+                const tiffOffset = exifOffset + 6;
+                const littleEndian = dataView.getUint16(tiffOffset, false) === 0x4949;
+                const ifdOffset = tiffOffset + dataView.getUint32(tiffOffset + 4, littleEndian);
+                const entries = dataView.getUint16(ifdOffset, littleEndian);
+                for (let i = 0; i < entries; i++) {
+                  const entryOffset = ifdOffset + 2 + i * 12;
+                  if (entryOffset + 12 > dataView.byteLength) break;
+                  if (dataView.getUint16(entryOffset, littleEndian) === 0x0112) { // Orientation tag
+                    orientation = dataView.getUint16(entryOffset + 8, littleEndian);
+                    break;
+                  }
+                }
+              }
+              break;
+            } else if ((marker & 0xFF00) === 0xFF00) {
+              offset += dataView.getUint16(offset, false);
+            } else break;
+          }
+        }
+      } catch { /* keep orientation = 1 if parsing fails */ }
+
+      // ALWAYS process through canvas: applies EXIF rotation AND keeps the
+      // upload under Vercel's ~4.5MB body limit. We prefer HIGH resolution and
+      // quality so faint document text (e.g. a vet schedule) stays legible for
+      // the vision model — degrading the image is a top cause of misreads —
+      // and only step down if the encoded size exceeds the budget.
+      const img = new Image();
+      img.onload = () => {
+        const renderAt = (maxDim: number): HTMLCanvasElement => {
+          let w = img.width, h = img.height;
+          if (w > maxDim || h > maxDim) {
+            const scale = maxDim / Math.max(w, h);
+            w = Math.round(w * scale);
+            h = Math.round(h * scale);
+          }
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d')!;
+          // Set canvas size based on rotation
+          if (orientation >= 5) { canvas.width = h; canvas.height = w; }
+          else { canvas.width = w; canvas.height = h; }
+          // Apply EXIF transform
+          switch (orientation) {
+            case 2: ctx.transform(-1, 0, 0, 1, w, 0); break;
+            case 3: ctx.transform(-1, 0, 0, -1, w, h); break;
+            case 4: ctx.transform(1, 0, 0, -1, 0, h); break;
+            case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
+            case 6: ctx.transform(0, 1, -1, 0, h, 0); break;
+            case 7: ctx.transform(0, -1, -1, 0, h, w); break;
+            case 8: ctx.transform(0, -1, 1, 0, 0, w); break;
+          }
+          ctx.imageSmoothingEnabled = true;
+          (ctx as any).imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, w, h);
+          return canvas;
+        };
+
+        const sizeMB = (b64: string) => b64.length * 0.75 / 1024 / 1024;
+        const BUDGET_MB = 3.6; // stay safely under Vercel's ~4.5MB request body limit
+        // Highest quality first; fall back only if the encoded image is too big.
+        const attempts: Array<{ dim: number; q: number }> = [
+          { dim: 3072, q: 0.92 },
+          { dim: 3072, q: 0.85 },
+          { dim: 2048, q: 0.85 },
+          { dim: 1600, q: 0.8 },
+        ];
+        let compressed = '';
+        for (const a of attempts) {
+          compressed = renderAt(a.dim).toDataURL('image/jpeg', a.q).split(',')[1];
+          if (sizeMB(compressed) <= BUDGET_MB) break;
+        }
+        console.log(`[upload] Image processed: ${img.width}x${img.height} → base64 ${sizeMB(compressed).toFixed(1)}MB`);
+        resolve(compressed);
+      };
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+};
 
 
 // ── Memoized message row ─────────────────────────────────────────────────────
@@ -1796,6 +1924,13 @@ function useSpeechInput(onResult: (text: string) => void, onError?: (title: stri
 // setState identity) so React.memo's shallow compare actually holds.
 const EMPTY_ENTRY_VALS: Record<string, any> = {};
 const EMPTY_ENTRY_NEW_FIELD = { name: "", value: "" };
+
+// Coerce numeric-looking strings from the inline entry editor to numbers.
+const coerceVal = (raw: string): any => {
+  const t = raw.trim();
+  const n = Number(t);
+  return t !== "" && !isNaN(n) && String(n) === t ? n : raw;
+};
 
 interface MessageRowProps {
   msg: ChatMessage;
@@ -1859,17 +1994,23 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
 
-        {/* Attachment preview in user message */}
+        {/* Attachment preview in user message. The wrapper reserves the
+            image's max display height up front (intrinsic size is unknown —
+            arbitrary user uploads) so decode/load doesn't shift the transcript
+            layout (CLS, defect #6). */}
         {msg.attachment &&
           msg.attachment.mimeType.startsWith("image/") && (
-            <div className="mb-2 rounded-lg overflow-hidden">
+            <div className="mb-2 rounded-lg overflow-hidden h-48">
               <img
                 src={
                   msg.attachment.previewUrl ||
                   `data:${msg.attachment.mimeType};base64,${msg.attachment.data}`
                 }
                 alt={msg.attachment.name}
-                className="max-h-48 w-auto rounded-lg"
+                height={192}
+                loading="lazy"
+                decoding="async"
+                className="h-48 max-h-48 w-auto max-w-full object-contain rounded-lg"
               />
             </div>
           )}
@@ -1894,6 +2035,22 @@ const MessageRow = memo(function MessageRow({
               iconOnly
               className="opacity-60 hover:opacity-100 text-primary-foreground/80 hover:text-primary-foreground hover:bg-primary-foreground/10"
             />
+          </div>
+        )}
+
+        {/* Failed-send marker (defect #1): the optimistically pushed bubble
+            stays visible when the POST errors, with a one-tap retry. */}
+        {msg.role === "user" && (msg as any).failed && (
+          <div className="mt-1.5 flex items-center justify-end gap-2">
+            <span className="text-[11px] text-primary-foreground/70">Not sent</span>
+            <button
+              type="button"
+              onClick={() => onRetry(msg)}
+              className="text-[11px] font-semibold underline underline-offset-2 text-primary-foreground/90 hover:text-primary-foreground"
+              data-testid={`button-retry-${msg.id}`}
+            >
+              Retry
+            </button>
           </div>
         )}
 
@@ -2798,8 +2955,14 @@ export default function ChatPage() {
       setBatchProcessedCount(0);
     },
     onSettled: () => {
-      // Revoke object URLs and clear attachments after mutation completes (success or error)
-      pendingBatchAttachmentsRef.current.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+      // Revoke object URLs, drop staged base64 payloads, and clear attachments
+      // after mutation completes (success or error)
+      pendingBatchAttachmentsRef.current.forEach(a => {
+        if (a.previewUrl) {
+          URL.revokeObjectURL(a.previewUrl);
+          attachmentDataRef.current.delete(a.previewUrl);
+        }
+      });
       pendingBatchAttachmentsRef.current = [];
       setAttachments([]);
     },
@@ -2921,110 +3084,20 @@ export default function ChatPage() {
     atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
-  // Process image: correct EXIF orientation + resize/compress to fit upload limits
-  // ALWAYS runs through canvas to ensure images stay under ~3MB base64 (Vercel body limit safety)
-  const correctImageOrientation = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const arrayBuffer = reader.result as ArrayBuffer;
-        const dataView = new DataView(arrayBuffer);
-        
-        // Read EXIF orientation
-        let orientation = 1;
-        try {
-          if (dataView.getUint16(0, false) === 0xFFD8) { // JPEG
-            let offset = 2;
-            while (offset < dataView.byteLength - 2) {
-              const marker = dataView.getUint16(offset, false);
-              offset += 2;
-              if (marker === 0xFFE1) { // APP1 (EXIF)
-                const exifOffset = offset + 2;
-                if (dataView.getUint32(exifOffset, false) === 0x45786966) { // "Exif"
-                  const tiffOffset = exifOffset + 6;
-                  const littleEndian = dataView.getUint16(tiffOffset, false) === 0x4949;
-                  const ifdOffset = tiffOffset + dataView.getUint32(tiffOffset + 4, littleEndian);
-                  const entries = dataView.getUint16(ifdOffset, littleEndian);
-                  for (let i = 0; i < entries; i++) {
-                    const entryOffset = ifdOffset + 2 + i * 12;
-                    if (entryOffset + 12 > dataView.byteLength) break;
-                    if (dataView.getUint16(entryOffset, littleEndian) === 0x0112) { // Orientation tag
-                      orientation = dataView.getUint16(entryOffset + 8, littleEndian);
-                      break;
-                    }
-                  }
-                }
-                break;
-              } else if ((marker & 0xFF00) === 0xFF00) {
-                offset += dataView.getUint16(offset, false);
-              } else break;
-            }
-          }
-        } catch { /* keep orientation = 1 if parsing fails */ }
-
-        // ALWAYS process through canvas: applies EXIF rotation AND keeps the
-        // upload under Vercel's ~4.5MB body limit. We prefer HIGH resolution and
-        // quality so faint document text (e.g. a vet schedule) stays legible for
-        // the vision model — degrading the image is a top cause of misreads —
-        // and only step down if the encoded size exceeds the budget.
-        const img = new Image();
-        img.onload = () => {
-          const renderAt = (maxDim: number): HTMLCanvasElement => {
-            let w = img.width, h = img.height;
-            if (w > maxDim || h > maxDim) {
-              const scale = maxDim / Math.max(w, h);
-              w = Math.round(w * scale);
-              h = Math.round(h * scale);
-            }
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d')!;
-            // Set canvas size based on rotation
-            if (orientation >= 5) { canvas.width = h; canvas.height = w; }
-            else { canvas.width = w; canvas.height = h; }
-            // Apply EXIF transform
-            switch (orientation) {
-              case 2: ctx.transform(-1, 0, 0, 1, w, 0); break;
-              case 3: ctx.transform(-1, 0, 0, -1, w, h); break;
-              case 4: ctx.transform(1, 0, 0, -1, 0, h); break;
-              case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
-              case 6: ctx.transform(0, 1, -1, 0, h, 0); break;
-              case 7: ctx.transform(0, -1, -1, 0, h, w); break;
-              case 8: ctx.transform(0, -1, 1, 0, 0, w); break;
-            }
-            ctx.imageSmoothingEnabled = true;
-            (ctx as any).imageSmoothingQuality = 'high';
-            ctx.drawImage(img, 0, 0, w, h);
-            return canvas;
-          };
-
-          const sizeMB = (b64: string) => b64.length * 0.75 / 1024 / 1024;
-          const BUDGET_MB = 3.6; // stay safely under Vercel's ~4.5MB request body limit
-          // Highest quality first; fall back only if the encoded image is too big.
-          const attempts: Array<{ dim: number; q: number }> = [
-            { dim: 3072, q: 0.92 },
-            { dim: 3072, q: 0.85 },
-            { dim: 2048, q: 0.85 },
-            { dim: 1600, q: 0.8 },
-          ];
-          let compressed = '';
-          for (const a of attempts) {
-            compressed = renderAt(a.dim).toDataURL('image/jpeg', a.q).split(',')[1];
-            if (sizeMB(compressed) <= BUDGET_MB) break;
-          }
-          console.log(`[upload] Image processed: ${img.width}x${img.height} → base64 ${sizeMB(compressed).toFixed(1)}MB`);
-          resolve(compressed);
-        };
-        img.onerror = reject;
-        img.src = URL.createObjectURL(file);
-      };
-      reader.onerror = reject;
-      reader.readAsArrayBuffer(file);
-    });
-  };
-
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+
+    // Staging hides the composer — carry any draft text over as the attachment
+    // note (matches the old shared-input behavior, where typed text became the
+    // note field).
+    if (attachments.length === 0) {
+      const draft = composerRef.current?.getText().trim() ?? "";
+      if (draft) {
+        setAttachmentNote(draft);
+        composerRef.current?.clear();
+      }
+    }
 
     for (const file of files) {
       if (file.size > 10 * 1024 * 1024) {
@@ -3052,7 +3125,7 @@ export default function ChatPage() {
         try {
           let base64: string;
           if (isImage) {
-            base64 = await correctImageOrientation(file);
+            base64 = await processImageFile(file);
           } else {
             base64 = await new Promise<string>((resolve, reject) => {
               const reader = new FileReader();
@@ -3061,10 +3134,13 @@ export default function ChatPage() {
               reader.readAsDataURL(file);
             });
           }
+          // Base64 goes into the ref map, NOT state (defect #8) — state only
+          // flips the processing flag so the panel enables its buttons.
+          attachmentDataRef.current.set(previewUrl, base64);
           setAttachments((prev) =>
             prev.map((att) =>
               att.previewUrl === previewUrl && att.processing
-                ? { ...att, data: base64, processing: false }
+                ? { ...att, processing: false }
                 : att
             )
           );
@@ -3076,6 +3152,7 @@ export default function ChatPage() {
             variant: "destructive",
           });
           // Remove the failed placeholder so the user can try again
+          attachmentDataRef.current.delete(previewUrl);
           setAttachments((prev) => prev.filter((att) => att.previewUrl !== previewUrl));
         }
       })();
@@ -3089,23 +3166,24 @@ export default function ChatPage() {
   const handleAttachmentSend = () => {
     if (attachments.length !== 1 || uploadMutation.isPending) return;
     const att = attachments[0];
-    if (att.processing || !att.data) {
+    const attData = getAttachmentData(att);
+    if (att.processing || !attData) {
       toast({ title: "Still preparing the photo… try again in a moment." });
       return;
     }
-    const note = input.trim();
+    const note = attachmentNote.trim();
 
     // ✨ If user wrote a Smart Fill intent in the note AND attached a form file,
     // skip the normal upload and open Smart Fill directly. Still post the user
     // message + an assistant chip so there is in-thread context.
     if (note && SMART_FILL_INTENT_RE.test(note) && isFormFile(att.mimeType)) {
-      const stripped = att.data.includes(",") ? att.data.split(",").pop() || att.data : att.data;
+      const stripped = attData.includes(",") ? attData.split(",").pop() || attData : attData;
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "user",
         content: note,
         timestamp: new Date().toISOString(),
-        attachment: { name: att.name, mimeType: att.mimeType, data: att.data, previewUrl: att.previewUrl },
+        attachment: { name: att.name, mimeType: att.mimeType, data: attData, previewUrl: att.previewUrl },
       };
       const assistantMsg: ChatMessage = {
         id: crypto.randomUUID(),
@@ -3121,21 +3199,22 @@ export default function ChatPage() {
       };
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setSmartFillFile({ name: att.name, mimeType: att.mimeType, base64: stripped });
+      attachmentDataRef.current.delete(att.previewUrl);
       setAttachments([]);
       setSelectedProfileId("none");
-      setInput("");
+      setAttachmentNote("");
       return;
     }
 
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
-      content: input.trim() || `Uploaded: ${att.name}`,
+      content: note || `Uploaded: ${att.name}`,
       timestamp: new Date().toISOString(),
       attachment: {
         name: att.name,
         mimeType: att.mimeType,
-        data: att.data,
+        data: attData,
         previewUrl: att.previewUrl,
       },
     };
@@ -3146,25 +3225,27 @@ export default function ChatPage() {
     uploadMutation.mutate({
       fileName: att.name,
       mimeType: att.mimeType,
-      fileData: att.data,
+      fileData: attData,
       profileId: profileToSend,
-      message: input.trim() || undefined,
+      message: note || undefined,
     });
 
+    attachmentDataRef.current.delete(att.previewUrl);
     setAttachments([]);
     setSelectedProfileId("none");
-    setInput("");
+    setAttachmentNote("");
   };
 
   // Save-only handler: store file linked to profile(s) with no AI processing
   const handleSaveOnly = () => {
     if (attachments.length !== 1 || saveOnlyMutation.isPending) return;
     const att = attachments[0];
-    if (att.processing || !att.data) {
+    const attData = getAttachmentData(att);
+    if (att.processing || !attData) {
       toast({ title: "Still preparing the photo… try again in a moment." });
       return;
     }
-    const note = input.trim();
+    const note = attachmentNote.trim();
 
     // Resolve profile IDs from per-attachment selection or global selection
     const rawProfileSel = att.profileId !== "none" ? att.profileId : selectedProfileId;
@@ -3182,7 +3263,7 @@ export default function ChatPage() {
       attachment: {
         name: att.name,
         mimeType: att.mimeType,
-        data: att.data,
+        data: attData,
         previewUrl: att.previewUrl,
       },
     };
@@ -3191,25 +3272,27 @@ export default function ChatPage() {
     saveOnlyMutation.mutate({
       fileName: att.name,
       mimeType: att.mimeType,
-      fileData: att.data,
+      fileData: attData,
       profileIds,
       note: note || undefined,
     });
 
+    attachmentDataRef.current.delete(att.previewUrl);
     setAttachments([]);
     setSelectedProfileId("none");
-    setInput("");
+    setAttachmentNote("");
   };
 
   // Batch upload: send using batch endpoint
   const handleBatchSend = () => {
     if (attachments.length < 2 || batchUploadMutation.isPending) return;
+    const note = attachmentNote.trim();
 
     const fileNames = attachments.map((a) => a.name).join(", ");
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
-      content: input.trim() || `Uploaded ${attachments.length} files: ${fileNames}`,
+      content: note || `Uploaded ${attachments.length} files: ${fileNames}`,
       timestamp: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -3220,10 +3303,10 @@ export default function ChatPage() {
       files: attachments.map((att) => ({
         fileName: att.name,
         mimeType: att.mimeType,
-        fileData: att.data,
+        fileData: getAttachmentData(att),
         profileId: att.profileId !== "none" ? att.profileId : undefined,
       })),
-      message: input.trim() || undefined,
+      message: note || undefined,
     });
 
     // Capture attachments in a ref so onSettled can revoke URLs and clear state
@@ -3242,9 +3325,9 @@ export default function ChatPage() {
       setBatchProcessedCount((prev) => Math.min(prev + 1, currentAttachmentCount));
     }, 2000);
 
-    // Clear input immediately; attachments will be cleared in onSettled after mutation completes
+    // Clear the note immediately; attachments will be cleared in onSettled after mutation completes
     setSelectedProfileId("none");
-    setInput("");
+    setAttachmentNote("");
   };
 
   // ── Smart Fill intent detection ────────────────────────────────────────────
@@ -3266,13 +3349,18 @@ export default function ChatPage() {
     return null;
   };
 
-  const handleSend = () => {
-    const msg = input.trim();
+  // Called by <ChatComposer/> with the draft text. Push-first (defect #1): the
+  // user bubble is appended synchronously BEFORE the POST fires, so it paints
+  // within the same frame as the tap; the pending/typing indicator keys off
+  // isPending immediately after. Returns true when the send was consumed (the
+  // composer clears its draft), false when rejected (draft is preserved).
+  const handleSend = (raw: string): boolean => {
+    const msg = raw.trim();
     const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending || saveOnlyMutation.isPending;
     // Reject re-entrant sends synchronously (sendingRef) AND while any mutation
     // is in flight (isPending). The ref catches the same-tick race isPending misses.
-    if (sendingRef.current || isPending) return;
-    if (!msg) return;
+    if (sendingRef.current || isPending) return false;
+    if (!msg) return false;
 
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
@@ -3302,29 +3390,21 @@ export default function ChatPage() {
           },
         };
         setMessages((prev) => [...prev, userMsg, assistantMsg]);
-        setInput("");
         // Auto-open the dialog so the user can begin immediately.
         setSmartFillFile({ name: recent.name, mimeType: recent.mimeType, base64: stripped });
-        return;
+        return true;
       }
     }
 
     setMessages((prev) => [...prev, userMsg]);
-    setInput("");
     sendingRef.current = true; // lock BEFORE mutate so a rapid second send can't slip through
-    chatMutation.mutate(msg);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    chatMutation.mutate({ message: msg, userMsgId: userMsg.id });
+    return true;
   };
 
   const handleSuggestion = (s: string) => {
-    setInput(s);
-    inputRef.current?.focus();
+    composerRef.current?.setText(s);
+    composerRef.current?.focus();
   };
 
   // Batch panel handlers
@@ -3341,9 +3421,10 @@ export default function ChatPage() {
   const handleRemoveAttachment = (index: number) => {
     setAttachments((prev) => {
       const newArr = [...prev];
-      // Revoke the object URL to avoid memory leaks
+      // Revoke the object URL (and drop the staged base64) to avoid memory leaks
       if (newArr[index]?.previewUrl) {
         URL.revokeObjectURL(newArr[index].previewUrl);
+        attachmentDataRef.current.delete(newArr[index].previewUrl);
       }
       newArr.splice(index, 1);
       return newArr;
@@ -3353,6 +3434,18 @@ export default function ChatPage() {
   const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending || saveOnlyMutation.isPending;
   const hasAttachments = attachments.length > 0;
   const isBatch = attachments.length > 1;
+
+  // Chat search (defect #4): the query is deferred so filtering long
+  // transcripts never runs on the keystroke's critical path, the lowercase
+  // query is computed ONCE (not twice per message per keystroke), and the
+  // filtered list is memoized so unrelated renders reuse it.
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const trimmedQuery = deferredSearchQuery.trim();
+  const filteredMessages = useMemo(() => {
+    const q = trimmedQuery.toLowerCase();
+    if (!q) return messages;
+    return messages.filter((msg) => msg.content.toLowerCase().includes(q));
+  }, [messages, trimmedQuery]);
 
   return (
     <div className="flex h-full overflow-x-hidden max-w-full" data-testid="page-chat">
@@ -3389,7 +3482,7 @@ export default function ChatPage() {
       />
 
       {/* Messages area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
+      <div ref={scrollRef} onScroll={handleTranscriptScroll} className="flex-1 overflow-y-auto px-4 py-3">
         <div className={`max-w-2xl mx-auto space-y-4 ${messages.length <= 1 ? 'min-h-[72vh] flex flex-col justify-end' : ''}`}>
 
           {/* Empty-state brand hero — fills the space above the welcome bubble
@@ -3425,26 +3518,19 @@ export default function ChatPage() {
               <button onClick={() => { setSearchOpen(false); setSearchQuery(''); }} className="text-muted-foreground hover:text-foreground text-xs">Done</button>
             </div>
           )}
-          {(() => {
-            const trimmedQuery = searchQuery.trim();
-            const filteredMessages = messages.filter(msg => !trimmedQuery || msg.content.toLowerCase().includes(trimmedQuery.toLowerCase()));
-            if (searchOpen && trimmedQuery && filteredMessages.length === 0) {
-              return (
-                <div className="flex flex-col items-center justify-center py-12 text-center text-sm text-muted-foreground gap-2" data-testid="chat-search-empty">
-                  <Search className="h-5 w-5 opacity-60" />
-                  <div>No messages match “<span className="font-medium text-foreground">{trimmedQuery}</span>”.</div>
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="mt-1 text-xs px-2.5 py-1 rounded-md border border-border/50 hover:bg-muted/60 text-foreground"
-                    data-testid="button-chat-search-clear"
-                  >
-                    Clear search
-                  </button>
-                </div>
-              );
-            }
-            return null;
-          })()}
+          {searchOpen && trimmedQuery && filteredMessages.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-12 text-center text-sm text-muted-foreground gap-2" data-testid="chat-search-empty">
+              <Search className="h-5 w-5 opacity-60" />
+              <div>No messages match “<span className="font-medium text-foreground">{trimmedQuery}</span>”.</div>
+              <button
+                onClick={() => setSearchQuery('')}
+                className="mt-1 text-xs px-2.5 py-1 rounded-md border border-border/50 hover:bg-muted/60 text-foreground"
+                data-testid="button-chat-search-clear"
+              >
+                Clear search
+              </button>
+            </div>
+          )}
           {filteredMessages.map((msg) => {
             // Only the row that owns the entry being edited receives live edit
             // state; every other row gets stable sentinels so React.memo holds.
@@ -3493,7 +3579,7 @@ export default function ChatPage() {
           has started they collapse into a small "Starter prompts" toggle so they
           don't permanently occupy space above the composer. Hidden while an
           attachment is staged. */}
-      {!hasAttachments && input.trim().length === 0 && (() => {
+      {!hasAttachments && composerEmpty && (() => {
         const conversationStarted = messages.length > 1;
         const expanded = !conversationStarted || showStarters;
         return (
@@ -3545,24 +3631,26 @@ export default function ChatPage() {
           onRemove={() => {
             if (attachments[0]?.previewUrl) {
               URL.revokeObjectURL(attachments[0].previewUrl);
+              attachmentDataRef.current.delete(attachments[0].previewUrl);
             }
             setAttachments([]);
             setSelectedProfileId("none");
-            setInput("");
+            setAttachmentNote("");
           }}
-          note={input}
-          onNoteChange={setInput}
+          note={attachmentNote}
+          onNoteChange={setAttachmentNote}
           onSend={handleAttachmentSend}
           onSaveOnly={handleSaveOnly}
           isSending={uploadMutation.isPending || saveOnlyMutation.isPending}
           onSmartFill={() => {
             const a = attachments[0];
             if (!a) return;
-            if (a.processing || !a.data) {
+            const data = getAttachmentData(a);
+            if (a.processing || !data) {
               toast({ title: "Still preparing the photo… try again in a moment." });
               return;
             }
-            const stripped = a.data.includes(",") ? a.data.split(",").pop() || a.data : a.data;
+            const stripped = data.includes(",") ? data.split(",").pop() || data : data;
             setSmartFillFile({ name: a.name, mimeType: a.mimeType, base64: stripped });
           }}
         />
@@ -3578,15 +3666,16 @@ export default function ChatPage() {
           onGlobalProfileChange={handleGlobalProfileChange}
           onRemove={handleRemoveAttachment}
           onAddMore={() => addMoreFileInputRef.current?.click()}
-          note={input}
-          onNoteChange={setInput}
+          note={attachmentNote}
+          onNoteChange={setAttachmentNote}
           onSend={handleBatchSend}
           isSending={batchUploadMutation.isPending}
           processedCount={batchProcessedCount}
           onSmartFill={(idx) => {
             const a = attachments[idx];
             if (!a) return;
-            const stripped = a.data.includes(",") ? a.data.split(",").pop() || a.data : a.data;
+            const data = getAttachmentData(a);
+            const stripped = data.includes(",") ? data.split(",").pop() || data : data;
             setSmartFillFile({ name: a.name, mimeType: a.mimeType, base64: stripped });
           }}
         />
@@ -3604,137 +3693,21 @@ export default function ChatPage() {
         </Suspense>
       )}
 
-      {/* Text input area (only shown when no attachment pending) */}
+      {/* Text input area (only shown when no attachment pending). The composer
+          owns its draft state — keystrokes no longer re-render this page. */}
       {!hasAttachments && (
-        <div className="px-3 pt-2 pb-[env(safe-area-inset-bottom,12px)] bg-background/95 backdrop-blur-sm border-t border-border/40">
-          <div className="max-w-2xl mx-auto">
-            {/* Large prominent input box */}
-            <div className="relative rounded-2xl border border-border bg-card shadow-sm focus-within:border-primary/40 focus-within:shadow-md transition-all duration-200">
-              <Textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Ask me anything..."
-                maxLength={10000}
-                className="min-h-[96px] max-h-[280px] resize-none border-0 bg-transparent px-4 pt-3.5 pb-14 text-sm leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0 rounded-2xl"
-                rows={3}
-                data-testid="input-chat"
-              />
-              {/* Action row inside the box. z-10 keeps these controls stacked
-                  ABOVE the textarea — without it, on mobile the native textarea
-                  (which extends under this row via its pb-14 padding) could
-                  swallow taps meant for the Send button, so only the Enter key
-                  worked (#2, 2026-06-25 user report). */}
-              <div className="absolute bottom-0 left-0 right-0 z-10 flex items-center justify-between px-3 pb-3">
-                <div className="flex items-center gap-0.5">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isPending}
-                    title="Attach file or image"
-                    aria-label="Attach file or image"
-                    data-testid="button-attach"
-                    className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                  >
-                    <Paperclip className="h-4 w-4" />
-                  </button>
-                  {/* Doc/Sheet creator — opens a popover with two tiles, then
-                      navigates to /editor/new/<type>?source=chat. The editor
-                      saves to the existing artifacts table; on save it surfaces
-                      both as a chat preview card and on the Artifacts page. */}
-                  <NewDocSheetButton disabled={isPending} />
-                  <button
-                    className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                    onClick={() => {
-                      // On mobile, opens camera. On desktop where `capture` is
-                      // ignored, this falls through to a normal image picker.
-                      const camera = document.getElementById('camera-capture') as HTMLInputElement | null;
-                      if (camera) {
-                        // Reset value so re-selecting the same photo re-fires onChange
-                        camera.value = '';
-                        camera.click();
-                      }
-                    }}
-                    disabled={isPending}
-                    title="Take photo / pick image"
-                    aria-label="Take photo or pick image"
-                    data-testid="button-camera"
-                  >
-                    <Camera className="h-4 w-4" />
-                  </button>
-                  {/* Search button */}
-                  <button
-                    onClick={() => setSearchOpen(v => !v)}
-                    title="Search messages"
-                    aria-label="Search messages"
-                    data-testid="button-chat-search"
-                    className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
-                      searchOpen ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
-                    }`}
-                  >
-                    <Search className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => speech.listening ? speech.stop() : speech.start()}
-                    title={!speech.supported ? 'Voice input not supported in this browser. Use Chrome or Safari.' : speech.listening ? 'Recording… click to stop' : 'Voice input'}
-                    aria-label={speech.listening ? 'Stop recording' : 'Start voice input'}
-                    data-testid="button-voice-input"
-                    className={`h-8 rounded-lg flex items-center justify-center transition-colors ${
-                      speech.listening
-                        ? 'px-2 gap-1 text-red-500 bg-red-500/10 ring-1 ring-red-500/40'
-                        : 'w-8 ' + (!speech.supported
-                          ? 'text-muted-foreground/40 cursor-not-allowed'
-                          : 'text-muted-foreground hover:text-foreground hover:bg-muted/60')
-                    }`}
-                  >
-                    {speech.listening ? (
-                      <>
-                        {/* Animated waveform bars to show the mic is live */}
-                        <span className="flex items-end gap-0.5" aria-hidden="true">
-                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-1" style={{ height: 6 }} />
-                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-2" style={{ height: 10 }} />
-                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-3" style={{ height: 14 }} />
-                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-2" style={{ height: 10 }} />
-                          <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-1" style={{ height: 6 }} />
-                        </span>
-                        <span className="text-[10px] font-medium uppercase tracking-wide">Rec</span>
-                      </>
-                    ) : (
-                      <Mic className="h-4 w-4" />
-                    )}
-                  </button>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {input.length > 9000 && (
-                    <span className={`text-xs tabular-nums ${input.length >= 10000 ? 'text-red-500 font-medium' : 'text-muted-foreground'}`} data-testid="chat-char-count">
-                      {input.length.toLocaleString()}/10,000
-                    </span>
-                  )}
-                  {messages.length > 1 && (
-                    <button
-                      onClick={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
-                      className="h-8 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors flex items-center gap-1"
-                      aria-label="Reset chat"
-                      title="Reset chat"
-                      data-testid="button-reset-chat"
-                    >
-                      <RotateCcw className="h-3 w-3" />
-                    </button>
-                  )}
-                  <Button
-                    onClick={handleSend}
-                    disabled={!input.trim() || isPending}
-                    size="sm"
-                    className="h-8 px-4 rounded-xl text-xs font-semibold gap-1.5 hover:scale-105 active:scale-95 transition-transform"
-                    data-testid="button-send"
-                  >
-                    {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Send className="h-3.5 w-3.5" /> Send</>}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ChatComposer
+          ref={composerRef}
+          onSubmit={handleSend}
+          isPending={isPending}
+          searchOpen={searchOpen}
+          onToggleSearch={() => setSearchOpen((v) => !v)}
+          onAttach={() => fileInputRef.current?.click()}
+          showReset={messages.length > 1}
+          onReset={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
+          onEmptyChange={setComposerEmpty}
+          newDocButton={<NewDocSheetButton disabled={isPending} />}
+        />
       )}
       </div>
 
