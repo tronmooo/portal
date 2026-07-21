@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { passesProfileFilter } from "@shared/profile-filter";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -695,7 +696,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
   const series = useMemo(() => {
     let list = (Array.isArray(events) ? events : []).filter(e => e.recurrence && e.recurrence !== "none");
     if (filterMode === "selected" && filterIds.length > 0) {
-      list = list.filter(e => (e.linkedProfiles || []).some((id: string) => filterIds.includes(id)));
+      list = list.filter(e => passesProfileFilter(e.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles }));
     }
     return list
       .map(e => ({ ev: e, status: seriesStatus(e, today), next: nextOccurrence(e, today) }))
