@@ -1110,11 +1110,11 @@ export default function EditorPage() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   if (loadingExisting && !isNew) {
-    return <div className="h-screen flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
+    return <div className="h-dvh flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
   }
 
   return (
-    <div className="h-screen flex flex-col bg-background">
+    <div className="h-dvh flex flex-col bg-background">
       {/* ───────────────────── Mobile-only top bar ─────────────────────
           Matches Google Sheets / Google Docs mobile chrome (IMG_0418-0420).
           For SHEETS: ‹ ↶ ↷ 👤+ 💬 ⋯

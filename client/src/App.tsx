@@ -19,6 +19,7 @@ import { initErrorReporter } from "@/lib/errorReporter";
 // Initialize error reporter immediately
 initErrorReporter();
 import { AuthProvider, useAuth, installAuthInterceptor } from "@/lib/auth";
+import { invalidateDomains, type Domain } from "@/lib/cache-bus";
 import { perfMark, perfMeasure } from "@/lib/perf-marks";
 import { Button } from "@/components/ui/button";
 import { Sun, Moon, Settings, Calendar, Lock, LogOut } from "lucide-react";

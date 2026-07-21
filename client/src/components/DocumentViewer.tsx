@@ -1316,13 +1316,13 @@ function DocumentPreviewPanel({
                 data={dataUrl}
                 type="application/pdf"
                 className="w-full"
-                style={{ height: "calc(100vh - 200px)", minHeight: "400px" }}
+                style={{ height: "calc(100dvh - 200px)", minHeight: "400px" }}
               >
                 <iframe
                   src={dataUrl}
                   title={doc.name}
                   className="w-full border-0"
-                  style={{ height: "calc(100vh - 200px)", minHeight: "400px" }}
+                  style={{ height: "calc(100dvh - 200px)", minHeight: "400px" }}
                 />
               </object>
             </div>

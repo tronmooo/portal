@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";

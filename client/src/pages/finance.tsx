@@ -32,6 +32,7 @@ import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCir
 import { cn } from "@/lib/utils";
 import { Link } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import type { Expense } from "@shared/schema";
 import {
@@ -251,7 +252,7 @@ export default function FinancePage() {
   // click handler and passed as mutation VARIABLES — captured at call time and
   // immune to re-renders. Same fix applied to paycheck + income below.
   type NewExpenseVars = { description: string; amount: number; category: string; vendor?: string; date: string; profileId?: string };
-  const addExpenseMutation = useMutation<{ amount: number; description: string }, Error, NewExpenseVars, { prev: [readonly unknown[], unknown][]; tempId: string }>({
+  const addExpenseMutation = useMutation<{ amount: number; description: string; created: any }, Error, NewExpenseVars, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async (vars) => {
       // Defense-in-depth: validate amount before sending. The submit button
       // already guards this, but if mutation is invoked any other way we
@@ -267,7 +268,7 @@ export default function FinancePage() {
       // in the user's timezone if for some reason the field is cleared.
       const expenseDate = (vars.date || "").trim()
         || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
-      await apiRequest("POST", "/api/expenses", {
+      const res = await apiRequest("POST", "/api/expenses", {
         description: desc,
         amount: vars.amount,
         category: vars.category,
@@ -276,7 +277,11 @@ export default function FinancePage() {
         tags: [],
         ...(vars.profileId ? { linkedProfiles: [vars.profileId] } : {}),
       });
-      return { amount: vars.amount, description: desc };
+      // Parse the created row so onSuccess can swap the optimistic temp id for
+      // the real server id (otherwise edit/delete on the fresh row 404s until
+      // the background refetch lands).
+      const created = await res.json().catch(() => null);
+      return { amount: vars.amount, description: desc, created };
     },
     onMutate: async (vars) => {
       const amt = vars.amount;
@@ -310,12 +315,21 @@ export default function FinancePage() {
       });
       return { prev, tempId };
     },
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
+    onSuccess: (result, _vars, ctx) => {
+      // Swap the optimistic temp row for the real server row (real id) so
+      // immediate edit/delete on it works before the refetch settles.
+      if (result.created?.id && ctx?.tempId) {
+        queryClient.setQueriesData({ queryKey: ["/api/expenses"] }, (old: any) => {
+          const swap = (e: any) => (e?.id === ctx.tempId ? { ...e, ...result.created } : e);
+          if (!old) return old;
+          if (Array.isArray(old)) return old.map(swap);
+          if (Array.isArray(old?.items)) return { ...old, items: old.items.map(swap) };
+          return old;
+        });
+      }
+      // Cache bus: one call ripples to every surface that reads expense data
+      // (dashboard KPIs, stats, budgets, cashflow, activity, insights).
+      invalidateDomain("expenses");
       toast({ title: `$${result.amount.toFixed(2)} expense added`, description: result.description });
     },
     onError: (err: Error, _v, ctx) => {
@@ -363,10 +377,8 @@ export default function FinancePage() {
       return { prev, tempId };
     },
     onSuccess: (_d, vars) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      // Cache bus: "incomes" covers paychecks + cashflow + dashboard + stats.
+      invalidateDomain("incomes");
       toast({ title: "Paycheck added", description: `${vars.source} — $${vars.amount.toFixed(2)}` });
     },
     onError: (err: Error, _v, ctx) => {
@@ -388,11 +400,9 @@ export default function FinancePage() {
       return { prev };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      // Confirming a paycheck touches income surfaces AND creates an expense-side
+      // ledger effect — bust both domains via the bus.
+      invalidateDomains("incomes", "expenses");
       toast({ title: "Paycheck confirmed" });
     },
     onError: (err: Error, _v, ctx) => {
@@ -411,10 +421,7 @@ export default function FinancePage() {
       return { prev };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/paychecks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      invalidateDomain("incomes");
       toast({ title: "Paycheck deleted" });
     },
     onError: (err: Error, _v, ctx) => {
@@ -447,11 +454,9 @@ export default function FinancePage() {
       return { prev };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/loans/schedule"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      // "obligations" covers loans/schedule + cashflow + dashboard + stats;
+      // marking a payment also writes an expense row.
+      invalidateDomains("obligations", "expenses");
       toast({ title: "Loan payment marked as paid" });
     },
     onError: (err: Error, _v, ctx) => {
@@ -522,10 +527,7 @@ export default function FinancePage() {
       return { prev, tempId };
     },
     onSuccess: ({ description, amount }) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomain("incomes");
       toast({ title: `Income added`, description: `${description} — $${amount.toFixed(2)}` });
     },
     onError: (err: Error, _v, ctx) => {
@@ -573,10 +575,7 @@ export default function FinancePage() {
       return { prev };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomain("incomes");
       toast({ title: "Income updated" });
     },
     onError: (err: Error, _v, ctx) => {
@@ -596,10 +595,7 @@ export default function FinancePage() {
       return { prev };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/incomes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomain("incomes");
       toast({ title: "Income deleted" });
     },
     onError: (err: Error, _v, ctx) => {
@@ -634,9 +630,8 @@ export default function FinancePage() {
     mutationFn: async ({ id }) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
     onSuccess: () => {
       toast({ title: "Payment recorded" });
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomain("obligations");
+      // No bus domain maps the calendar timeline to obligations — keep explicit.
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
     },
     onError: (err) => toast({ title: "Failed to record payment", description: formatApiError(err), variant: "destructive" }),
@@ -697,9 +692,10 @@ export default function FinancePage() {
       return { prev };
     },
     onSuccess: () => {
+      // No dedicated "cashflow" bus domain — keep the direct key, and let the
+      // "dashboard" domain ripple the derived surfaces (stats, insights, digest).
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      invalidateDomain("dashboard");
       toast({ title: "Cashflow entry saved" });
     },
     onError: (err: Error, _v, ctx) => {
@@ -1325,11 +1321,7 @@ export default function FinancePage() {
                     // Round-6 fix (BUG-017): persist the chosen profile linkage.
                     ...(newProfiles ? { linkedProfiles: newProfiles } : {}),
                   });
-                  queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+                  invalidateDomain("expenses");
                 } catch (err: any) {
                   for (const [key, data] of prev) queryClient.setQueryData(key, data);
                   toast({ title: "Failed to update", description: formatApiError(err), variant: "destructive" });
@@ -1995,11 +1987,7 @@ export default function FinancePage() {
                 toast({ title: `"${expense?.description}" deleted` });
                 try {
                   await apiRequest("DELETE", `/api/expenses/${targetId}`);
-                  queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/budgets/summary"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+                  invalidateDomain("expenses");
                 } catch (err: any) {
                   for (const [key, data] of prev) queryClient.setQueryData(key, data);
                   toast({ title: "Failed to delete", description: err?.message || "Unknown error", variant: "destructive" });
