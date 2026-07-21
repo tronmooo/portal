@@ -40,7 +40,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ToastAction } from "@/components/ui/toast";
+import { showUndoToast } from "@/lib/undo-delete";
 import { ListTodo, Calendar, AlertCircle, ArrowLeft, Plus, Trash2, CheckCircle2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Task, Profile } from "@shared/schema";
@@ -345,10 +345,12 @@ function TaskItem({
       queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
         (old || []).filter(t => t.id !== task.id)
       );
-      // Instant confirmation (see toggleMutation note); Undo still restores.
-      toast({
+      // Instant confirmation (see toggleMutation note). Undo rides the
+      // shared helper (8s window) and hits the server's soft-delete restore
+      // endpoint, so the row and its history come back intact.
+      showUndoToast({
         title: `"${task.title}" deleted`,
-        action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction>,
+        onUndo: () => restoreMutation.mutate(),
       });
       return { prevQueries };
     },

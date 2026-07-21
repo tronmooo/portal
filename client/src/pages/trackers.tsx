@@ -6,6 +6,7 @@ import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
+import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
@@ -1631,9 +1632,12 @@ function AddEntryDialog({
 function DeleteEntryButton({
   trackerId,
   entryId,
+  entry,
 }: {
   trackerId: string;
   entryId: string;
+  /** Full entry row — captured so the delete toast can offer Undo (P2). */
+  entry?: any;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -1655,7 +1659,37 @@ function DeleteEntryButton({
       return { prev };
     },
     onSuccess: () => {
-      toast({ title: "Entry deleted" });
+      // P2 undo: re-create the entry via the existing POST endpoint. The
+      // insert schema accepts values/notes/mood/tags/profile/timestamp, so
+      // nothing user-entered is lost (id + computed are re-derived server-side).
+      if (entry) {
+        showUndoToast({
+          title: "Entry deleted",
+          onUndo: () => recreateDeleted({
+            url: `/api/trackers/${trackerId}/entries`,
+            body: {
+              values: entry.values || {},
+              notes: entry.notes || undefined,
+              mood: entry.mood || undefined,
+              tags: entry.tags || undefined,
+              forProfile: entry.forProfile || undefined,
+              profileId: entry.profileId || undefined,
+              timestamp: entry.timestamp || undefined,
+            },
+            domains: ["trackers"],
+            queryKeyHead: "/api/trackers",
+            applyOptimistic: (old: any) => Array.isArray(old)
+              ? old.map((t: any) => t.id === trackerId
+                  ? { ...t, entries: [...(t.entries || []), entry] }
+                  : t)
+              : old,
+            successTitle: "Entry restored",
+            errorTitle: "Couldn't restore entry",
+          }),
+        });
+      } else {
+        toast({ title: "Entry deleted" });
+      }
     },
     onError: (err: Error, _v: any, ctx: any) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
@@ -1683,7 +1717,7 @@ function DeleteEntryButton({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. The entry will be permanently removed.
+              The entry will be removed. You can undo this action briefly after deletion.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -3296,7 +3330,7 @@ function EntryRow({
         <button onClick={() => setEditing(true)} className="p-0.5 rounded hover:bg-muted transition-colors" title="Edit entry">
           <Pencil className="h-3 w-3 text-muted-foreground hover:text-foreground" />
         </button>
-        <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+        <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} entry={entry} />
       </div>
     </div>
   );
@@ -4849,7 +4883,7 @@ function HistoryEntryRow({
           <Pencil className="h-3.5 w-3.5 text-muted-foreground/60 group-hover:text-foreground transition-colors" />
         </button>
         <div onClick={(e) => e.stopPropagation()}>
-          <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} />
+          <DeleteEntryButton trackerId={tracker.id} entryId={entry.id} entry={entry} />
         </div>
       </div>
     </div>

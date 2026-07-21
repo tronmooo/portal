@@ -28,9 +28,23 @@ const SmartFillDialog = lazy(() =>
 );
 const DocumentViewer = lazy(() => import("@/components/DocumentViewer"));
 const ChatChartBody = lazy(() => import("@/components/ChatChartRenderer"));
+
+// SmartFillDialog preload (QA audit, same-file fix): the lazy chunk otherwise
+// pays its fetch + JS-parse cost on first OPEN. Warm it on pointerdown of the
+// attach button instead — pointerdown fires before click, and the user then
+// spends seconds in the file picker, so the chunk is parsed long before the
+// dialog can possibly mount. Repeat calls are no-ops (dynamic import dedupes,
+// and React.lazy resolves from the warm module cache).
+let smartFillDialogPreloaded = false;
+function preloadSmartFillDialog() {
+  if (smartFillDialogPreloaded) return;
+  smartFillDialogPreloaded = true;
+  import("@/components/SmartFillDialog").catch(() => { smartFillDialogPreloaded = false; });
+}
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ChatComposer, type ChatComposerHandle } from "@/components/chat/ChatComposer";
+import { streamChat } from "@/components/chat/chat-stream";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -2578,6 +2592,16 @@ const MessageRow = memo(function MessageRow({
   );
 });
 
+// Live streaming scratch state (P0 streaming fix). Mirrors the pieces of the
+// final assistant message that can be painted before the `final` frame lands:
+// running text, incrementally-arrived action cards, and in-flight tool labels.
+interface LiveStreamState {
+  text: string;
+  actions: NonNullable<ChatMessage["actions"]>;
+  runningTools: Array<{ tool: string; label?: string }>;
+  startedAt: string;
+}
+
 export default function ChatPage() {
   useEffect(() => { document.title = "Chat — Portol"; }, []);
   useEffect(() => {
@@ -2650,6 +2674,44 @@ export default function ChatPage() {
   const addMoreFileInputRef = useRef<HTMLInputElement>(null);
   const batchIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const queryClient = useQueryClient();
+
+  // ── Live chat streaming (P0: chat had NO streaming) ────────────────────────
+  // SSE frames mutate liveStreamRef (cheap, no render) and a ~80ms trailing
+  // flush copies it into React state — token deltas never render per-chunk.
+  // The live bubble is scratch UI only: the `final` frame resolves the
+  // mutation, onSuccess appends the REAL assistant message exactly as before,
+  // and onSettled clears the scratch (after onSuccess, so there's no gap
+  // between the live bubble disappearing and the final message appearing).
+  const liveStreamRef = useRef<LiveStreamState | null>(null);
+  // Set when a new model round starts: only the LAST text-bearing round is the
+  // final reply (server-side contract), so the next delta resets the buffer.
+  const liveResetPendingRef = useRef(false);
+  const liveFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [liveStream, setLiveStream] = useState<LiveStreamState | null>(null);
+  const scheduleLiveFlush = useCallback(() => {
+    if (liveFlushTimerRef.current != null) return;
+    liveFlushTimerRef.current = setTimeout(() => {
+      liveFlushTimerRef.current = null;
+      const cur = liveStreamRef.current;
+      setLiveStream(cur ? { ...cur, actions: [...cur.actions], runningTools: [...cur.runningTools] } : null);
+    }, 80);
+  }, []);
+  const beginLiveStream = useCallback(() => {
+    liveStreamRef.current = { text: "", actions: [], runningTools: [], startedAt: new Date().toISOString() };
+    liveResetPendingRef.current = false;
+  }, []);
+  const endLiveStream = useCallback(() => {
+    liveStreamRef.current = null;
+    liveResetPendingRef.current = false;
+    if (liveFlushTimerRef.current != null) {
+      clearTimeout(liveFlushTimerRef.current);
+      liveFlushTimerRef.current = null;
+    }
+    setLiveStream(null);
+  }, []);
+  useEffect(() => () => {
+    if (liveFlushTimerRef.current != null) clearTimeout(liveFlushTimerRef.current);
+  }, []);
 
   // Inline editing of a logged tracker-entry directly from its chat result
   // card (change duration / intensity / calories, add or remove a field).
@@ -2724,12 +2786,46 @@ export default function ChatPage() {
       // Scope the AI to the active profile selection (empty array ⇒ household/
       // everyone, which the server treats as unscoped). See chatScopeRef above.
       const profileFilterIds = chatScopeRef.current;
-      const res = await apiRequest("POST", "/api/chat", {
-        message,
-        history,
-        ...(profileFilterIds.length > 0 ? { profileFilterIds } : {}),
-      });
-      return res.json();
+      // Streaming send (P0 fix): POST with SSE opt-in and paint frames as they
+      // arrive. streamChat resolves with the SAME body the old buffered
+      // `apiRequest → res.json()` returned — including when it talks to an
+      // old server that answers plain JSON — so onSuccess/onError below are
+      // untouched. On a mid-flight stream failure it rejects and the existing
+      // failed/retry affordance in onError takes over.
+      beginLiveStream();
+      return await streamChat(
+        {
+          message,
+          history,
+          ...(profileFilterIds.length > 0 ? { profileFilterIds } : {}),
+        },
+        {
+          onRound: () => { liveResetPendingRef.current = true; },
+          onAssistantDelta: (text) => {
+            const cur = liveStreamRef.current;
+            if (!cur) return;
+            if (liveResetPendingRef.current) { cur.text = ""; liveResetPendingRef.current = false; }
+            cur.text += text;
+            scheduleLiveFlush();
+          },
+          onToolStart: (frame) => {
+            const cur = liveStreamRef.current;
+            if (!cur) return;
+            cur.runningTools.push(frame);
+            scheduleLiveFlush();
+          },
+          onToolResult: (frame) => {
+            const cur = liveStreamRef.current;
+            if (!cur) return;
+            const idx = cur.runningTools.findIndex((t) => t.tool === frame.tool);
+            if (idx !== -1) cur.runningTools.splice(idx, 1);
+            // Merge finished tool cards incrementally — the frame carries the
+            // exact ParsedAction the final payload will contain.
+            if (frame.ok && frame.action) cur.actions.push(frame.action);
+            scheduleLiveFlush();
+          },
+        },
+      );
     },
     onSuccess: (data) => {
       const assistantMsg: any = {
@@ -2784,8 +2880,10 @@ export default function ChatPage() {
       invalidateAll();
     },
     // Release the synchronous send lock once the round-trip resolves (success
-    // or error), so the next message can be sent.
-    onSettled: () => { sendingRef.current = false; },
+    // or error), so the next message can be sent. The live-stream scratch is
+    // cleared HERE (after onSuccess appended the real message / onError
+    // appended the failure notice) so the swap is a single paint, no gap.
+    onSettled: () => { sendingRef.current = false; endLiveStream(); },
   });
 
   // Retry a failed send: clear the failed flag on the same bubble and re-POST.
@@ -3077,6 +3175,17 @@ export default function ChatPage() {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }, [messages]);
+
+  // Keep the transcript pinned to the bottom while the live-streamed bubble
+  // grows — same at-bottom guard as the append effect above, so a reader
+  // scrolled up into history is never yanked back down by token deltas.
+  useEffect(() => {
+    if (!liveStream) return;
+    const el = scrollRef.current;
+    if (el && atBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "instant" as ScrollBehavior });
+    }
+  }, [liveStream]);
 
   const handleTranscriptScroll = () => {
     const el = scrollRef.current;
@@ -3557,7 +3666,39 @@ export default function ChatPage() {
             );
           })}
 
-          {/* Typing indicator */}
+          {/* Live streaming assistant bubble (P0 fix): paints text tokens and
+              tool cards as SSE frames arrive instead of a 170s silent wait.
+              Rendered through the same MessageRow as finished messages, so
+              incremental action cards look identical to the final ones. The
+              bubble is scratch — onSuccess swaps in the real message and
+              onSettled clears this in the same paint. */}
+          {liveStream && (liveStream.text.trim() || liveStream.actions.length > 0) && (
+            <MessageRow
+              msg={{
+                id: "live-stream",
+                role: "assistant",
+                content: liveStream.text,
+                timestamp: liveStream.startedAt,
+                ...(liveStream.actions.length > 0 ? { actions: liveStream.actions } : {}),
+              } as ChatMessage}
+              setActiveArtifact={setActiveArtifact}
+              setSmartFillFile={setSmartFillFile}
+              handleConfirmExtraction={handleConfirmExtraction}
+              handleSkipExtraction={handleSkipExtraction}
+              setMessages={setMessages}
+              onRetry={handleRetryMessage}
+              editingEntryId={null}
+              entryEditVals={EMPTY_ENTRY_VALS}
+              entryNewField={EMPTY_ENTRY_NEW_FIELD}
+              setEditingEntryId={setEditingEntryId}
+              setEntryEditVals={setEntryEditVals}
+              setEntryNewField={setEntryNewField}
+              saveEntryEdit={saveEntryEdit}
+            />
+          )}
+
+          {/* Typing indicator — while a tool runs, names it (live progress)
+              instead of the anonymous bouncing dots. */}
           {isPending && (
             <div className="flex items-start gap-2">
               <div className="bg-muted rounded-lg px-3 py-2">
@@ -3567,7 +3708,18 @@ export default function ChatPage() {
                     <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '150ms'}} />
                     <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '300ms'}} />
                   </div>
-                  <SlowResponseHint />
+                  {liveStream && liveStream.runningTools.length > 0 ? (
+                    <span className="text-xs text-muted-foreground truncate max-w-[240px]" data-testid="live-tool-indicator">
+                      {(() => {
+                        const t = liveStream.runningTools[liveStream.runningTools.length - 1];
+                        const label = (t.label || "").trim();
+                        const name = t.tool.replace(/_/g, " ");
+                        return label && label !== t.tool ? `${name}: ${label}…` : `${name}…`;
+                      })()}
+                    </span>
+                  ) : (
+                    <SlowResponseHint />
+                  )}
                 </div>
               </div>
             </div>
@@ -3703,6 +3855,7 @@ export default function ChatPage() {
           searchOpen={searchOpen}
           onToggleSearch={() => setSearchOpen((v) => !v)}
           onAttach={() => fileInputRef.current?.click()}
+          onAttachPointerDown={preloadSmartFillDialog}
           showReset={messages.length > 1}
           onReset={() => { clearChatCache(); setMessagesRaw([WELCOME_MSG]); }}
           onEmptyChange={setComposerEmpty}

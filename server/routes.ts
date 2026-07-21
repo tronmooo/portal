@@ -893,6 +893,43 @@ export async function registerRoutes(
     if (rateLimit(`chat:${userId}`, 20)) {
       return res.status(429).json({ error: "Too many requests. Please wait a moment." });
     }
+    // ── Streaming opt-in (P0: chat had NO streaming) ──────────────────────
+    // Clients that send `Accept: text/event-stream` or `?stream=1` get an SSE
+    // response: an immediate `ack` frame, incremental `round` /
+    // `assistant_delta` / `tool_start` / `tool_result` frames from the AI
+    // engine, keepalive comments every 15s (so proxies don't kill long tool
+    // runs), then a `final` frame carrying the EXACT JSON body the buffered
+    // path returns. Clients that don't opt in (old iOS Capacitor builds) get
+    // the original buffered JSON response — that path is byte-identical to
+    // before. `sse` stays null until validation passes, so all early-exit
+    // errors below remain plain JSON with real status codes (the streaming
+    // client feature-detects the content type before reading frames).
+    const wantsStream =
+      String(req.headers["accept"] || "").includes("text/event-stream") ||
+      String((req.query as any)?.stream || "") === "1";
+    type SseHandle = { send: (event: string, data: unknown) => void; end: () => void };
+    let sse: SseHandle | null = null;
+    const beginSse = (): SseHandle => {
+      res.status(200);
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      // Disable proxy/nginx buffering so frames flush immediately.
+      res.setHeader("X-Accel-Buffering", "no");
+      (res as any).flushHeaders?.();
+      const write = (chunk: string) => { if (!res.writableEnded) res.write(chunk); };
+      const send = (event: string, data: unknown) => write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      const heartbeat = setInterval(() => write(`: keepalive\n\n`), 15_000);
+      (heartbeat as any).unref?.();
+      res.on("close", () => clearInterval(heartbeat));
+      const handle: SseHandle = {
+        send,
+        end: () => { clearInterval(heartbeat); if (!res.writableEnded) res.end(); },
+      };
+      // First-token target ≤800ms: the ack ships before any AI work starts.
+      send("ack", { ok: true });
+      return handle;
+    };
     try {
       const { message, history } = req.body;
       if (!message || typeof message !== "string") {
@@ -931,6 +968,10 @@ export async function registerRoutes(
         setIdem(userId, idem, { status: "pending", expires: Date.now() + IDEM_TTL_MS });
       }
 
+      // Validation passed — switch to SSE mode now (headers flush, ack frame,
+      // heartbeat timer) before any AI latency accrues.
+      if (wantsStream) sse = beginSse();
+
       // Pass user's timezone to AI engine so all date operations use the correct local date
       const tz = getTimezone(req);
       (storage as any)._timezone = tz;
@@ -955,7 +996,12 @@ export async function registerRoutes(
       })();
       const cleanMessage = sanitize(message);
       const [result, classification] = await Promise.all([
-        (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, { profileFilterIds }),
+        (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, {
+          profileFilterIds,
+          // Forward engine progress frames (round / assistant_delta /
+          // tool_start / tool_result) straight onto the SSE stream.
+          ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),
+        }),
         classifierContextPromise.then(ctx => classifyCapture(cleanMessage, ctx).catch(err => {
           console.warn("[classifyCapture] swallowed error:", (err as Error).message);
           return null;
@@ -1067,25 +1113,39 @@ export async function registerRoutes(
         const scoped = rs.find((r) => r && typeof r === "object" && (r as any).scope);
         if (scoped) (result as any).scope = (scoped as any).scope;
       } catch { /* non-fatal */ }
+      if (sse) {
+        // Streaming finalization: the `final` frame carries the EXACT object
+        // the buffered path would have sent via res.json — the client's
+        // completion handling is identical either way.
+        sse.send("final", result);
+        sse.end();
+        return;
+      }
       res.json(result);
     } catch (err: any) {
       const msg = err?.message || "unknown error";
       log.error("[Chat]", msg);
-      // Provide actionable error messages based on error type
+      // Provide actionable error messages based on error type. In SSE mode
+      // headers are already sent (200), so errors are delivered as an `error`
+      // frame carrying the same status + body the buffered path returns.
+      const fail = (status: number, body: { error: string; reply: string }) => {
+        if (sse) { sse.send("error", { status, ...body }); sse.end(); return; }
+        res.status(status).json(body);
+      };
       const status = err?.status || err?.error?.status || 500;
       if (status === 529 || status === 503 || msg.includes('overloaded')) {
-        return res.status(503).json({ error: "The AI is temporarily busy. Please try again in a few seconds.", reply: "I'm a bit overloaded right now. Could you try again in a moment?" });
+        return fail(503, { error: "The AI is temporarily busy. Please try again in a few seconds.", reply: "I'm a bit overloaded right now. Could you try again in a moment?" });
       }
       if (status === 429) {
-        return res.status(429).json({ error: "Rate limit reached. Please wait a moment.", reply: "I need a short break. Please try again in about 30 seconds." });
+        return fail(429, { error: "Rate limit reached. Please wait a moment.", reply: "I need a short break. Please try again in about 30 seconds." });
       }
       if (msg.includes('timeout') || msg.includes('ETIMEDOUT')) {
-        return res.status(504).json({ error: "Request timed out.", reply: "That took too long. Could you try a simpler question, or try again?" });
+        return fail(504, { error: "Request timed out.", reply: "That took too long. Could you try a simpler question, or try again?" });
       }
       // S3 fix: never leak internal error details to clients. Log to stderr instead.
       // Previously we surfaced `detail: <raw msg>` outside production, which exposed
       // SDK errors / stack traces / DB column names if NODE_ENV was misconfigured.
-      res.status(500).json({ error: "Failed to process message", reply: "Something went wrong. Please try again." });
+      fail(500, { error: "Failed to process message", reply: "Something went wrong. Please try again." });
     }
   }));
 

@@ -14,7 +14,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ToastAction } from "@/components/ui/toast";
+import { showUndoToast } from "@/lib/undo-delete";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
@@ -208,7 +208,12 @@ function HabitCard({ habit }: { habit: Habit }) {
       return { prev };
     },
     onSuccess: () => {
-      toast({ title: `"${habit.name}" deleted`, action: <ToastAction altText="Undo" onClick={() => restoreMutation.mutate()}>Undo</ToastAction> });
+      // Undo rides the shared helper (8s window) and hits the server's
+      // soft-delete restore endpoint (PATCH /api/habits/:id/restore).
+      showUndoToast({
+        title: `"${habit.name}" deleted`,
+        onUndo: () => restoreMutation.mutate(),
+      });
     },
     onError: (err: Error, _v: unknown, ctx: any) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }

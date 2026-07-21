@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import { Link } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
+import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { useToast } from "@/hooks/use-toast";
 import type { Expense } from "@shared/schema";
 import {
@@ -197,9 +198,10 @@ export default function FinancePage() {
   }, [editingExpense?.id]);
   const [editSaving, setEditSaving] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  // U2 fix: confirmation state for paycheck deletion. Holds the paycheck object
-  // pending confirmation, or null when no dialog is showing.
-  const [paycheckToDelete, setPaycheckToDelete] = useState<{ id: string; source: string; amount: number } | null>(null);
+  // U2 fix: confirmation state for paycheck deletion. Holds the FULL paycheck
+  // row pending confirmation (P2 undo needs every field for the re-create),
+  // or null when no dialog is showing.
+  const [paycheckToDelete, setPaycheckToDelete] = useState<any | null>(null);
   const [addPaycheckOpen, setAddPaycheckOpen] = useState(false);
   const [newPaycheck, setNewPaycheck] = useState({ source: "", amount: "", expectedDate: "" });
 
@@ -210,7 +212,9 @@ export default function FinancePage() {
   const [newIncome, setNewIncome] = useState({ description: "", amount: "", category: "salary", frequency: "monthly", date: "", profileId: "" });
   const [editingIncome, setEditingIncome] = useState<any | null>(null);
   const [editIncomeForm, setEditIncomeForm] = useState({ description: "", amount: "", category: "salary", frequency: "monthly", date: "", profileId: "" });
-  const [incomeToDelete, setIncomeToDelete] = useState<{ id: string; description: string; amount: number } | null>(null);
+  // P2 undo: hold the FULL income row (not just id/description/amount) so the
+  // delete mutation can capture everything the restore re-create needs.
+  const [incomeToDelete, setIncomeToDelete] = useState<any | null>(null);
   useEffect(() => {
     if (editingIncome) {
       // Bug #18 (income subset): re-seed every time the income changes so the
@@ -410,19 +414,49 @@ export default function FinancePage() {
       toast({ title: "Failed to confirm paycheck", description: formatApiError(err), variant: "destructive" });
     },
   });
-  const deletePaycheckMut = useMutation<string, Error, string, { prev: [readonly unknown[], unknown][] }>({
-    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/paychecks/${id}`); return id; },
-    onMutate: async (id) => {
+  // P2 undo: variables carry the FULL paycheck row so the delete toast can
+  // offer Undo — restore re-creates via POST /api/paychecks and, if the
+  // deleted paycheck had already been marked received, re-confirms it.
+  const deletePaycheckMut = useMutation<any, Error, any, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: async (pc: any) => { await apiRequest("DELETE", `/api/paychecks/${pc.id}`); return pc; },
+    onMutate: async (pc) => {
       await queryClient.cancelQueries({ queryKey: ["/api/paychecks"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/paychecks"] });
       queryClient.setQueriesData({ queryKey: ["/api/paychecks"] }, (old: any) =>
-        Array.isArray(old) ? old.filter((item: any) => item.id !== id) : old
+        Array.isArray(old) ? old.filter((item: any) => item.id !== pc.id) : old
       );
       return { prev };
     },
-    onSuccess: () => {
+    onSuccess: (_d, pc) => {
       invalidateDomain("incomes");
-      toast({ title: "Paycheck deleted" });
+      showUndoToast({
+        title: "Paycheck deleted",
+        description: `${pc.source} — $${Number(pc.actual_amount ?? pc.amount ?? 0).toFixed(2)}`,
+        onUndo: async () => {
+          const created = await recreateDeleted<any>({
+            url: "/api/paychecks",
+            body: {
+              source: pc.source,
+              amount: Number(pc.amount),
+              expected_date: pc.expected_date,
+              notes: pc.notes || undefined,
+            },
+            domains: ["incomes"],
+            queryKeyHead: "/api/paychecks",
+            applyOptimistic: (old: any) => Array.isArray(old) ? [pc, ...old] : old,
+            successTitle: "Paycheck restored",
+            errorTitle: "Couldn't restore paycheck",
+          });
+          // The create route can't set confirmed/actual_amount — replay the
+          // confirmation so a received paycheck comes back received.
+          if (created?.id && pc.confirmed) {
+            try {
+              await apiRequest("PATCH", `/api/paychecks/${created.id}/confirm`, { actual_amount: pc.actual_amount });
+            } catch { /* best-effort — the row itself is restored */ }
+            invalidateDomain("incomes");
+          }
+        },
+      });
     },
     onError: (err: Error, _v, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
@@ -584,19 +618,43 @@ export default function FinancePage() {
     },
   });
 
-  const deleteIncomeMut = useMutation<string, Error, string, { prev: [readonly unknown[], unknown][] }>({
-    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/incomes/${id}`); return id; },
-    onMutate: async (id) => {
+  // P2 undo: variables carry the FULL income row (not just the id) so the
+  // delete toast can offer Undo — restore re-creates via POST /api/incomes
+  // (the insert schema accepts every user-entered field; only id/createdAt
+  // are server-generated).
+  const deleteIncomeMut = useMutation<any, Error, any, { prev: [readonly unknown[], unknown][] }>({
+    mutationFn: async (income: any) => { await apiRequest("DELETE", `/api/incomes/${income.id}`); return income; },
+    onMutate: async (income) => {
       await queryClient.cancelQueries({ queryKey: ["/api/incomes"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/incomes"] });
       queryClient.setQueriesData({ queryKey: ["/api/incomes"] }, (old: any) =>
-        Array.isArray(old) ? old.filter((i: any) => i.id !== id) : old
+        Array.isArray(old) ? old.filter((i: any) => i.id !== income.id) : old
       );
       return { prev };
     },
-    onSuccess: () => {
+    onSuccess: (_d, income) => {
       invalidateDomain("incomes");
-      toast({ title: "Income deleted" });
+      showUndoToast({
+        title: "Income deleted",
+        description: `${income.description} — $${Number(income.amount || 0).toFixed(2)}`,
+        onUndo: () => recreateDeleted({
+          url: "/api/incomes",
+          body: {
+            description: income.description,
+            amount: Number(income.amount),
+            category: income.category || "salary",
+            frequency: income.frequency || "monthly",
+            date: income.date ? String(income.date).slice(0, 10) : undefined,
+            tags: income.tags || [],
+            linkedProfiles: income.linkedProfiles || [],
+          },
+          domains: ["incomes"],
+          queryKeyHead: "/api/incomes",
+          applyOptimistic: (old: any) => Array.isArray(old) ? [income, ...old] : old,
+          successTitle: `"${income.description}" restored`,
+          errorTitle: "Couldn't restore income",
+        }),
+      });
     },
     onError: (err: Error, _v, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
@@ -1409,7 +1467,7 @@ export default function FinancePage() {
                         type="button"
                         disabled={deletePaycheckMut.isPending}
                         data-testid={`btn-delete-paycheck-${pc.id}`}
-                        onClick={stopProp(() => setPaycheckToDelete({ id: pc.id, source: pc.source, amount: (pc.actual_amount || pc.amount) }))}>
+                        onClick={stopProp(() => setPaycheckToDelete(pc))}>
                         {deletePaycheckMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Delete
                       </Button>
                     </div>
@@ -1495,7 +1553,7 @@ export default function FinancePage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={stopProp(() => setEditingIncome(inc))} data-testid={`btn-edit-income-${inc.id}`}><Pencil className="h-3 w-3" /> Edit</Button>
-                      <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-destructive" disabled={deleteIncomeMut.isPending} onClick={stopProp(() => setIncomeToDelete({ id: inc.id, description: inc.description, amount: Number(inc.amount || 0) }))} data-testid={`btn-delete-income-${inc.id}`}>
+                      <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-destructive" disabled={deleteIncomeMut.isPending} onClick={stopProp(() => setIncomeToDelete(inc))} data-testid={`btn-delete-income-${inc.id}`}>
                         {deleteIncomeMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Delete
                       </Button>
                     </div>
@@ -1699,7 +1757,7 @@ export default function FinancePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this income?</AlertDialogTitle>
             <AlertDialogDescription>
-              {incomeToDelete ? `"${incomeToDelete.description}" ($${incomeToDelete.amount.toLocaleString()}) will be permanently deleted.` : "This income will be permanently deleted."}
+              {incomeToDelete ? `"${incomeToDelete.description}" ($${Number(incomeToDelete.amount || 0).toLocaleString()}) will be permanently deleted.` : "This income will be permanently deleted."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1708,7 +1766,7 @@ export default function FinancePage() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="btn-confirm-delete-income"
               onClick={() => {
-                if (incomeToDelete) deleteIncomeMut.mutate(incomeToDelete.id);
+                if (incomeToDelete) deleteIncomeMut.mutate(incomeToDelete);
                 setIncomeToDelete(null);
               }}
             >Delete</AlertDialogAction>
@@ -1937,7 +1995,7 @@ export default function FinancePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this paycheck?</AlertDialogTitle>
             <AlertDialogDescription>
-              {paycheckToDelete ? `“${paycheckToDelete.source}” ($${paycheckToDelete.amount.toLocaleString()}) will be permanently deleted.` : "This paycheck will be permanently deleted."}
+              {paycheckToDelete ? `“${paycheckToDelete.source}” ($${Number(paycheckToDelete.actual_amount ?? paycheckToDelete.amount ?? 0).toLocaleString()}) will be permanently deleted.` : "This paycheck will be permanently deleted."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1946,7 +2004,7 @@ export default function FinancePage() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               data-testid="btn-confirm-delete-paycheck"
               onClick={() => {
-                if (paycheckToDelete) deletePaycheckMut.mutate(paycheckToDelete.id);
+                if (paycheckToDelete) deletePaycheckMut.mutate(paycheckToDelete);
                 setPaycheckToDelete(null);
               }}
             >Delete</AlertDialogAction>
@@ -1984,7 +2042,40 @@ export default function FinancePage() {
                     return old;
                   }
                 );
-                toast({ title: `"${expense?.description}" deleted` });
+                // P2 undo: the full expense row is captured client-side, so the
+                // toast offers Undo — restore re-creates via POST /api/expenses
+                // (id/createdAt are server-generated and stripped; everything
+                // the insert schema accepts is preserved).
+                if (expense) {
+                  const exp: any = expense;
+                  showUndoToast({
+                    title: `"${exp.description}" deleted`,
+                    onUndo: () => recreateDeleted({
+                      url: "/api/expenses",
+                      body: {
+                        description: exp.description,
+                        amount: Number(exp.amount),
+                        category: exp.category || "general",
+                        vendor: exp.vendor || undefined,
+                        isRecurring: exp.isRecurring || undefined,
+                        date: exp.date ? String(exp.date).slice(0, 10) : undefined,
+                        tags: exp.tags || [],
+                        linkedProfiles: exp.linkedProfiles || [],
+                      },
+                      domains: ["expenses"],
+                      queryKeyHead: "/api/expenses",
+                      applyOptimistic: (old: any) => {
+                        if (Array.isArray(old)) return [exp, ...old];
+                        if (Array.isArray(old?.items)) return { ...old, items: [exp, ...old.items] };
+                        return old;
+                      },
+                      successTitle: `"${exp.description}" restored`,
+                      errorTitle: "Couldn't restore expense",
+                    }),
+                  });
+                } else {
+                  toast({ title: "Expense deleted" });
+                }
                 try {
                   await apiRequest("DELETE", `/api/expenses/${targetId}`);
                   invalidateDomain("expenses");

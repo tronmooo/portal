@@ -108,6 +108,9 @@ interface ChatComposerProps {
   onToggleSearch: () => void;
   /** Open the hidden file input (lives in the parent next to its handlers). */
   onAttach: () => void;
+  /** Fires on pointerdown of the attach button — before click — so the parent
+   *  can warm lazy chunks (e.g. SmartFillDialog) ahead of first open. */
+  onAttachPointerDown?: () => void;
   showReset: boolean;
   onReset: () => void;
   /** Fires only when the draft flips between empty and non-empty. */
@@ -123,6 +126,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     searchOpen,
     onToggleSearch,
     onAttach,
+    onAttachPointerDown,
     showReset,
     onReset,
     onEmptyChange,
@@ -207,6 +211,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             <div className="flex items-center gap-0.5">
               <button
                 onClick={onAttach}
+                onPointerDown={onAttachPointerDown}
                 disabled={isPending}
                 title="Attach file or image"
                 aria-label="Attach file or image"

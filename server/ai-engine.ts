@@ -12218,7 +12218,38 @@ async function runBulkLogPath(
 // MAIN AI PROCESSING — tool_use loop
 // ============================================================
 
-export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: { profileFilterIds?: string[] }): Promise<{
+/**
+ * Incremental progress frames emitted while a chat turn runs (P0 streaming fix).
+ * The consumer (routes.ts /api/chat?stream=1) forwards these verbatim as SSE
+ * frames so the client can paint tokens and tool cards as they happen instead
+ * of staring at a spinner for the full multi-round turn.
+ *
+ *  - round            → a new model round-trip is starting. The client resets
+ *                       its live text buffer on the NEXT delta (only the last
+ *                       text-bearing round becomes the final reply — see the
+ *                       textReply handling in the loop below).
+ *  - assistant_delta  → a streamed text token/chunk from the current round.
+ *  - tool_start       → a tool call is about to execute (name + display label).
+ *  - tool_result      → a tool call finished; carries the same ParsedAction /
+ *                       OperationOutcome objects the buffered response will
+ *                       contain, so cards render identically live and final.
+ *
+ * Emission is best-effort: a throwing listener must never break the turn.
+ */
+export type ChatStreamEvent =
+  | { type: "round"; iteration: number }
+  | { type: "assistant_delta"; text: string }
+  | { type: "tool_start"; tool: string; label: string }
+  | {
+      type: "tool_result";
+      tool: string;
+      ok: boolean;
+      error?: string;
+      action?: ParsedAction;
+      operation?: OperationOutcome;
+    };
+
+export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: { profileFilterIds?: string[]; onEvent?: (ev: ChatStreamEvent) => void }): Promise<{
   reply: string;
   actions: ParsedAction[];
   results: any[];
@@ -12230,6 +12261,16 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   artifact?: any;
   operations?: OperationOutcome[];
 }> {
+  // Streaming progress emitter — no-op unless the caller opted into SSE
+  // (routes.ts /api/chat?stream=1). A throwing listener must never break the
+  // turn, so every emission is wrapped. Fast paths (doc-open, bulk) don't
+  // token-stream — they return quickly and the caller's `final` frame covers
+  // them; only the main agentic loop below emits incremental frames.
+  const emitEvent = (ev: ChatStreamEvent) => {
+    try { options?.onEvent?.(ev); } catch { /* never break the turn */ }
+  };
+  const streamingEnabled = typeof options?.onEvent === "function";
+
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
   const lower = userMessage.toLowerCase().trim();
@@ -13073,15 +13114,40 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       let response;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          response = await getClient().messages.create({
-            model: chatModel,
-            // 8192 lets the model emit 30-40 tool_use blocks in ONE response,
-            // so long multi-action messages don't need extra round-trips.
-            max_tokens: 8192,
-            system: systemPrompt,
-            tools: TOOL_DEFINITIONS,
-            messages,
-          });
+          if (streamingEnabled) {
+            // SSE path: stream the model response so text tokens reach the
+            // client as they're generated. `round` is emitted per ATTEMPT
+            // (not per iteration) so a mid-stream retry resets the client's
+            // live text buffer instead of duplicating partial deltas. The
+            // MessageStream helper accumulates the full message, so
+            // `finalMessage()` yields the exact same object shape the
+            // buffered `messages.create` call returns — the rest of the loop
+            // is untouched.
+            emitEvent({ type: "round", iteration: iterations });
+            const modelStream = getClient().messages.stream({
+              model: chatModel,
+              // 8192 lets the model emit 30-40 tool_use blocks in ONE response,
+              // so long multi-action messages don't need extra round-trips.
+              max_tokens: 8192,
+              system: systemPrompt,
+              tools: TOOL_DEFINITIONS,
+              messages,
+            });
+            modelStream.on("text", (delta) => {
+              if (delta) emitEvent({ type: "assistant_delta", text: delta });
+            });
+            response = await modelStream.finalMessage();
+          } else {
+            response = await getClient().messages.create({
+              model: chatModel,
+              // 8192 lets the model emit 30-40 tool_use blocks in ONE response,
+              // so long multi-action messages don't need extra round-trips.
+              max_tokens: 8192,
+              system: systemPrompt,
+              tools: TOOL_DEFINITIONS,
+              messages,
+            });
+          }
           break; // Success
         } catch (retryErr: any) {
           const status = retryErr?.status || retryErr?.error?.status || 0;
@@ -13157,9 +13223,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
             allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Tool call limit reached" });
           }
+          emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: "Tool call limit reached" });
           continue;
         }
         totalToolCalls++;
+        emitEvent({ type: "tool_start", tool: toolUse.name, label: opRawLabel(toolUse) });
 
         try {
           // Validate input before executing
@@ -13172,6 +13240,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             if (!READ_ONLY_TOOLS.has(toolUse.name)) {
               allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: errorResult.error });
             }
+            emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: errorResult.error });
             continue;
           }
           if (validation.warnings.length > 0) {
@@ -13220,6 +13289,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const inp = toolUse.input as Record<string, any>;
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
           // Only count as a real action if it succeeded (no error field)
+          // Captured so the tool_result stream frame carries the exact same
+          // ParsedAction object the buffered response will contain.
+          let actionForStream: ParsedAction | undefined;
           if (result && !result.error) {
             // Forward revert metadata so the chat UI can render an Undo/Revert
             // button. _previousState is set by tools that support reversal
@@ -13246,7 +13318,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               // else's item.
               if (ownerInfo && !ownerInfo.isSelf) (result as any).owner = ownerInfo.name;
             } catch { /* attribution is best-effort */ }
-            allActions.push({
+            actionForStream = {
               type: actionType,
               category: "ai",
               data: {
@@ -13262,7 +13334,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 ...((result as any)?.trackerId ? { _trackerId: (result as any).trackerId } : {}),
                 ...(previousState ? { _previousState: previousState } : {}),
               },
-            });
+            };
+            allActions.push(actionForStream);
             allResults.push(result);
           }
           if (validation.warnings.length > 0 && result) {
@@ -13303,8 +13376,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             content: JSON.stringify(isSuccess ? summarizeResult(result) : (result?.error ? { error: result.error } : { error: "Action failed — data was not saved. Tell the user it didn't work." })),
             is_error: !isSuccess,
           });
+          let operationForStream: OperationOutcome | undefined;
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
-            allOperations.push({
+            operationForStream = {
               index: allOperations.length,
               raw: opRawLabel(toolUse),
               tool: toolUse.name,
@@ -13313,8 +13387,17 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               entityId: isSuccess ? (entityId || undefined) : undefined,
               trackerName: inp.trackerName ? String(inp.trackerName) : undefined,
               createdTracker: isSuccess && (result as any)?.__createdTracker?.id ? (result as any).__createdTracker : undefined,
-            });
+            };
+            allOperations.push(operationForStream);
           }
+          emitEvent({
+            type: "tool_result",
+            tool: toolUse.name,
+            ok: isSuccess,
+            error: isSuccess ? undefined : (result?.error || "Action failed — data was not saved"),
+            action: actionForStream,
+            operation: operationForStream,
+          });
         } catch (err: any) {
           console.error(`Tool ${toolUse.name} failed:`, err.message);
           toolResults.push({
@@ -13326,6 +13409,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
             allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: err.message });
           }
+          emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: err.message });
         }
       }
 
