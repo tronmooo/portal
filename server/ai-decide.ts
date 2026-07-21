@@ -27,6 +27,7 @@
 // ============================================================
 
 import Anthropic from "@anthropic-ai/sdk";
+import { selectModel, anthropicSpec, callModel, type TaskKind } from "./model-router";
 
 // Re-use the engine's lazy client so we don't double-init the SDK.
 let _client: Anthropic | null = null;
@@ -68,6 +69,13 @@ export interface AIDecideOptions<T> {
   validate?: (parsed: unknown) => boolean;
   /** Optional cap on prompt length — if exceeded, skip AI entirely and go straight to fallback. Default 8000 chars. */
   maxPromptChars?: number;
+  /**
+   * How to route this decision across providers (see model-router.ts).
+   * Defaults to "fast" — cheap, high-volume JSON decisions. Use "reasoning"
+   * for nuanced calls that deserve the strongest available model.
+   * Ignored when `model` is set explicitly (that forces a specific Claude model).
+   */
+  taskKind?: TaskKind;
 }
 
 /**
@@ -81,10 +89,11 @@ export async function aiDecide<T>(opts: AIDecideOptions<T>): Promise<AIDecisionR
     user,
     fallback,
     timeoutMs = 4000,
-    model = "claude-haiku-4-5-20251001",
+    model,
     maxTokens = 200,
     validate,
     maxPromptChars = 8000,
+    taskKind = "fast",
   } = opts;
 
   const t0 = Date.now();
@@ -106,28 +115,42 @@ export async function aiDecide<T>(opts: AIDecideOptions<T>): Promise<AIDecisionR
     return runFallback("fallback", `prompt too long (${system.length + user.length} > ${maxPromptChars})`);
   }
 
-  let client: Anthropic;
-  try { client = getClient(); }
-  catch (e: any) { return runFallback("ai-error-fallback", `client init failed: ${e?.message || e}`); }
-
-  // Race API call vs timeout.
-  let raw = "";
+  // Pick the model. An explicit `model` forces that specific Claude model
+  // (backward-compat for callers that hand-picked one); otherwise the router
+  // chooses the best available provider for this taskKind, always with Claude
+  // as the guaranteed fallback.
+  let spec;
   try {
-    const aiPromise = client.messages.create({
-      model,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: "user", content: user }],
-    });
+    spec = model ? anthropicSpec(model) : selectModel(taskKind);
+  } catch (e: any) {
+    return runFallback("ai-error-fallback", `no provider available: ${e?.message || e}`);
+  }
+
+  // The Anthropic path reuses the app's single lazy SDK client; other
+  // providers go over HTTP and don't need it.
+  let anthropicClient: Anthropic | undefined;
+  if (spec.provider === "anthropic") {
+    try { anthropicClient = getClient(); }
+    catch (e: any) { return runFallback("ai-error-fallback", `client init failed: ${e?.message || e}`); }
+  }
+
+  // Race API call vs timeout. The AbortController lets us cancel in-flight
+  // HTTP requests to OpenAI/Gemini once the timeout wins.
+  let raw = "";
+  const ac = new AbortController();
+  try {
+    const aiPromise = callModel({ spec, system, user, maxTokens, signal: ac.signal, anthropicClient });
     const timeoutPromise = new Promise<null>(resolve =>
       setTimeout(() => resolve(null), timeoutMs)
     );
     const resp = await Promise.race([aiPromise, timeoutPromise]);
-    if (!resp) return runFallback("ai-timeout-fallback", `timed out after ${timeoutMs}ms`);
+    if (resp === null) {
+      ac.abort();
+      return runFallback("ai-timeout-fallback", `timed out after ${timeoutMs}ms via ${spec.label}`);
+    }
 
-    const block = resp.content.find((b: any) => b.type === "text") as { text?: string } | undefined;
-    raw = (block?.text || "").trim();
-    if (!raw) return runFallback("ai-invalid-fallback", "empty AI response", raw);
+    raw = (resp || "").trim();
+    if (!raw) return runFallback("ai-invalid-fallback", `empty AI response from ${spec.label}`, raw);
 
     // Strip ```json fences if model wrapped output despite instructions.
     let jsonText = raw;
@@ -149,7 +172,7 @@ export async function aiDecide<T>(opts: AIDecideOptions<T>): Promise<AIDecisionR
     }
 
     const durationMs = Date.now() - t0;
-    console.log(`[aiDecide:${task}] source=ai duration=${durationMs}ms ok`);
+    console.log(`[aiDecide:${task}] source=ai model=${spec.label} duration=${durationMs}ms ok`);
     return { value: parsed as T, source: "ai", durationMs, raw };
   } catch (e: any) {
     return runFallback("ai-error-fallback", `API call failed: ${e?.message || e}`, raw);
@@ -177,6 +200,8 @@ export interface AIPickIndexOptions {
   fallback: () => number | Promise<number>;
   timeoutMs?: number;
   model?: string;
+  /** Routing hint across providers (see model-router.ts). Defaults to "fast". */
+  taskKind?: TaskKind;
   /** Minimum confidence (0-1) the AI must self-report; below this → fallback. Default 0.5. */
   minConfidence?: number;
 }
@@ -206,6 +231,7 @@ Return JSON only.`,
     },
     timeoutMs: opts.timeoutMs,
     model: opts.model,
+    taskKind: opts.taskKind,
     maxTokens: 120,
     validate: (p: any) => {
       if (!p || typeof p !== "object") return false;
