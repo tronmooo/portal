@@ -7,7 +7,14 @@ import {
   runFrontDoorDiag,
 } from "../server/chat-frontdoor";
 
-const KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "AI_ROUTER_DISABLE", "AI_CHAT_FRONTDOOR", "AI_FRONTDOOR_TIER"];
+const KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "AI_ROUTER_ENABLE", "AI_ROUTER_DISABLE", "AI_CHAT_FRONTDOOR", "AI_FRONTDOOR_TIER"];
+
+// Enable the (opt-in) router + front door for the behavioural tests below.
+// Production keeps them OFF by default; these flags exercise the on path.
+function enableRouting() {
+  process.env.AI_ROUTER_ENABLE = "1";
+  process.env.AI_CHAT_FRONTDOOR = "1";
+}
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -38,6 +45,15 @@ describe("needsAgent — CRUD / data messages stay on the tool-agent", () => {
     "list my upcoming tasks",
     "schedule a meeting friday at 3pm",
     "track my weight at 180",
+    // Natural first-person logging — the core use case that regressed. These
+    // MUST reach the agent so they actually get logged, not chatted about.
+    "I ate a chicken sandwich and ran 2 miles",
+    "had a coffee this morning",
+    "weighed 180 this morning",
+    "drank a protein shake after my workout",
+    "went for a 3 mile run",
+    "took my meds",
+    "slept 7 hours last night",
   ];
   for (const m of agentMessages) {
     it(`routes to agent: "${m}"`, () => {
@@ -52,13 +68,15 @@ describe("needsAgent — CRUD / data messages stay on the tool-agent", () => {
 });
 
 describe("needsAgent — self-contained conversational messages are eligible", () => {
+  // Genuinely self-contained: no pronoun, no meal/activity/data noun, no verb
+  // that could imply a log. The classifier is intentionally aggressive, so the
+  // eligible set is deliberately narrow.
   const convoMessages = [
     "explain how compound interest works",
-    "give me tips for staying focused while working from home",
-    "what questions should I ask a financial advisor?",
-    "brainstorm healthy dinner ideas for the week",
     "how does dollar cost averaging work?",
     "write a short motivational quote about consistency",
+    "what is a Roth IRA",
+    "describe the difference between stocks and bonds",
   ];
   for (const m of convoMessages) {
     it(`eligible for front door: "${m}"`, () => {
@@ -84,37 +102,38 @@ describe("needsAgent — conservative bias: borderline messages stay on the agen
 });
 
 describe("frontDoorEnabled / shouldUseFrontDoor gating", () => {
-  it("is off when only Anthropic is configured", () => {
+  it("is OFF by default even with OpenAI/Gemini keys set (root-cause fix)", () => {
+    // The key regression guard: keys alone must NOT enable the front door.
+    // Production keeps the chat 100% on the Claude agent unless explicitly told.
     process.env.ANTHROPIC_API_KEY = "x";
+    process.env.OPENAI_API_KEY = "x";
+    process.env.GEMINI_API_KEY = "AIza-x";
     expect(frontDoorEnabled()).toBe(false);
     expect(shouldUseFrontDoor("explain compound interest")).toBe(false);
   });
 
-  it("turns on when OpenAI is configured", () => {
-    process.env.ANTHROPIC_API_KEY = "x";
+  it("requires BOTH the front-door opt-in and an enabled provider", () => {
     process.env.OPENAI_API_KEY = "x";
+    // front door opt-in alone, but router not enabled → still off
+    process.env.AI_CHAT_FRONTDOOR = "1";
+    expect(frontDoorEnabled()).toBe(false);
+    // router enabled too → on
+    process.env.AI_ROUTER_ENABLE = "1";
     expect(frontDoorEnabled()).toBe(true);
     expect(shouldUseFrontDoor("explain compound interest")).toBe(true);
   });
 
-  it("turns on when Gemini is configured", () => {
-    process.env.GEMINI_API_KEY = "AIza-x";
-    expect(frontDoorEnabled()).toBe(true);
-  });
-
-  it("kill switch AI_CHAT_FRONTDOOR=0 forces it off", () => {
-    process.env.OPENAI_API_KEY = "x";
-    process.env.AI_CHAT_FRONTDOOR = "0";
-    expect(frontDoorEnabled()).toBe(false);
-  });
-
-  it("never front-doors a data/mutation message even when enabled", () => {
+  it("never front-doors a data/mutation/logging message even when fully enabled", () => {
+    enableRouting();
     process.env.OPENAI_API_KEY = "x";
     expect(shouldUseFrontDoor("log $12 lunch")).toBe(false);
     expect(shouldUseFrontDoor("show my tasks")).toBe(false);
+    expect(shouldUseFrontDoor("I ate a chicken sandwich and ran 2 miles")).toBe(false);
+    expect(shouldUseFrontDoor("had a coffee this morning")).toBe(false);
   });
 
-  it("AI_ROUTER_DISABLE keeps the front door off (only Claude left, so no second path)", () => {
+  it("AI_ROUTER_DISABLE keeps the front door off", () => {
+    enableRouting();
     process.env.ANTHROPIC_API_KEY = "x";
     process.env.OPENAI_API_KEY = "x";
     process.env.AI_ROUTER_DISABLE = "1";
@@ -123,6 +142,8 @@ describe("frontDoorEnabled / shouldUseFrontDoor gating", () => {
 });
 
 describe("runFrontDoorReply", () => {
+  beforeEach(() => { process.env.AI_ROUTER_ENABLE = "1"; });
+
   it("returns a reply from the routed provider", async () => {
     process.env.OPENAI_API_KEY = "sk-test";
     const fetchMock = vi.fn(async () =>
@@ -199,6 +220,8 @@ describe("runFrontDoorReply", () => {
 });
 
 describe("runFrontDoorDiag — failover across providers", () => {
+  beforeEach(() => { process.env.AI_ROUTER_ENABLE = "1"; });
+
   it("fails over from a bad Gemini key to OpenAI", async () => {
     // Reproduces the real bug: an invalid Gemini key must not disable the front
     // door — OpenAI should answer and the diag should record the Gemini failure.

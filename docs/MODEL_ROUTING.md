@@ -46,13 +46,23 @@ conversational message the response's `meta.attempts` lists every provider tried
 the error that knocked each one out — the fastest way to tell whether a key is
 invalid. The same detail is logged server-side as `[chat-trace] path="frontdoor-failed"`.
 
+> ⚠️ **Why the front door is OFF by default.** A life-logging app expresses logging
+> as open-ended natural language — "I ate a chicken sandwich and ran 2 miles", "had a
+> coffee", "weighed 180". No keyword classifier can reliably tell these apart from
+> questions, and a wrong guess sends a *log* to a tool-less model that cannot write it
+> — silently dropping the user's data while replying as if it logged. That regression
+> is why the front door now requires an explicit `AI_CHAT_FRONTDOOR=1` **and**
+> `AI_ROUTER_ENABLE=1`. Leaving it off means every chat message goes to the Claude
+> tool-agent, exactly as the app always worked.
+
 Guarantees:
 
-- The classifier is biased **broad toward the agent** — a false positive just keeps
-  a message on Claude; it never sends a data operation to a tool-less model.
-- The front door is **off unless an OpenAI or Gemini key is set** (`AI_CHAT_FRONTDOOR=0`
-  is an explicit kill switch). With only `ANTHROPIC_API_KEY`, behaviour is identical
-  to before.
+- **Default off.** Both `AI_ROUTER_ENABLE=1` and `AI_CHAT_FRONTDOOR=1` are required to
+  divert anything. Otherwise the chat is 100% the Claude tool-agent.
+- The classifier is biased **very broad toward the agent** — natural logging verbs
+  ("ate", "ran", "had", "drank", "took", "slept", "weighed"), meal/activity nouns, and
+  any first-person/`my` reference all route to the agent. A false positive just keeps a
+  message on Claude; it never sends a data operation to a tool-less model.
 - Any failure falls through to the Claude agent.
 - The routed prompt forbids inventing the user's figures, so a model that can't see
   their data won't fabricate balances or entries.
@@ -74,9 +84,11 @@ for doing it later.
 | Variable | Effect |
 | --- | --- |
 | `ANTHROPIC_API_KEY` | Enables Claude. Already required app-wide. |
-| `OPENAI_API_KEY` | Enables GPT. Get one at platform.openai.com/api-keys (starts with `sk-`). |
-| `GEMINI_API_KEY` | Enables Gemini. Get one at aistudio.google.com/apikey (**starts with `AIza`**). |
-| `AI_ROUTER_DISABLE=1` | Escape hatch — forces Claude-only, ignores the other keys. |
+| `AI_ROUTER_ENABLE=1` | **Master opt-in.** Without it, routing is Claude-only and the app behaves exactly as it did before routing existed — a bad or missing OpenAI/Gemini key can never change existing behaviour. |
+| `OPENAI_API_KEY` | GPT key (needs `AI_ROUTER_ENABLE=1`). platform.openai.com/api-keys (starts with `sk-`). |
+| `GEMINI_API_KEY` | Gemini key (needs `AI_ROUTER_ENABLE=1`). aistudio.google.com/apikey (**must start with `AIza`**). |
+| `AI_CHAT_FRONTDOOR=1` | **Separately** opt into the chat front door (see below). Off by default. |
+| `AI_ROUTER_DISABLE=1` | Hard kill — forces Claude-only regardless of the above. |
 | `OPENAI_MODEL` / `OPENAI_MODEL_FAST` | Override GPT model ids (defaults `gpt-4o` / `gpt-4o-mini`). |
 | `GEMINI_MODEL` / `GEMINI_MODEL_FAST` | Override Gemini model ids (defaults `gemini-1.5-pro` / `gemini-1.5-flash`). |
 

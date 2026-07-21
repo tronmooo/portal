@@ -11,6 +11,7 @@ const KEYS = [
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
   "GEMINI_API_KEY",
+  "AI_ROUTER_ENABLE",
   "AI_ROUTER_DISABLE",
   "OPENAI_MODEL",
   "OPENAI_MODEL_FAST",
@@ -35,7 +36,20 @@ afterEach(() => {
 });
 
 describe("providerAvailable", () => {
-  it("keys off env presence", () => {
+  it("non-Claude providers are OFF by default even with keys set", () => {
+    // Root-cause guard: without an explicit opt-in, only Claude is used, so the
+    // app behaves exactly as it did before routing existed. A bad/absent OpenAI
+    // or Gemini key can never silently change existing behaviour.
+    process.env.ANTHROPIC_API_KEY = "x";
+    process.env.OPENAI_API_KEY = "x";
+    process.env.GEMINI_API_KEY = "x";
+    expect(providerAvailable("anthropic")).toBe(true);
+    expect(providerAvailable("openai")).toBe(false);
+    expect(providerAvailable("gemini")).toBe(false);
+  });
+
+  it("keys off env presence once AI_ROUTER_ENABLE=1", () => {
+    process.env.AI_ROUTER_ENABLE = "1";
     expect(providerAvailable("anthropic")).toBe(false);
     process.env.ANTHROPIC_API_KEY = "x";
     process.env.OPENAI_API_KEY = "x";
@@ -46,6 +60,7 @@ describe("providerAvailable", () => {
   });
 
   it("AI_ROUTER_DISABLE forces Claude-only", () => {
+    process.env.AI_ROUTER_ENABLE = "1";
     process.env.ANTHROPIC_API_KEY = "x";
     process.env.OPENAI_API_KEY = "x";
     process.env.GEMINI_API_KEY = "x";
@@ -57,6 +72,9 @@ describe("providerAvailable", () => {
 });
 
 describe("selectModel", () => {
+  // These exercise cross-provider selection, which requires the explicit opt-in.
+  beforeEach(() => { process.env.AI_ROUTER_ENABLE = "1"; });
+
   it("falls back to Claude when only Anthropic is configured", () => {
     process.env.ANTHROPIC_API_KEY = "x";
     expect(selectModel("fast").provider).toBe("anthropic");
