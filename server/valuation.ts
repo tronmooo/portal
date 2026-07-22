@@ -19,6 +19,12 @@
 //    changed. Those keys are stripped here (purchase price/date are kept —
 //    those are real inputs, not prior model output).
 
+import {
+  computeCanonicalValuation,
+  roundCanonicalValue,
+  type RawSourceEstimate,
+} from "../shared/property-valuation";
+
 export interface AssetValuationContext {
   /** Free-form notes stored on the profile. */
   notes?: string | null;
@@ -42,15 +48,19 @@ export interface AssetValuationContext {
 }
 
 export interface AssetValuation {
-  /** Recommended midpoint estimate in USD. */
+  /** THE single canonical current value in USD. Use everywhere. */
   estimatedValue: number;
-  /** Low end of the estimated range (0 when the model didn't provide one). */
+  /**
+   * Legacy band fields. With the canonical-value contract these are collapsed
+   * to the single canonical value (low === high === estimatedValue) so no UI
+   * can render a min–max vendor spread as a competing answer. The raw INPUT
+   * spread lives in `inputSpread`, clearly labeled as inputs, not the answer.
+   */
   lowValue: number;
-  /** High end of the estimated range (0 when the model didn't provide one). */
   highValue: number;
   confidence: string;
   method: string;
-  /** Human-readable range string, e.g. "$19,250 - $25,199" (legacy shape). */
+  /** Labeled provenance/method line (NOT a competing range). */
   details: string;
   /** Which asset details actually influenced this estimate. */
   factorsConsidered: string[];
@@ -58,6 +68,13 @@ export interface AssetValuation {
   missingInfo: string[];
   /** ISO timestamp of when this valuation was computed. */
   valuationDate: string;
+  /**
+   * The accepted per-source point estimates the canonical value was computed
+   * from — supporting detail only. Empty for single-value fallback responses.
+   */
+  sources?: Array<{ source: string; value: number; asOf: string | null; weight: number }>;
+  /** Min/max of the accepted source inputs. Supporting detail, not the answer. */
+  inputSpread?: { low: number; high: number } | null;
 }
 
 // Outputs of prior valuations. NEVER included in a new valuation prompt —
@@ -75,6 +92,8 @@ const PRIOR_VALUATION_KEYS = new Set([
   "valuationhigh",
   "valuationfactors",
   "valuationmissinginfo",
+  "valuationsources",
+  "valuationinputspread",
   "lastvaluedat",
 ]);
 
@@ -192,16 +211,16 @@ export function buildValuationDossier(
 
 /** The JSON response contract shared by both valuation model paths. */
 export const VALUATION_RESPONSE_SPEC = `Respond with ONLY a JSON object (no markdown, no prose):
-{"value": <number — recommended midpoint estimate in USD>, "low": <number — low end of range>, "high": <number — high end of range>, "confidence": "high|medium|low", "method": "<brief sources/method, e.g. KBB, Zillow, eBay comps>", "factors": ["<specific asset detail that influenced this estimate, e.g. '80,000 miles reduces value ~$2,000'>", ...], "missing": ["<missing detail that would improve accuracy, e.g. 'trim level', 'condition', 'service records'>", ...]}
+{"sources": [{"source": "<vendor/site name, e.g. Zillow, Redfin, CoreLogic, KBB, Edmunds>", "value": <that source's numeric point estimate in USD>, "asOf": "<YYYY-MM or YYYY-MM-DD the estimate is dated, or null>"}, ...], "value": <number — your single best estimate in USD, used ONLY if you could not enumerate distinct sources>, "confidence": "high|medium|low", "factors": ["<specific asset detail that influenced these estimates, e.g. '80,000 miles reduces value ~$2,000'>", ...], "missing": ["<missing detail that would improve accuracy, e.g. 'trim level', 'condition'>", ...]}
 
 Valuation rules (CRITICAL):
-- Recompute the value from scratch using ONLY the asset details above plus current market data. Do NOT reuse or repeat any previous estimate.
-- Adjust for every relevant provided detail: year, make/model/trim, mileage, condition, location/region, upgrades, repairs and maintenance history, purchase info, and specifications. Meaningfully different details MUST produce a different estimate.
-- ALWAYS return a positive number for "value" — never 0. If exact data is unavailable, give your best informed estimate from comparable items.
-- "low"/"high" must be a sensible band around "value" (low < value < high).
-- "factors" must list the concrete details from the profile you actually used (2-6 items).
-- "missing" must list information absent from the profile that would tighten the estimate (0-5 items; empty array if nothing meaningful is missing).
-- confidence: "high" only with an exact market match, "medium" for similar comps, "low" for rough estimates.`;
+- Your job is EXTRACTION, not aggregation. Report each distinct source's OWN point estimate as a separate entry in "sources". Do NOT average, blend, pick a "midpoint", or invent a range — the system computes the single canonical value from your sources deterministically.
+- Prefer multiple independent sources (Zillow, Redfin, CoreLogic, Collateral Analytics, Realtor.com, Homes.com for property; KBB, Edmunds, comparable listings for vehicles). Each "value" must be that specific source's figure, verbatim, as a plain positive number.
+- Use ONLY the asset details above plus current market data. Do NOT reuse or repeat any previous estimate stored on the asset.
+- Every "value" must be a positive number. Omit sources you cannot attach a real number to. Include "asOf" whenever the source dates its estimate.
+- Only if you genuinely cannot enumerate distinct sources, leave "sources" empty and provide your single best "value".
+- "factors" must list the concrete profile details you used (2-6 items). "missing" lists absent details that would tighten the estimate (0-5 items).
+- confidence: "high" only with tight agreement across sources, "medium" for similar comps, "low" for rough estimates.`;
 
 /**
  * Parse a model response (Perplexity or Anthropic) into a normalized
@@ -210,7 +229,7 @@ Valuation rules (CRITICAL):
  */
 export function parseValuationResponse(
   text: string,
-  opts?: { defaultMethod?: string; methodPrefix?: string; allowZero?: boolean },
+  opts?: { defaultMethod?: string; methodPrefix?: string; allowZero?: boolean; now?: Date },
 ): AssetValuation | null {
   const m = (text || "").match(/\{[\s\S]*\}/);
   if (!m) return null;
@@ -221,27 +240,44 @@ export function parseValuationResponse(
     const n = Number(typeof x === "string" ? x.replace(/[$,]/g, "") : x);
     return Number.isFinite(n) && n > 0 ? n : 0;
   };
-  const value = num(parsed.value);
-  if (value <= 0 && !opts?.allowZero) return null;
-
-  let low = num(parsed.low);
-  let high = num(parsed.high);
-  // Some responses give "range": "$X - $Y" instead of low/high.
-  if ((!low || !high) && typeof parsed.range === "string") {
-    const nums = parsed.range.match(/[\d][\d,.]*/g);
-    if (nums && nums.length >= 2) {
-      low = low || num(nums[0]);
-      high = high || num(nums[nums.length - 1]);
-    }
-  }
-  if (low && high && low > high) [low, high] = [high, low];
-
-  const details = low && high
-    ? `$${low.toLocaleString()} - $${high.toLocaleString()}`
-    : (typeof parsed.range === "string" ? parsed.range : "");
 
   const strArr = (x: any): string[] =>
     Array.isArray(x) ? x.filter((s: any) => typeof s === "string" && s.trim()).map((s: string) => clip(s.trim(), 200)).slice(0, 8) : [];
+
+  const prefix = (s: string) => (opts?.methodPrefix ? `${opts.methodPrefix}${s}` : s);
+  const now = opts?.now ?? new Date();
+
+  // PRIMARY PATH — deterministic canonical value from per-source point
+  // estimates. The model only extracts sources; all selection/aggregation
+  // math happens in shared/property-valuation.ts, so identical normalized
+  // evidence always yields an identical number regardless of source ordering
+  // or model/temperature nondeterminism. No min–max range is ever surfaced as
+  // a competing answer — low/high collapse to the single canonical value.
+  const rawSources: RawSourceEstimate[] = Array.isArray(parsed.sources)
+    ? parsed.sources.map((s: any) => ({ source: s?.source, value: s?.value, asOf: s?.asOf ?? s?.date ?? null }))
+    : [];
+  const canonical = computeCanonicalValuation(rawSources, { now });
+  if (canonical && canonical.value > 0) {
+    return {
+      estimatedValue: canonical.value,
+      lowValue: canonical.value,
+      highValue: canonical.value,
+      confidence: canonical.confidence,
+      method: prefix(canonical.method),
+      details: canonical.method,
+      factorsConsidered: strArr(parsed.factors),
+      missingInfo: strArr(parsed.missing),
+      valuationDate: new Date().toISOString(),
+      sources: canonical.accepted,
+      inputSpread: { low: canonical.spreadLow, high: canonical.spreadHigh },
+    };
+  }
+
+  // FALLBACK — single model-provided value (used when the model could not
+  // enumerate distinct sources, e.g. a niche one-off asset). Still exactly one
+  // number and no competing range: low/high collapse to the canonical value.
+  const value = roundCanonicalValue(num(parsed.value));
+  if (value <= 0 && !opts?.allowZero) return null;
 
   const rawMethod = typeof parsed.method === "string" && parsed.method.trim()
     ? parsed.method.trim()
@@ -249,13 +285,15 @@ export function parseValuationResponse(
 
   return {
     estimatedValue: value,
-    lowValue: low,
-    highValue: high,
+    lowValue: value,
+    highValue: value,
     confidence: typeof parsed.confidence === "string" && parsed.confidence ? parsed.confidence : "medium",
-    method: opts?.methodPrefix ? `${opts.methodPrefix}${rawMethod}` : rawMethod,
-    details,
+    method: prefix(rawMethod),
+    details: "",
     factorsConsidered: strArr(parsed.factors),
     missingInfo: strArr(parsed.missing),
     valuationDate: new Date().toISOString(),
+    sources: [],
+    inputSpread: null,
   };
 }

@@ -98,6 +98,7 @@ export default defineConfig({
       'tests/chat-timeout-envelope.test.ts',
       'tests/ai-owner-attribution.test.ts',
       'tests/asset-valuation.test.ts',
+      'tests/property-valuation.test.ts',
       'tests/lookup-value-route.test.ts',
       'tests/cache-bust-predicate.test.ts',
       'tests/recover-wedged-queries.test.ts',

@@ -118,33 +118,59 @@ describe("buildValuationDossier — uses the complete asset record", () => {
   });
 });
 
-describe("parseValuationResponse — structured output", () => {
-  it("parses value, range, confidence, factors, and missing info", () => {
+describe("parseValuationResponse — canonical single-value contract", () => {
+  it("computes ONE canonical value from per-source estimates (never a range answer)", () => {
     const v = parseValuationResponse(JSON.stringify({
-      value: 20100, low: 18500, high: 22000, confidence: "medium", method: "KBB, Edmunds",
-      factors: ["80,000 miles", "good condition", "new tires"],
-      missing: ["service records"],
-    }));
+      sources: [
+        { source: "Zillow", value: 1987600, asOf: "2026-07" },
+        { source: "Redfin", value: 1760648, asOf: "2026-07" },
+        { source: "CoreLogic", value: 1524300, asOf: "2026-07" },
+        { source: "Collateral Analytics", value: 1182000, asOf: "2026-07" },
+      ],
+      confidence: "medium",
+      factors: ["4 bd", "waterfront"],
+      missing: ["recent renovations"],
+    }), { now: new Date("2026-07-18T00:00:00Z") });
     expect(v).not.toBeNull();
-    expect(v!.estimatedValue).toBe(20100);
-    expect(v!.lowValue).toBe(18500);
-    expect(v!.highValue).toBe(22000);
-    expect(v!.details).toBe("$18,500 - $22,000");
-    expect(v!.factorsConsidered).toEqual(["80,000 miles", "good condition", "new tires"]);
-    expect(v!.missingInfo).toEqual(["service records"]);
+    // Weighted median favors institutional AVMs (CoreLogic/Collateral) → $1,524,000.
+    expect(v!.estimatedValue).toBe(1524000);
+    // Exactly one number: low/high collapse to the canonical value, no vendor spread.
+    expect(v!.lowValue).toBe(1524000);
+    expect(v!.highValue).toBe(1524000);
+    // Provenance preserved as labeled inputs, not a competing answer.
+    expect(v!.sources!.map((s) => s.source).sort()).toEqual(
+      ["Collateral Analytics", "CoreLogic", "Redfin", "Zillow"],
+    );
+    expect(v!.inputSpread).toEqual({ low: 1182000, high: 1987600 });
+    expect(v!.details).not.toMatch(/\$[\d,]+ ?- ?\$[\d,]+/); // no min-max range string
+    expect(v!.factorsConsidered).toEqual(["4 bd", "waterfront"]);
+    expect(v!.missingInfo).toEqual(["recent renovations"]);
     expect(new Date(v!.valuationDate).getTime()).toBeGreaterThan(0);
   });
 
-  it("falls back to a legacy range string when low/high are absent", () => {
-    const v = parseValuationResponse('{"value": 21400, "confidence": "high", "method": "KBB", "range": "$19,250 - $25,199"}');
-    expect(v!.lowValue).toBe(19250);
-    expect(v!.highValue).toBe(25199);
+  it("is invariant to the order sources are listed in", () => {
+    const forward = parseValuationResponse(JSON.stringify({ sources: [
+      { source: "Zillow", value: 1987600 },
+      { source: "Redfin", value: 1760648 },
+      { source: "CoreLogic", value: 1524300 },
+      { source: "Collateral Analytics", value: 1182000 },
+    ] }));
+    const reversed = parseValuationResponse(JSON.stringify({ sources: [
+      { source: "Collateral Analytics", value: 1182000 },
+      { source: "CoreLogic", value: 1524300 },
+      { source: "Redfin", value: 1760648 },
+      { source: "Zillow", value: 1987600 },
+    ] }));
+    expect(forward!.estimatedValue).toBe(reversed!.estimatedValue);
   });
 
-  it("swaps a reversed low/high band", () => {
-    const v = parseValuationResponse('{"value": 500, "low": 700, "high": 400}');
-    expect(v!.lowValue).toBe(400);
-    expect(v!.highValue).toBe(700);
+  it("falls back to a single rounded value when no sources are enumerated", () => {
+    const v = parseValuationResponse('{"value": 20134, "confidence": "medium", "method": "KBB"}');
+    expect(v!.estimatedValue).toBe(20100); // stable rounding, nearest $100
+    expect(v!.lowValue).toBe(20100);
+    expect(v!.highValue).toBe(20100);
+    expect(v!.details).toBe(""); // no range presented
+    expect(v!.sources).toEqual([]);
   });
 
   it("returns null for missing or non-positive values", () => {
@@ -158,10 +184,12 @@ describe("parseValuationResponse — structured output", () => {
     expect(v!.method).toBe("Live search: Swappa");
   });
 
-  it("response spec demands recomputation and factor/missing reporting", () => {
+  it("response spec demands source extraction, not prose aggregation", () => {
     expect(VALUATION_RESPONSE_SPEC).toContain("Do NOT reuse or repeat any previous estimate");
+    expect(VALUATION_RESPONSE_SPEC).toContain('"sources"');
     expect(VALUATION_RESPONSE_SPEC).toContain('"factors"');
     expect(VALUATION_RESPONSE_SPEC).toContain('"missing"');
+    expect(VALUATION_RESPONSE_SPEC).toMatch(/EXTRACTION, not aggregation/i);
   });
 });
 
@@ -176,7 +204,12 @@ describe("estimateAssetValue — live-search path sends the full record", () => 
   beforeEach(() => {
     vi.stubEnv("PERPLEXITY_API_KEY", "test-key");
     fetchMock = vi.fn().mockResolvedValue(ppxResponse({
-      value: 20100, low: 18500, high: 22000, confidence: "medium", method: "KBB",
+      sources: [
+        { source: "KBB", value: 20500 },
+        { source: "Edmunds", value: 19800 },
+        { source: "CarGurus", value: 20100 },
+      ],
+      confidence: "medium",
       factors: ["80,000 miles"], missing: ["trim level"],
     }));
     vi.stubGlobal("fetch", fetchMock);
@@ -213,13 +246,14 @@ describe("estimateAssetValue — live-search path sends the full record", () => 
     expect(prompt).not.toContain("$19,250");
 
     expect(result).not.toBeNull();
+    // Canonical value computed in code (weighted median of the 3 comps) — one number.
     expect(result!.estimatedValue).toBe(20100);
-    expect(result!.lowValue).toBe(18500);
-    expect(result!.highValue).toBe(22000);
+    expect(result!.lowValue).toBe(20100);
+    expect(result!.highValue).toBe(20100);
     expect(result!.factorsConsidered).toEqual(["80,000 miles"]);
     expect(result!.missingInfo).toEqual(["trim level"]);
-    expect(result!.method).toBe("Live search: KBB");
-    expect(result!.details).toBe("$18,500 - $22,000");
+    expect(result!.method).toContain("Live search: Weighted median of 3 sources");
+    expect(result!.details).not.toMatch(/\$[\d,]+ ?- ?\$[\d,]+/);
   });
 
   it("sends a different prompt when asset details change", async () => {
