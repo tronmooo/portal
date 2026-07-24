@@ -1,5 +1,6 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation";
+import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-keys";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -321,6 +322,19 @@ export function isEssentialToPersist(queryKey: any): boolean {
 // other essential keys — the failure mode the old total-only cap created.
 const MAX_ENTRY_BYTES = 800_000;   // ~0.8MB per curated entry
 const MAX_TOTAL_BYTES = 2_500_000; // ~2.5MB total (localStorage quota margin)
+// Above-the-fold rows kept per list domain when the FULL bootstrap payload
+// exceeds MAX_ENTRY_BYTES. Enough to paint every tab's first screen; the full
+// lists refetch in the background on mount. See projectBootstrapShell.
+const SHELL_MAX_ROWS = 100;
+// Lightweight, opt-in persistence instrumentation (?perfLog=1). Logs the
+// bootstrap payload / persisted-shell byte sizes so the Phase 2 cliff frequency
+// can be sized without noisy production logging or any PII.
+function perfLogEnabled(): boolean {
+  try {
+    return typeof window !== "undefined" &&
+      /(?:\?|&)perfLog=1\b/.test(window.location.search + window.location.hash);
+  } catch { return false; }
+}
 
 export function snapshotCache(): void {
   try {
@@ -334,16 +348,43 @@ export function snapshotCache(): void {
     }
     const all = queryClient.getQueryCache().getAll();
     const candidates: Array<{ k: any; d: any; t: number; bytes: number }> = [];
+    const debug = perfLogEnabled();
     for (const q of all) {
       if (!q.state.data) continue;
       if (q.state.status !== "success") continue;
       if (!isEssentialToPersist(q.queryKey)) continue;
+      let data: any = q.state.data;
       let bytes = 0;
-      try { bytes = JSON.stringify(q.state.data).length; } catch { continue; }
-      // Drop this one heavy payload but keep collecting the rest — heavy data
-      // must not disable all useful fast-restore.
-      if (bytes > MAX_ENTRY_BYTES) continue;
-      candidates.push({ k: q.queryKey, d: q.state.data, t: q.state.dataUpdatedAt, bytes });
+      try { bytes = JSON.stringify(data).length; } catch { continue; }
+      if (bytes > MAX_ENTRY_BYTES) {
+        const isBootstrap = Array.isArray(q.queryKey) && q.queryKey[0] === "/api/dashboard-bootstrap";
+        if (isBootstrap) {
+          // PERSISTENCE CLIFF FIX (Phase 2): rather than silently dropping the
+          // whole bootstrap — which regressed the instant dashboard for exactly
+          // the heavy-data users who most need it — persist a bounded shell
+          // projection (aggregates whole + first SHELL_MAX_ROWS rows per list).
+          // The full payload refetches on mount and swaps in complete lists.
+          const shell = projectBootstrapShell(data, SHELL_MAX_ROWS);
+          let shellBytes = 0;
+          try { shellBytes = JSON.stringify(shell).length; } catch { shellBytes = Number.MAX_SAFE_INTEGER; }
+          if (debug) {
+            // eslint-disable-next-line no-console
+            console.log(`[perfLog] bootstrap over cap: full=${bytes}B shell=${shellBytes}B (cap ${MAX_ENTRY_BYTES}B)`);
+          }
+          if (shellBytes <= MAX_ENTRY_BYTES) {
+            data = shell;
+            bytes = shellBytes;
+          } else {
+            // Even the shell is too big — drop it, but keep collecting the rest.
+            continue;
+          }
+        } else {
+          // Drop this one heavy non-bootstrap payload but keep collecting the
+          // rest — heavy data must not disable all useful fast-restore.
+          continue;
+        }
+      }
+      candidates.push({ k: q.queryKey, d: data, t: q.state.dataUpdatedAt, bytes });
     }
     // Freshest first, then fill up to the total budget so the newest scope's
     // fast-restore data is preferred if we ever have to trim.
@@ -438,11 +479,39 @@ export function hydrateQueryCache(): void {
       return;
     }
 
+    let bootstrapEntry: { k: any; d: any; t: number } | null = null;
     for (const entry of entries) {
       // Only seed if no fresh data exists
       const existing = queryClient.getQueryData(entry.k as any);
       if (existing !== undefined) continue;
       queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: entry.t });
+      if (Array.isArray(entry.k) && entry.k[0] === "/api/dashboard-bootstrap") {
+        bootstrapEntry = entry as { k: any; d: any; t: number };
+      }
+    }
+
+    // PERF Phase 1 (extend instant-paint to every tab): the persisted bootstrap
+    // blob already carries the mount-time datasets for ~24 dependent list slots
+    // (tasks, expenses, obligations, habits, goals, journal, events, documents,
+    // trackers, reminders, …). Re-run the SAME seeding the dashboard does at
+    // runtime so those tabs paint cached rows BEFORE React mounts, instead of
+    // skeletoning on every cold reload. This reuses bytes already in
+    // localStorage — no extra persistence cost. The bootstrap key encodes the
+    // scope it was captured under: ["/api/dashboard-bootstrap", mode, ...ids, month].
+    if (bootstrapEntry) {
+      const k = bootstrapEntry.k as unknown[];
+      const mode = String(k[1] ?? "everyone");
+      const month = k.length > 2 ? String(k[k.length - 1]) : "";
+      const ids = k.slice(2, Math.max(2, k.length - 1)).map(String);
+      // Seed with the persisted blob's OWN timestamp (not now) so staleTime
+      // still treats the rows as stale and refetchOnMount fires exactly one
+      // quiet background refresh per tab — cached rows paint first, fresh data
+      // swaps in without a skeleton. Only fill empty slots (never clobber a
+      // fresher restore).
+      for (const { key, data } of bootstrapSeedEntries(bootstrapEntry.d, mode, ids, month)) {
+        if (queryClient.getQueryData(key as any) !== undefined) continue;
+        queryClient.setQueryData(key as any, data, { updatedAt: bootstrapEntry.t });
+      }
     }
   } catch {
     // Corrupt cache — purge it rather than risk a partial/cross-user restore.
