@@ -157,10 +157,6 @@ export const queryClient = new QueryClient({
          focus, the UI shows skeletons even when nothing changed.
 
          Current strategy (see staleTime below):
-         - 30s staleTime → AI chat / co-owner writes surface fast on the next
-           render without waiting on an explicit invalidate. Returning to the
-           tab within 30s reuses cache instantly; after 30s window-focus does
-           one quiet background refetch.
          - refetchOnMount: true (not "always") → cached data renders instantly
            when navigating between pages; the background refetch fills in any
            data that was invalidated while the page was unmounted.
@@ -168,8 +164,22 @@ export const queryClient = new QueryClient({
            full reload restores instantly instead of showing skeletons.
          - networkMode: "always" → queries continue even on flaky network
            instead of leaving in-flight requests hanging forever. */
-      refetchOnWindowFocus: true,
-      refetchOnReconnect: "always",
+      /* SINGLE-RESUME-PATH FIX (2026-07-21, BUG mobile-skeleton-storm):
+         refetchOnWindowFocus + refetchOnReconnect are DISABLED. Return-to-app
+         has exactly one refresh path now — recoverWedgedQueries (below),
+         invoked once per real resume from the visibilitychange/pageshow
+         listeners. Previously focus refetch (every ~25 active dashboard
+         queries at once) + reconnect refetch + KeepAlive + wedged-recovery all
+         fired on the same resume, and on a cold serverless instance under
+         high-data accounts that refetch storm produced wedged in-flight
+         queries → skeletons that never terminated and the "taking too long"
+         card. With these off, recovery only touches queries that are actually
+         stuck (in-flight-since-before-freeze) or that failed while frozen
+         (errored / dataless-idle active), matching the known-good baseline of
+         ~2 API requests after a 16s return. Freshness stays invalidation-driven
+         (600+ mutation call sites explicitly invalidate touched domains). */
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
       // refetchOnMount: true means "if the cached data is stale at the time
       // the component mounts, refetch in the background while showing the
       // cached data immediately." Crucially this is what makes invalidated
@@ -537,7 +547,17 @@ export function hydrateQueryCache(): void {
 --------------------------------------------------------------------------- */
 let hiddenAt = 0;
 
+// Resume dedupe: visibilitychange, pageshow(persisted), and auth's own resume
+// hook can all fire within the same instant when the app comes back to the
+// foreground. Collapse them so recovery runs at most once per real resume —
+// this is what makes return-to-app a SINGLE refresh path.
+const RESUME_DEDUP_MS = 3_000;
+let lastRecoverAt = 0;
+
 export async function recoverWedgedQueries(): Promise<void> {
+  const now = Date.now();
+  if (now - lastRecoverAt < RESUME_DEDUP_MS) return;
+  lastRecoverAt = now;
   try {
     const isApiQuery = (q: { queryKey?: readonly unknown[] }) =>
       String(q.queryKey?.[0] || "").startsWith("/api/");
@@ -561,10 +581,12 @@ export async function recoverWedgedQueries(): Promise<void> {
       (q.state.status === "error" ||
         (q.state.status === "pending" && q.state.data === undefined)),
     );
-    // Nothing is actually stuck — do NOT touch the cache. Normal return-to-app
-    // refresh is handled by React Query's refetchOnWindowFocus + staleTime; a
-    // blanket invalidate here (the old behavior) fired a redundant refetch wave
-    // on every tab return, competing with focus refetch and the KeepAlive ping.
+    // Nothing is actually stuck — do NOT touch the cache. With focus/reconnect
+    // refetch disabled (see queries defaults above), a settled cache on resume
+    // means there is genuinely nothing to refresh: cached data stays rendered
+    // and freshness arrives via mutation-driven invalidation. A blanket
+    // invalidate here (the old behavior) fired a redundant refetch wave on
+    // every tab return — exactly the storm this fix removes.
     if (wedged.length === 0 && failedWhileAway.length === 0) return;
 
     if (wedged.length > 0) {
@@ -612,4 +634,3 @@ if (typeof window !== "undefined") {
     if (e.persisted) void recoverWedgedQueries();
   });
 }
-

@@ -705,7 +705,11 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
         if (rank[a.status] !== rank[b.status]) return rank[a.status] - rank[b.status];
         return (a.next || "9999").localeCompare(b.next || "9999");
       });
-  }, [events, filterMode, filterIds, today]);
+    // `profiles` is a real dependency: passesProfileFilter resolves self-owned
+    // profile ids from `allProfiles`, so orphan recurring events are dropped
+    // when profiles is still empty and must be re-evaluated once it loads.
+    // Omitting it left the empty state stuck after navigation (BUG 2026-07-21).
+  }, [events, filterMode, filterIds, today, profiles]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: series.length };

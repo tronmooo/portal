@@ -103,6 +103,8 @@ export default defineConfig({
       'tests/lookup-value-route.test.ts',
       'tests/cache-bust-predicate.test.ts',
       'tests/recover-wedged-queries.test.ts',
+      'tests/resume-refresh.test.ts',
+      'tests/recurring-profile-dep.test.ts',
       'tests/curated-persistence.test.ts',
       'tests/model-router.test.ts',
       'tests/chat-frontdoor.test.ts',
