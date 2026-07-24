@@ -137,6 +137,7 @@ import { useRoute, Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
+import { ImproveEstimatePanel } from "@/components/asset/ImproveEstimatePanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -2085,6 +2086,20 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
               <span className="font-medium text-foreground/80">Add for a better estimate:</span>{" "}
               {lookupResult.missingInfo.join(" · ")}
             </div>
+          )}
+          {/* Actionable version of the missing-info list: fill the details
+              right here, save them onto the profile, and re-run the estimate.
+              The missing list is fresh from THIS estimate, so no field-skip
+              context is needed here. */}
+          {lookupResult.missingInfo.length > 0 && (
+            <ImproveEstimatePanel
+              profileId={profileId}
+              fields={{}}
+              missingInfo={lookupResult.missingInfo}
+              onSaved={() => invalidateDomains("profiles")}
+              onReestimate={handleLookupValue}
+              reestimating={lookupBusy}
+            />
           )}
         </div>
       )}
@@ -9408,6 +9423,7 @@ function InsightsTab({ profile }: { profile: any }) {
 }
 
 function ValuationTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
+  const { toast } = useToast();
   const f = profile.fields || {};
   const purchase = Number(f.purchasePrice) || 0;
   const current = Number(f.currentValue) || 0;
@@ -9420,8 +9436,69 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
     { key: "lastAppraisedDate", label: "Last Appraised" },
     { key: "marketNotes", label: "Market Notes" },
   ];
+  // Persisted market estimate (written by POST /lookup-value) + re-run.
+  const [reestimating, setReestimating] = useState(false);
+  const rerunEstimate = useCallback(async () => {
+    setReestimating(true);
+    try {
+      const res = await apiRequest("POST", `/api/profiles/${profileId}/lookup-value`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Lookup failed");
+      toast({ title: `Estimated at $${Number(data.currentValue).toLocaleString()}`, description: data.range ? `Range ${data.range}` : undefined });
+      invalidateDomains("profiles");
+      onChanged();
+    } catch (e: any) {
+      toast({ title: "Couldn't re-estimate", description: formatApiError(e), variant: "destructive" });
+    } finally {
+      setReestimating(false);
+    }
+  }, [profileId, onChanged, toast]);
+  const missingInfo: string[] = Array.isArray(f.valuationMissingInfo) ? f.valuationMissingInfo : [];
+  const factors: string[] = Array.isArray(f.valuationFactors) ? f.valuationFactors : [];
   return (
     <div className="space-y-3" data-testid="valuation-tab">
+      {/* Persisted market estimate — always visible inside the asset profile,
+          not only right after tapping Look up value. */}
+      {f.valuationMethod && current > 0 && (
+        <Card data-testid="valuation-market-estimate">
+          <CardContent className="pt-4 pb-3 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs text-muted-foreground">Market Estimate</p>
+                <p className="text-lg font-bold tabular-nums">{formatCurrency(current)}</p>
+                {f.valuationRange && <p className="text-xs text-muted-foreground tabular-nums">Range: {f.valuationRange}</p>}
+              </div>
+              <div className="text-right shrink-0 space-y-1">
+                {f.valuationConfidence && (
+                  <Badge variant="secondary" className="text-[10px] capitalize">{f.valuationConfidence} confidence</Badge>
+                )}
+                <div>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={rerunEstimate} disabled={reestimating} data-testid="valuation-rerun">
+                    <RefreshCw className={`h-3 w-3 mr-1 ${reestimating ? "animate-spin" : ""}`} />
+                    {reestimating ? "Estimating…" : "Re-estimate"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+            {factors.length > 0 && (
+              <p className="text-[11px] text-muted-foreground"><span className="font-medium text-foreground/80">Based on:</span> {factors.join(" · ")}</p>
+            )}
+            {f.valuationDate && (
+              <p className="text-[10px] text-muted-foreground">Valued {new Date(f.valuationDate).toLocaleDateString()}{f.valuationMethod ? ` · ${f.valuationMethod}` : ""}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+      {missingInfo.length > 0 && (
+        <ImproveEstimatePanel
+          profileId={profileId}
+          fields={f}
+          missingInfo={missingInfo}
+          onSaved={onChanged}
+          onReestimate={rerunEstimate}
+          reestimating={reestimating}
+        />
+      )}
       {purchase > 0 && current > 0 && (
         <Card>
           <CardContent className="pt-4 pb-3">
