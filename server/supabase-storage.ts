@@ -100,6 +100,13 @@ import { shareForParty, shareForParties, validateOwnership, roundPct, type Owner
 
 const DOCUMENTS_BUCKET = "documents";
 
+// Explicit metadata-only projection for document LIST queries. Deliberately
+// omits file_data — base64 blobs can be 10MB+ each and must never ship in a
+// list. Binary is fetched on demand by getDocument(id)/:id/file only. Shared by
+// getDocuments and getDocumentsPage so the two list paths stay in lockstep.
+const DOCUMENT_LIST_COLUMNS =
+  "id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at";
+
 /**
  * Merge an incoming JSONB-style patch into an existing object AND honor deletion
  * intents. Without explicit deletion support, shallow-merge (`{ ...existing,
@@ -3747,11 +3754,10 @@ export class SupabaseStorage implements IStorage {
   async getDocuments(profileIds?: string[]): Promise<Document[]> {
     return this.memo(`getDocuments${this._fk(profileIds)}`, async () => {
       if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
-      // PERF: Exclude file_data from list queries — base64 blobs can be 10MB+ each.
-      // Only getDocument(id) returns file_data when specifically needed.
-      // PERF (durable-fix-phase1): DB pushdown via idx_documents_linked_profiles_gin.
+      // PERF: metadata-only projection (see DOCUMENT_LIST_COLUMNS) excludes
+      // file_data. DB pushdown of profile scope via idx_documents_linked_profiles_gin.
       let q = this.supabase.from("documents")
-        .select("id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at")
+        .select(DOCUMENT_LIST_COLUMNS)
         .eq("user_id", this.userId)
         .is("deleted_at", null);
       q = this._applyProfileFilter(q, profileIds);
@@ -3759,6 +3765,48 @@ export class SupabaseStorage implements IStorage {
       if (error) throw error;
       return (data || []).map(r => this.rowToDocument({ ...r, file_data: "" }));
     });
+  }
+
+  // [PERF Phase 4] Server-side paginated documents. Pushes projection, profile
+  // scope, ordering, range (limit/offset) AND an exact total count into
+  // Supabase in ONE round-trip, so a list request fetches only the page it
+  // renders instead of the whole documents table (all rows + extracted_data).
+  //
+  // Ordering matches getDocuments (created_at desc) so the page is byte-identical
+  // to what the old fetch-all-then-slice returned for the same offset/limit.
+  // `total` is the exact count of ALL matching rows (independent of the range),
+  // so the route can set X-Total-Count without a second query.
+  //
+  // profileIds pushdown reproduces the NON-orphan half of passesProfileFilter
+  // (linked_profiles contains any selected id). Callers must only pass
+  // profileIds when the selection contains NO self-type profile — the orphan
+  // inclusion rule (empty linked_profiles pass when a self profile is selected)
+  // is NOT expressed here and stays on the fetch-all path. everyone-mode
+  // (no profileIds) has no orphan concept and is always safe to push down.
+  async getDocumentsPage(opts?: {
+    profileIds?: string[];
+    limit?: number;
+    offset?: number;
+  }): Promise<{ rows: Document[]; total: number }> {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
+    let q = this.supabase.from("documents")
+      .select(DOCUMENT_LIST_COLUMNS, { count: "exact" })
+      .eq("user_id", this.userId)
+      .is("deleted_at", null);
+    q = this._applyProfileFilter(q, opts?.profileIds);
+    let ranged: any = q.order("created_at", { ascending: false });
+    const offset = Math.max(opts?.offset ?? 0, 0);
+    if (opts?.limit != null) {
+      const limit = Math.max(opts.limit, 1);
+      ranged = ranged.range(offset, offset + limit - 1);
+    } else if (offset > 0) {
+      // Offset with no explicit limit: skip the first `offset` rows, keep the rest.
+      ranged = ranged.range(offset, Number.MAX_SAFE_INTEGER);
+    }
+    const { data, count, error } = await ranged;
+    if (error) throw error;
+    const rows = (data || []).map((r: any) => this.rowToDocument({ ...r, file_data: "" }));
+    return { rows, total: count ?? rows.length };
   }
 
   async getDocument(id: string): Promise<Document | undefined> {

@@ -4998,20 +4998,54 @@ Rules:
 
   // ---- Documents ----
   app.get("/api/documents", asyncHandler(async (req, res) => {
-    let items = await storage.getDocuments();
-    // [P2.4] Profile filter (parity with /api/obligations, /api/tasks, etc.) —
-    // single and multi param share the canonical orphan rule via filterByProfileScope.
+    // [P2.4] Profile filter (parity with /api/obligations, /api/tasks, etc.).
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
     const docFilterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (fp ? [fp] : []);
+    const uid_doc = cacheUserKey(req as AuthenticatedRequest);
+
+    // Mirror paginate(): default 100/page, cap 500 — the documents route has no
+    // route-level cache, so historically EVERY request fetched the entire
+    // documents table (all rows + extracted_data) just to slice out a page.
+    // X-Total-Count still carries the true total for opt-in pagers.
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 100, 1), 500);
+    const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+
+    // [PERF Phase 4] Decide whether the DB-pushdown path is correctness-safe.
+    // The pushed-down containment filter reproduces only the NON-orphan half of
+    // the profile rule. The orphan-inclusion half (docs with empty
+    // linked_profiles pass when a self-type profile is selected) can only apply
+    // when the selection actually contains a self profile — so that narrow case
+    // alone stays on the fetch-all + canonical orphan-rule path below.
+    let hasSelfInSelection = false;
     if (docFilterIds.length > 0) {
-      const uid_doc = cacheUserKey(req as AuthenticatedRequest);
-      items = await filterByProfileScope(items, docFilterIds, uid_doc);
+      const allProfiles: Array<{ id: string; type?: string }> =
+        getCached(`profiles:${uid_doc}`) ||
+        await ((storage as any).getProfilesLite?.() ?? storage.getProfiles());
+      const selfIds = new Set(allProfiles.filter(p => p.type === "self").map(p => p.id));
+      hasSelfInSelection = docFilterIds.some(id => selfIds.has(id));
     }
-    // PERF 2026-07-21: list responses are METADATA ONLY — never ship base64
-    // blobs in a list. SupabaseStorage.getDocuments already excludes file_data;
-    // this guard brings the MemStorage/dev path to parity (a 200-doc profile
-    // was shipping ~8MB of blobs here). Binary stays on /api/documents/:id/file.
+
+    if (docFilterIds.length === 0 || !hasSelfInSelection) {
+      // PUSHDOWN: everyone-mode, or a selection with no self profile. One
+      // Supabase round-trip returns just the page (metadata only, created_at
+      // desc) plus the exact total — no full-table fetch, no in-Node slice.
+      const { rows, total } = await storage.getDocumentsPage({
+        profileIds: docFilterIds.length > 0 ? docFilterIds : undefined,
+        limit,
+        offset,
+      });
+      res.set("X-Total-Count", String(total));
+      return res.json(rows);
+    }
+
+    // NARROW CASE — selection includes a self profile, so orphan inclusion is in
+    // play. Kept on the fetch-all path (filterByProfileScope) because the empty
+    // linked_profiles / self-selected union is not expressed by the DB pushdown.
+    let items = await storage.getDocuments();
+    items = await filterByProfileScope(items, docFilterIds, uid_doc);
+    // METADATA ONLY — never ship base64 blobs in a list (dev/MemStorage parity;
+    // SupabaseStorage.getDocuments already excludes file_data).
     items = items.map((d: any) => (d && d.fileData ? { ...d, fileData: "" } : d));
     res.json(paginate(items, req, res));
   }));

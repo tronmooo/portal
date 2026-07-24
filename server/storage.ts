@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
+import { passesProfileFilter } from "@shared/profile-filter";
 
 // Per-request storage context — eliminates the global userId race condition (C-1)
 // Auth middleware runs storage within this context so all downstream code
@@ -95,6 +96,11 @@ export interface IStorage {
 
   // Documents
   getDocuments(profileIds?: string[]): Promise<Document[]>;
+  // Server-side paginated documents: pushes projection/scope/order/range + an
+  // exact total count into the store in one round-trip. profileIds must only be
+  // passed for a selection with NO self-type profile (orphan inclusion stays on
+  // the getDocuments path — see SupabaseStorage.getDocumentsPage).
+  getDocumentsPage(opts?: { profileIds?: string[]; limit?: number; offset?: number }): Promise<{ rows: Document[]; total: number }>;
   getDocument(id: string): Promise<Document | undefined>;
   createDocument(data: Partial<InsertDocument> & { name: string; type: string } & Record<string, unknown>): Promise<Document>;
   updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined>;
@@ -1405,6 +1411,25 @@ export class MemStorage implements IStorage {
 
   // ---- Documents ----
   async getDocuments() { return Array.from(this.documents.values()); }
+  async getDocumentsPage(opts?: { profileIds?: string[]; limit?: number; offset?: number }): Promise<{ rows: Document[]; total: number }> {
+    // Parity with SupabaseStorage.getDocumentsPage: metadata-only (no fileData),
+    // created_at desc, non-orphan profile containment, exact total, then range.
+    let all = Array.from(this.documents.values());
+    const ids = (opts?.profileIds || []).filter(Boolean);
+    if (ids.length > 0) {
+      // Pure containment (NON-orphan half) via the canonical rule. Passing an
+      // empty allProfiles means no self is in selection, so orphan docs are
+      // excluded — exactly mirroring the DB pushdown (callers only pass
+      // profileIds for a self-free selection; orphan inclusion is on getDocuments).
+      all = all.filter((d: any) => passesProfileFilter(d.linkedProfiles, { selectedIds: ids, allProfiles: [] }));
+    }
+    all = all.slice().sort((a: any, b: any) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    const total = all.length;
+    const offset = Math.max(opts?.offset ?? 0, 0);
+    const windowed = opts?.limit != null ? all.slice(offset, offset + Math.max(opts.limit, 1)) : all.slice(offset);
+    const rows = windowed.map((d: any) => (d && d.fileData ? { ...d, fileData: "" } : d));
+    return { rows, total };
+  }
   async getDocument(id: string) { return this.documents.get(id); }
   async createDocument(data: any): Promise<Document> {
     const document: Document = {
