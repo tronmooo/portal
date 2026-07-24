@@ -32,7 +32,7 @@ import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity"
 import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
 import { detectMoodFromText } from "@shared/mood-detect";
-import { detectDocFieldIntentWithHistory, lookupDocField, type DocFieldLookupResult } from "@shared/doc-field-lookup";
+import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { resolveCanonicalActivity } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
@@ -190,6 +190,38 @@ function stripSensitiveDocData(
 // wrong document (a vehicle registration's "License Number" is the license
 // PLATE, not a driver's license number). Values are sanitized and the same
 // sensitive-key redaction as the document snapshot applies.
+// Per-conversation doc-field subject cache: remembers the last document-field
+// question each user asked (30 min TTL) so repeated questions and follow-ups
+// that fall OUTSIDE the 6-turn history window still resolve without
+// re-clarifying. Only the INTENT is cached — the lookup itself re-runs against
+// the freshly loaded document rows every turn, so a document edited between
+// turns can never serve a stale value (LIVE DATABASE CONTEXT rule). In-memory
+// and per-instance (same best-effort pattern as the action log); a cache miss
+// just means the model falls back to the history-based detection.
+const DOC_INTENT_CACHE_TTL_MS = 30 * 60 * 1000;
+const docIntentCache = new Map<string, { intent: DocFieldIntent; ts: number }>();
+
+function rememberDocFieldIntent(userId: string | undefined, intent: DocFieldIntent): void {
+  docIntentCache.set(userId || "anon", { intent, ts: Date.now() });
+  // Bound the map — one entry per user is the norm; sweep expired on write.
+  if (docIntentCache.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of docIntentCache) {
+      if (now - v.ts > DOC_INTENT_CACHE_TTL_MS) docIntentCache.delete(k);
+    }
+  }
+}
+
+function recallDocFieldIntent(userId: string | undefined): DocFieldIntent | null {
+  const hit = docIntentCache.get(userId || "anon");
+  if (!hit) return null;
+  if (Date.now() - hit.ts > DOC_INTENT_CACHE_TTL_MS) {
+    docIntentCache.delete(userId || "anon");
+    return null;
+  }
+  return hit.intent;
+}
+
 function renderDocFieldLookupBlock(lookup: DocFieldLookupResult, fromHistory: boolean): string {
   const { intent } = lookup;
   const clean = (s: any) => sanitize(String(s ?? "")).replace(/[\r\n]+/g, " ").slice(0, 160);
@@ -204,8 +236,16 @@ function renderDocFieldLookupBlock(lookup: DocFieldLookupResult, fromHistory: bo
   if (lookup.status === "found") {
     for (const m of lookup.matches.slice(0, 4)) {
       const owner = m.ownerNames.length ? `, owner: ${m.ownerNames.map(clean).join("/")}` : "";
-      const val = isSensitiveKey(m.fieldKey) || isSensitiveKey(intent.fieldLabel) ? REDACTED : `"${clean(m.value)}"`;
-      const via = m.source === "ocr" ? " [read from the document's OCR text — confirm against the displayed document]" : "";
+      const sensitive = isSensitiveKey(m.fieldKey) || isSensitiveKey(intent.fieldLabel);
+      const val = sensitive ? REDACTED : `"${clean(m.value)}"`;
+      const notes: string[] = [];
+      if (m.source === "ocr") notes.push("read from the document's OCR text — confirm against the displayed document");
+      if (m.source === "summary") notes.push("read from the extraction summary — confirm against the displayed document");
+      if (typeof m.confidence === "number") notes.push(`extraction confidence ${m.confidence.toFixed(2)}`);
+      if (m.verification === "ocr_confirmed") notes.push("low-confidence extraction VERIFIED against OCR — values agree");
+      if (m.verification === "unverified") notes.push("LOW-CONFIDENCE extraction with no OCR to verify — give the value but say it should be confirmed against the document (retrieve_document displays it); do NOT present it as certain");
+      if (m.verification === "ocr_conflict" && !sensitive) notes.push(`extraction/OCR CONFLICT — the extraction said "${clean(m.conflictingValue)}" but the document's OCR reads the value shown here; OCR wins. Tell the user about the discrepancy and offer retrieve_document to confirm visually`);
+      const via = notes.length ? ` [${notes.join("; ")}]` : "";
       lines.push(`→ ANSWER: ${clean(m.fieldKey)} = ${val} — from document "${clean(m.docName)}" (${clean(m.docType)}${owner})${via}`);
     }
     if (lookup.matches.some(m => isSensitiveKey(m.fieldKey) || isSensitiveKey(intent.fieldLabel))) {
@@ -217,6 +257,9 @@ function renderDocFieldLookupBlock(lookup: DocFieldLookupResult, fromHistory: bo
         : `Answer with THIS value.`,
       `Do NOT substitute a similarly-named field from a DIFFERENT document type (e.g. a vehicle registration's "License Number" is the license PLATE, not a driver's license number).`,
     );
+    if (fromHistory) {
+      lines.push(`This subject was carried over from earlier in the conversation. If the user's CURRENT message is about something else entirely, ignore this block and handle the message normally.`);
+    }
   } else if (lookup.status === "field_missing") {
     const names = lookup.checkedDocs.slice(0, 4).map(d => `"${clean(d.docName)}"`).join(", ");
     lines.push(
@@ -12970,8 +13013,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // the intent from conversation history, so no cross-request cache is needed.
   let docFieldLookupBlock = "";
   try {
-    const detectedDocIntent = detectDocFieldIntentWithHistory(userMessage, conversationHistory);
+    let detectedDocIntent = detectDocFieldIntentWithHistory(userMessage, conversationHistory);
+    // Conversation cache: history-based detection only sees the last 6 turns
+    // the client sent. If it missed but this message reads like a follow-up,
+    // fall back to the last document-field subject this user asked about.
+    if (!detectedDocIntent && looksLikeDocFieldFollowUp(userMessage)) {
+      const cached = recallDocFieldIntent(userId);
+      if (cached) detectedDocIntent = { intent: cached, fromHistory: true };
+    }
     if (detectedDocIntent) {
+      rememberDocFieldIntent(userId, detectedDocIntent.intent);
       const profileNameById = new Map(allProfiles.map((p: any) => [String(p.id), String(p.name || "")]));
       const lookup = lookupDocField(
         documents.map((d: any) => ({
