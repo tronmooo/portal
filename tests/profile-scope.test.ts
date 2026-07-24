@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   resolveActiveCreateProfileId,
   profileScopeParam,
-  profileScopeKey,
 } from "../client/src/hooks/useProfileScope";
+import { scopedKey, goalsQueryKey } from "../shared/query-keys";
 
 // These pin the create-target and scope-plumbing rules that keep every feature
 // locked to the active profile. The reactive read itself (useProfileScope) is a
@@ -68,15 +68,51 @@ describe("profileScopeParam", () => {
   });
 });
 
-describe("profileScopeKey", () => {
-  it("uses the shared canonical key shape so caches collapse to one slot", () => {
-    expect(profileScopeKey("/api/tasks", { selectedIds: [] })).toEqual(["/api/tasks", "all"]);
-    // sorted ascending so [b,a] and [a,b] are the same cache slot
-    expect(profileScopeKey("/api/tasks", { selectedIds: ["b", "a"] })).toEqual([
+describe("scopedKey (canonical profile-scope key builder)", () => {
+  it("uses the live everyone/selected convention, not the old all/selected one", () => {
+    // Unfiltered scope is "everyone" (matches the dashboard bootstrap seed and
+    // every tab reader), NOT the retired "all" segment.
+    expect(scopedKey("/api/tasks", "everyone", [])).toEqual(["/api/tasks", "everyone"]);
+    expect(scopedKey("/api/tasks", "selected", ["b", "a"])).toEqual([
       "/api/tasks",
       "selected",
-      "a",
       "b",
+      "a",
     ]);
+  });
+
+  it("appends trailing sub-slice discriminators verbatim after the scope", () => {
+    expect(scopedKey("/api/incomes", "everyone", [], "hero")).toEqual([
+      "/api/incomes",
+      "everyone",
+      "hero",
+    ]);
+    expect(scopedKey("/api/budgets/summary", "selected", ["p1"], "2026-07", "hero")).toEqual([
+      "/api/budgets/summary",
+      "selected",
+      "p1",
+      "2026-07",
+      "hero",
+    ]);
+  });
+
+  it("drops falsy ids so a stale empty id can't fork the cache slot", () => {
+    expect(scopedKey("/api/expenses", "selected", ["", "p1"])).toEqual([
+      "/api/expenses",
+      "selected",
+      "p1",
+    ]);
+  });
+});
+
+describe("goalsQueryKey", () => {
+  it("collapses to the same everyone/selected slot the dashboard seeds", () => {
+    // Empty selection -> everyone (previously this returned the divergent
+    // ["/api/goals","all"], which never matched the live seed).
+    expect(goalsQueryKey([])).toEqual(["/api/goals", "everyone"]);
+    expect(goalsQueryKey([])).toEqual(scopedKey("/api/goals", "everyone", []));
+    // A selection matches scopedKey("/api/goals","selected",ids) exactly so the
+    // goals/trackers pages and the dashboard read one cache slot (no double-seed).
+    expect(goalsQueryKey(["p1", "p2"])).toEqual(scopedKey("/api/goals", "selected", ["p1", "p2"]));
   });
 });

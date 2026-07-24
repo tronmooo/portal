@@ -4,9 +4,9 @@
 // popups stay on the dashboard's KPI section.
 //
 // CACHE-KEY LOCKSTEP (do not change casually): every query below uses the
-// dashboard's literal key shape `[endpoint, filterMode, ...filterIds]`
-// (see dashboard.tsx bootstrapQuery/statsQuery and HeroKPISection's incomes
-// key) — NOT profileScopeKey() — so this strip resolves from the caches that
+// dashboard's literal key shape `[endpoint, mode, ...filterIds]` — the same
+// shape scopedKey() (see dashboard.tsx bootstrapQuery/statsQuery and
+// HeroKPISection's incomes key) builds — so this strip resolves from the caches that
 // /api/dashboard-bootstrap seeding (lib/bootstrap-seed.ts) already fills and
 // fires zero extra requests on the happy path. The one exception is
 // /api/trackers (not bootstrap-seeded): the HEALTH chip shows "—" until it

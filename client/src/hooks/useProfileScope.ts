@@ -22,7 +22,7 @@
 //
 // Read scope:    const scope = useProfileScope();
 // Query param:   profileScopeParam(scope)  -> "" | "?profileIds=a,b"
-// Query key:     profileScopeKey("/api/x", scope)
+// Query key:     scopedKey("/api/x", scope.mode, scope.selectedIds)  (@shared/query-keys)
 // Create target: useActiveCreateProfileId(profiles) -> id a NEW record links to
 
 import { useSyncExternalStore } from "react";
@@ -31,7 +31,6 @@ import {
   subscribeProfileFilterRaw,
   type FilterMode,
 } from "@/lib/profileFilter";
-import { profileFilteredKey } from "@shared/query-keys";
 
 export interface ProfileScope {
   /** "everyone" = no filter (all data) or "selected" = one+ profiles chosen. */
@@ -76,18 +75,6 @@ export function useProfileScope(): ProfileScope {
 export function profileScopeParam(scope: Pick<ProfileScope, "selectedIds" | "mode">): string {
   if (scope.mode !== "selected" || scope.selectedIds.length === 0) return "";
   return `?profileIds=${scope.selectedIds.join(",")}`;
-}
-
-/**
- * Canonical react-query key for a profile-scoped endpoint. Delegates to the
- * shared profileFilteredKey so client and server agree and caches collapse to
- * one slot per (endpoint, selection).
- */
-export function profileScopeKey(
-  endpoint: string,
-  scope: Pick<ProfileScope, "selectedIds">,
-): readonly unknown[] {
-  return profileFilteredKey(endpoint, scope.selectedIds);
 }
 
 interface ProfileLite {

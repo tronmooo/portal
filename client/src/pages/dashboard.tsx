@@ -2915,7 +2915,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
   // Multi-profile aware: prefer profileIds (array) when present, fall back to single profileId.
   const ids = profileIds.length > 0 ? profileIds : (profileId ? [profileId] : []);
   const profileParam = ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
-  // Canonical key: ["/api/goals", filterMode, ...sortedIds] — see
+  // Canonical key: ["/api/goals", mode, ...ids] via scopedKey — see
   // shared/query-keys.ts and ARCHITECTURE.md §3. Both dashboard and
   // trackers must use this so their caches share one slot.
   // BUG-20260528-goals-key-shape
