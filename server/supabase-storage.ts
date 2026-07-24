@@ -6109,13 +6109,17 @@ export class SupabaseStorage implements IStorage {
   // PREFERENCES
   // ============================================================
   async getPreference(key: string): Promise<string | null> {
-    const { data } = await this.supabase.from("preferences").select("value").eq("user_id", this.userId).eq("key", key).single();
+    // maybeSingle (not single): an absent preference row is the NORMAL case
+    // (e.g. a key the user has never set). single() emits PostgREST 406 on zero
+    // rows — the harmless-but-noisy error the production log sample flagged.
+    const { data } = await this.supabase.from("preferences").select("value").eq("user_id", this.userId).eq("key", key).maybeSingle();
     return data ? data.value : null;
   }
 
   async setPreference(key: string, value: string): Promise<void> {
-    // Upsert: try update, then insert
-    const { data: existing } = await this.supabase.from("preferences").select("key").eq("user_id", this.userId).eq("key", key).single();
+    // Upsert: try update, then insert. maybeSingle — a missing row is the
+    // expected insert path, not an error (avoids the 406 that single() raises).
+    const { data: existing } = await this.supabase.from("preferences").select("key").eq("user_id", this.userId).eq("key", key).maybeSingle();
     if (existing) {
       await this.supabase.from("preferences").update({ value }).eq("user_id", this.userId).eq("key", key);
     } else {
@@ -6132,7 +6136,7 @@ export class SupabaseStorage implements IStorage {
       .select("value")
       .eq("user_id", this.userId)
       .eq("key", `budget:${month}`)
-      .single();
+      .maybeSingle();
     if (!data?.value) return [];
     let parsed: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>;
     try { parsed = JSON.parse(data.value); } catch { return []; }
@@ -6148,7 +6152,7 @@ export class SupabaseStorage implements IStorage {
       .select("id")
       .eq("user_id", this.userId)
       .eq("key", `budget:${month}`)
-      .single();
+      .maybeSingle();
     if (existing) {
       await this.supabase.from("preferences")
         .update({ value: JSON.stringify(budgets) })

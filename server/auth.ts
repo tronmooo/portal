@@ -123,7 +123,64 @@ function cacheUser(token: string, userId: string, email: string | undefined): vo
   }
   tokenUserCache.set(token, { userId, email, expiresAt: Date.now() + TOKEN_CACHE_TTL_MS });
 }
-export function clearTokenCache(): void { tokenUserCache.clear(); }
+export function clearTokenCache(): void { tokenUserCache.clear(); inFlightLookups.clear(); }
+
+// ── Single-flight token→user resolution ─────────────────────────────────────
+// The 60s cache above coalesces bursts AFTER the first lookup populates it. But
+// on a COLD cache during first-paint fan-out, React Query fires 5-10 parallel
+// API calls before any of them has resolved getUser(token) — so each one issues
+// its OWN GoTrue round-trip. Production auth telemetry showed this as the
+// GET /user p95 5,247ms tail: N simultaneous cold lookups pile onto one auth
+// backend. We de-duplicate by token: the FIRST caller starts the getUser()
+// promise and stores it here; every concurrent caller awaits the SAME promise
+// instead of issuing its own. The entry is cleared as soon as it settles, so a
+// later request (after the 60s cache expires) starts a fresh single flight.
+type ResolvedUser = { userId: string; email: string | undefined };
+const inFlightLookups = new Map<string, Promise<ResolvedUser | null>>();
+
+// Lightweight, non-PII counters for cache-hit / miss / single-flight coalescing.
+// Exposed via getAuthTokenStats() for opt-in instrumentation; never logged here.
+const authTokenStats = { hits: 0, misses: 0, coalesced: 0 };
+export function getAuthTokenStats(): { hits: number; misses: number; coalesced: number } {
+  return { ...authTokenStats };
+}
+export function resetAuthTokenStats(): void {
+  authTokenStats.hits = 0; authTokenStats.misses = 0; authTokenStats.coalesced = 0;
+}
+
+/**
+ * Resolve a token to a user via (1) the 60s cache, (2) a shared in-flight
+ * lookup, or (3) a fresh getUser() round-trip — in that order. This is the ONE
+ * place that calls supabase.auth.getUser for request auth, so a cold fan-out of
+ * parallel requests carrying the same JWT collapses to a single GoTrue call.
+ * Returns null on any verification failure (caller decides 401 vs anonymous).
+ */
+async function resolveTokenToUser(token: string): Promise<ResolvedUser | null> {
+  const cached = getCachedUser(token);
+  if (cached) { authTokenStats.hits++; return { userId: cached.userId, email: cached.email }; }
+
+  const existing = inFlightLookups.get(token);
+  if (existing) { authTokenStats.coalesced++; return existing; }
+
+  const supabase = getSupabaseAuth();
+  if (!supabase) return null;
+
+  authTokenStats.misses++;
+  const lookup = (async (): Promise<ResolvedUser | null> => {
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      if (error || !user) return null;
+      cacheUser(token, user.id, user.email);
+      return { userId: user.id, email: user.email };
+    } catch {
+      return null;
+    } finally {
+      inFlightLookups.delete(token);
+    }
+  })();
+  inFlightLookups.set(token, lookup);
+  return lookup;
+}
 
 /**
  * Best-effort resolution of the authenticated user from a request's bearer
@@ -146,19 +203,9 @@ export async function resolveUserFromRequest(
   const token = authHeader.replace("Bearer ", "").trim();
   if (!token || token.length < 20) return null;
 
-  const cached = getCachedUser(token);
-  if (cached) return { userId: cached.userId, email: cached.email };
-
-  const supabase = getSupabaseAuth();
-  if (!supabase) return null;
-  try {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) return null;
-    cacheUser(token, user.id, user.email);
-    return { userId: user.id, email: user.email };
-  } catch {
-    return null;
-  }
+  // Shares the 60s cache AND the in-flight single flight with authMiddleware,
+  // so an authed warmup costs no extra GoTrue round-trip even under fan-out.
+  return resolveTokenToUser(token);
 }
 
 /**
@@ -215,24 +262,16 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
   }
 
   try {
-    // Fast path: serve from the 60s token cache when present. Coalesces the
-    // burst of parallel API calls on every page navigation into a single auth
-    // round-trip per minute per token.
-    const cached = getCachedUser(token);
-    let userId: string;
-    let userEmail: string | undefined;
-    if (cached) {
-      userId = cached.userId;
-      userEmail = cached.email;
-    } else {
-      const { data: { user }, error } = await supabase.auth.getUser(token);
-      if (error || !user) {
-        return res.status(401).json({ error: "Invalid or expired token", code: "AUTH_INVALID" });
-      }
-      userId = user.id;
-      userEmail = user.email;
-      cacheUser(token, userId, userEmail);
+    // Fast path: serve from the 60s token cache when present; otherwise a
+    // single shared in-flight lookup (resolveTokenToUser) coalesces the burst
+    // of parallel API calls on every page navigation into ONE auth round-trip
+    // per token — even when the cache is cold at the start of the fan-out.
+    const resolved = await resolveTokenToUser(token);
+    if (!resolved) {
+      return res.status(401).json({ error: "Invalid or expired token", code: "AUTH_INVALID" });
     }
+    const userId = resolved.userId;
+    const userEmail = resolved.email;
 
     // Set user info on request
     req.userId = userId;
