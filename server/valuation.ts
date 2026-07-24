@@ -58,6 +58,12 @@ export interface AssetValuation {
   missingInfo: string[];
   /** ISO timestamp of when this valuation was computed. */
   valuationDate: string;
+  /** Item specs the live search found on listing/AVM pages (sqft, bedrooms,
+   * mileage…). The route fills these into EMPTY profile fields so the next
+   * estimate is tighter without the user re-typing public data. */
+  specs?: Record<string, string | number>;
+  /** Source URLs the estimate was drawn from (persisted as valuationSources). */
+  sources?: string[];
 }
 
 // Outputs of prior valuations. NEVER included in a new valuation prompt —
@@ -192,7 +198,9 @@ export function buildValuationDossier(
 
 /** The JSON response contract shared by both valuation model paths. */
 export const VALUATION_RESPONSE_SPEC = `Respond with ONLY a JSON object (no markdown, no prose):
-{"value": <number — recommended midpoint estimate in USD>, "low": <number — low end of range>, "high": <number — high end of range>, "confidence": "high|medium|low", "method": "<brief sources/method, e.g. KBB, Zillow, eBay comps>", "factors": ["<specific asset detail that influenced this estimate, e.g. '80,000 miles reduces value ~$2,000'>", ...], "missing": ["<missing detail that would improve accuracy, e.g. 'trim level', 'condition', 'service records'>", ...]}
+{"value": <number — recommended midpoint estimate in USD>, "low": <number — low end of range>, "high": <number — high end of range>, "confidence": "high|medium|low", "method": "<brief sources/method with the key numbers, e.g. 'Realtor.com $1,659,423 · Redfin $1,760,648'>", "factors": ["<specific asset detail that influenced this estimate, e.g. '80,000 miles reduces value ~$2,000'>", ...], "missing": ["<missing detail that would improve accuracy, e.g. 'trim level', 'condition', 'service records'>", ...], "specs": {"<canonical key like sqft|bedrooms|bathrooms|lotSize|yearBuilt|trim|mileage>": <number or short string>, ...}, "sources": ["<url>", ...]}
+
+"specs" (optional): concrete specifications of THIS EXACT item that your search found on its listing/AVM/record pages (e.g. the home's square footage, bed/bath count, lot size; a vehicle's trim). Include ONLY facts a page states about this exact item — omit the object entirely if none found. "sources" (optional): up to 5 URLs you actually drew numbers from.
 
 Valuation rules (CRITICAL):
 - Recompute the value from scratch using ONLY the asset details above plus current market data. Do NOT reuse or repeat any previous estimate.
@@ -279,6 +287,24 @@ export function parseValuationResponse(
     ? parsed.method.trim()
     : (opts?.defaultMethod || "AI estimate");
 
+  // Specs the search found about this exact item — whitelisted keys only, so a
+  // hallucinated blob can never spray arbitrary keys onto the profile.
+  const SPEC_KEYS = new Set(["sqft", "bedrooms", "bathrooms", "lotsize", "yearbuilt", "trim", "mileage", "vin", "condition", "priorsale"]);
+  const CANON_SPEC: Record<string, string> = { lotsize: "lotSize", yearbuilt: "yearBuilt", priorsale: "priorSale" };
+  let specs: Record<string, string | number> | undefined;
+  if (parsed.specs && typeof parsed.specs === "object" && !Array.isArray(parsed.specs)) {
+    for (const [k, v] of Object.entries(parsed.specs)) {
+      const nk = k.toLowerCase().replace(/[^a-z]/g, "");
+      if (!SPEC_KEYS.has(nk)) continue;
+      const key = CANON_SPEC[nk] || nk;
+      if (typeof v === "number" && Number.isFinite(v)) (specs ||= {})[key] = v;
+      else if (typeof v === "string" && v.trim() && v.trim().length <= 80) (specs ||= {})[key] = v.trim();
+    }
+  }
+  const sources = Array.isArray(parsed.sources)
+    ? parsed.sources.filter((s: any) => typeof s === "string" && /^https?:\/\//.test(s)).slice(0, 5)
+    : undefined;
+
   return {
     estimatedValue: value,
     lowValue: low,
@@ -289,5 +315,7 @@ export function parseValuationResponse(
     factorsConsidered: strArr(parsed.factors),
     missingInfo: strArr(parsed.missing),
     valuationDate: new Date().toISOString(),
+    ...(specs ? { specs } : {}),
+    ...(sources && sources.length ? { sources } : {}),
   };
 }

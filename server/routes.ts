@@ -3862,10 +3862,21 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
                     ?? (detail.fields as any)?.purchasePrice
                     ?? 0;
 
+      // Specs the live search found on the item's own listing/record pages
+      // (sqft, bed/bath count, lot size, mileage…) auto-fill EMPTY profile
+      // fields — never overwriting anything the user entered — so the next
+      // estimate is tighter without the user re-typing public data.
+      const specFills: Record<string, any> = {};
+      for (const [k, v] of Object.entries(valuation.specs || {})) {
+        const existing = (detail.fields as any)?.[k];
+        if (existing === undefined || existing === null || String(existing).trim() === "") specFills[k] = v;
+      }
+
       // DATA IS NOT DELETED — we merge into existing fields and preserve
       // previousValue so the user can compare against the prior estimate.
       const updatedFields = {
         ...(detail.fields || {}),
+        ...specFills,
         currentValue: valuation.estimatedValue,
         valuationMethod: valuation.method,
         valuationConfidence: valuation.confidence,
@@ -3875,6 +3886,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         valuationFactors: valuation.factorsConsidered,
         valuationMissingInfo: valuation.missingInfo,
         valuationDate: valuation.valuationDate,
+        ...(valuation.sources && valuation.sources.length ? { valuationSources: valuation.sources.join(", ") } : {}),
         previousValue: oldValue,
       };
       await storage.updateProfile(id, { fields: updatedFields });
@@ -3893,6 +3905,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         factorsConsidered: valuation.factorsConsidered,
         missingInfo: valuation.missingInfo,
         valuationDate: valuation.valuationDate,
+        // Specs auto-filled from the live search (empty fields only).
+        filledSpecs: specFills,
+        sources: valuation.sources || [],
       });
     } catch (err: any) {
       log.error("[LookupValue]", err?.message || "unknown error");

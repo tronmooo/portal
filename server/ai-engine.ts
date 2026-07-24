@@ -367,21 +367,32 @@ async function perplexityValuation(
   // instead of quoting the min-to-max envelope of every site (the "$1.18M–
   // $1.99M home" bug — one outlier AVM made the range meaningless).
   const propertyHint = profile.type === "property"
-    ? `\nThis is a specific residential address: look up the automated valuation estimates for the EXACT address (Zillow Zestimate, Redfin Estimate, Realtor.com), drop the single farthest outlier, and center your value and band on the remaining cluster.`
+    ? `\nThis is a specific residential address: look up the automated valuation estimates for the EXACT address (Zillow Zestimate, Redfin Estimate, Realtor.com, Homes.com), drop the single farthest outlier, and center your value and band on the remaining cluster. Also read the property's own listing/AVM pages for its specifications (square footage, bed/bath count, lot size, year built, prior sale) and check recent comparable sales in the immediate neighborhood — report the specs you find in "specs" and the URLs in "sources".`
     : "";
   const userMsg = `Determine the current US market resale value of the ${profile.type} described below. Search current listings and pricing sources (eBay, Swappa, KBB, Edmunds, Zillow, CARFAX, etc.).${propertyHint}\n\n${dossier}\n\n${VALUATION_RESPONSE_SPEC}`;
+  // sonar-pro has materially better retrieval than base sonar for exact-item
+  // lookups (it finds the property's own listing pages with sqft/beds/lot,
+  // where base sonar often stops at metro-level numbers). Falls back to base
+  // sonar automatically if the pro model is rejected for this account.
+  let ppxModel = process.env.PERPLEXITY_VALUATION_MODEL || "sonar-pro";
   const callPerplexity = async (messages: Array<{ role: string; content: string }>) => {
-    const resp = await fetch("https://api.perplexity.ai/chat/completions", {
+    const attempt = async (model: string) => fetch("https://api.perplexity.ai/chat/completions", {
       method: "POST",
       headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "sonar",
+        model,
         messages,
-        max_tokens: 600,
+        max_tokens: 900,
         temperature: 0.2,
       }),
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(25000),
     });
+    let resp = await attempt(ppxModel);
+    if (!resp.ok && ppxModel !== "sonar" && (resp.status === 400 || resp.status === 404)) {
+      console.warn(`[Valuation] Perplexity model "${ppxModel}" rejected (${resp.status}) — falling back to sonar`);
+      ppxModel = "sonar";
+      resp = await attempt(ppxModel);
+    }
     if (!resp.ok) {
       console.warn("[Valuation] Perplexity API", resp.status, await resp.text().catch(() => ""));
       return null;

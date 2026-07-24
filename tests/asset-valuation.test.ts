@@ -291,3 +291,30 @@ describe("enforceRangeDiscipline — no more source-envelope ranges", () => {
     expect(VALUATION_RESPONSE_SPEC).toContain("DISCARD extreme outliers");
   });
 });
+
+describe("parseValuationResponse — specs & sources from live search", () => {
+  it("parses whitelisted specs and http sources", () => {
+    const v = parseValuationResponse(JSON.stringify({
+      value: 1700000, low: 1600000, high: 1800000, confidence: "medium",
+      method: "Realtor.com $1,659,423 · Redfin $1,760,648",
+      factors: ["AVM cluster ~$1.7M"], missing: [],
+      specs: { sqft: 4240, bathrooms: 4, lotSize: "0.29 acres", yearBuilt: 1998, bogusKey: "x", evil: { nested: true } },
+      sources: ["https://www.redfin.com/x", "not-a-url", "https://www.realtor.com/y"],
+    }));
+    expect(v).not.toBeNull();
+    expect(v!.specs).toEqual({ sqft: 4240, bathrooms: 4, lotSize: "0.29 acres", yearBuilt: 1998 });
+    expect(v!.sources).toEqual(["https://www.redfin.com/x", "https://www.realtor.com/y"]);
+  });
+
+  it("omits specs/sources when absent or invalid", () => {
+    const v = parseValuationResponse('{"value": 5000, "low": 4800, "high": 5300}');
+    expect(v).not.toBeNull();
+    expect(v!.specs).toBeUndefined();
+    expect(v!.sources).toBeUndefined();
+  });
+
+  it("response spec asks for specs and sources", () => {
+    expect(VALUATION_RESPONSE_SPEC).toContain('"specs"');
+    expect(VALUATION_RESPONSE_SPEC).toContain('"sources"');
+  });
+});
