@@ -23,7 +23,7 @@ import {
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
-import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue } from "@shared/extraction-normalize";
+import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -54,7 +54,7 @@ import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO } from "@shared/timezone";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
-import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, type AssetValuation, type AssetValuationContext } from "./valuation";
+import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
 import { shouldUseFrontDoor, runFrontDoorDiag } from "./chat-frontdoor";
 import {
@@ -363,17 +363,20 @@ async function perplexityValuation(
   const apiKey = process.env.PERPLEXITY_API_KEY;
   if (!apiKey) return null;
   const dossier = buildValuationDossier(profile, context);
-  const userMsg = `Determine the current US market resale value of the ${profile.type} described below. Search current listings and pricing sources (eBay, Swappa, KBB, Edmunds, Zillow, CARFAX, etc.).\n\n${dossier}\n\n${VALUATION_RESPONSE_SPEC}`;
-  try {
+  // Property-specific guidance: pull AVMs for the EXACT address and blend them,
+  // instead of quoting the min-to-max envelope of every site (the "$1.18M–
+  // $1.99M home" bug — one outlier AVM made the range meaningless).
+  const propertyHint = profile.type === "property"
+    ? `\nThis is a specific residential address: look up the automated valuation estimates for the EXACT address (Zillow Zestimate, Redfin Estimate, Realtor.com), drop the single farthest outlier, and center your value and band on the remaining cluster.`
+    : "";
+  const userMsg = `Determine the current US market resale value of the ${profile.type} described below. Search current listings and pricing sources (eBay, Swappa, KBB, Edmunds, Zillow, CARFAX, etc.).${propertyHint}\n\n${dossier}\n\n${VALUATION_RESPONSE_SPEC}`;
+  const callPerplexity = async (messages: Array<{ role: string; content: string }>) => {
     const resp = await fetch("https://api.perplexity.ai/chat/completions", {
       method: "POST",
       headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "sonar",
-        messages: [
-          { role: "system", content: "You are an expert asset appraiser. Always respond with a single JSON object and a positive numeric value. Recompute every estimate from the provided details — never repeat a prior estimate." },
-          { role: "user", content: userMsg },
-        ],
+        messages,
         max_tokens: 600,
         temperature: 0.2,
       }),
@@ -384,8 +387,30 @@ async function perplexityValuation(
       return null;
     }
     const json: any = await resp.json();
-    const text: string = json?.choices?.[0]?.message?.content || "";
-    return parseValuationResponse(text, { defaultMethod: "Live search", methodPrefix: "Live search: " });
+    return (json?.choices?.[0]?.message?.content || "") as string;
+  };
+  const system = { role: "system", content: "You are an expert asset appraiser. Always respond with a single JSON object and a positive numeric value. Recompute every estimate from the provided details — never repeat a prior estimate." };
+  try {
+    const text = await callPerplexity([system, { role: "user", content: userMsg }]);
+    if (text === null) return null;
+    let parsed = parseValuationResponse(text, { defaultMethod: "Live search", methodPrefix: "Live search: " });
+    // Range discipline: a band wider than MAX_RANGE_SPREAD of the value is a
+    // source envelope, not an estimate. Give the model ONE chance to tighten
+    // it properly (drop outliers, weight the specific comps); if it still
+    // can't, clamp deterministically so the user never sees a useless range.
+    if (parsed && parsed.estimatedValue > 0 && parsed.lowValue > 0 && parsed.highValue > 0
+        && (parsed.highValue - parsed.lowValue) / parsed.estimatedValue > MAX_RANGE_SPREAD) {
+      const retryText = await callPerplexity([
+        system,
+        { role: "user", content: userMsg },
+        { role: "assistant", content: text },
+        { role: "user", content: `Your low/high band ($${parsed.lowValue.toLocaleString()}–$${parsed.highValue.toLocaleString()}) is a min-to-max envelope of your sources — far too wide to be useful. Discard the outlier source(s), weight the most specific and recent estimates, and return the SAME JSON shape with a band no wider than ${Math.round(MAX_RANGE_SPREAD * 100)}% of "value" total.` },
+      ]).catch(() => null);
+      const retryParsed = retryText ? parseValuationResponse(retryText, { defaultMethod: "Live search", methodPrefix: "Live search: " }) : null;
+      if (retryParsed && retryParsed.estimatedValue > 0) parsed = retryParsed;
+      if (parsed) parsed = enforceRangeDiscipline(parsed);
+    }
+    return parsed;
   } catch (e: any) {
     console.warn("[Valuation] Perplexity call failed:", e?.message || e);
     return null;
@@ -480,7 +505,7 @@ export async function estimateAssetValue(
     const parsed = parseValuationResponse(text, {
       defaultMethod: searchResults ? "web data" : "AI estimate",
     });
-    if (parsed) return parsed;
+    if (parsed) return enforceRangeDiscipline(parsed);
   } catch (e) {
     console.error("[Valuation] Failed:", e);
   }
@@ -1581,6 +1606,9 @@ Return only what you actually read. When a value is unreadable or blank, leave t
     try { fresh = flattenExtractedData(parsed.extractedData); }
     catch { fresh = parsed.extractedData; }
   }
+  // Vehicle-context "LICENSE NUMBER" is the PLATE — canonicalize the key
+  // before merging so the plate never lands under licenseNumber.
+  fresh = canonicalizeExtractedFieldKeys(fresh, `${doc.type || ""} ${doc.name || ""}`);
 
   const { merged, addedKeys } = mergeExtractedData(doc.extractedData, fresh);
   if (addedKeys.length === 0) {
@@ -2037,6 +2065,14 @@ Return ONLY the JSON object, nothing else.`;
     // Store the document (always save the file)
     // Deduplicate: if a document with the same name already exists for the same profiles, update it instead
     const docName = parsed.label || fileName;
+    // Canonicalize extraction field keys BEFORE any persistence: on a vehicle
+    // registration/title, the printed "LICENSE NUMBER" is the license PLATE —
+    // storing it as `licenseNumber` poisoned driver's-license recall (user
+    // report 2026-07-22: "what is my drivers license number" answered with the
+    // car's plate). See shared/extraction-normalize.canonicalizeExtractedFieldKeys.
+    if (parsed.extractedData && typeof parsed.extractedData === "object") {
+      parsed.extractedData = canonicalizeExtractedFieldKeys(parsed.extractedData, `${parsed.documentType || ""} ${docName}`);
+    }
     let document: any = null;
     const existingDocs = await storage.getDocuments();
     const existingDoc = existingDocs.find((d: any) => {

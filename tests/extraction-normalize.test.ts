@@ -218,3 +218,51 @@ describe("buildReminderFields (model-driven, document-agnostic)", () => {
     expect(fields).toHaveLength(2);
   });
 });
+
+// ── canonicalizeExtractedFieldKeys (user report 2026-07-22) ──────────────────
+import { canonicalizeExtractedFieldKeys, looksLikePlateValue } from "../shared/extraction-normalize";
+
+describe("canonicalizeExtractedFieldKeys", () => {
+  it("renames a plate-shaped licenseNumber to licensePlate on a vehicle registration", () => {
+    const out = canonicalizeExtractedFieldKeys(
+      { licenseNumber: "8YPJ480", vehicleIdNumber: "7FARW2H70ME032834" },
+      "vehicle_registration CA Vehicle Registration – Honda 2021",
+    );
+    expect(out.licensePlate).toBe("8YPJ480");
+    expect(out.licenseNumber).toBeUndefined();
+    expect(out.vehicleIdNumber).toBe("7FARW2H70ME032834");
+  });
+
+  it("keeps licenseNumber on a drivers license (non-vehicle context)", () => {
+    const out = canonicalizeExtractedFieldKeys(
+      { licenseNumber: "S226-116-24-800-0" },
+      "drivers_license Florida Driver License",
+    );
+    expect(out.licenseNumber).toBe("S226-116-24-800-0");
+    expect(out.licensePlate).toBeUndefined();
+  });
+
+  it("keeps a DL-shaped value even on a registration (a real DL listed on the card)", () => {
+    const out = canonicalizeExtractedFieldKeys(
+      { licenseNumber: "S226-116-24-800-0" },
+      "vehicle_registration",
+    );
+    expect(out.licenseNumber).toBe("S226-116-24-800-0");
+  });
+
+  it("never overwrites an existing licensePlate key", () => {
+    const out = canonicalizeExtractedFieldKeys(
+      { licenseNumber: "8YPJ480", licensePlate: "REAL01" },
+      "vehicle_registration",
+    );
+    expect(out.licensePlate).toBe("REAL01");
+    expect(out.licenseNumber).toBe("8YPJ480");
+  });
+
+  it("looksLikePlateValue accepts plates and rejects DL numbers", () => {
+    expect(looksLikePlateValue("8YPJ480")).toBe(true);
+    expect(looksLikePlateValue("ABC 123")).toBe(true);
+    expect(looksLikePlateValue("S226-116-24-800-0")).toBe(false);
+    expect(looksLikePlateValue("")).toBe(false);
+  });
+});

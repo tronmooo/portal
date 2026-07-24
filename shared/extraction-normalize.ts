@@ -299,3 +299,54 @@ export function buildReminderFields(
   }
   return out;
 }
+
+// ── Field-key canonicalization for extraction writes (user report 2026-07-22) ─
+// A California/Florida vehicle REGISTRATION card literally prints the license
+// PLATE under the heading "LICENSE NUMBER". The extractor copied that label
+// verbatim, storing the plate as `licenseNumber` — the same key a DRIVER
+// LICENSE uses for its real number — which poisoned recall ("what is my
+// drivers license number?" answered with the car's plate). On any
+// vehicle-context document, a plate-shaped "license number" value is renamed
+// to `licensePlate` before it is ever persisted.
+
+/** Document types/names where a printed "license number" means the PLATE. */
+const VEHICLE_DOC_CONTEXT_RE = /vehicle|registration|\btitle\b|\bdmv\b|smog|emission|\bplate\b/i;
+
+/** Plates are short alphanumerics (2–8 chars once separators are stripped);
+ * real DL numbers are longer and usually carry separators (S226-116-24-800-0). */
+export function looksLikePlateValue(value: unknown): boolean {
+  const raw = String(value ?? "").trim();
+  if (!raw) return false;
+  const compact = raw.replace(/[\s-]/g, "");
+  return /^[A-Za-z0-9]{2,8}$/.test(compact) && raw.replace(/[^-]/g, "").length <= 1;
+}
+
+const LICENSE_NUMBER_KEY_RE = /^licen[cs]e(number|no|num)?$/;
+
+/**
+ * Canonicalize extracted field keys for a document, given its type/name
+ * context. Currently one rule: on vehicle-context documents, a plate-shaped
+ * `licenseNumber` (or `license`/`licenseNo`) becomes `licensePlate`. Values
+ * that don't look like plates (a real DL number on a registration) keep their
+ * key, and an existing `licensePlate` key is never overwritten.
+ */
+export function canonicalizeExtractedFieldKeys(
+  data: Record<string, any> | null | undefined,
+  docTypeOrName: string | null | undefined,
+): Record<string, any> {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return (data as Record<string, any>) || {};
+  if (!VEHICLE_DOC_CONTEXT_RE.test(String(docTypeOrName || ""))) return data;
+  const hasPlateKey = Object.keys(data).some(k => /plate/i.test(k));
+  const out: Record<string, any> = {};
+  let renamed = false;
+  for (const [k, v] of Object.entries(data)) {
+    const nk = k.toLowerCase().replace(/[^a-z]/g, "");
+    if (!renamed && !hasPlateKey && LICENSE_NUMBER_KEY_RE.test(nk) && looksLikePlateValue(v)) {
+      out.licensePlate = v;
+      renamed = true;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}

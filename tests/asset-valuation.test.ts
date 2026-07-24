@@ -241,3 +241,53 @@ describe("estimateAssetValue — live-search path sends the full record", () => 
     expect(second).toContain("condition: fair");
   });
 });
+
+// ── enforceRangeDiscipline (user report 2026-07-24: "$1.18M–$1.99M home") ────
+import { enforceRangeDiscipline, MAX_RANGE_SPREAD } from "../server/valuation";
+
+describe("enforceRangeDiscipline — no more source-envelope ranges", () => {
+  const base = {
+    confidence: "medium", method: "Live search", details: "",
+    factorsConsidered: ["AVM cluster"], missingInfo: [], valuationDate: "2026-07-24T00:00:00.000Z",
+  };
+
+  it("clamps the reported $1.18M–$1.99M envelope to a tight band around the value", () => {
+    const v = enforceRangeDiscipline({
+      ...base, estimatedValue: 1550000, lowValue: 1182000, highValue: 1987600,
+    });
+    expect(v.rangeClamped).toBe(true);
+    const spread = (v.highValue - v.lowValue) / v.estimatedValue;
+    expect(spread).toBeLessThanOrEqual(MAX_RANGE_SPREAD + 1e-9);
+    expect(v.lowValue).toBe(Math.round(1550000 * (1 - MAX_RANGE_SPREAD / 2)));
+    expect(v.highValue).toBe(Math.round(1550000 * (1 + MAX_RANGE_SPREAD / 2)));
+    expect(v.details).toContain(v.lowValue.toLocaleString());
+    // Transparency: the original envelope is preserved as a factor.
+    expect(v.factorsConsidered.join(" ")).toContain("1,182,000");
+  });
+
+  it("leaves a sensible band untouched", () => {
+    const v = enforceRangeDiscipline({
+      ...base, estimatedValue: 20000, lowValue: 19000, highValue: 21500,
+    });
+    expect((v as any).rangeClamped).toBeUndefined();
+    expect(v.lowValue).toBe(19000);
+    expect(v.highValue).toBe(21500);
+  });
+
+  it("caps confidence at medium when it had to clamp", () => {
+    const v = enforceRangeDiscipline({
+      ...base, confidence: "high", estimatedValue: 100000, lowValue: 50000, highValue: 160000,
+    });
+    expect(v.confidence).toBe("medium");
+  });
+
+  it("does nothing without a positive value and band", () => {
+    const v = enforceRangeDiscipline({ ...base, estimatedValue: 0, lowValue: 0, highValue: 0 });
+    expect(v.estimatedValue).toBe(0);
+  });
+
+  it("response spec forbids min-to-max source envelopes", () => {
+    expect(VALUATION_RESPONSE_SPEC).toContain("RANGE DISCIPLINE");
+    expect(VALUATION_RESPONSE_SPEC).toContain("DISCARD extreme outliers");
+  });
+});

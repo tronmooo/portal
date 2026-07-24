@@ -198,10 +198,42 @@ Valuation rules (CRITICAL):
 - Recompute the value from scratch using ONLY the asset details above plus current market data. Do NOT reuse or repeat any previous estimate.
 - Adjust for every relevant provided detail: year, make/model/trim, mileage, condition, location/region, upgrades, repairs and maintenance history, purchase info, and specifications. Meaningfully different details MUST produce a different estimate.
 - ALWAYS return a positive number for "value" — never 0. If exact data is unavailable, give your best informed estimate from comparable items.
-- "low"/"high" must be a sensible band around "value" (low < value < high).
+- RANGE DISCIPLINE: "low"/"high" is YOUR confidence band around "value" — NOT the min-to-max envelope of every source you found. When sources disagree, weight the most specific/recent ones and DISCARD extreme outliers (for a specific home address: the AVMs for that exact address, dropping the farthest outlier; for a vehicle: comps matching trim + mileage). The band must be no wider than 25% of "value" total (roughly ±12%); if your sources honestly can't support a band that tight, still narrow to the best-supported cluster, set confidence to "low", and put the reason in "missing".
 - "factors" must list the concrete details from the profile you actually used (2-6 items).
 - "missing" must list information absent from the profile that would tighten the estimate (0-5 items; empty array if nothing meaningful is missing).
 - confidence: "high" only with an exact market match, "medium" for similar comps, "low" for rough estimates.`;
+
+// ── Range discipline (user report 2026-07-24: home valued "$1.18M–$1.99M") ───
+// The model reported low/high as the OUTER ENVELOPE of every source it found
+// (lowest AVM → highest AVM), so one outlier source made the range useless.
+// Deterministic guard: any band wider than MAX_RANGE_SPREAD of the midpoint is
+// tightened to ±(MAX_RANGE_SPREAD/2) around the value, the original envelope
+// is preserved in factorsConsidered for transparency, and confidence is capped
+// at "medium" (a clamped band is never "high" confidence).
+export const MAX_RANGE_SPREAD = 0.3; // total band width as a fraction of value
+
+export function enforceRangeDiscipline(v: AssetValuation): AssetValuation & { rangeClamped?: boolean } {
+  const { estimatedValue: value, lowValue: low, highValue: high } = v;
+  if (!(value > 0) || !(low > 0) || !(high > 0)) return v;
+  const spread = (high - low) / value;
+  if (spread <= MAX_RANGE_SPREAD) return v;
+  const half = MAX_RANGE_SPREAD / 2;
+  const newLow = Math.round(value * (1 - half));
+  const newHigh = Math.round(value * (1 + half));
+  const envelope = `$${low.toLocaleString()} - $${high.toLocaleString()}`;
+  return {
+    ...v,
+    lowValue: newLow,
+    highValue: newHigh,
+    details: `$${newLow.toLocaleString()} - $${newHigh.toLocaleString()}`,
+    confidence: v.confidence === "high" ? "medium" : v.confidence,
+    factorsConsidered: [
+      ...v.factorsConsidered,
+      `Sources spanned ${envelope}; range shown is the confidence band around the blended estimate`,
+    ].slice(0, 8),
+    rangeClamped: true,
+  };
+}
 
 /**
  * Parse a model response (Perplexity or Anthropic) into a normalized
