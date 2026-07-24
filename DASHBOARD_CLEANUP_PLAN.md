@@ -382,3 +382,79 @@ Each phase is independently shippable and independently revertable.
 | AI `configure_dashboard_sections` tool references removed section ids | `findSection()` fuzzy-matches; add aliases mapping old ids → new (`overdue`→`attention`, `birthdays`→`next14`). |
 | Merging Bills+Docs into one panel hides one behind a tab | Deep-link `?panel=obligations&sub=docs`; the Documents count keeps its own tile sub-line. |
 | Losing the AI Executive Brief removes the narrative | The ranked Needs Attention list carries the same facts with the same `go` targets — the narrative was derived from it, not the reverse. |
+
+---
+
+# Implementation record — 2026-07-24
+
+Shipped. What changed relative to the plan above, and why.
+
+## Delivered
+
+| Phase | Status | Notes |
+|---|---|---|
+| 0 — Guardrails | ✅ | `tests/dashboard-dedup.test.ts` (11 cases) + a DOM one-row-per-datum assertion in `tests/executive-sections.test.tsx`. |
+| 1 — Dedup model | ✅ | `useBriefingModel.ts`; Executive tab 17 sections → 5, 6 tiles → 4. |
+| 2 — Popup consolidation | ✅ | 13 popups → 11 panels; Bills+Docs merged; `TodayOverviewPopup` deleted; 192 lines of duplicate `<Dialog>` markup removed from `dashboard.tsx`. |
+| 3 — Speed | ✅ | Lazy chunks + pointerdown prefetch + idle warm-up, mount-on-open, seeded reads, both on-open invalidates removed, bounded first render. |
+| 4 — Other tabs | ✅ (partial) | Finance and Health de-duplicated. Daily ops left alone — see below. |
+| 5 — Verify | ✅ | 1252 tests pass; `docs/dashboard-scope-contract.md` extended with the render contract. |
+
+## Where the plan was wrong
+
+Four claims in the plan above did not survive contact with the code. Recording
+them so the plan is not read as an accurate description of what exists.
+
+1. **`LAYOUT_VERSION` was NOT bumped, and `DEFAULT_SECTION_DEFS` was not
+   pruned.** The plan called for both. It was wrong: the 17 sections being
+   removed were *internal* to `ExecutiveBriefing.tsx` and never appeared in
+   `DEFAULT_SECTION_DEFS`, which holds dashboard-level sections. Bumping the
+   version would have reset every user's saved layout to defaults for no
+   benefit at all. The §6 risk about layout resets is therefore moot.
+
+2. **"13 popups → 10 panels" is 11, not 10.** Bills+Docs merged (−1) and
+   `TodayOverviewPopup` was deleted (−1), from 13.
+
+3. **"Zero code-splitting … 3,573 lines in the dashboard chunk" was partly
+   wrong.** Rollup already split `TaskHabitPopups` and `HeroKPIPopups` into
+   separate chunks. They were still *static* imports, so the browser fetched
+   them on every dashboard load — the cost was real, but it was eager fetching,
+   not a fat single chunk. Only `BriefingPopups` was literally inside the
+   dashboard chunk.
+
+4. **"Virtualize using the windowing already in the repo (same approach as the
+   trackers list)" — there is no such windowing, and no virtualization
+   dependency.** Rather than add one for variable-height expandable cards,
+   `popups/Windowed.tsx` renders a bounded first page (50 rows) and reveals the
+   rest on demand. Same mount-cost win, no new dependency, every row stays a
+   real DOM node.
+
+Two smaller deviations:
+
+- **Daily ops was left untouched.** The plan wanted it collapsed to a trimmed
+  Executive. It carries no duplicate pair, and collapsing it would have made it
+  indistinguishable from Executive — the opposite of what modes exist for.
+- **The Spending donut dialog stays in `dashboard.tsx`.** The plan listed it as
+  overlapping `BudgetPopup`. They share a data source but the donut is the only
+  visual category breakdown; deleting it would lose a capability, not a copy.
+
+## Measured
+
+Dashboard-chunk JS on the critical path, production build, before → after:
+
+| | Before | After |
+|---|---:|---:|
+| `dashboard` chunk | 238,028 B | 203,591 B |
+| `TaskHabitPopups` (static → lazy) | 58,071 B | 0 B on load |
+| `HeroKPIPopups` (static → lazy) | 46,217 B | 0 B on load |
+| `BriefingPopups` (in-chunk → lazy) | (inside dashboard) | 0 B on load |
+| **Total before first paint** | **342,316 B** | **203,591 B** |
+
+**−138,725 B (−40.5%)** of JavaScript fetched and parsed before the dashboard
+can paint. 125,058 B of panel code now loads on demand, prefetched on press.
+Verified with `grep` against the built chunk: no popup module remains a static
+import.
+
+Not measured: wall-clock tap→visible latency. It needs a device profile against
+a real backend, which this environment cannot run. The mechanism is in place and
+guarded by tests; the number in §4e remains a target, not a result.

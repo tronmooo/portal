@@ -66,41 +66,67 @@ describe("WeeklySummarySection", () => {
 });
 
 describe("ExecutiveBriefing", () => {
-  it("renders every dense briefing section with collapse arrows", async () => {
+  const stats: any = { recentActivity: [{ id: "a1", type: "habit", description: "Completed Workout", timestamp: new Date().toISOString() }] };
+  const enhanced: any = {
+    financeSnapshot: { upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: 0, status: "due_today" }] },
+    expiringDocuments: [{ documentId: "d1", name: "Passport", expirationDate: "2026-10-01", daysUntil: 85 }],
+  };
+
+  it("renders the five deduplicated sections and four tiles", async () => {
     const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
-    const stats: any = { recentActivity: [{ type: "habit", description: "Completed Workout", timestamp: new Date().toISOString() }] };
-    const enhanced: any = {
-      financeSnapshot: { upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: 0, status: "due_today" }] },
-      expiringDocuments: [{ documentId: "d1", name: "Passport", expirationDate: "2026-10-01", daysUntil: 85 }],
-    };
     wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
-    for (const id of ["brief-agenda", "brief-tasks", "brief-habits", "brief-reminders", "brief-dates", "brief-docs", "brief-bills", "brief-calendar", "brief-projects", "brief-activity", "brief-notes"]) {
+
+    // Five sections, down from seventeen. The removed ids (brief-agenda,
+    // brief-overdue, brief-priority, brief-birthdays, brief-appointments,
+    // brief-dates, brief-calendar, brief-ai, …) were all views of these.
+    for (const id of ["brief-attention", "brief-today", "brief-next14", "brief-open", "brief-recent"]) {
       expect(screen.getByTestId(id), id).toBeTruthy();
     }
-    // Attention-first top grid (Attention/Tasks/Events + Bills/Documents/Habits)
-    // plus the full-width Today's Overview strip + AI Executive Brief render.
+    // Four tiles, down from six: the Attention tile counted the section right
+    // below it, and Bills + Documents merged into Obligations.
     expect(screen.getByTestId("brief-stat-row")).toBeTruthy();
-    for (const id of ["brief-stat-attention", "brief-stat-tasks", "brief-stat-events", "brief-stat-bills", "brief-stat-documents", "brief-stat-habits", "brief-today-card"]) {
+    for (const id of ["brief-stat-today", "brief-stat-tasks", "brief-stat-obligations", "brief-stat-habits"]) {
       expect(screen.getByTestId(id), id).toBeTruthy();
     }
-    // Once the (backend-less) queries settle, the bill due today from
-    // `enhanced` must surface on the Attention tile — not a vague score.
+
+    // The bill due today surfaces on the Obligations tile once queries settle.
     await waitFor(() => {
-      expect(screen.getByTestId("brief-stat-attention").textContent).not.toContain("loading");
+      expect(screen.getByTestId("brief-stat-obligations").textContent).not.toContain("loading");
     });
-    const attnTxt = screen.getByTestId("brief-stat-attention").textContent || "";
-    expect(attnTxt).toContain("1");
-    expect(attnTxt).toContain("bill due today");
+    const obTxt = screen.getByTestId("brief-stat-obligations").textContent || "";
+    expect(obTxt).toContain("Phone");
     // Zero habits must NOT read "all done" — nothing is scheduled.
     expect(screen.getByTestId("brief-stat-habits").textContent).toContain("No habits scheduled");
-    expect(screen.getByTestId("brief-ai")).toBeTruthy();
-    // Bills row + Pay button render from enhanced data (no fetch needed).
-    expect(screen.getByTestId("brief-bills").textContent).toContain("Phone");
-    expect(screen.getByTestId("brief-pay-b1")).toBeTruthy();
-    // Docs row renders with days-left.
-    expect(screen.getByTestId("brief-docs").textContent).toContain("Passport");
-    // Sections collapse on header click.
-    const header = screen.getByTestId("brief-bills").querySelector("button[aria-expanded]") as HTMLElement;
+
+    // The bill is an attention item; the 85-day document is open work, not
+    // attention — and neither is rendered in both.
+    expect(screen.getByTestId("brief-attention").textContent).toContain("Phone");
+    expect(screen.getByTestId("brief-open").textContent).toContain("Passport");
+    expect(screen.getByTestId("brief-open").textContent).not.toContain("Phone");
+  });
+
+  it("renders one row per datum in the DOM, not one per section", async () => {
+    // The regression guard for the original bug: this bill previously rendered
+    // in Bills & Obligations, in Calendar · Next 14d, in the AI Executive Brief
+    // and on the Attention tile at the same time.
+    const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
+    const { container } = wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("brief-stat-obligations").textContent).not.toContain("loading");
+    });
+    const rows = Array.from(container.querySelectorAll('[data-testid^="brief-row-"]'));
+    const phoneRows = rows.filter(r => (r.textContent || "").includes("Phone"));
+    expect(phoneRows).toHaveLength(1);
+    // Row keys are the model's dedup identity, so uniqueness in the DOM is the
+    // same property the model guarantees.
+    const keys = rows.map(r => r.getAttribute("data-testid"));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("collapses a section on header click", async () => {
+    const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
+    wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
+    const header = screen.getByTestId("brief-attention").querySelector("button[aria-expanded]") as HTMLElement;
     expect(header.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(header);
     expect(header.getAttribute("aria-expanded")).toBe("false");

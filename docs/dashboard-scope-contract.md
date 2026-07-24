@@ -90,3 +90,65 @@ creates are correct.
 - `tests/e2e-dashboard-filters.test.ts` (run via `npm run test:e2e`) seeds a
   known three-person tree against production and asserts the snapshot
   partitions correctly per filter.
+
+---
+
+# Dashboard render contract (2026-07-24)
+
+A second rule, about *how many times* a datum may appear, not which number it
+shows:
+
+> Every datum has exactly one owning surface. Tiles carry counts and one
+> headline; sections carry rows; panels carry the full list plus actions. A
+> second mention is a *pointer* (a count), never a *copy* (a readable row).
+
+## Where the Executive tab's rows come from
+
+`client/src/components/dashboard/useBriefingModel.ts` is the single derivation.
+It normalizes the seven briefing queries into `BriefingItem`s keyed
+`${kind}:${id}`, then assigns buckets by a **priority cascade**:
+
+```
+attention → today → next14 → open → recent
+```
+
+Passes run in that order against one shared `push`, which refuses a key it has
+already seen. An item therefore lands in its highest-priority bucket and cannot
+appear in a second one. This is the mechanism, not a convention — a new section
+cannot reintroduce double-rendering without deliberately bypassing `push`.
+
+Two consequences worth knowing before editing it:
+
+- **Timeline `task` / `habit` / `obligation` rows are dropped on purpose.**
+  `/api/tasks`, `/api/habits` and `financeSnapshot.upcomingBills` are
+  authoritative and carry live state (completion, payment status); the timeline
+  copies do not. Consuming both is what put bills in "Calendar · Next 14d" as
+  well as "Bills & Obligations".
+- **Bucket order is the product decision.** Moving a rule between passes moves
+  the row between sections; it never duplicates it.
+
+## Where popups come from
+
+`client/src/components/dashboard/popups/` — one `PopupHost` mount point, one
+`PanelRequest` atom mirrored into `?panel=&sub=&focus=`, and a `registry` of
+dynamically imported panels. The invariants:
+
+1. **Nothing mounts while closed.** `PopupHost` returns `null` without a
+   request. A panel rendered with `open={cond}` instead is a regression —
+   its hooks and queries then run on every dashboard render.
+2. **No popup module is a static import of the dashboard.** All three live
+   behind `import()` so they stay off the first-paint path.
+3. **Reads never invalidate.** Panels seed from the briefing's cache via
+   `useSeededList` (same query keys) and refetch in the background. Freshness
+   is a *write-time* concern, handled by `invalidateDomain()`.
+4. **Triggers prefetch on `pointerdown`,** which fires ~80–120 ms before the
+   click resolves on touch.
+
+## How this is guarded
+
+- `tests/dashboard-dedup.test.ts` drives `buildBriefingModel` with fixtures and
+  asserts no key is ever emitted twice, plus that bucket sizes sum to the model.
+- `tests/executive-sections.test.tsx` mounts the real component and asserts one
+  DOM row per datum.
+- `tests/dashboard-popup-perf.test.ts` pins the four structural invariants
+  above at source level (they are not observable from a render test).
