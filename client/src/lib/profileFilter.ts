@@ -290,6 +290,17 @@ function warmScope(mode: FilterMode, ids: string[]): void {
     const idsCopy = [...ids];
     void import("./scope-prefetch").then((m) => {
       try { m.prefetchScopeBootstrap(mode, idsCopy); } catch { /* best-effort */ }
+      // [PERF 2026-07-17] Also warm the SELECTED profile's detail bootstrap so
+      // the Info tab opens instantly. onTouchStart/onMouseEnter in the profile
+      // switcher fires the same warm, but iOS Safari does NOT emit hover before
+      // tap in every navigation gesture (e.g. sidebar swipe + row tap), leaving
+      // the Info tab as a blank 6-block skeleton until profile-bootstrap lands.
+      // Firing at commit is fire-and-forget: warmProfileDetail dedupes inside a
+      // 25s window and only warms the server's response cache — zero risk to
+      // the client cache shape (that's still owned by profile-detail.tsx).
+      if (mode === "selected" && idsCopy.length === 1) {
+        try { m.warmProfileDetail(idsCopy[0]); } catch { /* best-effort */ }
+      }
     }).catch(() => {});
   } catch { /* SSR / test envs without the module graph */ }
 }

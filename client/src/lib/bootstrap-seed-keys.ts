@@ -52,6 +52,23 @@ export function bootstrapSeedEntries(
   add(k("/api/trackers"), b.trackers);
   add(k("/api/trackers", "trends"), b.trackers);
   add(k("/api/reminders"), b.reminders);
+
+  // [PERF 2026-07-17, user report "every tile shows loading on scope switch"]
+  // Events tile is gated on the 45-day calendar-timeline query and the AI
+  // Executive Brief on /api/notifications; without these seeds a scope switch
+  // leaves both cold and the tiles stuck on "loading" for 12s+ on weak mobile.
+  //
+  // Calendar-timeline's live key shape is [endpoint, start, end, mode, ...ids]
+  // (dates BEFORE mode — see ExecutiveBriefing.tsx line 189), so it can't be
+  // built via scopedKey(); we assemble it manually to stay bit-identical.
+  if (b.calendarTimeline && Array.isArray(b.calendarTimeline.items)
+      && b.calendarTimeline.start && b.calendarTimeline.end) {
+    add(
+      ["/api/calendar/timeline", b.calendarTimeline.start, b.calendarTimeline.end, m, ...ids],
+      b.calendarTimeline.items,
+    );
+  }
+  add(k("/api/notifications"), b.notifications);
   return out;
 }
 

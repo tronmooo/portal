@@ -2558,8 +2558,21 @@ If unsure, return "profile_fact".`,
       const cachedStats = getCached(statsCacheKey);
       const cachedEnhanced = getCached(enhancedCacheKey);
 
+      // [PERF 2026-07-17, user report "every tile shows loading on scope switch"]
+      // The Events tile is gated on /api/calendar/timeline and the AI Executive
+      // Brief also reads /api/notifications — neither was in the bootstrap
+      // payload, so scope switches left both cold and the tiles stuck on
+      // "loading" until those separate GETs landed (12s+ on weak mobile). Both
+      // are added to the bootstrap fan-out here; the request memo makes the
+      // added storage reads free (getCalendarTimeline reuses events/tasks/
+      // obligations already fetched above; buildNotifications reuses docs/
+      // tasks/obligations/habits).
+      const bootstrapTz = getTimezone(req);
+      const bootstrapStart = getUserToday(bootstrapTz);
+      const bootstrapEnd = toLocalDateStr(new Date(Date.now() + 45 * 86400000), bootstrapTz);
       const [stats, profiles, incomes, expensesForBudget, budgets, obligationsAll, assetPartyLinks, liabilityProfileLinks,
-        tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll, remindersAll] = await Promise.all([
+        tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll, remindersAll,
+        calendarTimelineAll, notificationsAll] = await Promise.all([
         cachedStats ?? dedupe(statsCacheKey, async () => {
           const s = await storage.getStats(undefined, filterIds);
           setCache(statsCacheKey, s, 60 * 1000);
@@ -2591,6 +2604,11 @@ If unsure, return "profile_fact".`,
         storage.getDocuments(),
         storage.getTrackers(),
         (storage as any).listReminders ? (storage as any).listReminders() : Promise.resolve([] as any[]),
+        // [PERF 2026-07-17] Events tile and AI Brief seeds (see comment above).
+        storage.getCalendarTimeline
+          ? storage.getCalendarTimeline(bootstrapStart, bootstrapEnd, filterIds).catch(() => [] as any[])
+          : Promise.resolve([] as any[]),
+        buildNotifications(storage, bootstrapTz).catch(() => [] as any[]),
       ]);
 
       const enhanced = cachedEnhanced ?? await dedupe(enhancedCacheKey, async () => {
@@ -2677,6 +2695,31 @@ If unsure, return "profile_fact".`,
           : (remindersAll || []).filter((r: any) =>
               passesProfileFilter(r.profileId ? [r.profileId] : [], { selectedIds: filterIds, allProfiles: profiles })
             ),
+        // [PERF 2026-07-17] Calendar timeline for the Events tile — already
+        // scoped by getCalendarTimeline(profileIds), so no extra filtering.
+        // Shape mirrors GET /api/calendar/timeline exactly.
+        calendarTimeline: {
+          start: bootstrapStart,
+          end: bootstrapEnd,
+          items: calendarTimelineAll || [],
+        },
+        // Notifications payload for the AI Executive Brief. Filtered here so
+        // the seeded key matches GET /api/notifications for a scope switch.
+        notifications: (!filterIds || filterIds.length === 0)
+          ? (notificationsAll || [])
+          : (notificationsAll || []).filter((n: any) => {
+              if (!n?.entityType || !n?.entityId) return true;
+              if (n.entityType === "profile") return filterIds.includes(n.entityId);
+              const collection: any[] =
+                n.entityType === "document" ? (documentsAll as any[])
+                : n.entityType === "task" ? (tasksAll as any[])
+                : n.entityType === "obligation" ? (obligationsAll as any[])
+                : n.entityType === "habit" ? (habitsAll as any[])
+                : [];
+              const entity = collection.find((x: any) => x?.id === n.entityId);
+              if (!entity) return true;
+              return passesProfileFilter(entity.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles });
+            }),
         month,
         filterIds: filterIds || [],
       };
