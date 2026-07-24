@@ -32,6 +32,7 @@ import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity"
 import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
 import { detectMoodFromText } from "@shared/mood-detect";
+import { detectDocFieldIntentWithHistory, lookupDocField, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { resolveCanonicalActivity } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
@@ -179,6 +180,58 @@ function stripSensitiveDocData(
     }
   }
   return deepStripKeys(extractedData ?? {}, drop ?? computeAiSensitiveStripKeys(undefined));
+}
+
+// ─── Document-field priority retrieval (2026-07 driver's-license/plate report) ─
+// Renders the result of the deterministic, type-scoped field lookup
+// (shared/doc-field-lookup) as a context block the model sees FIRST. This is
+// the retrieval-order fix: structured extracted fields of the RIGHT document
+// type are resolved before the model can reach for a lookalike field from the
+// wrong document (a vehicle registration's "License Number" is the license
+// PLATE, not a driver's license number). Values are sanitized and the same
+// sensitive-key redaction as the document snapshot applies.
+function renderDocFieldLookupBlock(lookup: DocFieldLookupResult, fromHistory: boolean): string {
+  const { intent } = lookup;
+  const clean = (s: any) => sanitize(String(s ?? "")).replace(/[\r\n]+/g, " ").slice(0, 160);
+  const subject = fromHistory
+    ? `Based on the recent conversation, the user is asking for the ${intent.fieldLabel} from their ${intent.docLabel}.`
+    : `The user's message asks for the ${intent.fieldLabel} from their ${intent.docLabel}.`;
+  const lines: string[] = [
+    `DOCUMENT FIELD LOOKUP (deterministic pre-retrieval, ran before this turn):`,
+    subject,
+    `Structured extracted fields were checked FIRST, scoped to ${intent.docLabel} documents only:`,
+  ];
+  if (lookup.status === "found") {
+    for (const m of lookup.matches.slice(0, 4)) {
+      const owner = m.ownerNames.length ? `, owner: ${m.ownerNames.map(clean).join("/")}` : "";
+      const val = isSensitiveKey(m.fieldKey) || isSensitiveKey(intent.fieldLabel) ? REDACTED : `"${clean(m.value)}"`;
+      const via = m.source === "ocr" ? " [read from the document's OCR text — confirm against the displayed document]" : "";
+      lines.push(`→ ANSWER: ${clean(m.fieldKey)} = ${val} — from document "${clean(m.docName)}" (${clean(m.docType)}${owner})${via}`);
+    }
+    if (lookup.matches.some(m => isSensitiveKey(m.fieldKey) || isSensitiveKey(intent.fieldLabel))) {
+      lines.push(`A value marked ${REDACTED} exists on that document but is withheld from context — call retrieve_document to display the document to the user instead of reading the value aloud.`);
+    }
+    lines.push(
+      lookup.matches.length > 1
+        ? `Multiple documents matched — pick by owner/context, or ask which person the user means.`
+        : `Answer with THIS value.`,
+      `Do NOT substitute a similarly-named field from a DIFFERENT document type (e.g. a vehicle registration's "License Number" is the license PLATE, not a driver's license number).`,
+    );
+  } else if (lookup.status === "field_missing") {
+    const names = lookup.checkedDocs.slice(0, 4).map(d => `"${clean(d.docName)}"`).join(", ");
+    lines.push(
+      `→ Checked ${lookup.checkedDocs.length} ${intent.docLabel} document(s) (${names}) — no ${intent.fieldLabel} in their structured fields or OCR text.`,
+      `IF the user's current message is indeed asking for that value, follow this order strictly: (1) retrieve_document on ${names || "the matching document"} and read its extractedFields; (2) recall_memory("${clean(intent.docLabel)} ${clean(intent.fieldLabel)}"); (3) search_documents. If all miss, say the ${intent.fieldLabel} isn't stored and offer to save it.`,
+      `NEVER answer with a same-named field from a different document type.`,
+    );
+  } else {
+    lines.push(
+      `→ No ${intent.docLabel} document exists among the user's ${lookup.totalDocs} document(s).`,
+      `IF the user's current message is indeed asking for that value: call recall_memory("${clean(intent.docLabel)} ${clean(intent.fieldLabel)}") to check profile fields and memories before answering. If that also misses, say the ${intent.docLabel} isn't uploaded and offer to save the ${intent.fieldLabel} or the document.`,
+      `NEVER answer with a same-named field from a different document type.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 // Rich visual output types (inline — shared/schema was reverted)
@@ -4527,6 +4580,8 @@ BEHAVIOR:
 - ANSWERING DATA QUESTIONS: When the user asks about their data ("what's my expiration date?", "how much is my car worth?", "what's Joe's birthday?", "how much do I spend on subscriptions?"), ALWAYS look up the answer from the data snapshot above. Documents include extracted fields in curly braces {field: value}. Profiles include fields like height, weight, birthday. Assets include currentValue, make, model, year. Subscriptions include cost, frequency. Trackers include latest values. NEVER guess or approximate — cite the exact data you see. If the data seems wrong, tell the user what you found and suggest they update it.
   * MATCH THE USER'S WORD TO THE STORED LABEL — the value may be filed under a different but EQUIVALENT label, especially on document extracted fields. Scan BOTH profiles AND every document's {…} fields, and treat these as the SAME thing: VIN = "Vehicle ID Number"/"Vehicle Identification Number"; license plate = "License Number"/"Plate"/"Tag"; DOB/birthday = "Date of Birth"; SSN = "Social Security Number"; phone = "Phone Number"/"Cell"/"Mobile"; address = "Home/Street/Mailing Address"; sqft = "Square Feet/Footage"; mileage = "Odometer"; policy = "Policy Number"; account = "Account Number"; serial = "Serial Number"; expiration = "Expiration Date/Expires". A VIN asked about a Honda is the "Vehicle ID Number" on that Honda's registration document — find it there even if the vehicle profile has no vin field.
   * BEFORE saying "I don't have that saved", you MUST call recall_memory with a focused query (e.g. "vin", "license plate", "policy number"). recall_memory searches EVERY profile field, every document's extracted data, memories, and captures, and already bridges these label synonyms. Only answer "not saved" if recall_memory ALSO comes back empty.
+  * DOCUMENT-SPECIFIC FIELD QUESTIONS — RETRIEVAL ORDER (CRITICAL): when the user names a document type ("driver's license number", "passport expiration", "registration expiry", "insurance policy number"), the answer MUST come from a document of THAT type. Order: (1) the "DOCUMENT FIELD LOOKUP" block at the top of EXISTING DATA, when present — it already ran the type-scoped structured-field search, trust it over everything else; (2) that document's own extracted fields via retrieve_document; (3) recall_memory / search_documents as the LAST resort. Field labels COLLIDE across document types: a vehicle registration's "License Number" is the license PLATE — NOT a driver's license number — and a registration's "Expiration Date" is the registration's, not the license's. NEVER answer with a same-named field from the wrong document type; if the right document/field isn't stored, say exactly that instead.
+  * FOLLOW-UPS KEEP THE SUBJECT: when the user corrects you ("that's my license plate — I want my driver's license number") or sends a short follow-up ("so what is it?"), resolve what they mean from the conversation history. NEVER reply "What specific information are you referring to?" when the history already names the subject — re-run the lookup for the corrected subject and answer.
 - NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something but it's NOT in the data snapshot above, it was DELETED. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
@@ -12901,6 +12956,39 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     profiles = allProfiles.filter(profileInScope);
   }
 
+  // ── DOCUMENT-FIELD PRIORITY RETRIEVAL (2026-07 driver's-license/plate report) ──
+  // For document-specific questions ("what's my driver's license number?"),
+  // run a deterministic, type-scoped lookup BEFORE the model sees anything:
+  // detect the document type + field, read structured extracted fields of
+  // documents of THAT type first, then their OCR text — broad search is the
+  // last resort, not the first. The result (answer or explicit miss + fallback
+  // order) is injected at the TOP of the context so the right value ranks #1
+  // and a lookalike field from the wrong document type (a registration's
+  // "License Number" = the plate) can't be substituted. Scans the FULL scoped
+  // document list, so documents past the snapshot's 25-doc cap are covered.
+  // Runs on already-loaded rows (no extra I/O), and follow-up turns re-derive
+  // the intent from conversation history, so no cross-request cache is needed.
+  let docFieldLookupBlock = "";
+  try {
+    const detectedDocIntent = detectDocFieldIntentWithHistory(userMessage, conversationHistory);
+    if (detectedDocIntent) {
+      const profileNameById = new Map(allProfiles.map((p: any) => [String(p.id), String(p.name || "")]));
+      const lookup = lookupDocField(
+        documents.map((d: any) => ({
+          id: d.id, name: d.name, type: d.type,
+          extractedData: stripSensitiveDocData(d.extractedData, d.linkedProfiles, allProfiles),
+          createdAt: d.createdAt || d.created_at,
+          ownerNames: (d.linkedProfiles || []).map((pid: string) => profileNameById.get(String(pid))).filter(Boolean),
+        })),
+        detectedDocIntent.intent,
+      );
+      docFieldLookupBlock = renderDocFieldLookupBlock(lookup, detectedDocIntent.fromHistory);
+      logger.info("ai", `doc-field lookup: ${detectedDocIntent.intent.docKind}/${detectedDocIntent.intent.fieldKind} → ${lookup.status}${detectedDocIntent.fromHistory ? " (intent from history)" : ""}`);
+    }
+  } catch (e: any) {
+    logger.warn("ai", `doc-field lookup failed (non-fatal): ${e?.message || e}`);
+  }
+
   // Build COMPACT context — only summaries, no raw entry data (prevents token overflow)
   // PR Q: Always emit a COMPLETE profile-name index (every profile, no slice cap) so the LLM
   // cannot falsely deny the existence of a profile that's past the rich-snapshot cap.
@@ -12916,6 +13004,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // expense to the right profile. The bounded rich snapshot below stays scoped.
   const profileNameIndex = `Profile Name Index (${allProfiles.length}, complete list — every profile owned by user):\n${allProfiles.map((p: any) => `- ${p.name} (${p.type}, id:${p.id.slice(0,8)})`).join("\n") || "  (none)"}`;
   const context = (await Promise.all([
+    docFieldLookupBlock,
     profileNameIndex,
     `Profile Details (showing up to 60 of ${profiles.length}): ${profiles.slice(0, 60).map(p => {
       const fields = p.fields || {};

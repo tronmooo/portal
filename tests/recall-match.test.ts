@@ -95,3 +95,54 @@ describe("recall-match — alias bridging (VIN regression)", () => {
     expect(keyHit).toBeGreaterThan(valHit);
   });
 });
+
+// Regression for the 2026-07 driver's-license report: "What is my driver's
+// license number?" was answered with the vehicle's PLATE (8YPJ480), because
+// (a) the registration prints the plate as "License Number" — a cross-document
+// lookalike label — and (b) "license number" used to FIRE the plate alias
+// group, dragging plate terms into a driver's-license query. These tests pin
+// the type-scoped ranking so the wrong document can't win again.
+describe("recall-match — driver's license vs license plate disambiguation", () => {
+  // recallMemory key paths are "<doc name> <doc type>.<field>".
+  const REG_PLATE_KEY = "Honda Registration registration.License Number";
+  const DL_NUMBER_KEY = "Florida Driver License drivers_license.License Number";
+
+  it("normalizes alias members — the apostrophe form fires the DL group", () => {
+    // Old code compared the raw member "driver's license" against a normalized
+    // query, so it could never match. Both spellings must fire now.
+    for (const q of ["what is my driver's license number", "drivers license number"]) {
+      expect(buildRecallTerms(q).phrases).toContain("license number");
+    }
+  });
+
+  it("'driver's license number' ranks the DL document's field above the registration's plate", () => {
+    const terms = buildRecallTerms("What is my driver's license number?");
+    const dl = recallMatchScore(terms, DL_NUMBER_KEY, "D123-456-78-901-0");
+    const plate = recallMatchScore(terms, REG_PLATE_KEY, "8YPJ480");
+    expect(dl).toBeGreaterThan(plate);
+  });
+
+  it("'license plate' ranks the registration's field above the DL document's", () => {
+    const terms = buildRecallTerms("what's my license plate?");
+    const plate = recallMatchScore(terms, REG_PLATE_KEY, "8YPJ480");
+    const dl = recallMatchScore(terms, DL_NUMBER_KEY, "D123-456-78-901-0");
+    expect(plate).toBeGreaterThan(dl);
+  });
+
+  it("a driver's-license query does NOT drag plate terms into the search", () => {
+    const terms = buildRecallTerms("driver's license number");
+    expect(terms.phrases).not.toContain("license plate");
+    expect(terms.tokens).not.toContain("plate");
+  });
+
+  it("'plate' still searches the ambiguous 'license number' label (registration answer path)", () => {
+    expect(buildRecallTerms("plate").phrases).toContain("license number");
+    const hit = recallMatchScore(buildRecallTerms("plate number"), REG_PLATE_KEY, "8YPJ480");
+    expect(hit).toBeGreaterThan(0);
+  });
+
+  it("naming BOTH types applies no penalty in either direction", () => {
+    const terms = buildRecallTerms("is that my license plate or my driver's license number?");
+    expect(terms.penalties).toEqual([]);
+  });
+});
