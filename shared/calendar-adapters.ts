@@ -208,6 +208,11 @@ export function seriesFromObligations(obligations: readonly any[]): CalendarSeri
         profileId: liabilityId || profileId,
         label: o.name,
         href: sourceHref("obligation", o.id, liabilityId || profileId),
+        // The source-ID duplicate signal: this obligation IS that liability's
+        // payment, so the two must share one identity and one occurrence per
+        // due date. The link stays visible as metadata on the survivor.
+        linkedRecordId: liabilityId || undefined,
+        linkedLabel: liabilityId ? "Liability" : undefined,
       },
       baseDate: clip(o.nextDueDate),
       recurrence: frequencyToRecurrence(o.frequency),
@@ -247,6 +252,10 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
         profileId: p.id,
         label: p.name,
         href: sourceHref("liability", p.id, p.id),
+        // A liability profile IS the financial record, so it anchors on
+        // itself — that is what lets an obligation pointing at it collide.
+        linkedRecordId: p.id,
+        linkedLabel: "Liability",
       },
       baseDate: clip(due),
       recurrence: frequencyToRecurrence(f.frequency ?? "monthly"),

@@ -362,3 +362,152 @@ describe("labels", () => {
     expect(nextAnnual("nonsense", TODAY)).toBeNull();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: the second calendar screenshot (2026-07-25). Every recurring
+// payment rendered TWICE on the same date under two different labels:
+//
+//   Liability · ChatGPT Pro · $20.00       Jul 30
+//   Subscription · ChatGPT Pro · $20.00    Jul 30
+//   Liability · Progressive Auto Ins…      Jul 30
+//   Bill · Progressive Auto Insurance      Jul 30
+//
+// Cause: `kind` was part of the identity key, so `subscription:X:netflix` and
+// `liability:X:netflix` never collided. "Subscription", "Liability" and "Bill"
+// are DESCRIPTIVE LABELS for one money event, not three different dates.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("one payment, one occurrence — whatever label it wears", () => {
+  const CHATGPT = "chatgpt-liability-id";
+
+  const asLiability: CalendarSeries = {
+    id: "liability:chatgpt", kind: "liability", title: "ChatGPT Pro",
+    source: {
+      system: "liability", id: CHATGPT, profileId: CHATGPT,
+      href: `#/profiles/${CHATGPT}`, linkedRecordId: CHATGPT, linkedLabel: "Liability",
+    },
+    baseDate: "2026-07-30", recurrence: "monthly", amount: 20,
+  };
+  const asSubscription: CalendarSeries = {
+    id: "obligation:ob-chatgpt", kind: "subscription", title: "ChatGPT Pro",
+    source: {
+      system: "obligation", id: "ob-chatgpt", profileId: CHATGPT,
+      href: `#/profiles/${CHATGPT}`, linkedRecordId: CHATGPT, linkedLabel: "Liability",
+    },
+    baseDate: "2026-07-30", recurrence: "monthly", amount: 20,
+  };
+
+  it("gives the liability and the subscription ONE identity", () => {
+    expect(seriesIdentityKey(asLiability)).toBe(seriesIdentityKey(asSubscription));
+  });
+
+  it("renders one Jul 30 charge, not two", () => {
+    const jul30 = buildCalendarOccurrences([asLiability, asSubscription], { todayISO: TODAY })
+      .filter((o) => o.date === "2026-07-30");
+    expect(jul30).toHaveLength(1);
+    expect(jul30[0].amount).toBe(20);
+  });
+
+  it("shows it as the Subscription, keeping the liability as metadata", () => {
+    // "Type: Subscription · Linked financial record: Liability"
+    const [survivor] = dedupeSeries([asLiability, asSubscription]);
+    expect(survivor.series.kind).toBe("subscription");
+    expect(survivor.series.source.linkedLabel).toBe("Liability");
+    expect(survivor.duplicateIds).toEqual(["liability:chatgpt"]);
+  });
+
+  it("merges a bill with its liability the same way", () => {
+    const PROG = "progressive-id";
+    const liab: CalendarSeries = {
+      id: "liability:prog", kind: "liability", title: "Progressive Auto Insurance – Honda CR-V 2021",
+      source: { system: "liability", id: PROG, profileId: PROG, href: "#", linkedRecordId: PROG },
+      baseDate: "2026-07-30", recurrence: "monthly", amount: 155,
+    };
+    const bill: CalendarSeries = {
+      id: "obligation:prog", kind: "bill", title: "Progressive Auto Insurance – Honda CR-V 2021",
+      source: { system: "obligation", id: "ob-prog", profileId: PROG, href: "#", linkedRecordId: PROG },
+      baseDate: "2026-07-30", recurrence: "monthly", amount: 155,
+    };
+    const occ = buildCalendarOccurrences([liab, bill], { todayISO: TODAY })
+      .filter((o) => o.date === "2026-07-30");
+    expect(occ).toHaveLength(1);
+    expect(occ[0].kind).toBe("bill");
+  });
+
+  it("keeps two genuinely different bills on one liability separate", () => {
+    // "Do not delete separate records merely because their names are similar."
+    const escrow: CalendarSeries = {
+      ...asSubscription, id: "obligation:escrow", title: "Escrow", amount: 400,
+    };
+    expect(seriesIdentityKey(asSubscription)).not.toBe(seriesIdentityKey(escrow));
+    expect(dedupeSeries([asLiability, asSubscription, escrow])).toHaveLength(2);
+  });
+
+  it("keeps unrelated subscriptions apart", () => {
+    const spotify: CalendarSeries = {
+      ...asSubscription, id: "obligation:spotify", title: "Spotify Premium",
+      source: { ...asSubscription.source, id: "ob-spotify", profileId: "spotify-id", linkedRecordId: "spotify-id" },
+    };
+    expect(dedupeSeries([asSubscription, spotify])).toHaveLength(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: "Joe's Birthday · Every year on Feb 11 · Next: Sun, Feb 11, 2029
+// · in 932 days". The backing event had drifted to a base date of 2029-02-11,
+// so expansion "correctly" started in 2029 and skipped 2027 and 2028.
+//
+// A birthday's stored YEAR is a birth year, never a start date.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("annual dates always land on the earliest valid date after today", () => {
+  const joeBirthdayDrifted: CalendarSeries = {
+    id: "event:drifted", kind: "birthday", title: "Joe's Birthday",
+    source: { system: "profile", id: JOE, profileId: JOE, href: `#/profiles/${JOE}` },
+    baseDate: "2029-02-11", // the corrupt base from the screenshot
+    recurrence: "yearly",
+  };
+
+  it("returns Feb 11 2027, not 2029, for a base stored in the future", () => {
+    const occ = generateSeriesOccurrences(joeBirthdayDrifted, { todayISO: TODAY });
+    expect(occ[0].date).toBe("2027-02-11");
+    expect(nextOccurrenceOf(occ, joeBirthdayDrifted.id, TODAY)?.date).toBe("2027-02-11");
+  });
+
+  it("gives the same answer whatever year is stored", () => {
+    for (const baseDate of ["1990-02-11", "2029-02-11", "2005-02-11", "2026-02-11"]) {
+      const occ = generateSeriesOccurrences({ ...joeBirthdayDrifted, baseDate }, { todayISO: TODAY });
+      expect(occ[0].date, baseDate).toBe("2027-02-11");
+    }
+  });
+
+  it("still generates five future years from the re-anchored date", () => {
+    const dates = generateSeriesOccurrences(joeBirthdayDrifted, { todayISO: TODAY }).map((o) => o.date);
+    expect(dates).toEqual([
+      "2027-02-11", "2028-02-11", "2029-02-11", "2030-02-11", "2031-02-11",
+    ]);
+  });
+
+  it("picks this year's date when it is still ahead", () => {
+    // On Jan 1st, the Feb 11 birthday later that same year is the next one.
+    const occ = generateSeriesOccurrences(joeBirthdayDrifted, { todayISO: "2026-01-01" });
+    expect(occ[0].date).toBe("2026-02-11");
+  });
+
+  it("keeps a Feb 29 anniversary legal in non-leap years", () => {
+    const leapling: CalendarSeries = {
+      ...joeBirthdayDrifted, kind: "anniversary", baseDate: "2004-02-29",
+    };
+    const dates = generateSeriesOccurrences(leapling, { todayISO: TODAY }).map((o) => o.date);
+    expect(dates[0]).toBe("2027-02-28");
+    expect(dates).toContain("2028-02-29");
+  });
+
+  it("does NOT re-anchor a non-annual series that genuinely starts later", () => {
+    // A subscription beginning next March must not be dragged into the past.
+    const future: CalendarSeries = {
+      id: "obligation:future", kind: "subscription", title: "Later",
+      source: { system: "obligation", id: "f", profileId: "me", href: "#" },
+      baseDate: "2027-03-01", recurrence: "monthly",
+    };
+    expect(generateSeriesOccurrences(future, { todayISO: TODAY })[0].date).toBe("2027-03-01");
+  });
+});

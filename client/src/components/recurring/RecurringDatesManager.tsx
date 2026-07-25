@@ -831,4 +831,23 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
   );
 }
 
+// ─── Series dialog host ───────────────────────────────────────────────────────
+// The "New recurring date" form is still the right way to CREATE a managed
+// series, so RecurringDatesPage borrows it rather than duplicating the form.
+// The host owns the dialog state and hands the child an opener.
+
+export function SeriesDialogHost({ children }: {
+  children: (openAdd: () => void) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const { data: profilesRaw } = useQuery<any>({ queryKey: ["/api/profiles"] });
+  const profiles: any[] = Array.isArray(profilesRaw) ? profilesRaw : (profilesRaw?.data ?? []);
+  return (
+    <>
+      {children(() => setOpen(true))}
+      {open && <SeriesDialog mode="add" event={null} profiles={profiles} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
 export default RecurringDatesManager;

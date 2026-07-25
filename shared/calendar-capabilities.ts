@@ -13,7 +13,7 @@
 //
 // Pure, dependency-free. Pinned by tests/calendar-capabilities.test.ts.
 
-import type { CalendarSeries, SourceSystem } from "./calendar-occurrences";
+import { isPaymentKind, type CalendarSeries, type OccurrenceKind, type SourceSystem } from "./calendar-occurrences";
 
 /** Every action the standardized detail panel offers, in render order. */
 export const CALENDAR_ACTIONS = [
@@ -36,6 +36,45 @@ export const ACTION_LABELS: Record<CalendarAction, string> = {
   deleteFuture: "Delete future occurrences",
   deleteSeries: "Delete entire series",
 };
+
+/**
+ * What the primary action is CALLED for this kind of date.
+ *
+ * User report: "'Done' does not make sense for every category… One universal
+ * Done button is causing category behavior to blur together." A bill is paid,
+ * a task is completed, and a birthday is neither — it simply arrives.
+ */
+export function actionLabelFor(action: CalendarAction, kind: OccurrenceKind): string {
+  if (action === "complete") {
+    if (isPaymentKind(kind)) return "Mark paid";
+    if (kind === "task" || kind === "habit") return "Complete";
+    if (kind === "reminder") return "Dismiss";
+    return ACTION_LABELS.complete;
+  }
+  if (action === "edit") {
+    if (kind === "birthday" || kind === "anniversary") return "Edit date";
+    if (isPaymentKind(kind)) return "Edit schedule";
+    return ACTION_LABELS.edit;
+  }
+  if (action === "deleteSeries") {
+    if (kind === "birthday" || kind === "anniversary") return "Remove from calendar";
+    return ACTION_LABELS.deleteSeries;
+  }
+  if (action === "move" && (kind === "task" || kind === "reminder")) return "Reschedule";
+  return ACTION_LABELS[action];
+}
+
+/**
+ * Is there a meaningful per-occurrence "primary" action for this kind — i.e.
+ * should a row show a quick-action button at all?
+ *
+ * Birthdays and anniversaries get none: "Do not place a giant Done button on
+ * birthdays." They are not tasks to complete, and there is nothing to pay.
+ */
+export function hasPrimaryAction(series: CalendarSeries): boolean {
+  if (series.kind === "birthday" || series.kind === "anniversary") return false;
+  return can(series, "complete");
+}
 
 export interface ActionCapability {
   action: CalendarAction;

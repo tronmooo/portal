@@ -136,6 +136,18 @@ export interface OccurrenceSource {
   label?: string;
   /** Route to the source record. Always set — see `sourceHref`. */
   href: string;
+  /**
+   * The financial record this payment is attached to, when one exists — an
+   * obligation's `linkedLiabilityId`, or a liability profile's own id.
+   *
+   * This is the STRONGEST duplicate signal we have: an obligation that
+   * declares itself backed by liability X is, by definition, the same payment
+   * as liability X's own schedule. It is metadata on ONE occurrence, never a
+   * reason to generate a second one.
+   */
+  linkedRecordId?: string;
+  /** Human label for that link, e.g. "Liability". */
+  linkedLabel?: string;
 }
 
 /**
@@ -183,6 +195,25 @@ export interface CalendarSeries {
 /** Kinds whose identity is "this person/thing has ONE of these, ever". */
 const SINGLETON_KINDS = new Set<OccurrenceKind>(["birthday", "anniversary"]);
 
+/**
+ * Kinds that are all the same underlying thing: A RECURRING PAYMENT.
+ *
+ * "Subscription", "Liability" and "Bill" are DESCRIPTIVE LABELS for one money
+ * event, not three different dates. ChatGPT Pro modelled as a subscription
+ * obligation attached to a liability profile is one $20 charge on Jul 30 —
+ * so `kind` is deliberately excluded from their identity. Including it is
+ * exactly what produced the reported duplicates:
+ *
+ *   Liability · ChatGPT Pro · $20.00      Jul 30
+ *   Subscription · ChatGPT Pro · $20.00   Jul 30
+ */
+const PAYMENT_KINDS = new Set<OccurrenceKind>(["subscription", "liability", "bill", "renewal"]);
+
+/** True when this series represents a recurring payment. */
+export function isPaymentKind(kind: OccurrenceKind): boolean {
+  return PAYMENT_KINDS.has(kind);
+}
+
 const slug = (s: unknown) =>
   String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
 
@@ -202,9 +233,24 @@ const slug = (s: unknown) =>
  */
 export function seriesIdentityKey(series: CalendarSeries): string {
   const owner = series.source.profileId || "";
+
+  // A person has ONE birthday, however many systems describe it.
   if (SINGLETON_KINDS.has(series.kind) && owner) {
     return `${series.kind}:${owner}`;
   }
+
+  // A recurring payment is one payment. Anchor on the linked financial record
+  // when there is one (source-ID match — the strongest signal), otherwise on
+  // the owning profile, and keep the normalized title so two genuinely
+  // different bills on the same liability stay two bills.
+  if (PAYMENT_KINDS.has(series.kind)) {
+    const anchor = series.source.linkedRecordId || owner;
+    const name = slug(series.title);
+    if (anchor) return `payment:${anchor}:${name}`;
+    if (name) return `payment::${name}`;
+    return `payment:record:${series.source.system}:${series.source.id}`;
+  }
+
   const name = slug(series.title);
   if (owner && name) return `${series.kind}:${owner}:${name}`;
   if (name) return `${series.kind}::${name}`;
@@ -234,10 +280,31 @@ const AUTHORITY: Partial<Record<OccurrenceKind, SourceSystem>> = {
  * outright; otherwise the authoritative system wins; ties break toward the
  * series carrying more information (per-occurrence state, an amount).
  */
+/**
+ * For a merged payment, which representation should the user SEE?
+ *
+ * The obligation is the record that actually carries the schedule and the
+ * amount; the liability profile is the financial record it hangs off. So a
+ * merged ChatGPT Pro reads "Subscription · $20/month" with the liability kept
+ * as metadata ("Linked financial record"), exactly as specified — not
+ * "Liability" with the subscription hidden.
+ */
+const PAYMENT_SYSTEM_RANK: Partial<Record<SourceSystem, number>> = {
+  obligation: 3,
+  liability: 2,
+  event: 1,
+};
+
 export function seriesPriority(series: CalendarSeries): number {
   if (series.shadow) return 0;
   let score = 1;
-  if (AUTHORITY[series.kind] === series.source.system) score += 100;
+  if (isPaymentKind(series.kind)) {
+    // Payments have their own precedence — every payment system is
+    // "authoritative" for some payment kind, so AUTHORITY alone ties.
+    score += 100 * (PAYMENT_SYSTEM_RANK[series.source.system] ?? 0);
+  } else if (AUTHORITY[series.kind] === series.source.system) {
+    score += 100;
+  }
   if (series.source.profileId) score += 10;
   if (series.amount != null) score += 2;
   if ((series.completedDates?.length || 0) + (series.skippedDates?.length || 0) > 0) score += 1;
@@ -316,6 +383,48 @@ function statusFor(
   return "upcoming";
 }
 
+/**
+ * The base date to expand from.
+ *
+ * For a birthday or anniversary the base date's YEAR carries no schedule
+ * meaning — it is a birth year or a wedding year, and the real rule is
+ * "every year on this month and day". A stored year is therefore never a
+ * start date, and treating it as one is what produced:
+ *
+ *   "Joe's Birthday · Every year on Feb 11 · Next: Sun, Feb 11, 2029 · in 932 days"
+ *
+ * The event backing that card had drifted to a base of 2029-02-11, so
+ * expansion "correctly" began in 2029 and skipped 2027 and 2028 entirely.
+ * Re-anchoring to the year before today makes the next occurrence the
+ * earliest Feb 11 after today, whatever year is stored — and the clamped
+ * `addYearsISO` keeps a Feb-29 anniversary legal in non-leap years.
+ *
+ * Every other kind keeps its base date verbatim: a subscription that genuinely
+ * starts next March must not be dragged into the past.
+ */
+function annualAnchoredBase(series: CalendarSeries, todayISO: string): string {
+  const base = String(series.baseDate || "").slice(0, 10);
+  if (!SINGLETON_KINDS.has(series.kind)) return base;
+  if ((series.recurrence || "") !== "yearly") return base;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return base;
+  const baseYear = Number(base.slice(0, 4));
+  const anchorYear = Number(todayISO.slice(0, 4)) - 1;
+  if (!Number.isFinite(baseYear) || !Number.isFinite(anchorYear)) return base;
+  const baseDay = base.slice(8, 10);
+  // Re-anchor to the year before today so this year's date is still in range.
+  // A Feb-29 series would be CLAMPED to Feb 28 by that shift, and the expander
+  // takes its day-of-month anchor from whatever base it is handed — so the
+  // series would then be pinned to the 28th forever and never return to the
+  // 29th on a leap year. Step back until the original day survives (at most
+  // four years, for Feb 29); the expander's window filter drops the extra
+  // early occurrences.
+  for (let back = 0; back <= 4; back++) {
+    const candidate = addYearsISO(base, anchorYear - back - baseYear);
+    if (candidate.slice(8, 10) === baseDay) return candidate;
+  }
+  return addYearsISO(base, anchorYear - baseYear);
+}
+
 export interface GenerateOptions {
   /** Caller's tz-local today, YYYY-MM-DD. */
   todayISO: string;
@@ -350,7 +459,7 @@ export function generateSeriesOccurrences(
   const identityKey = seriesIdentityKey(series);
   const moved = series.movedDates || {};
 
-  const dates = expandRecurrenceDates(series.baseDate, series.recurrence || "none", {
+  const dates = expandRecurrenceDates(annualAnchoredBase(series, today), series.recurrence || "none", {
     recurrenceEnd: series.recurrenceEnd,
     windowStart,
     windowEnd,

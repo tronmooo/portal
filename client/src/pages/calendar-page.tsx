@@ -2,7 +2,11 @@ import { useEffect, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import CalendarView from "@/components/CalendarView";
-import { RecurringDatesManager } from "@/components/recurring/RecurringDatesManager";
+// The Recurring Dates screen: category chips + Rules/Upcoming views, all fed
+// by the one occurrence engine. Replaces the old manager, which ran recurring
+// RULES and generated OCCURRENCES together as a single scroll.
+import { RecurringDatesPage } from "@/components/recurring/RecurringDatesPage";
+import { SeriesDialogHost } from "@/components/recurring/RecurringDatesManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { ArrowLeft, CalendarDays, Repeat } from "lucide-react";
@@ -94,7 +98,15 @@ export default function CalendarPage() {
           <CalendarView externalFilterIds={filterIds} externalFilterMode={filterMode} />
         </>
       ) : (
-        <RecurringDatesManager filterIds={filterIds} filterMode={filterMode as any} />
+        <SeriesDialogHost>
+          {(openAdd) => (
+            <RecurringDatesPage
+              filterIds={filterIds}
+              filterMode={filterMode as any}
+              onAddRecurring={openAdd}
+            />
+          )}
+        </SeriesDialogHost>
       )}
     </div>
   );
