@@ -1,7 +1,10 @@
 // ── Executive briefing — eight blocks (2026-07-25) ──────────────────────────
 // Render order, each absorbing what it replaces:
 //
-//   1 Pulse            sticky strip · net worth, cash flow, wellness, streak
+//   1 Pulse            NOT RENDERED HERE — components/hub/HubKpiStrip.tsx is
+//                      block 1. The hub shell already pins net worth / cash
+//                      flow / wellness / streak above every tab, so a second
+//                      strip on the board showed the same four numbers twice.
 //   2 Needs Attention  the only red on screen · hides at zero
 //   3 Today            merged timeline + progress bar + one synthesis line
 //   4 Next 14 Days     collapsed count row, expands on tap
@@ -52,45 +55,6 @@ const money = (n: number) => {
   if (abs >= 10_000) return `${sign}$${Math.round(abs / 1000)}k`;
   return `${sign}$${abs.toLocaleString()}`;
 };
-
-// ── Block 1 — Pulse ─────────────────────────────────────────────────────────
-// Sticky. Four numbers, always visible, each opening its own panel. Replaces
-// the six-tile KPI grid outright.
-function Pulse({ model, loading, onOpen, intent }: {
-  model: BriefingModel; loading: boolean;
-  onOpen: (id: PanelId) => void;
-  intent: (id: PanelId) => { onPointerDown: () => void; onTouchStart: () => void };
-}) {
-  const p = model.pulse;
-  const cells: Array<{ label: string; value: string; sub: string; panel: PanelId; tone?: string }> = [
-    { label: "Net worth", value: loading ? "…" : money(p.netWorth), sub: p.netWorthSub, panel: "networth",
-      tone: p.netWorth < 0 ? "0 72% 58%" : undefined },
-    { label: "Cash flow", value: loading ? "…" : `${p.cashFlow >= 0 ? "+" : ""}${money(p.cashFlow)}`, sub: p.cashFlowSub, panel: "cashflow",
-      tone: p.cashFlow < 0 ? "0 72% 58%" : "155 65% 45%" },
-    { label: "Wellness", value: loading ? "…" : p.wellness, sub: p.wellnessSub, panel: "habits" },
-    { label: "Streak", value: loading ? "…" : p.streak === 0 ? "—" : `${p.streak}🔥`, sub: p.streakSub, panel: "habits" },
-  ];
-  return (
-    <div
-      className="sticky top-0 z-20 -mx-1 px-1 pt-1 pb-1.5 mb-2 backdrop-blur-md bg-background/85 border-b"
-      style={{ borderColor: `hsl(${ACCENTS.pulse} / 0.25)` }}
-      data-testid="block-pulse"
-    >
-      <div className="grid grid-cols-4 gap-1.5">
-        {cells.map((c) => (
-          <button key={c.label} onClick={() => onOpen(c.panel)} {...intent(c.panel)}
-            data-testid={`pulse-${c.label.toLowerCase().replace(/\s+/g, "-")}`}
-            className="rounded-lg border px-1.5 py-1 text-left card-lift transition-all min-w-0"
-            style={{ borderColor: `hsl(${c.tone || ACCENTS.pulse} / 0.28)`, background: `hsl(${c.tone || ACCENTS.pulse} / 0.07)` }}>
-            <div className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground truncate">{c.label}</div>
-            <div className="metric-value text-base truncate" style={{ color: `hsl(${c.tone || ACCENTS.pulse})` }}>{c.value}</div>
-            <div className="text-[9px] text-muted-foreground truncate">{loading ? "loading" : c.sub}</div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function Block({ accent, title, count, summary, children, defaultOpen = true, testId, collapsedLabel }: {
   accent: string; title: string; count?: number; summary?: string; children: React.ReactNode;
@@ -366,13 +330,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     );
   };
 
-  const financeLoading = enhanced === undefined;
-
   return (
     <div data-testid="executive-briefing">
-      {/* 1 — PULSE. Sticky, always visible. */}
-      <Pulse model={model} loading={financeLoading} onOpen={(id) => panel.open(id)} intent={rowIntent} />
-
       {stuck && (
         <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2" data-testid="brief-stuck-banner">
           <span className="text-xs text-muted-foreground">Some blocks are taking too long to load.</span>

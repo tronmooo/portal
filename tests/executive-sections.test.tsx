@@ -86,16 +86,20 @@ describe("ExecutiveBriefing — eight blocks", () => {
     ExecutiveBriefingCmp = (await import("../client/src/components/dashboard/ExecutiveBriefing")).ExecutiveBriefing;
   });
 
-  it("always renders Pulse, Today and Quick Capture", () => {
+  it("always renders Today and Quick Capture", () => {
     render8();
-    // Blocks 1, 3 and 8 render unconditionally per the spec's render rules.
-    expect(screen.getByTestId("block-pulse")).toBeTruthy();
+    // Blocks 3 and 8 render unconditionally per the spec's render rules.
     expect(screen.getByTestId("block-today")).toBeTruthy();
     expect(screen.getByTestId("block-capture")).toBeTruthy();
-    // Pulse carries exactly four numbers — it replaces the six-tile KPI grid.
-    for (const id of ["pulse-net-worth", "pulse-cash-flow", "pulse-wellness", "pulse-streak"]) {
-      expect(screen.getByTestId(id), id).toBeTruthy();
-    }
+  });
+
+  it("does NOT render its own Pulse — the hub strip is block 1", () => {
+    // components/hub/HubKpiStrip is pinned above every hub tab including this
+    // one. A second strip here stacked the same four numbers twice; see
+    // tests/hub-kpi-strip.test.ts.
+    render8();
+    expect(screen.queryByTestId("block-pulse")).toBeNull();
+    expect(screen.queryByTestId("pulse-net-worth")).toBeNull();
   });
 
   it("renders Next 14 Days collapsed, and expands it on tap", () => {
