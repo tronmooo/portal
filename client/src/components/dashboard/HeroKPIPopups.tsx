@@ -36,6 +36,7 @@ import {
 import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
+import { netWorthView } from "@/lib/net-worth-view";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ModalShell } from "@/components/ui/modal-shell";
 
@@ -277,18 +278,15 @@ export function NetWorthPopup({
 
   const snap = enhancedRes?.financeSnapshot;
   const showTestData = useShowTestData();
-  const rawAssets = Array.isArray(snap?.assetBreakdown) ? snap.assetBreakdown : fallback.assets;
-  const rawLiabilities = Array.isArray(snap?.liabilityBreakdown) ? snap.liabilityBreakdown : fallback.liabilities;
-  // Hide synthetic test rows unless toggled on (point 11). When rows are
-  // actually removed, recompute the total from the visible rows so the headline
-  // matches the list; otherwise keep the server's (co-ownership-aware) total.
-  const assets = showTestData ? rawAssets : rawAssets.filter((r: any) => !isTestEntity(r));
-  const liabilities = showTestData ? rawLiabilities : rawLiabilities.filter((r: any) => !isTestEntity(r));
-  const removedA = assets.length !== rawAssets.length;
-  const removedL = liabilities.length !== rawLiabilities.length;
-  const displayTotalA = (!removedA && snap?.totalAssetValue != null) ? snap.totalAssetValue : assets.reduce((s: number, r: any) => s + (r.value || 0), 0);
-  const displayTotalL = (!removedL && snap?.totalLiabilities != null) ? snap.totalLiabilities : liabilities.reduce((s: number, r: any) => s + (r.value || 0), 0);
-  const netWorth = displayTotalA - displayTotalL;
+  // ONE derivation, shared with the Hero KPI tile (client/src/lib/net-worth-view).
+  // Totals are the sum of the rows rendered below — including after the
+  // synthetic-test-data filter removes rows — so the headline can never drift
+  // from the list the way it did in the $150 KPI-vs-popup report.
+  const sheet = useMemo(
+    () => netWorthView(snap, showTestData, fallback),
+    [snap, showTestData, fallback],
+  );
+  const { assets, liabilities, totalAssets: displayTotalA, totalLiabilities: displayTotalL, netWorth } = sheet;
 
   // Trend series (oldest→newest), pinned to the live net worth at the end.
   const nwSeries = useMemo(() => {

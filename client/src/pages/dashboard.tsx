@@ -19,7 +19,8 @@ import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
-import { computeNetWorth } from "@shared/net-worth";
+import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
+import { netWorthView, isNetWorthLoaded } from "@/lib/net-worth-view";
 import { computeNowItems, type NowItem } from "@shared/now-rank";
 import {
   aggregateUpcomingDates,
@@ -651,7 +652,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // BUG-20260528-budget-keep-previous-leak: same fix as budgetSummary so the
   // Cash Flow "In $X" doesn't carry the previous filter's incomes when swapping
   // to a fresh profile.
-  const { data: incomesRaw } = useQuery<any[]>({
+  const { data: incomesRaw, isSuccess: incomesLoaded } = useQuery<any[]>({
     queryKey: ["/api/incomes", filterMode, ...filterIds, "hero"],
     queryFn: () => apiRequest("GET", `/api/incomes${leading}`).then(r => r.json()),
     staleTime: 60_000,
@@ -720,19 +721,27 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // already trust the server. For Everyone, prefer the server snapshot once
   // `enhanced` has resolved; the client roll-up is used only as a pre-resolve
   // animation source to avoid a $0 flash before the first response lands.
-  const serverAssets = enhanced?.financeSnapshot?.totalAssetValue;
-  const serverLiabs = enhanced?.financeSnapshot?.totalLiabilities;
-  const totalAssetValue = filterActive
-    ? (serverAssets ?? 0)
-    : serverAssets != null
-      ? serverAssets
+  //
+  // NW-6 (QA 2026-07-25, "$150 difference on the same screen"): the tile used
+  // to read `financeSnapshot.totalAssetValue` straight off the wire while the
+  // Net Worth popup filtered synthetic test rows out and re-summed. Both now
+  // go through `netWorthView`, the one client derivation, whose totals are by
+  // construction the sum of the rows the popup lists.
+  const financeSnap = enhanced?.financeSnapshot;
+  const showTestDataKpi = useShowTestData();
+  const sheet = useMemo(() => netWorthView(financeSnap, showTestDataKpi), [financeSnap, showTestDataKpi]);
+  const netWorthLoaded = isNetWorthLoaded(financeSnap);
+  const totalAssetValue = netWorthLoaded
+    ? sheet.totalAssets
+    : filterActive
+      ? 0
       : allProfiles
         ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0)
         : 0;
-  const totalLiabilities = filterActive
-    ? (serverLiabs ?? 0)
-    : serverLiabs != null
-      ? serverLiabs
+  const totalLiabilities = netWorthLoaded
+    ? sheet.totalLiabilities
+    : filterActive
+      ? 0
       : allProfiles
         ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0)
         : 0;
@@ -751,6 +760,14 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   const monthlyRecurringOut = enhanced?.financeSnapshot?.monthlyObligationTotal ?? 0;
   const monthlyOut = monthlySpend + monthlyRecurringOut;
   const cashFlow = monthlyIncome - monthlyOut;
+  // BUG (QA 2026-07-25): the tile flashed -$7,253 → +$28,247 → -$7,651 →
+  // +$27,849 before settling. Cash flow is In minus Out, and its three inputs
+  // land on three different ticks: `incomes` (In), `totalMonthlySpend` and
+  // `monthlyObligationTotal` (Out). Each missing input defaulted to 0, so every
+  // intermediate render published a WRONG total that looked final — a
+  // half-loaded sum with a dollar sign is indistinguishable from an answer.
+  // Gate the tile on all three: until then it shows a skeleton, not a number.
+  const cashFlowReady = incomesLoaded && enhanced?.financeSnapshot != null;
   const totalBudget = budgetSummary?.totalBudget ?? 0;
   const totalSpent = budgetSummary?.totalSpent ?? 0;
   const budgetPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
@@ -942,13 +959,25 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
             </div>
             <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Cash Flow</span>
           </div>
-          <div className="mt-2 text-2xl font-bold tabular-nums" style={{ color: cashFlow >= 0 ? 'hsl(155 65% 50%)' : 'hsl(0 80% 62%)' }}>
-            {hideAmounts ? "••••" : `${cashFlow >= 0 ? '+' : '−'}$${fmt(animatedCashFlow)}`}
-          </div>
-          <div className="mt-0.5 flex items-center gap-2.5 text-[11px] text-muted-foreground">
-            <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(155 65% 50%)' }} />In {money(monthlyIncome)}</span>
-            <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(0 80% 62%)' }} />Out {money(monthlyOut)}</span>
-          </div>
+          {/* A partially-loaded sum is not a smaller number — it is the WRONG
+              number. Hold the skeleton until In and Out have both landed
+              (see `cashFlowReady`) rather than publishing an intermediate. */}
+          {!cashFlowReady ? (
+            <>
+              <div className="mt-2 h-8 w-32 rounded-md bg-muted/60 animate-pulse" data-testid="hero-cash-flow-loading" />
+              <div className="mt-1 h-3 w-40 rounded bg-muted/40 animate-pulse" />
+            </>
+          ) : (
+            <>
+              <div className="mt-2 text-2xl font-bold tabular-nums" style={{ color: cashFlow >= 0 ? 'hsl(155 65% 50%)' : 'hsl(0 80% 62%)' }}>
+                {hideAmounts ? "••••" : `${cashFlow >= 0 ? '+' : '−'}$${fmt(animatedCashFlow)}`}
+              </div>
+              <div className="mt-0.5 flex items-center gap-2.5 text-[11px] text-muted-foreground">
+                <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(155 65% 50%)' }} />In {money(monthlyIncome)}</span>
+                <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(0 80% 62%)' }} />Out {money(monthlyOut)}</span>
+              </div>
+            </>
+          )}
           <div className="mt-2.5 flex items-end gap-1.5">
             {weekBars.map((b, i) => (
               <div key={i} className="flex flex-1 flex-col items-center gap-1">
@@ -4929,15 +4958,41 @@ function HouseholdGroupHeader({ icon: Icon, label }: { icon: any; label: string 
   );
 }
 
+// One place to read the relational ownership tables. Both queries are already
+// in the react-query cache (the hero KPI section fetches the same keys), so
+// this is a cache read, not extra network. Everything that turns a raw asset
+// or liability value into a per-person number must go through here — that is
+// what keeps the Finance tab, the Net Worth popup and the household cards
+// from each applying their own ownership rule.
+function useOwnershipTables(allProfiles: any[]): OwnershipTables {
+  const { data: assetLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/asset-party-links"],
+    queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()),
+  });
+  const { data: liabilityLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/liability-profile-links"],
+    queryFn: () => apiRequest("GET", "/api/liability-profile-links").then(r => r.json()),
+  });
+  const selfProfileId = (allProfiles || []).find((p: any) => p?.type === "self")?.id ?? null;
+  return useMemo(
+    () => ({ assetLinks, liabilityLinks, selfProfileId }),
+    [assetLinks, liabilityLinks, selfProfileId],
+  );
+}
+
 // #1 Household hero — one combined Net Worth headline with an assets-vs-
 // liabilities split bar. Distinct from the personal dashboard's KPI tiles so
 // "Everyone" reads as an aggregate view at a glance. Uses computeNetWorth (the
 // single source of truth) so it agrees with the per-profile cards + personal
 // dashboards to the dollar.
 function HouseholdHero({ allProfiles }: { allProfiles: any[] }) {
+  // Household total is unfiltered, so every share sums to 100% and the
+  // ownership tables can't change the answer — but pass them anyway so this
+  // hero and the per-person cards below run the exact same code path.
+  const ownership = useOwnershipTables(allProfiles);
   const { assets, liabilities, netWorth } = useMemo(
-    () => computeNetWorth(allProfiles || [], { mode: "everyone", selectedIds: [] }),
-    [allProfiles],
+    () => computeNetWorth(allProfiles || [], { mode: "everyone", selectedIds: [], ownership }),
+    [allProfiles, ownership],
   );
   const total = assets + liabilities;
   const assetPct = total > 0 ? Math.round((assets / total) * 100) : (assets > 0 ? 100 : 0);
@@ -4971,11 +5026,17 @@ function HouseholdHero({ allProfiles }: { allProfiles: any[] }) {
 // comes from the SINGLE source of truth (computeNetWorth). Clicking a card
 // switches scope to that profile's personal dashboard.
 function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
+  // BUG (QA 2026-07-25, "House: $250,000 in Finance but $500,000 in Assets"):
+  // these per-person cards used to sum WHOLE asset/liability values, so a
+  // 50/50 house counted $500k on both owners' cards while the Finance tab —
+  // which reads the server's share-adjusted snapshot — showed $250k. Feeding
+  // computeNetWorth the ownership tables makes both surfaces one calculation.
+  const ownership = useOwnershipTables(allProfiles);
   const cards = useMemo(() => {
     const people = (allProfiles || []).filter((p: any) => p.type === "self" || p.type === "person" || p.type === "pet");
     return people
       .map((p: any) => {
-        const nw = computeNetWorth(allProfiles, { mode: "selected", selectedIds: [p.id] });
+        const nw = computeNetWorth(allProfiles, { mode: "selected", selectedIds: [p.id], ownership });
         return {
           id: p.id,
           name: p.name || "Unnamed",
@@ -4988,7 +5049,7 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
         };
       })
       .sort((a: any, b: any) => b.netWorth - a.netWorth);
-  }, [allProfiles]);
+  }, [allProfiles, ownership]);
 
   const totalPositiveNW = useMemo(() => cards.reduce((s: number, c: any) => s + Math.max(0, c.netWorth), 0), [cards]);
 
