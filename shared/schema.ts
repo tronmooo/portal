@@ -326,6 +326,8 @@ export interface Tracker {
 
 export interface TrackerField {
   name: string;
+  /** Display override. Omit to derive one from `name` via trackerFieldLabel(). */
+  label?: string;
   type: "number" | "text" | "boolean" | "select" | "duration";
   options?: string[];
   unit?: string;

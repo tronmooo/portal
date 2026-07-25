@@ -18,6 +18,7 @@ import {
 } from "@shared/tracker-metric-definition";
 import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
 import { resolveTrackerUnit } from "@shared/tracker-units";
+import { trackerFieldLabel, humanizeFieldName } from "@shared/field-label";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
@@ -1468,8 +1469,8 @@ function AddEntryDialog({
           )}
           {tracker.fields.map((f) => (
             <div key={f.name}>
-              <Label className="text-xs font-medium text-muted-foreground capitalize">
-                {f.name}
+              <Label className="text-xs font-medium text-muted-foreground">
+                {trackerFieldLabel(f)}
                 {(f.unit || tracker.unit) ? ` (${f.unit || tracker.unit})` : ""}
               </Label>
               {f.type === "number" && (
@@ -1480,7 +1481,7 @@ function AddEntryDialog({
                   value={values[f.name] ?? ""}
                   onChange={(e) => setValues((p) => ({ ...p, [f.name]: e.target.value }))}
                   onKeyDown={(e) => { if (['e','E','+','-'].includes(e.key)) e.preventDefault(); }}
-                  placeholder={`Enter ${f.name}`}
+                  placeholder={`Enter ${trackerFieldLabel(f).toLowerCase()}`}
                   className="mt-1"
                   data-testid={`input-entry-${f.name}`}
                 />
@@ -1490,7 +1491,7 @@ function AddEntryDialog({
                   type="text"
                   value={values[f.name] ?? ""}
                   onChange={(e) => setValues((p) => ({ ...p, [f.name]: e.target.value }))}
-                  placeholder={`Enter ${f.name}`}
+                  placeholder={`Enter ${trackerFieldLabel(f).toLowerCase()}`}
                   className="mt-1"
                   data-testid={`input-entry-${f.name}`}
                 />
@@ -1504,7 +1505,7 @@ function AddEntryDialog({
                     data-testid={`checkbox-entry-${f.name}`}
                   />
                   <label htmlFor={`check-${f.name}`} className="text-sm">
-                    {f.name}
+                    {trackerFieldLabel(f)}
                   </label>
                 </div>
               )}
@@ -1514,7 +1515,7 @@ function AddEntryDialog({
                   onValueChange={(v) => setValues((p) => ({ ...p, [f.name]: v }))}
                 >
                   <SelectTrigger className="mt-1" data-testid={`select-entry-${f.name}`}>
-                    <SelectValue placeholder={`Select ${f.name}`} />
+                    <SelectValue placeholder={`Select ${trackerFieldLabel(f).toLowerCase()}`} />
                   </SelectTrigger>
                   <SelectContent>
                     {f.options.map((opt) => (
@@ -1542,7 +1543,7 @@ function AddEntryDialog({
             <div className="space-y-1.5">
               {Object.entries(customFields).map(([k, v]) => (
                 <div key={k} className="flex items-center gap-1.5">
-                  <span className="text-xs text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</span>
+                  <span className="text-xs text-muted-foreground w-24 shrink-0 truncate" title={k}>{humanizeFieldName(k)}</span>
                   <span className="text-sm flex-1 truncate">{String(v)}</span>
                   <button
                     type="button"
@@ -3178,7 +3179,7 @@ function EntryEditor({
           const selectOptions = def?.type === "select" && Array.isArray((def as any).options) ? ((def as any).options as string[]).filter(Boolean) : null;
           return (
           <div key={k} className="flex items-center gap-1.5">
-            <label className="text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
+            <label className="text-muted-foreground w-24 shrink-0 truncate" title={k}>{humanizeFieldName(k)}</label>
             {typeof editVals[k] === "boolean" ? (
               <Checkbox
                 checked={!!editVals[k]}
@@ -3308,7 +3309,7 @@ function EntryRow({
             if (v === undefined || v === "" || f.name === "_notes") return null;
             return (
               <span key={f.name} className="text-muted-foreground text-xs">
-                {f.name}: {String(v)}{f.unit ? ` ${f.unit}` : ""}
+                {trackerFieldLabel(f)}: {String(v)}{f.unit ? ` ${f.unit}` : ""}
               </span>
             );
           })}
@@ -4769,14 +4770,14 @@ function CorrelationsTabContent({ tracker }: { tracker: Tracker }) {
         <Select value={fieldA} onValueChange={setFieldA}>
           <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {numericFields.map(f => <SelectItem key={f.name} value={f.name}>{f.name}</SelectItem>)}
+            {numericFields.map(f => <SelectItem key={f.name} value={f.name}>{trackerFieldLabel(f)}</SelectItem>)}
           </SelectContent>
         </Select>
         <span className="text-xs text-muted-foreground">vs</span>
         <Select value={fieldB} onValueChange={setFieldB}>
           <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {numericFields.map(f => <SelectItem key={f.name} value={f.name}>{f.name}</SelectItem>)}
+            {numericFields.map(f => <SelectItem key={f.name} value={f.name}>{trackerFieldLabel(f)}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>

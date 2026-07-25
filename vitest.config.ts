@@ -69,6 +69,7 @@ export default defineConfig({
       'tests/hub-routes.test.ts',
       'tests/profile-tab-slugs.test.ts',
       'tests/profile-owner-scope.test.ts',
+      'tests/field-label.test.ts',
       'tests/profile-fields.test.ts',
       'tests/money-overview.test.tsx',
       'tests/money-popups.test.tsx',
