@@ -4572,6 +4572,28 @@ export class SupabaseStorage implements IStorage {
     return result;
   }
 
+  /** Remove ONE generated occurrence. The recurrence keeps running — only this
+   *  date disappears, from the calendar and every other surface at once. */
+  async deleteOccurrence(id: string, date: string): Promise<any> {
+    const occDate = String(date).slice(0, 10);
+    const result = await this._patchOccurrence(id, occDate, { status: "deleted", paymentId: null });
+    // Deleting the current due date advances the series so the next occurrence
+    // becomes due — same handling as skipping it.
+    const p = await this.getProfile(id);
+    const f: any = p?.fields || {};
+    if (String(f.dueDate ?? f.nextDueDate ?? "").slice(0, 10) === occDate) {
+      const nextDue = advanceLiabilityDueDate(f, occDate);
+      await this.updateProfile(id, { fields: { dueDate: nextDue, nextDueDate: nextDue } } as any);
+      return this.getLiabilitySchedule(id);
+    }
+    return result;
+  }
+
+  /** Restore a deleted or skipped occurrence back onto the schedule. */
+  async restoreOccurrence(id: string, date: string): Promise<any> {
+    return this._patchOccurrence(id, String(date).slice(0, 10), { status: null, paymentId: null });
+  }
+
   async rescheduleOccurrence(id: string, date: string, newDate: string): Promise<any> {
     return this._patchOccurrence(id, String(date).slice(0, 10), { movedTo: String(newDate).slice(0, 10) });
   }

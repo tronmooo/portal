@@ -45,6 +45,26 @@ describe("generateSchedule", () => {
     expect(s.find((o) => o.date === "2026-08-15")!.overridden).toBe(true);
   });
 
+  it("drops a deleted occurrence entirely while the series keeps generating", () => {
+    // "Skip" keeps the date visible and struck through; "delete" removes it, so
+    // it leaves the calendar and every other surface that reads this schedule.
+    const s = generateSchedule(bill({ dueDate: "2026-07-15", occurrences: { "2026-08-15": { status: "deleted" } } }), [], {
+      todayISO: TODAY, months: 4,
+    });
+    expect(s.find((o) => o.date === "2026-08-15")).toBeUndefined();
+    // Siblings on both sides are untouched — only the one date is gone.
+    expect(s.find((o) => o.date === "2026-07-15")).toBeDefined();
+    expect(s.find((o) => o.date === "2026-09-15")).toBeDefined();
+  });
+
+  it("skips a deleted occurrence when picking the next due date", () => {
+    const next = nextDueOccurrence(
+      bill({ dueDate: "2026-07-15", occurrences: { "2026-07-15": { status: "deleted" } } }),
+      [], TODAY,
+    );
+    expect(next!.date).toBe("2026-08-15");
+  });
+
   it("honors a reschedule override (movedTo shifts the effective date only)", () => {
     const s = generateSchedule(bill({ dueDate: "2026-07-15", occurrences: { "2026-09-15": { movedTo: "2026-09-18" } } }), [], {
       todayISO: TODAY, months: 4,

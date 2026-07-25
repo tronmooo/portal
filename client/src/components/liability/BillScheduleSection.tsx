@@ -8,8 +8,9 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarClock, CheckCircle2, SkipForward, Pause, Play, Pencil, Clock, ChevronDown, ChevronRight, ChevronLeft, Bell } from "lucide-react";
+import { CalendarClock, CheckCircle2, SkipForward, Pause, Play, Pencil, Clock, ChevronDown, ChevronRight, ChevronLeft, Bell, Trash2, RotateCcw, Plus } from "lucide-react";
 import { BILL_STATUS_META, type BillStatus } from "@shared/liability-status";
+import { generationRule, generationKindFor } from "@shared/occurrence-routing";
 
 type OccStatus = BillStatus | "skipped";
 interface Occ {
@@ -18,7 +19,7 @@ interface Occ {
 }
 interface Schedule {
   id: string; name: string; amount: number; frequency: string;
-  family?: string; isRecurring?: boolean;
+  family?: string; typeKey?: string | null; isRecurring?: boolean;
   firstPayment: string | null; nextDue: { date: string; effectiveDate: string; amount: number } | null;
   lastPaid: string | null; autopay: boolean; paused: boolean; pausedUntil: string | null;
   gracePeriodDays: number | null; lateFee: number | null; reminderLeadDays: number | null;
@@ -56,6 +57,10 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
   const [filter, setFilter] = useState<Filter>("upcoming");
   const [pauseUntil, setPauseUntil] = useState("");
   const [calOpen, setCalOpen] = useState(false);
+  // How far ahead to generate. Starts at the hard-coded default for this kind
+  // (a subscription/bill rolls 12 months; see shared/occurrence-routing) and
+  // the user can extend it — the horizon is a default, never a ceiling.
+  const [months, setMonths] = useState<number | null>(null);
   const scheduleKey = ["/api/liabilities", liabilityId, "schedule"];
 
   const { data, isLoading } = useQuery<Schedule>({
@@ -63,9 +68,18 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
     queryFn: async () => (await apiRequest("GET", `/api/liabilities/${liabilityId}/schedule?months=12`)).json(),
   });
 
+  // Refetch at the chosen horizon once the user extends past the default.
+  const { data: extended } = useQuery<Schedule>({
+    queryKey: [...scheduleKey, months],
+    queryFn: async () => (await apiRequest("GET", `/api/liabilities/${liabilityId}/schedule?months=${months}`)).json(),
+    enabled: months != null,
+  });
+
+  // The profile owns the recurrence, so any occurrence write has to refresh
+  // every surface that merely DISPLAYS it — the calendar first of all.
   const resync = () => {
     queryClient.invalidateQueries({ queryKey: scheduleKey });
-    for (const k of ["/api/calendar/timeline", "/api/obligations", "/api/dashboard-enhanced", "/api/profiles", "/api/stats"]) {
+    for (const k of ["/api/calendar/timeline", "/api/obligations", "/api/dashboard-enhanced", "/api/profiles", "/api/stats", "/api/events"]) {
       queryClient.invalidateQueries({ queryKey: [k] });
     }
   };
@@ -77,14 +91,16 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
   const act = (fn: () => Promise<Response>, ok: string) =>
     run.mutate(fn, { onSuccess: () => { resync(); toast({ title: ok }); } });
 
-  if (isLoading || !data) {
+  const view = (months != null && extended) ? extended : data;
+
+  if (isLoading || !view) {
     return (
-      <Card><CardHeader><CardTitle className="text-base flex items-center gap-2"><CalendarClock className="w-4 h-4" />Schedule &amp; Calendar</CardTitle></CardHeader>
-        <CardContent><p className="text-sm text-muted-foreground">Loading schedule…</p></CardContent></Card>
+      <Card><CardHeader><CardTitle className="text-base flex items-center gap-2"><CalendarClock className="w-4 h-4" />Recurring dates</CardTitle></CardHeader>
+        <CardContent><p className="text-sm text-muted-foreground">Loading generated dates…</p></CardContent></Card>
     );
   }
 
-  const occ = data.occurrences || [];
+  const occ = view.occurrences || [];
   const filtered = occ.filter((o) => {
     if (filter === "all") return true;
     if (filter === "upcoming") return o.status === "upcoming" || o.status === "due_today";
@@ -93,6 +109,10 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
     if (filter === "skipped") return o.status === "skipped";
     return true;
   });
+  // The hard-coded default horizon for this kind of liability, and whatever
+  // the user has extended it to.
+  const genKind = generationKindFor(view.typeKey || view.family || "bill");
+  const horizonMonths = months ?? generationRule(genKind).months;
   const counts = {
     upcoming: occ.filter((o) => o.status === "upcoming" || o.status === "due_today").length,
     completed: occ.filter((o) => o.status === "paid").length,
@@ -104,10 +124,10 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
     <Card data-testid="bill-schedule-section">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <CardTitle className="text-base flex items-center gap-2"><CalendarClock className="w-4 h-4" />Schedule &amp; Calendar</CardTitle>
-          {data.isRecurring && (
+          <CardTitle className="text-base flex items-center gap-2"><CalendarClock className="w-4 h-4" />Recurring dates</CardTitle>
+          {view.isRecurring && (
           <div className="flex items-center gap-2">
-            {data.paused ? (
+            {view.paused ? (
               <Button size="sm" variant="outline" onClick={() => act(() => apiRequest("POST", `/api/liabilities/${liabilityId}/resume`), "Bill resumed")} data-testid="btn-resume">
                 <Play className="w-3.5 h-3.5 mr-1" />Resume
               </Button>
@@ -126,38 +146,38 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {data.paused && (
+        {view.paused && (
           <div className="rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">
-            Paused{data.pausedUntil ? ` until ${dt(data.pausedUntil)}` : ""} — no occurrences generate while paused.
+            Paused{view.pausedUntil ? ` until ${dt(view.pausedUntil)}` : ""} — no occurrences generate while paused.
           </div>
         )}
 
         {/* Facts grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          <Fact label="Next due" value={data.nextDue ? dt(data.nextDue.effectiveDate) : "—"} />
-          <Fact label="Amount due" value={usd(data.nextDue?.amount ?? data.amount)} />
-          <Fact label="Frequency" value={<span className="capitalize">{data.frequency}</span>} />
-          <Fact label="Remaining" value={data.remainingPayments != null
-            ? `${data.remainingPayments} of ${data.totalPayments} payment${data.totalPayments === 1 ? "" : "s"}`
+          <Fact label="Next due" value={view.nextDue ? dt(view.nextDue.effectiveDate) : "—"} />
+          <Fact label="Amount due" value={usd(view.nextDue?.amount ?? view.amount)} />
+          <Fact label="Frequency" value={<span className="capitalize">{view.frequency}</span>} />
+          <Fact label="Remaining" value={view.remainingPayments != null
+            ? `${view.remainingPayments} of ${view.totalPayments} payment${view.totalPayments === 1 ? "" : "s"}`
             : "Ongoing"} />
-          <Fact label="Annual total" value={usd(data.annualTotal)} />
-          <Fact label="First payment" value={dt(data.firstPayment)} />
-          <Fact label="Last paid" value={dt(data.lastPaid)} />
-          <Fact label="Autopay" value={data.autopay ? "On" : "Off"} />
-          <Fact label="Calendar" value={data.calendarSynced ? "Synced" : "—"} />
-          <Fact label="Grace period" value={data.gracePeriodDays != null ? `${data.gracePeriodDays} days` : "—"} />
-          <Fact label="Late fee" value={data.lateFee != null ? usd(data.lateFee) : "—"} />
-          <Fact label="Reminder" value={data.reminderLeadDays != null ? `${data.reminderLeadDays} days before` : "—"} />
-          <Fact label="Payments made" value={String(data.payments?.length ?? 0)} />
+          <Fact label="Annual total" value={usd(view.annualTotal)} />
+          <Fact label="First payment" value={dt(view.firstPayment)} />
+          <Fact label="Last paid" value={dt(view.lastPaid)} />
+          <Fact label="Autopay" value={view.autopay ? "On" : "Off"} />
+          <Fact label="Calendar" value={view.calendarSynced ? "Synced" : "—"} />
+          <Fact label="Grace period" value={view.gracePeriodDays != null ? `${view.gracePeriodDays} days` : "—"} />
+          <Fact label="Late fee" value={view.lateFee != null ? usd(view.lateFee) : "—"} />
+          <Fact label="Reminder" value={view.reminderLeadDays != null ? `${view.reminderLeadDays} days before` : "—"} />
+          <Fact label="Payments made" value={String(view.payments?.length ?? 0)} />
         </div>
 
         {/* Change recurrence — bills only (a loan's cadence is fixed). */}
-        {data.isRecurring && (
+        {view.isRecurring && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-muted-foreground">Recurrence:</span>
           {FREQS.map((fr) => (
-            <Button key={fr} size="sm" variant={data.frequency === fr ? "default" : "outline"} className="h-7 px-2 text-xs capitalize"
-              onClick={() => data.frequency !== fr && act(() => apiRequest("PATCH", `/api/obligations/${liabilityId}`, { frequency: fr }), `Now ${fr}`)}
+            <Button key={fr} size="sm" variant={view.frequency === fr ? "default" : "outline"} className="h-7 px-2 text-xs capitalize"
+              onClick={() => view.frequency !== fr && act(() => apiRequest("PATCH", `/api/obligations/${liabilityId}`, { frequency: fr }), `Now ${fr}`)}
               data-testid={`btn-freq-${fr}`}>{fr}</Button>
           ))}
         </div>
@@ -174,13 +194,13 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
             {calOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             Calendar view
             <span className="text-xs text-muted-foreground font-normal">
-              — {data.reminderLeadDays != null ? `due dates + reminders (${data.reminderLeadDays}d before)` : "all due dates"}
+              — {view.reminderLeadDays != null ? `due dates + reminders (${view.reminderLeadDays}d before)` : "all due dates"}
             </span>
           </button>
           {calOpen && (
             <MiniMonthCalendar
               occurrences={occ}
-              reminderLeadDays={data.reminderLeadDays}
+              reminderLeadDays={view.reminderLeadDays}
               onPickDay={() => setFilter("all")}
             />
           )}
@@ -200,8 +220,34 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
         <div className="space-y-1.5">
           {filtered.length === 0 && <p className="text-sm text-muted-foreground py-2">No {filter} payments.</p>}
           {filtered.map((o) => (
-            <OccurrenceRow key={o.occurrenceId} liabilityId={liabilityId} occ={o} defaultAmount={data.amount} onAct={act} busy={run.isPending} />
+            <OccurrenceRow key={o.occurrenceId} liabilityId={liabilityId} occ={o} defaultAmount={view.amount} onAct={act} busy={run.isPending} />
           ))}
+        </div>
+
+        {/* Generation horizon. Dates are generated from the rule, never entered
+            one by one, so "more dates" means extending the window — the
+            default comes from the kind (12 months for a bill or subscription,
+            5 years for a birthday) and is a starting point, not a limit. */}
+        <div className="border-t pt-3 flex items-center justify-between gap-2 flex-wrap">
+          <p className="text-xs text-muted-foreground">
+            Showing {occ.length} generated {occ.length === 1 ? "date" : "dates"} ·{" "}
+            {horizonMonths >= 12 && horizonMonths % 12 === 0
+              ? `${horizonMonths / 12} year${horizonMonths === 12 ? "" : "s"}`
+              : `${horizonMonths} months`} ahead
+            {months == null && ` (default for a ${genKind.replace(/_/g, " ")})`}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={horizonMonths >= 36}
+              onClick={() => setMonths(Math.min(36, horizonMonths + 12))} data-testid="btn-generate-more">
+              <Plus className="w-3.5 h-3.5 mr-1" />Generate more
+            </Button>
+            {months != null && (
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs"
+                onClick={() => setMonths(null)} data-testid="btn-reset-horizon">
+                <RotateCcw className="w-3.5 h-3.5 mr-1" />Reset
+              </Button>
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -243,6 +289,18 @@ function OccurrenceRow({
               data-testid={`occ-skip-${occ.date}`}><SkipForward className="w-3.5 h-3.5" /></Button>
           </>
         )}
+        {/* Undo a skip / mark-paid — puts the date back on the schedule. */}
+        {!open && (
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={busy}
+            onClick={() => onAct(() => apiRequest("POST", `${base}/restore`), "Restored")}
+            data-testid={`occ-restore-${occ.date}`}><RotateCcw className="w-3.5 h-3.5" /></Button>
+        )}
+        {/* Delete THIS occurrence only. The series keeps generating; this one
+            date leaves the calendar and every other surface immediately. */}
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive" disabled={busy}
+          onClick={() => onAct(() => apiRequest("DELETE", base), "Occurrence removed")}
+          aria-label={`Delete the ${dt(occ.effectiveDate)} occurrence`}
+          data-testid={`occ-delete-${occ.date}`}><Trash2 className="w-3.5 h-3.5" /></Button>
         <Popover>
           <PopoverTrigger asChild><Button size="sm" variant="ghost" className="h-7 px-2 text-xs" data-testid={`occ-edit-${occ.date}`}><Pencil className="w-3.5 h-3.5" /></Button></PopoverTrigger>
           <PopoverContent className="w-64 space-y-3">
@@ -254,10 +312,17 @@ function OccurrenceRow({
               </div>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Amount for this occurrence</Label>
+              <Label className="text-xs">Amount</Label>
+              <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8" />
+              {/* Google-Calendar semantics: change just this instance, or the
+                  rule itself so every future occurrence follows. */}
               <div className="flex gap-1">
-                <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8" />
-                <Button size="sm" className="h-8" onClick={() => onAct(() => apiRequest("PATCH", base, { amount: Number(amt) }), "Amount updated")}>Save</Button>
+                <Button size="sm" variant="outline" className="h-8 flex-1 text-xs"
+                  onClick={() => onAct(() => apiRequest("PATCH", base, { amount: Number(amt) }), "This occurrence updated")}
+                  data-testid={`occ-amount-this-${occ.date}`}>This one</Button>
+                <Button size="sm" className="h-8 flex-1 text-xs"
+                  onClick={() => onAct(() => apiRequest("PATCH", `/api/obligations/${liabilityId}`, { amount: Number(amt) }), "All future occurrences updated")}
+                  data-testid={`occ-amount-future-${occ.date}`}>All future</Button>
               </div>
             </div>
             <div className="space-y-1">

@@ -9,8 +9,14 @@
 // the calendar, the dashboard bills, and the liability detail page all read it.
 //
 // fields.occurrences is keyed by the canonical (unshifted) YYYY-MM-DD date:
-//   { "2026-08-15": { status?: "paid"|"skipped", amount?, movedTo?, notes?, paymentId? } }
+//   { "2026-08-15": { status?: "paid"|"skipped"|"deleted", amount?, movedTo?, notes?, paymentId? } }
 // fields.paused / fields.pausedUntil suppress generation while paused.
+//
+// "skipped" vs "deleted": a skipped occurrence still EXISTS — it stays on the
+// schedule struck through so the history reads honestly ("I didn't pay
+// August"). A deleted one is generated and then dropped entirely, so it
+// vanishes from the calendar, the dashboard, and this schedule the moment the
+// user removes it. Both leave every sibling occurrence untouched.
 
 import { freqToUnit, advance, type RecurrenceRule } from "./recurrence";
 import { liabilityBillStatus, type BillStatus } from "./liability-status";
@@ -203,6 +209,16 @@ export function generateSchedule(
     if (cur >= anchor) seriesIndex++;
 
     const ov = overrides[cur] || null;
+    // A deleted occurrence is skipped over entirely — not emitted with a
+    // status — so every surface that reads this schedule loses it at once.
+    // The series itself keeps generating: only this one date is gone.
+    if (ov?.status === "deleted") {
+      if (!recurs) break;
+      const nextDeleted = advance(cur, rule);
+      if (nextDeleted <= cur) break;
+      cur = nextDeleted;
+      continue;
+    }
     const effectiveDate = ov && ISO_RE.test(clip(ov.movedTo)) ? clip(ov.movedTo) : cur;
     // Include when EITHER the canonical or the shifted date lands in-window.
     const inWindow = (cur >= windowStart && cur <= windowEnd) ||

@@ -56,6 +56,7 @@ import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { BillScheduleSection } from "@/components/liability/BillScheduleSection";
+import { hashParam, stripHashParams } from "@/lib/hashQuery";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -372,10 +373,25 @@ interface LiabilityProfilePageProps {
 type TabKey =
   | "overview"
   | "details"
+  | "recurring"
   | "payments"
   | "documents"
   | "activity"
   | "history";
+
+const TAB_KEYS: TabKey[] = ["overview", "details", "recurring", "payments", "documents", "activity", "history"];
+
+/**
+ * Which tab to open on arrival. A recurring occurrence deep-links here with
+ * ?section=recurring (or ?tab=recurring) so tapping "ChatGPT Pro · Jul 30" on
+ * the calendar lands on the generated dates, not the top of the page.
+ */
+function initialTab(): TabKey {
+  const raw = hashParam("tab") || hashParam("section");
+  // "payments"/"documents" double as section names; anything unrecognized
+  // (or absent) falls back to Overview.
+  return raw && (TAB_KEYS as string[]).includes(raw) ? (raw as TabKey) : "overview";
+}
 
 const PROFILE_LINK_ROLES: { value: string; label: string }[] = [
   { value: "owner", label: "Owner" },
@@ -393,9 +409,13 @@ const ASSET_LINK_ROLES: { value: string; label: string }[] = [
 
 export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const [, navigate] = useLocation();
-  const [tab, setTab] = useState<TabKey>("overview");
+  const [tab, setTab] = useState<TabKey>(initialTab);
   const { toast } = useToast();
   const qc = useQueryClient();
+
+  // One-shot: consume the deep-link param so switching tabs by hand and then
+  // refreshing doesn't snap back to the linked tab.
+  useEffect(() => { stripHashParams("tab", "section", "on"); }, []);
 
   // ── Edit / delete / avatar — match asset profile parity ────────────────────
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -1048,6 +1068,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             <TabsList className="inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50">
               <TabsTrigger value="overview" className="text-xs px-3 whitespace-nowrap" data-testid="tab-overview">Overview</TabsTrigger>
               <TabsTrigger value="details" className="text-xs px-3 whitespace-nowrap" data-testid="tab-details">Details</TabsTrigger>
+              <TabsTrigger value="recurring" className="text-xs px-3 whitespace-nowrap" data-testid="tab-recurring">Recurring Dates</TabsTrigger>
               <TabsTrigger value="payments" className="text-xs px-3 whitespace-nowrap" data-testid="tab-payments">Payments</TabsTrigger>
               <TabsTrigger value="documents" className="text-xs px-3 whitespace-nowrap" data-testid="tab-documents">Docs</TabsTrigger>
               <TabsTrigger value="activity" className="text-xs px-3 whitespace-nowrap" data-testid="tab-activity">Activity</TabsTrigger>
@@ -1213,9 +1234,31 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <NestedLiabilitiesCard liabilityId={profile.id} />
             </section>
 
-            {/* EVERY liability gets a Schedule & Calendar (bills, loans, cards
-                all look the same) — payment dates on a month calendar plus the
-                per-payment list. Placed at the bottom, below the AI summary. */}
+            {/* The generated dates live on their own Recurring Dates tab (this
+                profile owns the recurrence), so Overview just points at it. */}
+            <button
+              type="button"
+              onClick={() => setTab("recurring")}
+              className="mt-6 w-full rounded-xl border border-border bg-card px-4 py-3 flex items-center justify-between text-left hover:bg-muted/40 transition-colors"
+              data-testid="overview-goto-recurring"
+            >
+              <span className="flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 text-muted-foreground" />
+                <span>
+                  <span className="block text-sm font-medium">Recurring dates</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Every generated {recurringBill ? "due date" : "payment date"} — complete, skip, reschedule, or remove one
+                  </span>
+                </span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+            </button>
+          </TabsContent>
+
+          {/* RECURRING DATES — the occurrences this liability generates. The
+              profile owns the recurrence; the calendar only displays it, so
+              every action here updates the calendar immediately. */}
+          <TabsContent value="recurring" className="mt-4">
             <BillScheduleSection liabilityId={profile.id} />
           </TabsContent>
 

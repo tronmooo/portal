@@ -366,7 +366,11 @@ const USER_CACHE_PREFIXES = [
   "profiles:", "trackers:", "tasks:", "expenses:", "events:", "habits:",
   "obligations:", "journal:", "documents:", "goals:", "insights:",
   "insights-data:", "activity:", "ai-digest:", "artifacts:", "notifications:",
-  "cashflow:", "calendar:",
+  // "calendar:" does NOT cover the timeline — its keys are "caltimeline:<uid>:
+  // <start>:<end>:…". Without this entry the 30s timeline cache survived every
+  // write, so completing or deleting an occurrence left the stale date on the
+  // calendar until the TTL lapsed.
+  "cashflow:", "calendar:", "caltimeline:",
 ];
 
 // Scoped cache-bust: drop only the MUTATING user's cached responses instead of
@@ -5681,6 +5685,9 @@ Rules:
   const bustBillCaches = (uid: string) => {
     bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`enhanced:`);
     bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`);
+    // The calendar TIMELINE keys on "caltimeline:" — an occurrence that was
+    // paid, skipped, or deleted has to leave the calendar on the next read.
+    bustCache(`caltimeline:${uid}`);
     bustCache(`notifications:${uid}`); bustCache(`profile-detail:${uid}:`);
   };
   // Split a synthetic occurrenceId "<liabilityId>:<YYYY-MM-DD>" (UUIDs/dates
@@ -5790,6 +5797,28 @@ Rules:
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const result = await (storage as any).skipOccurrence(req.params.id, req.params.date);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
+    bustBillCaches(uid);
+    res.json(result);
+  }));
+
+  // Delete ONE generated occurrence. The recurrence rule is untouched, so the
+  // series keeps generating; this single date leaves the calendar, the
+  // dashboard, and the schedule immediately (bustBillCaches).
+  app.delete("/api/liabilities/:id/occurrences/:date", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const result = await (storage as any).deleteOccurrence(req.params.id, req.params.date);
+    if (!result) return res.status(404).json({ error: "Liability not found" });
+    bustBillCaches(uid);
+    res.json(result);
+  }));
+
+  // Put a deleted or skipped occurrence back on the schedule.
+  app.post("/api/liabilities/:id/occurrences/:date/restore", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const result = await (storage as any).restoreOccurrence(req.params.id, req.params.date);
+    if (!result) return res.status(404).json({ error: "Liability not found" });
     bustBillCaches(uid);
     res.json(result);
   }));

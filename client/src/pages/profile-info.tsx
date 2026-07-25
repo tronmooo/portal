@@ -22,6 +22,7 @@ import { flattenProfile } from "@/lib/flattenProfile";
 import { infoFieldsForType, readField, computeAge } from "@/lib/profile-fields";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
+import { hashParam, stripHashParams } from "@/lib/hashQuery";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -104,6 +105,11 @@ function SingleProfileInfo({ id }: { id: string }) {
   const [addingField, setAddingField] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newVal, setNewVal] = useState("");
+  // A recurring occurrence deep-links here with ?section=birthday (or
+  // anniversary) so tapping "Joe's Birthday" on the calendar lands ON the
+  // birthday, not at the top of an undifferentiated field grid.
+  const [section] = useState<string | null>(() => hashParam("section"));
+  useEffect(() => { stripHashParams("section", "focus", "on"); }, []);
 
   const { data: profile, isLoading, error } = useQuery<any>({
     queryKey: ["/api/profiles", id, "detail"],
@@ -281,6 +287,7 @@ function SingleProfileInfo({ id }: { id: string }) {
             label={r.label}
             value={r.value}
             editable={r.key !== "__age"}
+            highlighted={!!section && r.key.toLowerCase() === section.toLowerCase()}
             onSave={r.key !== "__age" ? (v) => saveField(r.key, v) : undefined}
             onRemove={r.key !== "__age" && !["birthday"].includes(r.key) ? () => removeField(r.key) : undefined}
           />
@@ -464,16 +471,22 @@ function MemoriesSection() {
 }
 
 // ── Single editable identity cell ────────────────────────────────────────────
-function FieldCell({ label, value, editable, onSave, onRemove }: {
+function FieldCell({ label, value, editable, highlighted, onSave, onRemove }: {
   label: string;
   value: string;
   editable: boolean;
+  /** Deep-linked target (?section=birthday) — scrolled to and ringed. */
+  highlighted?: boolean;
   onSave?: (v: string) => void;
   onRemove?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  const cellRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setDraft(value); }, [value]);
+  useEffect(() => {
+    if (highlighted) cellRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlighted]);
 
   if (editing && editable) {
     return (
@@ -491,7 +504,8 @@ function FieldCell({ label, value, editable, onSave, onRemove }: {
   }
   return (
     <Card
-      className={`p-2.5 group relative ${editable ? "cursor-pointer hover:border-primary/50" : ""}`}
+      ref={cellRef}
+      className={`p-2.5 group relative ${editable ? "cursor-pointer hover:border-primary/50" : ""} ${highlighted ? "ring-2 ring-primary" : ""}`}
       onClick={() => editable && setEditing(true)}
       data-testid={`info-cell-${label}`}
     >

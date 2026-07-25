@@ -3,6 +3,10 @@
 // Upcoming Dates — cross-app reminder aggregator
 // =============================================================================
 import { parseRecurringMeta, nextOccurrence as rdNextOccurrence } from "./recurring-dates";
+import {
+  resolveOccurrenceTarget, sectionForCategory,
+  type OccurrenceSourceType, type OccurrenceState, type ParentSection,
+} from "./occurrence-routing";
 // Pulls every time-sensitive item across the app into a single normalized stream
 // so the dashboard can render one definitive "what's next" view.
 //
@@ -25,6 +29,11 @@ import { parseRecurringMeta, nextOccurrence as rdNextOccurrence } from "./recurr
 //     items roll forward; past one-time items are dropped at read time).
 //   - Each entry carries a stable id, urgency, category, entityKind, and a
 //     deep-link href so the UI can route to source.
+//   - Every entry is an OCCURRENCE of a parent object, never a free-standing
+//     record. sourceType/sourceId name that parent and `href` always opens it
+//     (see shared/occurrence-routing.ts). No entry may route to a collection
+//     screen — landing on the Bills list after tapping "ChatGPT Pro · Jul 30"
+//     loses the identity of what was tapped.
 // =============================================================================
 
 export type UpcomingCategory =
@@ -110,8 +119,27 @@ export interface UpcomingDate {
   timeframe: UpcomingTimeframe;
   /** Recurring (birthday/anniversary/annual renewal) rolls forward automatically. */
   recurring: boolean;
-  /** href the dashboard uses to deep-link to the source. */
+  /**
+   * href that opens this occurrence's PARENT object. Always a detail route —
+   * `isCollectionRoute(href)` is false for every entry this module emits.
+   */
   href: string;
+  /** Kind of object that owns this occurrence (decides which page `href` opens). */
+  sourceType: OccurrenceSourceType;
+  /**
+   * Id of the owning object — what `href` opens. Distinct from `sourceId`,
+   * which is the id of the record the date was READ from: a bill's occurrence
+   * has sourceId = the obligation row and parentId = the liability profile.
+   */
+  parentId: string;
+  /** ISO date of this instance — same value as nextDate, named for the model. */
+  occurrenceDate: string;
+  /** This instance's own state; siblings are unaffected by it. */
+  status: OccurrenceState;
+  /** The recurrence rule that produced this date, in words. */
+  generatedFromRule: string;
+  /** Section of the parent page to reveal on arrival (e.g. Birthday). */
+  parentSection?: ParentSection;
   /** Optional related entity ids (e.g. for the click-through fallback). */
   relatedProfileId?: string;
   relatedDocumentId?: string;
@@ -429,6 +457,61 @@ function profileHref(p: any): string {
   return `#/profiles/${p.id}`;
 }
 
+/**
+ * Build the parent-pointer half of an UpcomingDate. Every extractor routes
+ * through here so there is exactly one place that decides where an occurrence
+ * goes — and that place can only produce parent detail routes.
+ */
+function occurrenceFields(args: {
+  sourceType: OccurrenceSourceType;
+  /** Parent id. For a liability this is the liability PROFILE id. */
+  parentId: string;
+  occurrenceDate: string;
+  daysUntil: number;
+  rule: string;
+  section?: ParentSection;
+  completed?: boolean;
+}): Pick<UpcomingDate, "href" | "sourceType" | "parentId" | "occurrenceDate" | "status" | "generatedFromRule" | "parentSection"> {
+  const target = resolveOccurrenceTarget({
+    sourceType: args.sourceType,
+    sourceId: args.parentId,
+    parentSection: args.section,
+    occurrenceDate: args.occurrenceDate,
+  });
+  const status: OccurrenceState = args.completed
+    ? "completed"
+    : args.daysUntil < 0 ? "overdue" : args.daysUntil === 0 ? "today" : "upcoming";
+  return {
+    href: target.href,
+    sourceType: args.sourceType,
+    parentId: args.parentId,
+    occurrenceDate: args.occurrenceDate,
+    status,
+    generatedFromRule: args.rule,
+    ...(args.section ? { parentSection: args.section } : {}),
+  };
+}
+
+/** Plain-language description of a recurrence, for `generatedFromRule`. */
+function ruleLabel(frequency: string | null | undefined, dateISO?: string): string {
+  const f = String(frequency || "").toLowerCase();
+  const day = dateISO && /^\d{4}-\d{2}-\d{2}/.test(dateISO) ? Number(dateISO.slice(8, 10)) : null;
+  switch (f) {
+    case "daily": return "every day";
+    case "weekly": return "weekly";
+    case "biweekly": return "every 2 weeks";
+    case "monthly": return day ? `monthly on day ${day}` : "monthly";
+    case "quarterly": return "quarterly";
+    case "yearly":
+    case "annual":
+    case "annually": return dateISO ? `every year on ${dateISO.slice(5)}` : "yearly";
+    case "once":
+    case "none":
+    case "": return "does not repeat";
+    default: return f;
+  }
+}
+
 /** Walk a fields record (flat or nested one-level) looking for date-like leaves. */
 function walkProfileFields(fields: any, profileType: string, profileId: string, profileName: string): UpcomingDate[] {
   const out: UpcomingDate[] = [];
@@ -466,7 +549,17 @@ function walkProfileFields(fields: any, profileType: string, profileId: string, 
         urgency: classifyUrgency(daysUntil),
         timeframe: classifyTimeframe(daysUntil),
         recurring: isAnnual,
-        href: profileHref({ id: profileId }),
+        // The profile owns this date (it's read off the profile's own fields),
+        // so the occurrence opens the profile — on the Birthday section for a
+        // birthday, the Anniversary section for an anniversary.
+        ...occurrenceFields({
+          sourceType: "profile",
+          parentId: profileId,
+          occurrenceDate: nextDate,
+          daysUntil,
+          rule: isAnnual ? ruleLabel("yearly", nextDate) : "one-time",
+          section: sectionForCategory(category),
+        }),
         relatedProfileId: profileId,
         needsActionSoon: daysUntil <= 14 && needsActionCategory(category),
         icon: CATEGORY_ICONS[category],
@@ -527,7 +620,15 @@ function extractDocuments(documents: any[], profiles: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: false,
-      href: linked ? `#/profiles/${linked.id}` : `#/documents`,
+      // A document expiration belongs to the document; when the document hangs
+      // off a profile, the profile is the more useful parent to land on.
+      ...occurrenceFields({
+        sourceType: linked ? "profile" : "document",
+        parentId: linked ? linked.id : d.id,
+        occurrenceDate: next,
+        daysUntil,
+        rule: "expires once",
+      }),
       relatedDocumentId: d.id,
       relatedProfileId: linkedId,
       needsActionSoon: daysUntil <= 30,
@@ -561,7 +662,14 @@ function extractTasks(tasks: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: false,
-      href: `#/tasks`,
+      ...occurrenceFields({
+        sourceType: "task",
+        parentId: t.id,
+        occurrenceDate: next,
+        daysUntil,
+        rule: "due once",
+        completed: t.status === "done",
+      }),
       relatedProfileId: (t.linkedProfiles || [])[0],
       needsActionSoon: daysUntil <= 3 || t.priority === "high",
       icon: CATEGORY_ICONS.task_due,
@@ -587,6 +695,12 @@ function extractEvents(events: any[]): UpcomingDate[] {
     if (!next) continue;
     const daysUntil = daysBetween(today, next);
     const cat = categoryFromEvent(e);
+    const linkedProfileId = (e.linkedProfiles || [])[0];
+    // A person-owned date that merely happens to be stored as an event still
+    // belongs to the person: "Joe's Birthday" opens Joe, not the calendar.
+    // Every other series owns itself.
+    const section = sectionForCategory(cat);
+    const ownedByProfile = !!linkedProfileId && !!section;
     out.push({
       id: hashId(["event", e.id, next]),
       sourceId: e.id,
@@ -599,8 +713,16 @@ function extractEvents(events: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: e.recurrence && e.recurrence !== "none",
-      href: `#/calendar`,
-      relatedProfileId: (e.linkedProfiles || [])[0],
+      ...occurrenceFields({
+        sourceType: ownedByProfile ? "profile" : "event",
+        parentId: ownedByProfile ? linkedProfileId : e.id,
+        occurrenceDate: next,
+        daysUntil,
+        rule: ruleLabel(e.recurrence, e.date),
+        section: ownedByProfile ? section : undefined,
+        completed: rdMeta.completedDates.includes(next),
+      }),
+      relatedProfileId: linkedProfileId,
       needsActionSoon: daysUntil <= 3,
       icon: CATEGORY_ICONS[cat] || CATEGORY_ICONS.calendar_event,
     });
@@ -669,7 +791,20 @@ function extractObligations(obligations: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: o.frequency && o.frequency !== "once",
-      href: `#/obligations`,
+      // THE parent pointer. An obligation is not a record of its own: since the
+      // obligations tables were retired, a recurring bill IS a liability
+      // profile, and `linkedLiabilityId` (or the obligation id, which is that
+      // same profile id) is the liability to open. `linkedProfiles[0]` is the
+      // OWNER of the bill — a person — and routing there would open the wrong
+      // object, so it is deliberately not used here.
+      ...occurrenceFields({
+        sourceType: "liability",
+        parentId: o.linkedLiabilityId || o.id,
+        occurrenceDate: next,
+        daysUntil,
+        rule: ruleLabel(o.frequency, next),
+        section: "recurring",
+      }),
       relatedProfileId: (o.linkedProfiles || [])[0],
       needsActionSoon: !o.autopay && daysUntil <= (o.leadTimeDays || 7),
       icon: CATEGORY_ICONS[cat],
@@ -703,7 +838,13 @@ function extractReminders(reminders: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: false,
-      href: `#/calendar`,
+      ...occurrenceFields({
+        sourceType: r.profileId ? "profile" : "reminder",
+        parentId: r.profileId || r.id,
+        occurrenceDate: next,
+        daysUntil,
+        rule: "fires once",
+      }),
       relatedProfileId: r.profileId || undefined,
       needsActionSoon: daysUntil <= 1,
       icon: CATEGORY_ICONS.reminder,
@@ -735,7 +876,13 @@ function extractGoals(goals: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: false,
-      href: `#/goals`,
+      ...occurrenceFields({
+        sourceType: "goal",
+        parentId: g.id,
+        occurrenceDate: next,
+        daysUntil,
+        rule: "target date",
+      }),
       relatedProfileId: (g.linkedProfiles || [])[0],
       needsActionSoon: daysUntil <= 14,
       icon: CATEGORY_ICONS.goal_target,

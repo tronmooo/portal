@@ -44,9 +44,10 @@ import {
   type RecurringKind, type SeriesStatus,
 } from "@shared/recurring-dates";
 import {
-  aggregateUpcomingDates, CATEGORY_LABELS, CATEGORY_ICONS, URGENCY_COLORS,
+  aggregateUpcomingDates, CATEGORY_LABELS,
   daysUntilLabel, type UpcomingDate, type UpcomingCategory,
 } from "@shared/upcoming-dates";
+import { resolveOccurrenceTarget, sectionForCategory } from "@shared/occurrence-routing";
 import { useLocation } from "wouter";
 
 const KIND_ICONS: Record<RecurringKind, any> = {
@@ -60,6 +61,7 @@ const fmtDate = (iso: string) =>
   new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 const fmtShort = (iso: string) =>
   new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 /** Kind for series created OUTSIDE the manager (plain recurring events). */
 function inferKind(ev: any): RecurringKind {
@@ -428,6 +430,7 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
   onReassign: () => void;
 }) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [expanded, setExpanded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const today = todayISO();
@@ -439,6 +442,21 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
   const sm = STATUS_META[status];
   const next = nextOccurrence(ev, today);
   const owner = profiles.find((p: any) => (ev.linkedProfiles || []).includes(p.id));
+
+  // A birthday or anniversary belongs to the PERSON, not to this screen — the
+  // event row is just where the date happens to be stored. So selecting it
+  // opens their profile on the matching section, and the chevron handles
+  // expansion. A self-owned series (a bill reminder, a custom date) has no
+  // parent beyond itself, so selecting it expands in place as before.
+  const parentSection = sectionForCategory(kind);
+  const parentProfileId = parentSection && owner ? owner.id : null;
+  const openParent = () => {
+    if (!parentProfileId) return;
+    navigate(resolveOccurrenceTarget({
+      sourceType: "profile", sourceId: parentProfileId,
+      parentSection, occurrenceDate: next || undefined,
+    }).path);
+  };
   const daysUntil = next ? Math.round((new Date(`${next}T12:00:00`).getTime() - new Date(`${today}T12:00:00`).getTime()) / 86400000) : null;
 
   const patchTags = async (tags: string[], msg: string) => {
@@ -482,7 +500,9 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
   return (
     <div className="rounded-2xl border bg-card overflow-hidden" style={{ borderColor: `hsl(${kd.hsl} / 0.25)` }} data-testid={`rd-series-${ev.id}`}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
-        <button type="button" onClick={() => setExpanded(e => !e)} className="flex items-start gap-2.5 flex-1 min-w-0 text-left">
+        <button type="button" onClick={parentProfileId ? openParent : () => setExpanded(e => !e)}
+          className="flex items-start gap-2.5 flex-1 min-w-0 text-left"
+          data-testid={parentProfileId ? `rd-open-parent-${ev.id}` : undefined}>
           <span className="mt-0.5 shrink-0 w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `hsl(${kd.hsl} / 0.14)` }}>
             <Icon className="w-4 h-4" style={{ color: `hsl(${kd.hsl})` }} />
           </span>
@@ -502,7 +522,6 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
               </p>
             )}
           </div>
-          {expanded ? <ChevronDown className="h-4 w-4 mt-1 text-muted-foreground shrink-0" /> : <ChevronRight className="h-4 w-4 mt-1 text-muted-foreground shrink-0" />}
         </button>
 
         {/* Quick check-off for the next occurrence */}
@@ -520,6 +539,11 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="text-xs">
+            {parentProfileId && (
+              <DropdownMenuItem onClick={openParent} data-testid={`rd-menu-open-parent-${ev.id}`}>
+                <Users className="h-3.5 w-3.5 mr-2" />Open {owner?.name}
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={onEdit}><Pencil className="h-3.5 w-3.5 mr-2" />Edit series</DropdownMenuItem>
             <DropdownMenuItem onClick={onEditFuture}><CalendarClock className="h-3.5 w-3.5 mr-2" />Edit this &amp; future</DropdownMenuItem>
             <DropdownMenuItem onClick={onMove} disabled={!next}><CalendarClock className="h-3.5 w-3.5 mr-2" />Move next date</DropdownMenuItem>
@@ -538,6 +562,11 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <button type="button" onClick={() => setExpanded(e => !e)} className="shrink-0 mt-1 text-muted-foreground"
+          aria-label={expanded ? "Collapse" : "Expand"} data-testid={`rd-expand-${ev.id}`}>
+          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </button>
       </div>
 
       {ev.description && expanded && (
@@ -602,10 +631,14 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
 // dates, bills and subscriptions (incl. chat-created), profile birthdays and
 // anniversaries, registrations, renewals, medication refills, reminders —
 // pulled from the same aggregator the dashboard's Upcoming section uses, so
-// this tab is the one complete list. These rows are managed by their own
-// systems (a bill pays from the liability page, a birthday comes from the
-// profile's date of birth), so they deep-link to the source instead of
-// offering series editing here.
+// this tab is the one complete list.
+//
+// These render as the SAME card as a manager-owned series, because to the user
+// they are the same thing: a recurring date with a cadence, a next occurrence,
+// and a check-off. What differs is ownership — the parent profile owns the
+// recurrence, so every action here writes through to that parent (pay the
+// liability, check off the profile's date) and selecting the card opens the
+// parent, never a collection screen.
 
 // One-off kinds that don't belong on a RECURRING dates screen.
 const ONE_OFF_CATEGORIES = new Set<UpcomingCategory>([
@@ -614,36 +647,197 @@ const ONE_OFF_CATEGORIES = new Set<UpcomingCategory>([
   "investment_maturity", "custom",
 ]);
 
-function LinkedRecurringRow({ item, profiles }: { item: UpcomingDate; profiles: any[] }) {
+/** Map an aggregator category onto a manager kind so linked cards pick up the
+ *  identical icon + accent colour as the series cards above them. */
+function kindForCategory(c: UpcomingCategory): RecurringKind {
+  switch (c) {
+    case "birthday": return "birthday";
+    case "anniversary": return "anniversary";
+    case "subscription_renewal": return "subscription";
+    case "bill_due": case "loan_payment": case "credit_card_payment": return "bill";
+    case "insurance_renewal": case "vehicle_registration": case "membership_renewal":
+    case "contract_renewal": case "lease_renewal": case "certification_renewal":
+    case "professional_license": return "renewal";
+    case "maintenance": case "inspection": case "scheduled_service": return "maintenance";
+    case "doctor_appointment": case "dental_appointment": case "vet_appointment": return "appointment";
+    default: return "custom";
+  }
+}
+
+/**
+ * A cross-app recurring date, rendered exactly like a manager-owned series.
+ *
+ * Expanding pulls the parent's OWN generated occurrences (a liability's
+ * schedule endpoint) rather than re-deriving them here — the parent owns the
+ * recurrence, this card only displays and acts on it.
+ */
+function LinkedSeriesCard({ item, profiles }: { item: UpcomingDate; profiles: any[] }) {
   const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const isLiability = item.sourceType === "liability";
+  const kind = kindForCategory(item.category);
+  const kd = kindDef(kind);
+  const Icon = KIND_ICONS[kind];
   const owner = item.relatedProfileId ? profiles.find((p: any) => p.id === item.relatedProfileId) : null;
-  const uc = URGENCY_COLORS[item.urgency];
-  const go = () => {
+  const sm = STATUS_META[item.status === "overdue" ? "overdue" : item.status === "completed" ? "completed" : "upcoming"];
+
+  // The parent's generated occurrences. Only fetched once expanded so the list
+  // stays cheap when a user has dozens of linked dates.
+  const { data: schedule } = useQuery<any>({
+    queryKey: ["/api/liabilities", item.parentId, "schedule"],
+    queryFn: () => apiRequest("GET", `/api/liabilities/${item.parentId}/schedule?months=12`).then(r => r.json()).catch(() => null),
+    enabled: expanded && isLiability && !!item.parentId,
+  });
+
+  const openParent = () => {
     const href = String(item.href || "").replace(/^#/, "");
     if (href) navigate(href);
   };
+
+  const act = async (fn: () => Promise<Response>, ok: string) => {
+    try {
+      await fn();
+      queryClient.invalidateQueries({ queryKey: ["/api/liabilities", item.parentId, "schedule"] });
+      invalidateRecurringSurfaces();
+      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+      toast({ title: ok });
+    } catch (e: any) {
+      toast({ title: "Couldn't update", description: e?.message || "Try again", variant: "destructive" });
+    }
+  };
+
+  const occBase = (date: string) => `/api/liabilities/${item.parentId}/occurrences/${date}`;
+  const payNext = () => act(() => apiRequest("POST", `${occBase(item.occurrenceDate)}/pay`), `Paid ${fmtShort(item.occurrenceDate)}`);
+  const skipNext = () => act(() => apiRequest("POST", `${occBase(item.occurrenceDate)}/skip`), `Skipped ${fmtShort(item.occurrenceDate)}`);
+
+  const occurrences: any[] = Array.isArray(schedule?.occurrences) ? schedule.occurrences : [];
+
   return (
-    <button type="button" onClick={go}
-      className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-muted/40 transition-colors"
-      data-testid={`rd-linked-${item.id}`}>
-      <span className="text-base leading-none shrink-0 w-6 text-center">{CATEGORY_ICONS[item.category] || "📅"}</span>
-      <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold truncate">{item.title}</p>
-        <p className="text-[10px] text-muted-foreground truncate">
-          {CATEGORY_LABELS[item.category] || item.category}
-          {owner ? ` · ${owner.name}` : ""}
-          {item.subtitle ? ` · ${item.subtitle}` : ""}
-        </p>
+    <div className="rounded-2xl border bg-card overflow-hidden" style={{ borderColor: `hsl(${kd.hsl} / 0.25)` }} data-testid={`rd-linked-${item.id}`}>
+      <div className="flex items-start gap-2.5 px-3 py-2.5">
+        {/* Selecting the card opens its PARENT — the ChatGPT Pro liability
+            profile, Joe's profile — which is the whole point of the model. */}
+        <button type="button" onClick={openParent} className="flex items-start gap-2.5 flex-1 min-w-0 text-left"
+          data-testid={`rd-linked-open-${item.id}`}>
+          <span className="mt-0.5 shrink-0 w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `hsl(${kd.hsl} / 0.14)` }}>
+            <Icon className="w-4 h-4" style={{ color: `hsl(${kd.hsl})` }} />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {/* "ChatGPT Pro — $20.00", matching the series cards. The
+                  subtitle is suppressed when it just repeats the title (a
+                  profile birthday titles itself "Joe — Birthday" already). */}
+              <p className="text-sm font-semibold truncate">
+                {item.title}
+                {item.subtitle && !item.title.toLowerCase().includes(item.subtitle.toLowerCase())
+                  ? ` — ${item.subtitle}` : ""}
+              </p>
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-0" style={{ background: `hsl(${sm.hsl} / 0.14)`, color: `hsl(${sm.hsl})` }}>{sm.label}</Badge>
+            </div>
+            <p className="text-[11px] text-muted-foreground truncate">
+              {cap(item.generatedFromRule)}
+              {owner ? ` · ${owner.name}` : ""}
+              {` · ${CATEGORY_LABELS[item.category] || item.category}`}
+            </p>
+            <p className="text-[11px] mt-0.5 font-medium tabular-nums" style={{ color: `hsl(${kd.hsl})` }}>
+              Next: {fmtDate(item.nextDate)} · {daysUntilLabel(item.daysUntil).toLowerCase()}
+            </p>
+          </div>
+        </button>
+
+        {isLiability && item.status !== "completed" && (
+          <Button size="sm" variant="outline" className="h-7 text-[11px] shrink-0 mt-0.5"
+            onClick={payNext} data-testid={`rd-linked-done-${item.id}`}>
+            <Check className="h-3 w-3 mr-1" /> Done
+          </Button>
+        )}
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0 mt-0.5" data-testid={`rd-linked-menu-${item.id}`}>
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="text-xs">
+            <DropdownMenuItem onClick={openParent}>
+              <Pencil className="h-3.5 w-3.5 mr-2" />Open {item.title}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setExpanded(e => !e)}>
+              <CalendarClock className="h-3.5 w-3.5 mr-2" />{expanded ? "Hide" : "Show"} generated dates
+            </DropdownMenuItem>
+            {isLiability && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={payNext}><Check className="h-3.5 w-3.5 mr-2" />Complete {fmtShort(item.occurrenceDate)}</DropdownMenuItem>
+                <DropdownMenuItem onClick={skipNext}><SkipForward className="h-3.5 w-3.5 mr-2" />Skip {fmtShort(item.occurrenceDate)}</DropdownMenuItem>
+                <DropdownMenuItem className="text-red-500 focus:text-red-500"
+                  onClick={() => act(() => apiRequest("DELETE", occBase(item.occurrenceDate)), `Removed ${fmtShort(item.occurrenceDate)}`)}>
+                  <Trash2 className="h-3.5 w-3.5 mr-2" />Delete this occurrence
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <button type="button" onClick={() => setExpanded(e => !e)} className="shrink-0 mt-1 text-muted-foreground"
+          aria-label={expanded ? "Collapse" : "Expand"} data-testid={`rd-linked-expand-${item.id}`}>
+          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </button>
       </div>
-      <div className="text-right shrink-0">
-        <p className="text-[11px] font-semibold tabular-nums">{fmtShort(item.nextDate)}</p>
-        <span className="inline-block text-[9px] font-semibold uppercase tracking-wide px-1.5 py-px rounded-full"
-          style={{ background: `hsl(${uc.bg})`, color: `hsl(${uc.fg})` }}>
-          {daysUntilLabel(item.daysUntil)}
-        </span>
-      </div>
-      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
-    </button>
+
+      {expanded && (
+        <div className="border-t border-border/60 divide-y divide-border/40" data-testid={`rd-linked-occurrences-${item.id}`}>
+          {!isLiability && (
+            <p className="px-3 py-3 text-[11px] text-muted-foreground text-center">
+              {CATEGORY_LABELS[item.category] || item.category} is generated from {owner ? `${owner.name}'s` : "the"} profile — open it to edit the date.
+            </p>
+          )}
+          {isLiability && occurrences.length === 0 && (
+            <p className="px-3 py-3 text-[11px] text-muted-foreground text-center">Loading generated dates…</p>
+          )}
+          {isLiability && occurrences.map((o: any) => {
+            const st = o.status === "paid" ? "done" : o.status === "skipped" ? "skipped"
+              : o.status === "overdue" ? "overdue" : o.status === "due_today" ? "today" : "upcoming";
+            const stColor = st === "done" ? "155 62% 44%" : st === "skipped" ? "240 6% 55%" : st === "overdue" ? "0 72% 58%" : st === "today" ? "38 92% 52%" : "220 10% 55%";
+            const done = st === "done" || st === "skipped";
+            return (
+              <div key={o.occurrenceId} className="flex items-center gap-2 px-3 py-1.5" data-testid={`rd-linked-occ-${item.id}-${o.date}`}>
+                <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: `hsl(${stColor})` }} />
+                <span className={`text-xs tabular-nums flex-1 ${done ? "line-through text-muted-foreground" : ""}`}>{fmtDate(o.effectiveDate)}</span>
+                <span className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: `hsl(${stColor})` }}>
+                  {st === "upcoming" ? "" : st}
+                </span>
+                {!done && (
+                  <>
+                    <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2 text-emerald-500"
+                      onClick={() => act(() => apiRequest("POST", `${occBase(o.date)}/pay`), `Completed ${fmtShort(o.date)}`)}
+                      data-testid={`rd-linked-occ-done-${o.date}`}>
+                      <Check className="h-3 w-3 mr-0.5" />Done
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2 text-muted-foreground"
+                      onClick={() => act(() => apiRequest("POST", `${occBase(o.date)}/skip`), `Skipped ${fmtShort(o.date)}`)}
+                      data-testid={`rd-linked-occ-skip-${o.date}`}>Skip</Button>
+                  </>
+                )}
+                <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5 text-muted-foreground hover:text-red-500"
+                  onClick={() => act(() => apiRequest("DELETE", occBase(o.date)), `Removed ${fmtShort(o.date)}`)}
+                  aria-label={`Delete ${o.date}`} data-testid={`rd-linked-occ-delete-${o.date}`}>
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              </div>
+            );
+          })}
+          {isLiability && (
+            <button type="button" onClick={openParent}
+              className="w-full px-3 py-2 text-[11px] font-medium text-center hover:bg-muted/40 transition-colors"
+              style={{ color: `hsl(${kd.hsl})` }} data-testid={`rd-linked-more-${item.id}`}>
+              Manage all dates on {item.title} →
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -711,14 +905,6 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
     // Omitting it left the empty state stuck after navigation (BUG 2026-07-21).
   }, [events, filterMode, filterIds, today, profiles]);
 
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { all: series.length };
-    for (const s of series) c[s.status] = (c[s.status] || 0) + 1;
-    return c;
-  }, [series]);
-
-  const visible = statusFilter === "all" ? series : series.filter(s => s.status === statusFilter);
-
   // Everything else in the app that recurs — bills/liabilities, birthdays,
   // anniversaries, renewals, refills, reminders — over a 370-day window so
   // every yearly date appears exactly once. Managed series above are excluded
@@ -742,6 +928,43 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
     return items;
   }, [events, profiles, documents, tasks, obligations, goals, reminders, scoped, filterIds]);
 
+  // ONE list. A recurring date is a recurring date whether the manager created
+  // it or a liability profile generates it, so both render as the same card in
+  // the same order — previously the cross-app ones sat in a separate strip with
+  // a different (row) layout, which read as a second-class kind of date.
+  const rows = useMemo(() => {
+    const fromSeries = series.map(s => ({
+      key: `series:${s.ev.id}`,
+      status: s.status,
+      next: s.next || "9999-12-31",
+      node: (
+        <SeriesCard key={`series:${s.ev.id}`} ev={s.ev} profiles={profiles}
+          onEdit={() => setDialog({ kind: "edit", event: s.ev })}
+          onEditFuture={() => setDialog({ kind: "future", event: s.ev })}
+          onMove={() => setDialog({ kind: "move", event: s.ev })}
+          onReassign={() => setDialog({ kind: "reassign", event: s.ev })} />
+      ),
+    }));
+    const fromLinked = linkedItems.map(item => ({
+      key: `linked:${item.id}`,
+      status: (item.status === "overdue" ? "overdue"
+        : item.status === "completed" ? "completed" : "upcoming") as SeriesStatus,
+      next: item.nextDate,
+      node: <LinkedSeriesCard key={`linked:${item.id}`} item={item} profiles={profiles} />,
+    }));
+    const rank: Record<SeriesStatus, number> = { overdue: 0, upcoming: 1, paused: 2, completed: 3, archived: 4 };
+    return [...fromSeries, ...fromLinked].sort((a, b) =>
+      rank[a.status] !== rank[b.status] ? rank[a.status] - rank[b.status] : a.next.localeCompare(b.next));
+  }, [series, linkedItems, profiles]);
+
+  const counts = useMemo(() => {
+    const c: Record<string, number> = { all: rows.length };
+    for (const r of rows) c[r.status] = (c[r.status] || 0) + 1;
+    return c;
+  }, [rows]);
+
+  const visible = statusFilter === "all" ? rows : rows.filter(r => r.status === statusFilter);
+
   return (
     <div className="space-y-2.5" data-testid="recurring-dates-manager">
       <div className="flex items-center justify-between gap-2">
@@ -764,7 +987,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
         </Button>
       </div>
 
-      {visible.length === 0 && linkedItems.length === 0 ? (
+      {visible.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border p-6 text-center">
           <Bell className="h-6 w-6 mx-auto text-muted-foreground/50 mb-2" />
           <p className="text-sm font-medium">No recurring dates{statusFilter !== "all" ? ` (${statusFilter})` : ""}</p>
@@ -777,38 +1000,17 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
           </Button>
         </div>
       ) : (
-        <div className="space-y-2">
-          {visible.map(({ ev }) => (
-            <SeriesCard key={ev.id} ev={ev} profiles={profiles}
-              onEdit={() => setDialog({ kind: "edit", event: ev })}
-              onEditFuture={() => setDialog({ kind: "future", event: ev })}
-              onMove={() => setDialog({ kind: "move", event: ev })}
-              onReassign={() => setDialog({ kind: "reassign", event: ev })} />
-          ))}
+        <div className="space-y-2" data-testid="rd-list">
+          {visible.map(r => r.node)}
         </div>
       )}
 
-      {/* Everything else in the app that recurs — liabilities/bills, birthdays,
-          anniversaries, renewals, refills, reminders — one complete list.
-          Rows deep-link to the system that owns them. */}
-      {statusFilter === "all" && linkedItems.length > 0 && (
-        <div className="pt-1" data-testid="rd-linked-section">
-          <div className="flex items-baseline justify-between px-1 mb-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              From across your app · {linkedItems.length}
-            </p>
-            <p className="text-[10px] text-muted-foreground">bills · birthdays · renewals · reminders</p>
-          </div>
-          <div className="rounded-2xl border border-border bg-card divide-y divide-border/50 overflow-hidden">
-            {linkedItems.map(item => (
-              <LinkedRecurringRow key={item.id} item={item} profiles={profiles} />
-            ))}
-          </div>
-          <p className="px-1 pt-1 text-[10px] text-muted-foreground">
-            These come from their own systems — tap one to manage it at the source (pay a bill on its
-            liability page, edit a birthday on the profile).
-          </p>
-        </div>
+      {linkedItems.length > 0 && (
+        <p className="px-1 pt-0.5 text-[10px] text-muted-foreground" data-testid="rd-ownership-note">
+          Dates generated by a bill, subscription, or profile open the thing that owns them — pay a bill on
+          its liability page, edit a birthday on the profile. Every change shows up here and on the calendar
+          right away.
+        </p>
       )}
 
       {dialog?.kind === "add" && <SeriesDialog mode="add" event={null} profiles={profiles} onClose={() => setDialog(null)} />}

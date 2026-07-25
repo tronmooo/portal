@@ -410,7 +410,10 @@ function findingsFromObligations(obligations: any[]): KeyFinding[] {
       direction: "stable",
       title: `${o.name || "Reminder"} due in ${days <= 0 ? "today" : `${days} day${days === 1 ? "" : "s"}`}`,
       detail: isMedication ? "Refill" : "Appointment",
-      href: "#/obligations",
+      // One specific due date → open the liability that generates it. (The
+      // subscription-count insight below is about many bills at once, so its
+      // collection link is the right destination.)
+      href: `#/profiles/${o.linkedLiabilityId || o.id}?section=recurring`,
       importance: 80 - days,
       icon: isMedication ? "💊" : "🩺",
     });
