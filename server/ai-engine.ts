@@ -34,6 +34,7 @@ import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@sh
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { resolveCanonicalActivity } from "@shared/canonical-activity";
+import { isLiftingEntry, scopeLiftingValues } from "@shared/lifting-scope";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import {
@@ -67,6 +68,30 @@ import {
   type ExtractedOperation,
   type OperationOutcome,
 } from "./ai-bulk-log";
+
+// ─── Lifting clause claims ─────────────────────────────────────────────────────
+// A multi-exercise message produces one log_tracker_entry call per exercise, and
+// each call re-scopes its fields against the user's own sentence (see
+// @shared/lifting-scope). When the SAME lift appears twice in one message
+// ("dumbbells 45 three times, then dumbbells 60 twice"), the second call must
+// not re-claim the first clause — so claimed clause offsets are remembered per
+// (user, message) for a short window. Purely an in-process disambiguation aid:
+// if the cache is cold or evicted, scoping still works, it just falls back to
+// the first name-matching clause.
+const LIFTING_CLAIMS = new Map<string, { claimed: Set<number>; at: number }>();
+const LIFTING_CLAIM_TTL_MS = 5 * 60 * 1000;
+function liftingClaimsFor(userId: string | undefined, message: string): Set<number> {
+  const now = Date.now();
+  for (const [k, v] of LIFTING_CLAIMS) {
+    if (now - v.at > LIFTING_CLAIM_TTL_MS) LIFTING_CLAIMS.delete(k);
+  }
+  const key = `${userId || "anon"}::${message.slice(0, 400)}`;
+  const hit = LIFTING_CLAIMS.get(key);
+  if (hit) { hit.at = now; return hit.claimed; }
+  const claimed = new Set<number>();
+  LIFTING_CLAIMS.set(key, { claimed, at: now });
+  return claimed;
+}
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -4631,7 +4656,8 @@ BEHAVIOR:
   Example: "Had a grande latte from Starbucks" → log_tracker_entry for Nutrition with values: { item: "Grande Latte (Starbucks)", calories: 190, protein: 13, carbs: 18, fat: 7 }.
   ALWAYS set the "item" field to a human-readable food name. Capitalize it. This is the most visible part of the entry.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
-- MULTI-EXERCISE WORKOUTS: A workout that lists several exercises is NOT one entry. Emit ONE log_tracker_entry PER exercise so none is silently dropped. "45-min chest workout: bench press 135 for 3x10, incline dumbbells 40lb, pushups to failure" → THREE log_tracker_entry calls: (1) trackerName:"Bench Press" values:{exercise:"Bench Press", weight:135, sets:3, reps:10}; (2) trackerName:"Incline Dumbbell Press" values:{exercise:"Incline Dumbbell Press", weight:40, sets:3}; (3) trackerName:"Pushups" values:{exercise:"Pushups", reps:0, notes:"to failure"}. Bodyweight/"to failure" moves (pushups, planks, pullups) STILL get their own entry even without a weight number — never omit an exercise just because it has no load. Pick the specific exercise name for each trackerName.
+- MULTI-EXERCISE WORKOUTS: A workout that lists several exercises is NOT one entry. Emit ONE log_tracker_entry PER exercise so none is silently dropped. "45-min chest workout: bench press 135 for 3x10, incline dumbbells 40lb, pushups to failure" → THREE log_tracker_entry calls: (1) trackerName:"Bench Press" values:{exercise:"Bench Press", weight:135, sets:3, reps:10}; (2) trackerName:"Incline Dumbbell Press" values:{exercise:"Incline Dumbbell Press", weight:40}; (3) trackerName:"Pushups" values:{exercise:"Pushups", reps:0, notes:"to failure"}. Bodyweight/"to failure" moves (pushups, planks, pullups) STILL get their own entry even without a weight number — never omit an exercise just because it has no load. Pick the specific exercise name for each trackerName.
+  *** PER-EXERCISE FIELD SCOPING — weight, reps, and sets belong ONLY to the exercise whose own words state them. NEVER copy a number from one exercise onto the next, and never reuse the previous exercise's values object as a template — build each one from scratch. In the example above the "3x10" is the BENCH PRESS's; the incline dumbbells get weight 40 and NO sets and NO reps, because the user never said any. If the user did not state a set count for an exercise, OMIT sets entirely — do not default it to 1, do not infer it, and do not carry it over. "Dumbbells I did 45 pounds 10 reps each three times ... bench pressed 145 pounds 10 reps each" → (1) {exercise:"Dumbbells", weight:45, reps:10, sets:3}; (2) {exercise:"Bench Press", weight:145, reps:10} — the "three times" is the dumbbells' set count and must NOT appear on the bench press. In your reply, say "sets not specified" for a lift whose sets the user never gave — never invent one. ***
 - RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
   In your response, mention that both a profile and a bill were created. Example: "Created Spotify subscription profile + $11/month bill — will show on Calendar every month."
   Wording like "$20/mo", "/month", "monthly", or "every month" ALWAYS means recurring: call create_obligation, never create_expense.
@@ -7008,6 +7034,40 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!targetProfileId) {
         const selfProfile = profiles.find(p => p.type === "self");
         if (selfProfile) targetProfileId = selfProfile.id;
+      }
+
+      // ── LIFTING FIELD SCOPING (user report 2026-07-25) ──────────────────
+      // A multi-exercise message ("Dumbbells … 10 reps each three times … bench
+      // pressed 145 pounds 10 reps each") used to log BOTH lifts with sets:3 —
+      // the model carried "three times" from the dumbbell clause onto the next
+      // exercise. Re-derive weight/reps/sets from the user's OWN clause for THIS
+      // exercise and drop anything that clause never stated. Each entry gets a
+      // fresh object; nothing is shared between exercises. Cardio never enters
+      // here (isLiftingEntry excludes running/walking/cycling/swimming), so the
+      // walk/run estimation path below is untouched.
+      try {
+        const liftMsg = String((input as any).__userMessage || "");
+        if (liftMsg && isLiftingEntry(input.trackerName || "", input.values)) {
+          const scoped = scopeLiftingValues({
+            message: liftMsg,
+            trackerName: input.trackerName || "",
+            values: input.values || {},
+            claimedIndexes: liftingClaimsFor(userId, liftMsg),
+          });
+          if (scoped.matched) {
+            input.values = scoped.values;
+            if (scoped.dropped.length || scoped.applied.length) {
+              logger.info(
+                "ai",
+                `Lifting scope [${input.trackerName}] → "${scoped.clause}"` +
+                  `${scoped.dropped.length ? ` dropped: ${scoped.dropped.join(", ")}` : ""}` +
+                  `${scoped.applied.length ? ` set from clause: ${scoped.applied.join(", ")}` : ""}`,
+              );
+            }
+          }
+        }
+      } catch (e: any) {
+        logger.warn("ai", `Lifting scope failed (non-fatal): ${e?.message || e}`);
       }
 
       // ── ESTIMATION / NORMALIZATION LAYER (2026-07-15) ──

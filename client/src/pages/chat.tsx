@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useDeferredValue, useMemo, la
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
+import { isLiftingEntry, liftingRecordFromValues, formatLiftingDetail, liftingSetsNote } from "@shared/lifting-scope";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { setFilterSelected, setFilterEveryone } from "@/lib/profileFilter";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -2227,11 +2228,22 @@ const MessageRow = memo(function MessageRow({
                 : '';
               const entryItem = isTrackerEntry && action.data?.values?.item
                 ? String(action.data.values.item) : '';
+              // LIFTING CARDS (user report 2026-07-25): a lift's set count used
+              // to fall off the end of the generic 4-field join
+              // ({activityType, exercise, weight, reps, sets…}), so "3 sets"
+              // was invisible even when it was stored. Lifts render from their
+              // own record instead — headlined by the EXERCISE, with the set
+              // count either shown or explicitly called out as not specified.
+              const liftRec = isTrackerEntry && isLiftingEntry(action.data?.trackerName || '', action.data?.values)
+                ? liftingRecordFromValues(action.data?.values, action.data?.trackerName || '')
+                : null;
+              const liftDetail = liftRec ? formatLiftingDetail(liftRec) : '';
+              const liftNote = liftRec ? liftingSetsNote(liftRec) : null;
               const entityTitle = isTrackerEntry
-                ? (entryItem || trackerName || 'Entry')
+                ? ((liftRec?.exerciseName || '').toUpperCase() || entryItem || trackerName || 'Entry')
                 : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || (action as any).title || '').toUpperCase() || actionLabel(action.type).toUpperCase();
               const entityDetails = isTrackerEntry
-                ? entryValues
+                ? (liftDetail || entryValues)
                 : action.data?.amount
                   ? `$${Number(action.data.amount).toFixed(2)}`
                   : '';
@@ -2287,6 +2299,11 @@ const MessageRow = memo(function MessageRow({
                         {entityDetails || actionLabel(action.type)}
                         {isUndone && ' · DELETED'}
                       </p>
+                      {liftNote && !isUndone && (
+                        <p className="text-[10px] text-muted-foreground/60 italic mt-0.5" data-testid={`lift-sets-note-${i}`}>
+                          {liftNote}
+                        </p>
+                      )}
                     </div>
                     {/* Edit button — tracker entries only (change duration,
                         intensity, calories; add/remove fields). Persists via the

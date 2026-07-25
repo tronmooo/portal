@@ -91,6 +91,8 @@ export default defineConfig({
       'tests/upcoming-reminders.test.ts',
       'tests/estimation-engine.test.ts',
       'tests/canonical-activity.test.ts',
+      'tests/lifting-scope.test.ts',
+      'tests/lifting-extraction-e2e.test.ts',
       'tests/habit-intent.test.ts',
       'tests/mood-detect.test.ts',
       'tests/dashboard-buttons.test.ts',
