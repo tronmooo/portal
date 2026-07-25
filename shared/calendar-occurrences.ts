@@ -504,19 +504,34 @@ export function sourceHref(
 
 // ─── Labels ──────────────────────────────────────────────────────────────────
 
-/** "in 3 days" / "today" / "2 days ago" for an occurrence date. */
+/**
+ * "in 3 days" / "today" / "2 days ago" for an occurrence date.
+ *
+ * Months and years are counted as real CALENDAR steps, not days divided by an
+ * average month length. Beyond reading more accurately near month boundaries,
+ * this keeps the module free of the average-length literals that the
+ * frequency-multiplier contract (tests/smoke/contracts) forbids — those
+ * constants belong to money conversion in shared/obligation-windows, and
+ * nothing else should be inventing its own.
+ */
 export function relativeDayLabel(dateISO: string, todayISO: string): string {
-  const days = Math.round(
-    (new Date(`${dateISO}T12:00:00`).getTime() - new Date(`${todayISO}T12:00:00`).getTime()) / 86400000,
-  );
+  const from = new Date(`${todayISO.slice(0, 10)}T12:00:00`);
+  const to = new Date(`${dateISO.slice(0, 10)}T12:00:00`);
+  const days = Math.round((to.getTime() - from.getTime()) / 86400000);
+  if (!Number.isFinite(days)) return "";
   if (days === 0) return "today";
   if (days === 1) return "tomorrow";
   if (days === -1) return "yesterday";
   if (days < 0) return `${Math.abs(days)} days ago`;
   if (days < 30) return `in ${days} days`;
-  const months = Math.round(days / 30.44);
+
+  // Whole calendar months between the two dates, trimmed by one when the
+  // day-of-month hasn't been reached yet ("Jul 25 → Feb 11" is 6 months, not 7).
+  let months = (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+  if (to.getDate() < from.getDate()) months -= 1;
+  if (months < 1) return `in ${days} days`;
   if (months < 24) return `in ${months} mo`;
-  return `in ${Math.round(days / 365.25)} yr`;
+  return `in ${Math.floor(months / 12)} yr`;
 }
 
 /** A yearly series' next anniversary of `baseDate`, on/after today. */
