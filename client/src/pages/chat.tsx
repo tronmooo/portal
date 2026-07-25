@@ -304,7 +304,11 @@ function ChatReport({ spec }: { spec: ReportSpec2 }) {
   );
 }
 
-const SUGGESTIONS = [
+// Static fallback ONLY — shown while the personalized feed loads or if it
+// errors. The real chips come from /api/starter-prompts, which generates
+// them from the user's own data (overdue work, expiring documents, spending
+// trends, habit gaps) and re-ranks by what this user types and clicks.
+const FALLBACK_SUGGESTIONS = [
   "I ate a chicken sandwich and ran 2 miles",
   "Track my blood pressure",
   "Spent $50 on groceries",
@@ -314,6 +318,13 @@ const SUGGESTIONS = [
   "Open my drivers license",
   "Log sleep: 7.5 hours",
 ];
+
+interface StarterPromptChip {
+  id: string;
+  text: string;
+  theme: string;
+  reason?: string;
+}
 
 const PROFILE_TYPE_COLORS: Record<string, string> = {
   person: "bg-primary/10 text-primary",
@@ -2748,6 +2759,19 @@ export default function ChatPage() {
     queryKey: ["/api/profiles"],
   });
 
+  // Personalized starter prompts — generated server-side from THIS user's
+  // data and usage history. Falls back to the static list while loading or
+  // on error. staleTime keeps the chips stable during a session; a page
+  // revisit re-personalizes against fresh data.
+  const { data: starterData } = useQuery<{ prompts: StarterPromptChip[] }>({
+    queryKey: ["/api/starter-prompts"],
+    staleTime: 5 * 60 * 1000,
+  });
+  const starterPrompts: StarterPromptChip[] =
+    starterData?.prompts && starterData.prompts.length > 0
+      ? starterData.prompts
+      : FALLBACK_SUGGESTIONS.map((s) => ({ id: `static-${s.slice(0, 16)}`, text: s, theme: "generic" }));
+
   // PROFILE-CONTEXT FIX: the AI must answer within the SAME profile scope the
   // rest of the UI is showing. The server already honors `profileFilterIds`
   // (routes.ts /api/chat → processMessage), but the client never sent it, so
@@ -3511,9 +3535,16 @@ export default function ChatPage() {
     return true;
   };
 
-  const handleSuggestion = (s: string) => {
-    composerRef.current?.setText(s);
+  const handleSuggestion = (s: StarterPromptChip | string) => {
+    const text = typeof s === "string" ? s : s.text;
+    composerRef.current?.setText(text);
     composerRef.current?.focus();
+    // Click learning: reinforce this prompt + its theme so the server ranks
+    // similar suggestions higher next time. Fire-and-forget; static
+    // fallbacks are not tracked.
+    if (typeof s !== "string" && !s.id.startsWith("static-")) {
+      apiRequest("POST", "/api/starter-prompts/click", { id: s.id, theme: s.theme }).catch(() => {});
+    }
   };
 
   // Batch panel handlers
@@ -3750,14 +3781,15 @@ export default function ChatPage() {
               )}
               {expanded && (
                 <div className="flex flex-wrap gap-1.5">
-                  {SUGGESTIONS.slice(0, 6).map((s) => (
+                  {starterPrompts.slice(0, 8).map((p) => (
                     <button
-                      key={s}
-                      onClick={() => handleSuggestion(s)}
+                      key={p.id}
+                      onClick={() => handleSuggestion(p)}
+                      title={p.reason || undefined}
                       className="text-xs px-3 py-1.5 rounded-full border border-border/50 bg-card/60 hover:bg-muted/60 active:scale-95 transition-all text-muted-foreground hover:text-foreground"
-                      data-testid={`button-suggestion-${s.slice(0, 20)}`}
+                      data-testid={`button-suggestion-${p.text.slice(0, 20)}`}
                     >
-                      {s}
+                      {p.text}
                     </button>
                   ))}
                 </div>

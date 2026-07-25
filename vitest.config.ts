@@ -16,6 +16,7 @@ export default defineConfig({
       'tests/utils.test.ts',
       'tests/recall-match.test.ts',
       'tests/doc-field-lookup.test.ts',
+      'tests/starter-prompts.test.ts',
       'tests/habit-match.test.ts',
       'tests/reextract-merge.test.ts',
       'tests/chart-data.test.ts',

@@ -7,6 +7,7 @@ const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { detectMoodFromText } from "@shared/mood-detect";
+import { generateStarterPrompts, themeCountsFromMessages, parseUsage as parseStarterUsage, recordServed as recordStarterServed, recordClick as recordStarterClick } from "@shared/starter-prompts";
 import { computeKeyFindings } from "@shared/tracker-insights";
 import { ownedAssetIds } from "@shared/cost-of-ownership";
 import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "@shared/ownership-model";
@@ -6967,6 +6968,75 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
       log.error("[SemanticSearch]", err?.message || "unknown error");
       res.status(500).json({ error: "Semantic search failed", results: [] });
     }
+  }));
+
+  // ── Personalized chat starter prompts ──────────────────────────────────
+  // Replaces the static suggestion chips: prompts are generated from THIS
+  // user's data (overdue work, expiring documents, spending trends, habit
+  // gaps, owned profile types) and re-ranked by learned behavior — themes
+  // detected in what they type (read from captures, which already record
+  // every chat message) plus which prompts they actually click. Generation
+  // is deterministic and instant (shared/starter-prompts.ts) — no LLM call.
+  const STARTER_STATS_PREF = "starter_prompt_stats";
+  app.get("/api/starter-prompts", asyncHandler(async (req, res) => {
+    try {
+      const [tasks, events, habits, documents, expenses, obligations, trackers, journalEntries, profiles, captures, rawStats] = await Promise.all([
+        storage.getTasks().catch(() => []),
+        storage.getEvents().catch(() => []),
+        storage.getHabits().catch(() => []),
+        storage.getDocuments().catch(() => []),
+        storage.getExpenses().catch(() => []),
+        storage.getObligations().catch(() => []),
+        storage.getTrackers().catch(() => []),
+        storage.getJournalEntries().catch(() => []),
+        storage.getProfiles().catch(() => []),
+        storage.getCaptures ? storage.getCaptures({ limit: 200 }).catch(() => []) : Promise.resolve([]),
+        storage.getPreference(STARTER_STATS_PREF).catch(() => null),
+      ]);
+
+      const usage = parseStarterUsage(rawStats);
+      // Typed-message learning: recompute theme counts from the chat firehose
+      // every time, then add the persisted click-driven affinity on top.
+      const typedThemes = themeCountsFromMessages(
+        (captures as any[])
+          .filter(c => c && c.source === "chat" && typeof c.rawInput === "string")
+          .map(c => c.rawInput),
+      );
+      const mergedThemes: Record<string, number> = { ...typedThemes };
+      for (const [k, v] of Object.entries(usage.themeCounts || {})) {
+        mergedThemes[k] = (mergedThemes[k] || 0) + (Number(v) || 0);
+      }
+
+      const count = Math.max(4, Math.min(8, Number(req.query.count) || 6));
+      const prompts = generateStarterPrompts(
+        { tasks, events, habits, documents, expenses, obligations, trackers, journalEntries, profiles } as any,
+        { ...usage, themeCounts: mergedThemes },
+        count,
+      );
+
+      // Impression tracking feeds the fatigue decay (served-but-never-clicked
+      // prompts rotate out). Persist best-effort — never block the response.
+      recordStarterServed(usage, prompts.map(p => p.id));
+      storage.setPreference(STARTER_STATS_PREF, JSON.stringify(usage)).catch(() => {});
+
+      res.json({ prompts, generatedAt: new Date().toISOString() });
+    } catch (err: any) {
+      log.error("[StarterPrompts]", err?.message || "unknown error");
+      // The client falls back to its static list on error.
+      res.status(500).json({ error: "Starter prompt generation failed", prompts: [] });
+    }
+  }));
+
+  // Click learning: reinforces the clicked prompt id and its theme so future
+  // rankings favor what this user actually uses.
+  app.post("/api/starter-prompts/click", asyncHandler(async (req, res) => {
+    const id = typeof req.body?.id === "string" ? req.body.id.slice(0, 64) : "";
+    const theme = typeof req.body?.theme === "string" ? req.body.theme.slice(0, 32) : undefined;
+    if (!id) return res.status(400).json({ error: "id required" });
+    const usage = parseStarterUsage(await storage.getPreference(STARTER_STATS_PREF).catch(() => null));
+    recordStarterClick(usage, id, theme);
+    await storage.setPreference(STARTER_STATS_PREF, JSON.stringify(usage)).catch(() => {});
+    res.json({ ok: true });
   }));
 
   // ── Wave 3 #8: Proactive AI suggestions for the dashboard ───────────────
