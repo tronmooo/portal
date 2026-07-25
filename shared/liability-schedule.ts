@@ -62,11 +62,8 @@ export interface ScheduleOptions {
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
 const clip = (d: any): string => String(d ?? "").slice(0, 10);
 
-function addMonthsISO(iso: string, n: number): string {
-  const d = new Date(iso + "T00:00:00");
-  d.setMonth(d.getMonth() + n);
-  return d.toLocaleDateString("en-CA");
-}
+// Month arithmetic comes from the canonical, month-end-clamping helper.
+import { addMonthsISO } from "./date-math";
 
 /**
  * Normalize ANY liability into the fields the schedule generator understands,
@@ -159,7 +156,12 @@ export function generateSchedule(
   const cap = opts.cap ?? 500;
 
   const { unit, interval } = freqToUnit(liabilityFrequency(liability));
-  const rule: RecurrenceRule = { freq: "x", interval, unit, done: 0, paused: false };
+  // Pin monthly/yearly bills to the anchor's day-of-month. Without this the
+  // walk below steps off each previous occurrence, so a bill due on the 31st
+  // overflows through a short month and silently becomes a bill due on the 1st.
+  const anchorDate = new Date(anchor + "T00:00:00");
+  const anchorDay = Number.isNaN(anchorDate.getTime()) ? undefined : anchorDate.getDate();
+  const rule: RecurrenceRule = { freq: "x", interval, unit, done: 0, paused: false, anchorDay };
   const recurs = unit !== "";
 
   const overrides: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {};

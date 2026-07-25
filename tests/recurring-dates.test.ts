@@ -137,3 +137,78 @@ describe("labels", () => {
     expect(humanRecurrenceLabel("none")).toBe("Does not repeat");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: QA report 2026-07-25 — "Netflix says 'Monthly on day 31', but its
+// next occurrence is August 1. It should be August 31."
+//
+// Root cause was JS date overflow: stepping setMonth(+1) off each previous
+// occurrence turns "June 31" into July 1, and every later occurrence then
+// inherits the wrong day-of-month. See shared/date-math.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("month-end recurrence never overflows (day-31 series)", () => {
+  it("expands a day-31 monthly series onto real month ends, not the 1st", () => {
+    const dates = expandRecurrenceDates("2026-05-31", "monthly", {
+      windowStart: "2026-05-01",
+      windowEnd: "2026-11-30",
+    });
+    expect(dates).toEqual([
+      "2026-05-31",
+      "2026-06-30", // clamped, NOT July 1
+      "2026-07-31", // back on the 31st — no drift
+      "2026-08-31", // the date the reporter expected
+      "2026-09-30",
+      "2026-10-31",
+      "2026-11-30",
+    ]);
+  });
+
+  it("reports August 31 as the next occurrence of a day-31 series in late July", () => {
+    const ev = { date: "2026-05-31", recurrence: "monthly", tags: [RD_TAG] };
+    expect(nextOccurrence(ev, "2026-07-25")).toBe("2026-07-31");
+    expect(nextOccurrence(ev, "2026-08-01")).toBe("2026-08-31");
+  });
+
+  it("keeps the 'Monthly on day 31' label truthful", () => {
+    // Label and occurrences must agree: both come off the same base date.
+    expect(humanRecurrenceLabel("monthly", "2026-05-31")).toContain("day 31");
+    const next = nextOccurrence(
+      { date: "2026-05-31", recurrence: "monthly", tags: [RD_TAG] },
+      "2026-08-05",
+    );
+    expect(next).toBe("2026-08-31");
+  });
+
+  it("clamps a Jan-31 series through February in leap and non-leap years", () => {
+    expect(
+      expandRecurrenceDates("2026-01-31", "monthly", {
+        windowStart: "2026-02-01",
+        windowEnd: "2026-03-31",
+      }),
+    ).toEqual(["2026-02-28", "2026-03-31"]);
+    expect(
+      expandRecurrenceDates("2028-01-31", "monthly", {
+        windowStart: "2028-02-01",
+        windowEnd: "2028-03-31",
+      }),
+    ).toEqual(["2028-02-29", "2028-03-31"]);
+  });
+
+  it("clamps a Feb-29 yearly series (birthdays/anniversaries) to Feb 28", () => {
+    expect(
+      expandRecurrenceDates("2028-02-29", "yearly", {
+        windowStart: "2029-01-01",
+        windowEnd: "2032-12-31",
+      }),
+    ).toEqual(["2029-02-28", "2030-02-28", "2031-02-28", "2032-02-29"]);
+  });
+
+  it("leaves non-month patterns untouched", () => {
+    expect(
+      expandRecurrenceDates("2026-07-01", "weekly", {
+        windowStart: "2026-07-01",
+        windowEnd: "2026-07-29",
+      }),
+    ).toEqual(["2026-07-01", "2026-07-08", "2026-07-15", "2026-07-22", "2026-07-29"]);
+  });
+});

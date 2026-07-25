@@ -46,6 +46,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
   return _sharedClient;
 }
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
+import { addMonthsClamped, addYearsClamped } from "../shared/date-math";
 import { passesProfileFilter } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
 import { selfIdsFrom, isInScope } from "../shared/scope";
@@ -3373,8 +3374,11 @@ export class SupabaseStorage implements IStorage {
             }
             case "weekly": next.setDate(next.getDate() + i * 7); break;
             case "biweekly": next.setDate(next.getDate() + i * 14); break;
-            case "monthly": next.setMonth(next.getMonth() + i); break;
-            case "yearly": next.setFullYear(next.getFullYear() + i); break;
+            // Clamped + base-anchored (shared/date-math): setMonth overflows a
+            // short month ("June 31" → July 1) and permanently drags the series
+            // off its day-of-month.
+            case "monthly": next.setTime(addMonthsClamped(base, i).getTime()); break;
+            case "yearly": next.setTime(addYearsClamped(base, i).getTime()); break;
           }
           const nextStr = next.toLocaleDateString('en-CA');
           if (nextStr > endDate) break;

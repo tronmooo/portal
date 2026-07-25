@@ -3,6 +3,7 @@
 // Upcoming Dates — cross-app reminder aggregator
 // =============================================================================
 import { parseRecurringMeta, nextOccurrence as rdNextOccurrence } from "./recurring-dates";
+import { addMonthsClamped, addYearsClamped } from "./date-math";
 // Pulls every time-sensitive item across the app into a single normalized stream
 // so the dashboard can render one definitive "what's next" view.
 //
@@ -296,7 +297,13 @@ function rollRecurrence(rawISO: string, pattern: string | undefined, todayStr: s
     return start.getTime() >= today.getTime() ? isoFromDate(start) : null;
   }
   const next = new Date(start);
+  // Month/year patterns index off the SERIES START and clamp to month end, so
+  // a "day 31" series rolls 31 → 30 → 31 instead of overflowing to the 1st and
+  // dragging every later occurrence with it (shared/date-math).
+  const anchorDay = start.getDate();
+  let step = 0;
   const advance = () => {
+    step++;
     switch (pattern) {
       case "daily": next.setDate(next.getDate() + 1); break;
       // weekdays (Mon–Fri): step forward until we land on a weekday.
@@ -305,8 +312,8 @@ function rollRecurrence(rawISO: string, pattern: string | undefined, todayStr: s
       case "weekends": do { next.setDate(next.getDate() + 1); } while (next.getDay() !== 0 && next.getDay() !== 6); break;
       case "weekly": next.setDate(next.getDate() + 7); break;
       case "biweekly": next.setDate(next.getDate() + 14); break;
-      case "monthly": next.setMonth(next.getMonth() + 1); break;
-      case "yearly": next.setFullYear(next.getFullYear() + 1); break;
+      case "monthly": next.setTime(addMonthsClamped(start, step, anchorDay).getTime()); break;
+      case "yearly": next.setTime(addYearsClamped(start, step, anchorDay).getTime()); break;
       default: next.setDate(next.getDate() + 1);
     }
   };

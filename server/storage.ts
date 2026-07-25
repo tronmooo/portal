@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -1295,8 +1296,9 @@ export class MemStorage implements IStorage {
             case "daily":    next.setDate(next.getDate() + i); break;
             case "weekly":   next.setDate(next.getDate() + i * 7); break;
             case "biweekly": next.setDate(next.getDate() + i * 14); break;
-            case "monthly":  next.setMonth(next.getMonth() + i); break;
-            case "yearly":   next.setFullYear(next.getFullYear() + i); break;
+            // Clamped + base-anchored — see shared/date-math.
+            case "monthly":  next.setTime(addMonthsClamped(base, i).getTime()); break;
+            case "yearly":   next.setTime(addYearsClamped(base, i).getTime()); break;
           }
           const nextStr = next.toLocaleDateString('en-CA');
           if (nextStr > endDate) break;
@@ -1579,9 +1581,11 @@ export class MemStorage implements IStorage {
     switch (ob.frequency) {
       case "weekly": nextDue.setDate(nextDue.getDate() + 7); break;
       case "biweekly": nextDue.setDate(nextDue.getDate() + 14); break;
-      case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
-      case "quarterly": nextDue.setMonth(nextDue.getMonth() + 3); break;
-      case "yearly": nextDue.setFullYear(nextDue.getFullYear() + 1); break;
+      // Clamped so a bill due on the 31st rolls to the 30th/28th rather than
+      // overflowing into the next month and losing its day-of-month forever.
+      case "monthly": nextDue.setTime(addMonthsClamped(nextDue, 1).getTime()); break;
+      case "quarterly": nextDue.setTime(addMonthsClamped(nextDue, 3).getTime()); break;
+      case "yearly": nextDue.setTime(addYearsClamped(nextDue, 1).getTime()); break;
     }
     ob.nextDueDate = nextDue.toLocaleDateString('en-CA');
     this.logActivity("obligation", `Paid ${ob.name}: $${amount}`);

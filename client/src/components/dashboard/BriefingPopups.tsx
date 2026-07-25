@@ -10,6 +10,7 @@ import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
+import { addMonthsClamped, addYearsClamped, toISODate } from "@shared/date-math";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { Button } from "@/components/ui/button";
@@ -62,14 +63,16 @@ const FREQ_LABEL: Record<string, string> = {
   quarterly: "Quarterly", yearly: "Yearly", once: "One-time",
 };
 const FREQ_DAYS: Record<string, number> = { weekly: 7, biweekly: 14, monthly: 30, quarterly: 91, yearly: 365 };
-function addFrequency(dateStr: string, freq: string): string | null {
+function addFrequency(dateStr: string, freq: string, anchorDay?: number): string | null {
   const d = new Date(dateStr + "T00:00:00");
   if (isNaN(d.getTime())) return null;
   if (freq === "once") return null;
-  if (freq === "monthly") d.setMonth(d.getMonth() + 1);
-  else if (freq === "quarterly") d.setMonth(d.getMonth() + 3);
-  else if (freq === "yearly") d.setFullYear(d.getFullYear() + 1);
-  else d.setDate(d.getDate() + (FREQ_DAYS[freq] || 30));
+  // Month/year steps clamp to the target month's last day (shared/date-math)
+  // instead of overflowing a "day 31" bill into the following month.
+  if (freq === "monthly") return toISODate(addMonthsClamped(d, 1, anchorDay));
+  if (freq === "quarterly") return toISODate(addMonthsClamped(d, 3, anchorDay));
+  if (freq === "yearly") return toISODate(addYearsClamped(d, 1, anchorDay));
+  d.setDate(d.getDate() + (FREQ_DAYS[freq] || 30));
   return d.toLocaleDateString("en-CA");
 }
 

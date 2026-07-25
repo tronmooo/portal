@@ -24,6 +24,7 @@ import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { formatApiError } from "@/lib/formatError";
+import { addMonthsClamped } from "@shared/date-math";
 import { useToast } from "@/hooks/use-toast";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -111,10 +112,14 @@ function parseQuickAdd(text: string): { kind: "obligation" | "event" | "task"; p
   if (dateMatch) dueDate = dateMatch[1];
   const dayOfMonthMatch = t.match(/on\s+the\s+(\d{1,2})(?:st|nd|rd|th)?/);
   if (!dueDate && dayOfMonthMatch) {
-    const day = Math.min(28, Math.max(1, parseInt(dayOfMonthMatch[1])));
+    // Keep the user's real day-of-month (1–31). It used to be capped at 28,
+    // which silently turned "on the 31st" into "on the 28th"; month-end
+    // clamping now happens per-occurrence instead (shared/date-math).
+    const day = Math.min(31, Math.max(1, parseInt(dayOfMonthMatch[1])));
     const today = new Date();
-    const d = new Date(today.getFullYear(), today.getMonth(), day);
-    if (d < today) d.setMonth(d.getMonth() + 1);
+    const daysThisMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    const d = new Date(today.getFullYear(), today.getMonth(), Math.min(day, daysThisMonth));
+    if (d < today) d.setTime(addMonthsClamped(d, 1, day).getTime());
     dueDate = isoDay(d);
   }
   if (!dueDate) {

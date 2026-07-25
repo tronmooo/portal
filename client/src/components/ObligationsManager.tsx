@@ -12,6 +12,7 @@ import EditableTitle from "@/components/EditableTitle";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,16 +40,20 @@ function nextOccurrencesFrom(startISO: string, freq: string, count = 3): string[
   if (!startISO) return [];
   try {
     const out: string[] = [];
-    const d = new Date(startISO + (startISO.length === 10 ? "T00:00:00" : ""));
-    if (isNaN(d.getTime())) return [];
+    const base = new Date(startISO + (startISO.length === 10 ? "T00:00:00" : ""));
+    if (isNaN(base.getTime())) return [];
+    // Month/year steps index off the base and clamp to month end so a series
+    // on the 31st reads 31 → 30 → 31, not 31 → 1 → 1 (shared/date-math).
+    const anchorDay = base.getDate();
+    const d = new Date(base);
     for (let i = 0; i < count; i++) {
       out.push(d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }));
       switch (freq) {
         case "weekly": d.setDate(d.getDate() + 7); break;
         case "biweekly": d.setDate(d.getDate() + 14); break;
-        case "monthly": d.setMonth(d.getMonth() + 1); break;
-        case "quarterly": d.setMonth(d.getMonth() + 3); break;
-        case "yearly": d.setFullYear(d.getFullYear() + 1); break;
+        case "monthly": d.setTime(addMonthsClamped(base, i + 1, anchorDay).getTime()); break;
+        case "quarterly": d.setTime(addMonthsClamped(base, 3 * (i + 1), anchorDay).getTime()); break;
+        case "yearly": d.setTime(addYearsClamped(base, i + 1, anchorDay).getTime()); break;
         case "once": return out; // no repeats
         default: return out;
       }
@@ -80,6 +85,7 @@ function occurrenceSeries(
     let count = 0;
     let lastDate = new Date(start);
     const cur = new Date(start);
+    const anchorDay = start.getDate();
     for (let i = 0; i < 500; i++) {
       if (cur > end) break;
       count++;
@@ -87,9 +93,9 @@ function occurrenceSeries(
       switch (freq) {
         case "weekly": cur.setDate(cur.getDate() + 7); break;
         case "biweekly": cur.setDate(cur.getDate() + 14); break;
-        case "monthly": cur.setMonth(cur.getMonth() + 1); break;
-        case "quarterly": cur.setMonth(cur.getMonth() + 3); break;
-        case "yearly": cur.setFullYear(cur.getFullYear() + 1); break;
+        case "monthly": cur.setTime(addMonthsClamped(start, i + 1, anchorDay).getTime()); break;
+        case "quarterly": cur.setTime(addMonthsClamped(start, 3 * (i + 1), anchorDay).getTime()); break;
+        case "yearly": cur.setTime(addYearsClamped(start, i + 1, anchorDay).getTime()); break;
         default: return null;
       }
     }

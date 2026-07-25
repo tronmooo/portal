@@ -30,6 +30,7 @@
 // Pinned by tests/recurring-dates.test.ts.
 
 import type { RecurrencePattern, EventCategory } from "./schema";
+import { addMonthsClamped, addYearsClamped } from "./date-math";
 
 export type RecurringKind =
   | "anniversary" | "birthday" | "bill" | "renewal"
@@ -194,16 +195,22 @@ export function expandRecurrenceDates(
   const out: string[] = [];
   if (base >= windowStart && base <= windowEnd) out.push(base);
   if (!recurrence || recurrence === "none") return out;
+  const seriesStart = parseLocal(base);
+  // Month/year series are indexed from the BASE date and clamped to month end
+  // (shared/date-math). Stepping `setMonth(+1)` off the previous occurrence
+  // overflows ("June 31" → July 1) and then permanently drifts the series off
+  // its day-of-month — the "Monthly on day 31, next occurrence Aug 1" bug.
+  const anchorDay = seriesStart.getDate();
   const d = parseLocal(base);
-  for (let i = 0; i < cap; i++) {
+  for (let i = 1; i <= cap; i++) {
     switch (recurrence) {
       case "daily": d.setDate(d.getDate() + 1); break;
       case "weekdays": do { d.setDate(d.getDate() + 1); } while (d.getDay() === 0 || d.getDay() === 6); break;
       case "weekends": do { d.setDate(d.getDate() + 1); } while (d.getDay() !== 0 && d.getDay() !== 6); break;
       case "weekly": d.setDate(d.getDate() + 7); break;
       case "biweekly": d.setDate(d.getDate() + 14); break;
-      case "monthly": d.setMonth(d.getMonth() + 1); break;
-      case "yearly": d.setFullYear(d.getFullYear() + 1); break;
+      case "monthly": d.setTime(addMonthsClamped(seriesStart, i, anchorDay).getTime()); break;
+      case "yearly": d.setTime(addYearsClamped(seriesStart, i, anchorDay).getTime()); break;
       default: return out;
     }
     const iso = toISO(d);

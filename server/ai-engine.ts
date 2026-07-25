@@ -53,6 +53,7 @@ import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO } from "@shared/timezone";
+import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
@@ -6430,7 +6431,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       } else if (recur === "weekly") {
         for (let i = 0; i < occCount; i++) occ.push(firstMs + i * 7 * DAY_MS);
       } else if (recur === "monthly") {
-        for (let i = 0; i < occCount; i++) { const d = new Date(firstMs); d.setMonth(d.getMonth() + i); occ.push(d.getTime()); }
+        // Anchored to the first occurrence's day and clamped to month end.
+        const monthlyBase = new Date(firstMs);
+        for (let i = 0; i < occCount; i++) occ.push(addMonthsClamped(monthlyBase, i).getTime());
       } else { // "daily" or any other recurring token
         for (let i = 0; i < occCount; i++) occ.push(firstMs + i * DAY_MS);
       }
@@ -8177,7 +8180,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             const today = new Date();
             const dueDay = Math.max(1, Math.min(31, Number(fields.dueDay)));
             const next = new Date(today.getFullYear(), today.getMonth(), dueDay);
-            if (next.getTime() < today.getTime()) next.setMonth(next.getMonth() + 1);
+            if (next.getTime() < today.getTime()) next.setTime(addMonthsClamped(next, 1, dueDay).getTime());
             const nextDueDate = next.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
             const newOb = await storage.createObligation({
               name: obName,
@@ -9352,9 +9355,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const n = finiteCount - 1;
         if (normalizedFrequency === "weekly") d.setDate(d.getDate() + 7 * n);
         else if (normalizedFrequency === "biweekly") d.setDate(d.getDate() + 14 * n);
-        else if (normalizedFrequency === "quarterly") d.setMonth(d.getMonth() + 3 * n);
-        else if (normalizedFrequency === "yearly") d.setFullYear(d.getFullYear() + n);
-        else d.setMonth(d.getMonth() + n);
+        // Month/year steps clamp to the target month end (shared/date-math) so
+        // a series anchored on the 31st keeps its day instead of overflowing.
+        else if (normalizedFrequency === "quarterly") d.setTime(addMonthsClamped(d, 3 * n).getTime());
+        else if (normalizedFrequency === "yearly") d.setTime(addYearsClamped(d, n).getTime());
+        else d.setTime(addMonthsClamped(d, n).getTime());
         derivedEnd = d.toLocaleDateString("en-CA");
       }
       const obligationPayload = validateAiPayload(insertObligationSchema, {

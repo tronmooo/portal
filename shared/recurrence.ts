@@ -13,6 +13,16 @@
 //   rcount:<n>            series ends after n completed occurrences
 //   rdone:<n>             occurrences completed so far (drives rcount)
 //   rpaused               series paused — its next occurrence is hidden
+//   ranchor:<n>           day-of-month the series is anchored to (1–31)
+//
+// ANCHOR DAY. A monthly series stores only its NEXT due date, so advancing it
+// one cycle at a time would drift whenever a month is too short: naive
+// setMonth turns Jan 31 into Mar 3, and every later step then sits on the 3rd.
+// `ranchor:` pins the intended day-of-month so the series clamps to the month
+// end (Feb 28) and returns to the 31st the following month. See
+// shared/date-math.ts.
+
+import { addMonthsClamped, addYearsClamped } from "./date-math";
 
 export interface RecurrenceRule {
   freq: string; // "" = does not repeat
@@ -22,6 +32,8 @@ export interface RecurrenceRule {
   count?: number; // end after N occurrences
   done: number; // completed occurrences so far
   paused: boolean;
+  /** Day-of-month the monthly/yearly series is pinned to (1–31). */
+  anchorDay?: number;
 }
 
 export const RECUR_PRESETS: { value: string; label: string }[] = [
@@ -34,7 +46,7 @@ export const RECUR_PRESETS: { value: string; label: string }[] = [
   { value: "yearly", label: "Yearly" },
 ];
 
-const RECUR_TAG_RE = /^(recur:|runtil:|rcount:|rdone:|rpaused$)/;
+const RECUR_TAG_RE = /^(recur:|runtil:|rcount:|rdone:|ranchor:|rpaused$)/;
 const DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 export function freqToUnit(freq: string): { unit: RecurrenceRule["unit"]; interval: number } {
@@ -62,7 +74,10 @@ export function parseRecurrence(tags: string[] = []): RecurrenceRule {
   const doneTag = get("rdone:");
   const done = doneTag ? parseInt(doneTag.slice(6), 10) || 0 : 0;
   const paused = tags.includes("rpaused");
-  return { freq, interval, unit, until, count, done, paused };
+  const anchorTag = get("ranchor:");
+  const anchorRaw = anchorTag ? parseInt(anchorTag.slice(8), 10) : NaN;
+  const anchorDay = Number.isFinite(anchorRaw) && anchorRaw >= 1 && anchorRaw <= 31 ? anchorRaw : undefined;
+  return { freq, interval, unit, until, count, done, paused, anchorDay };
 }
 
 // Build the recurrence-related tags, preserving any non-recurrence tags passed in.
@@ -73,8 +88,26 @@ export function recurrenceToTags(rule: RecurrenceRule, existing: string[] = []):
   if (rule.until) base.push(`runtil:${rule.until}`);
   if (rule.count) base.push(`rcount:${rule.count}`);
   if (rule.done) base.push(`rdone:${rule.done}`);
+  if (rule.anchorDay != null && rule.anchorDay >= 1 && rule.anchorDay <= 31) {
+    base.push(`ranchor:${rule.anchorDay}`);
+  }
   if (rule.paused) base.push("rpaused");
   return base;
+}
+
+/**
+ * Pin a month/year series to its start date's day-of-month so later steps
+ * can't drift off it. Call this when a recurrence is first attached to a task
+ * (the start date is known then and never again). No-op for day/week rules and
+ * for rules that already carry an anchor.
+ */
+export function withAnchorDay(rule: RecurrenceRule, startDate: string | undefined): RecurrenceRule {
+  if (rule.anchorDay != null) return rule;
+  if (rule.unit !== "month" && rule.unit !== "year") return rule;
+  if (!startDate) return rule;
+  const d = new Date(startDate.slice(0, 10) + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return rule;
+  return { ...rule, anchorDay: d.getDate() };
 }
 
 export function isRecurring(tags: string[] = []): boolean {
@@ -90,8 +123,10 @@ export function advance(dateStr: string, rule: RecurrenceRule): string {
   const d = new Date(dateStr + "T00:00:00");
   if (rule.unit === "day") d.setDate(d.getDate() + rule.interval);
   else if (rule.unit === "week") d.setDate(d.getDate() + 7 * rule.interval);
-  else if (rule.unit === "month") d.setMonth(d.getMonth() + rule.interval);
-  else if (rule.unit === "year") d.setFullYear(d.getFullYear() + rule.interval);
+  // Month/year steps clamp to the target month's last day and honour the
+  // series anchor, so Jan 31 → Feb 28 → Mar 31 rather than Mar 3 → Apr 3.
+  else if (rule.unit === "month") return toLocalISO(addMonthsClamped(d, rule.interval, rule.anchorDay));
+  else if (rule.unit === "year") return toLocalISO(addYearsClamped(d, rule.interval, rule.anchorDay));
   else if (rule.unit === "weekday") {
     do {
       d.setDate(d.getDate() + 1);
@@ -130,7 +165,9 @@ export function humanSummary(rule: RecurrenceRule, dueDate?: string): string {
     s += rule.interval === 1 ? "weekly" : `every ${rule.interval} weeks`;
     if (dow) s += ` on ${dow}`;
   } else if (rule.unit === "month") {
-    const dom = dueDate ? new Date(dueDate + "T00:00:00").getDate() : null;
+    // Prefer the stored anchor: on a short month the due date reads "28" while
+    // the series is really pinned to the 31st, and the label must not lie.
+    const dom = rule.anchorDay ?? (dueDate ? new Date(dueDate + "T00:00:00").getDate() : null);
     s += "monthly";
     if (dom) s += ` on day ${dom}`;
   } else if (rule.unit === "year") s += "yearly";
