@@ -165,7 +165,7 @@ function groupRaw(raw: any[]): SearchResults {
 
 const QUICK_ACTIONS = [
   { label: "Go to Dashboard", icon: LayoutDashboard, path: "/dashboard", shortcut: "D" },
-  { label: "Go to Chat",      icon: MessageSquare,   path: "/",         shortcut: "C" },
+  { label: "Go to Chat",      icon: MessageSquare,   path: "/chat",     shortcut: "C" },
   { label: "Go to Trackers",  icon: BarChart2,       path: "/trackers", shortcut: "T" },
   { label: "Go to Profiles",  icon: Users,           path: "/profiles", shortcut: "P" },
   { label: "Go to Finance",   icon: Wallet,          path: "/finance",  shortcut: "F" },

@@ -23,6 +23,16 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -534,7 +544,9 @@ function EventFormDialog({
 
 // ─── Event Detail Popup ────────────────────────────────────────────────────────
 
-function EventDetailDialog({
+// Exported for regression tests (tests/calendar-event-actions.test.tsx), which
+// assert that Edit never reaches the delete path and that Delete is confirm-gated.
+export function EventDetailDialog({
   open,
   onClose,
   item,
@@ -547,7 +559,11 @@ function EventDetailDialog({
 }) {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const Icon = TYPE_ICONS[item.type] || CalendarIcon;
+  // A single dated occurrence of a recurring bill — deleting it skips that date
+  // rather than destroying the whole series.
+  const isOccurrence = item.type === "obligation" && !!item.meta?.occurrenceId;
 
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -820,7 +836,12 @@ function EventDetailDialog({
           )}
         </div>
 
-        <DialogFooter className="gap-2">
+        {/* Not <DialogFooter>: that primitive is `flex-col-reverse` below the
+            `sm` breakpoint, which renders the LAST child first. On a narrow
+            viewport that put destructive Delete in the slot where Edit appears,
+            and a mis-aimed tap permanently destroyed the event. Explicit
+            row order keeps Edit before Delete at every width. */}
+        <div className="flex flex-row flex-wrap items-center justify-end gap-2">
           {/* Bill occurrence: pay / skip from the calendar, and jump to the
               liability's Schedule & Calendar page for reschedule / amount /
               notes / recurrence / history. Shown for any still-open occurrence
@@ -860,26 +881,55 @@ function EventDetailDialog({
           )}
           {(item.type === "event" || item.type === "task" || item.type === "obligation") && (
             <Button
+              type="button"
               variant="destructive"
               size="sm"
               disabled={deleteMutation.isPending}
-              onClick={() => {
-                // Close immediately for snappy UX — optimistic removal in onMutate.
-                deleteMutation.mutate();
-                onClose();
-              }}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setConfirmDelete(true); }}
               data-testid="btn-delete-event-detail"
             >
               <Trash2 className="h-3.5 w-3.5 mr-1" />
               {deleteMutation.isPending
                 ? "Removing\u2026"
-                : item.type === "obligation" && item.meta?.occurrenceId
+                : isOccurrence
                   ? "Remove this date"
                   : "Delete"}
             </Button>
           )}
-        </DialogFooter>
+        </div>
       </DialogContent>
+
+      {/* Destructive actions are confirm-gated: a single mis-aimed tap used to
+          permanently destroy an event with no way back. */}
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-event">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {isOccurrence ? "Remove this date?" : `Delete "${item.title}"?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {isOccurrence
+                ? "This skips this single occurrence. The rest of the series stays on your calendar."
+                : "This permanently removes it from your calendar and can't be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="btn-cancel-delete-event">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                setConfirmDelete(false);
+                // Close immediately for snappy UX — optimistic removal in onMutate.
+                deleteMutation.mutate();
+                onClose();
+              }}
+              data-testid="btn-confirm-delete-event"
+            >
+              {isOccurrence ? "Remove date" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

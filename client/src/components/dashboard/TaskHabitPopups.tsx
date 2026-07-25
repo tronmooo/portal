@@ -5,8 +5,6 @@
 // Behavior is unchanged — only the module boundary moved.
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useSeededScopedList } from "@/components/dashboard/popups/useSeededList";
-import { Windowed } from "@/components/dashboard/popups/Windowed";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -71,14 +69,15 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     enabled: open,
   });
   const profileName = (id: string) => allProfiles.find((p: any) => p.id === id)?.name || "Someone";
-  // PERF (2026-07-24): this used to `invalidateQueries(["/api/tasks"])` on every
-  // open "to prevent stale cache after AI chat mutations". The briefing already
-  // holds this exact key, freshly fetched, so the invalidate discarded warm data
-  // and forced a round-trip — a guaranteed spinner on EVERY open. AI-chat and
-  // in-app writes both go through invalidateDomain("tasks"), so freshness is
-  // already handled at write time; reading does not need to invalidate.
-  // useSeededList seeds from the briefing's cache and refetches in background.
-  const { data: tasks = [], isPending } = useSeededScopedList<any>("/api/tasks", { filterMode, filterIds }, { open });
+  // Force refetch when popup opens — prevents stale cache after AI chat mutations
+  useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); } }, [open]);
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  // PERF: isPending (not isLoading) so placeholderData keepPreviousData keeps prior list visible on filter switch.
+  const { data: tasks = [], isPending } = useQuery<any[]>({
+    queryKey: ["/api/tasks", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
+    enabled: open,
+  });
   const isLoading = isPending;
 
   const createMutation = useMutation({
@@ -798,13 +797,13 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                     {overdueTasks.length > 0 && (
                       <div data-testid="section-overdue">
                         <div className="flex items-center gap-1.5 px-1 mb-1.5 text-[11px] font-bold uppercase tracking-wider text-red-500"><AlertTriangle className="h-3 w-3" />Overdue ({overdueTasks.length})</div>
-                        <div className="space-y-2"><Windowed items={overdueTasks} testId="overdue" render={(t: any) => <TaskRow key={t.id} t={t} />} /></div>
+                        <div className="space-y-2">{overdueTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
                       </div>
                     )}
                     {todayTasks.length > 0 && (
                       <div data-testid="section-today">
                         {overdueTasks.length > 0 && <div className="px-1 mb-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Today</div>}
-                        <div className="space-y-2"><Windowed items={todayTasks} testId="today" render={(t: any) => <TaskRow key={t.id} t={t} />} /></div>
+                        <div className="space-y-2">{todayTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
                       </div>
                     )}
                   </div>
@@ -813,7 +812,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                 recurringTasks.length === 0 && !composer.open ? (
                   <div className="text-center py-10 text-sm text-muted-foreground">No recurring tasks — tap + to add one</div>
                 ) : (
-                  <div className="space-y-2"><Windowed items={recurringTasks} testId="recurring" render={(t: any) => <TaskRow key={t.id} t={t} />} /></div>
+                  <div className="space-y-2">{recurringTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
                 )
               ) : (
                 upcomingSections.length === 0 && !composer.open ? (
@@ -823,7 +822,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                     {upcomingSections.map((s) => (
                       <div key={s.key} data-testid={`section-${s.key}`}>
                         <div className="px-1 mb-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{s.label} ({s.items.length})</div>
-                        <div className="space-y-2"><Windowed items={s.items} testId={s.key} render={(t: any) => <TaskRow key={t.id} t={t} />} /></div>
+                        <div className="space-y-2">{s.items.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
                       </div>
                     ))}
                   </div>
@@ -896,10 +895,8 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   const [newHabitName, setNewHabitName] = useState('');
   const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'year'>('today');
   const [timeFilter, setTimeFilter] = useState<'all' | 'morning' | 'afternoon' | 'evening' | 'night'>('all');
-  // PERF (2026-07-24): the on-open invalidateQueries(["/api/habits"]) is gone
-  // for the same reason as the tasks one — it discarded the briefing's warm
-  // copy under the identical key and forced a spinner on every open. Writes
-  // still refresh through invalidateDomain("habits").
+  // Force refetch when popup opens — prevents stale cache after AI chat mutations
+  useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); } }, [open]);
 
   // BUG (user report: "Add Habit does nothing"): the habit was created WITHOUT
   // linkedProfiles, so under an active profile filter the new habit was
@@ -944,10 +941,13 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     setNewHabitTimeOfDay('anytime');
   };
 
-  // PERF: seeded from the briefing's cache — paints real habits on frame 1 and
-  // refetches in the background. isPending (not isLoading) so keepPreviousData
-  // keeps the prior habits visible across a filter switch.
-  const { data: habits = [], isPending: habitsLoading } = useSeededScopedList<any>("/api/habits", { filterMode, filterIds }, { open });
+  const habitsProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  // PERF: isPending (not isLoading) so placeholderData keeps prior habits visible on filter switch.
+  const { data: habits = [], isPending: habitsLoading } = useQuery<any[]>({
+    queryKey: ["/api/habits", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/habits${habitsProfileParam}`).then(r => r.json()),
+    enabled: open,
+  });
   const isLoading = habitsLoading;
 
   // Optimistically bump stats.habitCompletionRate so the dashboard

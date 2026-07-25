@@ -29,9 +29,15 @@ function Loader() {
 export default function ProfileRouteDispatch() {
   const [pluralMatch, pluralParams] = useRoute("/profiles/:id");
   const [singularMatch, singularParams] = useRoute("/profile/:id");
+  const [tabMatch, tabParams] = useRoute("/profiles/:id/:tab");
   const id = (pluralParams as { id?: string } | null)?.id
     || (singularParams as { id?: string } | null)?.id
+    || (tabParams as { id?: string } | null)?.id
     || "";
+  // An explicit tab deep-link (/profiles/:id/finance) asks for the deep detail
+  // page. Only the bare /profiles/:id shorthand redirects a person to their
+  // lightweight Info page.
+  const wantsTab = tabMatch && (tabParams as { tab?: string } | null)?.tab !== "info";
   const [, navigate] = useLocation();
 
   const { data: profiles, isLoading } = useQuery<any[]>({
@@ -52,14 +58,14 @@ export default function ProfileRouteDispatch() {
     // repointing the whole dashboard/finance/trackers scope to whoever you last
     // opened made the dashboard "stick" to a sparse profile and look empty.
     // Scope only changes via the explicit hub switcher now.
-    if (isPerson && profile) {
+    if (isPerson && profile && !wantsTab) {
       navigate(`/profiles/${profile.id}/info`, { replace: true });
     }
-  }, [id, singularMatch, pluralMatch, isPerson, profile?.id]);
+  }, [id, singularMatch, pluralMatch, isPerson, wantsTab, profile?.id]);
 
   // Show a loader while resolving the type, while redirecting a person, or while
   // normalizing the legacy alias.
-  if ((singularMatch && !pluralMatch) || isLoading || isPerson) return <Loader />;
+  if ((singularMatch && !pluralMatch) || isLoading || (isPerson && !wantsTab)) return <Loader />;
 
   // Non-person profile — keep the per-type detail page.
   return (

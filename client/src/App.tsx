@@ -56,6 +56,7 @@ const _dashImport = () => import("@/pages/dashboard");
 const _trackImport = () => import("@/pages/trackers");
 const _profDispatchImport = () => import("@/pages/profile-route-dispatch");
 const _profInfoImport = () => import("@/pages/profile-info");
+const _profListImport = () => import("@/pages/profiles-list");
 const _docDImport  = () => import("@/pages/document-detail");
 const _authImport  = () => import("@/pages/auth");
 const _resetImport = () => import("@/pages/reset-password");
@@ -80,6 +81,7 @@ const DashboardPage    = lazy(_dashImport);
 const TrackersPage     = lazy(_trackImport);
 const ProfileRouteDispatch = lazy(_profDispatchImport);
 const ProfileInfoPage  = lazy(_profInfoImport);
+const ProfilesListPage = lazy(_profListImport);
 const DocumentDetailPage = lazy(_docDImport);
 const AuthPage         = lazy(_authImport);
 const ResetPasswordPage = lazy(_resetImport);
@@ -325,7 +327,7 @@ function pullRefreshDomains(location: string): Domain[] | null {
   if (table[path]) return table[path];
   if (path.startsWith("/profiles/") || path.startsWith("/profile/")) return ["profiles"];
   if (path.startsWith("/documents/")) return ["documents"];
-  // "/", chat, settings, editor, share, unknown → no mapping (broad fallback)
+  // "/" (redirects), /chat, settings, editor, share, unknown → no mapping
   return null;
 }
 
@@ -506,7 +508,7 @@ function RouteTitle() {
   useEffect(() => {
     const path = location.split("?")[0].replace(/\/$/, "") || "/";
     const map: Record<string, string> = {
-      "/": "Portol — Your Life, Organized",
+      "/chat": "Chat — Portol",
       "/dashboard": "Dashboard — Portol",
       "/dashboard/finance": "Finance — Portol",
       "/dashboard/habits": "Habits — Portol",
@@ -521,6 +523,7 @@ function RouteTitle() {
       "/trackers": "Trackers — Portol",
       "/linked": "Linked — Portol",
       "/profiles": "Profiles — Portol",
+      "/profiles/list": "Profiles — Portol",
       "/calendar": "Calendar — Portol",
       "/settings": "Settings — Portol",
       "/artifacts": "Artifacts — Portol",
@@ -731,12 +734,24 @@ function HubArea() {
   );
 }
 
+// wouter has no <Redirect> in this setup — a mount-time replace keeps the bare
+// root out of history so Back from the dashboard leaves the app instead of
+// bouncing through "/".
+function RootRedirect() {
+  const [, navigate] = useLocation();
+  useEffect(() => { navigate("/dashboard", { replace: true }); }, []);
+  return <PageLoader />;
+}
+
 function AppRouter() {
   return (
     <SectionErrorBoundary name="app">
     <Suspense fallback={<PageLoader />}>
       <Switch>
-        <Route path="/" component={ChatPage} />
+        {/* Chat lives at /chat so it is bookmarkable and deep-linkable; the
+            bare root redirects to the dashboard, which is the home surface. */}
+        <Route path="/chat" component={ChatPage} />
+        <Route path="/" component={RootRedirect} />
         <Route path="/dashboard" component={DashboardPage} />
         <Route path="/trackers" component={TrackersPage} />
         <Route path="/linked" component={TrackersPage} />
@@ -744,9 +759,16 @@ function AppRouter() {
         {/* Info tab. No id → the combined "everyone" Info view (replaces the
             retired profiles grid). */}
         <Route path="/profiles" component={ProfileInfoPage} />
+        {/* Profiles index. MUST precede /profiles/:id — "list" is a literal
+            segment, not an id. */}
+        <Route path="/profiles/list" component={ProfilesListPage} />
         {/* Single-profile Info — MUST precede /profiles/:id so the more
             specific pattern wins under the query-tolerant matcher. */}
         <Route path="/profiles/:id/info" component={ProfileInfoPage} />
+        {/* Tab deep-links: /profiles/:id/overview|finance|trackers|documents|
+            productivity|history. The dispatcher hands them to the detail page
+            with that tab preselected. */}
+        <Route path="/profiles/:id/:tab" component={ProfileRouteDispatch} />
         {/* Dispatcher: people redirect to their dashboard + Info; every other
             profile type still renders the per-type detail page. */}
         <Route path="/profiles/:id" component={ProfileRouteDispatch} />
