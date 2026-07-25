@@ -18,7 +18,9 @@ import {
   frequencyToRecurrence,
   inferKindFromText,
 } from "../shared/calendar-adapters";
-import { buildCalendarOccurrences, seriesIdentityKey } from "../shared/calendar-occurrences";
+import {
+  buildCalendarOccurrences, generateSeriesOccurrences, seriesIdentityKey,
+} from "../shared/calendar-occurrences";
 
 const TODAY = "2026-07-25";
 const JOE = "joe-id";
@@ -278,5 +280,55 @@ describe("seriesFromAll is total and safe", () => {
     const ids = all.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(all.every((s) => !!s.source.href)).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The calendar GRID (server timeline) and the recurring STREAM (client hook)
+// are two different code paths over the same data. They agree only because
+// both run these shared functions. This pins that contract: whatever one
+// suppresses as a shadow, the other must suppress too, and the surviving
+// birthday must come from the same record.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("grid and stream cannot diverge", () => {
+  const inputs = {
+    profiles: [joeProfile],
+    events: [joeBirthdayEvent, { id: "evt-other", title: "Team standup", date: "2026-07-27", recurrence: "weekly" }],
+  };
+
+  it("both paths suppress the same shadow event", () => {
+    // What the server timeline computes to exclude from the grid…
+    const profileSeries = seriesFromProfiles(inputs.profiles);
+    const knownBirthdayProfiles = new Set(
+      profileSeries.filter((s) => s.kind === "birthday").map((s) => s.source.profileId!),
+    );
+    const shadowIds = new Set(
+      seriesFromEvents(inputs.events, { knownBirthdayProfiles })
+        .filter((s) => s.shadow)
+        .map((s) => s.source.id),
+    );
+    expect([...shadowIds]).toEqual(["evt-joe-bday"]);
+
+    // …is exactly what the client stream drops during dedup.
+    const streamBirthdays = buildCalendarOccurrences(seriesFromAll(inputs), { todayISO: TODAY })
+      .filter((o) => o.kind === "birthday");
+    expect(streamBirthdays.every((o) => o.source.system === "profile")).toBe(true);
+    expect(streamBirthdays.some((o) => o.source.id === "evt-joe-bday")).toBe(false);
+  });
+
+  it("both paths render the birthday from the profile, on the same date", () => {
+    const fromProfileRecord = seriesFromProfiles(inputs.profiles).find((s) => s.kind === "birthday")!;
+    const gridDates = generateSeriesOccurrences(fromProfileRecord, { todayISO: TODAY }).map((o) => o.date);
+    const streamDates = buildCalendarOccurrences(seriesFromAll(inputs), { todayISO: TODAY })
+      .filter((o) => o.kind === "birthday")
+      .map((o) => o.date);
+    expect(streamDates).toEqual(gridDates);
+    expect(streamDates[0]).toBe("2027-02-11");
+  });
+
+  it("leaves ordinary events untouched on both paths", () => {
+    const nonShadow = seriesFromEvents(inputs.events, { knownBirthdayProfiles: new Set([JOE]) })
+      .filter((s) => !s.shadow);
+    expect(nonShadow.map((s) => s.source.id)).toEqual(["evt-other"]);
   });
 });

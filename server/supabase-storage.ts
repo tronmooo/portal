@@ -48,6 +48,8 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
 import { addMonthsClamped, addYearsClamped } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
+import { seriesFromProfiles, seriesFromEvents } from "../shared/calendar-adapters";
+import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
 import { selfIdsFrom, isInScope } from "../shared/scope";
@@ -3333,12 +3335,58 @@ export class SupabaseStorage implements IStorage {
     // events. Match "Daily Reminder", "Rent Payment Reminder", "🔔 Reminder:
     // ...", etc. without nuking legitimate event titles that merely contain
     // the substring (we anchor on a word boundary).
+    const rdTodayISO0 = getUserToday(this._timezone);
     const REMINDER_TITLE_RE = /\breminder\b/i;
     const isReminderEvent = (e: { title?: string | null }) =>
       typeof e.title === "string" && REMINDER_TITLE_RE.test(e.title);
 
+    // ── Birthdays & anniversaries come from the PROFILE, once ──────────────
+    // The grid and the recurring stream must agree, so both run the same
+    // shared logic (shared/calendar-adapters + calendar-occurrences):
+    //
+    //   • a profile's date-of-birth field is the authoritative birthday, and
+    //     the grid renders it directly — previously the grid showed birthdays
+    //     only if someone had also typed in a calendar event, so a profile
+    //     birthday appeared nowhere on the grid at all;
+    //   • a typed-in birthday event for a profile that already carries the
+    //     date is a SHADOW of it and is suppressed here, so the same birthday
+    //     can never render twice.
+    const scopedProfiles = profiles.filter(p => !filterActive || matchesProfile([p.id]));
+    const profileDateSeries = seriesFromProfiles(scopedProfiles as any[]);
+    const knownBirthdayProfiles = new Set(
+      profileDateSeries.filter(x => x.kind === "birthday").map(x => x.source.profileId!).filter(Boolean),
+    );
+    const knownAnniversaryProfiles = new Set(
+      profileDateSeries.filter(x => x.kind === "anniversary").map(x => x.source.profileId!).filter(Boolean),
+    );
+    const shadowEventIds = new Set(
+      seriesFromEvents(allEvents as any[], { knownBirthdayProfiles, knownAnniversaryProfiles })
+        .filter(x => x.shadow)
+        .map(x => x.source.id),
+    );
+    for (const ser of profileDateSeries) {
+      for (const occ of generateSeriesOccurrences(ser, {
+        todayISO: rdTodayISO0, horizonDays: 366 * 6, cap: 12,
+      })) {
+        if (occ.date < startDate || occ.date > endDate) continue;
+        items.push({
+          id: `${ser.kind}-${ser.source.id}-${occ.date}`,
+          type: "event",
+          title: ser.title,
+          date: occ.date,
+          allDay: true,
+          color: ser.kind === "birthday" ? "#A78BFA" : "#F472B6",
+          category: "family",
+          linkedProfiles: ser.source.profileId ? [ser.source.profileId] : [],
+          sourceId: ser.source.id,
+          meta: { recurrence: "yearly", source: ser.source.system, kind: ser.kind, href: ser.source.href },
+        } as any);
+      }
+    }
+
     const events = allEvents
       .filter(e => !isReminderEvent(e))
+      .filter(e => !shadowEventIds.has(e.id))
       .filter(e => matchesProfile(e.linkedProfiles));
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
