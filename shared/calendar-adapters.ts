@@ -70,6 +70,31 @@ export function humanizeTitle(raw: unknown, fallback = "Untitled"): string {
   return words.join(" ") || fallback;
 }
 
+
+/**
+ * Pull a money amount out of a title, returning the cleaned title.
+ *
+ * User report 2026-07-25: "Lubi why is there a duplicate of that". Lubi
+ * existed twice — once as a subscription obligation ("Lubi", $10) and once as
+ * a hand-created recurring event titled "Lubi — $10". They never merged for
+ * two reasons, and this fixes the first: the amount was baked into the title,
+ * so the normalized slugs were "lubi" and "lubi10" and could never match.
+ *
+ * Only a TRAILING amount is stripped, so "Rent for $2,500 apartment" keeps its
+ * wording while "Netflix — $9.99" becomes "Netflix" + 9.99.
+ */
+export function parseAmountFromTitle(raw: unknown): { title: string; amount?: number } {
+  const text = String(raw ?? "").trim();
+  if (!text) return { title: text };
+  // "Name — $10", "Name - $9.99", "Name $20", "Name ($15.00)"
+  const m = text.match(/^(.*?)[\s]*[-–—:(]?[\s]*\$\s*([\d,]+(?:\.\d{1,2})?)\s*\)?$/);
+  if (!m) return { title: text };
+  const name = m[1].replace(/[\s\-–—:]+$/, "").trim();
+  const amount = Number(m[2].replace(/,/g, ""));
+  if (!name || !Number.isFinite(amount)) return { title: text };
+  return { title: name, amount };
+}
+
 // ─── Kind inference ──────────────────────────────────────────────────────────
 
 /** Map a free-text title/category onto a calendar kind. */
@@ -172,9 +197,18 @@ export function seriesFromEvents(
   for (const e of events || []) {
     if (!e?.id || !isISO(e.date)) continue;
     const meta = parseRecurringMeta(e.tags);
+    // A recurring event carrying a money amount ("Lubi — $10") is somebody
+    // tracking a PAYMENT on the calendar. Treat it as one so it shares an
+    // identity space with the obligation that already models the same charge,
+    // instead of sitting alongside it as a second, unrelated "Event".
+    const parsed = parseAmountFromTitle(humanizeTitle(e.title, "Event"));
+    const recurs = !!e.recurrence && e.recurrence !== "none";
+    const textKind = inferKindFromText(parsed.title, e.category);
     const kind: OccurrenceKind = meta.kind
       ? (meta.kind as OccurrenceKind)
-      : inferKindFromText(e.title, e.category);
+      : parsed.amount != null && recurs
+        ? (textKind === "custom" ? "bill" : textKind)
+        : textKind;
     const profileId = Array.isArray(e.linkedProfiles) ? e.linkedProfiles[0] : undefined;
 
     // A typed-in birthday/anniversary for a profile that already carries the
@@ -185,8 +219,9 @@ export function seriesFromEvents(
 
     out.push({
       id: `event:${e.id}`,
-      kind: kind === "custom" && e.recurrence && e.recurrence !== "none" ? "event" : kind,
-      title: humanizeTitle(e.title, "Event"),
+      kind: kind === "custom" && recurs ? "event" : kind,
+      title: parsed.title,
+      amount: parsed.amount,
       subtitle: e.location || (e.time ? `at ${e.time}` : undefined),
       source: {
         system: "event",

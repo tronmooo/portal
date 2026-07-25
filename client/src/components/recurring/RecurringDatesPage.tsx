@@ -26,9 +26,10 @@ import {
   type CalendarCategory,
 } from "@shared/calendar-categories";
 import {
-  KIND_LABELS, relativeDayLabel,
+  KIND_LABELS, relativeDayLabel, isRecurringRule,
   type CalendarOccurrence, type CalendarSeries,
 } from "@shared/calendar-occurrences";
+import { humanRecurrenceLabel } from "@shared/recurring-dates";
 import { type CalendarAction } from "@shared/calendar-capabilities";
 import { useCalendarOccurrences } from "@/hooks/useCalendarOccurrences";
 import { applyCalendarAction } from "@/lib/calendar-mutations";
@@ -60,6 +61,11 @@ function OccurrenceRow({
   if (ownerName && ownerName.trim().toLowerCase() !== occ.title.trim().toLowerCase()) {
     meta.push(ownerName);
   }
+  // Say plainly whether this date repeats, so a one-off in the Upcoming list
+  // is never mistaken for a rule.
+  meta.push(isRecurringRule(occ.series)
+    ? humanRecurrenceLabel(occ.series.recurrence, occ.series.baseDate)
+    : "One-time");
   return (
     <button
       type="button"
@@ -102,7 +108,10 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
   const today = cal.todayISO;
 
   // Chip counts are over deduplicated RULES — never occurrences.
-  const counts = useMemo(() => countRules(cal.series), [cal.series]);
+  const counts = useMemo(
+    () => countRules(view === "upcoming" ? cal.allSeries : cal.series),
+    [cal.series, cal.allSeries, view],
+  );
   const visibleRules = useMemo(
     () => filterSeriesByCategory(cal.series, category),
     [cal.series, category],
@@ -130,8 +139,11 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
 
   // Upcoming view: future dates in the active category, grouped by day.
   const grouped = useMemo(() => {
+    // Over ALL series, not just the rules: the Upcoming view is a list of
+    // DATES, so a one-off house viewing belongs here exactly as it appears on
+    // the calendar grid. Only the Rules list is restricted to repeating items.
     const inCategory = new Set(
-      cal.series.filter((s) => seriesInCategory(s, category)).map((s) => s.id),
+      cal.allSeries.filter((s) => seriesInCategory(s, category)).map((s) => s.id),
     );
     const out: Array<{ date: string; items: CalendarOccurrence[] }> = [];
     let current: { date: string; items: CalendarOccurrence[] } | null = null;
@@ -145,13 +157,13 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
       current.items.push(o);
     }
     return out.slice(0, 120);
-  }, [cal.occurrences, cal.series, category, today]);
+  }, [cal.occurrences, cal.allSeries, category, today]);
 
   const seriesById = useMemo(() => {
     const m = new Map<string, CalendarSeries>();
-    for (const s of cal.series) m.set(s.id, s);
+    for (const s of cal.allSeries) m.set(s.id, s);
     return m;
-  }, [cal.series]);
+  }, [cal.allSeries]);
 
   const runAction = async (series: CalendarSeries, action: CalendarAction) => {
     const occurrence = nextByRule.get(series.id) ?? undefined;

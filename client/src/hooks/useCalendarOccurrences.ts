@@ -45,10 +45,12 @@ export interface UseCalendarOccurrencesOptions {
 }
 
 export interface CalendarOccurrencesResult {
-  /** Every occurrence, deduplicated and date-sorted. */
+  /** Every occurrence, deduplicated and date-sorted — one-off dates included. */
   occurrences: CalendarOccurrence[];
-  /** The surviving series after dedup. */
+  /** The series the RULES list manages (recurring only when `recurringOnly`). */
   series: CalendarSeries[];
+  /** Every deduplicated series in scope, whether or not it repeats. */
+  allSeries: CalendarSeries[];
   /** seriesId → the ids collapsed into it, for honest disclosure in the UI. */
   duplicatesBySeries: Map<string, string[]>;
   /** Every occurrence of one series, ascending. */
@@ -123,10 +125,13 @@ export function useCalendarOccurrences(
     [profileList],
   );
 
-  const scopedSeries = useMemo(() => {
-    const inScope = scoped ? filterSeriesByProfiles(allSeries, filterIds, { selfIds }) : allSeries;
-    return recurringOnly ? onlyRecurringRules(inScope) : inScope;
-  }, [allSeries, scoped, filterIds.join(","), selfIds, recurringOnly]);
+  // Scope once. `recurringOnly` narrows only the RULES list — the occurrence
+  // stream always covers every date so the Upcoming view and the calendar grid
+  // show the same thing ("it should be connected to the Calendar view").
+  const scopedSeries = useMemo(
+    () => (scoped ? filterSeriesByProfiles(allSeries, filterIds, { selfIds }) : allSeries),
+    [allSeries, scoped, filterIds.join(","), selfIds],
+  );
 
   const deduped = useMemo(() => dedupeSeries(scopedSeries), [scopedSeries]);
 
@@ -136,7 +141,13 @@ export function useCalendarOccurrences(
     return m;
   }, [deduped]);
 
+  /** Every deduplicated series in scope — one-off dates included. */
   const survivingSeries = useMemo(() => deduped.map((d) => d.series), [deduped]);
+  /** The subset the RULES list manages. */
+  const ruleSeries = useMemo(
+    () => (recurringOnly ? onlyRecurringRules(survivingSeries) : survivingSeries),
+    [survivingSeries, recurringOnly],
+  );
 
   // Per-series generation, so a kind whose horizon was extended regenerates
   // with the wider window while everything else stays cheap.
@@ -192,7 +203,8 @@ export function useCalendarOccurrences(
 
   return {
     occurrences,
-    series: survivingSeries,
+    series: ruleSeries,
+    allSeries: survivingSeries,
     duplicatesBySeries,
     occurrencesForSeries: (seriesId: string) => bySeries.get(seriesId) || [],
     getEventRow: (eventId: string) => eventsById.get(eventId),

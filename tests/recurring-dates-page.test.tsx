@@ -25,7 +25,7 @@ vi.mock("@/lib/calendar-mutations", () => ({
 
 import { seriesFromAll } from "../shared/calendar-adapters";
 import {
-  dedupeSeries, generateSeriesOccurrences,
+  dedupeSeries, generateSeriesOccurrences, isRecurringRule,
   type CalendarOccurrence, type CalendarSeries,
 } from "../shared/calendar-occurrences";
 
@@ -47,6 +47,9 @@ const RAW = {
     // The drifted birthday event from the first screenshot.
     { id: "evt-joe", title: "Joe's Birthday", date: "2029-02-11", recurrence: "yearly",
       linkedProfiles: [JOE], tags: ["rdate", "rd:kind:birthday"] },
+    // A ONE-OFF date: excluded from Rules, present in Upcoming.
+    { id: "evt-viewing", title: "House Viewing", date: "2026-08-05", recurrence: "none",
+      linkedProfiles: [JOE] },
   ],
   obligations: [
     { id: "ob-chatgpt", name: "ChatGPT Pro", amount: 20, frequency: "monthly",
@@ -73,7 +76,10 @@ const allOccurrences = [...occBySeries.values()].flat()
 vi.mock("@/hooks/useCalendarOccurrences", () => ({
   useCalendarOccurrences: () => ({
     occurrences: allOccurrences,
-    series,
+    // `series` is the RULES list (recurring only); `allSeries` is every date,
+    // which is what the Upcoming view and the calendar grid share.
+    series: series.filter(isRecurringRule),
+    allSeries: series,
     duplicatesBySeries: new Map<string, string[]>(
       dedupeSeries(seriesFromAll(RAW))
         .filter((d) => d.duplicateIds.length)
@@ -243,5 +249,29 @@ describe("opening an item", () => {
     const rows = within(screen.getByTestId("cal-detail-occurrences"))
       .getAllByTestId(/^cal-occ-/);
     expect(rows.length).toBeGreaterThanOrEqual(12);
+  });
+});
+
+describe("Rules are recurring-only; Upcoming is every date", () => {
+  it("keeps a one-off out of the Rules list", () => {
+    mount();
+    expect(within(screen.getByTestId("rules-list")).queryByText("House Viewing")).toBeNull();
+  });
+
+  it("shows that same one-off in Upcoming, labelled One-time", () => {
+    mount();
+    fireEvent.click(screen.getByTestId("view-upcoming"));
+    const list = screen.getByTestId("upcoming-list");
+    const row = within(list).getByText("House Viewing").closest("[data-testid^='occ-row-']")!;
+    expect(row.textContent).toContain("One-time");
+  });
+
+  it("labels a recurring date with its actual pattern, not 'One-time'", () => {
+    mount();
+    fireEvent.click(screen.getByTestId("view-upcoming"));
+    const list = screen.getByTestId("upcoming-list");
+    const row = within(list).getAllByText("ChatGPT Pro")[0].closest("[data-testid^='occ-row-']")!;
+    expect(row.textContent).toMatch(/Monthly/i);
+    expect(row.textContent).not.toContain("One-time");
   });
 });

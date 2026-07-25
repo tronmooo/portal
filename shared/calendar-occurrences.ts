@@ -330,8 +330,18 @@ export function seriesIdentityKey(series: CalendarSeries): string {
   if (PAYMENT_KINDS.has(series.kind)) {
     const anchor = series.source.linkedRecordId || owner;
     const name = slug(series.title);
-    if (anchor) return `payment:${anchor}:${name}`;
-    if (name) return `payment::${name}`;
+    // Amount is part of the identity: two charges with the same name on the
+    // same account for DIFFERENT sums are two charges, not one. A missing
+    // amount stays blank so a liability that records no figure can still merge
+    // with the obligation that does (handled by `isEquivalentPayment`).
+    const amt = series.amount != null ? String(Math.round(series.amount * 100)) : "";
+    // …and so is the schedule slot. Two $10 charges on the 3rd and the 17th are
+    // two charges. `anchorSignature` compares the day-of-month rather than the
+    // full date, so an obligation whose next due date has already rolled
+    // forward still matches the liability it belongs to.
+    const slot = anchorSignature(series);
+    if (anchor) return `payment:${anchor}:${name}:${amt}:${slot}`;
+    if (name) return `payment::${name}:${amt}:${slot}`;
     return `payment:record:${series.source.system}:${series.source.id}`;
   }
 
@@ -410,6 +420,91 @@ export interface DedupedSeries {
   duplicateIds: string[];
 }
 
+
+// ─── Secondary merge: the same payment described two ways ────────────────────
+//
+// Identity keys anchor payments on the linked financial record. That collapses
+// an obligation with its liability, but NOT a hand-created recurring event
+// describing the same charge — the event has no financial link to anchor on,
+// so "Lubi" the subscription (anchored on its liability) and "Lubi — $10" the
+// event (anchored on nothing) landed in different key spaces and both showed.
+//
+// This pass applies the fallback signals: normalized title, recurrence rule,
+// schedule anchor, amount, and owner. It is deliberately conservative — every
+// one of those must agree, and two records owned by DIFFERENT people never
+// merge, so "do not delete separate records merely because their names are
+// similar" still holds.
+
+/** The scheduling fingerprint of a series: same rule AND same slot. */
+function anchorSignature(series: CalendarSeries): string {
+  const rec = String(series.recurrence || "").toLowerCase();
+  const base = String(series.baseDate || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return `${rec}:?`;
+  if (rec === "yearly") return `${rec}:${base.slice(5)}`;               // MM-DD
+  if (rec === "weekly" || rec === "biweekly") {
+    return `${rec}:${new Date(`${base}T12:00:00`).getDay()}`;           // weekday
+  }
+  if (rec === "monthly" || rec === "bimonthly" || rec === "quarterly") {
+    return `${rec}:${base.slice(8, 10)}`;                               // day-of-month
+  }
+  return `${rec}:${base}`;
+}
+
+function ownerSet(series: CalendarSeries): Set<string> {
+  const out = new Set<string>();
+  for (const id of series.source.ownerIds || []) if (id) out.add(id);
+  if (series.source.profileId) out.add(series.source.profileId);
+  if (series.source.linkedRecordId) out.add(series.source.linkedRecordId);
+  return out;
+}
+
+/**
+ * Could these two series be the same real-world payment?
+ *
+ * Exported so the behaviour is directly testable rather than only observable
+ * through a full dedup run.
+ */
+export function isEquivalentPayment(a: CalendarSeries, b: CalendarSeries): boolean {
+  if (!isPaymentKind(a.kind) || !isPaymentKind(b.kind)) return false;
+  if (slug(a.title) !== slug(b.title) || !slug(a.title)) return false;
+  if (anchorSignature(a) !== anchorSignature(b)) return false;
+  // Different amounts mean different charges, however alike the names.
+  if (a.amount != null && b.amount != null && Math.abs(a.amount - b.amount) > 0.005) return false;
+  const oa = ownerSet(a);
+  const ob = ownerSet(b);
+  if (oa.size === 0 || ob.size === 0) return true; // one side unowned — no conflict
+  for (const id of oa) if (ob.has(id)) return true;
+  return false; // owned by different people: genuinely two records
+}
+
+/**
+ * Fold equivalent payments into the highest-priority representation, carrying
+ * every absorbed id forward so the UI can still disclose them.
+ */
+export function mergeEquivalentPayments(groups: DedupedSeries[]): DedupedSeries[] {
+  const out: DedupedSeries[] = [];
+  for (const group of groups) {
+    const match = isPaymentKind(group.series.kind)
+      ? out.find((held) => isEquivalentPayment(held.series, group.series))
+      : undefined;
+    if (!match) {
+      out.push({ series: group.series, duplicateIds: [...group.duplicateIds] });
+      continue;
+    }
+    const keepIncoming = seriesPriority(group.series) > seriesPriority(match.series);
+    const winner = keepIncoming ? group.series : match.series;
+    const loser = keepIncoming ? match.series : group.series;
+    match.duplicateIds = [
+      ...match.duplicateIds, ...group.duplicateIds, loser.id,
+    ].filter((id) => id !== winner.id);
+    // The obligation usually wins but may lack the amount the event carried.
+    match.series = winner.amount == null && loser.amount != null
+      ? { ...winner, amount: loser.amount }
+      : winner;
+  }
+  return out;
+}
+
 export function dedupeSeries(list: readonly CalendarSeries[]): DedupedSeries[] {
   const byIdentity = new Map<string, DedupedSeries>();
   for (const s of list || []) {
@@ -426,7 +521,9 @@ export function dedupeSeries(list: readonly CalendarSeries[]): DedupedSeries[] {
       held.duplicateIds.push(s.id);
     }
   }
-  return [...byIdentity.values()];
+  // Second pass for payments whose identities anchor differently (an
+  // obligation on its liability, a hand-made event on nothing at all).
+  return mergeEquivalentPayments([...byIdentity.values()]);
 }
 
 // ─── Occurrences ─────────────────────────────────────────────────────────────

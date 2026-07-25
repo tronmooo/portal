@@ -17,9 +17,10 @@ import {
   filterSeriesByProfiles,
   frequencyToRecurrence,
   inferKindFromText,
+  parseAmountFromTitle,
 } from "../shared/calendar-adapters";
 import {
-  buildCalendarOccurrences, generateSeriesOccurrences, seriesIdentityKey,
+  buildCalendarOccurrences, generateSeriesOccurrences, seriesIdentityKey, dedupeSeries,
 } from "../shared/calendar-occurrences";
 
 const TODAY = "2026-07-25";
@@ -330,5 +331,90 @@ describe("grid and stream cannot diverge", () => {
     const nonShadow = seriesFromEvents(inputs.events, { knownBirthdayProfiles: new Set([JOE]) })
       .filter((s) => !s.shadow);
     expect(nonShadow.map((s) => s.source.id)).toEqual(["evt-other"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: "Lubi why is there a duplicate of that". Lubi appeared twice —
+// once as a subscription obligation ("Lubi", $10/month, day 3) and once as a
+// hand-created recurring event titled "Lubi — $10" on the same schedule.
+//
+// Two reasons it survived the payment merge:
+//   1. the amount was baked into the event's TITLE, so the normalized slugs
+//      were "lubi" and "lubi10" and could never match;
+//   2. the event's kind was "event", not a payment kind, so it never entered
+//      the payment identity space at all.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("a recurring money event is the same thing as its obligation", () => {
+  const LUBI = "lubi-liability";
+  const raw = {
+    profiles: [{ id: LUBI, name: "Lubi", type: "liability",
+      fields: { nextDueDate: "2026-08-03", monthlyPayment: 10 } }],
+    obligations: [{ id: "ob-lubi", name: "Lubi", amount: 10, frequency: "monthly",
+      category: "subscription", nextDueDate: "2026-08-03", linkedLiabilityId: LUBI }],
+    events: [{ id: "ev-lubi", title: "Lubi — $10", date: "2026-08-03",
+      recurrence: "monthly", tags: ["rdate"] }],
+  };
+
+  it("strips the amount out of the event title", () => {
+    expect(parseAmountFromTitle("Lubi — $10")).toEqual({ title: "Lubi", amount: 10 });
+    expect(parseAmountFromTitle("Netflix — $9.99")).toEqual({ title: "Netflix", amount: 9.99 });
+    expect(parseAmountFromTitle("Rent ($2,500)")).toEqual({ title: "Rent", amount: 2500 });
+  });
+
+  it("leaves a title that merely mentions money alone", () => {
+    expect(parseAmountFromTitle("Save $500 for the trip").title).toBe("Save $500 for the trip");
+    expect(parseAmountFromTitle("Lubi").amount).toBeUndefined();
+  });
+
+  it("collapses all three Lubi records into one subscription", () => {
+    const survivors = dedupeSeries(seriesFromAll(raw));
+    expect(survivors).toHaveLength(1);
+    expect(survivors[0].series).toMatchObject({ kind: "subscription", title: "Lubi", amount: 10 });
+    expect(survivors[0].duplicateIds).toEqual(
+      expect.arrayContaining(["liability:lubi-liability", "event:ev-lubi"]),
+    );
+  });
+
+  it("produces exactly one occurrence on the shared due date", () => {
+    const aug3 = buildCalendarOccurrences(seriesFromAll(raw), { todayISO: TODAY })
+      .filter((o) => o.date === "2026-08-03");
+    expect(aug3).toHaveLength(1);
+  });
+
+  it("gives a lone money event a real category and amount instead of 'Event'", () => {
+    const [netflix] = dedupeSeries(seriesFromAll({
+      events: [{ id: "ev-nf", title: "Netflix — $9.99", date: "2026-08-02", recurrence: "monthly" }],
+    }));
+    expect(netflix.series.kind).not.toBe("event");
+    expect(netflix.series).toMatchObject({ title: "Netflix", amount: 9.99 });
+  });
+
+  it("does NOT merge same-named payments owned by different people", () => {
+    const mine = seriesFromAll({
+      obligations: [{ id: "a", name: "Lubi", amount: 10, frequency: "monthly",
+        category: "subscription", nextDueDate: "2026-08-03", linkedProfiles: ["me"] }],
+    });
+    const theirs = seriesFromAll({
+      obligations: [{ id: "b", name: "Lubi", amount: 10, frequency: "monthly",
+        category: "subscription", nextDueDate: "2026-08-03", linkedProfiles: ["you"] }],
+    });
+    expect(dedupeSeries([...mine, ...theirs])).toHaveLength(2);
+  });
+
+  it("does NOT merge same-named payments with different amounts or schedules", () => {
+    const base = { name: "Lubi", frequency: "monthly", category: "subscription",
+      nextDueDate: "2026-08-03", linkedProfiles: ["me"] };
+    const differentAmount = seriesFromAll({
+      obligations: [{ ...base, id: "a", amount: 10 }, { ...base, id: "b", amount: 25 }],
+    });
+    expect(dedupeSeries(differentAmount)).toHaveLength(2);
+    const differentDay = seriesFromAll({
+      obligations: [
+        { ...base, id: "c", amount: 10 },
+        { ...base, id: "d", amount: 10, nextDueDate: "2026-08-17" },
+      ],
+    });
+    expect(dedupeSeries(differentDay)).toHaveLength(2);
   });
 });
