@@ -65,106 +65,108 @@ describe("WeeklySummarySection", () => {
   });
 });
 
-describe("ExecutiveBriefing — eight blocks", () => {
+describe("ExecutiveBriefing — dense command centre", () => {
   const stats: any = {
-    monthlySpend: 2200, journalStreak: 7,
-    streaks: [{ name: "Meditation", days: 12 }],
-    recentActivity: [],
+    recentActivity: [{ type: "habit", description: "Completed Workout", timestamp: new Date().toISOString() }],
   };
   const enhanced: any = {
-    financeSnapshot: {
-      upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: 0, status: "due_today" }],
-      totalAssetValue: 412000, totalLiabilities: 180000,
-      totalMonthlySpend: 2200, monthlyObligationTotal: 1800,
-    },
+    financeSnapshot: { upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: 0, status: "due_today" }] },
     expiringDocuments: [{ documentId: "d1", name: "Passport", expirationDate: "2026-10-01", daysUntil: 85 }],
   };
-  const render8 = () =>
-    wrap(<ExecutiveBriefingCmp filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
   let ExecutiveBriefingCmp: any;
   beforeAll(async () => {
     ExecutiveBriefingCmp = (await import("../client/src/components/dashboard/ExecutiveBriefing")).ExecutiveBriefing;
   });
+  const renderBoard = () =>
+    wrap(<ExecutiveBriefingCmp filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
 
-  it("always renders Today and Quick Capture", () => {
-    render8();
-    // Blocks 3 and 8 render unconditionally per the spec's render rules.
-    expect(screen.getByTestId("block-today")).toBeTruthy();
-    expect(screen.getByTestId("block-capture")).toBeTruthy();
+  // The reference design is a single scrolling column of colour-coded,
+  // collapsible section cards. Every one of these must be on the board.
+  const SECTION_IDS = [
+    "brief-ai", "brief-agenda", "brief-overdue", "brief-tasks", "brief-priority",
+    "brief-habits", "brief-reminders", "brief-birthdays", "brief-appointments",
+    "brief-dates", "brief-docs", "brief-bills", "brief-calendar",
+    "brief-notifications", "brief-projects", "brief-activity", "brief-notes",
+  ];
+
+  it("renders every dense briefing section", () => {
+    renderBoard();
+    for (const id of SECTION_IDS) expect(screen.getByTestId(id), id).toBeTruthy();
   });
 
-  it("does NOT render its own Pulse — the hub strip is block 1", () => {
-    // components/hub/HubKpiStrip is pinned above every hub tab including this
-    // one. A second strip here stacked the same four numbers twice; see
-    // tests/hub-kpi-strip.test.ts.
-    render8();
-    expect(screen.queryByTestId("block-pulse")).toBeNull();
-    expect(screen.queryByTestId("pulse-net-worth")).toBeNull();
+  it("renders the sections in the reference order", () => {
+    const { container } = renderBoard();
+    const seen = Array.from(container.querySelectorAll("[data-testid^='brief-']"))
+      .map(el => el.getAttribute("data-testid")!)
+      .filter(id => SECTION_IDS.includes(id));
+    expect(seen).toEqual(SECTION_IDS);
   });
 
-  it("renders Next 14 Days collapsed, and expands it on tap", () => {
-    render8();
-    const block = screen.getByTestId("block-next14");
-    const header = block.querySelector("button[aria-expanded]") as HTMLElement;
-    expect(header.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(header);
+  it("stacks to one column on phones and only fans out on wider screens", () => {
+    // The screenshots are full-width rows at iPhone width; the multi-column
+    // masonry is a md+ affordance, not the mobile layout.
+    const { container } = renderBoard();
+    const grid = screen.getByTestId("brief-agenda").parentElement!;
+    expect(grid.className).toContain("md:columns-2");
+    expect(grid.className).not.toMatch(/(^|\s)columns-\d/);
+    expect(container.querySelector("[data-testid='brief-stat-row']")!.className).toContain("grid-cols-2");
+  });
+
+  it("renders the stat tiles and the full-width Today strip above the sections", () => {
+    renderBoard();
+    expect(screen.getByTestId("brief-stat-row")).toBeTruthy();
+    for (const id of ["brief-stat-attention", "brief-stat-tasks", "brief-stat-events",
+                      "brief-stat-bills", "brief-stat-documents", "brief-stat-habits", "brief-today-card"]) {
+      expect(screen.getByTestId(id), id).toBeTruthy();
+    }
+  });
+
+  it("surfaces the bill due today on the Attention tile once queries settle", async () => {
+    renderBoard();
+    await waitFor(() => {
+      expect(screen.getByTestId("brief-stat-attention").textContent).not.toContain("loading");
+    });
+    const attnTxt = screen.getByTestId("brief-stat-attention").textContent || "";
+    expect(attnTxt).toContain("1");
+    expect(attnTxt).toContain("bill due today");
+  });
+
+  it("says nothing is scheduled rather than 'all done' when there are no habits", async () => {
+    renderBoard();
+    await waitFor(() => {
+      expect(screen.getByTestId("brief-stat-habits").textContent).toContain("No habits scheduled");
+    });
+  });
+
+  it("shows a tile as loading rather than a hard zero while its query is pending", () => {
+    // BUG-20260715-everyone-zeros: a wall of 0s reads as "aggregation broke".
+    wrap(<ExecutiveBriefingCmp filterMode="everyone" filterIds={[]} stats={undefined} enhanced={undefined} />);
+    expect(screen.getByTestId("brief-stat-bills").textContent).toContain("loading");
+    expect(screen.getByTestId("brief-stat-documents").textContent).toContain("loading");
+  });
+
+  it("renders bill and document rows straight from enhanced data", () => {
+    renderBoard();
+    expect(screen.getByTestId("brief-bills").textContent).toContain("Phone");
+    expect(screen.getByTestId("brief-pay-b1")).toBeTruthy();
+    expect(screen.getByTestId("brief-docs").textContent).toContain("Passport");
+  });
+
+  it("collapses a section on header click", () => {
+    renderBoard();
+    const header = screen.getByTestId("brief-bills").querySelector("button[aria-expanded]") as HTMLElement;
     expect(header.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("hides Open Projects at zero and rolls it into the All clear line", async () => {
-    render8();
-    expect(screen.queryByTestId("block-projects")).toBeNull();
-    await waitFor(() => expect(screen.getByTestId("all-clear")).toBeTruthy());
-    expect(screen.getByTestId("all-clear").textContent).toContain("Open Projects");
-  });
-
-  it("shows the bill due today in Needs Attention, not in Money", async () => {
-    render8();
-    await waitFor(() => expect(screen.getByTestId("block-attention")).toBeTruthy());
-    expect(screen.getByTestId("block-attention").textContent).toContain("Phone");
-    // Money hides at zero here: the only bill was claimed by Needs Attention.
-    expect(screen.queryByTestId("block-money")).toBeNull();
-  });
-
-  it("puts one synthesis line inside Today instead of a standalone AI brief", async () => {
-    render8();
-    await waitFor(() => expect(screen.getByTestId("today-synthesis")).toBeTruthy());
-    const line = screen.getByTestId("today-synthesis").textContent || "";
-    expect(line.length).toBeGreaterThan(0);
-    // It lives INSIDE Today, not as its own card.
-    expect(screen.getByTestId("block-today").contains(screen.getByTestId("today-synthesis"))).toBe(true);
-  });
-
-  it("renders one row per datum in the DOM, not one per block", async () => {
-    // The regression guard for the original bug: this bill previously rendered
-    // in Bills & Obligations, in Calendar · Next 14d, in the AI Executive Brief
-    // and on the Attention tile at the same time.
-    const { container } = render8();
-    await waitFor(() => expect(screen.getByTestId("block-attention")).toBeTruthy());
-    const rows = Array.from(container.querySelectorAll('[data-testid^="brief-row-"]'));
-    const phoneRows = rows.filter(r => (r.textContent || "").includes("Phone"));
-    expect(phoneRows).toHaveLength(1);
-    // Row keys are the model's dedup identity, so uniqueness in the DOM is the
-    // same property the model guarantees.
-    const keys = rows.map(r => r.getAttribute("data-testid"));
-    expect(new Set(keys).size).toBe(keys.length);
-  });
-
-  it("cuts Notifications and Recently Added from the board entirely", () => {
-    const { container } = render8();
-    const text = container.textContent || "";
-    expect(text).not.toContain("Notifications");
-    expect(text).not.toContain("Recently Added");
-  });
-
-  it("offers Quick Capture as a one-tap input", () => {
-    render8();
-    const input = screen.getByTestId("capture-input") as HTMLInputElement;
-    const save = screen.getByTestId("capture-save") as HTMLButtonElement;
-    // Nothing typed yet — saving is inert rather than posting an empty note.
-    expect(save.disabled).toBe(true);
-    fireEvent.change(input, { target: { value: "Remember the milk" } });
-    expect(save.disabled).toBe(false);
+  it("opens a row's panel through PopupHost, mounting nothing before the tap", async () => {
+    renderBoard();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    fireEvent.click(screen.getByTestId("brief-stat-bills"));
+    // Bills and Documents share the Obligations panel; the sub-tab picks the side.
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("panel")).toBe("obligations"));
+    expect(new URLSearchParams(window.location.search).get("sub")).toBe("bills");
   });
 });
 

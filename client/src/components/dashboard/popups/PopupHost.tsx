@@ -20,6 +20,7 @@ const GoalsPanel = lazy(() => import("@/components/dashboard/BriefingPopups").th
 const NotesPanel = lazy(() => import("@/components/dashboard/BriefingPopups").then(m => ({ default: m.NotesPopup })));
 const RemindersPanel = lazy(() => import("@/components/dashboard/BriefingPopups").then(m => ({ default: m.RemindersPopup })));
 const AttentionPanel = lazy(() => import("@/components/dashboard/BriefingPopups").then(m => ({ default: m.AttentionPopup })));
+const TodayPanel = lazy(() => import("@/components/dashboard/BriefingPopups").then(m => ({ default: m.TodayOverviewPopup })));
 const NetWorthPanel = lazy(() => import("@/components/dashboard/HeroKPIPopups").then(m => ({ default: m.NetWorthPopup })));
 const CashFlowPanel = lazy(() => import("@/components/dashboard/HeroKPIPopups").then(m => ({ default: m.CashFlowPopup })));
 const BudgetPanel = lazy(() => import("@/components/dashboard/HeroKPIPopups").then(m => ({ default: m.BudgetPopup })));
@@ -36,10 +37,17 @@ export interface PanelData {
   reminders: any[];
   attention: Array<{ id: string; title: string; reason: string; severity: "critical" | "warning" | "info"; group: string; go?: () => void }>;
   monthlyIncome?: number;
+  /** Today's Overview panel — the merged chronological view behind the board's
+   *  full-width Today strip. */
+  todayEntries: any[];
+  todayTomorrow: any[];
+  todayCompletedTasks: number;
+  todayAlerts: string[];
 }
 
 const EMPTY_DATA: PanelData = {
   todayStr: "", bills: [], docs: [], timeline: [], goals: [], notes: [], reminders: [], attention: [],
+  todayEntries: [], todayTomorrow: [], todayCompletedTasks: 0, todayAlerts: [],
 };
 
 export function PopupHost({ request, onClose, scope, data }: {
@@ -67,6 +75,8 @@ export function PopupHost({ request, onClose, scope, data }: {
       {id === "notes" && <NotesPanel open onClose={onClose} notes={d.notes} />}
       {id === "reminders" && <RemindersPanel open onClose={onClose} reminders={d.reminders} />}
       {id === "attention" && <AttentionPanel open onClose={onClose} items={d.attention} />}
+      {id === "today" && <TodayPanel open onClose={onClose} entries={d.todayEntries} tomorrow={d.todayTomorrow}
+        completedTasks={d.todayCompletedTasks} alerts={d.todayAlerts} />}
       {id === "networth" && <NetWorthPanel open onOpenChange={(o: boolean) => { if (!o) onClose(); }} filterMode={mode} filterIds={scope.filterIds} />}
       {id === "cashflow" && <CashFlowPanel open onOpenChange={(o: boolean) => { if (!o) onClose(); }} filterMode={mode} filterIds={scope.filterIds} />}
       {id === "budget" && <BudgetPanel open onOpenChange={(o: boolean) => { if (!o) onClose(); }} filterMode={mode} filterIds={scope.filterIds} monthlyIncome={d.monthlyIncome ?? 0} />}

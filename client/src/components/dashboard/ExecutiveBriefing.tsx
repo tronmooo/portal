@@ -1,122 +1,160 @@
-// ── Executive briefing — eight blocks (2026-07-25) ──────────────────────────
-// Render order, each absorbing what it replaces:
+// ── Executive briefing — dense command centre ────────────────────────────────
+// The board answers "what needs my attention today, what's coming up, and
+// what's going wrong" — not just totals. Row 1: Attention Required (the Score
+// replacement, most prominent) / Tasks / Events; row 2: Bills / Documents /
+// Habits; then a full-width Today's Overview strip. Below that, the dense
+// command-centre sections: compact spreadsheet-like cards in a responsive
+// masonry (1 column on phones, 2/3 on wider screens), each collapsible, and
+// every row opens the EXISTING surface for its module.
 //
-//   1 Pulse            NOT RENDERED HERE — components/hub/HubKpiStrip.tsx is
-//                      block 1. The hub shell already pins net worth / cash
-//                      flow / wellness / streak above every tab, so a second
-//                      strip on the board showed the same four numbers twice.
-//   2 Needs Attention  the only red on screen · hides at zero
-//   3 Today            merged timeline + progress bar + one synthesis line
-//   4 Next 14 Days     collapsed count row, expands on tap
-//   5 Money            near-term view · hides at zero
-//   6 Habits & Trackers streaks + one-tap logging · hides at zero
-//   7 Open Projects    hides at zero
-//   8 Quick Capture    always present, bottom — last thing the thumb reaches
-//
-// Cut, not moved: Notifications (the bell owns it), Recently Added (⌘K owns
-// it), the six-tile KPI grid (Pulse owns it), the standalone AI Executive Brief
-// (one line inside Today), Document Expirations as its own card (splits into
-// blocks 2 and 4).
-//
-// Which datum lands in which block is decided ONCE, by the priority cascade in
-// useBriefingModel — nothing here re-filters. Empty hide-at-zero blocks roll up
-// into a single grey "All clear" line directly above Quick Capture.
+// Panels are reached through PopupHost — one lazily loaded mount point, nothing
+// in the tree while closed, chunk warmed on pointerdown. Bills and Documents
+// share the Obligations panel; birthdays / appointments / dates share the
+// Timeline panel's filter chips. See popups/registry.ts.
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
-import { ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { PopupHost, usePanelRouter } from "@/components/dashboard/popups/PopupHost";
 import { warmCommonPanels, type PanelId } from "@/components/dashboard/popups/registry";
-import {
-  buildBriefingModel, BUCKET_CAPS, BLOCK_LABELS,
-  type BriefingBucket, type BriefingItem, type BriefingModel,
-} from "@/components/dashboard/useBriefingModel";
 import type { DashboardStats } from "@shared/schema";
 
-const ACCENTS: Record<BriefingBucket | "pulse" | "capture", string> = {
-  attention: "0 72% 58%",    // red — the ONLY red on the board
-  today:     "262 80% 66%",  // violet
-  next14:    "239 84% 67%",  // indigo
-  money:     "43 85% 52%",   // amber
-  habits:    "155 65% 45%",  // emerald
-  projects:  "142 70% 45%",  // green
-  pulse:     "199 89% 60%",  // sky
-  capture:   "240 10% 60%",  // stone
+// Row shapes the Attention and Today panels consume. Declared here rather than
+// imported so this module keeps zero static edges into the popup chunk — see
+// tests/dashboard-popup-perf.test.ts.
+type AttentionEntry = {
+  id: string; title: string; reason: string;
+  severity: "critical" | "warning" | "info"; group: string; go?: () => void;
+};
+type TodayEntry = {
+  id: string; title: string; kind: string; time?: string | null;
+  done?: boolean; urgent?: boolean; go?: () => void;
 };
 
-const money = (n: number) => {
-  const abs = Math.abs(Math.round(n));
-  const sign = n < 0 ? "-" : "";
-  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
-  if (abs >= 10_000) return `${sign}$${Math.round(abs / 1000)}k`;
-  return `${sign}$${abs.toLocaleString()}`;
+/** "14:30" → "2:30 PM". Calendar rows store bare HH:MM strings, not ISO. */
+function fmtClock(t?: string | null): string {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ""));
+  if (!m) return String(t || "");
+  const h = parseInt(m[1], 10);
+  return `${h % 12 || 12}:${m[2]} ${h >= 12 ? "PM" : "AM"}`;
+}
+
+// Every legacy popup target, mapped onto the panel that serves it now.
+type PanelTarget =
+  | "tasks" | "habits" | "bills" | "docs" | "events"
+  | "projects" | "notes" | "reminders" | "attention" | "today";
+const PANEL_FOR: Record<PanelTarget, [PanelId, string?]> = {
+  tasks: ["tasks"], habits: ["habits"],
+  bills: ["obligations", "bills"], docs: ["obligations", "docs"],
+  events: ["timeline"], projects: ["goals"], notes: ["notes"],
+  reminders: ["reminders"], attention: ["attention"], today: ["today"],
 };
 
-function Block({ accent, title, count, summary, children, defaultOpen = true, testId, collapsedLabel }: {
-  accent: string; title: string; count?: number; summary?: string; children: React.ReactNode;
+// Per-section accent colors (HSL) — the "colorful, visually organized" pass.
+const ACCENTS: Record<string, string> = {
+  agenda:        "199 89% 60%",  // sky
+  overdue:       "0 72% 58%",    // red
+  tasks:         "217 91% 65%",  // blue
+  priority:      "25 95% 58%",   // orange
+  habits:        "155 65% 45%",  // emerald
+  reminders:     "43 96% 56%",   // amber
+  birthdays:     "330 80% 62%",  // pink
+  appointments:  "262 80% 66%",  // violet
+  dates:         "187 80% 50%",  // cyan
+  docs:          "0 72% 58%",    // red
+  bills:         "48 96% 53%",   // yellow
+  calendar:      "239 84% 67%",  // indigo
+  notifications: "350 85% 62%",  // rose
+  projects:      "142 70% 45%",  // green
+  alerts:        "280 75% 62%",  // purple
+  activity:      "173 60% 44%",  // teal
+  notes:         "240 10% 60%",  // stone
+};
+
+function Section({ id, title, count, summary, children, defaultOpen = true, testId }: {
+  id: string; title: string; count?: number; summary?: string; children: React.ReactNode;
   defaultOpen?: boolean; testId: string;
-  /** When set, the collapsed state shows this instead of nothing (block 4). */
-  collapsedLabel?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const accent = ACCENTS[id] || "240 10% 60%";
   return (
-    <div className="mb-2 rounded-lg border bg-card/40 px-2 pt-0.5 pb-1.5"
-      style={{ borderColor: `hsl(${accent} / 0.25)` }} data-testid={testId}>
-      <button onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-1.5 py-1.5 text-left group" aria-expanded={open}>
-        <span className="w-1.5 h-1.5 rounded-full shrink-0"
-          style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
+    <div
+      className="break-inside-avoid mb-2 rounded-lg border bg-card/40 px-2 pt-0.5 pb-1.5"
+      style={{ borderColor: `hsl(${accent} / 0.25)` }}
+      data-testid={testId}
+    >
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-1.5 py-1.5 text-left group"
+        aria-expanded={open}
+      >
+        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-foreground transition-colors">{title}</span>
         {typeof count === "number" && count > 0 && (
           <span className="text-[10px] px-1.5 rounded-full" style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}>{count}</span>
         )}
-        {!open && collapsedLabel && (
-          <span className="ml-1 text-[11px] text-muted-foreground truncate">{collapsedLabel}</span>
-        )}
         {summary && <span className="ml-auto mr-1 text-[10px] tabular-nums" style={{ color: `hsl(${accent})` }}>{summary}</span>}
-        {open
-          ? <ChevronDown className={`h-3 w-3 ${summary ? "" : "ml-auto"} text-muted-foreground`} />
-          : <ChevronRight className={`h-3 w-3 ${summary ? "" : "ml-auto"} text-muted-foreground`} />}
+        <ChevronDown className={`h-3 w-3 ${summary ? "" : "ml-auto"} text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
       </button>
       {open && children}
     </div>
   );
 }
 
-function ItemRow({ item, onOpen, intent, showReason, onToggle, toggling }: {
-  item: BriefingItem; onOpen: () => void; showReason?: boolean;
-  intent?: { onPointerDown: () => void; onTouchStart: () => void };
-  /** Habits and trackers log in place — no popup, no navigation. */
-  onToggle?: () => void; toggling?: boolean;
+// Top stat tile (2026-07-16 redesign) — big count plus a small unit next to it
+// ("3 due today"), a decision-oriented sub-line, clickable. `prominent` gives
+// the Attention tile the strongest visual weight on the board.
+type IntentProps = { onPointerDown: () => void; onTouchStart: () => void };
+
+function StatTile({ label, value, unit, sub, accent, onClick, testId, prominent, intent }: {
+  label: string; value: string; unit?: string; sub?: string; accent: string;
+  onClick: () => void; testId: string; prominent?: boolean; intent?: IntentProps;
 }) {
-  const toneCls = item.tone === "pos" ? "text-emerald-500"
-    : item.tone === "neg" ? "text-red-500"
-    : item.tone === "warn" ? "text-amber-500" : "";
   return (
-    <div className="flex items-center gap-1">
-      <button onClick={onOpen} {...intent} data-testid={`brief-row-${item.key}`}
-        className={`flex-1 min-w-0 flex items-baseline gap-2 py-[3px] px-1 text-left text-xs hover:bg-muted/40 rounded-sm ${
-          item.severity === "critical" ? "text-red-500" : ""}`}>
-        <span className="text-[10px] uppercase text-muted-foreground w-14 shrink-0 truncate">{item.when}</span>
-        <span className={`flex-1 truncate ${item.done ? "line-through text-muted-foreground" : ""}`}>
-          {item.title}
-          {showReason && item.reason && <span className="text-muted-foreground"> — {item.reason}</span>}
-        </span>
-        {item.meta && <span className={`text-[11px] tabular-nums text-right shrink-0 ${toneCls}`}>{item.meta}</span>}
-      </button>
-      {onToggle && (
-        <button onClick={onToggle} disabled={toggling} data-testid={`brief-log-${item.key}`}
-          aria-label={item.done ? `${item.title} done` : `Log ${item.title}`}
-          className={`shrink-0 h-5 w-5 rounded border text-[11px] leading-none flex items-center justify-center transition-colors disabled:opacity-40 ${
-            item.done ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-500" : "border-border hover:bg-muted"}`}>
-          {item.done ? "✓" : "+"}
-        </button>
-      )}
-    </div>
+    <button
+      onClick={onClick}
+      {...intent}
+      data-testid={testId}
+      className="rounded-xl border px-2.5 py-2 text-left card-lift transition-all"
+      style={{
+        borderColor: `hsl(${accent} / ${prominent ? 0.55 : 0.30})`,
+        background: `linear-gradient(135deg, hsl(${accent} / ${prominent ? 0.20 : 0.12}) 0%, hsl(var(--card)) 75%)`,
+        ...(prominent ? { boxShadow: `0 0 16px hsl(${accent} / 0.18)` } : {}),
+      }}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
+      </div>
+      <div className="flex items-baseline gap-1 mt-0.5 min-w-0">
+        <span className={`metric-value ${prominent ? "text-2xl" : "text-xl"}`} style={{ color: `hsl(${accent})` }}>{value}</span>
+        {unit && <span className="text-[11px] font-medium truncate" style={{ color: `hsl(${accent})` }}>{unit}</span>}
+      </div>
+      {sub && <div className="text-[10px] text-muted-foreground truncate">{sub}</div>}
+    </button>
+  );
+}
+
+function Row({ cells, onClick, testId, urgent, valueTone, intent }: {
+  cells: React.ReactNode[]; onClick?: () => void; testId?: string;
+  urgent?: boolean; valueTone?: "pos" | "neg" | "warn"; intent?: IntentProps;
+}) {
+  const toneCls = valueTone === "pos" ? "text-emerald-500" : valueTone === "neg" ? "text-red-500" : valueTone === "warn" ? "text-amber-500" : "";
+  return (
+    <button
+      onClick={onClick}
+      {...intent}
+      data-testid={testId}
+      className={`w-full flex items-baseline gap-2 py-[3px] px-1 text-left text-xs hover:bg-muted/40 rounded-sm ${urgent ? "text-red-500" : ""}`}
+    >
+      <span className="text-[10px] uppercase text-muted-foreground w-16 shrink-0 truncate">{cells[0]}</span>
+      <span className="flex-1 truncate">{cells[1]}</span>
+      {cells.length > 2 && <span className={`text-[11px] tabular-nums text-right shrink-0 ${toneCls}`}>{cells[2]}</span>}
+    </button>
   );
 }
 
@@ -124,52 +162,25 @@ const Empty = ({ label }: { label: string }) => (
   <p className="text-[11px] text-muted-foreground py-0.5 px-1">{label}</p>
 );
 
-// ── Block 8 — Quick Capture ─────────────────────────────────────────────────
-// Always present, always last. Capture is the thing your thumb reaches for, so
-// it sits where the thumb already is.
-function QuickCapture({ filterIds }: { filterIds: string[] }) {
-  const { toast } = useToast();
-  const [text, setText] = useState("");
-  const save = useMutation({
-    mutationFn: async (content: string) => {
-      await apiRequest("POST", "/api/journal", {
-        content,
-        date: new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }),
-        ...(filterIds.length === 1 ? { linkedProfiles: filterIds } : {}),
-      });
-    },
-    onSuccess: () => { setText(""); toast({ title: "Captured" }); invalidateDomain("journal"); },
-    onError: (e: any) => toast({ title: "Couldn't save", description: e?.message, variant: "destructive" }),
-  });
-  const submit = () => { const t = text.trim(); if (t && !save.isPending) save.mutate(t); };
-  return (
-    <div className="mt-2 mb-1 rounded-lg border bg-card/40 px-2 py-1.5"
-      style={{ borderColor: `hsl(${ACCENTS.capture} / 0.25)` }} data-testid="block-capture">
-      <div className="flex items-center gap-1.5">
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } }}
-          placeholder="Capture a note…"
-          aria-label="Quick capture"
-          data-testid="capture-input"
-          className="flex-1 min-w-0 h-8 px-2 rounded-md border border-border bg-background text-xs placeholder:text-muted-foreground"
-        />
-        <button onClick={submit} disabled={!text.trim() || save.isPending} data-testid="capture-save"
-          className="shrink-0 h-8 px-2.5 rounded-md border border-border text-xs font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-40">
-          <Plus className="h-3 w-3" />Save
-        </button>
-      </div>
-    </div>
-  );
+function dayLabel(dateStr: string, todayStr: string): string {
+  if (dateStr === todayStr) return "Today";
+  const d = new Date(dateStr + "T00:00:00");
+  const t = new Date(todayStr + "T00:00:00");
+  const diff = Math.round((d.getTime() - t.getTime()) / 86400000);
+  if (diff === 1) return "Tomorrow";
+  if (diff > 1 && diff < 7) return d.toLocaleDateString("en-US", { weekday: "long" });
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
+
+const BIRTHDAY_RE = /birthday|anniversar|🎂|🎉/i;
+const APPT_RE = /appt|appointment|doctor|dentist|dental|vet\b|exam|check[- ]?up|physical|therapy/i;
 
 export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, ready = true }: {
   filterMode: string; filterIds: string[];
   stats: DashboardStats | undefined; enhanced: any;
   /** Gate for this component's own queries (PERF 2026-07-16): the dashboard
    * passes bootstrapSettled so these resolve from the bootstrap-seeded cache
-   * instead of firing network requests that race the bootstrap download on
+   * instead of firing 7 network requests that race the bootstrap download on
    * weak mobile links. Defaults true so other callers are unaffected; the
    * dashboard's gate self-releases after 8s even if bootstrap hangs. */
   ready?: boolean;
@@ -181,269 +192,651 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const ids = filterIds;
   const scope = useMemo(() => ({ filterMode: mode, filterIds: ids }), [mode, ids.join(",")]);
   const panel = usePanelRouter(scope);
-
+  const openPanel = (t: PanelTarget) => { const [id, sub] = PANEL_FOR[t]; panel.open(id, sub); };
+  const intentFor = (t: PanelTarget) => panel.intentProps(PANEL_FOR[t][0]);
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
   const amp = param ? "&" : "?";
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
   const in45 = new Date(Date.now() + 45 * 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+  const in14 = new Date(Date.now() + 14 * 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
 
   // NOTE (BUG-20260715-everyone-zeros): none of these query functions may
   // swallow errors into a cached-as-success empty value (`.catch(() => [])`).
   // A transient failure — e.g. the pre-auth boot window racing token restore —
   // then renders as "0 in every category" for the whole staleTime window.
   // Letting the error propagate keeps react-query in error state (data stays
-  // undefined → block shows empty NOW but refetches on mount/focus/switch).
-  const list = (path: string, staleTime = 30_000) => ({
-    queryKey: [path, mode, ...ids],
+  // undefined → section shows empty NOW but refetches on mount/focus/switch).
+  const { data: tasks = [], isPending: tasksPending } = useQuery<any[]>({
+    queryKey: ["/api/tasks", mode, ...ids],
     enabled: ready,
-    queryFn: () => apiRequest("GET", `${path}${param}`).then((r: Response) => r.json()),
-    staleTime,
+    queryFn: () => apiRequest("GET", `/api/tasks${param}`).then(r => r.json()),
+    staleTime: 30_000,
   });
-  const { data: tasks = [], isPending: tasksPending } = useQuery<any[]>(list("/api/tasks"));
-  const { data: habits = [], isPending: habitsPending } = useQuery<any[]>(list("/api/habits"));
-  const { data: reminders = [] } = useQuery<any[]>(list("/api/reminders", 60_000));
-  const { data: goals = [] } = useQuery<any[]>(list("/api/goals", 60_000));
-  const { data: trackers = [] } = useQuery<any[]>(list("/api/trackers", 60_000));
-  const { data: incomes = [] } = useQuery<any[]>(list("/api/incomes", 60_000));
-  // 45-day window: Today and Next 14 Days both slice from this one fetch. Only
-  // `type: "event"` rows are consumed — see BriefingInput.timeline.
+  const { data: habits = [], isPending: habitsPending } = useQuery<any[]>({
+    queryKey: ["/api/habits", mode, ...ids],
+    enabled: ready,
+    queryFn: () => apiRequest("GET", `/api/habits${param}`).then(r => r.json()),
+    staleTime: 30_000,
+  });
+  // 45-day window: agenda + calendar preview slice ≤14d from it; birthdays /
+  // appointments / important dates get the longer horizon. One fetch.
   const { data: timeline = [], isPending: timelinePending } = useQuery<any[]>({
     queryKey: ["/api/calendar/timeline", todayStr, in45, mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/calendar/timeline${param}${amp}start=${todayStr}&end=${in45}`).then(r => r.json()),
     staleTime: 60_000,
   });
+  // Reminders are profile-scoped like every other briefing section — pass the
+  // active filter so a selected profile shows only its own reminders (the
+  // server enforces strict isolation; unlinked reminders appear only in the
+  // unfiltered "Everyone" view). Keying on mode/ids makes switching profiles
+  // refetch instead of showing another profile's cached reminders.
+  const { data: reminders = [] } = useQuery<any[]>({
+    queryKey: ["/api/reminders", mode, ...ids],
+    enabled: ready,
+    queryFn: () => apiRequest("GET", `/api/reminders${param}`).then(r => r.json()),
+    staleTime: 60_000,
+  });
+  const { data: goals = [], isPending: goalsPending } = useQuery<any[]>({
+    queryKey: ["/api/goals", mode, ...ids],
+    enabled: ready,
+    queryFn: () => apiRequest("GET", `/api/goals${param}`).then(r => r.json()),
+    staleTime: 60_000,
+  });
+  const { data: journal = [] } = useQuery<any[]>({
+    queryKey: ["/api/journal", mode, ...ids],
+    enabled: ready,
+    queryFn: () => apiRequest("GET", `/api/journal${param}`).then(r => r.json()),
+    staleTime: 60_000,
+  });
+  const { data: notifications = [] } = useQuery<any[]>({
+    queryKey: ["/api/notifications", mode, ...ids],
+    enabled: ready,
+    queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()),
+    staleTime: 60_000,
+  });
 
-  // STUCK-LOADING DEADLINE (2026-07-16): if any feeding query is still
+  // STUCK-LOADING DEADLINE (2026-07-16): if any tile-feeding query is still
   // unresolved after 12s (wedged fetch, failed enhanced, cold instance), show
-  // the Retry banner instead of letting "loading" cells sit forever.
-  const anyPending = tasksPending || habitsPending || timelinePending || enhanced === undefined;
-  const [stuck, setStuck] = useState(false);
+  // the Retry banner instead of letting "loading" tiles sit forever.
+  const anyBriefPending = tasksPending || habitsPending || timelinePending || goalsPending || enhanced === undefined;
+  const [briefStuck, setBriefStuck] = useState(false);
   useEffect(() => {
-    if (!anyPending) { setStuck(false); return; }
-    const t = setTimeout(() => setStuck(true), 12_000);
+    if (!anyBriefPending) { setBriefStuck(false); return; }
+    const t = setTimeout(() => setBriefStuck(true), 12_000);
     return () => clearTimeout(t);
-  }, [anyPending]);
+  }, [anyBriefPending]);
 
   useEffect(() => {
     if (!ready) return;
     return warmCommonPanels(qc, scope);
   }, [ready, qc, scope]);
 
-  // One-tap habit check-in (block 3) and tracker log (block 6). Optimistic so
-  // the row flips on the frame of the tap, not after the round-trip.
-  const [pendingLog, setPendingLog] = useState<string | null>(null);
-  const checkinHabit = useMutation({
-    mutationFn: (id: string) => apiRequest("POST", `/api/habits/${id}/checkin`, { date: todayStr }),
-    onMutate: async (id: string) => {
-      setPendingLog(`habit:${id}`);
-      const key = ["/api/habits", mode, ...ids];
-      await qc.cancelQueries({ queryKey: key });
-      const prev = qc.getQueryData<any[]>(key);
-      qc.setQueryData<any[]>(key, (old) => (old || []).map((h: any) =>
-        h.id === id ? { ...h, checkins: [...(h.checkins || []), { id: `tmp-${Date.now()}`, date: todayStr }] } : h));
-      return { prev, key };
+  const payBill = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
+    onSuccess: () => {
+      toast({ title: "Payment recorded" });
+      // Cache bus: obligations domain also refreshes stats/cashflow/loans so
+      // every linked surface updates in one shot.
+      invalidateDomain("obligations");
     },
-    onError: (e: any, _id, ctx: any) => {
-      if (ctx?.prev) qc.setQueryData(ctx.key, ctx.prev);
-      toast({ title: "Couldn't check in", description: e?.message, variant: "destructive" });
-    },
-    onSettled: () => { setPendingLog(null); invalidateDomain("habits"); },
-  });
-  const logTracker = useMutation({
-    mutationFn: async (t: any) => {
-      const field = (t.fields || []).find((f: any) => f?.type === "number" || f?.type === "integer" || f?.type === "decimal")
-        || (t.fields || [])[0];
-      if (!field) throw new Error("This tracker has no fields to log");
-      // One tap logs a single unit against the primary field; anything richer
-      // belongs in the tracker's own surface, not on the board.
-      await apiRequest("POST", `/api/trackers/${t.id}/entries`, { values: { [field.name]: 1 } });
-    },
-    onMutate: (t: any) => { setPendingLog(`tracker:${t.id}`); },
-    onSuccess: () => toast({ title: "Logged" }),
-    onError: (e: any) => toast({ title: "Couldn't log", description: e?.message, variant: "destructive" }),
-    onSettled: () => { setPendingLog(null); invalidateDomain("trackers"); },
+    onError: () => toast({ title: "Payment failed", variant: "destructive" }),
   });
 
-  // Docs respect the shared 30-day dismisses (same map the Obligations panel
-  // uses) so a dismissed alert disappears everywhere at once.
+  // ── Derivations ─────────────────────────────────────────────────────────────
+  const pending = (tasks || []).filter((t: any) => t.status !== "done");
+  const overdueTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) < todayStr)
+    .sort((a: any, b: any) => (a.dueDate || "").localeCompare(b.dueDate || "")).slice(0, 10);
+  const highPriority = pending.filter((t: any) => ["high", "urgent"].includes(String(t.priority || "").toLowerCase()) && !(t.dueDate && t.dueDate.slice(0, 10) < todayStr)).slice(0, 8);
+  const agendaTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) === todayStr);
+  const upcomingTasks = pending
+    .filter((t: any) => !t.dueDate || t.dueDate.slice(0, 10) >= todayStr)
+    .sort((a: any, b: any) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999")).slice(0, 12);
+
+  const tl = (timeline || []).filter((i: any) => (i.date || "").slice(0, 10) >= todayStr);
+  const todayItems = tl.filter((i: any) => (i.date || "").slice(0, 10) === todayStr);
+  const events = tl.filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) > todayStr);
+  const birthdays = events.filter((i: any) => BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
+  const appointments = events.filter((i: any) => APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
+  const importantDates = events.filter((i: any) => !BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`) && !APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 10);
+  // EVENTS tile counts only real calendar EVENTS — not tasks / bills /
+  // obligations that also live in the timeline (BUG-20260709: "3 events even
+  // when Mike has no events"). `eventsToday` below keeps that semantics.
+
+  const habitRows = (habits || []).slice(0, 12).map((h: any) => {
+    const doneToday = (h.checkins || []).some((c: any) => (c.date || "").slice(0, 10) === todayStr);
+    return { id: h.id, name: h.name, doneToday, streak: h.currentStreak ?? h.streak ?? 0 };
+  });
+  const missedCount = habitRows.filter(h => !h.doneToday).length;
+
+  const bills = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil <= 21).slice(0, 10);
+  // Docs: respect the shared 30-day dismisses (same map the KPI section and
+  // DocsPopup use) so a dismissed alert disappears everywhere at once. The
+  // tile counts the 30-day "expiring soon" window (expired + ≤30d); the
+  // section/popup still list the longer 90-day horizon grouped by urgency.
   const docSnooze = loadDocSnoozeMap();
-  const allExpiringDocs = useMemo(
-    () => (enhanced?.expiringDocuments || []).filter((d: any) => !docSnooze[d.documentId]),
-    [enhanced?.expiringDocuments, docSnooze],
-  );
-  const bills = enhanced?.financeSnapshot?.upcomingBills || [];
-  const monthlyIncome = useMemo(
-    () => (Array.isArray(incomes) ? incomes : []).reduce((s: number, i: any) => s + (Number(i.amount) || 0), 0),
-    [incomes],
-  );
+  const allExpiringDocs = (enhanced?.expiringDocuments || []).filter((d: any) => !docSnooze[d.documentId]);
+  const docs = allExpiringDocs.slice(0, 10);
+  const docsSoonCount = allExpiringDocs.filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil <= 30).length;
 
-  // ── The ONE derivation. Every block below reads off `model`. ───────────────
-  const model = useMemo(() => buildBriefingModel({
-    todayStr, nowMs: Date.now(),
-    tasks, habits, timeline, reminders, goals, trackers,
-    bills, expiringDocs: allExpiringDocs,
-    finance: {
-      // Net worth totals come from the SERVER snapshot, never a client re-walk
-      // — see docs/dashboard-scope-contract.md.
-      assets: enhanced?.financeSnapshot?.totalAssetValue ?? 0,
-      liabilities: enhanced?.financeSnapshot?.totalLiabilities ?? 0,
-      monthlyIncome,
-      monthlySpend: enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0,
-      monthlyObligations: enhanced?.financeSnapshot?.monthlyObligationTotal ?? 0,
-    },
-    streaks: stats?.streaks || [],
-    journalStreak: stats?.journalStreak || 0,
-  }), [todayStr, tasks, habits, timeline, reminders, goals, trackers, bills,
-       allExpiringDocs, enhanced?.financeSnapshot, monthlyIncome, stats?.streaks,
-       stats?.journalStreak, stats?.monthlySpend]);
+  const calendarDays: Array<{ day: string; items: any[] }> = [];
+  for (const item of tl) {
+    const d = (item.date || "").slice(0, 10);
+    if (!d || d > in14) continue;
+    const label = dayLabel(d, todayStr);
+    const bucket = calendarDays.find(b => b.day === label);
+    if (bucket) { if (bucket.items.length < 4) bucket.items.push(item); }
+    else if (calendarDays.length < 7) calendarDays.push({ day: label, items: [item] });
+  }
 
-  const openItem = (item: BriefingItem) => panel.open(item.panel as PanelId, item.sub, item.key);
-  const rowIntent = (id: PanelId) => panel.intentProps(id);
+  const projects = (goals || []).filter((g: any) => g.status === "active" || !g.status).slice(0, 8);
+  const activity = (stats?.recentActivity || []).slice(0, 8);
+  const notes = (journal || []).slice(0, 4);
+  // Reminder rows carry { title, fireAt, firedAt } — there is no completed/
+  // dismissed field (done = soft-delete, fired = firedAt set). Un-fired rows
+  // are the active ones; sort soonest-first so the next reminder leads.
+  const activeReminders = (Array.isArray(reminders) ? reminders : [])
+    .filter((r: any) => !r.firedAt)
+    .sort((a: any, b: any) => new Date(a.fireAt || 0).getTime() - new Date(b.fireAt || 0).getTime())
+    .slice(0, 8);
+  const notifs = (Array.isArray(notifications) ? notifications : []).filter((n: any) => !n.dismissed);
+  const alerts = notifs.filter((n: any) => n.severity === "critical").slice(0, 6);
+  const infoNotifs = notifs.filter((n: any) => n.severity !== "critical").slice(0, 6);
 
-  const rows = (bucket: BriefingBucket, opts?: { showReason?: boolean; loggable?: boolean }) => {
-    const all = model.buckets[bucket];
-    const shown = all.slice(0, BUCKET_CAPS[bucket]);
-    const overflow = all.length - shown.length;
-    return (
-      <div className="divide-y divide-border/30">
-        {shown.map(item => (
-          <ItemRow key={item.key} item={item} onOpen={() => openItem(item)}
-            intent={rowIntent(item.panel as PanelId)} showReason={opts?.showReason}
-            onToggle={
-              opts?.loggable && item.kind === "habit" && !item.done
-                ? () => checkinHabit.mutate(item.id)
-                : opts?.loggable && item.kind === "habit" ? () => {}
-                : opts?.loggable && item.kind === "tracker" ? () => logTracker.mutate(item.raw)
-                : undefined
-            }
-            toggling={pendingLog === item.key} />
-        ))}
-        {overflow > 0 && (
-          <button onClick={() => panel.open(shown[0]?.panel as PanelId || "tasks")}
-            data-testid={`brief-${bucket}-overflow`}
-            className="w-full text-left text-[11px] text-muted-foreground py-1 px-1 hover:bg-muted/40 rounded-sm">
-            +{overflow} more →
-          </button>
-        )}
-      </div>
-    );
+  const daysLeft = (dateStr: string) => Math.max(0, Math.round((new Date(dateStr + "T00:00:00").getTime() - new Date(todayStr + "T00:00:00").getTime()) / 86400000));
+  const goNotif = (n: any) => {
+    if (n.entityType === "document" && n.entityId) navigate(`/documents/${n.entityId}`);
+    else if (n.entityType === "profile" && n.entityId) navigate(`/profiles/${n.entityId}`);
+    else if (n.entityType === "task") openPanel("tasks");
+    else if (n.entityType === "habit") openPanel("habits");
+    else openPanel("events");
   };
+
+  const overdueBillCount = bills.filter((b: any) => b.status === "overdue").length;
+  const billsUpcomingTotal = bills.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
+  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
+
+  // ── Top-card derivations (2026-07-16 redesign: attention over totals) ───────
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const fmtShort = (d: string) => new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const nowClock = new Date().toTimeString().slice(0, 5);
+  const nowMs = Date.now();
+
+  // Tasks: high-priority count includes overdue ones (unlike the section list).
+  const highCount = pending.filter((t: any) => ["high", "urgent"].includes(String(t.priority || "").toLowerCase())).length;
+  const habitsDone = habitRows.length - missedCount;
+
+  // Events: what's left today, and the single next thing on the calendar.
+  const eventsToday = todayItems.filter((i: any) => i.type === "event");
+  const nextTodayEvent = eventsToday
+    .filter((i: any) => i.time && i.time >= nowClock)
+    .sort((a: any, b: any) => String(a.time).localeCompare(String(b.time)))[0]
+    || eventsToday.find((i: any) => !i.time);
+  const nextFutureEvent = events.slice().sort((a: any, b: any) => String(a.date || "").localeCompare(String(b.date || "")))[0];
+  const nextEventLabel = nextTodayEvent
+    ? `Next: ${nextTodayEvent.title}${nextTodayEvent.time ? ` · ${fmtClock(nextTodayEvent.time)}` : ""}`
+    : nextFutureEvent
+      ? `Next: ${nextFutureEvent.title} · ${dayLabel(String(nextFutureEvent.date).slice(0, 10), todayStr)}`
+      : "nothing scheduled";
+
+  // Bills: risk + timing, not just a count.
+  const nextBill = bills.filter((b: any) => b.status !== "overdue")
+    .slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+  const nextBillDate = nextBill
+    ? fmtShort(String(nextBill.dueDate || "").slice(0, 10) || new Date(nowMs + (nextBill.daysUntil || 0) * 86400000).toLocaleDateString("en-CA"))
+    : null;
+
+  // Documents: expired or ≤30d, soonest first.
+  const docExpiryPhrase = (d: number) =>
+    d < 0 ? (d === -1 ? "expired yesterday" : `expired ${Math.abs(d)} days ago`)
+    : d === 0 ? "expires today" : d === 1 ? "expires tomorrow" : `expires in ${d} days`;
+  const nextDoc = allExpiringDocs
+    .filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil <= 30)
+    .slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+
+  // ── Attention Required: every urgent issue across the profile, one list. ────
+  const firedReminders = activeReminders.filter((r: any) => r.fireAt && new Date(r.fireAt).getTime() < nowMs);
+  const attention: AttentionEntry[] = [];
+  for (const t of overdueTasks) attention.push({
+    id: `task-${t.id}`, title: t.title, severity: "critical", group: "Overdue tasks",
+    reason: `Overdue — was due ${fmtShort(String(t.dueDate))}`, go: () => openPanel("tasks"),
+  });
+  for (const b of bills) {
+    if (b.status === "overdue") attention.push({
+      id: `bill-${b.id}`, title: b.name, severity: "critical", group: "Bills requiring action",
+      reason: `$${Number(b.amount).toLocaleString()} overdue`, go: () => openPanel("bills"),
+    });
+    else if (b.daysUntil === 0) attention.push({
+      id: `bill-${b.id}`, title: b.name, severity: "warning", group: "Bills requiring action",
+      reason: `$${Number(b.amount).toLocaleString()} due today`, go: () => openPanel("bills"),
+    });
+  }
+  for (const d of allExpiringDocs) {
+    if (typeof d.daysUntil !== "number" || d.daysUntil > 30) continue;
+    attention.push({
+      id: `doc-${d.documentId}-${d.fieldName || ""}`,
+      title: d.documentName || d.name || d.fieldName || "Document",
+      severity: d.daysUntil < 0 ? "critical" : "warning", group: "Expiring documents",
+      reason: docExpiryPhrase(d.daysUntil), go: () => openPanel("docs"),
+    });
+  }
+  for (const h of habitRows) if (!h.doneToday) attention.push({
+    id: `habit-${h.id}`, title: h.name, severity: "warning", group: "Habits still due today",
+    reason: "Not checked in yet", go: () => openPanel("habits"),
+  });
+  for (const n of alerts) attention.push({
+    id: `alert-${n.id}`, title: n.title, severity: "critical", group: "Alerts",
+    reason: "Critical notification", go: () => goNotif(n),
+  });
+  for (const r of firedReminders) attention.push({
+    id: `rem-${r.id}`, title: r.title || r.message || r.content || "Reminder", severity: "warning",
+    group: "Reminders", reason: "Fired — not dismissed", go: () => openPanel("reminders"),
+  });
+  const attnCritical = attention.filter(i => i.severity === "critical").length;
+  // Sub-line: the top two contributors, most severe first.
+  const attnParts: string[] = [];
+  if (overdueTasks.length) attnParts.push(`${plural(overdueTasks.length, "overdue task")}`);
+  if (overdueBillCount) attnParts.push(`${plural(overdueBillCount, "overdue bill")}`);
+  const billsDueTodayCount = bills.filter((b: any) => b.status !== "overdue" && b.daysUntil === 0).length;
+  if (billsDueTodayCount) attnParts.push(`${plural(billsDueTodayCount, "bill")} due today`);
+  if (alerts.length) attnParts.push(`${plural(alerts.length, "alert")}`);
+  if (nextDoc) attnParts.push(`${plural(attention.filter(i => i.group === "Expiring documents").length, "expiring doc")}`);
+  if (missedCount) attnParts.push(`${plural(missedCount, "habit")} due`);
+  if (firedReminders.length) attnParts.push(`${plural(firedReminders.length, "reminder")} fired`);
+
+  // ── Today's Overview: everything scheduled today, one chronological list. ───
+  const tomorrowStr = new Date(nowMs + 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+  const remindersToday = activeReminders.filter((r: any) => {
+    const f = r.fireAt ? new Date(r.fireAt) : null;
+    return f && !isNaN(f.getTime()) && f.toLocaleDateString("en-CA") === todayStr;
+  });
+  const todayEntries: TodayEntry[] = [
+    // Timeline supplies events/bills for today; tasks come from /api/tasks so
+    // completed-vs-pending state is authoritative (skip timeline task rows).
+    ...todayItems.filter((i: any) => i.type !== "task").map((i: any) => ({
+      id: String(i.id), title: i.title, kind: String(i.type), time: i.time || null,
+      urgent: i.type === "bill" || i.type === "obligation",
+      go: () => openPanel(i.type === "bill" || i.type === "obligation" ? "bills" : "events"),
+    })),
+    ...agendaTasks.map((t: any) => ({ id: `task-${t.id}`, title: t.title, kind: "task", time: null, go: () => openPanel("tasks") })),
+    ...habitRows.map(h => ({ id: `habit-${h.id}`, title: h.name, kind: "habit", time: null, done: h.doneToday, go: () => openPanel("habits") })),
+    ...remindersToday.map((r: any) => ({
+      id: `rem-${r.id}`, title: r.title || r.message || r.content || "Reminder", kind: "reminder",
+      time: r.fireAt ? new Date(r.fireAt).toTimeString().slice(0, 5) : null, go: () => openPanel("reminders"),
+    })),
+  ];
+  const tomorrowEntries: TodayEntry[] = tl
+    .filter((i: any) => (i.date || "").slice(0, 10) === tomorrowStr).slice(0, 8)
+    .map((i: any) => ({ id: `tmw-${i.id}`, title: i.title, kind: String(i.type), time: i.time || null }));
+  const todayRemainingTasks = agendaTasks.length;
+  const todayDone = doneToday + habitsDone;
+  const todayTotal = todayEntries.length + doneToday;
+  const todayPct = todayTotal > 0 ? Math.round((todayDone / todayTotal) * 100) : 0;
+  const timedRemaining = todayEntries.filter(e => e.time && !e.done).sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  const nextTimed = timedRemaining.find(e => String(e.time) >= nowClock);
+  const todayNextLabel = nextTimed
+    ? `Next: ${nextTimed.title} · ${fmtClock(nextTimed.time)}`
+    : agendaTasks[0] ? `Next: ${agendaTasks[0].title}`
+    : nextFutureEvent ? `Next: ${nextFutureEvent.title} · ${dayLabel(String(nextFutureEvent.date).slice(0, 10), todayStr)}`
+    : "Nothing scheduled today";
+  const firstCritical = attention.find(i => i.severity === "critical");
+
+  // AI Executive Brief — honest, instant bullets derived from the data above
+  // (no per-load AI call). The AI chat can still create/modify any of the
+  // underlying records; these lines just reflect the current state.
+  const aiBrief: Array<{ text: string; tone?: "pos" | "neg" | "warn"; go?: () => void }> = [];
+  if (overdueTasks.length === 0) aiBrief.push({ text: "No overdue tasks.", tone: "pos" });
+  else aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => openPanel("tasks") });
+  const soonestDoc = docs.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+  if (soonestDoc) aiBrief.push({ text: `${soonestDoc.documentName || soonestDoc.name || soonestDoc.fieldName || "A document"} ${soonestDoc.daysUntil < 0 ? `expired ${Math.abs(soonestDoc.daysUntil)} days ago` : soonestDoc.daysUntil === 0 ? "expires today" : `expires in ${soonestDoc.daysUntil} days`}.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => openPanel("docs") });
+  if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => openPanel("habits") });
+  const soonestBill = bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) due ${soonestBill.daysUntil === 0 ? "today" : `in ${soonestBill.daysUntil}d`}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => openPanel("bills") });
+  for (const n of alerts.slice(0, 2)) aiBrief.push({ text: n.title, tone: "neg", go: () => goNotif(n) });
+  if (birthdays[0]) aiBrief.push({ text: `${birthdays[0].title} in ${daysLeft(birthdays[0].date.slice(0, 10))} days.`, tone: "warn", go: () => openPanel("events") });
 
   return (
     <div data-testid="executive-briefing">
-      {stuck && (
+      {/* STUCK-LOADING BANNER (2026-07-16): a tile must never say "loading"
+          forever. If any feeding query is still unresolved after 12s, surface
+          a Retry that cancels wedged requests and refetches what's on screen. */}
+      {briefStuck && (
         <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2" data-testid="brief-stuck-banner">
-          <span className="text-xs text-muted-foreground">Some blocks are taking too long to load.</span>
-          <button className="text-xs font-medium text-primary hover:underline shrink-0"
-            onClick={() => { setStuck(false); void recoverWedgedQueries(); }}
-            data-testid="brief-stuck-retry">Retry</button>
+          <span className="text-xs text-muted-foreground">Some sections are taking too long to load.</span>
+          <button
+            className="text-xs font-medium text-primary hover:underline shrink-0"
+            onClick={() => { setBriefStuck(false); void recoverWedgedQueries(); }}
+            data-testid="brief-stuck-retry"
+          >Retry</button>
         </div>
       )}
+      {/* Attention-first top grid (2026-07-16 redesign): row 1 = Attention /
+          Tasks / Events, row 2 = Bills / Documents / Habits, then a full-width
+          Today's Overview strip. Every card answers "what needs my attention,
+          what's coming up, what's going wrong" — not just totals. The opaque
+          Score tile is replaced by Attention Required (most prominent card);
+          Projects moved down into the section grid (Open Projects).
+          Loading-vs-empty (BUG-20260715-everyone-zeros): while a tile's query
+          is still pending (cold Everyone switch, cold reload) it shows "…",
+          never a hard 0 — a wall of zeros reads as "aggregation is broken". */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2" data-testid="brief-stat-row">
+        <StatTile prominent label="Attention"
+          value={tasksPending || enhanced === undefined ? "…" : String(attention.length)}
+          unit={tasksPending || enhanced === undefined ? undefined : attention.length > 0 ? (attention.length === 1 ? "item needs review" : "items need review") : undefined}
+          sub={tasksPending || enhanced === undefined ? "loading" : attention.length === 0 ? "Nothing needs review" : attnParts.slice(0, 2).join(" · ")}
+          accent={attention.length === 0 ? "155 65% 45%" : attnCritical > 0 ? "0 72% 58%" : "43 96% 56%"}
+          onClick={() => openPanel("attention")} intent={intentFor("attention")} testId="brief-stat-attention" />
+        <StatTile label="Tasks"
+          value={tasksPending ? "…" : String(agendaTasks.length)} unit={tasksPending ? undefined : "due today"}
+          sub={tasksPending ? "loading"
+            : overdueTasks.length || highCount ? `${overdueTasks.length} overdue · ${highCount} high priority`
+            : doneToday > 0 ? `${plural(doneToday, "task")} completed today`
+            : `${plural(pending.length, "open task")}`}
+          accent={ACCENTS.tasks} onClick={() => openPanel("tasks")} intent={intentFor("tasks")} testId="brief-stat-tasks" />
+        <StatTile label="Events"
+          value={timelinePending ? "…" : String(eventsToday.length)} unit={timelinePending ? undefined : "today"}
+          sub={timelinePending ? "loading" : nextEventLabel}
+          accent={ACCENTS.calendar} onClick={() => openPanel("events")} intent={intentFor("events")} testId="brief-stat-events" />
+        <StatTile label="Bills"
+          value={enhanced === undefined ? "…" : `$${Math.round(billsUpcomingTotal).toLocaleString()}`}
+          unit={enhanced === undefined ? undefined : "due soon"}
+          sub={enhanced === undefined ? "loading"
+            : overdueBillCount ? `${plural(overdueBillCount, "overdue bill")}${nextBillDate ? ` · next due ${nextBillDate}` : ""}`
+            : nextBillDate ? `next due ${nextBillDate}`
+            : "nothing due in 3 weeks"}
+          accent={ACCENTS.bills} onClick={() => openPanel("bills")} intent={intentFor("bills")} testId="brief-stat-bills" />
+        <StatTile label="Documents"
+          value={enhanced === undefined ? "…" : String(docsSoonCount)}
+          unit={enhanced === undefined ? undefined : docsSoonCount === 1 ? "needs attention" : "need attention"}
+          sub={enhanced === undefined ? "loading" : nextDoc ? `${nextDoc.documentName || nextDoc.name || "Document"} ${docExpiryPhrase(nextDoc.daysUntil)}` : "all good"}
+          accent={ACCENTS.docs} onClick={() => openPanel("docs")} intent={intentFor("docs")} testId="brief-stat-documents" />
+        {/* Zero habits ≠ "all done" — it means nothing is scheduled. */}
+        <StatTile label="Habits"
+          value={habitsPending ? "…" : habitRows.length === 0 ? "—" : `${habitsDone} of ${habitRows.length}`}
+          unit={habitsPending || habitRows.length === 0 ? undefined : "completed"}
+          sub={habitsPending ? "loading" : habitRows.length === 0 ? "No habits scheduled today" : missedCount > 0 ? `${missedCount} remaining today` : "all done today"}
+          accent={ACCENTS.habits} onClick={() => openPanel("habits")} intent={intentFor("habits")} testId="brief-stat-habits" />
+      </div>
 
-      {/* 2 — NEEDS ATTENTION. Hides at zero. The only red on screen. */}
-      {model.counts.attention > 0 && (
-        <Block accent={ACCENTS.attention} title={BLOCK_LABELS.attention}
-          count={model.counts.attention} testId="block-attention">
-          {rows("attention", { showReason: true })}
-        </Block>
-      )}
-
-      {/* 3 — TODAY. Always renders. Progress bar + the one synthesis line that
-          the standalone AI Executive Brief collapsed into. */}
-      <Block accent={ACCENTS.today} title={BLOCK_LABELS.today} count={model.counts.today}
-        summary={model.todayTotal > 0 ? `${model.todayPct}%` : undefined} testId="block-today">
-        <p className="text-[11px] px-1 pb-1 leading-snug" style={{ color: `hsl(${ACCENTS.today})` }}
-          data-testid="today-synthesis">✦ {model.synthesis}</p>
-        {model.todayTotal > 0 && (
-          <div className="mx-1 mb-1.5 h-1 rounded-full bg-muted overflow-hidden" data-testid="today-progress">
-            <div className="h-full rounded-full transition-all"
-              style={{ width: `${model.todayPct}%`, background: `hsl(${ACCENTS.today})` }} />
+      {/* Today's Overview — full-width strip replacing the old Projects tile:
+          next action, remaining work, the most urgent issue, day progress. */}
+      <button onClick={() => openPanel("today")} {...intentFor("today")} data-testid="brief-today-card"
+        className="w-full rounded-xl border px-3 py-2.5 text-left card-lift transition-all mb-2"
+        style={{ borderColor: "hsl(262 80% 66% / 0.30)", background: "linear-gradient(135deg, hsl(262 80% 66% / 0.10) 0%, hsl(var(--card)) 70%)" }}>
+        <div className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: "hsl(262 80% 66%)", boxShadow: "0 0 5px hsl(262 80% 66% / 0.7)" }} />
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Today</span>
+          {todayTotal > 0 && <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">{todayPct}% done</span>}
+        </div>
+        <div className="mt-1 text-sm font-medium truncate" style={{ color: "hsl(262 80% 66%)" }}>
+          {tasksPending || timelinePending ? "…" : todayNextLabel}
+        </div>
+        <div className="text-[11px] text-muted-foreground mt-0.5 truncate">
+          {plural(todayRemainingTasks, "task")} remaining
+          {habitRows.length > 0 ? ` · ${plural(missedCount, "habit")} remaining` : ""}
+          {todayDone > 0 ? ` · ${todayDone} done` : ""}
+        </div>
+        {firstCritical && (
+          <div className="text-[11px] text-red-500 mt-0.5 truncate">⚠ {firstCritical.title} — {firstCritical.reason}</div>
+        )}
+        {todayTotal > 0 && (
+          <div className="mt-1.5 h-1 rounded-full bg-muted overflow-hidden">
+            <div className="h-full rounded-full" style={{ width: `${todayPct}%`, background: "hsl(262 80% 66%)" }} />
           </div>
         )}
-        {model.counts.today === 0
-          ? <Empty label="Nothing scheduled today." />
-          : rows("today", { loggable: true })}
-      </Block>
+      </button>
 
-      {/* 4 — NEXT 14 DAYS. Collapsed count row; expands on tap. */}
-      <Block accent={ACCENTS.next14} title={BLOCK_LABELS.next14} count={model.counts.next14}
-        defaultOpen={false} testId="block-next14"
-        collapsedLabel={model.counts.next14 === 0 ? "nothing coming up" : `${model.counts.next14} coming up`}>
-        {model.counts.next14 === 0 ? <Empty label="Nothing in the next two weeks." /> : rows("next14")}
-      </Block>
-
-      {/* 5 — MONEY. Near-term only, not a Finance tab replacement. Hides at zero. */}
-      {model.counts.money > 0 && (
-        <Block accent={ACCENTS.money} title={BLOCK_LABELS.money} count={model.counts.money}
-          summary={money(model.money.billsTotal)} testId="block-money">
-          {rows("money")}
-          <div className="mt-1 pt-1 border-t border-border/30 px-1 space-y-0.5">
-            <div className="flex items-baseline justify-between text-[11px]">
-              <span className="text-muted-foreground">Cash flow</span>
-              <span className={`tabular-nums font-medium ${model.money.cashFlow < 0 ? "text-red-500" : "text-emerald-500"}`}>
-                {money(model.money.monthlyIn)} in · {money(model.money.monthlyOut)} out
-              </span>
-            </div>
-            <p className="text-[10px] text-muted-foreground">{model.money.balanceLine}</p>
-          </div>
-        </Block>
-      )}
-
-      {/* 6 — HABITS & TRACKERS. Streak chips are aggregates over the habit rows
-          in Today, not copies of them; trackers are the one-tap log surface. */}
-      {(model.habits.total > 0 || model.counts.habits > 0) && (
-        <Block accent={ACCENTS.habits} title={BLOCK_LABELS.habits}
-          count={model.habits.total + model.counts.habits}
-          summary={model.habits.total > 0 ? `${model.habits.doneToday}/${model.habits.total}` : undefined}
-          testId="block-habits">
-          {model.habits.streaks.length > 0 && (
-            <div className="flex flex-wrap gap-1 px-1 pb-1" data-testid="habit-streaks">
-              {model.habits.streaks.map(s => (
-                <span key={s.id} data-testid={`streak-${s.id}`}
-                  className={`text-[10px] px-1.5 py-px rounded-full border ${
-                    s.doneToday ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500" : "border-border text-muted-foreground"}`}>
-                  {s.name}{s.days > 0 ? ` · ${s.days}🔥` : ""}
-                </span>
+      <div className="md:columns-2 xl:columns-3 gap-2">
+        <Section id="alerts" title="AI Executive Brief" count={aiBrief.length} testId="brief-ai" defaultOpen>
+          {aiBrief.length === 0 ? <Empty label="All clear." /> : (
+            <div className="space-y-0.5 pb-0.5">
+              {aiBrief.map((b, i) => (
+                <button key={i} onClick={b.go} disabled={!b.go}
+                  className={`w-full flex items-start gap-1.5 py-[3px] px-1 text-left text-xs rounded-sm ${b.go ? "hover:bg-muted/40" : ""} ${b.tone === "neg" ? "text-red-500" : b.tone === "warn" ? "text-amber-500" : b.tone === "pos" ? "text-emerald-500" : ""}`}>
+                  <span className="mt-[3px]" style={{ color: "hsl(280 75% 66%)" }}>✦</span>
+                  <span className="flex-1">{b.text}</span>
+                </button>
               ))}
             </div>
           )}
-          {model.counts.habits > 0 && rows("habits", { loggable: true })}
-        </Block>
-      )}
+        </Section>
 
-      {/* 7 — OPEN PROJECTS. Hides at zero. */}
-      {model.counts.projects > 0 && (
-        <Block accent={ACCENTS.projects} title={BLOCK_LABELS.projects}
-          count={model.counts.projects} testId="block-projects">
-          {rows("projects")}
-        </Block>
-      )}
+        <Section id="agenda" title="Today's Agenda" count={todayItems.length + agendaTasks.length} testId="brief-agenda">
+          {todayItems.length + agendaTasks.length === 0 ? <Empty label="Nothing scheduled today." /> : (
+            <div className="divide-y divide-border/30">
+              {todayItems.map((i: any) => (
+                <Row key={i.id} testId={`brief-agenda-${i.id}`}
+                  cells={[i.time || (i.allDay ? "all day" : "today"), i.title, i.type]}
+                  urgent={i.type === "bill" || i.type === "obligation"}
+                  onClick={() => i.type === "task" ? openPanel("tasks") : openPanel("events")} />
+              ))}
+              {agendaTasks.map((t: any) => (
+                <Row key={t.id} testId={`brief-agenda-task-${t.id}`}
+                  cells={["today", t.title, t.priority || "—"]}
+                  onClick={() => openPanel("tasks")} intent={intentFor("tasks")} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      {/* Empty hide-at-zero blocks roll up into one grey line. */}
-      {model.allClear.length > 0 && (
-        <p className="px-1 py-1 text-[11px] text-muted-foreground" data-testid="all-clear">
-          All clear · {model.allClear.join(" · ")}
-        </p>
-      )}
+        <Section id="overdue" title="Overdue" count={overdueTasks.length} testId="brief-overdue" defaultOpen={overdueTasks.length > 0}>
+          {overdueTasks.length === 0 ? <Empty label="Nothing overdue. 🎉" /> : (
+            <div className="divide-y divide-border/30">
+              {overdueTasks.map((t: any) => (
+                <Row key={t.id} cells={[dayLabel(t.dueDate.slice(0, 10), todayStr), t.title, t.priority || "—"]}
+                  urgent onClick={() => openPanel("tasks")} intent={intentFor("tasks")} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      {/* 8 — QUICK CAPTURE. Always present, always last. */}
-      <QuickCapture filterIds={ids} />
+        <Section id="tasks" title="Upcoming Tasks" count={upcomingTasks.length} testId="brief-tasks">
+          {upcomingTasks.length === 0 ? <Empty label="No open tasks." /> : (
+            <div className="divide-y divide-border/30">
+              {upcomingTasks.map((t: any) => (
+                <Row key={t.id} cells={[t.dueDate ? dayLabel(t.dueDate.slice(0, 10), todayStr) : "—", t.title, t.priority || "—"]}
+                  onClick={() => openPanel("tasks")} intent={intentFor("tasks")} />
+              ))}
+            </div>
+          )}
+        </Section>
 
-      {/* One mount point, lazily loaded, nothing rendered while closed. */}
+        <Section id="priority" title="High Priority" count={highPriority.length} testId="brief-priority" defaultOpen={highPriority.length > 0}>
+          {highPriority.length === 0 ? <Empty label="No high-priority items." /> : (
+            <div className="divide-y divide-border/30">
+              {highPriority.map((t: any) => (
+                <Row key={t.id} cells={[t.dueDate ? dayLabel(t.dueDate.slice(0, 10), todayStr) : "—", t.title, "high"]}
+                  valueTone="warn" onClick={() => openPanel("tasks")} intent={intentFor("tasks")} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="habits" title={missedCount > 0 ? `Habits · ${missedCount} due` : "Habits"} count={habitRows.length} testId="brief-habits">
+          {habitRows.length === 0 ? <Empty label="No habits yet." /> : (
+            <div className="divide-y divide-border/30">
+              {habitRows.map(h => (
+                <Row key={h.id} cells={[h.doneToday ? "✓ done" : "✗ due", h.name, `${h.streak}🔥`]}
+                  urgent={!h.doneToday} valueTone={h.streak > 0 ? "warn" : undefined}
+                  onClick={() => openPanel("habits")} intent={intentFor("habits")} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="reminders" title="Reminders" count={activeReminders.length} testId="brief-reminders" defaultOpen={activeReminders.length > 0}>
+          {activeReminders.length === 0 ? <Empty label="No reminders." /> : (
+            <div className="divide-y divide-border/30">
+              {activeReminders.map((r: any) => {
+                // Reminders fire at a timestamp (fireAt), not a bare date.
+                const fire = r.fireAt ? new Date(r.fireAt) : null;
+                const when = fire && !isNaN(fire.getTime())
+                  ? dayLabel(fire.toLocaleDateString("en-CA"), todayStr)
+                  : "—";
+                const time = fire && !isNaN(fire.getTime())
+                  ? fire.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+                  : "";
+                return (
+                  <Row key={r.id} cells={[when, r.title || r.message || r.content, time]}
+                    onClick={() => openPanel("reminders")} intent={intentFor("reminders")} />
+                );
+              })}
+            </div>
+          )}
+        </Section>
+
+        <Section id="birthdays" title="Birthdays & Anniversaries" count={birthdays.length} testId="brief-birthdays" defaultOpen={birthdays.length > 0}>
+          {birthdays.length === 0 ? <Empty label="None in the next 45 days." /> : (
+            <div className="divide-y divide-border/30">
+              {birthdays.map((i: any) => (
+                <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
+                  onClick={() => openPanel("events")} intent={intentFor("events")} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="appointments" title="Appointments" count={appointments.length} testId="brief-appointments" defaultOpen={appointments.length > 0}>
+          {appointments.length === 0 ? <Empty label="No upcoming appointments." /> : (
+            <div className="divide-y divide-border/30">
+              {appointments.map((i: any) => (
+                <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
+                  onClick={() => openPanel("events")} intent={intentFor("events")} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="dates" title="Important Dates" count={importantDates.length} testId="brief-dates">
+          {importantDates.length === 0 ? <Empty label="Nothing coming up." /> : (
+            <div className="divide-y divide-border/30">
+              {importantDates.map((i: any) => (
+                <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
+                  onClick={() => openPanel("events")} intent={intentFor("events")} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="docs" title="Document Expirations" count={docs.length} testId="brief-docs">
+          {docs.length === 0 ? <Empty label="Nothing expiring soon." /> : (
+            <div className="divide-y divide-border/30">
+              {docs.map((d: any) => (
+                <Row key={d.documentId || d.id}
+                  cells={[d.expirationDate?.slice(5, 10) || "—", d.documentName || d.name || d.fieldName || "Document", `${d.daysUntil}d`]}
+                  urgent={typeof d.daysUntil === "number" && d.daysUntil <= 21}
+                  valueTone={typeof d.daysUntil === "number" && d.daysUntil <= 45 ? "warn" : undefined}
+                  onClick={() => openPanel("docs")} intent={intentFor("docs")} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="bills" title="Bills & Obligations" count={bills.length} testId="brief-bills">
+          {bills.length === 0 ? <Empty label="No bills due soon." /> : (
+            <div className="divide-y divide-border/30">
+              {bills.map((b: any) => (
+                <div key={b.id} className="flex items-baseline gap-1">
+                  <div className="flex-1 min-w-0">
+                    <Row
+                      cells={[b.status === "overdue" ? "overdue" : b.daysUntil === 0 ? "today" : `${b.daysUntil}d`, b.name, `$${Number(b.amount).toLocaleString()}`]}
+                      urgent={b.status === "overdue" || b.daysUntil === 0}
+                      valueTone="pos"
+                      onClick={() => openPanel("bills")} intent={intentFor("bills")} />
+                  </div>
+                  <button
+                    onClick={() => payBill.mutate(b.id)}
+                    disabled={payBill.isPending}
+                    className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded border border-border hover:bg-muted shrink-0"
+                    data-testid={`brief-pay-${b.id}`}
+                  >Pay</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="calendar" title="Calendar · Next 14d" count={calendarDays.length} testId="brief-calendar">
+          {calendarDays.length === 0 ? <Empty label="Nothing scheduled." /> : (
+            <div className="space-y-0.5">
+              {calendarDays.map(d => (
+                <div key={d.day}>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-1">{d.day}</div>
+                  {d.items.map((i: any) => (
+                    <Row key={i.id} cells={[i.time || "", i.title]} onClick={() => openPanel("events")} intent={intentFor("events")} />
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="notifications" title="Notifications" count={notifs.length} testId="brief-notifications" defaultOpen={alerts.length > 0}>
+          {notifs.length === 0 ? <Empty label="All caught up." /> : (
+            <div className="divide-y divide-border/30">
+              {[...alerts, ...infoNotifs].map((n: any) => (
+                <Row key={n.id} cells={[n.severity === "critical" ? "⚠" : n.severity === "warning" ? "!" : "·", n.title]}
+                  urgent={n.severity === "critical"}
+                  valueTone={n.severity === "warning" ? "warn" : undefined}
+                  onClick={() => goNotif(n)} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="projects" title="Open Projects" count={projects.length} testId="brief-projects" defaultOpen={projects.length > 0}>
+          {projects.length === 0 ? <Empty label="No active goals." /> : (
+            <div className="divide-y divide-border/30">
+              {projects.map((g: any) => (
+                <Row key={g.id}
+                  cells={["goal", g.title, g.target ? `${Math.round(((g.current ?? 0) / g.target) * 100)}%` : ""]}
+                  valueTone="pos"
+                  onClick={() => openPanel("projects")} intent={intentFor("projects")} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="activity" title="Recently Added" count={activity.length} testId="brief-activity" defaultOpen={false}>
+          {activity.length === 0 ? <Empty label="No recent activity." /> : (
+            <div className="divide-y divide-border/30">
+              {activity.map((a: any, i: number) => (
+                <Row key={i} cells={["✓", a.description]} valueTone="pos" />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        <Section id="notes" title="Quick Notes" count={notes.length} testId="brief-notes" defaultOpen={false}>
+          {notes.length === 0 ? <Empty label="No notes." /> : (
+            <div className="divide-y divide-border/30">
+              {notes.map((n: any) => (
+                <Row key={n.id} cells={[String(n.date || n.createdAt || "").slice(5, 10), String(n.content || "").slice(0, 90)]}
+                  onClick={() => openPanel("notes")} intent={intentFor("notes")} />
+              ))}
+            </div>
+          )}
+        </Section>
+      </div>
+
+      {/* One mount point, lazily loaded, nothing rendered while closed. The
+          board already holds every row these panels list, so they paint from
+          this data on frame 1 and refetch in the background. */}
       <PopupHost
         request={panel.request} onClose={panel.close} scope={scope}
         data={{
-          todayStr, bills,
-          docs: enhanced?.expiringDocuments || [],
-          timeline, goals,
-          notes: [],
+          todayStr,
+          bills: enhanced?.financeSnapshot?.upcomingBills || [],
+          docs: allExpiringDocs,
+          timeline: tl,
+          goals,
+          notes: (journal || []).slice(0, 20),
           reminders,
-          monthlyIncome,
-          attention: model.buckets.attention.map(i => ({
-            id: i.key, title: i.title, reason: i.reason || i.when,
-            severity: i.severity, group: i.group, go: () => openItem(i),
-          })),
+          attention,
+          todayEntries,
+          todayTomorrow: tomorrowEntries,
+          todayCompletedTasks: doneToday,
+          todayAlerts: attention.filter(i => i.severity === "critical").slice(0, 3).map(i => `${i.title} — ${i.reason}`),
         }}
       />
     </div>

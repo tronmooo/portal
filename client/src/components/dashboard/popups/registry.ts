@@ -10,7 +10,7 @@ import { apiRequest } from "@/lib/queryClient";
 
 export type PanelId =
   | "tasks" | "habits" | "obligations" | "timeline"
-  | "goals" | "notes" | "reminders" | "attention"
+  | "goals" | "notes" | "reminders" | "attention" | "today"
   | "networth" | "cashflow" | "budget";
 
 /** Scope of the dashboard's current profile filter — part of every query key. */
@@ -70,6 +70,7 @@ export const PANELS: Record<PanelId, PanelDef> = {
   notes: { load: loadBriefing, prefetch: (qc, s) => { void warm(qc, "/api/journal", s); } },
   reminders: { load: loadBriefing, prefetch: (qc, s) => { void warm(qc, "/api/reminders", s); } },
   attention: { load: loadBriefing },
+  today: { load: loadBriefing },
   networth: { load: loadHeroKPI, prefetch: (qc, s) => { void warm(qc, "/api/profiles", s, false); } },
   cashflow: {
     load: loadHeroKPI,

@@ -112,7 +112,6 @@ export default defineConfig({
       'tests/profile-edit-no-ai-regen.test.ts',
       'tests/bootstrap-seed-keys.test.ts',
       'tests/documents-page.test.ts',
-      'tests/dashboard-dedup.test.ts',
       'tests/dashboard-popup-perf.test.ts',
       'tests/hub-kpi-strip.test.ts',
     ],

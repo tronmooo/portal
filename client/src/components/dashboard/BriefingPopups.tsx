@@ -811,3 +811,96 @@ export function AttentionPopup({ open, onClose, items }: {
     </PopupShell>
   );
 }
+
+// ── Today's Overview ─────────────────────────────────────────────────────────
+// The full-width executive popup: everything happening TODAY — tasks, events,
+// bills, habits, reminders — merged into one Morning/Afternoon/Evening/Anytime
+// timeline, plus alerts and a tomorrow preview. Rows open their module popup.
+export type TodayEntry = {
+  id: string;
+  title: string;
+  kind: string;               // task | event | bill | obligation | habit | reminder
+  time?: string | null;       // bare HH:MM when scheduled, null = anytime
+  done?: boolean;
+  urgent?: boolean;
+  go?: () => void;
+};
+
+const KIND_TONE: Record<string, "neg" | "warn" | "pos" | "muted"> = {
+  bill: "neg", obligation: "neg", reminder: "warn", habit: "pos",
+};
+
+function TodayRow({ e }: { e: TodayEntry }) {
+  return (
+    <button onClick={e.go} disabled={!e.go} data-testid={`today-row-${e.id}`}
+      className={`w-full flex items-baseline gap-2 px-2.5 py-1.5 mb-1 rounded-md border border-border/40 bg-card/50 text-left ${e.go ? "hover:bg-muted/30" : ""}`}>
+      <span className="text-[10px] uppercase text-muted-foreground w-14 shrink-0 truncate tabular-nums">{e.time ? fmtClock(e.time) : ""}</span>
+      <span className={`flex-1 text-xs truncate ${e.done ? "line-through text-muted-foreground" : e.urgent ? "text-red-500 font-medium" : ""}`}>
+        {e.done ? "✓ " : ""}{e.title}
+      </span>
+      <Chip tone={e.done ? "muted" : KIND_TONE[e.kind] || "muted"}>{e.kind}</Chip>
+    </button>
+  );
+}
+
+export function TodayOverviewPopup({ open, onClose, entries, tomorrow, completedTasks, alerts }: {
+  open: boolean; onClose: () => void;
+  entries: TodayEntry[];      // everything scheduled today (habits incl. done)
+  tomorrow: TodayEntry[];     // preview of tomorrow's calendar
+  completedTasks: number;     // tasks completed today (not in `entries`)
+  alerts: string[];           // critical attention headlines
+}) {
+  const hourOf = (t?: string | null) => { const m = /^(\d{1,2}):/.exec(String(t || "")); return m ? parseInt(m[1], 10) : null; };
+  const byTime = (a: TodayEntry, b: TodayEntry) => String(a.time || "99").localeCompare(String(b.time || "99"));
+  const remaining = entries.filter(e => !e.done);
+  const doneCount = entries.filter(e => e.done).length + completedTasks;
+  const nowClock = new Date().toTimeString().slice(0, 5);
+  const timed = remaining.filter(e => e.time).sort(byTime);
+  const next = timed.find(e => String(e.time) >= nowClock) || remaining.find(e => !e.time) || timed[timed.length - 1];
+  const buckets: Array<{ label: string; test: (h: number | null) => boolean }> = [
+    { label: "Morning", test: h => h !== null && h < 12 },
+    { label: "Afternoon", test: h => h !== null && h >= 12 && h < 17 },
+    { label: "Evening", test: h => h !== null && h >= 17 },
+    { label: "Anytime", test: h => h === null },
+  ];
+  const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  return (
+    <PopupShell open={open} onClose={onClose} title="Today's Overview" icon={CalendarDays}
+      accent="262 80% 66%" count={entries.length}
+      subtitle={`${dateLabel} · ${remaining.length} remaining · ${doneCount} done`}
+      footerLabel="Open Calendar" footerHref="/calendar">
+      {alerts.length > 0 && (
+        <div className="mb-1.5 rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5" data-testid="today-alerts">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-red-500 mb-0.5">Important alerts</p>
+          {alerts.slice(0, 3).map((a, i) => <p key={i} className="text-xs text-red-500 truncate">⚠ {a}</p>)}
+        </div>
+      )}
+      {next && (
+        <div className="mb-1.5 rounded-md border px-2.5 py-1.5" data-testid="today-next"
+          style={{ borderColor: "hsl(262 80% 66% / 0.35)", background: "hsl(262 80% 66% / 0.08)" }}>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-0.5">Next action</p>
+          <p className="text-xs font-medium truncate" style={{ color: "hsl(262 80% 66%)" }}>
+            {next.title}{next.time ? ` · ${fmtClock(next.time)}` : ""}
+          </p>
+        </div>
+      )}
+      {entries.length === 0 ? <EmptyNote label="Nothing scheduled today." /> :
+        buckets.map(b => {
+          const rows = entries.filter(e => b.test(hourOf(e.time))).sort(byTime);
+          if (rows.length === 0) return null;
+          return (
+            <div key={b.label}>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-2 pb-1">{b.label} · {rows.length}</div>
+              {rows.map(e => <TodayRow key={e.id} e={e} />)}
+            </div>
+          );
+        })}
+      {tomorrow.length > 0 && (
+        <div data-testid="today-tomorrow">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-2 pb-1">Tomorrow preview · {tomorrow.length}</div>
+          {tomorrow.map(e => <TodayRow key={e.id} e={e} />)}
+        </div>
+      )}
+    </PopupShell>
+  );
+}
