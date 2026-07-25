@@ -1,4 +1,5 @@
 import express, { type Express, type Request } from "express";
+import { canonicalExpenseCategory, canonicalObligationCategory, EXPENSE_CATEGORIES } from "@shared/category-canon";
 import { createServer, type Server } from "http";
 import { createClient } from "@supabase/supabase-js";
 import { execFile } from "child_process";
@@ -4739,9 +4740,12 @@ Rules:
     if (!req.body.description || typeof req.body.description !== "string" || !req.body.description.trim()) {
       return res.status(400).json({ error: "Description required" });
     }
-    const ALLOWED_EXPENSE_CATEGORIES = ["food", "transport", "health", "entertainment", "pet", "vehicle", "housing", "utilities", "general", "education", "shopping", "insurance", "travel", "subscription", "utility", "other"];
-    if (req.body.category !== undefined && !ALLOWED_EXPENSE_CATEGORIES.includes(req.body.category)) {
-      return res.status(400).json({ error: `Category must be one of: ${ALLOWED_EXPENSE_CATEGORIES.join(", ")}` });
+    // Fold the category to its canonical spelling instead of accepting several
+    // at once. The old allowlist admitted BOTH "utilities" and "utility" (and
+    // "other" alongside "general"), so grouped views showed the same bucket
+    // twice — the reported "Utility and Utilities" / "Liability and Other".
+    if (req.body.category !== undefined) {
+      req.body.category = canonicalExpenseCategory(req.body.category);
     }
     if (req.body.date !== undefined) {
       const parsed_date = new Date(req.body.date);
@@ -4760,13 +4764,13 @@ Rules:
           task: "expense-create-category",
           question: "Which expense category does this transaction belong to?",
           context: `Description: "${req.body.description}"${req.body.vendor ? `\nVendor: "${req.body.vendor}"` : ""}\nAmount: $${req.body.amount}`,
-          options: ALLOWED_EXPENSE_CATEGORIES,
+          options: [...EXPENSE_CATEGORIES],
           timeoutMs: 3000,
           minConfidence: 0.55,
           fallback: () => -1,
         });
         if (decision.value.index >= 0) {
-          req.body.category = ALLOWED_EXPENSE_CATEGORIES[decision.value.index];
+          req.body.category = EXPENSE_CATEGORIES[decision.value.index];
         }
       } catch (e: any) {
         console.error(`[expense-create] AI categorize failed silently: ${e?.message || e}`);
@@ -5462,6 +5466,12 @@ Rules:
   // /pay dedup. Memory bounded the same way (cleanup once >500 entries).
   const recentObligationCreates = new Map<string, { at: number; id: string }>();
   app.post("/api/obligations", asyncHandler(async (req, res) => {
+    // Fold the category before validation so a form that still posts "utility"
+    // (or an importer posting "subscriptions") is stored under the one
+    // canonical spelling — shared/category-canon.
+    if (req.body?.category !== undefined) {
+      req.body.category = canonicalObligationCategory(req.body.category);
+    }
     const parsed = insertObligationSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const uid_o1 = cacheUserKey(req as AuthenticatedRequest);
@@ -5551,6 +5561,9 @@ Rules:
     res.json({ success: true });
   }));
   app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
+    if (req.body?.category !== undefined) {
+      req.body.category = canonicalObligationCategory(req.body.category);
+    }
     {
       const parsed = insertObligationSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
@@ -6563,8 +6576,10 @@ Rules:
         return res.status(400).json({ error: "Could not detect an amount column in the CSV header" });
       }
 
-      // Canonical category set MUST match the POST /api/expenses allowlist.
-      const ALLOWED_CATEGORIES = ["food", "transport", "health", "entertainment", "pet", "vehicle", "housing", "utilities", "general", "education", "shopping", "insurance", "travel", "subscription", "utility", "other"];
+      // Canonical category set — the same vocabulary POST /api/expenses folds
+      // to (shared/category-canon), so an import can't introduce a spelling the
+      // rest of the app treats as a separate bucket.
+      const ALLOWED_CATEGORIES = [...EXPENSE_CATEGORIES];
 
       // Deterministic fallback (used if AI is unavailable / times out).
       const CATEGORY_KEYWORDS: Record<string, string[]> = {
@@ -6586,9 +6601,9 @@ Rules:
       const keywordCategory = (desc: string): string => {
         const lower = desc.toLowerCase();
         for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
-          if (keywords.some(k => lower.includes(k))) return cat;
+          if (keywords.some(k => lower.includes(k))) return canonicalExpenseCategory(cat);
         }
-        return "other";
+        return "general";
       };
 
       // Parse a CSV row respecting quoted fields
@@ -6643,7 +6658,7 @@ If unsure, use "other". Use "subscription" for recurring services; "vehicle" for
             validate: (p: any) => p && typeof p === "object" && !Array.isArray(p),
           });
           for (const [k, v] of Object.entries(decision.value)) {
-            const cat = (typeof v === "string" && ALLOWED_CATEGORIES.includes(v)) ? v : "other";
+            const cat = canonicalExpenseCategory(v);
             aiCategoryByDesc.set(k, cat);
           }
           console.log(`[bank-csv-import] AI categorised ${aiCategoryByDesc.size}/${uniqueDescs.length} descs via ${decision.source} in ${decision.durationMs}ms`);
@@ -6667,8 +6682,9 @@ If unsure, use "other". Use "subscription" for recurring services; "vehicle" for
           const csvCategory = colMap.category !== undefined ? fields[colMap.category] : undefined;
           // Priority: explicit CSV column → AI batch decision → keyword fallback.
           const aiCat = aiCategoryByDesc.get(description.trim().slice(0, 120));
-          let category = csvCategory || aiCat || keywordCategory(description);
-          if (!ALLOWED_CATEGORIES.includes(category)) category = "other";
+          // Fold through the one vocabulary so a CSV column reading "Utility"
+          // lands in the same bucket as the app's "utilities".
+          const category = canonicalExpenseCategory(csvCategory || aiCat || keywordCategory(description));
 
           // Normalize date to YYYY-MM-DD if possible
           let normalizedDate = date;

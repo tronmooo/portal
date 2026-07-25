@@ -74,6 +74,7 @@ export default defineConfig({
       'tests/date-math.test.ts',
       'tests/net-worth-ownership.test.ts',
       'tests/tracker-taxonomy.test.ts',
+      'tests/category-canon.test.ts',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
       'tests/wellness-metrics.test.ts',

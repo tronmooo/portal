@@ -6,7 +6,7 @@
 // This is intentionally self-contained — drop it anywhere there's a page shell.
 
 import { formatApiError } from "@/lib/formatError";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -607,7 +607,7 @@ function ObligationCard({ ob, onOpen, ownerLabel }: { ob: Obligation; onOpen?: (
                     <SelectItem value="loan">Loan</SelectItem>
                     <SelectItem value="other">Other</SelectItem>
                     <SelectItem value="subscription">Subscription</SelectItem>
-                    <SelectItem value="utility">Utility</SelectItem>
+                    <SelectItem value="utilities">Utilities</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1213,38 +1213,50 @@ export default function ObligationsManager({ showHeader = true, compact = false,
   // Apply kind filter, then time-window filter (overdue/today/week/month/all)
   const todayMs = useMemo(() => { const t = new Date(); t.setHours(0, 0, 0, 0); return t.getTime(); }, []);
   const filteredByKind = useMemo(() => kindFilter === "all" ? obligations : obligations.filter(o => (o.kind || "bill") === kindFilter), [obligations, kindFilter]);
-  // BUG-OBL-001/002: derive matching obligation IDs from occurrences for the
-  // selected window so the list mirrors the chip counts above.
-  const filteredByWindow = useMemo(() => {
-    if (windowFilter === "all") return filteredByKind;
+  // ONE window predicate, shared by the list AND the chip counts.
+  //
+  // BUG (QA 2026-07-25): "The calendar header said Today: 0, This week: 0,
+  // Total: 72 — but July 25 visibly contained eight items." The counts were
+  // computed purely from the server occurrence feed while the LIST also fell
+  // back to each obligation's own nextDueDate. Whenever the feed was empty or
+  // still in flight, the list rendered rows the counters said didn't exist.
+  // Counting anything the list doesn't show — or vice versa — is the bug, so
+  // both now run `matchesWindow` over the same `filteredByKind` array.
+  const windowMatchIds = useMemo(() => {
     const todayStr = new Date().toLocaleDateString("en-CA");
     const weekEnd = new Date(Date.now() + 7 * 86400000).toLocaleDateString("en-CA");
     const monthEnd = new Date(Date.now() + 30 * 86400000).toLocaleDateString("en-CA");
-    const matchIds = new Set<string>();
+    const ids = { overdue: new Set<string>(), today: new Set<string>(), week: new Set<string>(), month: new Set<string>() };
     for (const occ of windowOccurrences) {
       if (occ.status === "done" || occ.status === "skipped") continue;
       const obId = occ.obligation?.id || occ.obligation_id;
       if (!obId) continue;
       const d: string = occ.due_at;
-      if (windowFilter === "overdue" && d < todayStr) matchIds.add(obId);
-      else if (windowFilter === "today" && d === todayStr) matchIds.add(obId);
-      else if (windowFilter === "week" && d >= todayStr && d <= weekEnd) matchIds.add(obId);
-      else if (windowFilter === "month" && d >= todayStr && d <= monthEnd) matchIds.add(obId);
+      if (d < todayStr) ids.overdue.add(obId);
+      if (d === todayStr) ids.today.add(obId);
+      if (d >= todayStr && d <= weekEnd) ids.week.add(obId);
+      if (d >= todayStr && d <= monthEnd) ids.month.add(obId);
     }
-    // Fallback: include any obligation whose nextDueDate already falls in the
-    // window (handles brand-new obligations whose occurrences haven't been
-    // materialized yet on the server).
-    return filteredByKind.filter(o => {
-      if (matchIds.has(o.id)) return true;
-      const due = new Date(o.nextDueDate); due.setHours(0, 0, 0, 0);
-      const days = Math.round((due.getTime() - todayMs) / 86400000);
-      if (windowFilter === "overdue") return days < 0;
-      if (windowFilter === "today") return days === 0;
-      if (windowFilter === "week") return days >= 0 && days <= 7;
-      if (windowFilter === "month") return days >= 0 && days <= 30;
-      return false;
-    });
-  }, [filteredByKind, windowFilter, todayMs, windowOccurrences]);
+    return ids;
+  }, [windowOccurrences]);
+
+  // True when obligation `o` belongs in time window `w`. Matches on a
+  // materialized server occurrence OR on the obligation's own nextDueDate
+  // (which covers brand-new obligations the server hasn't expanded yet).
+  const matchesWindow = useCallback((o: Obligation, w: "overdue" | "today" | "week" | "month"): boolean => {
+    if (windowMatchIds[w].has(o.id)) return true;
+    const due = new Date(o.nextDueDate); due.setHours(0, 0, 0, 0);
+    const days = Math.round((due.getTime() - todayMs) / 86400000);
+    if (w === "overdue") return days < 0;
+    if (w === "today") return days === 0;
+    if (w === "week") return days >= 0 && days <= 7;
+    return days >= 0 && days <= 30;
+  }, [windowMatchIds, todayMs]);
+
+  const filteredByWindow = useMemo(() => {
+    if (windowFilter === "all") return filteredByKind;
+    return filteredByKind.filter(o => matchesWindow(o, windowFilter as any));
+  }, [filteredByKind, windowFilter, matchesWindow]);
   // Sort by next-due ascending so the most urgent shows first.
   const sorted = useMemo(() => [...filteredByWindow].sort((a, b) => {
     const da = new Date(a.nextDueDate).getTime();
@@ -1268,41 +1280,15 @@ export default function ObligationsManager({ showHeader = true, compact = false,
   // as the top "Overdue / Due today" panel), filtered by the active kind so
   // "Bills" only counts Bills, etc. "All" still reflects the obligation
   // count (one row per obligation, not per occurrence).
-  const todayIso = useMemo(() => new Date().toLocaleDateString("en-CA"), []);
-  const windowCounts = useMemo(() => {
-    const counts = { overdue: 0, today: 0, week: 0, month: 0, all: filteredByKind.length };
-    // Build a set of obligation IDs that pass the active kind filter so chip
-    // counts respect both window AND kind.
-    const allowedIds = new Set(filteredByKind.map(o => o.id));
-    const seenObligationByWindow = {
-      overdue: new Set<string>(),
-      today: new Set<string>(),
-      week: new Set<string>(),
-      month: new Set<string>(),
-    };
-    const weekEnd = new Date(Date.now() + 7 * 86400000).toLocaleDateString("en-CA");
-    const monthEnd = new Date(Date.now() + 30 * 86400000).toLocaleDateString("en-CA");
-    for (const occ of windowOccurrences) {
-      if (occ.status === "done" || occ.status === "skipped") continue;
-      const obId = occ.obligation?.id || occ.obligation_id;
-      if (!obId || (kindFilter !== "all" && !allowedIds.has(obId))) continue;
-      const dueAt: string = occ.due_at;
-      // Dedupe so an obligation with multiple overdue occurrences only adds 1
-      // to the chip count, matching how the top panel renders rows.
-      if (dueAt < todayIso && !seenObligationByWindow.overdue.has(obId)) {
-        seenObligationByWindow.overdue.add(obId); counts.overdue++;
-      } else if (dueAt === todayIso && !seenObligationByWindow.today.has(obId)) {
-        seenObligationByWindow.today.add(obId); counts.today++;
-      }
-      if (dueAt >= todayIso && dueAt <= weekEnd && !seenObligationByWindow.week.has(obId)) {
-        seenObligationByWindow.week.add(obId); counts.week++;
-      }
-      if (dueAt >= todayIso && dueAt <= monthEnd && !seenObligationByWindow.month.has(obId)) {
-        seenObligationByWindow.month.add(obId); counts.month++;
-      }
-    }
-    return counts;
-  }, [filteredByKind, windowOccurrences, kindFilter, todayIso]);
+  // Counts = the predicate applied to the same rows the list renders, so a
+  // chip can never claim 0 while eight rows sit underneath it.
+  const windowCounts = useMemo(() => ({
+    overdue: filteredByKind.filter(o => matchesWindow(o, "overdue")).length,
+    today: filteredByKind.filter(o => matchesWindow(o, "today")).length,
+    week: filteredByKind.filter(o => matchesWindow(o, "week")).length,
+    month: filteredByKind.filter(o => matchesWindow(o, "month")).length,
+    all: filteredByKind.length,
+  }), [filteredByKind, matchesWindow]);
 
   const monthlyTotal = useMemo(() => obligations.reduce((s, o) => {
     switch (o.frequency) {
@@ -1473,7 +1459,7 @@ export default function ObligationsManager({ showHeader = true, compact = false,
                     <SelectItem value="loan">Loan</SelectItem>
                     <SelectItem value="other">Other</SelectItem>
                     <SelectItem value="subscription">Subscription</SelectItem>
-                    <SelectItem value="utility">Utility</SelectItem>
+                    <SelectItem value="utilities">Utilities</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
