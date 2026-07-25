@@ -76,6 +76,8 @@ describe("isHubRoute / isHubLocationForNav", () => {
       "/dashboard", "/dashboard/finance", "/dashboard/health", "/finance",
       "/trackers", "/linked", "/linked?tab=assets", "/liabilities", "/health", "/wellness",
       "/profiles", "/profiles/some-id", "/profile/legacy-id", "/profiles/some-id/info",
+      "/profiles/some-id/overview", "/profiles/some-id/finance",
+      "/profiles/some-id/trackers", "/profiles/some-id/history",
     ]) {
       expect(isHubRoute(loc), loc).toBe(true);
       expect(isHubLocationForNav(loc), loc).toBe(true);
@@ -89,6 +91,7 @@ describe("isHubRoute / isHubLocationForNav", () => {
       "/dashboard/journal", "/dashboard/tasks", "/dashboard/obligations",
       "/dashboard/habits", "/dashboard/goals", "/dashboard/documents",
       "/dashboard/artifacts", "/documents/abc", "/editor/abc", "/profiles/a/b",
+      "/profiles/list",
     ]) {
       expect(isHubRoute(loc), loc).toBe(false);
     }

@@ -143,6 +143,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { resolveProfileTab, slugForProfileTab } from "@/lib/profile-tab-slugs";
 import {
   Dialog,
   DialogContent,
@@ -12641,8 +12642,14 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
 
 export default function ProfileDetailPage() {
   const [, params] = useRoute("/profiles/:id");
+  const [tabMatch, tabParams] = useRoute("/profiles/:id/:tab");
   const [, navigate] = useLocation();
-  const id = (params as { id?: string } | null)?.id || "";
+  const id = (params as { id?: string } | null)?.id
+    || (tabParams as { id?: string } | null)?.id
+    || "";
+  // /profiles/:id/<slug> deep-links a tab. Undefined on the bare route, which
+  // falls back to the type's first tab.
+  const urlTabSlug = tabMatch ? (tabParams as { tab?: string } | null)?.tab : undefined;
   const { toast } = useToast();
 
   // Document title is set dynamically below once the profile loads, so the
@@ -13155,8 +13162,13 @@ export default function ProfileDetailPage() {
         {(() => {
           const tabs = getTabsForType(profile.type, profile);
           const tabValues = new Set(tabs.map(t => t.value));
+          const activeTab = resolveProfileTab(tabs, urlTabSlug);
           return (
-            <Tabs defaultValue="info" className="mt-3">
+            <Tabs
+              value={activeTab}
+              onValueChange={(v) => navigate(`/profiles/${id}/${slugForProfileTab(tabs, v)}`)}
+              className="mt-3"
+            >
               <div className="overflow-x-auto pb-1 border-b border-border/50 -mx-1 px-1" style={{WebkitOverflowScrolling: 'touch'}}>
                 <TabsList className="inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50">
                   {tabs.map(tab => (

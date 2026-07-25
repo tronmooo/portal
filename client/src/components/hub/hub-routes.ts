@@ -9,6 +9,8 @@
 // shell is eagerly mounted in App.tsx; a page import would drag a 7k-line
 // lazy chunk into the main bundle. (Guard test enforces this.)
 
+import { isProfileTabSlug } from "@/lib/profile-tab-slugs";
+
 export type HubTabId =
   | "executive"
   | "trackers"
@@ -104,9 +106,14 @@ export function isHubRoute(location: string): boolean {
     path === "/wellness" ||
     path === "/profiles"
   ) return true;
-  // Profile detail pages (people, assets, liabilities) + the lightweight Info
-  // page keep the hub chrome so every profile feels like its own dashboard.
-  return /^\/profiles?\/[^/]+(\/info)?$/.test(path);
+  // The profiles index is a plain list, not a profile — no hub chrome.
+  if (path === "/profiles/list") return false;
+  // Profile detail pages (people, assets, liabilities) + any tab deep-link
+  // (/profiles/:id/finance, …) keep the hub chrome so every profile feels like
+  // its own dashboard. A non-tab second segment is not a profile route.
+  const sub = path.match(/^\/profiles?\/[^/]+(?:\/([^/]+))?$/);
+  if (!sub) return false;
+  return sub[1] === undefined || isProfileTabSlug(sub[1]);
 }
 
 /** Nav active-state helper: the single "Dashboard" nav item lights up for any
