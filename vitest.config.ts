@@ -68,6 +68,7 @@ export default defineConfig({
       'tests/tracker-health.test.ts',
       'tests/hub-routes.test.ts',
       'tests/profile-tab-slugs.test.ts',
+      'tests/profile-owner-scope.test.ts',
       'tests/profile-fields.test.ts',
       'tests/money-overview.test.tsx',
       'tests/money-popups.test.tsx',
