@@ -48,7 +48,11 @@ function HabitCard({ habit }: { habit: Habit }) {
     .sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
 
   const checkinMutation = useMutation<any, Error, void>({
-    mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
+    // .json() matters: onSuccess reconciles against the returned habit, and a
+    // bare Response has no .id/.checkins — the reconciliation silently never
+    // ran, leaving the optimistic "temp-" check-in id in cache until refetch
+    // (and a tap on that dot to undo did nothing).
+    mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }).then(r => r.json()),
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
@@ -293,6 +297,10 @@ function HabitCard({ habit }: { habit: Habit }) {
                       const checkinToRemove = todayCheckinEntries[idx];
                       if (checkinToRemove && checkinToRemove.id && !checkinToRemove.id.startsWith('temp-')) {
                         uncheckinMutation.mutate(checkinToRemove.id);
+                      } else {
+                        // Still-optimistic row: say so instead of swallowing the
+                        // tap, which reads as a dead button.
+                        toast({ title: "Still saving…", description: "Give that check-in a second, then tap again." });
                       }
                     } else if (idx === todayCheckins) {
                       // Fill: only the next empty dot is fillable

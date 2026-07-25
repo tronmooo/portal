@@ -1,6 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp } from "@/lib/event-utils";
+import { usePendingIds } from "@/hooks/usePendingIds";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { matchesExpenseSearch, sortExpenses, type ExpenseSort } from "@shared/expense-view";
@@ -427,11 +428,16 @@ export default function FinancePage() {
       toast({ title: "Failed to add paycheck", description: formatApiError(err), variant: "destructive" });
     },
   });
+  // Paycheck rows expand independently, so a shared `isPending` greyed out
+  // "Mark received"/"Delete" on every other open row mid-write. Gate per row.
+  const pendingPaycheck = usePendingIds();
   const confirmPaycheckMut = useMutation<void, Error, { id: string; actual_amount?: number }, { prev: [readonly unknown[], unknown][] }>({
     mutationFn: async ({ id, actual_amount }: { id: string; actual_amount?: number }) => {
       await apiRequest("PATCH", `/api/paychecks/${id}/confirm`, { actual_amount });
     },
+    onSettled: (_d, _e, vars: any) => { pendingPaycheck.end(vars?.id); },
     onMutate: async ({ id, actual_amount }) => {
+      pendingPaycheck.start(id);
       await queryClient.cancelQueries({ queryKey: ["/api/paychecks"] });
       const prev = queryClient.getQueriesData({ queryKey: ["/api/paychecks"] });
       queryClient.setQueriesData({ queryKey: ["/api/paychecks"] }, (old: any) => {
@@ -1507,17 +1513,16 @@ export default function FinancePage() {
                     <div className="flex items-center gap-2">
                       {!pc.confirmed && !isFuture && (
                         <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-green-600 border-green-500/30"
-                          disabled={confirmPaycheckMut.isPending}
+                          disabled={pendingPaycheck.has(pc.id)}
                           onClick={stopProp(() => confirmPaycheckMut.mutate({ id: pc.id }))}>
                           <Check className="h-3 w-3" /> Mark received
                         </Button>
                       )}
                       <Button variant="outline" size="sm" className="h-7 text-xs gap-1 text-destructive"
                         type="button"
-                        disabled={deletePaycheckMut.isPending}
                         data-testid={`btn-delete-paycheck-${pc.id}`}
                         onClick={stopProp(() => setPaycheckToDelete(pc))}>
-                        {deletePaycheckMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Delete
+                        <Trash2 className="h-3 w-3" /> Delete
                       </Button>
                     </div>
                   </div>

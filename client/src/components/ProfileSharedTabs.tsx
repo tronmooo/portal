@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
+import { usePendingIds } from "@/hooks/usePendingIds";
 import { hashNavigate } from "@/lib/hashNavigate";
 
 // ─── Connections Tab (radial SVG graph) ──────────────────────────────────────
@@ -274,10 +275,15 @@ export function HistoryTab({ profileId }: { profileId: string }) {
       ).then((r) => r.json()),
   });
 
+  // Per-entry busy tracking — the shared `isPending` greyed out every Undo
+  // button in the history list while one revert was in flight.
+  const pendingUndo = usePendingIds();
   const undoMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/ownership-history/${id}`);
     },
+    onMutate: (id: string) => { pendingUndo.start(id); },
+    onSettled: (_d, _e, id: string) => { pendingUndo.end(id); },
     onSuccess: () => {
       toast({ title: "Reverted" });
       refetch();
@@ -391,7 +397,7 @@ export function HistoryTab({ profileId }: { profileId: string }) {
                       variant="ghost"
                       className="h-6 text-xs px-2 shrink-0"
                       onClick={() => undoMutation.mutate(e.id)}
-                      disabled={undoMutation.isPending}
+                      disabled={pendingUndo.has(e.id)}
                     >
                       <RefreshCw className="h-3 w-3 mr-1" />
                       Undo

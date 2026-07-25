@@ -115,6 +115,7 @@ export default defineConfig({
       'tests/dashboard-dedup.test.ts',
       'tests/dashboard-popup-perf.test.ts',
       'tests/hub-kpi-strip.test.ts',
+      'tests/habit-completion.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

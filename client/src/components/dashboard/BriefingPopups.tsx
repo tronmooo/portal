@@ -11,6 +11,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
+import { usePendingIds } from "@/hooks/usePendingIds";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { Button } from "@/components/ui/button";
 import { Windowed } from "@/components/dashboard/popups/Windowed";
@@ -219,8 +220,14 @@ function BillsBody({ open, bills }: { open: boolean; bills: any[] }) {
   const [editDue, setEditDue] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
+  // Rows expand independently, so a shared `isPending` froze the actions on
+  // EVERY expanded bill while one write was in flight. Gate per bill id.
+  const pendingPay = usePendingIds();
+  const pendingSkip = usePendingIds();
   const payBill = useMutation({
     mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
+    onMutate: (id: string) => { pendingPay.start(id); },
+    onSettled: (_d, _e, id: string) => { pendingPay.end(id); },
     onSuccess: () => { toast({ title: "Payment recorded" }); invalidateFinance(); },
     onError: (e: any) => toast({ title: "Payment failed", description: e?.message, variant: "destructive" }),
   });
@@ -229,6 +236,8 @@ function BillsBody({ open, bills }: { open: boolean; bills: any[] }) {
       const due = String(b.dueDate || b.nextDueDate || "").slice(0, 10);
       await apiRequest("POST", `/api/obligation-occurrences/${b.id}:${due}/status`, { status: "skipped" });
     },
+    onMutate: (b: any) => { pendingSkip.start(b.id); },
+    onSettled: (_d, _e, b: any) => { pendingSkip.end(b?.id); },
     onSuccess: () => { toast({ title: "Payment skipped", description: "This occurrence was skipped; the next one stays scheduled." }); invalidateFinance(); },
     onError: (e: any) => toast({ title: "Couldn't skip", description: e?.message, variant: "destructive" }),
   });
@@ -336,8 +345,8 @@ function BillsBody({ open, bills }: { open: boolean; bills: any[] }) {
                 </div>
               ) : (
                 <div className="flex items-center flex-wrap gap-1.5 pt-1">
-                  <ActionBtn label="Mark as paid" icon={Check} disabled={payBill.isPending} onClick={() => payBill.mutate(b.id)} testId={`popup-pay-${b.id}`} />
-                  <ActionBtn label="Skip payment" icon={RefreshCw} disabled={skipBill.isPending} onClick={() => skipBill.mutate(b)} testId={`popup-skip-${b.id}`} />
+                  <ActionBtn label="Mark as paid" icon={Check} disabled={pendingPay.has(b.id)} onClick={() => payBill.mutate(b.id)} testId={`popup-pay-${b.id}`} />
+                  <ActionBtn label="Skip payment" icon={RefreshCw} disabled={pendingSkip.has(b.id)} onClick={() => skipBill.mutate(b)} testId={`popup-skip-${b.id}`} />
                   <ActionBtn label="Edit" icon={Pencil} onClick={() => { setEditId(b.id); setEditAmount(String(b.amount ?? "")); setEditDue(due); }} testId={`popup-edit-${b.id}`} />
                   <ActionBtn label="Delete" icon={Trash2} danger onClick={() => setConfirmDeleteId(b.id)} testId={`popup-delete-${b.id}`} />
                 </div>
@@ -593,8 +602,12 @@ export function GoalsPopup({ open, onClose, goals }: { open: boolean; onClose: (
   const owners = useOwnerNames(open);
   const [progressId, setProgressId] = useState<string | null>(null);
   const [progressVal, setProgressVal] = useState("");
+  // Per-goal gating — expanded rows each render their own actions.
+  const pendingGoal = usePendingIds();
   const updateGoal = useMutation({
     mutationFn: async (vars: { id: string; body: any }) => { await apiRequest("PATCH", `/api/goals/${vars.id}`, vars.body); },
+    onMutate: (vars: { id: string; body: any }) => { pendingGoal.start(vars.id); },
+    onSettled: (_d, _e, vars: any) => { pendingGoal.end(vars?.id); },
     onSuccess: (_d, vars) => {
       toast({ title: vars.body.status === "completed" ? "Goal completed 🎉" : "Progress updated" });
       setProgressId(null);
@@ -647,14 +660,14 @@ export function GoalsPopup({ open, onClose, goals }: { open: boolean; onClose: (
                 <div className="flex items-center gap-1.5 pt-1">
                   <input type="number" value={progressVal} onChange={e => setProgressVal(e.target.value)} placeholder={`Current (${g.current ?? 0})`}
                     className="w-24 h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`project-progress-input-${g.id}`} />
-                  <ActionBtn label="Save" icon={Check} disabled={updateGoal.isPending || progressVal === ""}
+                  <ActionBtn label="Save" icon={Check} disabled={pendingGoal.has(g.id) || progressVal === ""}
                     onClick={() => updateGoal.mutate({ id: g.id, body: { current: Number(progressVal) } })} testId={`project-progress-save-${g.id}`} />
                   <ActionBtn label="Cancel" onClick={() => setProgressId(null)} />
                 </div>
               ) : (
                 <div className="flex items-center flex-wrap gap-1.5 pt-1">
                   <ActionBtn label="Update progress" icon={Pencil} onClick={() => { setProgressId(g.id); setProgressVal(String(g.current ?? "")); }} testId={`project-progress-${g.id}`} />
-                  <ActionBtn label="Mark complete" icon={Check} disabled={updateGoal.isPending}
+                  <ActionBtn label="Mark complete" icon={Check} disabled={pendingGoal.has(g.id)}
                     onClick={() => updateGoal.mutate({ id: g.id, body: { status: "completed" } })} testId={`project-complete-${g.id}`} />
                 </div>
               )}
@@ -701,8 +714,12 @@ export function NotesPopup({ open, onClose, notes }: { open: boolean; onClose: (
 export function RemindersPopup({ open, onClose, reminders }: { open: boolean; onClose: () => void; reminders: any[] }) {
   const { toast } = useToast();
   const owners = useOwnerNames(open);
+  // Every reminder row shows its Done button at once — gate per reminder.
+  const pendingDismiss = usePendingIds();
   const dismiss = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/reminders/${id}`); },
+    onMutate: (id: string) => { pendingDismiss.start(id); },
+    onSettled: (_d, _e, id: string) => { pendingDismiss.end(id); },
     onSuccess: () => { toast({ title: "Reminder dismissed" }); queryClient.invalidateQueries({ queryKey: ["/api/reminders"] }); },
     onError: (e: any) => toast({ title: "Couldn't dismiss", description: e?.message, variant: "destructive" }),
   });
@@ -733,7 +750,7 @@ export function RemindersPopup({ open, onClose, reminders }: { open: boolean; on
                   {ownerName && <Chip><User className="h-2.5 w-2.5" />{ownerName}</Chip>}
                 </div>
               </div>
-              <ActionBtn label="Done" icon={Check} disabled={dismiss.isPending} onClick={() => dismiss.mutate(r.id)} testId={`reminder-done-${r.id}`} />
+              <ActionBtn label="Done" icon={Check} disabled={pendingDismiss.has(r.id)} onClick={() => dismiss.mutate(r.id)} testId={`reminder-done-${r.id}`} />
             </div>
           </div>
         );

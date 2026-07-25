@@ -6,6 +6,7 @@ import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
+import { usePendingIds } from "@/hooks/usePendingIds";
 import { categoryTheme } from "@/lib/category-theme";
 import { AccentCard } from "@/components/ui/accent-card";
 import { resolveAssetValue, resolveLiabilityBalance, isNetWorthLiabilityProfile } from "@shared/asset-value";
@@ -1728,8 +1729,12 @@ function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyo
                     </p>
                   </div>
                 </button>
+                {/* No shared-pending gate on the action: acting on a row removes
+                    it from the queue immediately (the `acted` filter), so a
+                    double-submit is already impossible — while that flag was
+                    ALSO freezing every OTHER row's Done/Pay until the write
+                    returned. */}
                 <Button size="sm" variant={it.action === "open" ? "ghost" : "outline"} className="h-7 shrink-0 px-2.5 text-[11px]"
-                  disabled={completeTask.isPending || payBill.isPending}
                   onClick={() => doAction(it)} data-testid={`now-action-${it.key}`}>
                   {actionLabel}
                 </Button>
@@ -2759,12 +2764,16 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
     },
     onError: (e: Error) => toast({ title: "Failed to create goal", description: e.message, variant: "destructive" }),
   });
+  // Per-goal busy tracking: one shared `isPending` used to disable (and spin)
+  // the complete button on EVERY goal row while a single goal was saving.
+  const pendingGoals = usePendingIds();
   const updateMutation = useMutation({
     mutationFn: ({ id, title, ...data }: any) => apiRequest("PATCH", `/api/goals/${id}`, { title, ...data }).then(r => r.json()),
     // Optimistic (CalendarView pattern): patch the goal in the cached list so
     // progress bars / status flips paint immediately; server confirms via the
     // cache-bus invalidation in onSettled, rollback in onError.
     onMutate: async ({ id, title, ...data }: any) => {
+      pendingGoals.start(id);
       await queryClient.cancelQueries({ queryKey: goalsKey });
       const prev = queryClient.getQueryData<GoalItem[]>(goalsKey);
       queryClient.setQueryData<GoalItem[]>(goalsKey, (old) =>
@@ -2779,7 +2788,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
       if (ctx?.prev !== undefined) queryClient.setQueryData(goalsKey, ctx.prev);
       toast({ title: `Failed to update "${variables.title || "goal"}"`, description: err.message, variant: "destructive" });
     },
-    onSettled: () => { invalidateDomain("goals"); },
+    onSettled: (_d, _e, vars: any) => { pendingGoals.end(vars?.id); invalidateDomain("goals"); },
   });
   const deleteMutation = useMutation({
     mutationFn: ({ id, title }: { id: string; title?: string }) => apiRequest("DELETE", `/api/goals/${id}`),
@@ -2862,10 +2871,10 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                   <button
                     className="h-5 w-5 rounded-full border-2 border-primary/40 flex items-center justify-center shrink-0 hover:bg-green-500/20 hover:border-green-500 active:scale-90 transition-all disabled:opacity-50 disabled:pointer-events-none"
                     onClick={() => updateMutation.mutate({ id: g.id, status: "completed" })}
-                    disabled={updateMutation.isPending}
+                    disabled={pendingGoals.has(g.id)}
                     title="Mark complete"
                   >
-                    {updateMutation.isPending ? (
+                    {pendingGoals.has(g.id) ? (
                       <span className="h-2.5 w-2.5 border border-primary/40 border-t-transparent rounded-full animate-spin" />
                     ) : (
                       <Check className="h-2.5 w-2.5 text-transparent group-hover:text-green-500" />

@@ -110,7 +110,7 @@ function ItemRow({ item, onOpen, intent, showReason, onToggle, toggling }: {
       </button>
       {onToggle && (
         <button onClick={onToggle} disabled={toggling} data-testid={`brief-log-${item.key}`}
-          aria-label={item.done ? `${item.title} done` : `Log ${item.title}`}
+          aria-label={item.done ? `Undo ${item.title}` : `Log ${item.title}`}
           className={`shrink-0 h-5 w-5 rounded border text-[11px] leading-none flex items-center justify-center transition-colors disabled:opacity-40 ${
             item.done ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-500" : "border-border hover:bg-muted"}`}>
           {item.done ? "✓" : "+"}
@@ -234,7 +234,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // the row flips on the frame of the tap, not after the round-trip.
   const [pendingLog, setPendingLog] = useState<string | null>(null);
   const checkinHabit = useMutation({
-    mutationFn: (id: string) => apiRequest("POST", `/api/habits/${id}/checkin`, { date: todayStr }),
+    mutationFn: (id: string) =>
+      apiRequest("POST", `/api/habits/${id}/checkin`, { date: todayStr }).then(r => r.json()),
     onMutate: async (id: string) => {
       setPendingLog(`habit:${id}`);
       const key = ["/api/habits", mode, ...ids];
@@ -244,12 +245,57 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         h.id === id ? { ...h, checkins: [...(h.checkins || []), { id: `tmp-${Date.now()}`, date: todayStr }] } : h));
       return { prev, key };
     },
+    onSuccess: (serverHabit: any, id: string) => {
+      // Swap the optimistic "tmp-" check-in for the server's real row so an
+      // immediate un-check has a real id to delete.
+      if (!serverHabit || !Array.isArray(serverHabit.checkins)) return;
+      qc.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+        (old || []).map((h: any) => h.id === id ? { ...h, ...serverHabit } : h));
+    },
     onError: (e: any, _id, ctx: any) => {
       if (ctx?.prev) qc.setQueryData(ctx.key, ctx.prev);
       toast({ title: "Couldn't check in", description: e?.message, variant: "destructive" });
     },
     onSettled: () => { setPendingLog(null); invalidateDomain("habits"); },
   });
+  // Tapping the ✓ on a habit that is already done used to be wired to a no-op,
+  // so the row could be completed but never undone from the board. Un-check it
+  // for real — same semantics as the Habits popup (clear today's check-ins).
+  const uncheckHabit = useMutation({
+    mutationFn: async ({ id, checkinIds }: { id: string; checkinIds: string[] }) => {
+      for (const cid of checkinIds) {
+        try {
+          await apiRequest("DELETE", `/api/habits/${id}/checkin/${cid}`);
+        } catch (e: any) {
+          // 404 = already gone; the desired state holds, so not an error.
+          if (!String(e?.message || "").startsWith("404")) throw e;
+        }
+      }
+    },
+    onMutate: async ({ id }) => {
+      setPendingLog(`habit:${id}`);
+      const key = ["/api/habits", mode, ...ids];
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<any[]>(key);
+      qc.setQueryData<any[]>(key, (old) => (old || []).map((h: any) =>
+        h.id === id ? { ...h, checkins: (h.checkins || []).filter((c: any) => c.date !== todayStr) } : h));
+      return { prev, key };
+    },
+    onError: (e: any, _v, ctx: any) => {
+      if (ctx?.prev) qc.setQueryData(ctx.key, ctx.prev);
+      toast({ title: "Couldn't undo check-in", description: e?.message, variant: "destructive" });
+    },
+    onSettled: () => { setPendingLog(null); invalidateDomain("habits"); },
+  });
+  const toggleHabitRow = (item: BriefingItem) => {
+    const h = item.raw || {};
+    const checkinIds = (h.checkins || [])
+      .filter((c: any) => String(c.date).slice(0, 10) === todayStr)
+      .map((c: any) => c.id)
+      .filter(Boolean);
+    if (item.done) uncheckHabit.mutate({ id: item.id, checkinIds });
+    else checkinHabit.mutate(item.id);
+  };
   const logTracker = useMutation({
     mutationFn: async (t: any) => {
       const field = (t.fields || []).find((f: any) => f?.type === "number" || f?.type === "integer" || f?.type === "decimal")
@@ -311,9 +357,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           <ItemRow key={item.key} item={item} onOpen={() => openItem(item)}
             intent={rowIntent(item.panel as PanelId)} showReason={opts?.showReason}
             onToggle={
-              opts?.loggable && item.kind === "habit" && !item.done
-                ? () => checkinHabit.mutate(item.id)
-                : opts?.loggable && item.kind === "habit" ? () => {}
+              opts?.loggable && item.kind === "habit"
+                ? () => toggleHabitRow(item)
                 : opts?.loggable && item.kind === "tracker" ? () => logTracker.mutate(item.raw)
                 : undefined
             }

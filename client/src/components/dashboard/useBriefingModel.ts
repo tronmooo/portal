@@ -261,7 +261,10 @@ export function buildBriefingModel(input: BriefingInput): BriefingModel {
     .map((h: any) => ({
       id: String(h.id),
       name: h.name,
-      doneToday: arr(h.checkins).some((c: any) => d10(c.date) === todayStr),
+      // A habit with targetPerDay > 1 ("3× daily") is only done once it has
+      // that many check-ins today — one tap must not read as complete.
+      doneToday: arr(h.checkins).filter((c: any) => d10(c.date) === todayStr).length
+        >= Math.max(1, Number(h.targetPerDay) || 1),
       streak: h.currentStreak ?? h.streak ?? 0,
       raw: h,
     }));

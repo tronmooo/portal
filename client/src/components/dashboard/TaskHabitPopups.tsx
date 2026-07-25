@@ -6,6 +6,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useSeededScopedList } from "@/components/dashboard/popups/useSeededList";
+import { usePendingIds } from "@/hooks/usePendingIds";
 import { Windowed } from "@/components/dashboard/popups/Windowed";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -910,6 +911,13 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   const [newHabitProfileId, setNewHabitProfileId] = useState('');
   // Which habit row has its inline schedule editor open (the "habit profile" edit).
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
+  // BUG (user report: "I marked one habit done, it wouldn't let me mark the
+  // second one"): the check buttons used to be disabled off the SHARED
+  // mutation's isPending, so completing one habit froze every other row's
+  // button until that write came back — seconds on a cold serverless instance.
+  // Track exactly which habits have a write in flight instead — taps on other
+  // rows go through immediately, and several can be in flight at once.
+  const pendingHabits = usePendingIds();
   const { data: habitProfiles = [] } = useQuery<any[]>({ queryKey: ['/api/profiles'], enabled: open });
   const habitOwnerId = useMemo(() => {
     if (newHabitProfileId) return newHabitProfileId;
@@ -950,6 +958,13 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   const { data: habits = [], isPending: habitsLoading } = useSeededScopedList<any>("/api/habits", { filterMode, filterIds }, { open });
   const isLoading = habitsLoading;
 
+  // A habit with targetPerDay > 1 ("Go to the bathroom 3× daily") is only DONE
+  // once it has that many check-ins for the day — treating a single check-in as
+  // done made those habits impossible to actually complete from this popup.
+  const targetOf = (h: any) => Math.max(1, Number(h.targetPerDay) || 1);
+  const countOn = (h: any, dk: string) => (h.checkins || []).filter((c: any) => c.date === dk).length;
+  const doneOn = (h: any, dk: string) => countOn(h, dk) >= targetOf(h);
+
   // Optimistically bump stats.habitCompletionRate so the dashboard
   // donut ring jumps to 100% the instant the user marks every habit
   // done, instead of waiting on the server roundtrip.
@@ -957,9 +972,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     if (!habitsList || habitsList.length === 0) return;
     const total = habitsList.filter((h: any) => !h.archivedAt).length;
     if (total === 0) return;
-    const completed = habitsList.filter((h: any) =>
-      !h.archivedAt && (h.checkins || []).some((c: any) => c.date === today)
-    ).length;
+    const completed = habitsList.filter((h: any) => !h.archivedAt && doneOn(h, today)).length;
     const pct = Math.round((completed / total) * 100);
     const statsKey = ["/api/stats", filterMode, ...filterIds];
     queryClient.setQueryData<any>(statsKey, (old: any) => {
@@ -969,36 +982,51 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   };
 
   const checkinMutation = useMutation({
-    mutationFn: ({ id }: { id: string }) => apiRequest("POST", `/api/habits/${id}/checkin`, { date: today }),
+    mutationFn: ({ id }: { id: string }) =>
+      apiRequest("POST", `/api/habits/${id}/checkin`, { date: today }).then(r => r.json()),
     onMutate: async ({ id }) => {
+      pendingHabits.start(id);
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
       const prevStats = queryClient.getQueryData<any>(["/api/stats", filterMode, ...filterIds]);
       // Optimistically add today's check-in to the habit AND bump its streak so
       // the flame/streak chip paints instantly; the server-computed streak
-      // reconciles on the onSettled invalidation.
+      // reconciles on the onSettled invalidation. The streak only moves on the
+      // check-in that COMPLETES the day (targetPerDay), matching the server's
+      // streak math for multi-per-day habits.
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
-        (old || []).map((h: any) => h.id === id
-          ? {
-              ...h,
-              checkins: [...(h.checkins || []), { date: today, id: 'tmp-' + Date.now() }],
-              currentStreak: (h.checkins || []).some((c: any) => c.date === today)
-                ? h.currentStreak
-                : Number(h.currentStreak || 0) + 1,
-            }
-          : h)
+        (old || []).map((h: any) => {
+          if (h.id !== id) return h;
+          const before = countOn(h, today);
+          const completesDay = before + 1 >= targetOf(h) && before < targetOf(h);
+          return {
+            ...h,
+            checkins: [...(h.checkins || []), { date: today, id: 'tmp-' + Date.now() }],
+            currentStreak: completesDay ? Number(h.currentStreak || 0) + 1 : h.currentStreak,
+          };
+        })
       );
       // Recompute completion% from the (now-updated) cache.
       const updated = queryClient.getQueryData<any[]>(["/api/habits", filterMode, ...filterIds]);
       if (updated) recomputeStatsHabitRate(updated);
       return { prev, prevStats };
     },
+    onSuccess: (serverHabit: any, { id }) => {
+      // The endpoint returns the full habit with the REAL check-in rows. Swap it
+      // in so the optimistic "tmp-…" id never survives — an un-check that
+      // targets a tmp id 404s server-side and the check-in reappears on refetch,
+      // which reads as "the button doesn't work".
+      if (!serverHabit || !Array.isArray(serverHabit.checkins)) return;
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+        (old || []).map((h: any) => h.id === id ? { ...h, ...serverHabit } : h));
+    },
     onError: (_e: any, _v: any, ctx: any) => {
       if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
       if (ctx?.prevStats !== undefined) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], ctx.prevStats);
       toast({ title: "Failed to check in habit", variant: "destructive" });
     },
-    onSettled: () => {
+    onSettled: (_d, _e, vars: any) => {
+      pendingHabits.end(vars.id);
       invalidateDomain("habits");
     },
   });
@@ -1006,16 +1034,21 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   // Un-check (toggle off) today's completion. The design's check button toggles,
   // so tapping a completed habit must remove today's check-in.
   const deleteCheckinMutation = useMutation({
-    mutationFn: async ({ id, checkinId }: { id: string; checkinId: string }) => {
-      // Idempotent un-check: 404 = already gone (stale render / double tap);
-      // the desired state holds, so don't surface a red error for it.
-      try {
-        await apiRequest("DELETE", `/api/habits/${id}/checkin/${checkinId}`);
-      } catch (e: any) {
-        if (!String(e?.message || "").startsWith("404")) throw e;
+    mutationFn: async ({ id, checkinIds }: { id: string; checkinIds: string[] }) => {
+      // Un-checking a multi-per-day habit has to remove EVERY check-in logged
+      // today, or the row bounces straight back to "done" on the next refetch.
+      for (const checkinId of checkinIds) {
+        // Idempotent un-check: 404 = already gone (stale render / double tap);
+        // the desired state holds, so don't surface a red error for it.
+        try {
+          await apiRequest("DELETE", `/api/habits/${id}/checkin/${checkinId}`);
+        } catch (e: any) {
+          if (!String(e?.message || "").startsWith("404")) throw e;
+        }
       }
     },
     onMutate: async ({ id }) => {
+      pendingHabits.start(id);
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
       const prevStats = queryClient.getQueryData<any>(["/api/stats", filterMode, ...filterIds]);
@@ -1026,7 +1059,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
           ? {
               ...h,
               checkins: (h.checkins || []).filter((c: any) => c.date !== today),
-              currentStreak: (h.checkins || []).some((c: any) => c.date === today)
+              currentStreak: doneOn(h, today)
                 ? Math.max(0, Number(h.currentStreak || 0) - 1)
                 : h.currentStreak,
             }
@@ -1041,7 +1074,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
       if (ctx?.prevStats !== undefined) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], ctx.prevStats);
       toast({ title: "Failed to update habit", variant: "destructive" });
     },
-    onSettled: () => { invalidateDomain("habits"); },
+    onSettled: (_d, _e, vars: any) => { pendingHabits.end(vars.id); invalidateDomain("habits"); },
   });
 
   // Edit a habit's schedule (time-of-day / precise time) from its profile row.
@@ -1089,12 +1122,14 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     for (let i = periodDays - 1; i >= 0; i--) { const d = new Date(t); d.setDate(t.getDate() - i); arr.push(dateKey(d)); }
     return arr;
   }, [periodDays]);
-  const isDone = (h: any, dk: string) => (h.checkins || []).some((c: any) => c.date === dk);
-  const todayCheckinId = (h: any): string | undefined => (h.checkins || []).find((c: any) => c.date === today)?.id;
-  const togglePending = checkinMutation.isPending || deleteCheckinMutation.isPending;
+  const isDone = (h: any, dk: string) => doneOn(h, dk);
+  const todayCheckinIds = (h: any): string[] =>
+    (h.checkins || []).filter((c: any) => c.date === today).map((c: any) => c.id).filter(Boolean);
   const toggleToday = (h: any) => {
-    const cid = todayCheckinId(h);
-    if (cid) deleteCheckinMutation.mutate({ id: h.id, checkinId: cid });
+    // Only the row whose write is in flight is inert — every other habit stays
+    // tappable, so you can mark them all done as fast as you can tap.
+    if (pendingHabits.has(h.id)) return;
+    if (doneOn(h, today)) deleteCheckinMutation.mutate({ id: h.id, checkinIds: todayCheckinIds(h) });
     else checkinMutation.mutate({ id: h.id });
   };
   // Time-of-day bucket. Prefer the habit's EXPLICIT schedule (editable from the
@@ -1148,10 +1183,14 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     if (n.includes('stretch') || n.includes('yoga')) return '🤸';
     return '⭐';
   };
+  // Rank on the streak EXCLUDING today, so checking a habit off doesn't shuffle
+  // the list under the user's finger mid-tap (the row order stayed put in the
+  // "my second tap did nothing" reports — it had jumped to another habit).
+  const rankStreak = (h: any) => Math.max(0, Number(h.currentStreak || 0) - (doneOn(h, today) ? 1 : 0));
   const visible = useMemo(
     () => active
       .filter((h: any) => timeFilter === 'all' || bucketOf(h) === timeFilter)
-      .sort((a: any, b: any) => (b.currentStreak || 0) - (a.currentStreak || 0) || (a.name || '').localeCompare(b.name || '')),
+      .sort((a: any, b: any) => rankStreak(b) - rankStreak(a) || (a.name || '').localeCompare(b.name || '')),
     [active, timeFilter]
   );
 
@@ -1329,9 +1368,12 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
               {visible.map((h: any) => {
                 const color = (h.color && h.color !== '#4F98A3') ? h.color : VIVID[h.id.charCodeAt(0) % VIVID.length];
                 const done = isDone(h, today);
+                const target = targetOf(h);
+                const todayCount = countOn(h, today);
+                const busy = pendingHabits.has(h.id);
                 const streak = h.currentStreak || 0;
                 const emoji = h.icon || getEmoji(h.name);
-                const freqLabel = (h.targetPerDay || 1) > 1 ? `${h.targetPerDay}× daily` : (h.frequency === 'weekly' ? 'Weekly' : 'Daily');
+                const freqLabel = target > 1 ? `${target}× daily` : (h.frequency === 'weekly' ? 'Weekly' : 'Daily');
                 const sLabel = schedLabel(h);
                 const editing = editingScheduleId === h.id;
                 return (
@@ -1344,7 +1386,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-semibold truncate">{h.name}</p>
                         <p className="text-[11px] text-muted-foreground truncate">
-                          {freqLabel}{sLabel ? ` · ${sLabel}` : ''}
+                          {freqLabel}{target > 1 ? ` · ${todayCount}/${target} today` : ''}{sLabel ? ` · ${sLabel}` : ''}
                         </p>
                         <div className="mt-1.5 flex gap-1">
                           {last7.map((dk) => (
@@ -1364,16 +1406,19 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                           {streak} {streak > 0 ? '🔥' : ''}
                         </span>
                         <span className="text-[8px] uppercase tracking-wide text-muted-foreground/70 leading-none">day streak</span>
-                        <button onClick={() => toggleToday(h)} disabled={togglePending}
-                          aria-label={done ? 'Mark not done today' : 'Mark done today'}
-                          className="touch-manipulation active:scale-90 transition-transform mt-0.5"
+                        <button onClick={() => toggleToday(h)} disabled={busy}
+                          aria-label={done ? 'Mark not done today' : target > 1 ? `Log ${todayCount + 1} of ${target} for today` : 'Mark done today'}
+                          data-testid={`habit-toggle-${h.id}`}
+                          className={`touch-manipulation active:scale-90 transition-transform mt-0.5 ${busy ? 'opacity-60' : ''}`}
                           style={{ minWidth: 40, minHeight: 40 }}>
-                          <div className="flex h-7 w-7 items-center justify-center rounded-full border-2 transition-all"
+                          <div className="mx-auto flex h-7 w-7 items-center justify-center rounded-full border-2 transition-all"
                             style={{
                               background: done ? 'hsl(262 70% 58%)' : 'transparent',
                               borderColor: done ? 'hsl(262 70% 58%)' : 'hsl(var(--muted-foreground) / 0.5)',
                             }}>
-                            {done && <Check className="h-4 w-4 text-white" strokeWidth={3} />}
+                            {done ? <Check className="h-4 w-4 text-white" strokeWidth={3} />
+                              : todayCount > 0 ? <span className="text-[10px] font-bold tabular-nums text-muted-foreground">{todayCount}</span>
+                              : null}
                           </div>
                         </button>
                       </div>

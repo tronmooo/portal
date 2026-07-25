@@ -54,3 +54,35 @@ describe("hub button inventory", () => {
     });
   }
 });
+
+// ── Per-row busy gating ──────────────────────────────────────────────────────
+// A list of rows sharing ONE mutation must not share ONE busy flag. Gating a
+// per-row button on `someMutation.isPending` disables EVERY row while a single
+// write is in flight — the "I marked one habit done, it wouldn't let me mark
+// the second" report (2026-07-25). These surfaces now gate on usePendingIds();
+// this guard keeps the shared-flag form from creeping back in.
+const ROW_ACTION_FILES = [
+  "client/src/components/dashboard/TaskHabitPopups.tsx",
+  "client/src/components/dashboard/BriefingPopups.tsx",
+  "client/src/components/ProfileSharedTabs.tsx",
+];
+
+describe("per-row action buttons stay independently tappable", () => {
+  for (const file of ROW_ACTION_FILES) {
+    it(`${file.split("/").pop()} gates row actions per id, not on a shared isPending`, () => {
+      const src = read(file);
+      expect(src).toContain("usePendingIds");
+      // Row-level toggles/logs must not be disabled by a whole-list flag.
+      const shared = [...src.matchAll(/disabled=\{(\w+)\.isPending\}/g)].map(m => m[1]);
+      const rowMutations = ["toggleMutation", "checkinMutation", "deleteCheckinMutation",
+        "payBill", "skipBill", "updateGoal", "dismiss", "undoMutation"];
+      const leaked = shared.filter(name => rowMutations.includes(name));
+      expect(leaked, `${file} gates row buttons on shared isPending: ${leaked.join(", ")}`).toEqual([]);
+    });
+  }
+
+  it("the habits popup exposes a per-habit toggle hook", () => {
+    const src = read("client/src/components/dashboard/TaskHabitPopups.tsx");
+    expect(src).toContain("habit-toggle-");
+  });
+});

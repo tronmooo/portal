@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { usePendingIds } from "@/hooks/usePendingIds";
 import {
   Sparkles, Copy, Check, ClipboardPaste, AlertTriangle, ArrowRight, Loader2, Undo2, History, ExternalLink,
 } from "lucide-react";
@@ -256,8 +257,12 @@ export function ChatGPTImportHistory() {
     queryKey: ["finance-import-history"],
     queryFn: async () => (await apiRequest("GET", "/api/finance-import/history")).json(),
   });
+  // Per-import gating — a shared flag disabled every row's Undo at once.
+  const pendingUndo = usePendingIds();
   const undoMut = useMutation({
     mutationFn: async (id: string) => (await apiRequest("POST", `/api/finance-import/${id}/undo`)).json(),
+    onMutate: (id: string) => { pendingUndo.start(id); },
+    onSettled: (_d, _e, id: string) => { pendingUndo.end(id); },
     onSuccess: (d: any) => {
       toast({ title: "Import undone", description: `${d.removed} record${d.removed === 1 ? "" : "s"} removed` });
       queryClient.invalidateQueries({ queryKey: ["finance-import-history"] });
@@ -282,7 +287,7 @@ export function ChatGPTImportHistory() {
             )}
             {it.status === "undone" && <p className="text-[10px] text-muted-foreground">Undone</p>}
           </div>
-          <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" disabled={it.status === "undone" || undoMut.isPending} onClick={() => undoMut.mutate(it.id)}>
+          <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" disabled={it.status === "undone" || pendingUndo.has(it.id)} onClick={() => undoMut.mutate(it.id)}>
             <Undo2 className="h-3 w-3" /> Undo
           </Button>
         </div>

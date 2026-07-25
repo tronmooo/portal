@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { usePendingIds } from "@/hooks/usePendingIds";
 import { flattenProfile } from "@/lib/flattenProfile";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
 // profile-detail stays under control. The legacy ChildAssetsCard /
@@ -7585,6 +7586,9 @@ function TasksTab({
   const [taskPriority, setTaskPriority] = useState<"low" | "medium" | "high">("medium");
   const [taskDueDate, setTaskDueDate] = useState("");
 
+  // Per-task busy tracking — a shared `isPending` disabled every row's toggle
+  // while one task was saving, so only the first tap of a batch landed.
+  const pendingTasks = usePendingIds();
   const toggleMutation = useMutation({
     mutationFn: async ({ taskId, status, title }: { taskId: string; status: "todo" | "done"; title?: string }) => {
       const res = await apiRequest("PATCH", `/api/tasks/${taskId}`, { status });
@@ -7593,6 +7597,7 @@ function TasksTab({
     // Optimistic update — flip the status immediately in the profile detail cache
     // so the checkbox/UI snaps without waiting for the network round trip.
     onMutate: async ({ taskId, status }) => {
+      pendingTasks.start(taskId);
       await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       const prev = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
       if (prev) {
@@ -7618,7 +7623,8 @@ function TasksTab({
       if (context?.prev) queryClient.setQueryData(["/api/profiles", profileId, "detail"], context.prev);
       toast({ title: `Failed to update "${variables.title || "task"}"`, description: formatApiError(err), variant: "destructive" });
     },
-    onSettled: () => {
+    onSettled: (_d, _e, vars: any) => {
+      pendingTasks.end(vars?.taskId);
       // Reconcile with server to catch any drift
       invalidateDomains("profiles", "tasks");
     },
@@ -7769,7 +7775,7 @@ function TasksTab({
                 >
                   <button
                     onClick={() => toggleMutation.mutate({ taskId: task.id, status: isDone ? "todo" : "done", title: task.title })}
-                    disabled={toggleMutation.isPending}
+                    disabled={pendingTasks.has(task.id)}
                     className="mt-0.5 shrink-0"
                     data-testid={`button-toggle-task-${task.id}`}
                     aria-label={isDone ? "Mark incomplete" : "Mark complete"}
