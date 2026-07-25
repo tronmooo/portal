@@ -87,6 +87,7 @@ export default defineConfig({
       'tests/recurring-dates-page.test.tsx',
       'tests/recurring-scope-and-purity.test.ts',
       'tests/calendar-crud.test.ts',
+      'tests/recurring-page-sweep.test.tsx',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
       'tests/wellness-metrics.test.ts',

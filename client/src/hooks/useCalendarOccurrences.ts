@@ -8,7 +8,7 @@
 // exhausted, the horizon widens and everything regenerates, so a recurring
 // date can never quietly fall off the end of the calendar.
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { seriesFromAll, filterSeriesByProfiles } from "@shared/calendar-adapters";
@@ -201,14 +201,32 @@ export function useCalendarOccurrences(
     return m;
   }, [profileList]);
 
+  // PERF: these are consumed as useMemo/useEffect dependencies by the page.
+  // Returning fresh arrow functions each render gave them a new identity every
+  // time, so every downstream memo recomputed on every render — regenerating
+  // the whole schedule (5 years of birthdays plus 12 months per payment) for
+  // nothing. Stable identities keep the work proportional to real data changes.
+  const occurrencesForSeries = useCallback(
+    (seriesId: string) => bySeries.get(seriesId) || [],
+    [bySeries],
+  );
+  const getEventRow = useCallback(
+    (eventId: string) => eventsById.get(eventId),
+    [eventsById],
+  );
+  const profileName = useCallback(
+    (profileId: string) => profilesById.get(profileId)?.name,
+    [profilesById],
+  );
+
   return {
     occurrences,
     series: ruleSeries,
     allSeries: survivingSeries,
     duplicatesBySeries,
-    occurrencesForSeries: (seriesId: string) => bySeries.get(seriesId) || [],
-    getEventRow: (eventId: string) => eventsById.get(eventId),
-    profileName: (profileId: string) => profilesById.get(profileId)?.name,
+    occurrencesForSeries,
+    getEventRow,
+    profileName,
     todayISO,
     isLoading:
       events.isLoading || profiles.isLoading || obligations.isLoading ||

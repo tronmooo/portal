@@ -202,18 +202,54 @@ describe("occurrence generation", () => {
   });
 
   it("reflects per-occurrence state", () => {
+    // A PAYMENT is completable, so its marks are honoured. (Birthdays are not —
+    // see "a birthday has no done state" below.)
     const s: CalendarSeries = {
-      ...joeBirthdayFromProfile,
-      completedDates: ["2027-02-11"],
-      skippedDates: ["2028-02-11"],
-      movedDates: { "2029-02-11": "2029-02-12" },
+      id: "obligation:m", kind: "subscription", title: "Thing",
+      source: { system: "obligation", id: "m", profileId: "me", href: "#" },
+      baseDate: "2026-08-02", recurrence: "monthly",
+      completedDates: ["2026-08-02"],
+      skippedDates: ["2026-09-02"],
+      movedDates: { "2026-10-02": "2026-10-05" },
     };
     const occ = generateSeriesOccurrences(s, { todayISO: TODAY });
     expect(occ[0].status).toBe("done");
     expect(occ[1].status).toBe("skipped");
-    expect(occ[2].effectiveDate).toBe("2029-02-12");
+    expect(occ[2].effectiveDate).toBe("2026-10-05");
     expect(occ[2].moved).toBe(true);
     expect(occ[3].moved).toBe(false);
+  });
+
+  it("a birthday has no done state, so stale marks never cross one out", () => {
+    // User report: "why is Joe's birthday crossed out for six months and 18
+    // months when that hasn't even occurred yet". Marks written by an older
+    // build that offered a Done button must be ignored, not migrated.
+    const s: CalendarSeries = {
+      ...joeBirthdayFromProfile,
+      completedDates: ["2027-02-11"],
+      skippedDates: ["2028-02-11"],
+    };
+    const occ = generateSeriesOccurrences(s, { todayISO: TODAY });
+    expect(occ[0].status).toBe("upcoming");
+    expect(occ[1].status).toBe("upcoming");
+    expect(occ.some((o) => o.status === "done" || o.status === "skipped")).toBe(false);
+  });
+
+  it("an anniversary ignores marks the same way", () => {
+    const s: CalendarSeries = {
+      ...joeBirthdayFromProfile, kind: "anniversary",
+      completedDates: ["2027-02-11"],
+    };
+    expect(generateSeriesOccurrences(s, { todayISO: TODAY })[0].status).toBe("upcoming");
+  });
+
+  it("still honours a MOVED birthday date — moving is not completing", () => {
+    const s: CalendarSeries = {
+      ...joeBirthdayFromProfile, movedDates: { "2027-02-11": "2027-02-12" },
+    };
+    const [first] = generateSeriesOccurrences(s, { todayISO: TODAY });
+    expect(first.effectiveDate).toBe("2027-02-12");
+    expect(first.moved).toBe(true);
   });
 
   it("marks past occurrences overdue only when completion is required", () => {
@@ -273,9 +309,22 @@ describe("buildCalendarOccurrences — one row per date, app-wide", () => {
   });
 
   it("skips done and skipped occurrences when finding the next one", () => {
-    const s = { ...joeBirthdayFromProfile, completedDates: ["2027-02-11"], skippedDates: ["2028-02-11"] };
+    const s: CalendarSeries = {
+      id: "obligation:n2", kind: "subscription", title: "Thing",
+      source: { system: "obligation", id: "n2", profileId: "me", href: "#" },
+      baseDate: "2026-08-02", recurrence: "monthly",
+      completedDates: ["2026-08-02"], skippedDates: ["2026-09-02"],
+    };
     const all = buildCalendarOccurrences([s], { todayISO: TODAY });
-    expect(nextOccurrenceOf(all, s.id, TODAY)?.date).toBe("2029-02-11");
+    expect(nextOccurrenceOf(all, s.id, TODAY)?.date).toBe("2026-10-02");
+  });
+
+  it("a birthday's next date is never pushed out by stale marks", () => {
+    // The reported symptom: NEXT read "Feb 11, 2029 · in 2 yr" because 2027
+    // and 2028 were marked done on a date that had not happened.
+    const s = { ...joeBirthdayFromProfile, completedDates: ["2027-02-11", "2028-02-11"] };
+    const all = buildCalendarOccurrences([s], { todayISO: TODAY });
+    expect(nextOccurrenceOf(all, s.id, TODAY)?.date).toBe("2027-02-11");
   });
 });
 

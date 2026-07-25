@@ -551,14 +551,38 @@ export interface CalendarOccurrence {
   series: CalendarSeries;
 }
 
+/**
+ * True when a kind has no completable state at all.
+ *
+ * User report 2026-07-25: "why is Joe's birthday crossed out for six months
+ * and 18 months when that hasn't even occurred yet". Feb 11 2027 and 2028 both
+ * rendered struck through and captioned "done", which also pushed the headline
+ * NEXT date out to 2029.
+ *
+ * `capabilitiesFor` already refuses to let a birthday be checked off — but the
+ * STATUS reader still honoured whatever `rd:done:` marks were sitting in the
+ * data from an older build whose card did show a Done button. Disabling the
+ * button was never enough: as long as the reader trusts those marks, one
+ * historical tap keeps a birthday crossed out for years.
+ *
+ * A birthday is not a task. It has no done state, so the marks are ignored
+ * rather than migrated away — which self-heals every record already carrying
+ * them, with no data write.
+ */
+function hasCompletableState(kind: OccurrenceKind): boolean {
+  return kind !== "birthday" && kind !== "anniversary";
+}
+
 function statusFor(
   series: CalendarSeries,
   date: string,
   todayISO: string,
   requireComplete: boolean,
 ): OccurrenceStatus {
-  if (series.completedDates?.includes(date)) return "done";
-  if (series.skippedDates?.includes(date)) return "skipped";
+  if (hasCompletableState(series.kind)) {
+    if (series.completedDates?.includes(date)) return "done";
+    if (series.skippedDates?.includes(date)) return "skipped";
+  }
   if (date < todayISO) return requireComplete ? "overdue" : "past";
   if (date === todayISO) return "today";
   return "upcoming";
