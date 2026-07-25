@@ -76,6 +76,8 @@ export default defineConfig({
       'tests/tracker-taxonomy.test.ts',
       'tests/category-canon.test.ts',
       'tests/timezone-dst.test.ts',
+      'tests/calendar-occurrences.test.ts',
+      'tests/calendar-adapters.test.ts',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
       'tests/wellness-metrics.test.ts',

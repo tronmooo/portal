@@ -210,6 +210,13 @@ export function expandRecurrenceDates(
       case "weekly": d.setDate(d.getDate() + 7); break;
       case "biweekly": d.setDate(d.getDate() + 14); break;
       case "monthly": d.setTime(addMonthsClamped(seriesStart, i, anchorDay).getTime()); break;
+      // Multi-month cadences step the same clamped, base-anchored way. Without
+      // these a quarterly bill fell through to `default` and generated only its
+      // base date, so it vanished from the calendar after the first payment.
+      case "bimonthly": d.setTime(addMonthsClamped(seriesStart, i * 2, anchorDay).getTime()); break;
+      case "quarterly": d.setTime(addMonthsClamped(seriesStart, i * 3, anchorDay).getTime()); break;
+      case "semiannual": case "semiannually": case "biannual":
+        d.setTime(addMonthsClamped(seriesStart, i * 6, anchorDay).getTime()); break;
       case "yearly": d.setTime(addYearsClamped(seriesStart, i, anchorDay).getTime()); break;
       default: return out;
     }
@@ -317,6 +324,10 @@ export function humanRecurrenceLabel(recurrence: string, baseDate?: string): str
     case "weekly": return d ? `Weekly on ${DOW[d.getDay()]}` : "Weekly";
     case "biweekly": return d ? `Every 2 weeks on ${DOW[d.getDay()]}` : "Every 2 weeks";
     case "monthly": return d ? `Monthly on day ${d.getDate()}` : "Monthly";
+    case "bimonthly": return d ? `Every 2 months on day ${d.getDate()}` : "Every 2 months";
+    case "quarterly": return d ? `Quarterly on day ${d.getDate()}` : "Quarterly";
+    case "semiannual": case "semiannually": case "biannual":
+      return d ? `Every 6 months on day ${d.getDate()}` : "Every 6 months";
     case "yearly": return d ? `Every year on ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : "Yearly";
     default: return "Does not repeat";
   }
