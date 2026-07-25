@@ -5,7 +5,7 @@
 // belongs to, its important dates, current status, related records, and REAL
 // in-place actions (pay/skip/edit/delete/renew/dismiss) — not just nav links.
 // TasksPopup/HabitsPopup already live in TaskHabitPopups.tsx.
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -13,7 +13,6 @@ import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { Button } from "@/components/ui/button";
-import { Windowed } from "@/components/dashboard/popups/Windowed";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -73,13 +72,9 @@ function addFrequency(dateStr: string, freq: string): string | null {
   return d.toLocaleDateString("en-CA");
 }
 
-/** Owner names for a linkedProfiles list. Empty links = primary (Self).
- *  PERF: `enabled` MUST be the owning popup's `open` flag. Without the gate
- *  this hook fired /api/profiles for every popup that merely existed in the
- *  tree, which — before panels became mount-on-open — meant several redundant
- *  fetches per dashboard render. */
-function useOwnerNames(enabled = true) {
-  const { data: profiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"], staleTime: 60_000, enabled });
+/** Owner names for a linkedProfiles list. Empty links = primary (Self). */
+function useOwnerNames() {
+  const { data: profiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"], staleTime: 60_000 });
   const byId = useMemo(() => new Map((profiles || []).map((p: any) => [p.id, p])), [profiles]);
   const selfName = useMemo(() => (profiles || []).find((p: any) => p.type === "self")?.name, [profiles]);
   return {
@@ -95,15 +90,9 @@ function useOwnerNames(enabled = true) {
 }
 
 // ── Shared shell + primitives ────────────────────────────────────────────────
-function PopupShell({ open, onClose, title, icon: Icon, accent, count, subtitle, footerLabel, footerHref, tabs, activeTab, onTab, children }: {
+function PopupShell({ open, onClose, title, icon: Icon, accent, count, subtitle, footerLabel, footerHref, children }: {
   open: boolean; onClose: () => void; title: string; icon: any; accent: string;
-  count?: number; subtitle?: string; footerLabel?: string; footerHref?: string;
-  /** Sub-tabs inside one panel — how Bills and Documents share a single shell
-   *  instead of being two popups that each restate the same "dated thing that
-   *  costs you if ignored" idea. */
-  tabs?: Array<{ id: string; label: string; count?: number }>;
-  activeTab?: string; onTab?: (id: string) => void;
-  children: React.ReactNode;
+  count?: number; subtitle?: string; footerLabel?: string; footerHref?: string; children: React.ReactNode;
 }) {
   const [, navigate] = useLocation();
   return (
@@ -119,21 +108,6 @@ function PopupShell({ open, onClose, title, icon: Icon, accent, count, subtitle,
             )}
           </DialogTitle>
           {subtitle && <p className="text-[11px] text-muted-foreground mt-0.5">{subtitle}</p>}
-          {tabs && tabs.length > 1 && (
-            <div className="flex items-center gap-1 pt-1.5" role="tablist">
-              {tabs.map(t => (
-                <button key={t.id} role="tab" aria-selected={activeTab === t.id}
-                  onClick={() => onTab?.(t.id)} data-testid={`panel-tab-${t.id}`}
-                  className={`text-[11px] font-medium px-2 py-0.5 rounded-full border transition-colors ${
-                    activeTab === t.id ? "text-foreground" : "border-border text-muted-foreground hover:bg-muted"}`}
-                  style={activeTab === t.id
-                    ? { borderColor: `hsl(${accent} / 0.5)`, background: `hsl(${accent} / 0.12)` }
-                    : undefined}>
-                  {t.label}{typeof t.count === "number" ? ` · ${t.count}` : ""}
-                </button>
-              ))}
-            </div>
-          )}
         </DialogHeader>
         <div className="flex-1 overflow-y-auto px-2 py-1.5">{children}</div>
         {footerLabel && footerHref && (
@@ -203,15 +177,13 @@ const invalidateFinance = () => {
   queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
 };
 
-// ── Bills (the "Bills" tab of ObligationsPopup) ──────────────────────────────
+// ── Bills & Obligations ──────────────────────────────────────────────────────
 // Row source: enhanced.financeSnapshot.upcomingBills (30-day window). Each row
 // is enriched from /api/obligations (recurrence, owners, linked asset/liability,
 // payment history) and exposes Mark-paid / Skip / Edit / Delete in place.
-// Body-only: the Dialog shell lives in ObligationsPopup so bills and documents
-// share one popup instead of two that say the same thing.
-function BillsBody({ open, bills }: { open: boolean; bills: any[] }) {
+export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: () => void; bills: any[] }) {
   const { toast } = useToast();
-  const owners = useOwnerNames(open);
+  const owners = useOwnerNames();
   const { data: obligationsRaw } = useQuery<any[]>({ queryKey: ["/api/obligations"], staleTime: 30_000, enabled: open });
   const obById = useMemo(() => new Map((Array.isArray(obligationsRaw) ? obligationsRaw : []).map((o: any) => [o.id, o])), [obligationsRaw]);
   const [editId, setEditId] = useState<string | null>(null);
@@ -247,9 +219,14 @@ function BillsBody({ open, bills }: { open: boolean; bills: any[] }) {
   });
 
   const rows = useMemo(() => (bills || []).slice().sort((a, b) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9)), [bills]);
+  const total = rows.reduce((s, b) => s + (Number(b.amount) || 0), 0);
+  const overdueCount = rows.filter((b) => b.status === "overdue").length;
 
   return (
-    <>
+    <PopupShell open={open} onClose={onClose} title="Bills & Obligations" icon={CreditCard}
+      accent="48 96% 53%" count={rows.length}
+      subtitle={rows.length ? `$${Math.round(total).toLocaleString()} due in the next 30 days${overdueCount ? ` · ${overdueCount} overdue` : ""}` : undefined}
+      footerLabel="Open Finance" footerHref="/dashboard/finance">
       {rows.length === 0 ? <EmptyNote label="No bills due in the next 30 days." /> : rows.map((b: any) => {
         const full = obById.get(b.id) || {};
         const freq = full.frequency || "monthly";
@@ -346,18 +323,18 @@ function BillsBody({ open, bills }: { open: boolean; bills: any[] }) {
           </ExpandCard>
         );
       })}
-    </>
+    </PopupShell>
   );
 }
 
-// ── Document expirations (the "Documents" tab of ObligationsPopup) ───────────
+// ── Document expirations ─────────────────────────────────────────────────────
 // Rows: enhanced.expiringDocuments ({documentId, documentName, documentType,
 // fieldName, expirationDate, daysUntil, status}). Grouped by urgency band with
 // a 30-day "expiring soon" window; enriched with owner from /api/documents.
-function DocsBody({ open, onClose, docs }: { open: boolean; onClose: () => void; docs: any[] }) {
+export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () => void; docs: any[] }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
-  const owners = useOwnerNames(open);
+  const owners = useOwnerNames();
   const { data: allDocsRaw } = useQuery<any[]>({ queryKey: ["/api/documents"], staleTime: 60_000, enabled: open });
   const docById = useMemo(() => new Map((Array.isArray(allDocsRaw) ? allDocsRaw : []).map((d: any) => [d.id, d])), [allDocsRaw]);
   const [snoozeMap, setSnoozeMap] = useState<Record<string, number>>(() => loadDocSnoozeMap());
@@ -446,8 +423,12 @@ function DocsBody({ open, onClose, docs }: { open: boolean; onClose: () => void;
     );
   };
 
+  const soonCount = visible.filter((d: any) => d.daysUntil <= 30).length;
   return (
-    <>
+    <PopupShell open={open} onClose={onClose} title="Document Expirations" icon={FileText}
+      accent="0 72% 58%" count={visible.length}
+      subtitle={visible.length ? `${soonCount} expired or expiring within 30 days` : undefined}
+      footerLabel="Open Documents" footerHref="/linked?tab=documents">
       {visible.length === 0 ? <EmptyNote label="Nothing expiring in the next 90 days." /> : bands.map(band => band.rows.length === 0 ? null : (
         <div key={band.key}>
           <div className={`text-[10px] font-semibold uppercase tracking-wider px-1 pt-2 pb-1 ${band.tone === "neg" ? "text-red-500" : band.tone === "warn" ? "text-amber-500" : "text-muted-foreground"}`}>
@@ -456,87 +437,18 @@ function DocsBody({ open, onClose, docs }: { open: boolean; onClose: () => void;
           {band.rows.map(renderRow)}
         </div>
       ))}
-    </>
-  );
-}
-
-// ── Obligations — bills + documents in ONE panel ─────────────────────────────
-// Both answer the same question ("what dated thing costs me if I ignore it?"),
-// so they share a shell with two tabs instead of being two popups. The Executive
-// tab's Obligations tile and every bill/doc row lands here; `sub` picks the tab,
-// so a doc row opens on Documents and a bill row on Bills.
-export function ObligationsPopup({ open, onClose, bills, docs, sub = "bills" }: {
-  open: boolean; onClose: () => void; bills: any[]; docs: any[]; sub?: string;
-}) {
-  const [tab, setTab] = useState(sub === "docs" ? "docs" : "bills");
-  useEffect(() => { if (open) setTab(sub === "docs" ? "docs" : "bills"); }, [open, sub]);
-
-  const billRows = bills || [];
-  const billTotal = billRows.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
-  const overdueCount = billRows.filter((b: any) => b.status === "overdue").length;
-  const snooze = loadDocSnoozeMap();
-  const docRows = (docs || []).filter((d: any) => !snooze[d.documentId]);
-  const docSoon = docRows.filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil <= 30).length;
-  const onBills = tab === "bills";
-
-  return (
-    <PopupShell open={open} onClose={onClose}
-      title="Obligations" icon={onBills ? CreditCard : FileText}
-      accent={onBills ? "48 96% 53%" : "0 72% 58%"}
-      count={onBills ? billRows.length : docRows.length}
-      subtitle={onBills
-        ? (billRows.length ? `$${Math.round(billTotal).toLocaleString()} due in the next 30 days${overdueCount ? ` · ${overdueCount} overdue` : ""}` : undefined)
-        : (docRows.length ? `${docSoon} expired or expiring within 30 days` : undefined)}
-      tabs={[
-        { id: "bills", label: "Bills", count: billRows.length },
-        { id: "docs", label: "Documents", count: docRows.length },
-      ]}
-      activeTab={tab} onTab={setTab}
-      footerLabel={onBills ? "Open Finance" : "Open Documents"}
-      footerHref={onBills ? "/dashboard/finance" : "/linked?tab=documents"}>
-      {onBills
-        ? <BillsBody open={open} bills={billRows} />
-        : <DocsBody open={open} onClose={onClose} docs={docs || []} />}
     </PopupShell>
   );
 }
 
-// ── Timeline — one dated list, with the old section splits as filter chips ───
-// Birthdays & Anniversaries, Appointments and Important Dates used to be three
-// separate briefing sections carved out of this same timeline by regex, which
-// meant "Calendar · Next 14d" then re-rendered all three. They are filters over
-// one list now, not sections beside it.
-export const BIRTHDAY_RE = /birthday|anniversar|🎂|🎉/i;
-export const APPT_RE = /appt|appointment|doctor|dentist|dental|vet\b|exam|check[- ]?up|physical|therapy/i;
-
-type TimelineFilter = "all" | "birthdays" | "appointments" | "events";
-
-const TIMELINE_FILTERS: Array<{ key: TimelineFilter; label: string; test: (i: any) => boolean }> = [
-  { key: "all", label: "All", test: () => true },
-  { key: "birthdays", label: "Birthdays", test: (i) => BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`) },
-  { key: "appointments", label: "Appointments", test: (i) => APPT_RE.test(`${i.title} ${i.category || ""}`) },
-  {
-    key: "events", label: "Other",
-    test: (i) => !BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`) && !APPT_RE.test(`${i.title} ${i.category || ""}`),
-  },
-];
-
-export function TimelinePopup({ open, onClose, items, todayStr, title = "Calendar · Next 45 days", sub }: {
-  open: boolean; onClose: () => void; items: any[]; todayStr: string; title?: string; sub?: string;
+// ── Events / calendar (also serves birthdays, appointments, important dates) ─
+export function EventsPopup({ open, onClose, items, todayStr, title = "Calendar · Next 45 days" }: {
+  open: boolean; onClose: () => void; items: any[]; todayStr: string; title?: string;
 }) {
-  const owners = useOwnerNames(open);
-  const [filter, setFilter] = useState<TimelineFilter>("all");
-  useEffect(() => {
-    if (!open) return;
-    const match = TIMELINE_FILTERS.find(f => f.key === sub);
-    setFilter(match ? match.key : "all");
-  }, [open, sub]);
-
-  const active = TIMELINE_FILTERS.find(f => f.key === filter) || TIMELINE_FILTERS[0];
-  const filtered = useMemo(() => (items || []).filter(active.test), [items, active]);
+  const owners = useOwnerNames();
   const days = useMemo(() => {
     const buckets: Array<{ day: string; date: string; items: any[] }> = [];
-    for (const item of filtered) {
+    for (const item of items || []) {
       const d = String(item.date || "").slice(0, 10);
       if (!d) continue;
       const label = d === todayStr ? "Today" : new Date(d + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
@@ -545,19 +457,14 @@ export function TimelinePopup({ open, onClose, items, todayStr, title = "Calenda
       else buckets.push({ day: label, date: d, items: [item] });
     }
     return buckets;
-  }, [filtered, todayStr]);
+  }, [items, todayStr]);
   const daysAway = (d: string) => Math.round((new Date(d + "T00:00:00").getTime() - new Date(todayStr + "T00:00:00").getTime()) / 86400000);
   return (
     <PopupShell open={open} onClose={onClose} title={title} icon={CalendarDays}
-      accent="239 84% 67%" count={filtered.length}
+      accent="239 84% 67%" count={(items || []).length}
       subtitle={(items || []).length ? "Events, tasks and bills on your combined calendar" : undefined}
-      tabs={TIMELINE_FILTERS.map(f => ({
-        id: f.key, label: f.label,
-        count: f.key === "all" ? (items || []).length : (items || []).filter(f.test).length,
-      }))}
-      activeTab={filter} onTab={(id) => setFilter(id as TimelineFilter)}
       footerLabel="Open Calendar" footerHref="/calendar">
-      {days.length === 0 ? <EmptyNote label="Nothing scheduled." /> : <Windowed items={days} pageSize={20} testId="timeline" render={(d) => (
+      {days.length === 0 ? <EmptyNote label="Nothing scheduled." /> : days.map(d => (
         <div key={d.day}>
           <div className="flex items-baseline px-1 pt-2 pb-0.5">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{d.day}</span>
@@ -582,15 +489,15 @@ export function TimelinePopup({ open, onClose, items, todayStr, title = "Calenda
             );
           })}
         </div>
-      )} />}
+      ))}
     </PopupShell>
   );
 }
 
-// ── Goals ────────────────────────────────────────────────────────────────────
-export function GoalsPopup({ open, onClose, goals }: { open: boolean; onClose: () => void; goals: any[] }) {
+// ── Projects / goals ─────────────────────────────────────────────────────────
+export function ProjectsPopup({ open, onClose, goals }: { open: boolean; onClose: () => void; goals: any[] }) {
   const { toast } = useToast();
-  const owners = useOwnerNames(open);
+  const owners = useOwnerNames();
   const [progressId, setProgressId] = useState<string | null>(null);
   const [progressVal, setProgressVal] = useState("");
   const updateGoal = useMutation({
@@ -668,7 +575,7 @@ export function GoalsPopup({ open, onClose, goals }: { open: boolean; onClose: (
 
 // ── Quick notes / journal ────────────────────────────────────────────────────
 export function NotesPopup({ open, onClose, notes }: { open: boolean; onClose: () => void; notes: any[] }) {
-  const owners = useOwnerNames(open);
+  const owners = useOwnerNames();
   return (
     <PopupShell open={open} onClose={onClose} title="Quick Notes" icon={NotebookPen}
       accent="240 10% 60%" count={(notes || []).length}
@@ -700,7 +607,7 @@ export function NotesPopup({ open, onClose, notes }: { open: boolean; onClose: (
 // ── Reminders ────────────────────────────────────────────────────────────────
 export function RemindersPopup({ open, onClose, reminders }: { open: boolean; onClose: () => void; reminders: any[] }) {
   const { toast } = useToast();
-  const owners = useOwnerNames(open);
+  const owners = useOwnerNames();
   const dismiss = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/reminders/${id}`); },
     onSuccess: () => { toast({ title: "Reminder dismissed" }); queryClient.invalidateQueries({ queryKey: ["/api/reminders"] }); },
@@ -752,7 +659,7 @@ export type AttentionEntry = {
   id: string;
   title: string;
   reason: string;             // why it was flagged, human sentence
-  severity: "critical" | "warning" | "info";
+  severity: "critical" | "warning";
   group: string;              // grouped section label ("Overdue tasks", …)
   go?: () => void;            // open the owning module surface
 };

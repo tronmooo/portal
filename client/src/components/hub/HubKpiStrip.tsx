@@ -1,17 +1,7 @@
-// ── Hub KPI strip = block 1, "Pulse" ─────────────────────────────────────────
+// ── Hub KPI strip ────────────────────────────────────────────────────────────
 // The compact stat chips pinned above every hub tab: NET WORTH · CASH FLOW ·
-// WELLNESS · STREAK. Chips navigate to the owning tab — popups stay on the
-// dashboard's KPI section.
-//
-// This IS the spec's block 1. It is already pinned above every tab, which is
-// exactly what "sticky strip, always visible" asks for, so ExecutiveBriefing
-// must NOT render a second one — an earlier pass did, and the two showed the
-// same four numbers stacked on top of each other. tests/hub-kpi-strip.test.ts
-// fails if either the chip set drifts or the board grows its own copy.
-//
-// TASKS DUE and DOCS EXP were removed here (2026-07-25): the board's Needs
-// Attention and Today blocks own those rows now, so the chips restated what was
-// already one scroll below them.
+// HEALTH · STREAK · TASKS DUE · DOCS EXP. Chips navigate to the owning tab —
+// popups stay on the dashboard's KPI section.
 //
 // CACHE-KEY LOCKSTEP (do not change casually): every query below uses the
 // dashboard's literal key shape `[endpoint, mode, ...filterIds]` — the same
@@ -172,7 +162,22 @@ export function HubKpiStrip() {
         onClick={() => setPopup("habits")}
         testId="hub-kpi-streak"
       />
-
+      <StatChip
+        label="Tasks Due"
+        value={tasksDue == null ? "—" : String(tasksDue)}
+        sub={tasksLate > 0 ? `${tasksLate} late` : undefined}
+        subTone="neg"
+        onClick={() => setPopup("tasks")}
+        testId="hub-kpi-tasks"
+      />
+      <StatChip
+        label="Docs Exp"
+        value={String(expDocs.length)}
+        sub={minDocDays != null && isFinite(minDocDays) ? (minDocDays < 0 ? "overdue" : `≤${minDocDays}d`) : undefined}
+        subTone={minDocDays != null && minDocDays < 0 ? "neg" : "warn"}
+        onClick={() => navigate("/linked?tab=documents")}
+        testId="hub-kpi-docs"
+      />
 
       {/* Drill-down popups — the exact components the dashboard KPI tiles use.
           Mounted only while open so the lazy chunk loads on first click. */}

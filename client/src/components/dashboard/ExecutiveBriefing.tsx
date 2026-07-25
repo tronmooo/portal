@@ -1,58 +1,31 @@
-// ── Executive briefing — dense command centre ────────────────────────────────
-// The board answers "what needs my attention today, what's coming up, and
-// what's going wrong" — not just totals. Row 1: Attention Required (the Score
-// replacement, most prominent) / Tasks / Events; row 2: Bills / Documents /
-// Habits; then a full-width Today's Overview strip. Below that, the dense
-// command-centre sections: compact spreadsheet-like cards in a responsive
-// masonry (1 column on phones, 2/3 on wider screens), each collapsible, and
-// every row opens the EXISTING surface for its module.
-//
-// Panels are reached through PopupHost — one lazily loaded mount point, nothing
-// in the tree while closed, chunk warmed on pointerdown. Bills and Documents
-// share the Obligations panel; birthdays / appointments / dates share the
-// Timeline panel's filter chips. See popups/registry.ts.
-import { useEffect, useMemo, useState } from "react";
+// ── Executive briefing (2026-07-16, v3 attention-first top) ──────────────────
+// Top of the board answers "what needs my attention today, what's coming up,
+// and what's going wrong" — not just totals. Row 1: Attention Required (the
+// Score replacement, most prominent) / Tasks / Events; row 2: Bills /
+// Documents / Habits; then a full-width Today's Overview strip. Projects moved
+// down into the section grid. Below that, the dense multi-column command-center
+// sections remain: compact spreadsheet-like sections in a responsive masonry
+// (1/2/3 columns), each collapsible, and every row opens the EXISTING
+// popup/surface for its module — TasksPopup and HabitsPopup are the same
+// components the dashboard KPI tiles always used (TaskHabitPopups.tsx); the
+// rest live in BriefingPopups.tsx. Nothing here duplicates functionality.
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
 import { ChevronDown } from "lucide-react";
-import { PopupHost, usePanelRouter } from "@/components/dashboard/popups/PopupHost";
-import { warmCommonPanels, type PanelId } from "@/components/dashboard/popups/registry";
+import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
+import {
+  BillsPopup, EventsPopup, DocsPopup, ProjectsPopup, NotesPopup, RemindersPopup,
+  AttentionPopup, TodayOverviewPopup, fmtClock,
+  type AttentionEntry, type TodayEntry,
+} from "@/components/dashboard/BriefingPopups";
 import type { DashboardStats } from "@shared/schema";
 
-// Row shapes the Attention and Today panels consume. Declared here rather than
-// imported so this module keeps zero static edges into the popup chunk — see
-// tests/dashboard-popup-perf.test.ts.
-type AttentionEntry = {
-  id: string; title: string; reason: string;
-  severity: "critical" | "warning" | "info"; group: string; go?: () => void;
-};
-type TodayEntry = {
-  id: string; title: string; kind: string; time?: string | null;
-  done?: boolean; urgent?: boolean; go?: () => void;
-};
-
-/** "14:30" → "2:30 PM". Calendar rows store bare HH:MM strings, not ISO. */
-function fmtClock(t?: string | null): string {
-  const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ""));
-  if (!m) return String(t || "");
-  const h = parseInt(m[1], 10);
-  return `${h % 12 || 12}:${m[2]} ${h >= 12 ? "PM" : "AM"}`;
-}
-
-// Every legacy popup target, mapped onto the panel that serves it now.
-type PanelTarget =
-  | "tasks" | "habits" | "bills" | "docs" | "events"
-  | "projects" | "notes" | "reminders" | "attention" | "today";
-const PANEL_FOR: Record<PanelTarget, [PanelId, string?]> = {
-  tasks: ["tasks"], habits: ["habits"],
-  bills: ["obligations", "bills"], docs: ["obligations", "docs"],
-  events: ["timeline"], projects: ["goals"], notes: ["notes"],
-  reminders: ["reminders"], attention: ["attention"], today: ["today"],
-};
+type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | "projects" | "notes" | "reminders" | "attention" | "today" | null;
 
 // Per-section accent colors (HSL) — the "colorful, visually organized" pass.
 const ACCENTS: Record<string, string> = {
@@ -108,16 +81,13 @@ function Section({ id, title, count, summary, children, defaultOpen = true, test
 // Top stat tile (2026-07-16 redesign) — big count plus a small unit next to it
 // ("3 due today"), a decision-oriented sub-line, clickable. `prominent` gives
 // the Attention tile the strongest visual weight on the board.
-type IntentProps = { onPointerDown: () => void; onTouchStart: () => void };
-
-function StatTile({ label, value, unit, sub, accent, onClick, testId, prominent, intent }: {
+function StatTile({ label, value, unit, sub, accent, onClick, testId, prominent }: {
   label: string; value: string; unit?: string; sub?: string; accent: string;
-  onClick: () => void; testId: string; prominent?: boolean; intent?: IntentProps;
+  onClick: () => void; testId: string; prominent?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      {...intent}
       data-testid={testId}
       className="rounded-xl border px-2.5 py-2 text-left card-lift transition-all"
       style={{
@@ -139,15 +109,14 @@ function StatTile({ label, value, unit, sub, accent, onClick, testId, prominent,
   );
 }
 
-function Row({ cells, onClick, testId, urgent, valueTone, intent }: {
+function Row({ cells, onClick, testId, urgent, valueTone }: {
   cells: React.ReactNode[]; onClick?: () => void; testId?: string;
-  urgent?: boolean; valueTone?: "pos" | "neg" | "warn"; intent?: IntentProps;
+  urgent?: boolean; valueTone?: "pos" | "neg" | "warn";
 }) {
   const toneCls = valueTone === "pos" ? "text-emerald-500" : valueTone === "neg" ? "text-red-500" : valueTone === "warn" ? "text-amber-500" : "";
   return (
     <button
       onClick={onClick}
-      {...intent}
       data-testid={testId}
       className={`w-full flex items-baseline gap-2 py-[3px] px-1 text-left text-xs hover:bg-muted/40 rounded-sm ${urgent ? "text-red-500" : ""}`}
     >
@@ -187,13 +156,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
-  const qc = useQueryClient();
+  const [popup, setPopup] = useState<PopupKind>(null);
   const mode = filterMode;
   const ids = filterIds;
-  const scope = useMemo(() => ({ filterMode: mode, filterIds: ids }), [mode, ids.join(",")]);
-  const panel = usePanelRouter(scope);
-  const openPanel = (t: PanelTarget) => { const [id, sub] = PANEL_FOR[t]; panel.open(id, sub); };
-  const intentFor = (t: PanelTarget) => panel.intentProps(PANEL_FOR[t][0]);
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
   const amp = param ? "&" : "?";
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
@@ -266,11 +231,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     const t = setTimeout(() => setBriefStuck(true), 12_000);
     return () => clearTimeout(t);
   }, [anyBriefPending]);
-
-  useEffect(() => {
-    if (!ready) return;
-    return warmCommonPanels(qc, scope);
-  }, [ready, qc, scope]);
 
   const payBill = useMutation({
     mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
@@ -347,9 +307,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const goNotif = (n: any) => {
     if (n.entityType === "document" && n.entityId) navigate(`/documents/${n.entityId}`);
     else if (n.entityType === "profile" && n.entityId) navigate(`/profiles/${n.entityId}`);
-    else if (n.entityType === "task") openPanel("tasks");
-    else if (n.entityType === "habit") openPanel("habits");
-    else openPanel("events");
+    else if (n.entityType === "task") setPopup("tasks");
+    else if (n.entityType === "habit") setPopup("habits");
+    else setPopup("events");
   };
 
   const overdueBillCount = bills.filter((b: any) => b.status === "overdue").length;
@@ -399,16 +359,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const attention: AttentionEntry[] = [];
   for (const t of overdueTasks) attention.push({
     id: `task-${t.id}`, title: t.title, severity: "critical", group: "Overdue tasks",
-    reason: `Overdue — was due ${fmtShort(String(t.dueDate))}`, go: () => openPanel("tasks"),
+    reason: `Overdue — was due ${fmtShort(String(t.dueDate))}`, go: () => setPopup("tasks"),
   });
   for (const b of bills) {
     if (b.status === "overdue") attention.push({
       id: `bill-${b.id}`, title: b.name, severity: "critical", group: "Bills requiring action",
-      reason: `$${Number(b.amount).toLocaleString()} overdue`, go: () => openPanel("bills"),
+      reason: `$${Number(b.amount).toLocaleString()} overdue`, go: () => setPopup("bills"),
     });
     else if (b.daysUntil === 0) attention.push({
       id: `bill-${b.id}`, title: b.name, severity: "warning", group: "Bills requiring action",
-      reason: `$${Number(b.amount).toLocaleString()} due today`, go: () => openPanel("bills"),
+      reason: `$${Number(b.amount).toLocaleString()} due today`, go: () => setPopup("bills"),
     });
   }
   for (const d of allExpiringDocs) {
@@ -417,12 +377,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       id: `doc-${d.documentId}-${d.fieldName || ""}`,
       title: d.documentName || d.name || d.fieldName || "Document",
       severity: d.daysUntil < 0 ? "critical" : "warning", group: "Expiring documents",
-      reason: docExpiryPhrase(d.daysUntil), go: () => openPanel("docs"),
+      reason: docExpiryPhrase(d.daysUntil), go: () => setPopup("docs"),
     });
   }
   for (const h of habitRows) if (!h.doneToday) attention.push({
     id: `habit-${h.id}`, title: h.name, severity: "warning", group: "Habits still due today",
-    reason: "Not checked in yet", go: () => openPanel("habits"),
+    reason: "Not checked in yet", go: () => setPopup("habits"),
   });
   for (const n of alerts) attention.push({
     id: `alert-${n.id}`, title: n.title, severity: "critical", group: "Alerts",
@@ -430,7 +390,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   });
   for (const r of firedReminders) attention.push({
     id: `rem-${r.id}`, title: r.title || r.message || r.content || "Reminder", severity: "warning",
-    group: "Reminders", reason: "Fired — not dismissed", go: () => openPanel("reminders"),
+    group: "Reminders", reason: "Fired — not dismissed", go: () => setPopup("reminders"),
   });
   const attnCritical = attention.filter(i => i.severity === "critical").length;
   // Sub-line: the top two contributors, most severe first.
@@ -456,13 +416,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     ...todayItems.filter((i: any) => i.type !== "task").map((i: any) => ({
       id: String(i.id), title: i.title, kind: String(i.type), time: i.time || null,
       urgent: i.type === "bill" || i.type === "obligation",
-      go: () => openPanel(i.type === "bill" || i.type === "obligation" ? "bills" : "events"),
+      go: () => setPopup(i.type === "bill" || i.type === "obligation" ? "bills" : "events"),
     })),
-    ...agendaTasks.map((t: any) => ({ id: `task-${t.id}`, title: t.title, kind: "task", time: null, go: () => openPanel("tasks") })),
-    ...habitRows.map(h => ({ id: `habit-${h.id}`, title: h.name, kind: "habit", time: null, done: h.doneToday, go: () => openPanel("habits") })),
+    ...agendaTasks.map((t: any) => ({ id: `task-${t.id}`, title: t.title, kind: "task", time: null, go: () => setPopup("tasks") })),
+    ...habitRows.map(h => ({ id: `habit-${h.id}`, title: h.name, kind: "habit", time: null, done: h.doneToday, go: () => setPopup("habits") })),
     ...remindersToday.map((r: any) => ({
       id: `rem-${r.id}`, title: r.title || r.message || r.content || "Reminder", kind: "reminder",
-      time: r.fireAt ? new Date(r.fireAt).toTimeString().slice(0, 5) : null, go: () => openPanel("reminders"),
+      time: r.fireAt ? new Date(r.fireAt).toTimeString().slice(0, 5) : null, go: () => setPopup("reminders"),
     })),
   ];
   const tomorrowEntries: TodayEntry[] = tl
@@ -486,14 +446,14 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // underlying records; these lines just reflect the current state.
   const aiBrief: Array<{ text: string; tone?: "pos" | "neg" | "warn"; go?: () => void }> = [];
   if (overdueTasks.length === 0) aiBrief.push({ text: "No overdue tasks.", tone: "pos" });
-  else aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => openPanel("tasks") });
+  else aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => setPopup("tasks") });
   const soonestDoc = docs.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-  if (soonestDoc) aiBrief.push({ text: `${soonestDoc.documentName || soonestDoc.name || soonestDoc.fieldName || "A document"} ${soonestDoc.daysUntil < 0 ? `expired ${Math.abs(soonestDoc.daysUntil)} days ago` : soonestDoc.daysUntil === 0 ? "expires today" : `expires in ${soonestDoc.daysUntil} days`}.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => openPanel("docs") });
-  if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => openPanel("habits") });
+  if (soonestDoc) aiBrief.push({ text: `${soonestDoc.documentName || soonestDoc.name || soonestDoc.fieldName || "A document"} ${soonestDoc.daysUntil < 0 ? `expired ${Math.abs(soonestDoc.daysUntil)} days ago` : soonestDoc.daysUntil === 0 ? "expires today" : `expires in ${soonestDoc.daysUntil} days`}.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => setPopup("docs") });
+  if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => setPopup("habits") });
   const soonestBill = bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) due ${soonestBill.daysUntil === 0 ? "today" : `in ${soonestBill.daysUntil}d`}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => openPanel("bills") });
+  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) due ${soonestBill.daysUntil === 0 ? "today" : `in ${soonestBill.daysUntil}d`}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => setPopup("bills") });
   for (const n of alerts.slice(0, 2)) aiBrief.push({ text: n.title, tone: "neg", go: () => goNotif(n) });
-  if (birthdays[0]) aiBrief.push({ text: `${birthdays[0].title} in ${daysLeft(birthdays[0].date.slice(0, 10))} days.`, tone: "warn", go: () => openPanel("events") });
+  if (birthdays[0]) aiBrief.push({ text: `${birthdays[0].title} in ${daysLeft(birthdays[0].date.slice(0, 10))} days.`, tone: "warn", go: () => setPopup("events") });
 
   return (
     <div data-testid="executive-briefing">
@@ -525,18 +485,18 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           unit={tasksPending || enhanced === undefined ? undefined : attention.length > 0 ? (attention.length === 1 ? "item needs review" : "items need review") : undefined}
           sub={tasksPending || enhanced === undefined ? "loading" : attention.length === 0 ? "Nothing needs review" : attnParts.slice(0, 2).join(" · ")}
           accent={attention.length === 0 ? "155 65% 45%" : attnCritical > 0 ? "0 72% 58%" : "43 96% 56%"}
-          onClick={() => openPanel("attention")} intent={intentFor("attention")} testId="brief-stat-attention" />
+          onClick={() => setPopup("attention")} testId="brief-stat-attention" />
         <StatTile label="Tasks"
           value={tasksPending ? "…" : String(agendaTasks.length)} unit={tasksPending ? undefined : "due today"}
           sub={tasksPending ? "loading"
             : overdueTasks.length || highCount ? `${overdueTasks.length} overdue · ${highCount} high priority`
             : doneToday > 0 ? `${plural(doneToday, "task")} completed today`
             : `${plural(pending.length, "open task")}`}
-          accent={ACCENTS.tasks} onClick={() => openPanel("tasks")} intent={intentFor("tasks")} testId="brief-stat-tasks" />
+          accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
         <StatTile label="Events"
           value={timelinePending ? "…" : String(eventsToday.length)} unit={timelinePending ? undefined : "today"}
           sub={timelinePending ? "loading" : nextEventLabel}
-          accent={ACCENTS.calendar} onClick={() => openPanel("events")} intent={intentFor("events")} testId="brief-stat-events" />
+          accent={ACCENTS.calendar} onClick={() => setPopup("events")} testId="brief-stat-events" />
         <StatTile label="Bills"
           value={enhanced === undefined ? "…" : `$${Math.round(billsUpcomingTotal).toLocaleString()}`}
           unit={enhanced === undefined ? undefined : "due soon"}
@@ -544,23 +504,23 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             : overdueBillCount ? `${plural(overdueBillCount, "overdue bill")}${nextBillDate ? ` · next due ${nextBillDate}` : ""}`
             : nextBillDate ? `next due ${nextBillDate}`
             : "nothing due in 3 weeks"}
-          accent={ACCENTS.bills} onClick={() => openPanel("bills")} intent={intentFor("bills")} testId="brief-stat-bills" />
+          accent={ACCENTS.bills} onClick={() => setPopup("bills")} testId="brief-stat-bills" />
         <StatTile label="Documents"
           value={enhanced === undefined ? "…" : String(docsSoonCount)}
           unit={enhanced === undefined ? undefined : docsSoonCount === 1 ? "needs attention" : "need attention"}
           sub={enhanced === undefined ? "loading" : nextDoc ? `${nextDoc.documentName || nextDoc.name || "Document"} ${docExpiryPhrase(nextDoc.daysUntil)}` : "all good"}
-          accent={ACCENTS.docs} onClick={() => openPanel("docs")} intent={intentFor("docs")} testId="brief-stat-documents" />
+          accent={ACCENTS.docs} onClick={() => setPopup("docs")} testId="brief-stat-documents" />
         {/* Zero habits ≠ "all done" — it means nothing is scheduled. */}
         <StatTile label="Habits"
           value={habitsPending ? "…" : habitRows.length === 0 ? "—" : `${habitsDone} of ${habitRows.length}`}
           unit={habitsPending || habitRows.length === 0 ? undefined : "completed"}
           sub={habitsPending ? "loading" : habitRows.length === 0 ? "No habits scheduled today" : missedCount > 0 ? `${missedCount} remaining today` : "all done today"}
-          accent={ACCENTS.habits} onClick={() => openPanel("habits")} intent={intentFor("habits")} testId="brief-stat-habits" />
+          accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
       </div>
 
       {/* Today's Overview — full-width strip replacing the old Projects tile:
           next action, remaining work, the most urgent issue, day progress. */}
-      <button onClick={() => openPanel("today")} {...intentFor("today")} data-testid="brief-today-card"
+      <button onClick={() => setPopup("today")} data-testid="brief-today-card"
         className="w-full rounded-xl border px-3 py-2.5 text-left card-lift transition-all mb-2"
         style={{ borderColor: "hsl(262 80% 66% / 0.30)", background: "linear-gradient(135deg, hsl(262 80% 66% / 0.10) 0%, hsl(var(--card)) 70%)" }}>
         <div className="flex items-center gap-1.5">
@@ -608,12 +568,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <Row key={i.id} testId={`brief-agenda-${i.id}`}
                   cells={[i.time || (i.allDay ? "all day" : "today"), i.title, i.type]}
                   urgent={i.type === "bill" || i.type === "obligation"}
-                  onClick={() => i.type === "task" ? openPanel("tasks") : openPanel("events")} />
+                  onClick={() => i.type === "task" ? setPopup("tasks") : setPopup("events")} />
               ))}
               {agendaTasks.map((t: any) => (
                 <Row key={t.id} testId={`brief-agenda-task-${t.id}`}
                   cells={["today", t.title, t.priority || "—"]}
-                  onClick={() => openPanel("tasks")} intent={intentFor("tasks")} />
+                  onClick={() => setPopup("tasks")} />
               ))}
             </div>
           )}
@@ -624,7 +584,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <div className="divide-y divide-border/30">
               {overdueTasks.map((t: any) => (
                 <Row key={t.id} cells={[dayLabel(t.dueDate.slice(0, 10), todayStr), t.title, t.priority || "—"]}
-                  urgent onClick={() => openPanel("tasks")} intent={intentFor("tasks")} />
+                  urgent onClick={() => setPopup("tasks")} />
               ))}
             </div>
           )}
@@ -635,7 +595,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <div className="divide-y divide-border/30">
               {upcomingTasks.map((t: any) => (
                 <Row key={t.id} cells={[t.dueDate ? dayLabel(t.dueDate.slice(0, 10), todayStr) : "—", t.title, t.priority || "—"]}
-                  onClick={() => openPanel("tasks")} intent={intentFor("tasks")} />
+                  onClick={() => setPopup("tasks")} />
               ))}
             </div>
           )}
@@ -646,7 +606,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <div className="divide-y divide-border/30">
               {highPriority.map((t: any) => (
                 <Row key={t.id} cells={[t.dueDate ? dayLabel(t.dueDate.slice(0, 10), todayStr) : "—", t.title, "high"]}
-                  valueTone="warn" onClick={() => openPanel("tasks")} intent={intentFor("tasks")} />
+                  valueTone="warn" onClick={() => setPopup("tasks")} />
               ))}
             </div>
           )}
@@ -658,7 +618,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               {habitRows.map(h => (
                 <Row key={h.id} cells={[h.doneToday ? "✓ done" : "✗ due", h.name, `${h.streak}🔥`]}
                   urgent={!h.doneToday} valueTone={h.streak > 0 ? "warn" : undefined}
-                  onClick={() => openPanel("habits")} intent={intentFor("habits")} />
+                  onClick={() => setPopup("habits")} />
               ))}
             </div>
           )}
@@ -678,7 +638,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   : "";
                 return (
                   <Row key={r.id} cells={[when, r.title || r.message || r.content, time]}
-                    onClick={() => openPanel("reminders")} intent={intentFor("reminders")} />
+                    onClick={() => setPopup("reminders")} />
                 );
               })}
             </div>
@@ -690,7 +650,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <div className="divide-y divide-border/30">
               {birthdays.map((i: any) => (
                 <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
-                  onClick={() => openPanel("events")} intent={intentFor("events")} />
+                  onClick={() => setPopup("events")} />
               ))}
             </div>
           )}
@@ -701,7 +661,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <div className="divide-y divide-border/30">
               {appointments.map((i: any) => (
                 <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
-                  onClick={() => openPanel("events")} intent={intentFor("events")} />
+                  onClick={() => setPopup("events")} />
               ))}
             </div>
           )}
@@ -712,7 +672,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <div className="divide-y divide-border/30">
               {importantDates.map((i: any) => (
                 <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
-                  onClick={() => openPanel("events")} intent={intentFor("events")} />
+                  onClick={() => setPopup("events")} />
               ))}
             </div>
           )}
@@ -726,7 +686,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   cells={[d.expirationDate?.slice(5, 10) || "—", d.documentName || d.name || d.fieldName || "Document", `${d.daysUntil}d`]}
                   urgent={typeof d.daysUntil === "number" && d.daysUntil <= 21}
                   valueTone={typeof d.daysUntil === "number" && d.daysUntil <= 45 ? "warn" : undefined}
-                  onClick={() => openPanel("docs")} intent={intentFor("docs")} />
+                  onClick={() => setPopup("docs")} />
               ))}
             </div>
           )}
@@ -742,7 +702,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       cells={[b.status === "overdue" ? "overdue" : b.daysUntil === 0 ? "today" : `${b.daysUntil}d`, b.name, `$${Number(b.amount).toLocaleString()}`]}
                       urgent={b.status === "overdue" || b.daysUntil === 0}
                       valueTone="pos"
-                      onClick={() => openPanel("bills")} intent={intentFor("bills")} />
+                      onClick={() => setPopup("bills")} />
                   </div>
                   <button
                     onClick={() => payBill.mutate(b.id)}
@@ -763,7 +723,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <div key={d.day}>
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-1">{d.day}</div>
                   {d.items.map((i: any) => (
-                    <Row key={i.id} cells={[i.time || "", i.title]} onClick={() => openPanel("events")} intent={intentFor("events")} />
+                    <Row key={i.id} cells={[i.time || "", i.title]} onClick={() => setPopup("events")} />
                   ))}
                 </div>
               ))}
@@ -791,7 +751,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <Row key={g.id}
                   cells={["goal", g.title, g.target ? `${Math.round(((g.current ?? 0) / g.target) * 100)}%` : ""]}
                   valueTone="pos"
-                  onClick={() => openPanel("projects")} intent={intentFor("projects")} />
+                  onClick={() => setPopup("projects")} />
               ))}
             </div>
           )}
@@ -812,33 +772,30 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <div className="divide-y divide-border/30">
               {notes.map((n: any) => (
                 <Row key={n.id} cells={[String(n.date || n.createdAt || "").slice(5, 10), String(n.content || "").slice(0, 90)]}
-                  onClick={() => openPanel("notes")} intent={intentFor("notes")} />
+                  onClick={() => setPopup("notes")} />
               ))}
             </div>
           )}
         </Section>
       </div>
 
-      {/* One mount point, lazily loaded, nothing rendered while closed. The
-          board already holds every row these panels list, so they paint from
-          this data on frame 1 and refetch in the background. */}
-      <PopupHost
-        request={panel.request} onClose={panel.close} scope={scope}
-        data={{
-          todayStr,
-          bills: enhanced?.financeSnapshot?.upcomingBills || [],
-          docs: allExpiringDocs,
-          timeline: tl,
-          goals,
-          notes: (journal || []).slice(0, 20),
-          reminders,
-          attention,
-          todayEntries,
-          todayTomorrow: tomorrowEntries,
-          todayCompletedTasks: doneToday,
-          todayAlerts: attention.filter(i => i.severity === "critical").slice(0, 3).map(i => `${i.title} — ${i.reason}`),
-        }}
-      />
+      {/* The SAME popups the dashboard KPI tiles use — statically imported here
+          (part of the dashboard chunk), so a row click always opens them even
+          if a lazy chunk fetch would have failed. */}
+      {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
+      {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
+      {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={enhanced?.financeSnapshot?.upcomingBills || []} />}
+      {popup === "events" && <EventsPopup open onClose={() => setPopup(null)} items={tl} todayStr={todayStr} />}
+      {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={allExpiringDocs} />}
+      {popup === "projects" && <ProjectsPopup open onClose={() => setPopup(null)} goals={goals} />}
+      {popup === "notes" && <NotesPopup open onClose={() => setPopup(null)} notes={(journal || []).slice(0, 20)} />}
+      {popup === "reminders" && <RemindersPopup open onClose={() => setPopup(null)} reminders={reminders} />}
+      {popup === "attention" && <AttentionPopup open onClose={() => setPopup(null)} items={attention} />}
+      {popup === "today" && (
+        <TodayOverviewPopup open onClose={() => setPopup(null)} entries={todayEntries}
+          tomorrow={tomorrowEntries} completedTasks={doneToday}
+          alerts={attention.filter(i => i.severity === "critical").slice(0, 3).map(i => `${i.title} — ${i.reason}`)} />
+      )}
     </div>
   );
 }

@@ -96,9 +96,9 @@ import { DEFAULT_SECTION_DEFS, LAYOUT_VERSION } from "@shared/dashboard-layout";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { NetWorthPopup, CashFlowPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
 import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
-import { PopupHost, usePanelRouter } from "@/components/dashboard/popups/PopupHost";
-type IntentProps = { onPointerDown: () => void; onTouchStart: () => void };
+import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import { ExecutiveBriefing } from "@/components/dashboard/ExecutiveBriefing";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -291,8 +291,8 @@ function CollapsibleSection({
 }
 
 function MiniStat({
-  icon: Icon, label, value, sub, color, onClick, trend, accent, sparkData, change, intent,
-}: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void; trend?: "up" | "down" | "flat"; accent?: string; sparkData?: number[]; change?: string | number; intent?: IntentProps }) {
+  icon: Icon, label, value, sub, color, onClick, trend, accent, sparkData, change,
+}: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void; trend?: "up" | "down" | "flat"; accent?: string; sparkData?: number[]; change?: string | number }) {
   const accentColor = accent ? `hsl(${accent})` : color;
   return (
     <div
@@ -300,7 +300,6 @@ function MiniStat({
         onClick ? "cursor-pointer active:scale-[0.97] transition-all hover:-translate-y-0.5 hover:shadow-md" : ""
       }`}
       onClick={onClick}
-      {...intent}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
       onKeyDown={onClick ? onEnterOrSpace(onClick) : undefined}
@@ -404,11 +403,11 @@ function ViewPageLink({ href, label = "View Full Page" }: { href: string; label?
 
 // ─── Enhanced KPI Cards ──────────────────────────────────────────────────────
 
-function KPITaskCard({ count, onClick, intent }: { count: number; onClick: () => void; intent?: IntentProps }) {
+function KPITaskCard({ count, onClick }: { count: number; onClick: () => void }) {
   const animatedCount = useCountUp(count);
   const fillPct = Math.min(100, Math.round((count / Math.max(count, 50)) * 100));
   return (
-    <div onClick={onClick} {...intent} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(262 65% 62% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-open-tasks"
       role="button" tabIndex={0} aria-label="Open tasks" onKeyDown={onEnterOrSpace(onClick)}>
@@ -472,13 +471,13 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
   );
 }
 
-function KPIHabitsCard({ completionPct, totalHabits, onClick, intent }: { completionPct: number; totalHabits: number; onClick: () => void; intent?: IntentProps }) {
+function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct: number; totalHabits: number; onClick: () => void }) {
   const r = 14; const circ = 2 * Math.PI * r;
   const pct = Math.min(100, completionPct);
   const animatedPct = useCountUp(pct);
   const dash = (pct / 100) * circ;
   return (
-    <div onClick={onClick} {...intent} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
       style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-habits-today"
       role="button" tabIndex={0} aria-label="Habits today" onKeyDown={onEnterOrSpace(onClick)}>
@@ -531,7 +530,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
   );
 }
 
-function KPIDocsCard({ docs, onClick, intent }: { docs: any[]; onClick: () => void; intent?: IntentProps }) {
+function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   const expiredCount = (docs || []).filter(d => normalizeFilter(d.status) === normalizeFilter('expired')).length;
   const mostOverdue = (docs || []).filter(d => d.daysUntil < 0).sort((a,b) => a.daysUntil - b.daysUntil)[0];
   const isUrgent = expiredCount > 0;
@@ -592,12 +591,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   hideBudget?: boolean;
 }) {
   const [, navigate] = useLocation();
-  // Same mount-on-open treatment as the KPI panels: these three were rendered
-  // unconditionally with an `open` prop, which kept HeroKPIPopups a STATIC
-  // import of the dashboard chunk — so its ~46 KB downloaded on every dashboard
-  // load whether or not a hero tile was ever tapped.
-  const heroScope = useMemo(() => ({ filterMode, filterIds }), [filterMode, filterIds.join(",")]);
-  const heroPanel = usePanelRouter(heroScope);
+  const [heroPopup, setHeroPopup] = useState<"networth" | "cashflow" | "budget" | null>(null);
   // BUG (2026-06-26): the "Updating filter…" badge + 60% dim was wired straight
   // to react-query's isFetching, so a slow/cold fetch (a minute+) left the whole
   // hero greyed out and the badge spinning the entire time — it read as the UI
@@ -863,7 +857,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
       {/* ───── NET WORTH HERO ───── */}
       <button
         type="button"
-        onClick={() => heroPanel.open("networth")} {...heroPanel.intentProps("networth")}
+        onClick={() => setHeroPopup("networth")}
         className="relative w-full overflow-hidden rounded-2xl border border-border/50 p-4 text-left card-lift active:scale-[0.99] transition-all"
         style={{ background: 'radial-gradient(130% 150% at 88% -10%, hsl(265 70% 32% / 0.55) 0%, hsl(232 55% 16% / 0.6) 42%, hsl(222 47% 9%) 100%)' }}
         data-testid="hero-kpi-net-worth"
@@ -929,7 +923,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
         {/* CASH FLOW */}
         <button
           type="button"
-          onClick={() => heroPanel.open("cashflow")} {...heroPanel.intentProps("cashflow")}
+          onClick={() => setHeroPopup("cashflow")}
           className="relative flex flex-col overflow-hidden rounded-2xl border border-border/50 p-4 text-left card-lift active:scale-[0.98] transition-all"
           style={{ background: 'linear-gradient(150deg, hsl(200 70% 50% / 0.10) 0%, transparent 55%)' }}
           data-testid="hero-kpi-cash-flow"
@@ -985,7 +979,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
         {!effectiveHideBudget && !budgetPending && (
         <button
           type="button"
-          onClick={() => heroPanel.open("budget")} {...heroPanel.intentProps("budget")}
+          onClick={() => setHeroPopup("budget")}
           className="relative flex flex-col overflow-hidden rounded-2xl border border-border/50 p-4 text-left card-lift active:scale-[0.98] transition-all"
           style={{ background: 'linear-gradient(150deg, hsl(155 60% 44% / 0.10) 0%, transparent 55%)' }}
           data-testid="hero-kpi-budget"
@@ -1019,9 +1013,26 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
       </div>
       </div>
 
-      {/* Lazily loaded on demand, prefetched on press, nothing mounted while closed. */}
-      <PopupHost request={heroPanel.request} onClose={heroPanel.close} scope={heroScope}
-        data={{ monthlyIncome }} />
+      {/* Hero KPI Popups */}
+      <NetWorthPopup
+        open={heroPopup === "networth"}
+        onOpenChange={(o) => setHeroPopup(o ? "networth" : null)}
+        filterMode={(filterMode as "all" | "selected" | "everyone")}
+        filterIds={filterIds}
+      />
+      <CashFlowPopup
+        open={heroPopup === "cashflow"}
+        onOpenChange={(o) => setHeroPopup(o ? "cashflow" : null)}
+        filterMode={(filterMode as "all" | "selected" | "everyone")}
+        filterIds={filterIds}
+      />
+      <BudgetPopup
+        open={heroPopup === "budget"}
+        onOpenChange={(o) => setHeroPopup(o ? "budget" : null)}
+        filterMode={(filterMode as "all" | "selected" | "everyone")}
+        filterIds={filterIds}
+        monthlyIncome={monthlyIncome}
+      />
     </div>
   );
 }
@@ -1034,15 +1045,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
 function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", allProfiles }: { stats: DashboardStats; enhanced: any; filterIds?: string[]; filterMode?: string; allProfiles?: any[] }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
-  // DEDUP (2026-07-24): "bills", "tasks", "docs" and "habits" used to be
-  // hand-rolled <Dialog> blocks / always-mounted popups right here, duplicating
-  // panels that already existed in BriefingPopups + TaskHabitPopups. They now go
-  // through the shared PopupHost, which mounts one lazily loaded panel on
-  // demand. Only the spending donut — which has no equivalent panel — stays a
-  // local dialog.
-  const [popup, setPopup] = useState<"spending" | null>(null);
-  const kpiScope = useMemo(() => ({ filterMode, filterIds }), [filterMode, filterIds.join(",")]);
-  const kpiPanel = usePanelRouter(kpiScope);
+  const [popup, setPopup] = useState<"spending" | "bills" | "tasks" | "docs" | "habits" | null>(null);
   // In-place quick-add from the Spending / Bills dialogs (no redirect).
   const [quickAdd, setQuickAdd] = useState<QuickAddKind | null>(null);
   // P1 dedupe (QA scorecard): profiles come from the page-level query.
@@ -1051,9 +1054,13 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
     return (kpiProfiles.find((p: any) => p.type === "self")?.id) || "";
   }, [filterMode, filterIds, kpiProfiles]);
-  // Snoozing itself now lives in the Obligations panel's Documents tab — this
-  // section only needs the map to keep the KPI card's count in step with it.
-  const [docSnoozeMap] = useState<Record<string, number>>(() => loadDocSnoozeMap());
+  const [docSnoozeMap, setDocSnoozeMap] = useState<Record<string, number>>(() => loadDocSnoozeMap());
+  const snoozeDoc = (docId: string) => {
+    const next = { ...docSnoozeMap, [docId]: Date.now() + 30 * 86400000 };
+    setDocSnoozeMap(next);
+    saveDocSnoozeMap(next);
+    toast({ title: "Document snoozed", description: "Hidden from alerts for 30 days" });
+  };
   const visibleDocs: any[] = useMemo(() => {
     return (enhanced?.expiringDocuments || []).filter((d: any) => !docSnoozeMap[d.documentId]);
   }, [enhanced, docSnoozeMap]);
@@ -1084,11 +1091,11 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     <>
       <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-          <KPITaskCard count={safeStats.activeTasks} onClick={() => kpiPanel.open("tasks")} intent={kpiPanel.intentProps("tasks")} />
+          <KPITaskCard count={safeStats.activeTasks} onClick={() => setPopup("tasks")} />
           {/* Bug fix: prefer financeSnapshot.totalMonthlySpend (same source as the drilldown popup)
                over stats.monthlySpend (/api/stats) so the KPI card and popup show identical totals. */}
           <KPISpendCard amount={enhanced?.financeSnapshot?.totalMonthlySpend ?? safeStats?.monthlySpend ?? 0} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
-          <KPIHabitsCard completionPct={safeStats.habitCompletionRate} totalHabits={safeStats.totalHabits} onClick={() => kpiPanel.open("habits")} intent={kpiPanel.intentProps("habits")} />
+          <KPIHabitsCard completionPct={safeStats.habitCompletionRate} totalHabits={safeStats.totalHabits} onClick={() => setPopup("habits")} />
           <KPIJournalCard streak={safeStats.journalStreak} mood={safeStats.currentMood || null} onClick={() => navigate("/dashboard/journal")} />
           {/* Bug fix: derive bill count from the same enhanced.financeSnapshot.upcomingBills
                array the popup renders, so the count on the KPI card always matches the
@@ -1100,10 +1107,10 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
               <MiniStat accent="43 75% 50%" icon={CreditCard} label="Bills Due"
                 value={billCount}
                 sub={billCount > 0 ? "Due soon" : "All clear"}
-                onClick={() => kpiPanel.open("obligations", "bills")} intent={kpiPanel.intentProps("obligations")} />
+                onClick={() => setPopup("bills")} />
             );
           })()}
-          <KPIDocsCard docs={visibleDocs} onClick={() => kpiPanel.open("obligations", "docs")} intent={kpiPanel.intentProps("obligations")} />
+          <KPIDocsCard docs={visibleDocs} onClick={() => setPopup("docs")} />
         </div>
       </div>
 
@@ -1250,14 +1257,197 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
         </DialogContent>
       </Dialog>
 
-      {/* One mount point for every KPI panel: nothing renders while closed, the
-          chunk is prefetched on press, and Bills/Documents share one panel. */}
-      <PopupHost request={kpiPanel.request} onClose={kpiPanel.close} scope={kpiScope}
-        data={{
-          bills: finSnap?.upcomingBills || [],
-          docs: enhanced?.expiringDocuments || [],
-          todayStr: new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }),
-        }} />
+      {/* Bills Popup */}
+      <Dialog open={popup === "bills"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
+          {(() => {
+            const bills = (finSnap?.upcomingBills || []) as any[];
+            const total = bills.reduce((s, b) => s + (b.amount || 0), 0);
+            const autopayBills = bills.filter(b => b.autopay);
+            const manualBills = bills.filter(b => !b.autopay);
+            const autopayTotal = autopayBills.reduce((s, b) => s + (b.amount || 0), 0);
+            const manualTotal = manualBills.reduce((s, b) => s + (b.amount || 0), 0);
+            const within7 = bills.filter(b => b.daysUntil >= 0 && b.daysUntil <= 7);
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="text-sm flex items-center gap-2">
+                    <CreditCard className="h-4 w-4 text-amber-500" />
+                    Upcoming Bills
+                    {bills.length > 0 && <Badge variant="secondary" className="ml-1 tabular-nums">{bills.length}</Badge>}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs">Bills due in the next 30 days</DialogDescription>
+                </DialogHeader>
+                {bills.length > 0 && (
+                  <div className="grid grid-cols-3 gap-2 p-2 rounded-lg bg-muted/40 mt-1">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total due</p>
+                      <p className="text-sm font-bold tabular-nums">{formatMoney(total)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Manual</p>
+                      <p className="text-sm font-bold tabular-nums">{formatMoney(manualTotal)}</p>
+                      <p className="text-[9px] text-muted-foreground">{manualBills.length} bill{manualBills.length !== 1 ? 's' : ''}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Autopay</p>
+                      <p className="text-sm font-bold tabular-nums text-green-500">{formatMoney(autopayTotal)}</p>
+                      <p className="text-[9px] text-muted-foreground">{autopayBills.length} bill{autopayBills.length !== 1 ? 's' : ''}</p>
+                    </div>
+                  </div>
+                )}
+                {within7.length > 0 && bills.length > 0 && (
+                  <div className="flex gap-2 mt-1">
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">
+                      {within7.length} due this week
+                    </span>
+                  </div>
+                )}
+                <div className="overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '50vh' }}>
+                  <div className="space-y-1.5 py-2">
+                    {bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 999) - (b.daysUntil ?? 999)).map((bill: any) => {
+                      // Bills-as-liabilities: every bill is backed by a liability
+                      // record. The row shows the lifecycle status and clicking
+                      // opens the liability's own page (payments, history, notes).
+                      const overdue = bill.status === "overdue" && !bill.autopay;
+                      const dueToday = bill.status === "due_today" && !bill.autopay;
+                      const soon = !overdue && !dueToday && typeof bill.daysUntil === "number" && bill.daysUntil >= 0 && bill.daysUntil <= 7 && !bill.autopay;
+                      const accent = overdue ? "border-red-500/40 bg-red-500/5" : (dueToday || soon) ? "border-amber-500/30 bg-amber-500/5" : "border-border/50";
+                      const textAccent = overdue ? "text-red-500" : (dueToday || soon) ? "text-amber-500" : "text-muted-foreground";
+                      const statusChip = overdue
+                        ? <span className="text-[9px] font-semibold uppercase tracking-wider text-red-500 shrink-0">Overdue</span>
+                        : dueToday
+                          ? <span className="text-[9px] font-semibold uppercase tracking-wider text-amber-500 shrink-0">Due today</span>
+                          : <span className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground/60 shrink-0">Upcoming</span>;
+                      const openLiability = () => {
+                        if (bill.linkedLiabilityId) { setPopup(null); navigate(`/profiles/${bill.linkedLiabilityId}`); }
+                      };
+                      return (
+                        <div key={bill.id}
+                          role={bill.linkedLiabilityId ? "button" : undefined}
+                          tabIndex={bill.linkedLiabilityId ? 0 : undefined}
+                          onClick={openLiability}
+                          onKeyDown={(e) => { if (e.key === "Enter") openLiability(); }}
+                          className={`flex items-center justify-between p-2 rounded-lg border ${accent} ${bill.linkedLiabilityId ? "cursor-pointer hover:bg-muted/40 transition-colors" : ""}`}
+                          data-testid={`bill-row-${bill.id}`}>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-xs font-medium truncate">{bill.name}</p>
+                              {statusChip}
+                              {bill.category && (
+                                <span className="text-[9px] uppercase tracking-wider text-muted-foreground/60 shrink-0">
+                                  {bill.category}
+                                </span>
+                              )}
+                            </div>
+                            <p className={`text-xs ${textAccent}`}>
+                              {billDueLabel(bill)}
+                              {bill.autopay && <span className="ml-1 text-green-500">• autopay</span>}
+                            </p>
+                          </div>
+                          <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
+                          {bill.linkedLiabilityId && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0 ml-1" />}
+                        </div>
+                      );
+                    })}
+                    {bills.length === 0 && (
+                      <div className="text-center py-6">
+                        <CheckCircle2 className="h-7 w-7 text-green-500/40 mx-auto mb-2" />
+                        <p className="text-xs text-muted-foreground">No bills due in the next 30 days</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <Button size="sm" className="w-full mt-1" onClick={() => setQuickAdd("bill")} data-testid="btn-bills-add-bill">
+                  <Plus className="h-3.5 w-3.5 mr-1.5" /> Add bill
+                </Button>
+                <ViewPageLink href="/bills" label="View all bills" />
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Tasks Popup */}
+      <TasksPopup open={popup === "tasks"} onClose={() => setPopup(null)} filterIds={filterIds} filterMode={filterMode} />
+      <HabitsPopup open={popup === "habits"} onClose={() => setPopup(null)} filterIds={filterIds} filterMode={filterMode} />
+
+      {/* Expiring Documents Popup */}
+      <Dialog open={popup === "docs"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
+        <DialogContent className="max-w-md max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="text-sm flex items-center gap-2">
+              <FileWarning className="h-4 w-4 text-amber-500" />
+              Expiring Documents
+              <Badge variant="secondary" className="ml-1 tabular-nums">{visibleDocs.length}</Badge>
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {(() => {
+                const expiredCt = visibleDocs.filter((d: any) => normalizeFilter(d.status) === normalizeFilter("expired")).length;
+                const soonCt = visibleDocs.filter((d: any) => normalizeFilter(d.status) === normalizeFilter("expiring_soon")).length;
+                const upcomingCt = visibleDocs.length - expiredCt - soonCt;
+                const parts: string[] = [];
+                if (expiredCt > 0) parts.push(`${expiredCt} expired`);
+                if (soonCt > 0) parts.push(`${soonCt} expiring soon`);
+                if (upcomingCt > 0) parts.push(`${upcomingCt} upcoming`);
+                return parts.length > 0
+                  ? `${parts.join(" · ")}. Tap to view, snooze to hide for 30 days.`
+                  : "Documents with upcoming or past expiration dates. Snooze to hide for 30 days.";
+              })()}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch', maxHeight: '60vh' }}>
+            <div className="space-y-1.5 py-2 pr-2">
+              {visibleDocs.slice().sort((a: any, b: any) => (a.documentName || '').localeCompare(b.documentName || '')).map((doc: any, i: number) => {
+                const expired = normalizeFilter(doc.status) === normalizeFilter("expired");
+                const expiringSoon = normalizeFilter(doc.status) === normalizeFilter("expiring_soon");
+                return (
+                  <div key={`${doc.documentId}-${i}`}
+                    className={`flex items-center gap-2.5 p-2.5 rounded-lg transition-colors border ${
+                      expired ? "border-red-500/30 bg-red-500/5" : expiringSoon ? "border-amber-500/30 bg-amber-500/5" : "border-border/50"
+                    }`}>
+                    <button
+                      type="button"
+                      onClick={() => { setPopup(null); navigate(`/documents/${doc.documentId}`); }}
+                      className="flex items-center gap-2.5 flex-1 min-w-0 text-left hover:opacity-80"
+                    >
+                      <FileText className={`h-3.5 w-3.5 shrink-0 ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate">{doc.documentName}</p>
+                        <p className={`text-xs tabular-nums ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`}>
+                          {doc.fieldName}: {fmtDate(doc.expirationDate)} ({daysUntilStr(doc.daysUntil)})
+                        </p>
+                      </div>
+                      <Badge variant="outline" className={`shrink-0 text-xs-tight px-1.5 py-0 h-4 ${
+                        expired ? "border-red-500/40 text-red-500" : expiringSoon ? "border-amber-500/40 text-amber-500" : ""
+                      }`}>
+                        {expired ? "Expired" : expiringSoon ? "Soon" : "Upcoming"}
+                      </Badge>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); snoozeDoc(doc.documentId); }}
+                      title="Hide for 30 days"
+                      className="h-6 px-1.5 rounded text-[10px] font-semibold flex items-center gap-0.5 bg-muted/60 hover:bg-muted text-muted-foreground shrink-0"
+                      data-testid={`btn-snooze-doc-${doc.documentId}`}
+                    >
+                      <BellOff className="h-3 w-3" />
+                      Snooze
+                    </button>
+                  </div>
+                );
+              })}
+              {visibleDocs.length === 0 && (
+                <div className="text-center py-6">
+                  <FileText className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
+                  <p className="text-xs text-muted-foreground">No expiring documents</p>
+                </div>
+              )}
+            </div>
+          </div>
+          <ViewPageLink href="/dashboard/documents" label="View All Documents" />
+        </DialogContent>
+      </Dialog>
 
       {quickAdd && (
         <QuickAddDialog open kind={quickAdd} ownerProfileId={kpiOwnerId} onClose={() => setQuickAdd(null)} />
@@ -4698,18 +4888,9 @@ const MODE_LABELS: Record<DashMode, string> = {
 // reorder of the same cards): Finance surfaces the full Finance widget; Health
 // drops the finance hero entirely and leads with Trends; Daily ops is a lean
 // "what do I do today" view with no trends/finance hero.
-// DEDUP (2026-07-24): Finance used to list `hero-kpis` AND `finance` AND `kpis`
-// together — the same net worth / cash flow / budget numbers in three card
-// shapes on one screen, which DASHBOARD_V2_PLAN.md flagged and nothing fixed.
-// `finance` is the richest of the three, so it is the one that stays; `kpis`
-// (generic six-chip strip) is dropped from Finance and Health because both
-// modes already render the domain-specific version of every chip it carries.
-// Daily ops is left as-is: it carries no duplicate pair (a ranked urgency list
-// plus counts plus links), and collapsing it further would make it
-// indistinguishable from Executive — the opposite of what modes are for.
 const MODE_ORDER: Record<Exclude<DashMode, "executive">, string[]> = {
-  finance: ["hero-briefing", "now-queue", "finance", "trends", "domain-hubs"],
-  health:  ["hero-briefing", "now-queue", "health", "trends", "goals", "domain-hubs"],
+  finance: ["hero-briefing", "now-queue", "hero-kpis", "finance", "trends", "kpis", "domain-hubs"],
+  health:  ["hero-briefing", "now-queue", "health", "trends", "kpis", "goals", "domain-hubs"],
   daily:   ["hero-briefing", "now-queue", "kpis", "domain-hubs", "goals"],
 };
 function loadDashMode(): DashMode {
