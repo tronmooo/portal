@@ -69,6 +69,14 @@ const ALLOWLIST = new Set<string>([
   // filtered by linkedProfiles against the active filterIds in-component
   // (see the `series` useMemo), and edits need the full list regardless.
   "components/recurring/RecurringDatesManager.tsx::events",
+  // Calendar occurrence engine — deliberately fetch-all-then-filter-locally.
+  // Scoping this read at the API would BREAK deduplication: a birthday typed
+  // in as an event has to be visible in order to be recognized as a shadow of
+  // the profile's date-of-birth field, even when that event is linked to a
+  // profile outside the current selection. The hook applies the profile scope
+  // itself via filterSeriesByProfiles() after the shadow pass, so nothing
+  // out-of-scope ever reaches the UI.
+  "hooks/useCalendarOccurrences.ts::events",
 ]);
 
 function walk(dir: string): string[] {

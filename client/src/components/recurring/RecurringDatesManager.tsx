@@ -35,6 +35,7 @@ import {
   CalendarHeart, Cake, Receipt, RefreshCw, Wrench, Stethoscope, CreditCard,
   Repeat, Plus, Check, ChevronDown, ChevronRight, MoreHorizontal, Pause, Play,
   Archive, ArchiveRestore, Pencil, CalendarClock, SkipForward, Trash2, Users, Bell,
+  Wallet, CheckSquare, FileText,
 } from "lucide-react";
 import {
   RECURRING_KINDS, kindDef, parseRecurringMeta, metaToTags, markOccurrence,
@@ -44,10 +45,28 @@ import {
   type RecurringKind, type SeriesStatus,
 } from "@shared/recurring-dates";
 import {
-  aggregateUpcomingDates, CATEGORY_LABELS, CATEGORY_ICONS, URGENCY_COLORS,
-  daysUntilLabel, type UpcomingDate, type UpcomingCategory,
-} from "@shared/upcoming-dates";
+  KIND_LABELS, relativeDayLabel,
+  type CalendarOccurrence, type OccurrenceKind,
+} from "@shared/calendar-occurrences";
+import { useCalendarOccurrences } from "@/hooks/useCalendarOccurrences";
+import { CalendarItemDetail } from "@/components/calendar/CalendarItemDetail";
 import { useLocation } from "wouter";
+
+// Icon + accent per calendar kind. The detail panel uses the same mapping, so
+// a birthday looks identical wherever it appears.
+const OCC_ICONS: Record<OccurrenceKind, any> = {
+  birthday: Cake, anniversary: CalendarHeart, subscription: CreditCard,
+  liability: Wallet, bill: Receipt, renewal: RefreshCw, maintenance: Wrench,
+  appointment: Stethoscope, reminder: Bell, task: CheckSquare, habit: Repeat,
+  document: FileText, event: CalendarClock, custom: Repeat,
+};
+const KIND_HSL: Record<OccurrenceKind, string> = {
+  birthday: "262 75% 64%", anniversary: "330 75% 60%", subscription: "220 80% 62%",
+  liability: "270 70% 62%", bill: "0 72% 58%", renewal: "38 92% 52%",
+  maintenance: "199 85% 55%", appointment: "155 62% 44%", reminder: "48 90% 55%",
+  task: "210 80% 60%", habit: "170 60% 45%", document: "215 15% 60%",
+  event: "240 8% 60%", custom: "240 8% 60%",
+};
 
 const KIND_ICONS: Record<RecurringKind, any> = {
   anniversary: CalendarHeart, birthday: Cake, bill: Receipt, renewal: RefreshCw,
@@ -597,50 +616,48 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
   );
 }
 
-// ─── Cross-app recurring feed ─────────────────────────────────────────────────
-// Everything ELSE in the app that recurs — liability/loan/credit-card payment
-// dates, bills and subscriptions (incl. chat-created), profile birthdays and
-// anniversaries, registrations, renewals, medication refills, reminders —
-// pulled from the same aggregator the dashboard's Upcoming section uses, so
-// this tab is the one complete list. These rows are managed by their own
-// systems (a bill pays from the liability page, a birthday comes from the
-// profile's date of birth), so they deep-link to the source instead of
-// offering series editing here.
+// ─── Unified occurrence list ──────────────────────────────────────────────────
+// Everything the calendar knows about — birthdays, anniversaries, bills,
+// subscriptions, liabilities, reminders, tasks, documents and plain events —
+// comes from ONE engine (shared/calendar-occurrences) via one hook, already
+// deduplicated. There is no longer a second "from across your app" collection
+// competing with this one: two lists meant two answers, and it was never clear
+// which was authoritative.
+//
+// Each row opens the standardized detail panel, which is identical for every
+// type and routes Edit straight to the source record.
 
-// One-off kinds that don't belong on a RECURRING dates screen.
-const ONE_OFF_CATEGORIES = new Set<UpcomingCategory>([
-  "task_due", "calendar_event", "goal_target", "travel_departure", "travel_return",
-  "reservation", "event_ticket", "court_date", "legal_filing", "habit_milestone",
-  "investment_maturity", "custom",
-]);
-
-function LinkedRecurringRow({ item, profiles }: { item: UpcomingDate; profiles: any[] }) {
-  const [, navigate] = useLocation();
-  const owner = item.relatedProfileId ? profiles.find((p: any) => p.id === item.relatedProfileId) : null;
-  const uc = URGENCY_COLORS[item.urgency];
-  const go = () => {
-    const href = String(item.href || "").replace(/^#/, "");
-    if (href) navigate(href);
-  };
+function OccurrenceRow({ occ, todayISO, profileName, onOpen }: {
+  occ: CalendarOccurrence;
+  todayISO: string;
+  profileName: (id: string) => string | undefined;
+  onOpen: (o: CalendarOccurrence) => void;
+}) {
+  const hsl = KIND_HSL[occ.kind] ?? "240 8% 60%";
+  const Icon = OCC_ICONS[occ.kind] ?? Repeat;
+  const owner = occ.source.profileId ? profileName(occ.source.profileId) : undefined;
+  const done = occ.status === "done" || occ.status === "skipped";
   return (
-    <button type="button" onClick={go}
+    <button type="button" onClick={() => onOpen(occ)}
       className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-muted/40 transition-colors"
-      data-testid={`rd-linked-${item.id}`}>
-      <span className="text-base leading-none shrink-0 w-6 text-center">{CATEGORY_ICONS[item.category] || "📅"}</span>
+      data-testid={`cal-row-${occ.id}`}>
+      <span className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
+        style={{ background: `hsl(${hsl} / 0.14)` }}>
+        <Icon className="w-3.5 h-3.5" style={{ color: `hsl(${hsl})` }} />
+      </span>
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold truncate">{item.title}</p>
+        <p className={`text-xs font-semibold truncate ${done ? "line-through text-muted-foreground" : ""}`}>
+          {occ.title}
+        </p>
         <p className="text-[10px] text-muted-foreground truncate">
-          {CATEGORY_LABELS[item.category] || item.category}
-          {owner ? ` · ${owner.name}` : ""}
-          {item.subtitle ? ` · ${item.subtitle}` : ""}
+          {KIND_LABELS[occ.kind]}
+          {owner ? ` · ${owner}` : ""}
+          {occ.amount != null ? ` · $${occ.amount.toFixed(2)}` : ""}
         </p>
       </div>
       <div className="text-right shrink-0">
-        <p className="text-[11px] font-semibold tabular-nums">{fmtShort(item.nextDate)}</p>
-        <span className="inline-block text-[9px] font-semibold uppercase tracking-wide px-1.5 py-px rounded-full"
-          style={{ background: `hsl(${uc.bg})`, color: `hsl(${uc.fg})` }}>
-          {daysUntilLabel(item.daysUntil)}
-        </span>
+        <p className="text-[11px] font-semibold tabular-nums">{fmtShort(occ.effectiveDate)}</p>
+        <p className="text-[9px] text-muted-foreground">{relativeDayLabel(occ.effectiveDate, todayISO)}</p>
       </div>
       <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
     </button>
@@ -654,6 +671,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
   filterMode: "all" | "selected" | "everyone";
 }) {
   const [statusFilter, setStatusFilter] = useState<SeriesStatus | "all">("all");
+  const [detail, setDetail] = useState<CalendarOccurrence | null>(null);
   const [dialog, setDialog] = useState<
     | { kind: "add" }
     | { kind: "edit" | "future" | "move" | "reassign"; event: any }
@@ -667,32 +685,14 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
   const { data: profilesRaw } = useQuery<any>({ queryKey: ["/api/profiles"] });
   const profiles: any[] = Array.isArray(profilesRaw) ? profilesRaw : (profilesRaw?.data ?? []);
 
-  // Cross-app inputs — same scoped fetches the dashboard's Upcoming section
-  // uses, so the aggregate here matches it item-for-item.
-  const scoped = filterMode === "selected" && filterIds.length > 0;
-  const profileParam = scoped ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: documents = [] } = useQuery<any[]>({
-    queryKey: ["/api/documents", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/documents${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const { data: tasks = [] } = useQuery<any[]>({
-    queryKey: ["/api/tasks", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const { data: obligations = [] } = useQuery<any[]>({
-    queryKey: ["/api/obligations", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const { data: reminders = [] } = useQuery<any[]>({
-    queryKey: ["/api/reminders", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/reminders${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-  const { data: goals = [] } = useQuery<any[]>({
-    queryKey: ["/api/goals", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()).catch(() => []),
-  });
-
+  // ONE source for every date on this screen. The hook fetches each system's
+  // records, runs them through the adapters and the occurrence engine, and
+  // returns a deduplicated stream — so a birthday that exists both as a profile
+  // field and as a typed-in event arrives once, not twice.
+  const cal = useCalendarOccurrences({ filterIds, filterMode });
   const today = todayISO();
+
+  // Managed rd:* series still get their own editable cards above the stream.
   const series = useMemo(() => {
     let list = (Array.isArray(events) ? events : []).filter(e => e.recurrence && e.recurrence !== "none");
     if (filterMode === "selected" && filterIds.length > 0) {
@@ -719,28 +719,27 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
 
   const visible = statusFilter === "all" ? series : series.filter(s => s.status === statusFilter);
 
-  // Everything else in the app that recurs — bills/liabilities, birthdays,
-  // anniversaries, renewals, refills, reminders — over a 370-day window so
-  // every yearly date appears exactly once. Managed series above are excluded
-  // (they'd be duplicates).
-  const linkedItems = useMemo(() => {
-    const managedIds = new Set(
-      (Array.isArray(events) ? events : [])
-        .filter((e: any) => e.recurrence && e.recurrence !== "none")
-        .map((e: any) => e.id),
-    );
-    let items = aggregateUpcomingDates(
-      { profiles, documents, tasks, events, obligations, goals, reminders },
-      { windowDays: 370 },
-    ).filter(u =>
-      (u.recurring || !ONE_OFF_CATEGORIES.has(u.category)) &&
-      !(u.entityKind === "event" && managedIds.has(u.sourceId)));
-    if (scoped) {
-      const allow = new Set(filterIds);
-      items = items.filter(u => u.relatedProfileId && allow.has(u.relatedProfileId));
-    }
-    return items;
-  }, [events, profiles, documents, tasks, obligations, goals, reminders, scoped, filterIds]);
+  // The stream. Series already shown as an editable card above are omitted so
+  // the same date never appears twice on one screen — the old "All 23" vs
+  // "From across your app · 69" split is gone: one list, one count.
+  const cardSeriesIds = useMemo(
+    () => new Set(series.map(s => `event:${s.ev.id}`)),
+    [series],
+  );
+  const streamOccurrences = useMemo(
+    () => cal.occurrences.filter(o => o.effectiveDate >= today && !cardSeriesIds.has(o.seriesId)),
+    [cal.occurrences, today, cardSeriesIds],
+  );
+
+  // When two records described the same date, we kept the authoritative one and
+  // collapsed the other. Say so rather than silently hiding a record the user
+  // created — "where did my event go?" is a worse bug than a duplicate.
+  const duplicateNoteFor = (occ: CalendarOccurrence): string | undefined => {
+    const dupes = cal.duplicatesBySeries.get(occ.seriesId);
+    if (!dupes || dupes.length === 0) return undefined;
+    const systems = Array.from(new Set(dupes.map(id => id.split(":")[0])));
+    return `Also tracked as ${systems.join(" and ")} ${dupes.length === 1 ? "a record" : "records"} — shown once here, managed at the source above.`;
+  };
 
   return (
     <div className="space-y-2.5" data-testid="recurring-dates-manager">
@@ -764,7 +763,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
         </Button>
       </div>
 
-      {visible.length === 0 && linkedItems.length === 0 ? (
+      {visible.length === 0 && streamOccurrences.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border p-6 text-center">
           <Bell className="h-6 w-6 mx-auto text-muted-foreground/50 mb-2" />
           <p className="text-sm font-medium">No recurring dates{statusFilter !== "all" ? ` (${statusFilter})` : ""}</p>
@@ -788,27 +787,39 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
         </div>
       )}
 
-      {/* Everything else in the app that recurs — liabilities/bills, birthdays,
-          anniversaries, renewals, refills, reminders — one complete list.
-          Rows deep-link to the system that owns them. */}
-      {statusFilter === "all" && linkedItems.length > 0 && (
-        <div className="pt-1" data-testid="rd-linked-section">
+      {/* THE calendar stream: every date the app knows about, from one engine,
+          already deduplicated. Tapping any row opens the same detail panel. */}
+      {statusFilter === "all" && streamOccurrences.length > 0 && (
+        <div className="pt-1" data-testid="rd-stream-section">
           <div className="flex items-baseline justify-between px-1 mb-1.5">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              From across your app · {linkedItems.length}
+              Upcoming · {streamOccurrences.length}
             </p>
-            <p className="text-[10px] text-muted-foreground">bills · birthdays · renewals · reminders</p>
+            <p className="text-[10px] text-muted-foreground">birthdays · bills · subscriptions · reminders</p>
           </div>
           <div className="rounded-2xl border border-border bg-card divide-y divide-border/50 overflow-hidden">
-            {linkedItems.map(item => (
-              <LinkedRecurringRow key={item.id} item={item} profiles={profiles} />
+            {streamOccurrences.slice(0, 60).map(occ => (
+              <OccurrenceRow key={occ.id} occ={occ} todayISO={cal.todayISO}
+                profileName={cal.profileName} onOpen={setDetail} />
             ))}
           </div>
           <p className="px-1 pt-1 text-[10px] text-muted-foreground">
-            These come from their own systems — tap one to manage it at the source (pay a bill on its
-            liability page, edit a birthday on the profile).
+            Tap any date to see its full schedule, edit it, move it, or remove one occurrence — every
+            type opens the same panel, and Edit goes straight to the record it came from.
           </p>
         </div>
+      )}
+
+      {detail && (
+        <CalendarItemDetail
+          occurrence={detail}
+          seriesOccurrences={cal.occurrencesForSeries(detail.seriesId)}
+          getEventRow={cal.getEventRow}
+          profileName={cal.profileName}
+          todayISO={cal.todayISO}
+          duplicateNote={duplicateNoteFor(detail)}
+          onClose={() => setDetail(null)}
+        />
       )}
 
       {dialog?.kind === "add" && <SeriesDialog mode="add" event={null} profiles={profiles} onClose={() => setDialog(null)} />}
