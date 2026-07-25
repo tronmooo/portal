@@ -28,6 +28,48 @@ const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
 const clip = (v: unknown): string => String(v ?? "").slice(0, 10);
 const isISO = (v: unknown): boolean => ISO_RE.test(clip(v));
 
+/** Compact a list of maybe-ids into unique, non-empty strings. */
+function uniq(ids: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  for (const id of ids) {
+    if (typeof id === "string" && id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+
+/**
+ * Never show a database property name to a user.
+ *
+ * User report 2026-07-25: the page listed a card titled
+ * "date Of Birth: 03/12/2034". Some writer had created an event whose title
+ * was a raw field dump. Such records no longer reach the recurring screen
+ * (they do not repeat), but a title is displayed on the calendar grid too, so
+ * the humanising happens at the adapter — one place, every surface.
+ *
+ * "dateOfBirth: 03/12/2034" -> "Date Of Birth"
+ * "expiration_date"         -> "Expiration Date"
+ */
+export function humanizeTitle(raw: unknown, fallback = "Untitled"): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return fallback;
+  // Only rewrite things that actually look like `key: value` field dumps —
+  // a real title such as "Rent: due Friday" keeps its wording.
+  const m = text.match(/^([A-Za-z][A-Za-z0-9_]*)\s*:\s*(.*)$/);
+  const key = m ? m[1] : text;
+  const looksLikeFieldName =
+    /^[a-z]+(?:[A-Z][a-z0-9]*)+$/.test(key) || /^[a-z0-9]+(?:_[a-z0-9]+)+$/.test(key);
+  if (!looksLikeFieldName) return text;
+  const words = key
+    .replace(/_/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+  return words.join(" ") || fallback;
+}
+
 // ─── Kind inference ──────────────────────────────────────────────────────────
 
 /** Map a free-text title/category onto a calendar kind. */
@@ -91,6 +133,7 @@ export function seriesFromProfiles(profiles: readonly any[]): CalendarSeries[] {
             system: "profile",
             id: p.id,
             profileId: p.id,
+            ownerIds: uniq([p.id, p.parentProfileId]),
             label: name,
             href: sourceHref("profile", p.id, p.id),
           },
@@ -143,12 +186,13 @@ export function seriesFromEvents(
     out.push({
       id: `event:${e.id}`,
       kind: kind === "custom" && e.recurrence && e.recurrence !== "none" ? "event" : kind,
-      title: e.title || "Event",
+      title: humanizeTitle(e.title, "Event"),
       subtitle: e.location || (e.time ? `at ${e.time}` : undefined),
       source: {
         system: "event",
         id: e.id,
         profileId,
+        ownerIds: uniq(Array.isArray(e.linkedProfiles) ? e.linkedProfiles : []),
         href: sourceHref("event", e.id, profileId),
       },
       baseDate: clip(e.date),
@@ -206,6 +250,14 @@ export function seriesFromObligations(obligations: readonly any[]): CalendarSeri
         // A bill backed by a liability profile navigates to that profile —
         // that's the record the user manages, not a list page.
         profileId: liabilityId || profileId,
+        // Scope matches on the WHOLE chain: everyone the obligation is linked
+        // to, plus the liability and asset it hangs off. Matching only the
+        // navigation target hid every payment behind a person filter.
+        ownerIds: uniq([
+          ...(Array.isArray(o.linkedProfiles) ? o.linkedProfiles : []),
+          liabilityId,
+          o.linkedAssetId,
+        ]),
         label: o.name,
         href: sourceHref("obligation", o.id, liabilityId || profileId),
         // The source-ID duplicate signal: this obligation IS that liability's
@@ -250,6 +302,9 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
         system: "liability",
         id: p.id,
         profileId: p.id,
+        // A liability nested under a person belongs to that person too, so it
+        // survives a filter on either.
+        ownerIds: uniq([p.id, p.parentProfileId, ...(Array.isArray(p.linkedProfiles) ? p.linkedProfiles : [])]),
         label: p.name,
         href: sourceHref("liability", p.id, p.id),
         // A liability profile IS the financial record, so it anchors on
@@ -282,12 +337,13 @@ export function seriesFromTasks(tasks: readonly any[]): CalendarSeries[] {
     out.push({
       id: `task:${t.id}`,
       kind: "task",
-      title: t.title || "Task",
+      title: humanizeTitle(t.title, "Task"),
       subtitle: t.priority ? `${t.priority} priority` : undefined,
       source: {
         system: "task",
         id: t.id,
         profileId,
+        ownerIds: uniq(Array.isArray(t.linkedProfiles) ? t.linkedProfiles : []),
         href: sourceHref("task", t.id, profileId),
       },
       baseDate: clip(t.dueDate),
@@ -310,11 +366,12 @@ export function seriesFromReminders(reminders: readonly any[]): CalendarSeries[]
     out.push({
       id: `reminder:${r.id}`,
       kind: "reminder",
-      title: r.title || "Reminder",
+      title: humanizeTitle(r.title, "Reminder"),
       source: {
         system: "reminder",
         id: r.id,
         profileId: r.profileId || undefined,
+        ownerIds: uniq([r.profileId]),
         href: sourceHref("reminder", r.id, r.profileId || undefined),
       },
       baseDate: date,
@@ -345,12 +402,13 @@ export function seriesFromDocuments(documents: readonly any[]): CalendarSeries[]
     out.push({
       id: `document:${d.id}`,
       kind: "document",
-      title: d.name || "Document",
+      title: humanizeTitle(d.name, "Document"),
       subtitle: d.type || undefined,
       source: {
         system: "document",
         id: d.id,
         profileId,
+        ownerIds: uniq(Array.isArray(d.linkedProfiles) ? d.linkedProfiles : []),
         href: sourceHref("document", d.id, profileId),
       },
       baseDate: found,
@@ -400,8 +458,25 @@ export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
 export function filterSeriesByProfiles(
   list: readonly CalendarSeries[],
   selectedIds: readonly string[] | null | undefined,
+  opts: { selfIds?: ReadonlySet<string> } = {},
 ): CalendarSeries[] {
   if (!selectedIds || selectedIds.length === 0) return [...list];
   const allow = new Set(selectedIds);
-  return list.filter((s) => !!s.source.profileId && allow.has(s.source.profileId));
+  const selfIds = opts.selfIds ?? new Set<string>();
+  return list.filter((s) => {
+    const owners = ownerCandidates(s);
+    if (owners.length === 0) {
+      // Unowned records follow the app-wide soft-orphan rule: they belong to
+      // the primary person. Dropping them is what made "Reminders 0" — a
+      // reminder with no profileId matched nothing at all.
+      for (const id of allow) if (selfIds.has(id)) return true;
+      return false;
+    }
+    return owners.some((id) => allow.has(id));
+  });
+}
+
+/** Every profile id that can put a series in scope. */
+export function ownerCandidates(series: CalendarSeries): string[] {
+  return uniq([...(series.source.ownerIds || []), series.source.profileId]);
 }

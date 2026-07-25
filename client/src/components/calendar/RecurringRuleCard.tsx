@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import {
-  KIND_LABELS, relativeDayLabel,
+  KIND_LABELS, relativeDayLabel, ruleValidity,
   type CalendarOccurrence, type CalendarSeries, type OccurrenceKind,
 } from "@shared/calendar-occurrences";
 import {
@@ -88,6 +88,8 @@ export interface RecurringRuleCardProps {
   series: CalendarSeries;
   /** The next live occurrence, or null when the series has finished. */
   next: CalendarOccurrence | null;
+  /** How many future dates this rule has generated. */
+  upcomingCount: number;
   ownerName?: string;
   todayISO: string;
   onOpen: () => void;
@@ -97,13 +99,16 @@ export interface RecurringRuleCardProps {
 }
 
 export function RecurringRuleCard({
-  series, next, ownerName, todayISO, onOpen, onAction, linkedNote,
+  series, next, upcomingCount, ownerName, todayISO, onOpen, onAction, linkedNote,
 }: RecurringRuleCardProps) {
   const Icon = RULE_ICONS[series.kind] ?? CalendarDays;
   const hsl = RULE_HSL[series.kind] ?? RULE_HSL.custom;
   const caps = capabilitiesFor(series);
   const showPrimary = hasPrimaryAction(series) && !!next;
   const overdue = !!next && next.effectiveDate < todayISO;
+  // A live rule with no next date is paused, finished, or broken — say which
+  // rather than the bare "No upcoming date" the old card showed.
+  const validity = ruleValidity(series, !!next, todayISO);
 
   return (
     <div
@@ -137,13 +142,22 @@ export function RecurringRuleCard({
           </span>
           <span
             className={`block text-[11px] font-medium tabular-nums truncate leading-tight ${
-              overdue ? "text-red-500" : ""
+              overdue || validity.state === "invalid" ? "text-red-500" : ""
             }`}
-            style={overdue ? undefined : { color: `hsl(${hsl})` }}
+            style={overdue || validity.state !== "ok" ? undefined : { color: `hsl(${hsl})` }}
+            data-testid={`rule-next-${series.id}`}
           >
             {next
               ? `Next: ${fmtDate(next.effectiveDate)} · ${relativeDayLabel(next.effectiveDate, todayISO)}`
-              : series.paused ? "Paused" : "No upcoming date"}
+              : validity.state === "paused" ? "Paused — resume to schedule dates"
+                : validity.state === "ended" ? validity.message
+                  : validity.state === "invalid" ? validity.message
+                    : "No upcoming date"}
+          </span>
+          {/* End condition + how many dates are generated, per spec. */}
+          <span className="block text-[10px] text-muted-foreground truncate leading-tight">
+            {series.recurrenceEnd ? `Ends ${fmtDate(series.recurrenceEnd)}` : "No end date"}
+            {upcomingCount > 0 ? ` · ${upcomingCount} upcoming` : ""}
           </span>
           {linkedNote && (
             <span className="block text-[10px] text-muted-foreground/80 truncate leading-tight">

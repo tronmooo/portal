@@ -130,8 +130,23 @@ export interface OccurrenceSource {
   system: SourceSystem;
   /** Record id inside that system. */
   id: string;
-  /** The profile this date belongs to (a person, a vehicle, a liability…). */
+  /**
+   * Where tapping this date NAVIGATES — the record the user edits. For a bill
+   * backed by a liability that is the liability profile, not the person.
+   */
   profileId?: string;
+  /**
+   * EVERY profile this date belongs to, for profile-scope matching.
+   *
+   * Deliberately separate from `profileId`. Collapsing the two is what made
+   * "Bills 0 · Subscriptions 0 · Liabilities 0" appear while those records
+   * plainly existed: a ChatGPT Pro obligation owned by Robert but attached to
+   * the ChatGPT Pro liability profile had `profileId` set to the LIABILITY, so
+   * filtering to Robert matched nothing and every payment vanished.
+   *
+   * Navigation wants one target; scope wants the whole ownership chain.
+   */
+  ownerIds?: string[];
   /** Display name of the source ("Joe", "Netflix", "Honda CR-V"). */
   label?: string;
   /** Route to the source record. Always set — see `sourceHref`. */
@@ -185,6 +200,75 @@ export interface CalendarSeries {
    * source. Adapters set this; `dedupeSeries` enforces it.
    */
   shadow?: boolean;
+}
+
+
+/** Recurrence tokens that mean "this genuinely repeats". */
+const REPEATING = new Set([
+  "daily", "weekdays", "weekends", "weekly", "biweekly",
+  "monthly", "bimonthly", "quarterly",
+  "semiannual", "semiannually", "biannual", "yearly",
+]);
+
+/**
+ * Is this a RECURRING RULE, i.e. does it belong on a recurrence manager?
+ *
+ * User report 2026-07-25: the Recurring Dates page was listing driver-licence
+ * expirations, a raw `dateOfBirth` field, a House Viewing and a Soccer Game —
+ * every one of them captioned "Does not repeat". A screen that calls its
+ * contents recurring dates while telling you they do not recur is not a small
+ * cosmetic bug; those records simply do not belong there.
+ *
+ * One-off dates still exist and still show on the calendar grid. They are just
+ * not RULES, so they are not managed here.
+ */
+export function isRecurringRule(series: CalendarSeries): boolean {
+  if (!series) return false;
+  return REPEATING.has(String(series.recurrence || "").toLowerCase());
+}
+
+/** Just the genuinely repeating series. */
+export function onlyRecurringRules(list: readonly CalendarSeries[]): CalendarSeries[] {
+  return (list || []).filter(isRecurringRule);
+}
+
+// ─── Rule validity ───────────────────────────────────────────────────────────
+
+export type RuleValidity =
+  | { state: "ok" }
+  | { state: "paused" }
+  | { state: "ended"; message: string }
+  | { state: "invalid"; message: string };
+
+/**
+ * Why a recurring rule has no upcoming date.
+ *
+ * "Never show 'No upcoming date' for an active recurring rule unless the rule
+ * is invalid, in which case show a clear validation error." A rule with no
+ * future occurrence is always one of: paused, genuinely finished, or broken —
+ * and the user is entitled to know which.
+ */
+export function ruleValidity(
+  series: CalendarSeries,
+  hasUpcoming: boolean,
+  todayISO: string,
+): RuleValidity {
+  if (series.archived) return { state: "invalid", message: "Archived — hidden from the calendar." };
+  if (series.paused) return { state: "paused" };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(series.baseDate || "").slice(0, 10))) {
+    return { state: "invalid", message: "This rule has no valid start date — edit it to set one." };
+  }
+  if (!isRecurringRule(series)) {
+    return { state: "invalid", message: "This rule has no repeat pattern — edit it to set one." };
+  }
+  if (hasUpcoming) return { state: "ok" };
+  if (series.recurrenceEnd && series.recurrenceEnd < todayISO) {
+    return { state: "ended", message: `Ended ${series.recurrenceEnd}` };
+  }
+  return {
+    state: "invalid",
+    message: "No future dates could be generated — check the start date and repeat pattern.",
+  };
 }
 
 // ─── Identity ────────────────────────────────────────────────────────────────

@@ -85,6 +85,7 @@ export default defineConfig({
       'tests/calendar-capabilities.test.ts',
       'tests/calendar-categories.test.ts',
       'tests/recurring-dates-page.test.tsx',
+      'tests/recurring-scope-and-purity.test.ts',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
       'tests/wellness-metrics.test.ts',

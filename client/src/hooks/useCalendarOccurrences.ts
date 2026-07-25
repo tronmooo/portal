@@ -12,6 +12,7 @@ import { useMemo, useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { seriesFromAll, filterSeriesByProfiles } from "@shared/calendar-adapters";
+import { onlyRecurringRules } from "@shared/calendar-occurrences";
 import {
   buildCalendarOccurrences,
   dedupeSeries,
@@ -31,6 +32,16 @@ export interface UseCalendarOccurrencesOptions {
   filterMode?: "all" | "selected" | "everyone";
   /** Days of history to include. Default 62 so recent misses stay visible. */
   lookbackDays?: number;
+  /**
+   * Restrict to genuinely repeating rules.
+   *
+   * The Recurring Dates screen sets this. Without it the screen listed
+   * driver-licence expirations, a raw `dateOfBirth` field, a House Viewing and
+   * a Soccer Game — each captioned "Does not repeat" — because one-off dates
+   * were being adapted into "rules". They still belong on the calendar grid;
+   * they are just not recurrence rules to manage.
+   */
+  recurringOnly?: boolean;
 }
 
 export interface CalendarOccurrencesResult {
@@ -52,7 +63,7 @@ export interface CalendarOccurrencesResult {
 export function useCalendarOccurrences(
   opts: UseCalendarOccurrencesOptions = {},
 ): CalendarOccurrencesResult {
-  const { filterIds = [], filterMode = "everyone", lookbackDays = 62 } = opts;
+  const { filterIds = [], filterMode = "everyone", lookbackDays = 62, recurringOnly = false } = opts;
   const scoped = filterMode === "selected" && filterIds.length > 0;
   const profileParam = scoped ? `?profileIds=${filterIds.join(",")}` : "";
   const scopeKey = scoped ? filterIds.join(",") : "all";
@@ -105,10 +116,17 @@ export function useCalendarOccurrences(
     [profileList, eventList, obligations.data, tasks.data, reminders.data, documents.data],
   );
 
-  const scopedSeries = useMemo(
-    () => (scoped ? filterSeriesByProfiles(allSeries, filterIds) : allSeries),
-    [allSeries, scoped, filterIds.join(",")],
+  // Self ids drive the soft-orphan rule: an unassigned record belongs to the
+  // primary person, the same convention finance and the dashboard use.
+  const selfIds = useMemo(
+    () => new Set(profileList.filter((p: any) => p?.type === "self").map((p: any) => p.id)),
+    [profileList],
   );
+
+  const scopedSeries = useMemo(() => {
+    const inScope = scoped ? filterSeriesByProfiles(allSeries, filterIds, { selfIds }) : allSeries;
+    return recurringOnly ? onlyRecurringRules(inScope) : inScope;
+  }, [allSeries, scoped, filterIds.join(","), selfIds, recurringOnly]);
 
   const deduped = useMemo(() => dedupeSeries(scopedSeries), [scopedSeries]);
 

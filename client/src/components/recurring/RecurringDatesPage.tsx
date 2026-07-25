@@ -94,7 +94,11 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
   const [category, setCategory] = useState<CalendarCategory>("all");
   const [detail, setDetail] = useState<CalendarOccurrence | null>(null);
 
-  const cal = useCalendarOccurrences({ filterIds, filterMode });
+  // recurringOnly: this screen manages REPEATING RULES. One-off dates —
+  // document expirations, a house viewing, a soccer game — stay on the
+  // calendar grid where they belong, instead of being listed here under a
+  // "Does not repeat" caption.
+  const cal = useCalendarOccurrences({ filterIds, filterMode, recurringOnly: true });
   const today = cal.todayISO;
 
   // Chip counts are over deduplicated RULES — never occurrences.
@@ -104,18 +108,25 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
     [cal.series, category],
   );
 
-  // The next live date per rule, straight from the engine.
-  const nextByRule = useMemo(() => {
-    const m = new Map<string, CalendarOccurrence | null>();
+  // The next live date per rule, and how many future dates it has — both
+  // straight from the engine so the card never does its own arithmetic.
+  const scheduleByRule = useMemo(() => {
+    const m = new Map<string, { next: CalendarOccurrence | null; upcoming: number }>();
     for (const s of cal.series) {
       const own = cal.occurrencesForSeries(s.id);
-      m.set(
-        s.id,
-        own.find((o) => o.effectiveDate >= today && o.status !== "done" && o.status !== "skipped") ?? null,
-      );
+      const future = own.filter((o) => o.effectiveDate >= today);
+      m.set(s.id, {
+        next: future.find((o) => o.status !== "done" && o.status !== "skipped") ?? null,
+        upcoming: future.length,
+      });
     }
     return m;
   }, [cal.series, cal.occurrencesForSeries, today]);
+  const nextByRule = useMemo(() => {
+    const m = new Map<string, CalendarOccurrence | null>();
+    for (const [id, v] of scheduleByRule) m.set(id, v.next);
+    return m;
+  }, [scheduleByRule]);
 
   // Upcoming view: future dates in the active category, grouped by day.
   const grouped = useMemo(() => {
@@ -237,7 +248,8 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
               <RecurringRuleCard
                 key={s.id}
                 series={s}
-                next={nextByRule.get(s.id) ?? null}
+                next={scheduleByRule.get(s.id)?.next ?? null}
+                upcomingCount={scheduleByRule.get(s.id)?.upcoming ?? 0}
                 ownerName={s.source.profileId ? cal.profileName(s.source.profileId) : undefined}
                 todayISO={today}
                 onOpen={() => openDetailFor(s)}
