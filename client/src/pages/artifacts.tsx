@@ -24,6 +24,7 @@ import {
   Pin, PinOff, Tag, Trash2, Sparkles,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import DOMPurify from "dompurify";
@@ -251,11 +252,10 @@ function ArtifactRenderer({ artifact, artifactId, isArtifact }: { artifact: any;
 
   switch (type) {
     case "markdown":
-      return (
-        <div className="prose prose-sm dark:prose-invert max-w-none">
-          <ReactMarkdown>{content || ""}</ReactMarkdown>
-        </div>
-      );
+    // ai_report is markdown too — it used to fall through to `default` and
+    // render as pre-wrapped text, so every table came out as raw pipes.
+    case "ai_report":
+      return <Markdown content={content || ""} />;
 
     case "code":
       return <CodeRenderer content={content || ""} language={language} />;
@@ -332,9 +332,44 @@ function ArtifactRenderer({ artifact, artifactId, isArtifact }: { artifact: any;
       // it as a chart rather than leaking the raw JSON; fall back to text.
       const chartSpec = tryParseChartSpec(content || "");
       if (chartSpec) return <ChartCard spec={chartSpec} defaultOpen />;
-      return <div className="text-sm whitespace-pre-wrap">{content || ""}</div>;
+      // Notes are authored as plain text OR markdown and we can't tell which,
+      // so render markdown: plain text passes through unchanged, and a note
+      // that does contain a table or heading no longer shows its syntax.
+      return <Markdown content={content || ""} />;
     }
   }
+}
+
+// Markdown artifacts arrive from the AI with GFM tables — without remark-gfm
+// those render as literal pipe characters, which is what the 2026-07-25 audit
+// saw. Tables get explicit classes because Tailwind Typography styles them
+// only when the `prose` plugin's table styles aren't reset by the app theme.
+function Markdown({ content }: { content: string }) {
+  return (
+    <div className="prose prose-sm dark:prose-invert max-w-none" data-testid="artifact-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          table: ({ children }) => (
+            <div className="overflow-x-auto my-3">
+              <table className="w-full text-sm border-collapse">{children}</table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border border-border bg-muted/50 px-2 py-1 text-left font-semibold">{children}</th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-border px-2 py-1 align-top">{children}</td>
+          ),
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noreferrer noopener" className="text-primary underline">{children}</a>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 function CodeRenderer({ content, language }: { content: string; language?: string }) {
