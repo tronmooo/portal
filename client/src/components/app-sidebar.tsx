@@ -19,7 +19,7 @@ import { isHubLocationForNav } from "@/components/hub/hub-routes";
 // All old routes (/linked, /trackers, /profiles, ...) still work and light up
 // the Dashboard item via isHubLocationForNav.
 const NAV_ITEMS = [
-  { label: "Chat",      href: "/",          icon: MessageSquare,  accent: "188 55% 50%" },
+  { label: "Chat",      href: "/chat",      icon: MessageSquare,  accent: "188 55% 50%" },
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard,accent: "262 65% 62%" },
   { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
   { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
@@ -38,7 +38,7 @@ export function AppSidebar() {
             click the brand to return to the chat page like every other app. */}
         <button
           type="button"
-          onClick={() => navigate("/")}
+          onClick={() => navigate("/chat")}
           className="flex items-center gap-2.5 -mx-1 px-1 py-0.5 rounded-md hover:bg-accent/40 transition-colors text-left w-full"
           aria-label="Go to home"
           data-testid="sidebar-home-link"

@@ -39,7 +39,7 @@ export function KeyboardShortcuts() {
         case "/": {
           e.preventDefault();
           // Navigate to chat and focus the input
-          navigate("/");
+          navigate("/chat");
           setTimeout(() => {
             const chatInput = document.querySelector<HTMLTextAreaElement>('[data-testid="input-chat"]');
             if (chatInput) chatInput.focus();

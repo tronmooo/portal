@@ -7,7 +7,7 @@ import { prefetchScopeBootstrap } from "@/lib/scope-prefetch";
 
 // Hub consolidation (2026-07): Linked merged into the Dashboard hub (4 tabs).
 const TABS = [
-  { label: "Chat",      href: "/",          icon: MessageSquare,  accent: "188 50% 52%" },
+  { label: "Chat",      href: "/chat",      icon: MessageSquare,  accent: "188 50% 52%" },
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard,accent: "262 65% 62%" },
   { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
   { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
@@ -42,7 +42,7 @@ function prefetchTabData(href: string): void {
         // Default fetcher (queryKey[0] is the URL) — matches artifacts.tsx.
         void queryClient.prefetchQuery({ queryKey: ["/api/artifacts"] });
         break;
-      case "/":
+      case "/chat":
         // Chat's primary data dependency is the profiles list.
         void queryClient.prefetchQuery({ queryKey: ["/api/profiles"] });
         break;

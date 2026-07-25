@@ -2628,10 +2628,6 @@ export default function ChatPage() {
   const composerRef = useRef<ChatComposerHandle>(null);
   const [composerEmpty, setComposerEmpty] = useState(true);
   const [attachmentNote, setAttachmentNote] = useState("");
-  // Once a conversation has started, the starter chips collapse into a small
-  // toggle instead of staying pinned above the composer. Users can re-open them
-  // on demand (recall) without them permanently occupying vertical space.
-  const [showStarters, setShowStarters] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<any>(null);
@@ -3727,45 +3723,26 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Suggestions — pinned on the first-load empty state; once a conversation
-          has started they collapse into a small "Starter prompts" toggle so they
-          don't permanently occupy space above the composer. Hidden while an
-          attachment is staged. */}
-      {!hasAttachments && composerEmpty && (() => {
-        const conversationStarted = messages.length > 1;
-        const expanded = !conversationStarted || showStarters;
-        return (
-          <div className="px-3 pb-2">
-            <div className="max-w-2xl mx-auto">
-              {conversationStarted && (
-                <button
-                  type="button"
-                  onClick={() => setShowStarters((v) => !v)}
-                  className="text-xs px-2.5 py-1 rounded-full border border-border/50 bg-card/60 hover:bg-muted/60 transition-colors text-muted-foreground hover:text-foreground mb-1.5"
-                  aria-expanded={expanded}
-                  data-testid="button-toggle-starters"
-                >
-                  {expanded ? "Hide starter prompts" : "Starter prompts"}
-                </button>
-              )}
-              {expanded && (
-                <div className="flex flex-wrap gap-1.5">
-                  {SUGGESTIONS.slice(0, 6).map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => handleSuggestion(s)}
-                      className="text-xs px-3 py-1.5 rounded-full border border-border/50 bg-card/60 hover:bg-muted/60 active:scale-95 transition-all text-muted-foreground hover:text-foreground"
-                      data-testid={`button-suggestion-${s.slice(0, 20)}`}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+      {/* Suggestions — first-load empty state only. They used to persist as a
+          "Starter prompts" toggle for the whole session, which duplicated the
+          welcome state's chips and sat above the composer forever. Once you've
+          sent a message you know how to type one. */}
+      {!hasAttachments && composerEmpty && messages.length <= 1 && (
+        <div className="px-3 pb-2">
+          <div className="max-w-2xl mx-auto flex flex-wrap gap-1.5">
+            {SUGGESTIONS.slice(0, 6).map((s) => (
+              <button
+                key={s}
+                onClick={() => handleSuggestion(s)}
+                className="text-xs px-3 py-1.5 rounded-full border border-border/50 bg-card/60 hover:bg-muted/60 active:scale-95 transition-all text-muted-foreground hover:text-foreground"
+                data-testid={`button-suggestion-${s.slice(0, 20)}`}
+              >
+                {s}
+              </button>
+            ))}
           </div>
-        );
-      })()}
+        </div>
+      )}
 
       {/* Single attachment staging panel */}
       {attachments.length === 1 && (

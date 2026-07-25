@@ -327,7 +327,7 @@ function pullRefreshDomains(location: string): Domain[] | null {
   if (table[path]) return table[path];
   if (path.startsWith("/profiles/") || path.startsWith("/profile/")) return ["profiles"];
   if (path.startsWith("/documents/")) return ["documents"];
-  // "/", chat, settings, editor, share, unknown → no mapping (broad fallback)
+  // "/" (redirects), /chat, settings, editor, share, unknown → no mapping
   return null;
 }
 
@@ -508,7 +508,7 @@ function RouteTitle() {
   useEffect(() => {
     const path = location.split("?")[0].replace(/\/$/, "") || "/";
     const map: Record<string, string> = {
-      "/": "Portol — Your Life, Organized",
+      "/chat": "Chat — Portol",
       "/dashboard": "Dashboard — Portol",
       "/dashboard/finance": "Finance — Portol",
       "/dashboard/habits": "Habits — Portol",
@@ -734,12 +734,24 @@ function HubArea() {
   );
 }
 
+// wouter has no <Redirect> in this setup — a mount-time replace keeps the bare
+// root out of history so Back from the dashboard leaves the app instead of
+// bouncing through "/".
+function RootRedirect() {
+  const [, navigate] = useLocation();
+  useEffect(() => { navigate("/dashboard", { replace: true }); }, []);
+  return <PageLoader />;
+}
+
 function AppRouter() {
   return (
     <SectionErrorBoundary name="app">
     <Suspense fallback={<PageLoader />}>
       <Switch>
-        <Route path="/" component={ChatPage} />
+        {/* Chat lives at /chat so it is bookmarkable and deep-linkable; the
+            bare root redirects to the dashboard, which is the home surface. */}
+        <Route path="/chat" component={ChatPage} />
+        <Route path="/" component={RootRedirect} />
         <Route path="/dashboard" component={DashboardPage} />
         <Route path="/trackers" component={TrackersPage} />
         <Route path="/linked" component={TrackersPage} />

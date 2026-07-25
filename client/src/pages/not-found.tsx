@@ -11,7 +11,7 @@ export default function NotFound() {
   useEffect(() => { document.title = "Page not found — Portol"; }, []);
 
   const quickLinks = [
-    { href: "/", label: "Chat", icon: MessageSquare },
+    { href: "/chat", label: "Chat", icon: MessageSquare },
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/linked", label: "Linked", icon: Link2 },
     { href: "/calendar", label: "Calendar", icon: Calendar },
