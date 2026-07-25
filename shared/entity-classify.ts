@@ -327,3 +327,101 @@ export function classifyEntity(rawName: string, opts: ClassifyOpts = {}): Entity
 
   return { category: "custom", confidence: "none" };
 }
+
+// ─── Canonical category resolution ────────────────────────────────────────────
+//
+// ONE resolver for "what category does this tracker belong to?", used by every
+// write path (create_tracker, log_tracker_entry auto-create, the self-heal
+// pass). Before this existed each path had its own precedence rules and they
+// disagreed.
+//
+// QA report 2026-07-25: "'Pushups' is classified under Other instead of
+// Fitness." Two defects combined:
+//   1. `create_tracker` only consulted the classifier when the supplied
+//      category was empty or literally "custom". A model that guessed "other"
+//      beat a HIGH-confidence dictionary match on the word "pushup".
+//   2. "other" is not a valid TrackerCategory, but the guard was
+//      `category = category || "custom"`, a no-op for a non-empty invalid
+//      string — so the bogus value was written to the database and every
+//      grouped view filed the tracker under "Other".
+
+export type CategorySource = "dictionary" | "supplied" | "learned" | "keyword" | "unknown";
+
+export interface CategoryResolution {
+  category: TrackerCategory;
+  source: CategorySource;
+  /** Worth persisting as a learned mapping (a model judgment we'd re-use). */
+  remember: boolean;
+  matchedTerm?: string;
+}
+
+/**
+ * Resolve a tracker's category from every available signal.
+ *
+ * Precedence, highest first:
+ *   1. HIGH-confidence dictionary identity — "Pushups" IS strength training,
+ *      no caller-supplied guess overrides a known entity.
+ *   2. A valid, non-custom supplied category (the model's semantic judgment).
+ *   3. A learned mapping the user taught us earlier.
+ *   4. MEDIUM-confidence keyword/values inference.
+ *   5. "custom" — the caller should ask.
+ *
+ * The result is ALWAYS a valid TrackerCategory. An unrecognized supplied value
+ * ("other", "misc", "") is discarded rather than written through.
+ */
+export function resolveTrackerCategory(
+  name: string,
+  opts: { supplied?: unknown; learned?: unknown; values?: Record<string, unknown> } = {},
+): CategoryResolution {
+  const classification = classifyEntity(name, { values: opts.values });
+
+  if (classification.confidence === "high") {
+    return {
+      category: classification.category,
+      source: "dictionary",
+      remember: false,
+      matchedTerm: classification.matchedTerm,
+    };
+  }
+
+  const supplied = normalizeCategory(opts.supplied);
+  if (supplied && supplied !== "custom") {
+    return { category: supplied, source: "supplied", remember: true };
+  }
+
+  const learned = normalizeCategory(opts.learned);
+  if (learned && learned !== "custom") {
+    return { category: learned, source: "learned", remember: false };
+  }
+
+  if (classification.confidence === "medium") {
+    return {
+      category: classification.category,
+      source: "keyword",
+      remember: false,
+      matchedTerm: classification.matchedTerm,
+    };
+  }
+
+  return { category: "custom", source: "unknown", remember: false };
+}
+
+/** A supplied category, lowercased, or null when it isn't a real category. */
+export function normalizeCategory(v: unknown): TrackerCategory | null {
+  if (typeof v !== "string") return null;
+  const lc = v.trim().toLowerCase();
+  return isValidTrackerCategory(lc) ? (lc as TrackerCategory) : null;
+}
+
+/**
+ * Should this tracker's category be re-resolved on the next write?
+ *
+ * True for anything that isn't a real, specific category — missing, "custom",
+ * or a junk value like "other" that an older write path let through. The
+ * self-heal pass used to check only for "custom", so trackers already stuck on
+ * "other" stayed there forever.
+ */
+export function categoryNeedsResolution(v: unknown): boolean {
+  const norm = normalizeCategory(v);
+  return norm === null || norm === "custom";
+}

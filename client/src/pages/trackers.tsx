@@ -18,6 +18,7 @@ import {
 } from "@shared/tracker-metric-definition";
 import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
 import { resolveTrackerUnit } from "@shared/tracker-units";
+import { inferTrackerShapeId } from "@shared/tracker-shapes";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
@@ -1995,24 +1996,62 @@ function isSameDay(a: Date, b: Date) {
   return a.toDateString() === b.toDateString();
 }
 
+// Canonical shape ID -> insight template. The taxonomy itself lives in
+// shared/tracker-shapes.ts (ordered, specific-before-generic, with a
+// vehicle-vs-health domain guard); this table only says how to RENDER each
+// known shape. Shapes with no entry fall through to the name heuristics.
+const SHAPE_TO_INSIGHT: Record<string, InsightKind> = {
+  bench_press: "bench", squat: "bench", deadlift: "bench",
+  overhead: "bench", row: "bench", curl: "bench", lifting: "bench",
+  pushup: "bench", plank: "duration",
+  running: "running", cycling: "running", swimming: "running",
+  steps: "walking",
+  weight: "weight", weight_solo: "weight",
+  sleep: "sleep",
+  hydration: "hydration",
+  nutrition: "calories",
+  blood_pressure: "bloodpressure",
+  meditation: "meditation", stretching: "meditation",
+  // Vehicle + medication shapes render through the generic path, which prints
+  // the primary field with its declared unit ("35 PSI", "10 mg") instead of
+  // borrowing another domain's sentence.
+  tire_pressure: "generic", fuel: "generic", odometer: "generic",
+  oil_change: "generic", ev_charge: "generic", vehicle_service: "generic",
+  mileage: "generic", medication: "generic", supplement: "generic",
+  expense: "generic", mood: "generic", heart_rate: "generic", body_fat: "generic",
+};
+
+// Whole-word test. The old classifier used bare `includes`, so "Tire
+// Pressure" matched "press" and rendered as a bench-press tracker
+// ("Lifted 35 lbs"), and "Treadmill" matched "read" and rendered as reading.
+const hasWord = (name: string, ...stems: string[]) =>
+  stems.some((stem) => new RegExp(`\\b${stem}`, "i").test(name));
+
 // Classify a tracker by name + category. The kind drives which insight
 // template we render.
 function classifyTracker(tracker: Tracker): InsightKind {
   const name = (tracker.name || "").toLowerCase();
   const cat = (tracker.category || "").toLowerCase();
-  if (name.includes("blood pressure") || name.includes(" bp ") || name === "bp") return "bloodpressure";
-  if (name.includes("weight")) return "weight";
-  if (name.includes("sleep")) return "sleep";
-  if (name.includes("run")) return "running";
-  if (name.includes("walk") || name.includes("step")) return "walking";
-  if (name.includes("hydrat") || name.includes("water") || name.includes("drink")) return "hydration";
-  if (name.includes("calorie")) return "calories";
-  if (name.includes("guitar") || name.includes("piano") || name.includes("instrument")) return "guitar";
-  if (name.includes("read") || name.includes("book")) return "reading";
-  if (name.includes("gam")) return "gaming";
-  if (name.includes("meditat") || name.includes("mindful") || name.includes("yoga")) return "meditation";
-  if (name.includes("bench") || name.includes("press") || name.includes("squat") || name.includes("deadlift")) return "bench";
-  if (name.includes("bike") || name.includes("cycl")) return "running"; // distance/duration shape
+
+  // 1) The canonical taxonomy decides first, so every surface classifies the
+  //    same tracker the same way.
+  const shapeId = inferTrackerShapeId(tracker.name || "", tracker.category || undefined);
+  if (shapeId && SHAPE_TO_INSIGHT[shapeId]) return SHAPE_TO_INSIGHT[shapeId];
+
+  // 2) Name heuristics for trackers the catalog doesn't know, on whole words.
+  if (hasWord(name, "blood pressure") || /(^|\s)bp(\s|$)/.test(name)) return "bloodpressure";
+  if (hasWord(name, "weigh")) return "weight";
+  if (hasWord(name, "sleep", "nap")) return "sleep";
+  if (hasWord(name, "run", "jog", "sprint")) return "running";
+  if (hasWord(name, "walk", "step", "hike")) return "walking";
+  if (hasWord(name, "hydrat", "water", "drink")) return "hydration";
+  if (hasWord(name, "calorie", "kcal")) return "calories";
+  if (hasWord(name, "guitar", "piano", "instrument", "violin", "drum")) return "guitar";
+  if (hasWord(name, "read", "book", "reading")) return "reading";
+  if (hasWord(name, "gaming", "game", "chess", "videogame")) return "gaming";
+  if (hasWord(name, "meditat", "mindful", "yoga", "breathwork")) return "meditation";
+  if (hasWord(name, "bench", "squat", "deadlift", "lift", "press")) return "bench";
+  if (hasWord(name, "bike", "cycl", "biking")) return "running"; // distance/duration shape
   // Generic categorical fallbacks
   if (cat === "habit" || cat === "routine") return "habit";
   return "generic";

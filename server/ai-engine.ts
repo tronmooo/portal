@@ -34,7 +34,7 @@ import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@sh
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { resolveCanonicalActivity } from "@shared/canonical-activity";
-import { classifyEntity, isValidTrackerCategory, normalizeEntityName } from "@shared/entity-classify";
+import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import {
   enrichWalkRunEntry,
@@ -7184,7 +7184,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // now recognizes gets its real category on this log — e.g. the "Xanax"
       // tracker created before the medication dictionary existed moves to
       // Medications the next time the user logs a dose.
-      if (tracker && (!tracker.category || String(tracker.category).toLowerCase() === "custom")) {
+      // `categoryNeedsResolution` covers missing, "custom", AND junk values
+      // like "other" that older write paths let through — those trackers were
+      // previously stranded because the check was for "custom" alone.
+      if (tracker && categoryNeedsResolution(tracker.category)) {
         try {
           const healed = classifyEntity(tracker.name, { values: input.values });
           const healCat = healed.confidence !== "none"
@@ -7415,21 +7418,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       //   4. "custom" — the entry result carries a categoryNote telling the
       //      model to ask ONE concise clarification, whose answer arrives via
       //      update_tracker(changes:{category}) and is then remembered.
-      const classification = classifyEntity(input.trackerName || "", { values: input.values });
-      let autoCategory: string = classification.category;
-      if (classification.confidence === "none") {
-        const learned = await lookupLearnedCategory(input.trackerName || "");
-        if (learned) {
-          autoCategory = learned;
-          logger.info("ai", `Category from learned mapping: "${input.trackerName}" → ${learned}`);
-        } else if (isValidTrackerCategory(input.category) && String(input.category).toLowerCase() !== "custom") {
-          autoCategory = String(input.category).toLowerCase();
-          await rememberCategoryMapping(input.trackerName || "", autoCategory);
-          logger.info("ai", `Category from model judgment: "${input.trackerName}" → ${autoCategory} (remembered)`);
-        }
-      } else {
-        logger.info("ai", `Category classified: "${input.trackerName}" → ${autoCategory} (${classification.confidence}, ${classification.matchedTerm || "keyword"})`);
+      // Same resolver as create_tracker and the self-heal pass, so the three
+      // write paths cannot land the same tracker in different categories.
+      const learnedCat = await lookupLearnedCategory(input.trackerName || "");
+      const resolvedCat = resolveTrackerCategory(input.trackerName || "", {
+        supplied: input.category,
+        learned: learnedCat,
+        values: input.values,
+      });
+      const autoCategory: string = resolvedCat.category;
+      if (resolvedCat.remember) {
+        await rememberCategoryMapping(input.trackerName || "", autoCategory);
       }
+      logger.info("ai", `Category resolved: "${input.trackerName}" → ${autoCategory} (${resolvedCat.source}${resolvedCat.matchedTerm ? `, ${resolvedCat.matchedTerm}` : ""})`);
       // Display name: use the tracker name VERBATIM. Every profile owns its OWN
       // clean-named tracker ("Running", "Calories") — never "Running - Craig".
       // Ownership is carried by linkedProfiles and the UI already filters by
@@ -7619,14 +7620,22 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // deterministic classifier upgrades a missing/"custom" category, and a
       // model-supplied category for an entity the dictionaries DON'T know is
       // remembered so future logs classify the same way.
-      let ctCategory = safeLC(input.category);
-      const ctClass = classifyEntity(input.name || "");
-      if ((!ctCategory || ctCategory === "custom") && ctClass.confidence !== "none") {
-        ctCategory = ctClass.category;
-      } else if (ctCategory && ctCategory !== "custom" && ctClass.confidence === "none" && isValidTrackerCategory(ctCategory)) {
+      // One resolver, shared with log_tracker_entry and the self-heal pass
+      // (shared/entity-classify). A HIGH-confidence dictionary match wins over
+      // the model's guess, and an invalid supplied value ("other") is dropped
+      // rather than written through — that combination is what filed "Pushups"
+      // under Other instead of Fitness.
+      const ctLearned = categoryNeedsResolution(input.category)
+        ? await lookupLearnedCategory(input.name || "")
+        : null;
+      const ctResolved = resolveTrackerCategory(input.name || "", {
+        supplied: input.category,
+        learned: ctLearned,
+      });
+      const ctCategory = ctResolved.category;
+      if (ctResolved.remember) {
         await rememberCategoryMapping(input.name || "", ctCategory);
       }
-      if (!isValidTrackerCategory(ctCategory)) ctCategory = ctCategory || "custom";
 
       // P0.3a: validate with the shared insert schema before writing.
       const trackerPayload = validateAiPayload(insertTrackerSchema, {

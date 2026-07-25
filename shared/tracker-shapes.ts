@@ -261,12 +261,20 @@ const CATALOG: ShapeEntry[] = [
 ];
 
 /**
- * Look up the canonical shape for a tracker by name + optional category.
+ * The canonical shape ID for a tracker name + optional category, or null when
+ * nothing in the catalog matches.
  *
- * Returns a deep-cloned field list (caller may mutate). Returns null when no
- * pattern matches — the caller should keep whatever fields the tracker has.
+ * This is THE tracker taxonomy. Presentation layers must classify off this ID
+ * rather than re-deriving a domain from name substrings — that second,
+ * looser classifier is what rendered "Tire Pressure" (which contains "press")
+ * as a bench-press tracker reading "Lifted 35 lbs".
  */
-export function inferTrackerShape(name: string, category?: string): TrackerField[] | null {
+export function inferTrackerShapeId(name: string, category?: string): string | null {
+  const entry = matchShapeEntry(name, category);
+  return entry ? entry.id : null;
+}
+
+function matchShapeEntry(name: string, category?: string): ShapeEntry | null {
   const haystack = (name || "").toLowerCase().trim();
   if (!haystack) return null;
   const cat = (category || "").toLowerCase().trim();
@@ -282,12 +290,21 @@ export function inferTrackerShape(name: string, category?: string): TrackerField
     if (entry.category && entry.category !== cat) continue;
     if (isHealthDomain && VEHICLE_SHAPES.has(entry.id)) continue;
     for (const pat of entry.patterns) {
-      if (haystack.includes(pat)) {
-        return entry.fields.map(f => ({ ...f }));
-      }
+      if (haystack.includes(pat)) return entry;
     }
   }
   return null;
+}
+
+/**
+ * Look up the canonical shape for a tracker by name + optional category.
+ *
+ * Returns a deep-cloned field list (caller may mutate). Returns null when no
+ * pattern matches — the caller should keep whatever fields the tracker has.
+ */
+export function inferTrackerShape(name: string, category?: string): TrackerField[] | null {
+  const entry = matchShapeEntry(name, category);
+  return entry ? entry.fields.map(f => ({ ...f })) : null;
 }
 
 /**

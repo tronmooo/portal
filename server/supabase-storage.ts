@@ -47,6 +47,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 }
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
 import { addMonthsClamped, addYearsClamped } from "../shared/date-math";
+import { trackerIdentityKey } from "../shared/tracker-identity";
 import { passesProfileFilter } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
 import { selfIdsFrom, isInScope } from "../shared/scope";
@@ -2544,12 +2545,22 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createTracker(data: InsertTracker): Promise<Tracker> {
-    // Dedup: check for existing tracker with same name AND same profile (case-insensitive)
-    // Different profiles CAN have same-named trackers (e.g., "Calories" for Me and "Calories - Rex" for Rex)
+    // Dedup: check for an existing tracker with the same IDENTITY and the same
+    // profile. Different profiles CAN have same-named trackers (e.g. "Calories"
+    // for Me and "Calories - Rex" for Rex).
+    //
+    // Identity, not raw text (QA report 2026-07-25: '"Chess (2)" indicates
+    // duplicate tracker creation instead of matching the existing canonical
+    // tracker'). `trackerIdentityKey` strips a trailing "(2)", punctuation and
+    // noise words, so "Chess (2)", "Chess" and "Chess Tracker" collapse to one
+    // key. Deliberate equality — not the looser containment matching in
+    // `trackerNamesMatch` — so a user who really does want "Trail Running"
+    // alongside "Running" still gets two trackers.
     const existing = await this.getTrackers();
     const requestedProfiles = (data as any).linkedProfiles || [];
+    const wantedKey = trackerIdentityKey(data.name);
     const dup = existing.find(t => {
-      if (t.name.toLowerCase() !== data.name.toLowerCase()) return false;
+      if (!wantedKey || trackerIdentityKey(t.name) !== wantedKey) return false;
       // If no profile specified, any match is a dup
       if (requestedProfiles.length === 0) return true;
       // If profile specified, only match if the existing tracker has the same profile
@@ -2667,7 +2678,7 @@ export class SupabaseStorage implements IStorage {
       const fresh = await this.getTrackers();
       const wanted = new Set<string>(requestedProfiles.length ? requestedProfiles : linkedProfiles);
       const reusable = fresh.find(t => {
-        if (t.name.toLowerCase() !== data.name.toLowerCase()) return false;
+        if (!wantedKey || trackerIdentityKey(t.name) !== wantedKey) return false;
         if (wanted.size === 0) return true; // no profile constraint → any same-name row
         const lp = t.linkedProfiles || [];
         return lp.some((pid: string) => wanted.has(pid));
