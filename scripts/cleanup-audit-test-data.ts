@@ -11,10 +11,17 @@
  * a service key checked in and should be rotated):
  *   VITE_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, PORTOL_USER_ID
  *
- * Matching is exact on title/description so it cannot eat real data. The
- * audit's third artifact, the calendar event "QA Test Event - Recurring", is
- * NOT listed here: the Edit=Delete bug already destroyed it (see the calendar
- * fix commit) and it has to be recreated by hand.
+ * Matching is exact on title/description so it cannot eat real data.
+ *
+ * DATA LOSS — recreate by hand. The audit's third artifact, the calendar event
+ * "QA Test Event - Recurring", is not listed here because it no longer exists:
+ * the Edit=Delete bug destroyed it during the audit. To restore it:
+ *
+ *   Title:      QA Test Event - Recurring
+ *   Date:       Wednesday 2026-07-22, 10:00–11:00
+ *   Category:   Work
+ *   Recurrence: weekly
+ *   Location:   Test Location
  */
 
 const SB_URL = process.env.VITE_SUPABASE_URL;
