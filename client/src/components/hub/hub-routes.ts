@@ -46,6 +46,29 @@ export function infoTabRoute(selectedIds: string[]): string {
   return selectedIds.length === 1 ? `/profiles/${selectedIds[0]}/info` : "/profiles";
 }
 
+/**
+ * The Info route the current location SHOULD be, or null when it's already
+ * correct. Every other hub tab has a fixed route that re-reads the profile
+ * scope on render, so switching to "Everyone" re-aggregates them. Info is the
+ * exception — its route embeds a profile id — so nothing moved the user off
+ * `/profiles/<someone>/info` when the scope changed underneath them.
+ *
+ * QA report 2026-07-25: "'Everyone -> Info' displayed only the Test profile's
+ * personal information instead of an Everyone summary or list of people. Other
+ * tabs aggregate profiles, but Info behaves like the self profile remained
+ * selected."
+ *
+ * Returns null for any non-Info location, so callers can apply it blindly.
+ */
+export function reconcileInfoRoute(location: string, selectedIds: string[] = []): string | null {
+  const { path } = splitLocation(location);
+  const infoMatch = path.match(/^\/profiles\/([^/]+)\/info$/);
+  if (!infoMatch) return null;
+  const target = infoTabRoute(selectedIds);
+  if (target === path) return null;
+  return target;
+}
+
 function splitLocation(location: string): { path: string; query: URLSearchParams } {
   const [rawPath, rawQuery] = (location || "/").split("?");
   const path = (rawPath.replace(/\/+$/, "") || "/");

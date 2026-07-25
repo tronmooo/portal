@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import path from "path";
 import {
-  HUB_TABS, activeHubTab, isHubRoute, isHubLocationForNav, infoTabRoute,
+  HUB_TABS, activeHubTab, isHubRoute, isHubLocationForNav, infoTabRoute, reconcileInfoRoute,
 } from "../client/src/components/hub/hub-routes";
 
 describe("HUB_TABS", () => {
@@ -114,5 +114,47 @@ describe("bundle guard", () => {
       const importsPage = /from\s+["']@\/pages\/|import\(\s*["']@\/pages\//.test(src);
       expect(importsPage, `${f} must not import @/pages/*`).toBe(false);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: QA report 2026-07-25 — "'Everyone → Info' displayed only the Test
+// profile's personal information instead of an Everyone summary or list of
+// people. Other tabs aggregate profiles, but Info behaves like the self profile
+// remained selected."
+//
+// Info is the only hub tab whose route embeds a profile id, so a scope change
+// left the URL — and therefore the page — pinned to the old profile.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("reconcileInfoRoute — Info follows the profile scope", () => {
+  const ALICE = "alice-id";
+  const BOB = "bob-id";
+
+  it("sends Everyone off a single-profile Info page to the people grid", () => {
+    expect(reconcileInfoRoute(`/profiles/${ALICE}/info`, [])).toBe("/profiles");
+  });
+
+  it("redirects when the selection moves to a different profile", () => {
+    expect(reconcileInfoRoute(`/profiles/${ALICE}/info`, [BOB])).toBe(`/profiles/${BOB}/info`);
+  });
+
+  it("sends a multi-select off a single-profile Info page to the grid", () => {
+    expect(reconcileInfoRoute(`/profiles/${ALICE}/info`, [ALICE, BOB])).toBe("/profiles");
+  });
+
+  it("leaves a correctly-scoped Info route alone", () => {
+    expect(reconcileInfoRoute(`/profiles/${ALICE}/info`, [ALICE])).toBeNull();
+  });
+
+  it("ignores every non-Info location", () => {
+    expect(reconcileInfoRoute("/dashboard", [])).toBeNull();
+    expect(reconcileInfoRoute("/trackers", [ALICE])).toBeNull();
+    expect(reconcileInfoRoute("/profiles", [])).toBeNull();
+    expect(reconcileInfoRoute(`/profiles/${ALICE}`, [])).toBeNull(); // deep page, not Info
+    expect(reconcileInfoRoute("/linked?tab=assets", [BOB])).toBeNull();
+  });
+
+  it("tolerates a trailing slash", () => {
+    expect(reconcileInfoRoute(`/profiles/${ALICE}/info/`, [])).toBe("/profiles");
   });
 });

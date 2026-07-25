@@ -33,3 +33,17 @@ export function hashNavigate(pathOrHash: string): void {
   url.hash = next;
   window.location.assign(url.toString());
 }
+
+/**
+ * Navigate WITHOUT adding a history entry. Use when the app is correcting the
+ * URL to match state the user already changed (e.g. reconciling the Info route
+ * after a profile-scope switch) — a pushed entry there would make Back bounce
+ * the user between the stale and corrected routes.
+ */
+export function hashReplace(pathOrHash: string): void {
+  if (typeof window === "undefined") return;
+  const next = toHash(pathOrHash);
+  const url = new URL(window.location.href);
+  url.hash = next;
+  window.location.replace(url.toString());
+}

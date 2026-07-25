@@ -52,8 +52,8 @@ import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
-import { DEFAULT_TIMEZONE, todayAtTimeISO } from "@shared/timezone";
-import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
+import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC } from "@shared/timezone";
+import { addMonthsClamped, addYearsClamped, addMonthsISO } from "@shared/date-math";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
@@ -6417,25 +6417,44 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       // RECURRENCE: "twice daily for 10 days" etc. expands into multiple reminder
       // rows so each dose fires its own notification. Non-recurring = a single row.
-      const HOUR_MS = 3600000, DAY_MS = 86400000;
-      const firstMs = new Date(input.fireAt).getTime();
+      // DST-STABLE SERIES (QA report 2026-07-25: "Reminder times change from
+      // 2:00 AM to 1:00 AM after daylight-saving transitions"). "Every day at
+      // 2 AM" is a WALL-CLOCK promise, but the series was built by adding a
+      // fixed 86,400,000 ms — and the fall-back day is 25 hours long, so every
+      // occurrence after the transition slid an hour earlier. Step calendar
+      // days in the USER'S timezone and re-compose the same local time instead
+      // (shared/timezone addZonedDays).
+      const remSeriesTz = (storage as any)._timezone || DEFAULT_TIMEZONE;
+      const firstAt = new Date(input.fireAt);
+      const firstMs = firstAt.getTime();
       const recur = String((input as any).recurrence || "").toLowerCase();
       const occCount = recur ? Math.max(1, Math.min(90, Math.floor(Number((input as any).count) || 1))) : 1;
       const occ: number[] = [];
       if (!recur) {
         occ.push(firstMs);
       } else if (recur === "twice_daily") {
-        for (let i = 0; i < occCount; i++) { const day = Math.floor(i / 2), slot = i % 2; occ.push(firstMs + day * DAY_MS + slot * 12 * HOUR_MS); }
+        for (let i = 0; i < occCount; i++) {
+          const day = Math.floor(i / 2), slot = i % 2;
+          occ.push(addZonedDays(firstAt, day, remSeriesTz, slot * 12 * 60).getTime());
+        }
       } else if (recur === "three_times_daily") {
-        for (let i = 0; i < occCount; i++) { const day = Math.floor(i / 3), slot = i % 3; occ.push(firstMs + day * DAY_MS + slot * 8 * HOUR_MS); }
+        for (let i = 0; i < occCount; i++) {
+          const day = Math.floor(i / 3), slot = i % 3;
+          occ.push(addZonedDays(firstAt, day, remSeriesTz, slot * 8 * 60).getTime());
+        }
       } else if (recur === "weekly") {
-        for (let i = 0; i < occCount; i++) occ.push(firstMs + i * 7 * DAY_MS);
+        for (let i = 0; i < occCount; i++) occ.push(addZonedDays(firstAt, i * 7, remSeriesTz).getTime());
       } else if (recur === "monthly") {
-        // Anchored to the first occurrence's day and clamped to month end.
-        const monthlyBase = new Date(firstMs);
-        for (let i = 0; i < occCount; i++) occ.push(addMonthsClamped(monthlyBase, i).getTime());
+        // Calendar months in the user's zone: clamped to month end (so a day-31
+        // series doesn't overflow) and re-composed at the same wall-clock time.
+        const remParts = getZonedParts(firstAt, remSeriesTz);
+        const anchorDay = Number(remParts.date.slice(8, 10));
+        for (let i = 0; i < occCount; i++) {
+          const dateISO = addMonthsISO(remParts.date, i, anchorDay);
+          occ.push(zonedTimeToUTC(dateISO, remParts.hours, remParts.minutes, remSeriesTz).getTime());
+        }
       } else { // "daily" or any other recurring token
-        for (let i = 0; i < occCount; i++) occ.push(firstMs + i * DAY_MS);
+        for (let i = 0; i < occCount; i++) occ.push(addZonedDays(firstAt, i, remSeriesTz).getTime());
       }
       let reminder;
       try {
