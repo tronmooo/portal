@@ -5,7 +5,7 @@
 // and never enters the section-grid path, so this jsdom mount is where we
 // actually exercise the new sections with live React + providers.
 import React from "react";
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeAll, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Router } from "wouter";
@@ -65,55 +65,78 @@ describe("WeeklySummarySection", () => {
   });
 });
 
-describe("ExecutiveBriefing", () => {
-  const stats: any = { recentActivity: [{ id: "a1", type: "habit", description: "Completed Workout", timestamp: new Date().toISOString() }] };
+describe("ExecutiveBriefing — eight blocks", () => {
+  const stats: any = {
+    monthlySpend: 2200, journalStreak: 7,
+    streaks: [{ name: "Meditation", days: 12 }],
+    recentActivity: [],
+  };
   const enhanced: any = {
-    financeSnapshot: { upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: 0, status: "due_today" }] },
+    financeSnapshot: {
+      upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: 0, status: "due_today" }],
+      totalAssetValue: 412000, totalLiabilities: 180000,
+      totalMonthlySpend: 2200, monthlyObligationTotal: 1800,
+    },
     expiringDocuments: [{ documentId: "d1", name: "Passport", expirationDate: "2026-10-01", daysUntil: 85 }],
   };
-
-  it("renders the five deduplicated sections and four tiles", async () => {
-    const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
-    wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
-
-    // Five sections, down from seventeen. The removed ids (brief-agenda,
-    // brief-overdue, brief-priority, brief-birthdays, brief-appointments,
-    // brief-dates, brief-calendar, brief-ai, …) were all views of these.
-    for (const id of ["brief-attention", "brief-today", "brief-next14", "brief-open", "brief-recent"]) {
-      expect(screen.getByTestId(id), id).toBeTruthy();
-    }
-    // Four tiles, down from six: the Attention tile counted the section right
-    // below it, and Bills + Documents merged into Obligations.
-    expect(screen.getByTestId("brief-stat-row")).toBeTruthy();
-    for (const id of ["brief-stat-today", "brief-stat-tasks", "brief-stat-obligations", "brief-stat-habits"]) {
-      expect(screen.getByTestId(id), id).toBeTruthy();
-    }
-
-    // The bill due today surfaces on the Obligations tile once queries settle.
-    await waitFor(() => {
-      expect(screen.getByTestId("brief-stat-obligations").textContent).not.toContain("loading");
-    });
-    const obTxt = screen.getByTestId("brief-stat-obligations").textContent || "";
-    expect(obTxt).toContain("Phone");
-    // Zero habits must NOT read "all done" — nothing is scheduled.
-    expect(screen.getByTestId("brief-stat-habits").textContent).toContain("No habits scheduled");
-
-    // The bill is an attention item; the 85-day document is open work, not
-    // attention — and neither is rendered in both.
-    expect(screen.getByTestId("brief-attention").textContent).toContain("Phone");
-    expect(screen.getByTestId("brief-open").textContent).toContain("Passport");
-    expect(screen.getByTestId("brief-open").textContent).not.toContain("Phone");
+  const render8 = () =>
+    wrap(<ExecutiveBriefingCmp filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
+  let ExecutiveBriefingCmp: any;
+  beforeAll(async () => {
+    ExecutiveBriefingCmp = (await import("../client/src/components/dashboard/ExecutiveBriefing")).ExecutiveBriefing;
   });
 
-  it("renders one row per datum in the DOM, not one per section", async () => {
+  it("always renders Pulse, Today and Quick Capture", () => {
+    render8();
+    // Blocks 1, 3 and 8 render unconditionally per the spec's render rules.
+    expect(screen.getByTestId("block-pulse")).toBeTruthy();
+    expect(screen.getByTestId("block-today")).toBeTruthy();
+    expect(screen.getByTestId("block-capture")).toBeTruthy();
+    // Pulse carries exactly four numbers — it replaces the six-tile KPI grid.
+    for (const id of ["pulse-net-worth", "pulse-cash-flow", "pulse-wellness", "pulse-streak"]) {
+      expect(screen.getByTestId(id), id).toBeTruthy();
+    }
+  });
+
+  it("renders Next 14 Days collapsed, and expands it on tap", () => {
+    render8();
+    const block = screen.getByTestId("block-next14");
+    const header = block.querySelector("button[aria-expanded]") as HTMLElement;
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("hides Open Projects at zero and rolls it into the All clear line", async () => {
+    render8();
+    expect(screen.queryByTestId("block-projects")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("all-clear")).toBeTruthy());
+    expect(screen.getByTestId("all-clear").textContent).toContain("Open Projects");
+  });
+
+  it("shows the bill due today in Needs Attention, not in Money", async () => {
+    render8();
+    await waitFor(() => expect(screen.getByTestId("block-attention")).toBeTruthy());
+    expect(screen.getByTestId("block-attention").textContent).toContain("Phone");
+    // Money hides at zero here: the only bill was claimed by Needs Attention.
+    expect(screen.queryByTestId("block-money")).toBeNull();
+  });
+
+  it("puts one synthesis line inside Today instead of a standalone AI brief", async () => {
+    render8();
+    await waitFor(() => expect(screen.getByTestId("today-synthesis")).toBeTruthy());
+    const line = screen.getByTestId("today-synthesis").textContent || "";
+    expect(line.length).toBeGreaterThan(0);
+    // It lives INSIDE Today, not as its own card.
+    expect(screen.getByTestId("block-today").contains(screen.getByTestId("today-synthesis"))).toBe(true);
+  });
+
+  it("renders one row per datum in the DOM, not one per block", async () => {
     // The regression guard for the original bug: this bill previously rendered
     // in Bills & Obligations, in Calendar · Next 14d, in the AI Executive Brief
     // and on the Attention tile at the same time.
-    const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
-    const { container } = wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
-    await waitFor(() => {
-      expect(screen.getByTestId("brief-stat-obligations").textContent).not.toContain("loading");
-    });
+    const { container } = render8();
+    await waitFor(() => expect(screen.getByTestId("block-attention")).toBeTruthy());
     const rows = Array.from(container.querySelectorAll('[data-testid^="brief-row-"]'));
     const phoneRows = rows.filter(r => (r.textContent || "").includes("Phone"));
     expect(phoneRows).toHaveLength(1);
@@ -123,13 +146,21 @@ describe("ExecutiveBriefing", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("collapses a section on header click", async () => {
-    const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
-    wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
-    const header = screen.getByTestId("brief-attention").querySelector("button[aria-expanded]") as HTMLElement;
-    expect(header.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(header);
-    expect(header.getAttribute("aria-expanded")).toBe("false");
+  it("cuts Notifications and Recently Added from the board entirely", () => {
+    const { container } = render8();
+    const text = container.textContent || "";
+    expect(text).not.toContain("Notifications");
+    expect(text).not.toContain("Recently Added");
+  });
+
+  it("offers Quick Capture as a one-tap input", () => {
+    render8();
+    const input = screen.getByTestId("capture-input") as HTMLInputElement;
+    const save = screen.getByTestId("capture-save") as HTMLButtonElement;
+    // Nothing typed yet — saving is inert rather than posting an empty note.
+    expect(save.disabled).toBe(true);
+    fireEvent.change(input, { target: { value: "Remember the milk" } });
+    expect(save.disabled).toBe(false);
   });
 });
 

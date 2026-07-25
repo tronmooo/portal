@@ -458,3 +458,64 @@ import.
 Not measured: wall-clock tap→visible latency. It needs a device profile against
 a real backend, which this environment cannot run. The mechanism is in place and
 guarded by tests; the number in §4e remains a target, not a result.
+
+---
+
+# Revision — 2026-07-25: the eight-block spec
+
+The five-section structure above was superseded by an explicit eight-block spec
+before it shipped to anyone. What changed:
+
+| Was (5 sections + 4 tiles) | Now (8 blocks) |
+|---|---|
+| 4 stat tiles | **1 Pulse** — sticky, net worth / cash flow / wellness / streak |
+| Needs Attention | **2 Needs Attention** — + high priority, − critical alerts |
+| Today | **3 Today** — + progress bar, + the one synthesis line |
+| Next 14 Days | **4 Next 14 Days** — now collapsed to a count by default |
+| — | **5 Money** — near-term bills + cash flow + balance line |
+| — | **6 Habits & Trackers** — streaks + one-tap logging (was missing) |
+| Open Work | **7 Open Projects** — goals only |
+| Recent | **8 Quick Capture** — replaces it outright |
+
+Also cut: Notifications (all severities, not just non-critical), Recently Added,
+and journal notes as board rows.
+
+## Two places the spec overlapped itself
+
+Recorded because both were judgment calls, and both are pinned by tests:
+
+1. **"habits due" appears under both block 2 and block 3.** Resolved to block 3.
+   Block 2 is "the only red on screen"; an unchecked habit is a routine, not
+   something late, and filling the red block with them every morning is the
+   noise the redesign removes. Block 3's progress bar needs them regardless.
+2. **Habits appear under both block 3 and block 6.** The habit *rows* live in
+   block 3 (tap to check off). Block 6 carries streak *chips* — aggregates over
+   the same habits, not copies of the rows — plus trackers, which are a
+   different entity and the actual "let me log something" surface.
+
+## One visibility change to be aware of
+
+Undated and far-future tasks (beyond 14 days) no longer appear on the board.
+The spec places tasks in blocks 2 (high priority), 3 (due today) and 4 (next 14
+days); block 7 is projects. Backlog therefore lives in the Tasks panel, one tap
+from Pulse or any task row. This is what makes the board hold at roughly one
+screen, but it *is* a change — a user with 40 undated tasks now sees them only
+in the panel.
+
+## Two blocks needed data the board wasn't fetching
+
+- **Block 5 (Money)** needs `/api/incomes` for the cash-flow line.
+- **Block 6 (Trackers)** needs `/api/trackers`.
+
+Both are scoped, gated on `ready`, and cached like the rest. Habit check-in
+(`POST /api/habits/:id/checkin`) is optimistic so the row flips on the frame of
+the tap; tracker logging posts a single unit against the primary numeric field,
+because anything richer belongs in the tracker's own surface, not the board.
+
+## Wellness is habit completion, not a score
+
+The spec asks Pulse for "wellness". There is no wellness score in the data model
+and inventing a composite would recreate the opaque "Score" tile this dashboard
+already removed once. Pulse shows today's habit completion (`3/5`) — concrete
+and legible. Streak is the best active streak across habits, tracker streaks and
+the journal.

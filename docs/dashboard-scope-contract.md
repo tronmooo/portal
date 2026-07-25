@@ -93,31 +93,50 @@ creates are correct.
 
 ---
 
-# Dashboard render contract (2026-07-24)
+# Dashboard render contract (2026-07-25)
 
 A second rule, about *how many times* a datum may appear, not which number it
 shows:
 
-> Every datum has exactly one owning surface. Tiles carry counts and one
-> headline; sections carry rows; panels carry the full list plus actions. A
-> second mention is a *pointer* (a count), never a *copy* (a readable row).
+> Every datum has exactly one owning block. A second mention is a *pointer* (a
+> count, a streak chip), never a *copy* (a readable row).
 
-## Where the Executive tab's rows come from
+## The eight blocks
+
+| # | Block | Renders |
+|---|---|---|
+| 1 | **Pulse** | always — sticky strip: net worth, cash flow, wellness, streak |
+| 2 | **Needs Attention** | hides at zero — the only red on screen |
+| 3 | **Today** | always — merged timeline, progress bar, one synthesis line |
+| 4 | **Next 14 Days** | always, collapsed to a count; expands on tap |
+| 5 | **Money** | hides at zero — near-term only, not a Finance tab replacement |
+| 6 | **Habits & Trackers** | hides at zero — streaks + one-tap logging |
+| 7 | **Open Projects** | hides at zero |
+| 8 | **Quick Capture** | always, last — capture is where the thumb already is |
+
+Empty hide-at-zero blocks roll up into a single grey "All clear" line directly
+above Quick Capture.
+
+**Cut, not moved:** Notifications (the bell owns it), Recently Added (⌘K owns
+it), the six-tile KPI grid (Pulse owns it), the standalone AI Executive Brief
+(one line inside Today), Document Expirations as its own card.
+
+## Where the rows come from
 
 `client/src/components/dashboard/useBriefingModel.ts` is the single derivation.
-It normalizes the seven briefing queries into `BriefingItem`s keyed
-`${kind}:${id}`, then assigns buckets by a **priority cascade**:
+It normalizes the queries into `BriefingItem`s keyed `${kind}:${id}`, then
+assigns blocks by a **priority cascade**:
 
 ```
-attention → today → next14 → open → recent
+attention → today → next14 → money → habits → projects
 ```
 
 Passes run in that order against one shared `push`, which refuses a key it has
-already seen. An item therefore lands in its highest-priority bucket and cannot
-appear in a second one. This is the mechanism, not a convention — a new section
+already seen. An item therefore lands in its highest-priority block and cannot
+appear in a second. This is the mechanism, not a convention — a new block
 cannot reintroduce double-rendering without deliberately bypassing `push`.
 
-Two consequences worth knowing before editing it:
+Four consequences worth knowing before editing it:
 
 - **Timeline `task` / `habit` / `obligation` rows are dropped on purpose.**
   `/api/tasks`, `/api/habits` and `financeSnapshot.upcomingBills` are
@@ -125,7 +144,19 @@ Two consequences worth knowing before editing it:
   copies do not. Consuming both is what put bills in "Calendar · Next 14d" as
   well as "Bills & Obligations".
 - **Bucket order is the product decision.** Moving a rule between passes moves
-  the row between sections; it never duplicates it.
+  the row between blocks; it never duplicates it.
+- **Habits live in Today, not in Needs Attention.** The spec listed "habits due"
+  under both. A habit is a routine, not something late, and block 2 is the only
+  red on screen — filling it with unchecked habits every morning is the noise
+  this redesign exists to remove. Today's progress bar needs them anyway.
+- **Block 6's streak chips are aggregates, not rows.** They summarize the same
+  habits block 3 lists, so they are computed from `habitRows` rather than
+  `push`ed as items. Only trackers — a different entity — are pushed into the
+  `habits` bucket. `tests/dashboard-dedup.test.ts` pins both halves.
+
+Pulse's net worth reads `financeSnapshot.totalAssetValue` /
+`totalLiabilities`, per the scope contract above. It must never re-walk
+profiles to recompute them.
 
 ## Where popups come from
 
@@ -144,11 +175,16 @@ dynamically imported panels. The invariants:
 4. **Triggers prefetch on `pointerdown`,** which fires ~80–120 ms before the
    click resolves on touch.
 
+Blocks 3 and 6 are the exception to "rows open panels": habit check-in and
+tracker logging mutate optimistically in place, because one-tap logging that
+opens a dialog first is not one tap.
+
 ## How this is guarded
 
 - `tests/dashboard-dedup.test.ts` drives `buildBriefingModel` with fixtures and
-  asserts no key is ever emitted twice, plus that bucket sizes sum to the model.
-- `tests/executive-sections.test.tsx` mounts the real component and asserts one
-  DOM row per datum.
+  asserts no key is ever emitted twice, that block sizes sum to the model, and
+  that both spec overlaps stay resolved.
+- `tests/executive-sections.test.tsx` mounts the real component and asserts the
+  render rules (always / hides-at-zero / collapsed) plus one DOM row per datum.
 - `tests/dashboard-popup-perf.test.ts` pins the four structural invariants
   above at source level (they are not observable from a render test).
