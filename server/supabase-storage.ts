@@ -1638,12 +1638,36 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
+    // ── WHAT THIS MAY AND MAY NOT GENERATE ──────────────────────────────────
+    //
+    // User report 2026-07-26, Problem #6:
+    //   "The calendar should never own data. Liability → Recurring Rule →
+    //    Occurrence Generator → Calendar. NOT Calendar → creates another record
+    //    → creates another profile → creates duplicate."
+    //
+    // This function used to write a calendar EVENT ROW for a profile's own
+    // recurring schedule. The occurrence engine already derives those dates
+    // from the profile (`seriesFromLiabilityProfiles`, `seriesFromProfiles`),
+    // so every one of them came out twice — once as the real record and once as
+    // a generated twin that then drifted into its own category:
+    //
+    //   liability "Progressive Auto Insurance"  (bill, $155, day 30)
+    //     └─ 🔄 Progressive Auto Insurance — Renewal   monthly, tagged
+    //        auto-generated  →  filed under EVENTS, alongside the bill
+    //
+    // Deleted from the database 2026-07-26; this is the write path that made
+    // them. The rule now: generate an event ONLY for a date the occurrence
+    // engine cannot derive from the profile itself. A recurring payment, a
+    // renewal and a birthday are all derived — so none of them belongs here.
+    // One-off milestones (a warranty expiry, a lease end) are not derived, so
+    // they still get a row.
     const eventDefs: { fieldKey: string; titleFn: (n: string) => string; category: string; recurrence: string; color: string }[] = [];
 
     switch (type) {
       case "person":
       case "self":
-        eventDefs.push({ fieldKey: "birthday", titleFn: (n) => `\u{1F382} ${n}'s Birthday`, category: "family", recurrence: "yearly", color: "#A86FDF" });
+        // `fields.birthday` → `seriesFromProfiles` already yields a yearly
+        // birthday series. Writing an event too gave every person two.
         break;
       case "medical":
         eventDefs.push({ fieldKey: "nextVisit", titleFn: (n) => `\u{1F3E5} ${n} — Visit`, category: "health", recurrence: "none", color: "#6DAA45" });
@@ -1652,8 +1676,10 @@ export class SupabaseStorage implements IStorage {
         eventDefs.push({ fieldKey: "nextService", titleFn: (n) => `\u{1F697} ${n} — Service`, category: "other", recurrence: "none", color: "#BB653B" });
         break;
       case "subscription":
-        eventDefs.push({ fieldKey: "renewalDate", titleFn: (n) => `\u{1F504} ${n} — Renewal`, category: "finance", recurrence: "monthly", color: "#D19900" });
-        eventDefs.push({ fieldKey: "nextPayment", titleFn: (n) => `\u{1F4B0} ${n} — Payment Due`, category: "finance", recurrence: "monthly", color: "#BB653B" });
+        // `renewalDate` and `nextPayment` are the subscription's own recurring
+        // schedule — the engine generates those occurrences. Writing event rows
+        // for them is what produced "🔄 Netflix — Renewal" sitting next to
+        // Netflix. Only the one-off start date, which nothing derives, remains.
         eventDefs.push({ fieldKey: "startDate", titleFn: (n) => `\u{1F504} ${n} — Start Date`, category: "finance", recurrence: "none", color: "#D19900" });
         break;
       case "loan":
@@ -1661,7 +1687,8 @@ export class SupabaseStorage implements IStorage {
         // Calendar events on loan/liability profiles. Phase 4 also derives a synthetic
         // 'nextPayment' from `dueDay` (1-31) when explicit nextPayment isn't set —
         // see synthesizeNextPaymentFromDueDay below.
-        eventDefs.push({ fieldKey: "nextPayment", titleFn: (n) => `\u{1F4B0} ${n} — Payment Due`, category: "finance", recurrence: "monthly", color: "#BB653B" });
+        // `nextPayment` is the liability's own payment schedule — derived, so
+        // no event row. The synthesised value above still feeds the profile.
         eventDefs.push({ fieldKey: "startDate", titleFn: (n) => `\u{1F4B0} ${n} — Start Date`, category: "finance", recurrence: "none", color: "#BB653B" });
         break;
       case "pet":
