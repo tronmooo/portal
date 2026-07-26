@@ -215,6 +215,31 @@ describe("fields land on the right kind of profile", () => {
   it("never filters unknown fields — it is not a schema police", () => {
     expect(fieldBelongsOnProfileType("somethingNovel", "person")).toBe(true);
   });
+
+  it("rejects receipt residue on a person", () => {
+    // The screenshot also carried VENDOR PHONE (619) 625-5263 — the SHOP's
+    // number, filed on Robert as if it were his.
+    for (const key of ["vendorPhone", "vendorName", "merchant", "subtotal", "taxAmount"]) {
+      expect(fieldBelongsOnProfileType(key, "person"), key).toBe(false);
+    }
+  });
+
+  it("still keeps the person's own name from a receipt", () => {
+    // `customerName` folds to `name`, which really is theirs.
+    expect(fieldBelongsOnProfileType("customerName", "person")).toBe(true);
+    expect(fieldBelongsOnProfileType("phone", "person")).toBe(true);
+  });
+
+  it("matches type-only fields however they are spelled", () => {
+    // The rule compares normalized identity. Written as camelCase set entries
+    // and compared raw, the whole receipt bucket would silently match nothing.
+    for (const spelling of ["vendorPhone", "vendor_phone", "VENDOR PHONE", "vendorphone"]) {
+      expect(fieldBelongsOnProfileType(spelling, "person"), spelling).toBe(false);
+    }
+    for (const spelling of ["licensePlate", "license_plate", "LICENSE PLATE", "plateNumber"]) {
+      expect(fieldBelongsOnProfileType(spelling, "person"), spelling).toBe(false);
+    }
+  });
 });
 
 describe("the nested-group list is shared, not re-declared", () => {

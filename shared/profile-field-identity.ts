@@ -267,9 +267,31 @@ function equivalentValue(a: unknown, b: unknown): boolean {
  */
 const TYPE_ONLY_FIELDS: Record<string, ReadonlySet<string>> = {
   vehicle: new Set(["make", "model", "year", "trim", "mileage", "vin", "licensePlate", "odometer"]),
+  // Receipt residue. A scanned receipt names the SHOP, not the person holding
+  // it, so `vendorPhone: (619) 625-5263` on Robert's Info tab was the store's
+  // number filed as if it were his. These belong on the document, never on a
+  // human being. ("customerName" is deliberately absent — it folds to `name`,
+  // which genuinely is the person's.)
+  receipt: new Set([
+    "vendorPhone", "vendorName", "vendorAddress", "merchant", "merchantName",
+    "storeNumber", "registerNumber", "cashier", "transactionId", "receiptNumber",
+    "subtotal", "taxAmount", "tipAmount", "paymentMethod",
+  ]),
 };
 
 const PERSON_TYPES = new Set(["person", "self", "pet"]);
+
+// Compare on NORMALIZED identity, not on the literal strings above. Written as
+// `vendorPhone`, the entry would never match `fieldIdentity("vendorPhone")` —
+// "vendorphone" — and the whole receipt bucket would silently do nothing. That
+// is the same exact-string mistake this module exists to end, so the sets are
+// normalized once here rather than trusted to be spelled right.
+const TYPE_ONLY_IDENTITIES: Record<string, ReadonlySet<string>> = Object.fromEntries(
+  Object.entries(TYPE_ONLY_FIELDS).map(([owner, keys]) => [
+    owner,
+    new Set([...keys].map((k) => normalizeKey(fieldIdentity(k)))),
+  ]),
+);
 
 /**
  * Should this field appear on a profile of this type?
@@ -280,8 +302,8 @@ const PERSON_TYPES = new Set(["person", "self", "pet"]);
 export function fieldBelongsOnProfileType(key: unknown, profileType: unknown): boolean {
   const type = String(profileType ?? "").toLowerCase();
   if (!PERSON_TYPES.has(type)) return true;
-  const id = fieldIdentity(key);
-  for (const [owner, keys] of Object.entries(TYPE_ONLY_FIELDS)) {
+  const id = normalizeKey(fieldIdentity(key));
+  for (const [owner, keys] of Object.entries(TYPE_ONLY_IDENTITIES)) {
     if (owner === type) continue;
     if (keys.has(id)) return false;
   }

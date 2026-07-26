@@ -4867,6 +4867,11 @@ Rules:
   }));
 
   app.delete("/api/paychecks/:id", asyncHandler(async (req, res) => {
+    // Idempotent: the row is hard-deleted with a user_id filter, so a repeat
+    // DELETE is a no-op that still succeeded. `storage.deletePaycheck` returns
+    // void and cannot distinguish "removed one" from "there was none", so this
+    // handler must not pretend to — it reports success either way rather than
+    // inventing a 404 it has no evidence for.
     await storage.deletePaycheck(req.params.id);
     const uid_pc3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`paychecks:${uid_pc3}`); bustCache(`stats:${uid_pc3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc3}`);
@@ -5559,6 +5564,35 @@ Rules:
     const ok = await storage.deleteReminder(req.params.id);
     if (!ok) return res.status(404).json({ error: "Reminder not found" });
     res.json({ success: true });
+  }));
+  // EDIT a reminder. `storage.updateReminder` has existed since the AI tools
+  // landed, but no REST route ever exposed it — a reminder could be created and
+  // deleted but never corrected, so a typo'd title or a wrong time meant
+  // delete-and-retype. Pinned by tests/crud-coverage.test.ts, which now fails
+  // if any creatable resource loses its update or delete route.
+  app.patch("/api/reminders/:id", asyncHandler(async (req, res) => {
+    const patch: { title?: string; fireAt?: string; profileId?: string | null } = {};
+    if (req.body?.title !== undefined) {
+      const t = typeof req.body.title === "string" ? req.body.title.trim() : "";
+      if (!t) return res.status(400).json({ error: "Title must be a non-empty string" });
+      patch.title = sanitize(t);
+    }
+    if (req.body?.fireAt !== undefined) {
+      const d = new Date(req.body.fireAt);
+      if (isNaN(d.getTime())) return res.status(400).json({ error: "Invalid fireAt date" });
+      patch.fireAt = d.toISOString();
+    }
+    if (req.body?.profileId !== undefined) {
+      patch.profileId = typeof req.body.profileId === "string" && req.body.profileId
+        ? req.body.profileId
+        : null;
+    }
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ error: "No supported fields to update" });
+    }
+    const updated = await storage.updateReminder(req.params.id, patch);
+    if (!updated) return res.status(404).json({ error: "Reminder not found" });
+    res.json(updated);
   }));
   app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
     if (req.body?.category !== undefined) {
@@ -7450,7 +7484,13 @@ No emojis. No prose outside the JSON.`,
     const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
     const ok = await storage.deleteIncome(req.params.id);
     bustIncomeCaches(uid);
-    res.json({ success: ok });
+    // Was `res.json({ success: ok })` — HTTP 200 carrying `success: false`.
+    // The client checks the HTTP status, so a delete that removed nothing read
+    // as a delete that worked: the toast said "Deleted", the refetch brought
+    // the row straight back, and it looked like the app was ignoring the user.
+    // A failed delete has to fail loudly. Pinned by tests/crud-coverage.test.ts.
+    if (!ok) return res.status(404).json({ error: "Income not found" });
+    res.json({ success: true });
   }));
 
   // ---- Audit Log ----

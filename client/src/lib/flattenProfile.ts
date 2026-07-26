@@ -1,5 +1,5 @@
 import {
-  dedupeDisplayFields, fieldBelongsOnProfileType, PROFILE_FIELD_GROUPS,
+  dedupeDisplayFields, fieldBelongsOnProfileType, fieldIdentity, PROFILE_FIELD_GROUPS,
 } from "@shared/profile-field-identity";
 
 /** Remove fields that belong to a different kind of record entirely. */
@@ -35,31 +35,11 @@ function dropMisfiledFields(fields: any, profileType: any): any {
 // populates it must produce the same flattened shape.
 export function flattenProfileFields(rawFields: any): any {
   if (!rawFields || typeof rawFields !== "object") return rawFields || {};
-  const NESTED_GROUPS = [
-    // financial / asset groups
-    "vehicles", "insurance", "housing", "other", "finance", "subscriptions", "utilities",
-    // person / self groups
-    "personal", "identity", "health", "contact", "emergency",
-    // pet groups
-    "pets", "pet",
-  ];
-  // Aliases so UI keys match storage keys.
-  // Storage key (left) → UI key (right). When we promote a nested key, also
-  // mirror it under the UI alias if the alias slot is empty.
-  const KEY_ALIASES: Record<string, string> = {
-    dateOfBirth: "birthday",
-    dob: "birthday",
-    licenseNumber: "license",
-    licenseClass: "licenseClass",
-    issuingAuthority: "licenseState",
-    expirationDate: "licenseExpiration",
-    patientName: "name",
-    primaryPhone: "phone",
-    homePhone: "phone",
-    cellPhone: "phone",
-    homeAddress: "address",
-    serviceAddress: "address",
-  };
+  // The group list is SHARED with the delete path. It used to be a second,
+  // shorter copy here — missing "vehicle", "contacts" and "loan" — so a field
+  // stored under `fields.vehicle.*` was swept by a delete but never promoted
+  // for display, and the two layers disagreed about what existed.
+  const NESTED_GROUPS = PROFILE_FIELD_GROUPS as readonly string[];
   const out: any = {};
   // Case-insensitive presence tracking so "Weight" and "weight" don't both end
   // up as separate rows. First write wins; matches storage's schema (lowercase).
@@ -83,7 +63,11 @@ export function flattenProfileFields(rawFields: any): any {
       for (const [k, v] of Object.entries(nested)) {
         if (v === undefined || v === null || v === "") continue;
         setIfEmpty(k, v);
-        const alias = KEY_ALIASES[k];
+        // Mirror under the canonical UI key (`dateOfBirth` → `birthday`,
+        // `licenseNumber` → `license`) so readers that ask for the canonical
+        // name find it. Derived from the shared alias table rather than a
+        // private one, so display and deletion can't know different names.
+        const alias = fieldIdentity(k);
         if (alias && alias !== k) setIfEmpty(alias, v);
       }
     }

@@ -91,6 +91,7 @@ export default defineConfig({
       'tests/date-year-integrity.test.ts',
       'tests/profile-field-identity.test.ts',
       'tests/profile-field-crud-contract.test.ts',
+      'tests/crud-coverage.test.ts',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
       'tests/wellness-metrics.test.ts',

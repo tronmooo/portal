@@ -93,8 +93,11 @@ describe("delete → refresh → still gone", () => {
   it("does not disturb neighbouring fields", () => {
     const { displayed } = deleteThenReload(EXTRACTED, "license");
     expect(displayed.restrictions).toBe("12 REST: NONE");
-    expect(displayed.class).toBe("E");
     expect(displayed.licenseType).toBe("DRIVER LICENSE");
+    // The licence class survives — under its canonical key. `identity.class`
+    // and `licenseClass` are one field, so it renders once, and the clearer
+    // name wins. Asserting the raw key here would be asserting the duplicate.
+    expect(displayed.licenseClass ?? displayed.class).toBe("E");
   });
 
   it("deletes every remaining field one by one without error", () => {
