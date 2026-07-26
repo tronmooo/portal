@@ -11,6 +11,7 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, Cell,
 } from "recharts";
 import { ShoppingCart, Utensils, Car, HeartPulse, Home, Zap, Film, CreditCard, Package } from "lucide-react";
+import { dayLabel } from "@shared/now-rank";
 
 export interface MoneyBill {
   id: string; name: string; amount: number; dueDate?: string;
@@ -320,7 +321,7 @@ export function MoneyOverview(props: {
                   <span className="text-[10px] font-semibold uppercase w-14 shrink-0 text-muted-foreground">
                     {b.status === "overdue" ? <span className="text-red-500">overdue</span>
                       : b.daysUntil === 0 ? <span className="text-amber-500">today</span>
-                      : `${b.daysUntil}d`}
+                      : dayLabel(b.daysUntil)}
                   </span>
                   <span className="flex-1 text-sm truncate">{b.name}</span>
                   <span className="text-sm font-semibold tabular-nums">{money2(b.amount)}</span>

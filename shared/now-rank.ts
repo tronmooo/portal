@@ -79,12 +79,35 @@ function urgencyScore(daysUntil: number | null): number {
   return Math.max(40, 200 - daysUntil);
 }
 
-function dayLabel(daysUntil: number | null): string {
-  if (daysUntil == null) return "";
-  if (daysUntil < 0) return `${Math.abs(daysUntil)}d overdue`;
-  if (daysUntil === 0) return "today";
-  if (daysUntil === 1) return "tomorrow";
-  return `in ${daysUntil}d`;
+/**
+ * "in 5d" / "today" / "29d overdue" — THE relative-due formatter.
+ *
+ * User report 2026-07-26, #16:
+ *   "AI Executive Brief says: 'Lawn care ($40) due in -29d.' Past dates should
+ *    say '29 days overdue', never 'due in -29d'."
+ *
+ * That string was built inline in ExecutiveBriefing, and four other screens had
+ * their own copy of the same three lines — each one interpolating a raw
+ * `daysUntil` that goes negative once a date passes. This function is the one
+ * every caller now uses, so a past date reads as overdue everywhere at once.
+ *
+ * Exported because the bug was never in the logic here; it was in the four
+ * places that never called it.
+ */
+export function dayLabel(daysUntil: number | null | undefined): string {
+  if (daysUntil == null || !Number.isFinite(daysUntil)) return "";
+  const d = Math.trunc(daysUntil);
+  if (d < 0) return `${Math.abs(d)}d overdue`;
+  if (d === 0) return "today";
+  if (d === 1) return "tomorrow";
+  return `in ${d}d`;
+}
+
+/** Same rule, phrased for a sentence: "due today", "due in 5d", "29d overdue". */
+export function dueLabel(daysUntil: number | null | undefined): string {
+  const label = dayLabel(daysUntil);
+  if (!label) return "";
+  return (daysUntil ?? 0) < 0 ? label : `due ${label}`;
 }
 
 // Documents whose expiry carries real consequence rank above a random receipt.

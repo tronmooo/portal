@@ -314,6 +314,54 @@ export function seriesFromObligations(obligations: readonly any[]): CalendarSeri
 // ─── Liability profiles ──────────────────────────────────────────────────────
 
 /**
+ * What KIND of thing is this liability-profile row, really?
+ *
+ * User report 2026-07-26: "Bills 8, Subs 5, and Liabilities 3 coexist, while
+ * many rules describe liabilities as bills or subscriptions… The app is mixing
+ * the financial profile type with the calendar display category."
+ *
+ * Exactly right, and the mixing was here. `seriesFromLiabilityProfiles` used to
+ * hardcode `kind: "liability"` for every row, so a $20/month ChatGPT Pro
+ * subscription and a $155/month insurance premium both landed under the
+ * Liabilities chip and Subs read 0.
+ *
+ * `liability` is the STORAGE type — the table these live in. It is not what the
+ * record IS. The rows already carry the answer: `type_key` ("subscription",
+ * "bill", "auto_loan") and `fields.category` ("subscription", "insurance",
+ * "housing", "loan_payment"). Both were being thrown away. This reads them.
+ *
+ * `liability` is reserved for genuine DEBT — something with a balance you are
+ * paying down. A recurring charge for a service is a subscription; a recurring
+ * charge for something you consume or must carry is a bill.
+ */
+export function kindForLiabilityProfile(p: any): OccurrenceKind {
+  const f = p?.fields && typeof p.fields === "object" ? p.fields : {};
+  const signals = [p?.type_key, p?.typeKey, f.category, f.type, f.kind]
+    .map((s) => String(s ?? "").toLowerCase().replace(/[^a-z]+/g, "_"));
+
+  const has = (...needles: string[]) =>
+    signals.some((s) => s && needles.some((n) => s === n || s.includes(n)));
+
+  // Genuine debt first — these keep the Liability kind.
+  if (has("loan", "mortgage", "credit_card", "debt", "lease", "line_of_credit")) {
+    return "liability";
+  }
+  if (has("subscription", "membership", "streaming", "software")) return "subscription";
+  if (has("bill", "insurance", "utility", "utilities", "housing", "rent", "health", "investment")) {
+    return "bill";
+  }
+  // No usable signal. A row with a balance being paid down is a debt; a plain
+  // recurring charge is a bill. Never guess "subscription" — that would put a
+  // mortgage under Subs, which is worse than the generic answer.
+  const balance = Number(f.balance ?? f.currentBalance ?? f.amountOwed);
+  const payoff = f.payoffDate ?? f.payoff_date;
+  if (payoff || (Number.isFinite(balance) && balance > 0 && f.interestRate != null)) {
+    return "liability";
+  }
+  return "bill";
+}
+
+/**
  * Liability profiles that carry their own payment schedule (a mortgage, an
  * auto loan) rather than an obligation row. `recurrenceEnd` comes from the
  * payoff date so the series genuinely ends instead of running forever.
@@ -328,11 +376,12 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
     if (!isISO(due)) continue;
     const amount = Number(f.monthlyPayment ?? f.monthly_payment ?? f.amount);
     const end = f.payoffDate ?? f.payoff_date ?? f.endDate ?? f.end_date ?? f.recurrenceEnd;
+    const kind = kindForLiabilityProfile(p);
     out.push({
       id: `liability:${p.id}`,
-      kind: "liability",
+      kind,
       title: p.name || "Liability",
-      subtitle: String(p.type_key ?? p.typeKey ?? "liability").replace(/_/g, " "),
+      subtitle: String(p.type_key ?? p.typeKey ?? kind).replace(/_/g, " "),
       source: {
         system: "liability",
         id: p.id,
@@ -499,8 +548,16 @@ export function filterSeriesByProfiles(
   const allow = new Set(selectedIds);
   const selfIds = opts.selfIds ?? new Set<string>();
   return list.filter((s) => {
-    const owners = ownerCandidates(s);
+    // A record that lists only ITSELF as an owner is unowned. A liability
+    // profile is its own source id, so `ownerCandidates` always returned at
+    // least that one entry and the soft-orphan rule below could never fire —
+    // an unparented Netflix or Spotify Premium matched no selection and
+    // silently vanished the moment any profile filter was on. ("Why is there
+    // only three things?" — there were five.)
+    const owners = ownerCandidates(s).filter((id) => id !== s.source.id);
     if (owners.length === 0) {
+      // Selecting the record itself still shows it.
+      if (s.source.id && allow.has(s.source.id)) return true;
       // Unowned records follow the app-wide soft-orphan rule: they belong to
       // the primary person. Dropping them is what made "Reminders 0" — a
       // reminder with no profileId matched nothing at all.

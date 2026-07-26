@@ -21,7 +21,7 @@ import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcil
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
 import { netWorthView, isNetWorthLoaded } from "@/lib/net-worth-view";
-import { computeNowItems, type NowItem } from "@shared/now-rank";
+import { computeNowItems, dayLabel, type NowItem } from "@shared/now-rank";
 import {
   aggregateUpcomingDates,
   groupByTimeframe,
@@ -2119,7 +2119,8 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     }
     // Due soon bills
     for (const b of soonBills) {
-      const label = b.daysUntil === 0 ? "Today" : b.daysUntil === 1 ? "Tomorrow" : `in ${b.daysUntil}d`;
+      // A past bill has a NEGATIVE daysUntil; interpolating it read "in -29d".
+      const label = dayLabel(b.daysUntil);
       items.push({
         id: b.id, title: b.name,
         detail: `${label}${b.amount ? ` · ${formatMoney(b.amount)}` : ""}`,

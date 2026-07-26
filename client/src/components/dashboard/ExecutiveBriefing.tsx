@@ -24,6 +24,9 @@ import {
   type AttentionEntry, type TodayEntry,
 } from "@/components/dashboard/BriefingPopups";
 import type { DashboardStats } from "@shared/schema";
+// One relative-due formatter for the whole app. Interpolating a raw `daysUntil`
+// here is what produced "Lawn care ($40) due in -29d".
+import { dayLabel as relativeDay, dueLabel } from "@shared/now-rank";
 
 type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | "projects" | "notes" | "reminders" | "attention" | "today" | null;
 
@@ -451,9 +454,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   if (soonestDoc) aiBrief.push({ text: `${soonestDoc.documentName || soonestDoc.name || soonestDoc.fieldName || "A document"} ${soonestDoc.daysUntil < 0 ? `expired ${Math.abs(soonestDoc.daysUntil)} days ago` : soonestDoc.daysUntil === 0 ? "expires today" : `expires in ${soonestDoc.daysUntil} days`}.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => setPopup("docs") });
   if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => setPopup("habits") });
   const soonestBill = bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) due ${soonestBill.daysUntil === 0 ? "today" : `in ${soonestBill.daysUntil}d`}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => setPopup("bills") });
+  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) ${dueLabel(soonestBill.daysUntil)}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => setPopup("bills") });
   for (const n of alerts.slice(0, 2)) aiBrief.push({ text: n.title, tone: "neg", go: () => goNotif(n) });
-  if (birthdays[0]) aiBrief.push({ text: `${birthdays[0].title} in ${daysLeft(birthdays[0].date.slice(0, 10))} days.`, tone: "warn", go: () => setPopup("events") });
+  if (birthdays[0]) aiBrief.push({ text: `${birthdays[0].title} ${relativeDay(daysLeft(birthdays[0].date.slice(0, 10)))}.`, tone: "warn", go: () => setPopup("events") });
 
   return (
     <div data-testid="executive-briefing">
@@ -683,7 +686,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <div className="divide-y divide-border/30">
               {docs.map((d: any) => (
                 <Row key={d.documentId || d.id}
-                  cells={[d.expirationDate?.slice(5, 10) || "—", d.documentName || d.name || d.fieldName || "Document", `${d.daysUntil}d`]}
+                  cells={[d.expirationDate?.slice(5, 10) || "—", d.documentName || d.name || d.fieldName || "Document", relativeDay(d.daysUntil)]}
                   urgent={typeof d.daysUntil === "number" && d.daysUntil <= 21}
                   valueTone={typeof d.daysUntil === "number" && d.daysUntil <= 45 ? "warn" : undefined}
                   onClick={() => setPopup("docs")} />
@@ -699,7 +702,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <div key={b.id} className="flex items-baseline gap-1">
                   <div className="flex-1 min-w-0">
                     <Row
-                      cells={[b.status === "overdue" ? "overdue" : b.daysUntil === 0 ? "today" : `${b.daysUntil}d`, b.name, `$${Number(b.amount).toLocaleString()}`]}
+                      cells={[b.status === "overdue" ? "overdue" : relativeDay(b.daysUntil), b.name, `$${Number(b.amount).toLocaleString()}`]}
                       urgent={b.status === "overdue" || b.daysUntil === 0}
                       valueTone="pos"
                       onClick={() => setPopup("bills")} />

@@ -206,10 +206,37 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
     if (occ) setDetail(occ);
   };
 
+  /**
+   * The note under a card.
+   *
+   * User report 2026-07-26:
+   *   "'Test's Birthday' says: 'Linked financial record: Liability.' A birthday
+   *    must belong to the Test person profile, never a financial record."
+   *   "'Stretch Every Morning' is labeled Event but says it has a linked
+   *    liability."
+   *
+   * Both were this function. It fired whenever ANY duplicate had been merged
+   * into the series and then hardcoded "Liability" as the label — so a birthday
+   * that absorbed its own duplicate row was captioned as a financial record.
+   * The note was about DEDUPLICATION; it was worded as a financial link.
+   *
+   * They are two different facts, so they are now two different notes, and the
+   * financial one is only ever shown when a financial record is actually
+   * linked.
+   */
   const linkedNoteFor = (series: CalendarSeries): string | undefined => {
+    const linkedId = series.source.linkedRecordId;
+    // A record that anchors on ITSELF is not linked to anything — that is just
+    // the series' own id, used for duplicate detection.
+    const genuinelyLinked =
+      linkedId && linkedId !== series.source.id && series.source.linkedLabel;
+    if (genuinelyLinked) return `Linked financial record: ${series.source.linkedLabel}`;
+
     const dupes = cal.duplicatesBySeries.get(series.id);
     if (!dupes?.length) return undefined;
-    return `Linked financial record: ${series.source.linkedLabel || "Liability"}`;
+    return dupes.length === 1
+      ? "Merged 1 duplicate of this date"
+      : `Merged ${dupes.length} duplicates of this date`;
   };
 
   return (
@@ -329,9 +356,14 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
           profileName={cal.profileName}
           todayISO={today}
           duplicateNote={
-            cal.duplicatesBySeries.get(detail.seriesId)?.length
-              ? `Linked financial record: ${seriesById.get(detail.seriesId)?.source.linkedLabel || "Liability"} — one date, shown once.`
-              : undefined
+            // Same fix as `linkedNoteFor`: this panel captioned every merged
+            // series as a financial record, including birthdays.
+            (() => {
+              const s = seriesById.get(detail.seriesId);
+              if (!s) return undefined;
+              const note = linkedNoteFor(s);
+              return note ? `${note} — one date, shown once.` : undefined;
+            })()
           }
           onClose={() => setDetail(null)}
         />
