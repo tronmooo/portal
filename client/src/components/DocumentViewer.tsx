@@ -1125,7 +1125,7 @@ function ExtractedDataPanel({
                     </div>
                     <button
                       onClick={() => deleteField(key)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-muted-foreground hover:text-destructive mt-1"
+                      className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-muted-foreground hover:text-destructive mt-1"
                       data-testid={`btn-delete-field-${key}`}
                       title="Delete field"
                     >

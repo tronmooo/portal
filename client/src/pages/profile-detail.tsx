@@ -2620,7 +2620,7 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
             <button
               onClick={stopProp(findValue)}
               disabled={finding}
-              className="opacity-0 group-hover:opacity-100 text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-all flex items-center gap-1 shrink-0"
+              className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-all flex items-center gap-1 shrink-0"
               title="Find current market value using AI"
             >
               {finding ? (
@@ -7804,7 +7804,7 @@ function TasksTab({
                       )}
                     </div>
                   </div>
-                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteTaskId(task.id)} data-testid={`button-delete-task-${task.id}`}>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0 opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteTaskId(task.id)} data-testid={`button-delete-task-${task.id}`}>
                     <Trash2 className="h-3 w-3" />
                   </Button>
                 </div>
@@ -9185,7 +9185,7 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
               <span className="text-xs">{c.description || "Claim"}</span>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium">{c.amount ? formatCurrency(Number(c.amount)) : "—"}</span>
-                <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => deleteClaimMutation.mutate(c.id)} data-testid={`button-delete-claim-${c.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteClaimMutation.mutate(c.id)} data-testid={`button-delete-claim-${c.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
               </div>
             </div>
           )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No claims recorded</p>}
@@ -9271,7 +9271,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium tabular-nums">{r.amount ? formatCurrency(Number(r.amount)) : "—"}</span>
-                <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => deleteRedemptionMutation.mutate(r.id)} data-testid={`button-delete-redemption-${r.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteRedemptionMutation.mutate(r.id)} data-testid={`button-delete-redemption-${r.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
               </div>
             </div>
           )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No redemptions recorded</p>}
@@ -9368,7 +9368,7 @@ function CredentialsList({ profileId, fields, onChanged }: { profileId: string; 
             </div>
             <div className="flex items-center gap-2">
               {c.url && <a href={c.url.startsWith("http") ? c.url : `https://${c.url}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline" data-testid={`link-cred-${i}`}><ExternalLink className="h-3 w-3" /></a>}
-              <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-cred-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+              <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-cred-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
             </div>
           </div>
         )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No saved credentials</p>}
@@ -9571,7 +9571,7 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground tabular-nums">{a.date ? new Date(a.date).toLocaleDateString() : ""}</span>
-              <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-appraisal-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+              <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-appraisal-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
             </div>
           </div>
         )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No appraisals recorded</p>}
@@ -10703,7 +10703,7 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
                   <span className="text-xs text-muted-foreground">{p.date ? new Date(p.date).toLocaleDateString() : "—"}</span>
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium tabular-nums">{p.amount ? formatCurrency(Number(p.amount)) : "—"}</span>
-                    <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => deletePayMutation.mutate(p.id)} data-testid={`button-delete-payment-${p.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                    <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deletePayMutation.mutate(p.id)} data-testid={`button-delete-payment-${p.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
                   </div>
                 </div>
               ))}
@@ -12224,7 +12224,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold tabular-nums">${(exp.amount || 0).toFixed(2)}</span>
-                    <button className="opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => deleteSubPayMutation.mutate(exp.id)} data-testid={`button-delete-sub-payment-${exp.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                    <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteSubPayMutation.mutate(exp.id)} data-testid={`button-delete-sub-payment-${exp.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
                   </div>
                 </div>
               ))}

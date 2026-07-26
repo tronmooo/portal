@@ -92,6 +92,7 @@ export default defineConfig({
       'tests/profile-field-identity.test.ts',
       'tests/profile-field-crud-contract.test.ts',
       'tests/crud-coverage.test.ts',
+      'tests/touch-crud-reachable.test.ts',
       'tests/source-type-stability.test.ts',
       'tests/calendar-owns-no-data.test.ts',
       'tests/due-label.test.ts',

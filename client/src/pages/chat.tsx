@@ -1420,7 +1420,7 @@ function BatchAttachmentPanel({
                   {/* Remove button */}
                   <button
                     onClick={() => onRemove(idx)}
-                    className="absolute -top-1.5 -right-1.5 p-0.5 bg-card border border-border rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                    className="absolute -top-1.5 -right-1.5 p-0.5 bg-card border border-border rounded-full opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10"
                     data-testid={`button-remove-batch-file-${idx}`}
                     aria-label={`Remove ${att.name}`}
                     disabled={isSending}

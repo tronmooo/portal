@@ -4549,7 +4549,7 @@ function UpcomingDateRow({
       </div>
       <button
         onClick={(e) => { e.stopPropagation(); onTogglePin(item.id); }}
-        className="opacity-0 group-hover:opacity-100 shrink-0 p-1 rounded hover:bg-muted/60 transition-opacity"
+        className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 shrink-0 p-1 rounded hover:bg-muted/60 transition-opacity"
         aria-label={pinned ? "Unpin" : "Pin"}
         data-testid={`upcoming-pin-${item.id}`}
       >

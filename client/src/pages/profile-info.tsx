@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain } from "lucide-react";
+import { deleteProfileFields } from "@shared/profile-field-identity";
 
 function timeAgo(ts: string | undefined): string {
   if (!ts) return "";
@@ -153,8 +154,11 @@ function SingleProfileInfo({ id }: { id: string }) {
       const prev = queryClient.getQueryData(["/api/profiles", id, "detail"]);
       queryClient.setQueryData(["/api/profiles", id, "detail"], (old: any) => {
         if (!old?.fields) return old;
-        const { [key]: _drop, ...rest } = old.fields;
-        return { ...old, fields: rest };
+        // Use the SAME resolver the server uses, so the optimistic view and the
+        // saved result agree. Destructuring `{ [key]: _drop, ...rest }` only
+        // removed an exact top-level key — a nested `identity.licenseNumber`
+        // stayed put and the card sat there until the refetch landed.
+        return { ...old, fields: deleteProfileFields(old.fields, [key]).fields };
       });
       try {
         await apiRequest("PATCH", `/api/profiles/${id}`, { fieldsToDelete: [key] });
@@ -316,12 +320,31 @@ function SingleProfileInfo({ id }: { id: string }) {
       {nestedGroups.map(g => (
         <Card className="p-4" key={g.key} data-testid={`info-group-${g.key}`}>
           <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{fieldLabel(g.key)}</span>
+          {/*
+            Nested-group fields used to render as plain <div> text — no
+            FieldCell, no onSave, no onRemove. Every value under IDENTITY,
+            PERSONAL, VEHICLES etc. was permanently read-only, which is most of
+            what a scanned document writes.
+
+            User, 2026-07-26: "Why won't it let me edit these or delete them".
+            They were right: on this screen those fields had no CRUD at all.
+
+            They now use the SAME FieldCell as the top-level grid, so a nested
+            field edits and deletes exactly like any other. `removeField` sweeps
+            nested groups by field identity (shared/profile-field-identity), so
+            deleting `identity.licenseNumber` really removes it rather than
+            leaving a twin to be promoted back on the next read.
+          */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mt-2">
             {g.entries.map(([k, v]) => (
-              <div key={k} className="min-w-0">
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{fieldLabel(k)}</div>
-                <div className="text-sm font-medium truncate">{String(v)}</div>
-              </div>
+              <FieldCell
+                key={k}
+                label={fieldLabel(k)}
+                value={String(v)}
+                editable
+                onSave={(nv) => saveField(k, nv)}
+                onRemove={() => removeField(k)}
+              />
             ))}
           </div>
         </Card>
@@ -520,11 +543,18 @@ function FieldCell({ label, value, editable, onSave, onRemove }: {
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="text-sm font-medium truncate mt-0.5">{value}</div>
       {onRemove && (
+        // ALWAYS VISIBLE. This was `opacity-0 group-hover:opacity-100`, so the
+        // delete control only existed under a mouse cursor. Portol is used on a
+        // phone, where nothing ever hovers — the X was never rendered visibly
+        // and the fields looked permanently undeletable.
+        // User, 2026-07-26: "Why won't it let me edit these or delete them".
+        // A hit target of 24px keeps it tappable without covering the value.
         <button
           onClick={e => { e.stopPropagation(); onRemove(); }}
-          className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+          className="absolute top-0.5 right-0.5 h-6 w-6 grid place-items-center rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 active:bg-destructive/20 transition-colors"
           aria-label={`Remove ${label}`}
-        ><X className="h-3 w-3" /></button>
+          data-testid={`info-remove-${label}`}
+        ><X className="h-3.5 w-3.5" /></button>
       )}
     </Card>
   );
