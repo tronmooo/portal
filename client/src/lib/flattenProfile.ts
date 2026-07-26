@@ -1,3 +1,22 @@
+import {
+  dedupeDisplayFields, fieldBelongsOnProfileType, PROFILE_FIELD_GROUPS,
+} from "@shared/profile-field-identity";
+
+/** Remove fields that belong to a different kind of record entirely. */
+function dropMisfiledFields(fields: any, profileType: any): any {
+  if (!fields || typeof fields !== "object") return fields;
+  const out: any = {};
+  for (const [k, v] of Object.entries(fields)) {
+    // Never touch the preserved nested group objects or reserved metadata.
+    if (k.startsWith("_") || (PROFILE_FIELD_GROUPS as readonly string[]).includes(k)) {
+      out[k] = v;
+      continue;
+    }
+    if (fieldBelongsOnProfileType(k, profileType)) out[k] = v;
+  }
+  return out;
+}
+
 // ── Field flattening (nested → top-level) ───────────────────────────────────
 // Storage paths used by the app:
 //   fields.vehicles.{licensePlate,vin,make,model,year,mileage,color,trim,registrationExpiration}
@@ -91,6 +110,17 @@ export function flattenProfileFields(rawFields: any): any {
       seenLC[lc] = k;
     }
   }
+  // IDENTITY DE-DUPLICATION (2026-07-25). `seenLC` above only collapses keys
+  // that differ by CASE, so `licenseNumber` and `license_number` both survived
+  // and the Info tab rendered the same value twice —
+  //   LICENSE NUMBER: S226-116-24-800-0  /  LICENSE: S226-116-24-800-0
+  //   DONOR INDICATOR: DONOR             /  DONOR: true
+  // `dedupeDisplayFields` compares canonical field IDENTITY (the same function
+  // the delete path uses, so display and deletion can never disagree again) and
+  // hides a twin only when the values actually agree.
+  const deduped = dedupeDisplayFields(out);
+  for (const k of deduped.hidden) delete out[k];
+
   // Liability fallback: if no top-level balance but finance.loans[] has one, sum them
   const finance = rawFields.finance;
   if (finance && Array.isArray(finance.loans) && finance.loans.length > 0) {
@@ -106,12 +136,19 @@ export function flattenProfileFields(rawFields: any): any {
 }
 
 // Apply flattening to a profile and (recursively) its child profiles.
-export function flattenProfile<T extends { fields?: any; childProfiles?: any[] } | null | undefined>(p: T): T {
+export function flattenProfile<T extends { fields?: any; childProfiles?: any[]; type?: any } | null | undefined>(p: T): T {
   if (!p) return p;
-  const flat: any = { ...p, fields: flattenProfileFields((p as any).fields) };
+  const flat: any = {
+    ...p,
+    // Drop fields that cannot belong to this profile type. Document extraction
+    // had put MAKE / YEAR / LICENSEPLATE and a VENDOR PHONE onto a PERSON —
+    // vehicle and receipt data on a human being. Those live on the vehicle
+    // profile; showing them here is what made the tab read as nonsense.
+    fields: dropMisfiledFields(flattenProfileFields((p as any).fields), (p as any).type),
+  };
   if (Array.isArray((p as any).childProfiles)) {
     flat.childProfiles = (p as any).childProfiles.map((c: any) =>
-      c ? { ...c, fields: flattenProfileFields(c.fields) } : c,
+      c ? { ...c, fields: dropMisfiledFields(flattenProfileFields(c.fields), c.type) } : c,
     );
   }
   return flat as T;

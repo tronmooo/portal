@@ -49,6 +49,7 @@ import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } fr
 import { addMonthsClamped, addYearsClamped } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromProfiles, seriesFromEvents } from "../shared/calendar-adapters";
+import { deleteProfileFields } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
@@ -1728,16 +1729,23 @@ export class SupabaseStorage implements IStorage {
     // (nested) survive — and flatten promotes them right back on the next read.
     // See PROFILE_KEY_ALIAS_REVERSE + PROFILE_NESTED_GROUPS at the top of this
     // file for the topology this depends on (kept in lockstep with the client).
-    const expandedDeletes = expandProfileFieldDeletions(data.fieldsToDelete);
-    const mergedFields = mergeAndApplyDeletes(
-      existing.fields || {},
-      data.fields,
-      expandedDeletes
-    );
-    if (expandedDeletes.length > 0) {
-      stripFromNestedGroups(mergedFields as Record<string, any>, expandedDeletes);
+    // UNIVERSAL DELETE (2026-07-25). Deletion now matches on field IDENTITY
+    // (shared/profile-field-identity), not on exact key strings.
+    //
+    // The old path expanded a UI key through a hand-maintained alias table and
+    // then did `delete base[k]` / `k in nested`. Any spelling missing from that
+    // table — `license_number`, `LICENSE NUMBER`, `licenseNo` — survived, and
+    // the flattener promoted it straight back on the next read, so the field
+    // looked undeletable. `deleteProfileFields` sweeps the top level AND every
+    // nested group, comparing normalized identities, so one spelling cannot
+    // hide behind another.
+    const mergedFields = mergeAndApplyDeletes(existing.fields || {}, data.fields, null);
+    const deletion = deleteProfileFields(mergedFields as Record<string, any>, data.fieldsToDelete);
+    const finalFields = deletion.fields;
+    if (deletion.removed.length > 0) {
+      console.log(`[profile-delete] ${id} removed ${deletion.removed.length} key(s): ${deletion.removed.join(", ")}`);
     }
-    const merged = { ...existing, ...data, fields: mergedFields };
+    const merged = { ...existing, ...data, fields: finalFields };
     const now = new Date().toISOString();
     const updateData: any = {
       type: merged.type, name: merged.name, avatar: merged.avatar || null,

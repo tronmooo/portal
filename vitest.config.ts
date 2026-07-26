@@ -89,6 +89,8 @@ export default defineConfig({
       'tests/calendar-crud.test.ts',
       'tests/recurring-page-sweep.test.tsx',
       'tests/date-year-integrity.test.ts',
+      'tests/profile-field-identity.test.ts',
+      'tests/profile-field-crud-contract.test.ts',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
       'tests/wellness-metrics.test.ts',
