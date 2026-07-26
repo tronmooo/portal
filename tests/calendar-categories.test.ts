@@ -14,6 +14,9 @@ import {
   filterSeriesByCategory,
   countRules,
   categoryChips,
+  SOURCE_CATEGORIES,
+  isImportant,
+  IMPORTANT_WINDOW_DAYS,
 } from "../shared/calendar-categories";
 import {
   dedupeSeries,
@@ -50,17 +53,22 @@ describe("every kind lands in exactly one chip", () => {
     expect(categoryForKind("liability")).toBe("liabilities");
     expect(categoryForKind("task")).toBe("tasks");
     expect(categoryForKind("reminder")).toBe("reminders");
-    // Important Dates is the home for non-money, non-person, non-todo dates.
-    expect(categoryForKind("anniversary")).toBe("important");
-    expect(categoryForKind("renewal")).toBe("important");
-    expect(categoryForKind("appointment")).toBe("important");
-    expect(categoryForKind("document")).toBe("important");
+    // Each kind gets a real source category. "Important" is NOT a source type.
+    expect(categoryForKind("anniversary")).toBe("anniversaries");
+    expect(categoryForKind("document")).toBe("documents");
+    expect(categoryForKind("renewal")).toBe("events");
+    expect(categoryForKind("appointment")).toBe("events");
+    expect(categoryForKind("custom")).toBe("other");
+    for (const k of Object.keys(KIND_LABELS) as OccurrenceKind[]) {
+      expect(categoryForKind(k), k).not.toBe("important");
+    }
   });
 
   it("offers the chips in the specified order", () => {
     expect(CALENDAR_CATEGORIES.map((c) => c.id)).toEqual([
-      "all", "birthdays", "important", "bills",
-      "subscriptions", "liabilities", "tasks", "reminders",
+      "all", "important", "birthdays", "anniversaries", "bills",
+      "subscriptions", "liabilities", "documents", "tasks",
+      "reminders", "events", "other",
     ]);
   });
 });
@@ -97,11 +105,9 @@ describe("counts are unique RULES, never occurrences", () => {
     expect(countRules([...rules, ...rules]).all).toBe(7);
   });
 
-  it("all equals the sum of the other chips", () => {
+  it("all equals the sum of the SOURCE chips (important overlaps by design)", () => {
     const c = countRules(rules);
-    const sum = CALENDAR_CATEGORIES
-      .filter((x) => x.id !== "all")
-      .reduce((n, x) => n + c[x.id], 0);
+    const sum = SOURCE_CATEGORIES.reduce((n, x) => n + c[x], 0);
     expect(sum).toBe(c.all);
   });
 
@@ -166,11 +172,54 @@ describe("categoryChips", () => {
     const chips = categoryChips(countRules([mk({ id: "s1", kind: "subscription" })]));
     expect(chips).toHaveLength(CALENDAR_CATEGORIES.length);
     expect(chips.find((c) => c.id === "subscriptions")!.count).toBe(1);
-    expect(chips.find((c) => c.id === "important")!.count).toBe(0);
+    expect(chips.find((c) => c.id === "other")!.count).toBe(0);
   });
 
   it("can drop empty chips but always keeps All", () => {
     const chips = categoryChips(countRules([mk({ id: "s1", kind: "subscription" })]), { hideEmpty: true });
     expect(chips.map((c) => c.id)).toEqual(["all", "subscriptions"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "Important contains routine monthly bills and renewals and is massively
+// overpopulated" — it read 40 of 49. It was a source-type dumping ground for
+// everything that wasn't money, people, or to-dos. It is now a STATUS.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("Important is a status, not a source type", () => {
+  const TODAY_I = "2026-07-25";
+  const bill = mk({ id: "b", kind: "bill" });
+
+  it("excludes an ordinary bill due far in the future", () => {
+    expect(isImportant(bill, { todayISO: TODAY_I, nextDate: "2027-01-30" })).toBe(false);
+  });
+
+  it("includes anything overdue", () => {
+    expect(isImportant(bill, { todayISO: TODAY_I, nextDate: "2026-07-01" })).toBe(true);
+  });
+
+  it("includes anything inside the warning window", () => {
+    expect(isImportant(bill, { todayISO: TODAY_I, nextDate: "2026-07-30" })).toBe(true);
+    // …and excludes the day after it.
+    const past = new Date(`${TODAY_I}T12:00:00`);
+    past.setDate(past.getDate() + IMPORTANT_WINDOW_DAYS + 1);
+    expect(isImportant(bill, { todayISO: TODAY_I, nextDate: past.toLocaleDateString("en-CA") })).toBe(false);
+  });
+
+  it("includes anything the user starred, whatever its date", () => {
+    expect(isImportant(bill, {
+      todayISO: TODAY_I, nextDate: "2030-01-01", starred: new Set(["b"]),
+    })).toBe(true);
+  });
+
+  it("excludes a rule with no upcoming date at all", () => {
+    expect(isImportant(bill, { todayISO: TODAY_I, nextDate: null })).toBe(false);
+  });
+
+  it("does not inflate: 12 monthly bills a year out give Important 0", () => {
+    const many = Array.from({ length: 12 }, (_, i) => mk({ id: `b${i}`, kind: "bill" }));
+    const counts = countRules(many, { todayISO: TODAY_I, nextDateFor: () => "2027-06-01" });
+    expect(counts.bills).toBe(12);
+    expect(counts.important).toBe(0);
   });
 });

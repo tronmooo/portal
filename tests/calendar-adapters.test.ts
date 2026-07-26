@@ -203,7 +203,7 @@ describe("seriesFromTasks / Reminders / Documents", () => {
       { id: "t1", title: "Water plants", dueDate: "2026-07-26", tags: ["recur:weekly"], linkedProfiles: ["me"] },
     ]);
     expect(s).toMatchObject({ kind: "task", recurrence: "weekly", baseDate: "2026-07-26" });
-    expect(s.source.href).toBe("#/profiles/me");
+    expect(s.source.href).toBe("#/tasks?focus=t1");
   });
 
   it("treats an untagged task as one-off and drops completed ones", () => {
@@ -220,6 +220,7 @@ describe("seriesFromTasks / Reminders / Documents", () => {
     for (const key of ["expiration_date", "expirationDate", "valid_until", "renewalDate"]) {
       const out = seriesFromDocuments([{ id: "d1", name: "Passport", extractedData: { [key]: "2027-01-01" } }]);
       expect(out[0]).toMatchObject({ kind: "document", baseDate: "2027-01-01" });
+      expect(out[0].source.href).toBe("#/documents/d1");
     }
     expect(seriesFromDocuments([{ id: "d2", name: "X", extractedData: { note: "hello" } }])).toEqual([]);
   });

@@ -435,6 +435,55 @@ export interface DedupedSeries {
 // merge, so "do not delete separate records merely because their names are
 // similar" still holds.
 
+/**
+ * Strip the boilerplate suffix an auto-generator appended to a title.
+ *
+ * User report 2026-07-25: "The same record is sometimes duplicated with names
+ * such as 'Expiration' and 'Expires'." Two generators wrote the same source
+ * date under different labels —
+ *
+ *   ⚠️ CA Vehicle Registration – Honda 2021 — Expiration   (document extraction)
+ *   ⚠️ CA Vehicle Registration – Honda 2021 — Expires      (profile field)
+ *
+ * — and dedup by exact title kept both. Normalizing the suffix away lets the
+ * pair collide. The base name still has to match, so two genuinely different
+ * documents never merge.
+ */
+const GENERATED_SUFFIX_RE =
+  /\s*[—–-]\s*(expiration|expires|expiry|expire|renewal|renews|renew|due|payment due|start date)\s*$/i;
+
+export function stripGeneratedSuffix(title: string): string {
+  let out = String(title ?? "").trim();
+  // Repeat: a few rows carry two suffixes ("… — Card — Expiration").
+  for (let i = 0; i < 3; i++) {
+    const next = out.replace(GENERATED_SUFFIX_RE, "").trim();
+    if (next === out) break;
+    out = next;
+  }
+  return out || String(title ?? "").trim();
+}
+
+/**
+ * Two ONE-TIME dates from the same profile on the same day whose titles match
+ * once the generated suffix is removed are the same real-world date.
+ *
+ * Restricted to non-recurring dates on purpose: a monthly bill and a yearly
+ * renewal with similar names are genuinely different schedules.
+ */
+export function isDuplicateOneTimeDate(a: CalendarSeries, b: CalendarSeries): boolean {
+  if (isRecurringRule(a) || isRecurringRule(b)) return false;
+  if (a.baseDate !== b.baseDate || !a.baseDate) return false;
+  const an = slug(stripGeneratedSuffix(a.title));
+  const bn = slug(stripGeneratedSuffix(b.title));
+  if (!an || an !== bn) return false;
+  // Must share an owner, or one side must be unowned.
+  const oa = ownerSet(a);
+  const ob = ownerSet(b);
+  if (oa.size === 0 || ob.size === 0) return true;
+  for (const id of oa) if (ob.has(id)) return true;
+  return false;
+}
+
 /** The scheduling fingerprint of a series: same rule AND same slot. */
 function anchorSignature(series: CalendarSeries): string {
   const rec = String(series.recurrence || "").toLowerCase();
@@ -484,9 +533,15 @@ export function isEquivalentPayment(a: CalendarSeries, b: CalendarSeries): boole
 export function mergeEquivalentPayments(groups: DedupedSeries[]): DedupedSeries[] {
   const out: DedupedSeries[] = [];
   for (const group of groups) {
-    const match = isPaymentKind(group.series.kind)
-      ? out.find((held) => isEquivalentPayment(held.series, group.series))
-      : undefined;
+    // Try BOTH predicates: "Renewal" is a payment kind, so a one-time
+    // "… — Renewal" event would otherwise only be offered the payment test —
+    // which compares raw titles and so never matched its "… — Expiration"
+    // twin. The one-time rule is the stricter of the two (identical date,
+    // identical base name), so checking it as well cannot over-merge.
+    const match = out.find((held) =>
+      (isPaymentKind(group.series.kind) && isPaymentKind(held.series.kind)
+        && isEquivalentPayment(held.series, group.series))
+      || isDuplicateOneTimeDate(held.series, group.series));
     if (!match) {
       out.push({ series: group.series, duplicateIds: [...group.duplicateIds] });
       continue;
@@ -801,13 +856,21 @@ export function sourceHref(
   recordId: string,
   profileId?: string,
 ): string {
+  // Systems that OWN their own record page always route to it, even when the
+  // date is also linked to a profile. User report 2026-07-25: "sometimes when
+  // I press the link, it brings me to somewhere else" — a document expiry
+  // opened the linked person instead of the document, because any profileId
+  // short-circuited the switch below. A document expiration belongs to the
+  // document; that is the record you edit to change the date.
+  if (system === "document" && recordId) return `#/documents/${recordId}`;
+  if (system === "task" && recordId) return `#/tasks?focus=${recordId}`;
   if (profileId) return `#/profiles/${profileId}`;
   switch (system) {
     case "profile": return recordId ? `#/profiles/${recordId}` : "#/profiles";
     case "liability": return recordId ? `#/profiles/${recordId}` : "#/liabilities";
     case "obligation": return recordId ? `#/obligations?focus=${recordId}` : "#/obligations";
     case "task": return recordId ? `#/tasks?focus=${recordId}` : "#/tasks";
-    case "document": return recordId ? `#/documents?focus=${recordId}` : "#/documents";
+    case "document": return recordId ? `#/documents/${recordId}` : "#/documents";
     case "goal": return recordId ? `#/goals?focus=${recordId}` : "#/goals";
     case "habit": return recordId ? `#/habits?focus=${recordId}` : "#/habits";
     case "reminder": return "#/calendar";

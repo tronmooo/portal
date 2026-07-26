@@ -228,16 +228,24 @@ export const CATEGORY_ICONS: Record<UpcomingCategory, string> = {
  * the next occurrence.
  */
 const ANNUAL_RECURRING: Set<UpcomingCategory> = new Set([
+  // ONLY dates whose stored YEAR is meaningless. A birthday's year is a birth
+  // year; an anniversary's is a wedding year; a holiday repeats forever. For
+  // these, and only these, rolling to the next occurrence is correct.
   "birthday",
   "anniversary",
   "holiday",
-  "vehicle_registration",
-  "property_tax",
-  "tax_filing",
-  "membership_renewal",
-  "certification_renewal",
-  "professional_license",
-  "insurance_renewal",
+  // REMOVED (user report 2026-07-25): vehicle_registration, property_tax,
+  // tax_filing, membership_renewal, certification_renewal,
+  // professional_license, insurance_renewal.
+  //
+  // "The Florida driver's license expires in 2034, but the calendar shows
+  //  March 12 as 'in 7 months'."
+  //
+  // An EXPIRATION is a fixed point in time, not an annual recurrence. Calling
+  // one "annual" sent it through rollAnnual, which throws the stored year away
+  // and pins the month/day to the current year — turning 2034 into 2027. The
+  // renewal that follows an expiry is a NEW date on a NEW document, not the
+  // same date repeating.
 ]);
 
 // =============================================================================
@@ -275,11 +283,24 @@ function daysBetween(fromISO: string, toISO: string): number {
   return Math.round((b.getTime() - a.getTime()) / (24 * 60 * 60 * 1000));
 }
 
-/** Roll an annual date forward to its next occurrence on/after today. */
+/**
+ * Roll an annual date forward to its next occurrence on/after today.
+ *
+ * NEVER invents a year for a date that already has a valid future one. The
+ * stored year is only replaced when the date is in the PAST — which is the
+ * only situation where "next occurrence" differs from "the date itself".
+ *
+ * Guard added 2026-07-25: this function used to unconditionally rebuild the
+ * date as (currentYear, storedMonth, storedDay), so a 2034 expiry silently
+ * became 2027. Callers must also be sure the category really is annual — see
+ * ANNUAL_RECURRING, which no longer contains expirations.
+ */
 function rollAnnual(rawISO: string, todayStr: string): string | null {
   const d = parseDate(rawISO);
   if (!d) return null;
   const today = parseDate(todayStr)!;
+  // Already in the future: that date IS the answer. Do not touch the year.
+  if (d.getTime() >= today.getTime()) return isoFromDate(d);
   const candidate = new Date(today.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0);
   if (candidate.getTime() < today.getTime()) {
     candidate.setFullYear(candidate.getFullYear() + 1);

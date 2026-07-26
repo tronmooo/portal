@@ -258,12 +258,14 @@ describe("Rules are recurring-only; Upcoming is every date", () => {
     expect(within(screen.getByTestId("rules-list")).queryByText("House Viewing")).toBeNull();
   });
 
-  it("shows that same one-off in Upcoming, labelled One-time", () => {
+  it("keeps the one-off out of Upcoming too — the whole SCREEN is recurring", () => {
+    // Corrected 2026-07-25: an earlier pass let one-off dates into this
+    // Upcoming list on the reasoning that "dates" is broader than "rules".
+    // That was wrong — a driver's-licence expiry is not a recurring date on
+    // any view of it. One-off dates live on the Calendar tab.
     mount();
     fireEvent.click(screen.getByTestId("view-upcoming"));
-    const list = screen.getByTestId("upcoming-list");
-    const row = within(list).getByText("House Viewing").closest("[data-testid^='occ-row-']")!;
-    expect(row.textContent).toContain("One-time");
+    expect(within(screen.getByTestId("upcoming-list")).queryByText("House Viewing")).toBeNull();
   });
 
   it("labels a recurring date with its actual pattern, not 'One-time'", () => {

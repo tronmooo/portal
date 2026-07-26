@@ -17,7 +17,7 @@
 // and a liability is one rule and one date, with the financial link kept as
 // metadata.
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Plus, Bell } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -108,15 +108,6 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
   const today = cal.todayISO;
 
   // Chip counts are over deduplicated RULES — never occurrences.
-  const counts = useMemo(
-    () => countRules(view === "upcoming" ? cal.allSeries : cal.series),
-    [cal.series, cal.allSeries, view],
-  );
-  const visibleRules = useMemo(
-    () => filterSeriesByCategory(cal.series, category),
-    [cal.series, category],
-  );
-
   // The next live date per rule, and how many future dates it has — both
   // straight from the engine so the card never does its own arithmetic.
   const scheduleByRule = useMemo(() => {
@@ -137,13 +128,37 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
     return m;
   }, [scheduleByRule]);
 
+  const nextDateFor = useCallback(
+    (s: CalendarSeries) => nextByRule.get(s.id)?.effectiveDate ?? null,
+    [nextByRule],
+  );
+
+  // Counts come from the SAME set the cards are drawn from, in both views —
+  // "counts must be derived from the exact same filtered result set as the
+  // visible cards". Switching view must never change what a chip says.
+  // `important` is computed from urgency, so it needs the schedule.
+  const counts = useMemo(
+    () => countRules(cal.series, { todayISO: today, nextDateFor }),
+    [cal.series, today, nextDateFor],
+  );
+  const visibleRules = useMemo(
+    () => filterSeriesByCategory(cal.series, category, nextDateFor, { todayISO: today }),
+    [cal.series, category, nextDateFor, today],
+  );
+
   // Upcoming view: future dates in the active category, grouped by day.
   const grouped = useMemo(() => {
-    // Over ALL series, not just the rules: the Upcoming view is a list of
-    // DATES, so a one-off house viewing belongs here exactly as it appears on
-    // the calendar grid. Only the Rules list is restricted to repeating items.
+    // RECURRING ONLY — both views.
+    //
+    // A previous pass let one-off dates into this Upcoming list, reasoning that
+    // "dates" is broader than "rules". That was wrong: the whole SCREEN is
+    // Recurring Dates, and a driver's-licence expiry is not a recurring date on
+    // any view of it. One-off dates live on the Calendar tab. `cal.series` is
+    // already gated to genuine repeat patterns by `recurringOnly` above.
     const inCategory = new Set(
-      cal.allSeries.filter((s) => seriesInCategory(s, category)).map((s) => s.id),
+      cal.series
+        .filter((s) => seriesInCategory(s, category, { todayISO: today, nextDate: nextDateFor(s) }))
+        .map((s) => s.id),
     );
     const out: Array<{ date: string; items: CalendarOccurrence[] }> = [];
     let current: { date: string; items: CalendarOccurrence[] } | null = null;
@@ -157,13 +172,13 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
       current.items.push(o);
     }
     return out.slice(0, 120);
-  }, [cal.occurrences, cal.allSeries, category, today]);
+  }, [cal.occurrences, cal.series, category, today, nextDateFor]);
 
   const seriesById = useMemo(() => {
     const m = new Map<string, CalendarSeries>();
-    for (const s of cal.allSeries) m.set(s.id, s);
+    for (const s of cal.series) m.set(s.id, s);
     return m;
-  }, [cal.allSeries]);
+  }, [cal.series]);
 
   const runAction = async (series: CalendarSeries, action: CalendarAction) => {
     const occurrence = nextByRule.get(series.id) ?? undefined;

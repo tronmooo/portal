@@ -31,7 +31,7 @@ import {
   generateSeriesOccurrences,
   type CalendarSeries,
 } from "../shared/calendar-occurrences";
-import { countRules } from "../shared/calendar-categories";
+import { countRules, SOURCE_CATEGORIES } from "../shared/calendar-categories";
 
 const TODAY = "2026-07-25";
 const ROBERT = "robert-id";
@@ -183,14 +183,28 @@ describe("counts reflect the scoped, deduplicated rules", () => {
     expect(counts.birthdays).toBe(1);
     expect(counts.tasks).toBe(1);       // the recurring one only
     expect(counts.subscriptions).toBe(1);
-    expect(counts.all).toBe(counts.birthdays + counts.important + counts.bills +
-      counts.subscriptions + counts.liabilities + counts.tasks + counts.reminders);
+    // `all` is the sum of the SOURCE categories. `important` is a status that
+    // overlaps them, so it is deliberately excluded from this invariant.
+    expect(counts.all).toBe(SOURCE_CATEGORIES.reduce((n, c) => n + counts[c], 0));
   });
 
-  it("no longer inflates Important with one-off junk", () => {
-    const before = countRules(seriesFromAll(RAW)).important;
-    const after = countRules(onlyRecurringRules(seriesFromAll(RAW))).important;
-    expect(after).toBeLessThan(before);
+  it("Important is a status, so it is empty without urgency context", () => {
+    // It used to be a source-type dumping ground; now nothing lands in it
+    // merely by existing.
+    const scoped = filterSeriesByProfiles(
+      onlyRecurringRules(seriesFromAll(RAW)), [ROBERT], { selfIds: SELF_IDS },
+    );
+    expect(countRules(scoped).important).toBe(0);
+  });
+
+  it("Important counts only what is overdue or due soon", () => {
+    const scoped = filterSeriesByProfiles(
+      onlyRecurringRules(seriesFromAll(RAW)), [ROBERT], { selfIds: SELF_IDS },
+    );
+    const soon = countRules(scoped, { todayISO: TODAY, nextDateFor: () => "2026-07-28" });
+    const later = countRules(scoped, { todayISO: TODAY, nextDateFor: () => "2027-07-28" });
+    expect(soon.important).toBe(scoped.length);
+    expect(later.important).toBe(0);
   });
 });
 

@@ -372,6 +372,13 @@ describe("horizons and auto-extend", () => {
 });
 
 describe("sourceHref — every item knows where it came from", () => {
+  it("routes a document to the DOCUMENT even when a profile is linked", () => {
+    // A document expiration is edited on the document, not on the person it
+    // happens to be attached to.
+    expect(sourceHref("document", "d-1", JOE)).toBe("#/documents/d-1");
+    expect(sourceHref("task", "t-1", JOE)).toBe("#/tasks?focus=t-1");
+  });
+
   it("routes a profile-owned date to that profile", () => {
     expect(sourceHref("event", "evt-1", JOE)).toBe(`#/profiles/${JOE}`);
     expect(sourceHref("obligation", "ob-1", "liab-9")).toBe("#/profiles/liab-9");
@@ -382,7 +389,7 @@ describe("sourceHref — every item knows where it came from", () => {
     expect(sourceHref("obligation", "ob-1")).toBe("#/obligations?focus=ob-1");
     expect(sourceHref("task", "t-1")).toBe("#/tasks?focus=t-1");
     expect(sourceHref("event", "e-1")).toBe("#/calendar?event=e-1");
-    expect(sourceHref("document", "d-1")).toBe("#/documents?focus=d-1");
+    expect(sourceHref("document", "d-1")).toBe("#/documents/d-1");
     expect(sourceHref("liability", "l-1")).toBe("#/profiles/l-1");
   });
 
