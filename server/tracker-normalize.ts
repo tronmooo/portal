@@ -27,9 +27,14 @@ const FIELD_ALIASES: Record<string, string> = {
   // distance
   miles: "distance", km: "distance", kilometers: "distance",
   meters: "distance", mi: "distance",
-  // weight
+  // weight — including the unit-suffixed keys models like to emit for lifts.
+  // Without these, "45 weightLbs" persisted as its own stray field and the card
+  // read "45 weightLbs" instead of "45 lbs" (user screenshot 2026-07-26).
   lbs: "weight", lb: "weight", pounds: "weight",
+  weightlbs: "weight", weight_lbs: "weight", weightpounds: "weight",
   kg: "weight", kilograms: "weight", mass: "weight",
+  // strength sets/reps
+  repetitions: "reps", rep: "reps", set: "sets",
   // temperature
   temp: "temperature", temperature: "temperature",
   // blood pressure

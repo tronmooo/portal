@@ -150,3 +150,46 @@ describe("normalizeTrackerEntry — single-numeric mapping is value-aware", () =
     expect(values.mood).toBe("happy");
   });
 });
+
+// Regression for the reported bug (screenshot 2026-07-26): a lift logged from
+// chat arrived as { activityType, weightLbs, reps, sets }. "weightLbs" matched
+// no field on the Bench Press tracker, so it persisted as its own stray column
+// and the entry card read "110 weightLbs" instead of "110 lbs" — and the
+// strength enrichment (weight × reps × sets) never fired because it looks for
+// `weight`.
+const benchPress = {
+  name: "Bench Press",
+  category: "fitness",
+  fields: [
+    { name: "weight", type: "number", unit: "lbs", isPrimary: true },
+    { name: "reps", type: "number", unit: "reps" },
+    { name: "sets", type: "number", unit: "sets" },
+    { name: "rpe", type: "number", unit: "/10" },
+  ],
+} as any;
+
+describe("normalizeTrackerEntry — strength lifts", () => {
+  it("maps weightLbs onto the tracker's canonical weight field", () => {
+    const { values } = normalizeTrackerEntry(benchPress, {
+      activityType: "bench press", weightLbs: 110, reps: 10, sets: 3,
+    });
+    expect(values.weight).toBe(110);
+    expect(values.weightLbs).toBeUndefined();
+    expect(values.reps).toBe(10);
+    expect(values.sets).toBe(3);
+    // The exercise label stays as its own field — it is not a metric.
+    expect(values.activityType).toBe("bench press");
+  });
+
+  it("maps repetitions/set aliases too", () => {
+    const { values } = normalizeTrackerEntry(benchPress, { lbs: 45, repetitions: 8, set: 3 });
+    expect(values.weight).toBe(45);
+    expect(values.reps).toBe(8);
+    expect(values.sets).toBe(3);
+  });
+
+  it("keeps each lift metric distinct — no collapse onto one numeric field", () => {
+    const { values } = normalizeTrackerEntry(benchPress, { weightLbs: 110, reps: 10, sets: 3 });
+    expect([values.weight, values.reps, values.sets]).toEqual([110, 10, 3]);
+  });
+});

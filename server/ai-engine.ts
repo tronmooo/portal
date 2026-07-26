@@ -5065,12 +5065,23 @@ ACTIVITY TRACKING ARCHITECTURE — follow exactly:
    - Soccer → trackerName: "Soccer"
    - Swimming → trackerName: "Swimming"
    - Yoga → trackerName: "Yoga"
-   - Weight Lifting → trackerName: "Lifting"
    - Walking → trackerName: "Walking" (separate from Running)
    - Cycling → trackerName: "Cycling"
    NEVER use "Running" for basketball, tennis, soccer, or any non-running activity.
+   STRENGTH TRAINING = ONE TRACKER PER EXERCISE, named for the LIFT — never a
+   catch-all "Lifting" bucket with the exercise buried in a field:
+   - "dumbbell curls with 45s, 8 reps, 3 sets" → trackerName: "Dumbbell Curls"
+   - "bench press 110 for 10, 3 sets"          → trackerName: "Bench Press"
+   - squats / deadlifts / overhead press / rows → their own trackers
+   Each lift has its own weight progression, so merging them makes the chart
+   meaningless (110 lb bench and 45 lb curls in one line). Only fall back to
+   trackerName "Lifting" when the user names NO exercise at all ("lifted weights
+   for 45 minutes").
 
 3. EVERY FITNESS ENTRY MUST INCLUDE activityType in values:
+   Strength example values (tracker "Bench Press"): { activityType: "bench press", weight: 110, reps: 10, sets: 3 }
+   Use the canonical keys weight / reps / sets for lifts — NOT weightLbs, lbs, or
+   repetitions — so the entry renders as "110 lbs" and total volume is computed.
    Basketball example values: { activityType: "basketball", duration: 30, caloriesBurned: 210, intensity: "moderate" }
    Running example values: { activityType: "running", distance: 5, duration: 50, pace: "10:00", caloriesBurned: 500 }
    Tennis example values: { activityType: "tennis", duration: 60, caloriesBurned: 480, intensity: "high" }
@@ -7047,9 +7058,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           entryEnrichment = enrichHydrationEntry(input.values);
         } else if (canonType === "sleep") {
           entryEnrichment = enrichSleepEntry(input.values);
-        } else if (input.values.weight != null && input.values.reps != null) {
+        } else if ((input.values.weight ?? input.values.weightLbs ?? input.values.lbs) != null
+                   && (input.values.reps ?? input.values.repetitions) != null) {
           // Strength-shaped entry on any tracker (Bench Press, Squats, …):
-          // weight × reps × sets → total volume, calculated exactly.
+          // weight × reps × sets → total volume, calculated exactly. The gate
+          // reads the same aliases enrichStrengthEntry does — it used to check
+          // `weight` only, so a model that emitted weightLbs silently lost its
+          // volume calculation (user screenshot 2026-07-26).
           entryEnrichment = enrichStrengthEntry(input.values);
         }
         if (entryEnrichment && (
