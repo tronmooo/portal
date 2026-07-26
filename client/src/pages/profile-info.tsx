@@ -139,11 +139,33 @@ function SingleProfileInfo({ id }: { id: string }) {
   });
 
   const saveField = (key: string, value: string) =>
-    patch.mutate({ fields: { ...(profile?.fields || {}), [key]: value } });
+    patch.mutate({ fields: { [key]: value } });
+  // Profile field delete must use the explicit `fieldsToDelete` signal.
+  // The storage layer (mergeAndApplyDeletes) MERGES incoming `fields` on top
+  // of the existing JSONB, so sending `{ fields: rest }` with the key omitted
+  // is a no-op — the removed key stays in storage and re-surfaces on refresh.
+  // Optimistically strip the key from the detail cache so the X click feels
+  // instant, and roll back if the PATCH fails. Mirrors the pattern used in
+  // profile-detail.tsx so both Info and Detail pages behave the same way.
   const removeField = (key: string) => {
-    const next = { ...(profile?.fields || {}) };
-    delete next[key];
-    patch.mutate({ fields: next });
+    (async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", id, "detail"] });
+      const prev = queryClient.getQueryData(["/api/profiles", id, "detail"]);
+      queryClient.setQueryData(["/api/profiles", id, "detail"], (old: any) => {
+        if (!old?.fields) return old;
+        const { [key]: _drop, ...rest } = old.fields;
+        return { ...old, fields: rest };
+      });
+      try {
+        await apiRequest("PATCH", `/api/profiles/${id}`, { fieldsToDelete: [key] });
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "none" });
+      } catch (err: any) {
+        if (prev !== undefined) queryClient.setQueryData(["/api/profiles", id, "detail"], prev);
+        toast({ title: "Failed to remove", description: formatApiError(err), variant: "destructive" });
+      }
+    })();
   };
 
   const avatarMutation = useMutation({
