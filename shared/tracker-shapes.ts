@@ -20,6 +20,7 @@
 // =============================================================================
 
 import type { TrackerField } from "./schema";
+import { canonicalFieldKey } from "./field-aliases";
 
 export interface TrackerShape {
   /** Stable id of the shape, e.g. "bench_press", "running", "nutrition". */
@@ -131,6 +132,50 @@ const PLANK_SHAPE: TrackerField[] = [
   { name: "sets",     type: "number", unit: "sets" },
 ];
 
+// Loaded carries: the load is the metric, distance/time are secondary.
+const CARRY_SHAPE: TrackerField[] = [
+  { name: "weight",   type: "number", unit: "lbs", isPrimary: true },
+  { name: "distance", type: "number", unit: "ft" },
+  { name: "duration", type: "number", unit: "sec" },
+  { name: "sets",     type: "number", unit: "sets" },
+];
+
+// Machine / class cardio where TIME is what the user actually logs
+// (elliptical, stair climber, jump rope, HIIT, spin, rucking).
+const CARDIO_MACHINE_SHAPE: TrackerField[] = [
+  { name: "duration",       type: "number", unit: "min", isPrimary: true },
+  { name: "distance",       type: "number", unit: "mi" },
+  { name: "caloriesBurned", type: "number", unit: "kcal" },
+  { name: "heart_rate",     type: "number", unit: "bpm" },
+];
+
+// Rowing ergometer — meters, not miles.
+const ROW_ERG_SHAPE: TrackerField[] = [
+  { name: "distance",       type: "number", unit: "m", isPrimary: true },
+  { name: "duration",       type: "number", unit: "min" },
+  { name: "caloriesBurned", type: "number", unit: "kcal" },
+];
+
+// Sports & classes: duration + effort. Covers everything from basketball to
+// jiu-jitsu to pilates, so a sport logged from chat never lands on a bare
+// "value" field.
+const SPORT_SHAPE: TrackerField[] = [
+  { name: "duration",       type: "number", unit: "min", isPrimary: true },
+  { name: "caloriesBurned", type: "number", unit: "kcal" },
+  { name: "intensity",      type: "select", options: ["light", "moderate", "intense"] },
+  { name: "heart_rate",     type: "number", unit: "bpm" },
+];
+
+// The generic "Lifting"/"Weights" bucket — correct only when the user names no
+// exercise. It needs duration too, since a bucket log is usually "lifted for
+// 45 minutes" rather than a specific set.
+const LIFT_BUCKET_SHAPE: TrackerField[] = [
+  { name: "weight",   type: "number", unit: "lbs", isPrimary: true },
+  { name: "reps",     type: "number", unit: "reps" },
+  { name: "sets",     type: "number", unit: "sets" },
+  { name: "duration", type: "number", unit: "min" },
+];
+
 const MILEAGE_SHAPE: TrackerField[] = [
   { name: "miles", type: "number", unit: "mi", isPrimary: true },
 ];
@@ -188,21 +233,84 @@ const CATALOG: ShapeEntry[] = [
     "antibiotic", "prescription", "medication",
   ] },
   // --- Specific lifts ------------------------------------------------------
+  // NOTE on patterns: bare "press", "row" and "curl" are NOT usable as
+  // patterns — "press" would swallow "Blood Pressure", "row" would swallow
+  // "Rowing", "curl" would swallow "Curling". Plural forms ("presses",
+  // "rows", "curls") are safe because the colliding words don't contain them,
+  // so every family lists explicit compounds PLUS the plural catch-all.
   { id: "bench_press",  fields: LIFT_SHAPE, patterns: ["bench press", "bench-press", "bench"] },
   { id: "squat",        fields: LIFT_SHAPE, patterns: ["squat"] },
-  { id: "deadlift",     fields: LIFT_SHAPE, patterns: ["deadlift"] },
-  { id: "overhead",     fields: LIFT_SHAPE, patterns: ["overhead press", "shoulder press", "ohp"] },
-  { id: "row",          fields: LIFT_SHAPE, patterns: ["barbell row", "bent over row", "pendlay row"] },
-  { id: "curl",         fields: LIFT_SHAPE, patterns: ["bicep curl", "barbell curl", "dumbbell curl"] },
-  // Generic "Lifting" / "Weights" — use the same lift shape.
-  { id: "lifting",      fields: LIFT_SHAPE, patterns: ["lifting", "weight lifting", "weightlifting", "weights", "strength"] },
-  // --- Bodyweight ----------------------------------------------------------
-  { id: "pushup",       fields: PUSHUP_SHAPE, patterns: ["push-up", "pushup", "push up", "pull-up", "pullup", "pull up", "chin-up", "chinup", "chin up", "dip"] },
-  { id: "plank",        fields: PLANK_SHAPE, patterns: ["plank"] },
+  { id: "deadlift",     fields: LIFT_SHAPE, patterns: ["deadlift", "rdl", "romanian dead", "stiff leg dead", "sumo dead"] },
+  { id: "press",        fields: LIFT_SHAPE, patterns: [
+    "overhead press", "shoulder press", "ohp", "military press", "arnold press",
+    "incline press", "decline press", "chest press", "dumbbell press",
+    "machine press", "floor press", "landmine press", "push press", "z press",
+    "leg press", "presses",
+  ] },
+  { id: "row",          fields: LIFT_SHAPE, patterns: [
+    "barbell row", "bent over row", "bent-over row", "pendlay row", "dumbbell row",
+    "seated row", "cable row", "t-bar row", "t bar row", "chest supported row",
+    "inverted row", "upright row", "machine row", "rows",
+  ] },
+  { id: "curl",         fields: LIFT_SHAPE, patterns: [
+    "bicep curl", "barbell curl", "dumbbell curl", "hammer curl", "preacher curl",
+    "concentration curl", "cable curl", "ez bar curl", "incline curl", "spider curl",
+    "wrist curl", "leg curl", "hamstring curl", "drag curl", "curls",
+  ] },
+  { id: "pulldown",     fields: LIFT_SHAPE, patterns: ["lat pulldown", "pulldown", "pull down", "pullover", "pull-over"] },
+  { id: "fly",          fields: LIFT_SHAPE, patterns: ["chest fly", "cable fly", "pec deck", "reverse fly", "rear delt fly", "flyes"] },
+  { id: "raise",        fields: LIFT_SHAPE, patterns: [
+    "lateral raise", "side raise", "front raise", "rear delt raise", "calf raise",
+  ] },
+  { id: "extension",    fields: LIFT_SHAPE, patterns: [
+    "tricep extension", "triceps extension", "overhead extension", "skull crusher",
+    "skullcrusher", "tricep pushdown", "pushdown", "kickback", "leg extension",
+    "back extension", "hyperextension",
+  ] },
+  { id: "hinge",        fields: LIFT_SHAPE, patterns: [
+    "hip thrust", "glute bridge", "good mornings", "shrug", "face pull",
+    "kettlebell swing", "kb swing", "hack squat", "smith machine", "lunge",
+    "split squat", "step-up", "step up", "sled push", "sled drag", "prowler",
+  ] },
+  { id: "olympic",      fields: LIFT_SHAPE, patterns: [
+    "power clean", "hang clean", "clean and jerk", "clean & jerk", "snatch",
+    "thruster", "push jerk", "split jerk", "turkish get", "muscle up", "muscle-up",
+  ] },
+  { id: "carry",        fields: CARRY_SHAPE, patterns: ["farmer carry", "farmers carry", "farmer's carry", "suitcase carry", "loaded carry", "yoke walk"] },
+  // Generic "Lifting" / "Weights" — same lift shape. MUST stay after every
+  // specific lift above so a named exercise never falls through to it.
+  { id: "lifting",      fields: LIFT_BUCKET_SHAPE, patterns: ["lifting", "weight lifting", "weightlifting", "weights", "strength"] },
+  // --- Bodyweight: rep-counted ---------------------------------------------
+  { id: "pushup",       fields: PUSHUP_SHAPE, patterns: [
+    "push-up", "pushup", "push up", "pull-up", "pullup", "pull up",
+    "chin-up", "chinup", "chin up", "dip", "burpee", "jumping jack",
+    "air squat", "box jump", "mountain climber", "crunch", "sit-up", "sit up",
+    "situp", "russian twist", "leg raise", "knee raise", "toes to bar",
+    "ab wheel", "flutter kick", "bicycle crunch", "v-up", "superman",
+  ] },
+  // --- Bodyweight: timed holds ---------------------------------------------
+  { id: "plank",        fields: PLANK_SHAPE, patterns: ["plank", "wall sit", "dead hang", "l-sit", "l sit", "hollow hold", "isometric hold"] },
   // --- Cardio --------------------------------------------------------------
-  { id: "running",      fields: RUN_SHAPE, patterns: ["running", "run", "jog", "jogging", "treadmill"] },
-  { id: "cycling",      fields: RIDE_SHAPE, patterns: ["cycling", "biking", "bike ride", "bicycle"] },
-  { id: "swimming",     fields: SWIM_SHAPE, patterns: ["swimming", "swim"] },
+  { id: "running",      fields: RUN_SHAPE, patterns: ["running", "run", "jog", "jogging", "treadmill", "sprint"] },
+  { id: "cycling",      fields: RIDE_SHAPE, patterns: ["cycling", "biking", "bike ride", "bicycle", "spin class", "spinning", "peloton"] },
+  { id: "swimming",     fields: SWIM_SHAPE, patterns: ["swimming", "swim", "laps"] },
+  { id: "hiking",       fields: RIDE_SHAPE, patterns: ["hiking", "hike", "trail walk", "rucking", "ruck"] },
+  { id: "row_erg",      fields: ROW_ERG_SHAPE, patterns: ["rowing machine", "row machine", "rowing", "erg", "ergometer", "rower", "ski erg", "skierg"] },
+  { id: "cardio_machine", fields: CARDIO_MACHINE_SHAPE, patterns: [
+    "elliptical", "stair climber", "stairmaster", "stair stepper", "jump rope",
+    "jumprope", "skipping rope", "hiit", "circuit training", "battle rope",
+    "assault bike", "airdyne", "versaclimber",
+  ] },
+  // --- Sports & classes ----------------------------------------------------
+  { id: "sport",        fields: SPORT_SHAPE, patterns: [
+    "basketball", "tennis", "soccer", "football", "baseball", "softball", "golf",
+    "pickleball", "volleyball", "badminton", "racquetball", "squash", "handball",
+    "boxing", "martial art", "karate", "judo", "jiu jitsu", "jiu-jitsu", "bjj",
+    "muay thai", "wrestling", "hockey", "lacrosse", "rugby", "cricket", "polo",
+    "skiing", "snowboard", "surfing", "skateboard", "rock climbing", "bouldering",
+    "pilates", "barre", "crossfit", "zumba", "dance class", "kickball", "frisbee",
+    "curling", "bowling", "fencing", "archery", "gymnastics", "cheer",
+  ] },
   { id: "mileage",      fields: MILEAGE_SHAPE, patterns: ["mileage", "vehicle miles", "car miles"] },
   // --- Stretch / mind ------------------------------------------------------
   { id: "stretching",   fields: STRETCH_SHAPE, patterns: ["stretch", "stretching", "mobility", "yoga"] },
@@ -259,6 +367,69 @@ const CATALOG: ShapeEntry[] = [
     { name: "cost",     type: "number", unit: "$" },
   ], patterns: ["vehicle maintenance", "vehicle service", "car maintenance", "car service", "service"] },
 ];
+
+/**
+ * Last-resort shape inference from an ENTRY's VALUES, for subjects the name
+ * catalog has never heard of — "Jefferson Curl", "Zercher Carry", "Sandbag Over
+ * Shoulder", whatever the user invents next. The shape of the numbers is enough
+ * to tell a lift from a rep-out from a timed hold, so an unknown exercise still
+ * gets real units instead of a bare unit-less column.
+ *
+ * Returns null when the values don't look like exercise at all.
+ */
+export function inferShapeFromValues(values: Record<string, any> | null | undefined): TrackerField[] | null {
+  if (!values || typeof values !== "object") return null;
+  const num = (k: string) => {
+    const v = (values as any)[k];
+    return typeof v === "number" ? isFinite(v)
+      : typeof v === "string" ? /^\s*[-+]?\d/.test(v)
+      : false;
+  };
+  // Canonicalize incoming keys first so weightLbs/repetitions/setCount count.
+  const canon = new Set(Object.keys(values).map(k => canonicalFieldKey(k)));
+  const hasNum = (canonName: string) =>
+    canon.has(canonName) && Object.keys(values).some(k => canonicalFieldKey(k) === canonName && num(k));
+
+  if (hasNum("weight") && hasNum("reps")) return LIFT_SHAPE.map(f => ({ ...f }));
+  if (hasNum("reps")) return PUSHUP_SHAPE.map(f => ({ ...f }));
+  if (hasNum("duration") && (canon.has("caloriesBurned") || canon.has("intensity") || canon.has("heart_rate"))) {
+    return SPORT_SHAPE.map(f => ({ ...f }));
+  }
+  return null;
+}
+
+/**
+ * The field list a BRAND-NEW tracker should be created with, given its name,
+ * category and the first entry's values.
+ *
+ * Before this existed, the auto-create path in the AI engine built fields
+ * verbatim from the value keys with NO units — so a lift logged as
+ * { activityType, weightLbs, reps, sets } created a unit-less `weightLbs`
+ * column and the card read "45 weightLbs" (user screenshot 2026-07-26). Now the
+ * canonical shape wins, value keys that alias into it are dropped rather than
+ * duplicated, and anything genuinely extra (activityType, notes) is appended.
+ */
+export function shapeForNewTracker(
+  name: string,
+  category: string | undefined,
+  values: Record<string, any> | null | undefined,
+): TrackerField[] {
+  const keys = Object.keys(values || {}).filter(k => k !== "_notes" && !k.startsWith("_"));
+  const valueFields: TrackerField[] = keys.map(k => ({
+    name: k,
+    type: (typeof (values as any)[k] === "number" ? "number" : "text") as TrackerField["type"],
+  }));
+  const base = inferTrackerShape(name, category) || inferShapeFromValues(values);
+  if (!base || base.length === 0) return valueFields;
+  const covered = new Set(base.map(f => String(f.name).toLowerCase()));
+  const extras = valueFields.filter(f => {
+    const lc = f.name.toLowerCase();
+    // Drop both an exact hit and an alias hit — the normalizer folds
+    // weightLbs → weight, so a separate weightLbs column would stay empty.
+    return !covered.has(lc) && !covered.has(canonicalFieldKey(lc));
+  });
+  return [...base.map(f => ({ ...f })), ...extras];
+}
 
 /**
  * Look up the canonical shape for a tracker by name + optional category.

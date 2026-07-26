@@ -25,15 +25,25 @@ describe("strength routing instructions", () => {
     expect(engine).not.toContain(`Weight Lifting → trackerName: "Lifting"`);
   });
 
-  it("names a tracker per exercise, with Lifting only as the unnamed fallback", () => {
-    expect(engine).toContain(`STRENGTH TRAINING = ONE TRACKER PER EXERCISE`);
-    expect(engine).toContain(`trackerName: "Dumbbell Curls"`);
-    expect(engine).toContain(`trackerName: "Bench Press"`);
-    expect(engine).toMatch(/Only fall back to\s+trackerName "Lifting" when the user names NO exercise at all/);
+  it("states the rule generally — the NAMED thing is the tracker", () => {
+    expect(engine).toMatch(/whatever the user NAMED is the tracker name/i);
+    // Buckets are called out as buckets, not as destinations.
+    expect(engine).toMatch(/NEVER route a named exercise to "Lifting"/);
+    expect(engine).toMatch(/correct ONLY when the user names no exercise at all/i);
+    // And an exercise the catalog has never seen still gets its own tracker.
+    expect(engine).toMatch(/unfamiliar exercise\s+is still its own tracker/i);
   });
 
-  it("asks for canonical weight/reps/sets keys, not weightLbs", () => {
-    expect(engine).toContain("Use the canonical keys weight / reps / sets for lifts");
+  it("spans every discipline, not just barbell lifts", () => {
+    for (const example of ["Bench Press", "Dumbbell Curls", "Lat Pulldown",
+      "Pull-Ups", "Plank", "Elliptical", "Pilates", "Basketball", "Pickleball"]) {
+      expect(engine, `engine prompt missing ${example}`).toContain(example);
+    }
+  });
+
+  it("asks for canonical weight/reps/sets/duration keys, not weightLbs", () => {
+    expect(engine).toMatch(/canonical keys weight \/ reps \/ sets \/ duration/);
+    expect(engine).toMatch(/NOT weightLbs/);
   });
 
   it("the bulk extractor carries the same rule and overrides tracker reuse", () => {
@@ -43,9 +53,11 @@ describe("strength routing instructions", () => {
       profileNames: ["Me"],
       habitNames: [],
     });
-    expect(prompt).toContain("one tracker PER EXERCISE");
+    expect(prompt).toMatch(/whatever the user NAMED is the tracker name, one operation PER exercise/);
     expect(prompt).toContain(`trackerName "Dumbbell Curls"`);
     expect(prompt).toContain(`trackerName "Bench Press"`);
+    expect(prompt).toContain(`trackerName "Pull-Ups"`);
+    expect(prompt).toContain(`trackerName "Pickleball"`);
     // The reuse rule must not swallow a named lift into the existing bucket.
     expect(prompt).toContain(`an existing "Lifting" tracker is NOT a match for a named exercise`);
   });

@@ -12,38 +12,10 @@
 // the UI can't display side-by-side. This module makes them match.
 
 import type { Tracker, TrackerField } from "../shared/schema";
+import { FIELD_ALIASES } from "../shared/field-aliases";
 
-// ── Aliases that map AI/document-supplied field names → tracker fields ──
-// LHS = source key (lowercased), RHS = canonical field name we'll try
-// to find on the tracker. If the tracker has a field with that name we
-// rename the incoming key; otherwise we leave the key as-is (the parent
-// flow surfaces unknown fields to the user).
-const FIELD_ALIASES: Record<string, string> = {
-  // generic
-  steps: "value", count: "value", amount: "value", total: "value",
-  score: "value", reading: "value", number: "value",
-  // duration
-  time: "duration", minutes: "duration", hours: "duration", length: "duration",
-  // distance
-  miles: "distance", km: "distance", kilometers: "distance",
-  meters: "distance", mi: "distance",
-  // weight — including the unit-suffixed keys models like to emit for lifts.
-  // Without these, "45 weightLbs" persisted as its own stray field and the card
-  // read "45 weightLbs" instead of "45 lbs" (user screenshot 2026-07-26).
-  lbs: "weight", lb: "weight", pounds: "weight",
-  weightlbs: "weight", weight_lbs: "weight", weightpounds: "weight",
-  kg: "weight", kilograms: "weight", mass: "weight",
-  // strength sets/reps
-  repetitions: "reps", rep: "reps", set: "sets",
-  // temperature
-  temp: "temperature", temperature: "temperature",
-  // blood pressure
-  sys: "systolic", dia: "diastolic",
-  // heart rate
-  bpm: "heart_rate", hr: "heart_rate", pulse: "heart_rate",
-  // sleep
-  sleep: "hours", "sleep_hours": "hours",
-};
+// The alias table lives in shared/field-aliases so the tracker-CREATION path
+// resolves incoming keys exactly the way this normalizer does.
 
 // ── Unit detection / conversion ─────────────────────────────────────
 

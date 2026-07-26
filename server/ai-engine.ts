@@ -21,13 +21,14 @@ import {
   insertMemorySchema,
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
+import { resolveExerciseTracker } from "../shared/exercise-routing";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
-import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
+import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit, shapeForNewTracker } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
@@ -5068,20 +5069,32 @@ ACTIVITY TRACKING ARCHITECTURE — follow exactly:
    - Walking → trackerName: "Walking" (separate from Running)
    - Cycling → trackerName: "Cycling"
    NEVER use "Running" for basketball, tennis, soccer, or any non-running activity.
-   STRENGTH TRAINING = ONE TRACKER PER EXERCISE, named for the LIFT — never a
-   catch-all "Lifting" bucket with the exercise buried in a field:
-   - "dumbbell curls with 45s, 8 reps, 3 sets" → trackerName: "Dumbbell Curls"
-   - "bench press 110 for 10, 3 sets"          → trackerName: "Bench Press"
-   - squats / deadlifts / overhead press / rows → their own trackers
-   Each lift has its own weight progression, so merging them makes the chart
-   meaningless (110 lb bench and 45 lb curls in one line). Only fall back to
-   trackerName "Lifting" when the user names NO exercise at all ("lifted weights
-   for 45 minutes").
+   THE RULE, stated generally: whatever the user NAMED is the tracker name. If
+   they can name it, it gets its own tracker — never a catch-all bucket with the
+   real subject buried in a field. This holds for every discipline:
+   - lifts: "Bench Press", "Dumbbell Curls", "Romanian Deadlift", "Lat Pulldown",
+     "Leg Press", "Hip Thrust", "Hammer Curls", "Face Pulls", "Power Clean"
+   - bodyweight: "Pull-Ups", "Burpees", "Plank", "Wall Sit", "Russian Twists"
+   - machines/classes: "Elliptical", "Rowing", "Stair Climber", "Spin Class",
+     "Pilates", "HIIT"
+   - sports: "Basketball", "Pickleball", "Jiu-Jitsu", "Bouldering", "Golf"
+   Each of these has its own progression, so merging them makes the chart
+   meaningless (110 lb bench and 45 lb curls on one line; a 3-mile run averaged
+   with a yoga class). NEVER route a named exercise to "Lifting", "Workout",
+   "Gym", "Strength Training", "Exercise", "Cardio", or "Sports" — those are
+   buckets, and are correct ONLY when the user names no exercise at all
+   ("lifted weights for 45 minutes", "went to the gym"). An unfamiliar exercise
+   is still its own tracker: use the user's words verbatim, title-cased.
+   A workout listing several exercises = ONE log_tracker_entry PER exercise.
 
 3. EVERY FITNESS ENTRY MUST INCLUDE activityType in values:
    Strength example values (tracker "Bench Press"): { activityType: "bench press", weight: 110, reps: 10, sets: 3 }
-   Use the canonical keys weight / reps / sets for lifts — NOT weightLbs, lbs, or
-   repetitions — so the entry renders as "110 lbs" and total volume is computed.
+   Rep-only move (tracker "Pull-Ups"): { activityType: "pull-ups", reps: 12, sets: 3 }
+   Timed hold (tracker "Plank"): { activityType: "plank", duration: 90, sets: 3 }  // seconds
+   Sport/class (tracker "Pickleball"): { activityType: "pickleball", duration: 60, caloriesBurned: 400, intensity: "moderate" }
+   Use the canonical keys weight / reps / sets / duration — NOT weightLbs, lbs,
+   repetitions, or setCount — so the entry renders as "110 lbs" and total volume
+   is computed.
    Basketball example values: { activityType: "basketball", duration: 30, caloriesBurned: 210, intensity: "moderate" }
    Running example values: { activityType: "running", distance: 5, duration: 50, pace: "10:00", caloriesBurned: 500 }
    Tennis example values: { activityType: "tennis", duration: 60, caloriesBurned: 480, intensity: "high" }
@@ -6972,6 +6985,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
       const trackers = await storage.getTrackers();
 
+      // ── EXERCISE ROUTING (deterministic backstop, 2026-07-26) ──
+      // A generic bucket name with the real exercise buried in the values
+      // ("Lifting" + activityType:"bench press") is re-routed to a tracker
+      // named for the exercise. The prompts ask for this, but a prompt is a
+      // suggestion — this runs on EVERY write (chat tool call, bulk extractor,
+      // document extraction) so no path can collapse distinct lifts into one
+      // meaningless chart. Runs BEFORE canonical-activity so a diverted name
+      // still gets canonicalized ("Cardio" + activity:"jogging" → Running).
+      const exerciseRoute = resolveExerciseTracker(input.trackerName, input.values);
+      if (exerciseRoute) {
+        logger.info("ai", `Exercise routing: "${exerciseRoute.from}" → "${exerciseRoute.trackerName}" (via ${exerciseRoute.via})`);
+        input.trackerName = exerciseRoute.trackerName;
+      }
+
       // ── CANONICAL ACTIVITY RESOLUTION (normalization layer, 2026-07-15) ──
       // "Walking Distance", "Steps Walked", "Daily Walk" etc. are all ONE
       // canonical Walking tracker — never separate trackers. Keep the raw
@@ -7493,13 +7520,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // P0.3a: validate the schema-covered part with the shared insert schema;
       // linkedProfiles isn't part of insertTrackerSchema, so it rides alongside
       // the validated payload explicitly (createTracker supports it inline).
+      // Fields for the NEW tracker come from the canonical shape (name-based,
+      // else value-shaped) — not verbatim from the AI's value keys. Building
+      // them verbatim is what created a unit-less `weightLbs` column so the
+      // card read "45 weightLbs" instead of "45 lbs" (screenshot 2026-07-26),
+      // and it left every auto-created tracker without units of any kind.
       const autoTrackerPayload = validateAiPayload(insertTrackerSchema, {
         name: trackerDisplayName,
         category: autoCategory,
-        fields: Object.keys(input.values || {}).filter(k => k !== '_notes').map(k => ({
-          name: k,
-          type: typeof input.values[k] === "number" ? "number" as const : "text" as const,
-        })),
+        fields: shapeForNewTracker(trackerDisplayName, autoCategory, input.values || {}),
       }, "tracker");
       if (!autoTrackerPayload.ok) return { error: autoTrackerPayload.error };
       // Wrap create+log so a failure returns a precise, actionable error and
