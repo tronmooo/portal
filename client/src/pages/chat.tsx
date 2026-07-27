@@ -2901,8 +2901,22 @@ export default function ChatPage() {
       profileId?: string;
       message?: string;
     }) => {
-      const res = await apiRequest("POST", "/api/upload", payload);
-      return res.json();
+      // "Load failed" (iOS) / "Failed to fetch" = the connection died mid-
+      // transfer, common on cellular. The server dedupes re-uploads by content
+      // hash, so ONE automatic retry is safe — it can never create a second
+      // document or expense.
+      const isConnectionDrop = (e: any) =>
+        e instanceof TypeError ||
+        /load failed|failed to fetch|network|timed out/i.test(String(e?.message || e || ""));
+      try {
+        const res = await apiRequest("POST", "/api/upload", payload);
+        return res.json();
+      } catch (e) {
+        if (!isConnectionDrop(e)) throw e;
+        await new Promise((r) => setTimeout(r, 2500));
+        const res = await apiRequest("POST", "/api/upload", payload);
+        return res.json();
+      }
     },
     onSuccess: (data) => {
       const assistantMsg: ChatMessage = {
@@ -2917,15 +2931,32 @@ export default function ChatPage() {
         pendingExtraction: data.pendingExtraction,
       };
       setMessages((prev) => [...prev, assistantMsg]);
+      // Only NOW release the staged attachment — it stays attached through
+      // failures so a dropped connection never costs the user their photo.
+      setAttachments((prev) => {
+        for (const a of prev) {
+          if (a.previewUrl) {
+            URL.revokeObjectURL(a.previewUrl);
+            attachmentDataRef.current.delete(a.previewUrl);
+          }
+        }
+        return [];
+      });
+      setSelectedProfileId("none");
       invalidateAll();
     },
     onError: (err: Error) => {
+      const isConnectionDrop =
+        err instanceof TypeError ||
+        /load failed|failed to fetch|network|timed out/i.test(err.message || "");
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: `Failed to process the uploaded file: ${err.message || "Network error"}. Please try again.`,
+          content: isConnectionDrop
+            ? `The connection dropped while uploading — nothing was lost. Your file is still attached below; check your signal and tap Send to retry.`
+            : `Failed to process the uploaded file: ${err.message || "Network error"}. Your file is still attached below — tap Send to retry.`,
           timestamp: new Date().toISOString(),
         },
       ]);
@@ -2981,8 +3012,20 @@ export default function ChatPage() {
       files: Array<{ fileName: string; mimeType: string; fileData: string; profileId?: string }>;
       message?: string;
     }) => {
-      const res = await apiRequest("POST", "/api/upload/batch", payload);
-      return res.json();
+      // Same connection-drop auto-retry as the single-file path — safe
+      // because the server dedupes identical files by content hash.
+      const isConnectionDrop = (e: any) =>
+        e instanceof TypeError ||
+        /load failed|failed to fetch|network|timed out/i.test(String(e?.message || e || ""));
+      try {
+        const res = await apiRequest("POST", "/api/upload/batch", payload);
+        return res.json();
+      } catch (e) {
+        if (!isConnectionDrop(e)) throw e;
+        await new Promise((r) => setTimeout(r, 2500));
+        const res = await apiRequest("POST", "/api/upload/batch", payload);
+        return res.json();
+      }
     },
     onSuccess: (data: {
       results: Array<{
@@ -3037,20 +3080,28 @@ export default function ChatPage() {
       invalidateAll();
     },
     onError: (err: Error) => {
+      const isConnectionDrop =
+        err instanceof TypeError ||
+        /load failed|failed to fetch|network|timed out/i.test(err.message || "");
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: `Failed to process the batch upload: ${err.message || "Network error"}. Please try again.`,
+          content: isConnectionDrop
+            ? `The connection dropped while uploading — nothing was lost. Your files are still attached below; check your signal and tap Send to retry.`
+            : `Failed to process the batch upload: ${err.message || "Network error"}. Your files are still attached below — tap Send to retry.`,
           timestamp: new Date().toISOString(),
         },
       ]);
       setBatchProcessedCount(0);
     },
-    onSettled: () => {
-      // Revoke object URLs, drop staged base64 payloads, and clear attachments
-      // after mutation completes (success or error)
+    onSettled: (_data, error) => {
+      // Release object URLs and staged payloads only when the upload
+      // SUCCEEDED. On failure the attachments stay staged so a dropped
+      // connection never costs the user their files — re-uploads are safe
+      // because the server dedupes identical files by content hash.
+      if (error) { pendingBatchAttachmentsRef.current = []; return; }
       pendingBatchAttachmentsRef.current.forEach(a => {
         if (a.previewUrl) {
           URL.revokeObjectURL(a.previewUrl);
@@ -3335,9 +3386,10 @@ export default function ChatPage() {
       message: note || undefined,
     });
 
-    attachmentDataRef.current.delete(att.previewUrl);
-    setAttachments([]);
-    setSelectedProfileId("none");
+    // Deliberately NOT clearing the attachment here — it's released in the
+    // mutation's onSuccess. If the connection drops mid-upload the photo
+    // stays staged so the user can just tap Send again instead of re-taking
+    // it. Only the note clears (it's already posted as the user message).
     setAttachmentNote("");
   };
 

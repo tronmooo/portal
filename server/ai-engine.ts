@@ -27,6 +27,7 @@ import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderV
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { createHash } from "crypto";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
@@ -1676,6 +1677,54 @@ export async function processFileUpload(
   if (cleanBase640.includes(",")) cleanBase640 = cleanBase640.split(",").pop() || cleanBase640;
   cleanBase640 = cleanBase640.replace(/\s/g, "");
 
+  // ── IDEMPOTENT RE-UPLOAD GUARD ─────────────────────────────────────────────
+  // A dropped connection ("Load failed" on iOS) leaves the client unsure
+  // whether the server finished processing, so it (or the user) retries the
+  // same upload — and a retry must NEVER create a second document or a second
+  // expense. Every stored upload is tagged with its content hash; an identical
+  // file re-sent within the window short-circuits to the existing document,
+  // rebuilding the extraction checklist from its saved extractedData so the
+  // confirm-and-save flow still works.
+  const uploadHashTag = `sha256:${createHash("sha256").update(cleanBase640).digest("hex").slice(0, 32)}`;
+  try {
+    const recentDocs = await storage.getDocuments();
+    const cutoffMs = Date.now() - 60 * 60 * 1000;
+    const existingUpload = (recentDocs || []).find((d: any) =>
+      Array.isArray(d.tags) && d.tags.includes(uploadHashTag) &&
+      new Date(d.createdAt || 0).getTime() >= cutoffMs
+    );
+    if (existingUpload) {
+      console.log(`[Upload] Duplicate upload of "${fileName}" — reusing document ${existingUpload.id} instead of reprocessing`);
+      const unwrapDup = (v: any) => (v && typeof v === "object" && "value" in v) ? v.value : v;
+      const dupFields = Object.entries(existingUpload.extractedData || {})
+        .filter(([, v]) => unwrapDup(v) != null && unwrapDup(v) !== "")
+        .map(([key, v]) => ({
+          key,
+          label: key.replace(/_/g, " ").replace(/([A-Z])/g, " $1").replace(/\s+/g, " ").trim().replace(/\b\w/g, (c: string) => c.toUpperCase()),
+          value: unwrapDup(v),
+          selected: true,
+        }));
+      return {
+        reply: `"${fileName}" is the same file you just uploaded — using the existing document "${existingUpload.name}" instead of creating a duplicate.${dupFields.length > 0 ? " Review the extracted fields below to save them to a profile." : ""}`,
+        actions: [],
+        results: [existingUpload],
+        documentId: existingUpload.id,
+        documentPreview: { id: existingUpload.id, name: existingUpload.name, mimeType: existingUpload.mimeType, data: "" },
+        pendingExtraction: dupFields.length > 0 ? {
+          extractionId: existingUpload.id,
+          fileName,
+          documentType: existingUpload.type || "other",
+          label: existingUpload.name,
+          extractedFields: dupFields,
+          trackerEntries: [],
+          documentPreview: { id: existingUpload.id, name: existingUpload.name, mimeType: existingUpload.mimeType },
+        } : undefined,
+      };
+    }
+  } catch (dupErr: any) {
+    console.error(`[Upload] duplicate-check failed (continuing with normal upload): ${dupErr?.message || dupErr}`);
+  }
+
   const classifierContent: any[] = [];
   if (isImage0 || isPdf0) {
     classifierContent.push({
@@ -2100,7 +2149,7 @@ Return ONLY the JSON object, nothing else.`;
         fileData: base64Data,
         extractedData: parsed.extractedData || {},
         linkedProfiles: Array.from(new Set([...existingDoc.linkedProfiles, ...linkedProfiles])),
-        tags: Array.from(new Set([...(existingDoc.tags || []), parsed.documentType || "uploaded"])),
+        tags: Array.from(new Set([...(existingDoc.tags || []), parsed.documentType || "uploaded", uploadHashTag])),
       });
       console.log(`[Upload] Updated existing document "${docName}" (${existingDoc.id}) instead of creating duplicate`);
     } else {
@@ -2114,7 +2163,7 @@ Return ONLY the JSON object, nothing else.`;
         fileData: base64Data,
         extractedData: parsed.extractedData || {},
         linkedProfiles,
-        tags: [parsed.documentType || "uploaded"],
+        tags: [parsed.documentType || "uploaded", uploadHashTag],
       }, "document");
       if (docPayload.ok) {
         document = await storage.createDocument(docPayload.data);
@@ -2127,7 +2176,7 @@ Return ONLY the JSON object, nothing else.`;
           fileData: base64Data,
           extractedData: {},
           linkedProfiles,
-          tags: ["uploaded"],
+          tags: ["uploaded", uploadHashTag],
         });
       }
     }
@@ -2582,7 +2631,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       fileData: base64Data,
       extractedData: {},
       linkedProfiles: profileId ? profileId.split(",").filter(Boolean) : [],
-      tags: ["uploaded"],
+      tags: ["uploaded", uploadHashTag],
     });
     const documentPreview = {
       id: document.id,

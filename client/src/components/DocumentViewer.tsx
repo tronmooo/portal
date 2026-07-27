@@ -1197,11 +1197,12 @@ function ExtractedDataPanel({
           </div>
 
           {/* Tags */}
-          {doc.tags && doc.tags.length > 0 && (
+          {doc.tags && doc.tags.some((t) => !t.startsWith("sha256:")) && (
             <div>
               <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">Tags</p>
               <div className="flex flex-wrap gap-1" data-testid="tags-list">
-                {doc.tags.map((tag) => (
+                {/* sha256: tags are the upload-dedupe content hash — internal, never shown */}
+                {doc.tags.filter((tag) => !tag.startsWith("sha256:")).map((tag) => (
                   <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0">{tag}</Badge>
                 ))}
               </div>
