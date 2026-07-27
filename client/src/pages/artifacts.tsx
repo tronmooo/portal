@@ -472,18 +472,18 @@ function ChartRenderer({ content, dataBindings, chartType }: { content: string; 
     // If dataBindings exist, fetch fresh data from the API (with profile isolation)
     if (dataBindings?.tool && dataBindings?.params) {
       setLoading(true);
-      // Direct read-only tool execution — no chat/model round-trip. The server
-      // enforces the read-only allowlist and validates params, so a stale or
-      // malformed binding degrades to the static content below instead of
-      // spinning up a full AI turn.
+      const params = new URLSearchParams();
+      for (const [k, v] of Object.entries(dataBindings.params)) {
+        if (v != null) params.set(k, String(v));
+      }
       // Profile isolation: dataBindings.params should include profileId
       // This ensures one person's chart can't show another person's data
-      apiRequest("POST", "/api/tools/execute", {
-        tool: dataBindings.tool,
-        params: dataBindings.params,
+      apiRequest("POST", "/api/chat", {
+        message: `Use the ${dataBindings.tool} tool with params: ${JSON.stringify(dataBindings.params)}`,
+        history: []
       }).then(r => r.json()).then(result => {
-        // Chart-bearing tools return { chart: { data } }; query tools return rows.
-        const chartData = result?.result?.chart?.data || result?.result?.data || result?.result?.items;
+        // Try to extract chart data from the AI response
+        const chartData = result?.charts?.[0]?.data || result?.results?.[0]?.data;
         if (chartData) setData(chartData);
         setLoading(false);
       }).catch(() => {

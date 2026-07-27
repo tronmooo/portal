@@ -147,7 +147,7 @@ async function syncLiabilityObligation(profileId: string): Promise<void> {
     console.warn("[syncLiabilityObligation] hook error:", err?.message || err);
   }
 }
-import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue, classifyCapture, reextractDocument, executeTool, validateToolInput, READ_ONLY_TOOLS } from "./ai-engine";
+import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue, classifyCapture, reextractDocument } from "./ai-engine";
 import { analyzeSmartFill, renderFilledPdf, type SmartFillSource, type FillFieldInput } from "./smart-fill";
 import { aiDecide, aiPickIndex } from "./ai-decide";
 
@@ -969,30 +969,19 @@ export async function registerRoutes(
       // Opt-in routing diagnostics: clients never send this, but a probe can pass
       // { debug: true } to see which provider served the reply (meta.attempts).
       const debug = req.body?.debug === true;
-      // PR Z classifier, now OFF the reply's critical path. It still starts in
-      // parallel, but the route no longer blocks on a full Haiku round-trip:
-      // when the engine routed the message (projections exist below) we take
-      // whatever the classifier has finished by then, and only an unrouted
-      // message earns a bounded wait — that's the one case where the
-      // classifier's clarifyingQuestion improves the reply. The capture write
-      // stays before the response on purpose: a serverless instance may freeze
-      // the moment the response ends, and captures must never be lost.
-      let settledClassification: Awaited<ReturnType<typeof classifyCapture>> | null = null;
-      const classifierPromise: Promise<Awaited<ReturnType<typeof classifyCapture>> | null> =
-        classifierContextPromise
-          .then(ctx => classifyCapture(cleanMessage, ctx))
-          .then(c => { settledClassification = c; return c; })
-          .catch(err => {
-            console.warn("[classifyCapture] swallowed error:", (err as Error).message);
-            return null;
-          });
-      const result = await (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, {
-        profileFilterIds,
-        debug,
-        // Forward engine progress frames (round / assistant_delta /
-        // tool_start / tool_result) straight onto the SSE stream.
-        ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),
-      });
+      const [result, classification] = await Promise.all([
+        (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, {
+          profileFilterIds,
+          debug,
+          // Forward engine progress frames (round / assistant_delta /
+          // tool_start / tool_result) straight onto the SSE stream.
+          ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),
+        }),
+        classifierContextPromise.then(ctx => classifyCapture(cleanMessage, ctx).catch(err => {
+          console.warn("[classifyCapture] swallowed error:", (err as Error).message);
+          return null;
+        })),
+      ]);
       if (idem) setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
 
       // ─── Universal Capture (PR Y + Z) ──────────────────────────────
@@ -1017,19 +1006,6 @@ export async function registerRoutes(
               at: new Date().toISOString(),
             }))
             .filter(p => p.id);
-
-          // Classifier result without blocking the reply on it: routed
-          // messages take whatever has already settled (usually everything —
-          // Haiku finishes well inside a full agent turn); only an unrouted
-          // message waits, bounded to 2s, because its clarifyingQuestion may
-          // be appended to the reply below. On timeout the heuristic
-          // fallbacks in this block handle classification=null as before.
-          const classification = projections.length > 0
-            ? settledClassification
-            : await Promise.race([
-                classifierPromise,
-                new Promise<null>(resolve => setTimeout(() => resolve(null), 2000)),
-              ]);
 
           // Prefer classifier output; fall back to action-derived heuristic.
           const typeMap: Record<string, string> = {
@@ -1145,42 +1121,6 @@ export async function registerRoutes(
       // Previously we surfaced `detail: <raw msg>` outside production, which exposed
       // SDK errors / stack traces / DB column names if NODE_ENV was misconfigured.
       fail(500, { error: "Failed to process message", reply: "Something went wrong. Please try again." });
-    }
-  }));
-
-  // ---- Direct read-only tool execution (artifact data refresh) ----
-  // artifacts.tsx used to refresh a chart's dataBindings by POSTing a synthetic
-  // natural-language prompt ("Use the X tool with params: ...") through the
-  // ENTIRE chat pipeline — a full model turn (plus the risk of the model doing
-  // something other than the one intended call) to run one deterministic tool.
-  // This endpoint executes exactly one READ-ONLY tool directly: allowlist
-  // enforced server-side, input validated, no model involved, writes impossible.
-  app.post("/api/tools/execute", asyncHandler(async (req, res) => {
-    const userId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
-    if (rateLimit(`tools-execute:${userId}`, 60)) {
-      return res.status(429).json({ error: "Too many requests. Please wait a moment." });
-    }
-    const { tool, params } = req.body || {};
-    if (typeof tool !== "string" || !tool.trim()) {
-      return res.status(400).json({ error: "tool required" });
-    }
-    if (!READ_ONLY_TOOLS.has(tool)) {
-      return res.status(403).json({ error: `Tool "${tool}" is not read-only and cannot run via this endpoint` });
-    }
-    const input = (params && typeof params === "object" && !Array.isArray(params)) ? params : {};
-    const validation = validateToolInput(tool, input);
-    if (!validation.valid) {
-      return res.status(400).json({ error: `Validation failed: ${validation.errors.join(". ")}` });
-    }
-    const tz = getTimezone(req);
-    (storage as any)._timezone = tz;
-    try {
-      const result = await executeTool(tool, validation.normalized, userId);
-      if (result && result.error) return res.status(422).json({ error: result.error });
-      res.json({ tool, result });
-    } catch (err: any) {
-      log.error("[tools/execute]", err?.message || "unknown error");
-      res.status(500).json({ error: "Tool execution failed" });
     }
   }));
 

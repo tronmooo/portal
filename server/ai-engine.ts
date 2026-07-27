@@ -70,14 +70,6 @@ import {
   type ExtractedOperation,
   type OperationOutcome,
 } from "./ai-bulk-log";
-import {
-  FAST_LANE_MODEL,
-  FAST_LANE_TIMEOUT_MS,
-  FAST_LANE_IDLE_TIMEOUT_MS,
-  fastLaneEnabled,
-  fastLaneEligible,
-  assessFastLaneResponse,
-} from "./ai-fast-lane";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -763,36 +755,7 @@ interface ContextCache {
 const contextCacheMap = new Map<string, ContextCache>();
 const CONTEXT_CACHE_TTL = 5000; // 5 seconds
 
-// Chat-model preference cache — the "ai_chat_model" preference changes rarely
-// (a settings toggle) but was read from the DB on EVERY chat message. Per-user
-// keyed (getPreference is scoped to storage.userId); a changed setting takes
-// effect within a minute.
-const modelPrefCache = new Map<string, { value: string | null; at: number }>();
-const MODEL_PREF_TTL_MS = 60_000;
-
-async function getCachedModelPreference(userId: string | undefined): Promise<string | null> {
-  const key = userId || "_global";
-  const hit = modelPrefCache.get(key);
-  if (hit && Date.now() - hit.at < MODEL_PREF_TTL_MS) return hit.value;
-  let value: string | null = null;
-  try {
-    value = await storage.getPreference("ai_chat_model");
-  } catch { /* ignore — use default */ }
-  modelPrefCache.set(key, { value, at: Date.now() });
-  if (modelPrefCache.size > 200) {
-    const oldest = [...modelPrefCache.entries()].sort((a, b) => a[1].at - b[1].at);
-    for (let i = 0; i < 100; i++) modelPrefCache.delete(oldest[i][0]);
-  }
-  return value;
-}
-
 function invalidateContextCache(userId?: string) {
-  // Also drop the storage layer's per-request read memo (see processMessage,
-  // which enables it for the whole chat turn): every tool write lands here, so
-  // post-write reads — the envelope's read-back verification in particular —
-  // always observe the write, while the many pre-write reads (context load,
-  // dedup scans, name resolution) stay deduplicated.
-  try { (storage as any).clearRequestMemo?.(); } catch { /* non-Supabase storage */ }
   if (userId) {
     contextCacheMap.delete(userId);
     return;
@@ -4621,13 +4584,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
 // SYSTEM PROMPT (simplified — no JSON format instructions)
 // ============================================================
 
-// The chat system prompt, split for prompt caching (see the cachedSystem
-// assembly in processMessage): `staticText` is byte-stable for a given user —
-// no data snapshot, no clock — so its cache_control breakpoint actually hits
-// across turns and rounds. Everything volatile (the DB context and the
-// current date/time lines, which change every minute) lives in `dynamicText`,
-// appended as a second, uncached system block AFTER the static one.
-export function buildSystemPromptParts(context: string, selfProfileId?: string, userTz?: string): { staticText: string; dynamicText: string } {
+function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: string): string {
   // The user's IANA timezone is forwarded from the chat route via the
   // `x-timezone` header; falling back to LA preserves prior behavior so
   // model output stays sensible if the header is missing.
@@ -4637,7 +4594,7 @@ export function buildSystemPromptParts(context: string, selfProfileId?: string, 
     : tz === 'America/Chicago' ? 'Central Time'
     : tz === 'America/Denver' ? 'Mountain Time'
     : tz.replace(/_/g, ' ');
-  const staticText = `You are Portol AI — the intelligent brain of a unified personal life operating system. You have FULL access to the user's data: health trackers, finances, calendar, profiles, documents, habits, tasks, medications, and more. Your job is to both act on commands AND generate real, data-driven insights.
+  return `You are Portol AI — the intelligent brain of a unified personal life operating system. You have FULL access to the user's data: health trackers, finances, calendar, profiles, documents, habits, tasks, medications, and more. Your job is to both act on commands AND generate real, data-driven insights.
 
 *** RESPONSE STYLE — BE CONCISE ***
 After you finish acting, confirm in the FEWEST words that clearly state what was done. For multi-action requests use a short bulleted recap — ONE line per action (what + where it was saved), and flag anything that failed or was skipped. Do NOT restate the user's request, do NOT narrate your steps ("Now I'll create…", "Let me…"), do NOT add tips, encouragement, or long summaries. Aim for under ~80 words unless the user asked a question that needs a real answer.
@@ -4647,7 +4604,8 @@ Example for a multi-log request:
 ✅ Amoxicillin reminder: twice daily × 10 days
 ✅ Journal entry added
 
-EXISTING DATA: the snapshot of the user's stored data is in the FINAL system block below, under "EXISTING DATA" (fresh from the database — use it for every answer). The current date/time and the date rules are there too.
+EXISTING DATA (this is fresh from the database — use it for every answer):
+${context}
 
 *** PROFILE EXISTENCE — READ THE NAME INDEX FIRST ***
 The "Profile Name Index" at the top of EXISTING DATA is the COMPLETE list of every profile the user owns (no truncation). Before you ever say "I don't have a profile for X", "I don't see X in your data", "there's no profile named X", or any similar denial, you MUST scan the Profile Name Index for case-insensitive name matches, nickname matches, and partial matches. If the name appears in the index, that profile EXISTS — answer from its row in "Profile Details" (if present) or call get_profile_data by name. If a field (hair color, eye color, breed, etc.) isn't shown in Profile Details because it was truncated, say "I see Craig but don't have that specific field loaded — let me check" and call a profile read tool rather than denying the profile's existence. NEVER deny a profile that appears in the Name Index.
@@ -5367,7 +5325,10 @@ When the user asks /help, "what can you do", "how do I use this", or similar, su
 Do NOT suggest: "create a workout plan" or "workout routine" (no workout-plan page exists — only fitness trackers). Workouts are tracked via /trackers as fitness entries. Goals ARE visible — they live in the Goals widget on /dashboard.
 Keep help responses concise: 4-6 example commands max, each tied to a real route the user can click.
 
-CRITICAL DATE RULES (the current date/time and a 7-day reference are in the final system block — always calculate from those):
+Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz })} (${tzLabel}).
+Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}. Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz })}.
+${(() => { const now = new Date(); const ref: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(now.getTime() + i * 86400000); ref.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz }) + ' = ' + d.toLocaleDateString('en-CA', { timeZone: tz })); } return 'Reference: ' + ref.join(', '); })()}
+CRITICAL DATE RULES:
 - "tomorrow" = the day AFTER today in ${tzLabel}. Calculate carefully.
 - "by Friday" or "this Friday" = if today IS Friday, that means TODAY. If today is before Friday, it means the upcoming Friday of this week. NEVER push to next week.
 - "next Friday" = the Friday of NEXT week (7+ days away).
@@ -5376,7 +5337,7 @@ CRITICAL DATE RULES (the current date/time and a 7-day reference are in the fina
 - ALWAYS double-check: what day of the week is today? Then count forward from there.
 - If today is Friday and the user says "by Friday", the date is TODAY's date, not tomorrow.
 - ALWAYS double-check your date math. If today is Wednesday March 26, then tomorrow is Thursday March 27 — NOT March 28.
-- When mentioning dates in your response, ALWAYS verify the day of the week is correct. Use the reference dates from the final system block and count forward/backward. For example, if the reference shows "Sat Apr 12", then Apr 19 is also a Saturday (7 days later). Do NOT guess the day name — calculate it from the known reference.
+- When mentioning dates in your response, ALWAYS verify the day of the week is correct. Use the reference dates above and count forward/backward. For example, if the reference shows "Sat Apr 12", then Apr 19 is also a Saturday (7 days later). Do NOT guess the day name — calculate it from the known reference.
 - NEVER say "Friday, April 18" if April 18 is actually a Saturday. Getting the day name wrong destroys user trust.
 - When creating events or tasks with dates, state the resolved date explicitly in your response so the user can verify.
 
@@ -5427,23 +5388,6 @@ Do NOT create an artifact for simple answers, confirmations, or short responses.
 - NEVER fabricate trends or numbers
 - Currency values are raw numbers (no $ symbols)
 - Dates are ISO 8601`;
-
-  const dynamicText = `EXISTING DATA (this is fresh from the database — use it for every answer):
-${context}
-
-Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz })} (${tzLabel}).
-Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}. Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz })}.
-${(() => { const now = new Date(); const ref: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(now.getTime() + i * 86400000); ref.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz }) + ' = ' + d.toLocaleDateString('en-CA', { timeZone: tz })); } return 'Reference: ' + ref.join(', '); })()}
-Apply the CRITICAL DATE RULES from the instructions above to these dates.`;
-
-  return { staticText, dynamicText };
-}
-
-// Backward-compatible single-string form for callers/tests that don't split
-// cache blocks. The chat loop uses buildSystemPromptParts directly.
-export function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: string): string {
-  const parts = buildSystemPromptParts(context, selfProfileId, userTz);
-  return `${parts.staticText}\n\n${parts.dynamicText}`;
 }
 
 // ============================================================
@@ -12496,58 +12440,6 @@ function opRawLabel(toolUse: { name: string; input?: any }): string {
   return String(inp.trackerName || inp.title || inp.description || inp.name || toolUse.name);
 }
 
-/**
- * Normalize client-sent history + the current message into a Claude-legal
- * messages array: last 6 turns, strict user/assistant alternation, malformed
- * entries dropped, consecutive same-role turns merged, no leading assistant
- * turn. Shared by the main agentic loop and the fast lane so both paths see
- * the identical conversation shape (the alternation rules here fixed
- * BUG-20260529-ai-history-execute — see the comment at the loop call site).
- */
-function buildLoopMessages(
-  userMessage: string,
-  conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>,
-): Anthropic.Messages.MessageParam[] {
-  const messages: Anthropic.Messages.MessageParam[] = [];
-  if (conversationHistory && conversationHistory.length > 0) {
-    const recent = conversationHistory.slice(-6);
-    for (const msg of recent) {
-      if (msg?.role !== "user" && msg?.role !== "assistant") continue;
-      if (typeof msg.content !== "string") continue;
-      const cleaned = sanitize(msg.content);
-      const content = cleaned.length > 1500 ? cleaned.slice(0, 1500) + "\n[...truncated]" : cleaned;
-      if (!content) continue;
-      const last = messages[messages.length - 1];
-      if (last && last.role === msg.role) {
-        last.content = `${last.content}\n---\n${content}`;
-      } else {
-        // Claude requires the messages array to start with a user turn.
-        if (messages.length === 0 && msg.role === "assistant") continue;
-        messages.push({ role: msg.role, content });
-      }
-    }
-  }
-  // Append the current user message. If the last carried-forward turn is
-  // also a user turn (e.g. history ended on a user message with no
-  // assistant reply persisted yet), merge so we don't break alternation.
-  const lastCarried = messages[messages.length - 1];
-  if (lastCarried && lastCarried.role === "user") {
-    lastCarried.content = `${lastCarried.content}\n---\n${userMessage}`;
-  } else {
-    messages.push({ role: "user", content: userMessage });
-  }
-  return messages;
-}
-
-/** The full tool schema with the prompt-cache breakpoint on the last tool —
- * identical for every chat model call (main loop + fast lane), which is what
- * lets the tools prefix cache across them. */
-function buildCachedChatTools(): Anthropic.Messages.Tool[] {
-  return TOOL_DEFINITIONS.map((t, i) =>
-    i === TOOL_DEFINITIONS.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
-  ) as Anthropic.Messages.Tool[];
-}
-
 async function runBulkLogPath(
   userMessage: string,
   userId: string | undefined,
@@ -12604,33 +12496,10 @@ async function runBulkLogPath(
   if (ops.length === 0) return null;
 
   // ── Phase B: execute every operation independently ──
-  // (Shared executor — the fast lane runs its tool calls through the same
-  // validate → before-rows → executeTool → envelope-verify → action-log
-  // pipeline, so both paths have identical write semantics.)
-  const { actions, results, operations, createdTrackers } =
-    await executeExtractedOperations(ops, userMessage, userId, 75_000);
-
-  logger.info("ai", `Bulk path: ${operations.filter(o => o.status === "ok").length}/${operations.length} ops ok (model ${chatModel})`);
-  return { reply: buildBulkReply(operations, createdTrackers), actions, results, operations };
-}
-
-/**
- * Execute a list of extracted write operations independently, with the same
- * per-tool verification pipeline the agentic loop uses. Never throws; each
- * operation's outcome (ok/failed/skipped/deduped) is reported honestly.
- * 75s default budget: the platform ceiling is 300s (vercel.json maxDuration),
- * so the old 40s Vercel special-case (from the 60s-cap era) is gone.
- */
-async function executeExtractedOperations(
-  // Wider than ExtractedOperation on purpose: the bulk path passes its
-  // whitelisted BulkActionTool ops, the fast lane adds complete_task. Every
-  // tool still goes through validateToolInput before executing.
-  ops: Array<{ tool: string; input: Record<string, any>; raw: string }>,
-  userMessage: string,
-  userId: string | undefined,
-  execBudgetMs: number,
-): Promise<{ actions: ParsedAction[]; results: any[]; operations: OperationOutcome[]; createdTrackers: Array<{ id: string; name: string }> }> {
   const startedAt = Date.now();
+  // 75s everywhere: the platform ceiling is 300s (vercel.json maxDuration),
+  // so the old 40s Vercel special-case (from the 60s-cap era) is gone.
+  const EXEC_BUDGET_MS = 75_000;
   const turnVerifyCtx = buildTurnVerifyContext(storage);
   const actions: ParsedAction[] = [];
   const results: any[] = [];
@@ -12642,7 +12511,7 @@ async function executeExtractedOperations(
     const op = ops[i];
     const outcome: OperationOutcome = { index: i, raw: op.raw, tool: op.tool, status: "failed", trackerName: (op.input as any)?.trackerName, detail: summarizeOpDetail(op.input) || undefined };
     operations.push(outcome);
-    if (Date.now() - startedAt > execBudgetMs) {
+    if (Date.now() - startedAt > EXEC_BUDGET_MS) {
       outcome.status = "skipped";
       outcome.error = "Ran out of time this message";
       continue;
@@ -12690,166 +12559,8 @@ async function executeExtractedOperations(
     }
   }
 
-  return { actions, results, operations, createdTrackers };
-}
-
-/**
- * Slim context for the fast lane: only what a whitelisted WRITE command needs
- * to be routed and named correctly — the complete profile-name index, tracker
- * names/shapes, active task titles (complete_task), habit names, and stored
- * memories. Deliberately EXCLUDES the heavy tables the full agent context
- * loads (documents with extracted fields, expenses, events, obligations,
- * goals, journal, liability link fan-out): the production probe showed that
- * load dominating fast-lane latency (5-20s on data-heavy accounts), and none
- * of it informs a simple log/create. Anything that actually needs the rich
- * context escalates to the Sonnet loop, which still builds the full snapshot.
- */
-function buildFastLaneContext(
-  profiles: any[],
-  trackers: any[],
-  tasks: any[],
-  habits: any[],
-  memories: any[],
-): string {
-  const profileNameIndex = `Profile Name Index (${profiles.length}, complete list — every profile owned by user):\n${profiles.map((p: any) => `- ${p.name} (${p.type}, id:${String(p.id).slice(0, 8)})`).join("\n") || "  (none)"}`;
-  const trackerBlock = `Trackers (${trackers.length}): ${trackers.slice(0, 40).map((t: any) => {
-    const last = (t.entries || [])[t.entries?.length - 1];
-    const ownerNames = (t.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name || String(pid).slice(0, 8)).join(",");
-    return `${t.name} (${t.category}, owner:${ownerNames || "unlinked"}${last ? `, latest: ${JSON.stringify(last.values).slice(0, 60)}` : ""})`;
-  }).join("; ") || "none"}`;
-  const taskBlock = `Active Tasks: ${tasks.filter((t: any) => t.status !== "done").slice(0, 20).map((t: any) => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`;
-  const habitBlock = `Habits (${habits.length}): ${habits.slice(0, 25).map((h: any) => h.name).join("; ") || "none"}`;
-  const memoryBlock = `Memories: ${memories.slice(0, 25).map((m: any) => `${m.key}: ${isSensitiveKey(m.key) ? REDACTED : String(m.value).slice(0, 50)}`).join("; ") || "none"}`;
-  return [profileNameIndex, trackerBlock, taskBlock, habitBlock, memoryBlock].join("\n");
-}
-
-// ============================================================
-// SINGLE-ACTION FAST LANE — one Haiku round, guarded, escalates
-// ============================================================
-// See server/ai-fast-lane.ts for the safety model. Summary: short single-
-// intent write commands get ONE round on the fast model with the IDENTICAL
-// system prompt + full tool schema as the main agent. The response is
-// assessed before anything executes; any doubt (no tools, wrong tools, too
-// many tools, invalid input, timeout, error) returns null and the caller
-// falls through to the normal Sonnet agentic loop — side-effect free,
-// because nothing has been written yet. Once tools DO execute, failures are
-// reported honestly and there is no Sonnet re-run (double-write risk).
-async function runFastLanePath(
-  userMessage: string,
-  conversationHistory: Array<{ role: "user" | "assistant"; content: string }> | undefined,
-  userId: string | undefined,
-  systemPromptParts: { staticText: string; dynamicText: string },
-  /** Out-param: escalation reason + stage timings, surfaced in meta.trace so
-   * production is diagnosable from the response (Vercel logs aren't always
-   * reachable). Written even when this function returns null. */
-  trace?: Record<string, any>,
-): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[]; meta: { route: string; model: string } } | null> {
-  const t0 = Date.now();
-  const escalate = (reason: string): null => {
-    if (trace) { trace.escalated = reason; trace.fastLaneMs = Date.now() - t0; }
-    try {
-      console.log("[chat-trace] " + JSON.stringify({
-        path: "fast-lane-escalated",
-        reason,
-        model: FAST_LANE_MODEL,
-        duration_ms: Date.now() - t0,
-        user_id: userId,
-        msg_preview: (userMessage || "").slice(0, 80),
-      }));
-    } catch { /* never let logging break the turn */ }
-    return null;
-  };
-
-  // Same cached blocks as the main loop: static system + full tool schema.
-  // The fast model sees exactly what Sonnet would see — no trimmed grounding.
-  const cachedSystem = [
-    { type: "text" as const, text: systemPromptParts.staticText, cache_control: { type: "ephemeral" as const } },
-    { type: "text" as const, text: systemPromptParts.dynamicText },
-  ];
-  const messages = buildLoopMessages(userMessage, conversationHistory);
-
-  // Streamed call with an INACTIVITY timer instead of one flat deadline: the
-  // first fast-lane call per cache window pays a cold prompt-cache write over
-  // the ~60K-token prefix, which can take several healthy seconds — a flat 8s
-  // deadline was killing exactly the calls that were about to succeed. As long
-  // as stream events keep arriving the call may run to the hard cap; silence
-  // for FAST_LANE_IDLE_TIMEOUT_MS (a hung connection) aborts fast.
-  const ac = new AbortController();
-  const hardTimer = setTimeout(() => ac.abort(), FAST_LANE_TIMEOUT_MS);
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
-  const armIdle = () => {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => ac.abort(), FAST_LANE_IDLE_TIMEOUT_MS);
-  };
-  let response: Anthropic.Messages.Message;
-  try {
-    const stream = getClient().messages.stream({
-      model: FAST_LANE_MODEL,
-      max_tokens: 2048,
-      system: cachedSystem,
-      tools: buildCachedChatTools(),
-      messages,
-    }, { signal: ac.signal });
-    armIdle();
-    stream.on("streamEvent", armIdle);
-    response = await stream.finalMessage();
-  } catch (err: any) {
-    return escalate(err?.name === "AbortError" || ac.signal.aborted ? "timeout" : `api-error:${String(err?.message || err).slice(0, 80)}`);
-  } finally {
-    clearTimeout(hardTimer);
-    if (idleTimer) clearTimeout(idleTimer);
-  }
-
-  const assessment = assessFastLaneResponse(response.content as any);
-  if (!assessment.ok) return escalate(assessment.reason || "assessment-failed");
-
-  // Under-extraction guard: a 2-3-clause message ("I ate X and walked Y and
-  // took Z") where the fast model emits FEWER tool calls than the detected
-  // action clauses would silently drop an action — the original sin this
-  // whole design exists to prevent. Escalate; the Sonnet loop handles it.
-  // Command phrasings ("log $5 coffee") count 0 clauses, so this is inert
-  // for the single-command majority.
-  if (assessment.toolUses.length < countActionClauses(userMessage)) {
-    return escalate("under-extraction");
-  }
-
-  // Validate EVERY input before executing ANY — admission is all-or-nothing
-  // so a pre-execution escalation is guaranteed side-effect free.
-  const ops: Array<{ tool: string; input: Record<string, any>; raw: string }> = [];
-  for (const tu of assessment.toolUses) {
-    const validation = validateToolInput(tu.name, tu.input);
-    if (!validation.valid) return escalate(`invalid-input:${tu.name}`);
-    ops.push({ tool: tu.name, input: tu.input, raw: opRawLabel(tu) });
-  }
-
-  const modelMs = Date.now() - t0;
-  if (trace) trace.fastLaneModelMs = modelMs;
-  const { actions, results, operations, createdTrackers } =
-    await executeExtractedOperations(ops, userMessage, userId, 30_000);
-  if (trace) trace.fastLaneToolsMs = Date.now() - t0 - modelMs;
-
-  // Deterministic recap — no second model round. For the common single-action
-  // case, drop the "Logged 1 of 1 actions:" header for a cleaner one-liner.
-  let reply = buildBulkReply(operations, createdTrackers);
-  if (operations.length === 1 && operations[0].status === "ok") {
-    reply = reply.replace(/^Logged 1 of 1 actions:\n/, "");
-  }
-
-  try {
-    console.log("[chat-trace] " + JSON.stringify({
-      path: "fast-lane",
-      model: FAST_LANE_MODEL,
-      tools: operations.map(o => o.tool),
-      ops_ok: operations.filter(o => o.status === "ok").length,
-      ops_total: operations.length,
-      model_ms: modelMs,
-      total_ms: Date.now() - t0,
-      user_id: userId,
-      msg_preview: (userMessage || "").slice(0, 80),
-    }));
-  } catch { /* never let logging break the turn */ }
-
-  return { reply, actions, results, operations, meta: { route: "fast-lane", model: FAST_LANE_MODEL } };
+  logger.info("ai", `Bulk path: ${operations.filter(o => o.status === "ok").length}/${operations.length} ops ok (${Date.now() - startedAt}ms, model ${chatModel})`);
+  return { reply: buildBulkReply(operations, createdTrackers), actions, results, operations };
 }
 
 // ============================================================
@@ -12899,7 +12610,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   artifact?: any;
   operations?: OperationOutcome[];
   /** Routing observability: which path/model served this reply (front door only). */
-  meta?: { route: string; model: string; ms?: number; attempts?: Array<{ model: string; error?: string }>; trace?: Record<string, any> };
+  meta?: { route: string; model: string; attempts?: Array<{ model: string; error?: string }> };
 }> {
   // Streaming progress emitter — no-op unless the caller opted into SSE
   // (routes.ts /api/chat?stream=1). A throwing listener must never break the
@@ -12911,28 +12622,6 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   };
   const streamingEnabled = typeof options?.onEvent === "function";
 
-  // Route diagnostics: every reply carries meta { route, model, ms } so a
-  // client (or the latency probe) can see which path served it without server
-  // log access; { debug: true } additionally gets the full routeTrace —
-  // eligibility verdicts, escalation reasons, per-stage timings.
-  const turnT0 = Date.now();
-  const routeTrace: Record<string, any> = {};
-  const buildMeta = (route: string, model: string) => ({
-    route,
-    model,
-    ms: Date.now() - turnT0,
-    ...(options?.debug ? { trace: routeTrace } : {}),
-  });
-
-  // Per-request read memo for the WHOLE chat turn (production probe 2026-07-27:
-  // tool execution spent 3-11s re-reading full tables already loaded for the
-  // context snapshot — dedup scans, name resolution, envelope read-backs).
-  // Safe with writes because invalidateContextCache — called after every tool
-  // write — also clears this memo, so read-after-write verification always
-  // observes the write. The storage instance is request-scoped, so the memo
-  // dies with the request.
-  try { (storage as any).enableRequestMemo?.(); } catch { /* non-Supabase storage */ }
-
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
   const lower = userMessage.toLowerCase().trim();
@@ -12940,16 +12629,8 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   // FAST-PATH: "open [document name]" — direct DB lookup, no AI needed
   // Only trigger for "open" / "pull up" / "view" (not "show" which is ambiguous with "show me my tasks")
   // Skip if it looks like a general query: "show me", "show my tasks", "get my tasks"
-  // The broad verbs (view/show/find/get) must ALSO name something document-ish
-  // before we pay this path's cost (getDocuments + getProfiles + a 4s-raced
-  // Haiku call). "show my tasks" / "get my net worth" used to take this detour
-  // on every miss and then run the full agent loop anyway. A doc request whose
-  // phrasing misses this noun list still works — it just goes straight to the
-  // agent, which has the open_document tools.
-  const DOC_NOUN = /\b(?:documents?|docs?|pdf|files?|receipts?|invoices?|licenses?|licence|dl|id|ids|passports?|registrations?|insurance|policy|policies|statements?|contracts?|leases?|deeds?|titles?|records?|certificates?|certs?|forms?|w-?[29]|1099|photos?|images?|scans?|cards?)\b/;
   const isDocOpen = lower.match(/^(?:open|pull up)\s+(?:up\s+)?(?:my\s+)?(.+)/) ||
-    (lower.match(/^(?:view|show|find|get)\s+(?:my\s+)?(.+)/) &&
-     DOC_NOUN.test(lower) &&
+    (lower.match(/^(?:view|show|find|get)\s+(?:my\s+)?(.+)/) && 
      !lower.match(/\b(?:tasks?|expenses?|trackers?|habits?|events?|calendar|bills?|obligations?|goals?|spending|journal|mood|summary|data|stats|schedule)\b/));
   if (isDocOpen) {
     const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:up\s+)?(?:my\s+)?/, "").trim();
@@ -13411,58 +13092,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   try {
     const fp = await tryFastPath(userMessage);
     if (fp.matched) {
-      return { reply: fp.reply, actions: fp.actions, results: fp.results, meta: buildMeta("fast-path", "none") };
+      return { reply: fp.reply, actions: fp.actions, results: fp.results };
     }
   } catch { /* fall through to AI */ }
 
-  // ── SINGLE-ACTION FAST LANE (early, slim context) ──
-  // Short single-intent write commands ("log $5 coffee", "remind me to call
-  // mom at 5") run ONE guarded round on the fast model BEFORE the expensive
-  // 11-table context snapshot below — the production probe showed that load
-  // costing 5-20s on data-heavy accounts, dwarfing the model call itself. The
-  // lane's prompt is built from a slim 5-table context (what a whitelisted
-  // write actually needs — see buildFastLaneContext); anything the guards
-  // doubt (no tool calls, off-allowlist tool, fewer tools than detected action
-  // clauses, invalid input, timeout) falls through to the full snapshot +
-  // Sonnet loop below before anything is written. Bulk-eligible recaps (4+
-  // clauses) are excluded up front — they belong to the bulk path.
-  if (fastLaneEnabled()) {
-    const gate = fastLaneEligible(userMessage);
-    routeTrace.fastLaneGate = gate.eligible ? "eligible" : gate.reason;
-    if (gate.eligible && !shouldUseBulkPath(userMessage)) {
-      try {
-        const ctxT0 = Date.now();
-        const [flProfiles, flTrackers, flTasks, flHabits, flMemories] = await Promise.all([
-          storage.getProfiles().catch(() => [] as any[]),
-          storage.getTrackers().catch(() => [] as any[]),
-          storage.getTasks().catch(() => [] as any[]),
-          storage.getHabits().catch(() => [] as any[]),
-          storage.getMemories().catch(() => [] as any[]),
-        ]);
-        routeTrace.fastLaneCtxMs = Date.now() - ctxT0;
-        const slimContext = sanitize(buildFastLaneContext(flProfiles, flTrackers, flTasks, flHabits, flMemories)).replace(/```/g, "'''");
-        const slimSelfId = flProfiles.find((p: any) => p.type === "self")?.id || "";
-        const slimParts = buildSystemPromptParts(slimContext, slimSelfId, (storage as any)._timezone);
-        const fast = await runFastLanePath(userMessage, conversationHistory, userId, slimParts, routeTrace);
-        if (fast) return { ...fast, meta: buildMeta("fast-lane", FAST_LANE_MODEL) };
-        // Escalated — the 5 slim reads stay memoized, so the full snapshot
-        // below re-reads them for free.
-      } catch (err: any) {
-        routeTrace.escalated = `crash:${String(err?.message || err).slice(0, 80)}`;
-        logger.warn("ai", `Fast lane crashed (${err?.message}) — continuing with the agentic loop`);
-      }
-    }
-  } else {
-    routeTrace.fastLaneGate = "disabled";
-  }
-
-  // Context snapshot. The 5s per-user cache is honored here — invalidating it
-  // unconditionally before this read (as this used to) meant the cache NEVER
-  // hit and every message paid 11 full-table reads. Freshness is preserved
-  // where it matters: every AI tool write invalidates the cache immediately
-  // (agent loop + bulk path), so post-write reads are never stale. A manual UI
-  // edit followed by a chat message within the same 5s window on the same warm
-  // instance can see a snapshot up to 5s old — an accepted, bounded tradeoff.
+  // ALWAYS invalidate cache at the start of every chat request so AI sees the CURRENT database state.
+  // This ensures manual UI edits (creates, deletes, updates) are reflected immediately.
+  invalidateContextCache(userId);
   let [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
 
   // P4.5: honor the UI profile filter when the chat route passes it through.
@@ -13617,15 +13253,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     await (async () => {
       const liabProfiles = profiles.filter((p: any) => p.type === 'liability' || p.type === 'loan');
       if (liabProfiles.length === 0) return '';
-      // Ownership/collateral links cost 2 queries per liability, so bound the
-      // fan-out: only the first 20 liabilities get their links resolved. Every
-      // liability still appears by name below (allPartyLinks[idx] is simply
-      // undefined past the cap, rendering without owners/collateral).
-      const LIAB_LINK_CAP = 20;
-      const linkedLiabs = liabProfiles.slice(0, LIAB_LINK_CAP);
       const [allPartyLinks, allAssetLinks] = await Promise.all([
-        Promise.all(linkedLiabs.map((l: any) => storage.getLiabilityProfileLinks(l.id).catch(() => []))),
-        Promise.all(linkedLiabs.map((l: any) => storage.getLiabilityAssetLinks(l.id).catch(() => []))),
+        Promise.all(liabProfiles.map((l: any) => storage.getLiabilityProfileLinks(l.id).catch(() => []))),
+        Promise.all(liabProfiles.map((l: any) => storage.getLiabilityAssetLinks(l.id).catch(() => []))),
       ]);
       return `Liabilities (${liabProfiles.length}): ${liabProfiles.map((l: any, idx: number) => {
         const f = l.fields || {};
@@ -13726,7 +13356,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // hiding in profile names, memory keys/values, tracker names, etc. Stripping
   // happens at the top level so per-row mistakes elsewhere can't leak through.
   const safeContext = sanitize(context).replace(/```/g, "'''");
-  const systemPromptParts = buildSystemPromptParts(safeContext, selfProfileId, (storage as any)._timezone);
+  const systemPrompt = buildSystemPrompt(safeContext, selfProfileId, (storage as any)._timezone);
 
   // ─── Model selection: Sonnet 4.5 ALWAYS ───
   // (2026-05-21) Haiku was dropping action-heavy multi-step prompts silently —
@@ -13736,7 +13366,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // Env-var ANTHROPIC_MODEL still wins (for emergency override).
   // User preference still wins (in case they explicitly pick a model in settings).
   const SONNET_MODEL = "claude-sonnet-4-6";
-  let preferredModel: string | null = await getCachedModelPreference(userId);
+  let preferredModel: string | null = null;
+  try {
+    preferredModel = await storage.getPreference("ai_chat_model");
+  } catch { /* ignore — use default */ }
 
   // Migrate retired/deprecated saved preferences to the current Sonnet so a
   // user who picked Sonnet 4.5 in the past doesn't get a 404 from Anthropic.
@@ -13787,7 +13420,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         }));
       } catch { /* never let logging break the reply */ }
       if (diag.ok && diag.reply) {
-        return { reply: diag.reply, actions: [], results: [], operations: [], meta: buildMeta("frontdoor", diag.modelLabel!) };
+        return { reply: diag.reply, actions: [], results: [], operations: [], meta: { route: "frontdoor", model: diag.modelLabel! } };
       }
       // Front door was eligible but every provider failed. In debug mode,
       // surface exactly why (bad key, retired model, timeout) instead of
@@ -13817,13 +13450,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         profileNames: (allProfiles || []).map((p: any) => String(p.name)).filter(Boolean),
         habitNames: (habits || []).map((h: any) => String(h.name)).filter(Boolean),
       });
-      if (bulk) return { ...bulk, meta: buildMeta("bulk", chatModel) };
+      if (bulk) return bulk;
     } catch (err: any) {
       logger.warn("ai", `Bulk path crashed (${err?.message}) — continuing with the agentic loop`);
     }
   }
-  // (The single-action fast lane runs EARLIER — before the full context
-  // snapshot — with a slim prompt; see the hook right after tryFastPath.)
 
   try {
     // Build the tool_use conversation loop.
@@ -13843,8 +13474,39 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // So the correct shape is: keep proper user/assistant alternation, just
     // like a normal chat. The model can then see prior requests were already
     // resolved by prior assistant turns and won't re-fire their tool calls.
-    // (Assembly shared with the fast lane — buildLoopMessages.)
-    const messages: Anthropic.Messages.MessageParam[] = buildLoopMessages(userMessage, conversationHistory);
+    let messages: Anthropic.Messages.MessageParam[] = [];
+    if (conversationHistory && conversationHistory.length > 0) {
+      // Walk the last 6 turns and emit them, enforcing strict user/assistant
+      // alternation. Drop malformed entries. Merge consecutive same-role
+      // turns (rare — client should already alternate) so the API doesn't
+      // 400 on us. Drop a leading assistant turn since Claude requires the
+      // conversation to start with a user message.
+      const recent = conversationHistory.slice(-6);
+      for (const msg of recent) {
+        if (msg?.role !== "user" && msg?.role !== "assistant") continue;
+        if (typeof msg.content !== "string") continue;
+        const cleaned = sanitize(msg.content);
+        const content = cleaned.length > 1500 ? cleaned.slice(0, 1500) + "\n[...truncated]" : cleaned;
+        if (!content) continue;
+        const last = messages[messages.length - 1];
+        if (last && last.role === msg.role) {
+          last.content = `${last.content}\n---\n${content}`;
+        } else {
+          // Claude requires the messages array to start with a user turn.
+          if (messages.length === 0 && msg.role === "assistant") continue;
+          messages.push({ role: msg.role, content });
+        }
+      }
+    }
+    // Append the current user message. If the last carried-forward turn is
+    // also a user turn (e.g. history ended on a user message with no
+    // assistant reply persisted yet), merge so we don't break alternation.
+    const lastCarried = messages[messages.length - 1];
+    if (lastCarried && lastCarried.role === "user") {
+      lastCarried.content = `${lastCarried.content}\n---\n${userMessage}`;
+    } else {
+      messages.push({ role: "user", content: userMessage });
+    }
     const allActions: ParsedAction[] = [];
     const allResults: any[] = [];
     // Per-operation outcome report (success AND failure) so the client can
@@ -13877,20 +13539,19 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     const turnVerifyCtx = buildTurnVerifyContext(storage);
 
     // ── Prompt caching (speed/cost) ──
-    // Two cache breakpoints: end of tools, and end of the STATIC system block.
-    // The static block deliberately contains no data snapshot and no clock
-    // (buildSystemPromptParts) — before that split, the volatile context lived
-    // inside the cached block and the date line changed every minute, so the
-    // system breakpoint effectively never hit across turns. Now the ~60K-token
-    // tools+instructions prefix is byte-stable per user and reuses the cache on
-    // every round and every turn inside the TTL window; only the small dynamic
-    // block (context + clock) is reprocessed. Same model, same content, same
-    // answers — just far less repeated prefix work.
+    // The system prompt and the full tool schema (~40 tools) are identical on
+    // every one of the up-to-15 round-trips in this loop (and across turns
+    // within the 5-min cache window). Marking them with cache_control lets
+    // Anthropic reuse the computed prefix instead of reprocessing it each call,
+    // cutting time-to-first-token and input cost. This changes NOTHING about
+    // the model, the tools, or the outputs — same answers, just less repeated
+    // work. Two cache breakpoints: end of tools, and the system block.
     const cachedSystem = [
-      { type: "text" as const, text: systemPromptParts.staticText, cache_control: { type: "ephemeral" as const } },
-      { type: "text" as const, text: systemPromptParts.dynamicText },
+      { type: "text" as const, text: systemPrompt, cache_control: { type: "ephemeral" as const } },
     ];
-    const cachedTools = buildCachedChatTools();
+    const cachedTools = TOOL_DEFINITIONS.map((t, i) =>
+      i === TOOL_DEFINITIONS.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
+    );
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
@@ -14536,8 +14197,6 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       }
     }
 
-    routeTrace.agentRounds = iterations;
-    routeTrace.agentToolCalls = totalToolCalls;
     return {
       reply: finalReply,
       actions: allActions,
@@ -14549,7 +14208,6 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       report: richReport,
       artifact: artifact || undefined,
       operations: allOperations.length > 0 ? allOperations : undefined,
-      meta: buildMeta("agent", chatModel),
     };
   } catch (err: any) {
     console.error("AI engine error:", err.message);
