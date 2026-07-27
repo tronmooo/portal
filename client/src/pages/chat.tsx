@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useDeferredValue, useMemo, la
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
+import { EXPENSE_CATEGORIES, categoryLabel } from "@shared/category-canon";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { setFilterSelected, setFilterEveryone } from "@/lib/profileFilter";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -682,6 +683,18 @@ function ExtractionConfirmation({
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(extraction.targetProfile?.id);
   const [createExpense, setCreateExpense] = useState(!!extraction.pendingFinancial?.expense);
   const [createObligation, setCreateObligation] = useState(!!extraction.pendingFinancial?.obligation);
+  // The proposed expense is a SUGGESTION — every part of it is editable before
+  // saving. (Bug report: the AI proposed $84.97 while the receipt's Total
+  // Amount 92.40 sat in the checklist, and the user had no way to correct it.)
+  const [expenseDraft, setExpenseDraft] = useState(() => {
+    const e = extraction.pendingFinancial?.expense;
+    return e ? {
+      description: String(e.description ?? ""),
+      amount: String(e.amount ?? ""),
+      category: String(e.category ?? "general"),
+      date: String(e.date ?? ""),
+    } : null;
+  });
 
   // Fetch profiles for the dropdown
   const { data: allProfiles = [] } = useQuery<any[]>({
@@ -814,7 +827,22 @@ function ExtractionConfirmation({
     // classifier didn't produce a pendingFinancial.expense but the user opted
     // in via the manual "Add to Finance" toggle, synthesize one from the
     // money-shaped field we detected.
-    let expensePayload: any = createExpense ? extraction.pendingFinancial?.expense : undefined;
+    // The user's edits win over the AI proposal — whatever is in the draft is
+    // exactly what gets saved.
+    let expensePayload: any = (createExpense && extraction.pendingFinancial?.expense)
+      ? {
+          ...extraction.pendingFinancial.expense,
+          ...(expenseDraft ? {
+            description: expenseDraft.description.trim() || extraction.pendingFinancial.expense.description,
+            amount: (() => {
+              const n = parseFloat(String(expenseDraft.amount).replace(/[$,\s]/g, ""));
+              return isFinite(n) && n > 0 ? n : extraction.pendingFinancial.expense.amount;
+            })(),
+            category: expenseDraft.category || extraction.pendingFinancial.expense.category,
+            date: expenseDraft.date || extraction.pendingFinancial.expense.date,
+          } : {}),
+        }
+      : undefined;
     if (!expensePayload && addManualExpense && moneyFieldCandidate) {
       const vendorField = fields.find((f) => /vendor|merchant|company|provider|payee/i.test(String(f.key || '')));
       const dateField = fields.find((f) => /transaction.?date|date$|paid/i.test(String(f.key || '')));
@@ -956,7 +984,9 @@ function ExtractionConfirmation({
                     ) : (
                       <input
                         type={isDateField ? 'date' : isNumField ? 'number' : 'text'}
-                        className="w-full bg-transparent text-foreground focus:outline-none focus:bg-primary/5 rounded px-0.5 py-0.5"
+                        // Dashed underline signals "tap to edit" — these values
+                        // were always editable but looked like static text.
+                        className="w-full bg-transparent text-foreground border-b border-dashed border-border/60 focus:outline-none focus:border-primary focus:bg-primary/5 rounded-t px-0.5 py-0.5"
                         value={strVal}
                         onChange={(e) => {
                           const newFields = [...fields];
@@ -1022,12 +1052,61 @@ function ExtractionConfirmation({
         <div className="pt-1.5 border-t border-border/50">
           <span className="text-xs text-muted-foreground font-medium">💰 Financial Records</span>
           {extraction.pendingFinancial.expense && (
-            <label className="flex items-center gap-2 cursor-pointer ml-1 py-1">
-              <Checkbox checked={createExpense} onCheckedChange={() => setCreateExpense(!createExpense)} className="h-3.5 w-3.5" />
-              <span className={`text-xs ${createExpense ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
-                Create expense: ${extraction.pendingFinancial.expense.amount.toFixed(2)} — {extraction.pendingFinancial.expense.description}
-              </span>
-            </label>
+            <div className="ml-1 py-1">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox checked={createExpense} onCheckedChange={() => setCreateExpense(!createExpense)} className="h-3.5 w-3.5" />
+                <span className={`text-xs ${createExpense ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
+                  Create expense{!createExpense && expenseDraft ? `: $${expenseDraft.amount} — ${expenseDraft.description}` : ""}
+                </span>
+              </label>
+              {/* Every part of the proposal is editable — amount, description,
+                  category, date. What you see here is exactly what saves. */}
+              {createExpense && expenseDraft && (
+                <div className="mt-1.5 ml-6 space-y-1.5" data-testid="expense-draft-editor">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground">$</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      value={expenseDraft.amount}
+                      onChange={(e) => setExpenseDraft({ ...expenseDraft, amount: e.target.value })}
+                      className="w-24 text-xs bg-background border border-border rounded px-1.5 py-1 text-foreground tabular-nums"
+                      data-testid="input-expense-amount"
+                      aria-label="Expense amount"
+                    />
+                    <select
+                      value={expenseDraft.category}
+                      onChange={(e) => setExpenseDraft({ ...expenseDraft, category: e.target.value })}
+                      className="text-xs bg-background border border-border rounded px-1 py-1 text-foreground"
+                      data-testid="select-expense-category"
+                      aria-label="Expense category"
+                    >
+                      {(EXPENSE_CATEGORIES as readonly string[]).map((c) => (
+                        <option key={c} value={c}>{categoryLabel(c)}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="date"
+                      value={/^\d{4}-\d{2}-\d{2}$/.test(expenseDraft.date) ? expenseDraft.date : ""}
+                      onChange={(e) => setExpenseDraft({ ...expenseDraft, date: e.target.value })}
+                      className="text-xs bg-background border border-border rounded px-1.5 py-1 text-foreground"
+                      data-testid="input-expense-date"
+                      aria-label="Expense date"
+                    />
+                  </div>
+                  <input
+                    type="text"
+                    value={expenseDraft.description}
+                    onChange={(e) => setExpenseDraft({ ...expenseDraft, description: e.target.value })}
+                    className="w-full text-xs bg-background border border-border rounded px-1.5 py-1 text-foreground"
+                    placeholder="Description"
+                    data-testid="input-expense-description"
+                    aria-label="Expense description"
+                  />
+                </div>
+              )}
+            </div>
           )}
           {extraction.pendingFinancial.obligation && (
             <label className="flex items-center gap-2 cursor-pointer ml-1 py-1">
