@@ -2630,9 +2630,9 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
               )}
             </button>
           )}
-          <span className="text-xs font-medium max-w-[180px] truncate text-right">
+          <span className="text-xs font-medium max-w-[180px] truncate text-right tabular-nums">
             {displayValue !== ""
-              ? (isValueField && !isNaN(Number(displayValue)) ? `$${Number(displayValue).toLocaleString()}` : displayValue)
+              ? formatFieldDisplayValue(fieldKey, displayValue)
               : <span className="text-muted-foreground/40 italic">tap to add</span>}
           </span>
           {/* Delete button — always visible on mobile */}
@@ -2700,7 +2700,7 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
 // Canonical address group reused across profile types. Lists every common
 // address key the AI extractor / form writers emit so structured address data
 // always lands in a real "Address" group instead of the "Other" catch-all.
-const ADDRESS_FIELD_GROUP: { title: string; fields: { key: string; label: string }[] }[] = [
+const ADDRESS_FIELD_GROUP: { title: string; fields: { key: string; label: string; hideWhenEmpty?: boolean }[] }[] = [
   { title: "Address", fields: [
     { key: "address", label: "Address" },
     { key: "addressLine1", label: "Address Line 1" },
@@ -2718,35 +2718,36 @@ const ADDRESS_FIELD_GROUP: { title: string; fields: { key: string; label: string
     { key: "country", label: "Country" },
   ]},
 ];
-const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label: string }[] }[]> = {
+const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label: string; hideWhenEmpty?: boolean }[] }[]> = {
   vehicle: [
     { title: "Vehicle Identity", fields: [
       { key: "make", label: "Make" }, { key: "model", label: "Model" }, { key: "year", label: "Year" },
       { key: "trim", label: "Trim" }, { key: "vin", label: "VIN" }, { key: "licensePlate", label: "License Plate" },
-      { key: "color", label: "Color" }, { key: "engineType", label: "Engine" },
-      // Also match extracted PDF keys
-      { key: "vehicleMake", label: "Make" }, { key: "vehicleType", label: "Type" },
-      { key: "vehicleYear", label: "Year" }, { key: "vehicleVIN", label: "VIN" },
+      { key: "color", label: "Color" }, { key: "engineType", label: "Engine", hideWhenEmpty: true },
+      // Also match extracted PDF keys — legacy spellings shown only when a
+      // value exists so clean profiles don't render duplicate empty rows.
+      { key: "vehicleMake", label: "Make", hideWhenEmpty: true }, { key: "vehicleType", label: "Type", hideWhenEmpty: true },
+      { key: "vehicleYear", label: "Year", hideWhenEmpty: true }, { key: "vehicleVIN", label: "VIN", hideWhenEmpty: true },
     ]},
     { title: "Purchase & Value", fields: [
       { key: "purchaseDate", label: "Purchase Date" }, { key: "purchasePrice", label: "Purchase Price" },
       { key: "currentValue", label: "Current Value" }, { key: "mileage", label: "Mileage" },
       // Alias spellings still on older profiles — same canonical field, so
-      // they belong here, not in the "Other" catch-all. New saves fold these
-      // into `mileage` server-side.
-      { key: "currentMileage", label: "Mileage" }, { key: "odometer", label: "Mileage" },
+      // they belong here (with a value), not in the "Other" catch-all. New
+      // saves fold these into `mileage` server-side.
+      { key: "currentMileage", label: "Mileage", hideWhenEmpty: true }, { key: "odometer", label: "Mileage", hideWhenEmpty: true },
     ]},
     // Oil changes & service visits — the fields a service receipt extraction
     // saves. Without this group they all dumped into "Other (N)".
     { title: "Service & Maintenance", fields: [
-      { key: "serviceDate", label: "Service Date" }, { key: "lastServiceDate", label: "Last Service" },
-      { key: "serviceType", label: "Service Type" }, { key: "servicesPerformed", label: "Services Performed" },
-      { key: "serviceProvider", label: "Service Provider" }, { key: "serviceLocation", label: "Service Location" },
-      { key: "oilType", label: "Oil Type" }, { key: "oilFilter", label: "Oil Filter" },
-      { key: "nextServiceMileage", label: "Next Service (mi)" }, { key: "nextServiceDate", label: "Next Service Date" },
-      { key: "nextOilChangeMileage", label: "Next Oil Change (mi)" }, { key: "recommendedService", label: "Recommended Service" },
-      { key: "serviceAmount", label: "Service Amount" }, { key: "serviceNotes", label: "Service Notes" },
-      { key: "lastOilChange", label: "Last Oil Change" }, { key: "invoiceNumber", label: "Invoice #" },
+      { key: "serviceDate", label: "Service Date" }, { key: "lastServiceDate", label: "Last Service", hideWhenEmpty: true },
+      { key: "serviceType", label: "Service Type" }, { key: "servicesPerformed", label: "Services Performed", hideWhenEmpty: true },
+      { key: "serviceProvider", label: "Service Provider" }, { key: "serviceLocation", label: "Service Location", hideWhenEmpty: true },
+      { key: "oilType", label: "Oil Type" }, { key: "oilFilter", label: "Oil Filter", hideWhenEmpty: true },
+      { key: "nextServiceMileage", label: "Next Service (mi)" }, { key: "nextServiceDate", label: "Next Service Date", hideWhenEmpty: true },
+      { key: "nextOilChangeMileage", label: "Next Oil Change (mi)", hideWhenEmpty: true }, { key: "recommendedService", label: "Recommended Service", hideWhenEmpty: true },
+      { key: "serviceAmount", label: "Service Amount", hideWhenEmpty: true }, { key: "serviceNotes", label: "Service Notes", hideWhenEmpty: true },
+      { key: "lastOilChange", label: "Last Oil Change", hideWhenEmpty: true }, { key: "invoiceNumber", label: "Invoice #", hideWhenEmpty: true },
     ]},
     { title: "Insurance", fields: [
       { key: "insurer", label: "Insurer" }, { key: "insurerCode", label: "Insurer Code" },
@@ -2764,8 +2765,8 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
     { title: "Status", fields: [
       { key: "condition", label: "Condition" }, { key: "location", label: "Location" },
       { key: "registration", label: "Registration Exp" },
-      { key: "registrationExpiration", label: "Registration Exp" },
-      { key: "registrationDate", label: "Registration Date" },
+      { key: "registrationExpiration", label: "Registration Exp", hideWhenEmpty: true },
+      { key: "registrationDate", label: "Registration Date", hideWhenEmpty: true },
       { key: "ownerName", label: "Owner Name" },
     ]},
   ],
@@ -2940,6 +2941,64 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
   ],
 };
 
+// ── Per-group visual identity (icon + accent) for the Info tab sections ──
+// Falls back to a neutral FileText for any title not listed.
+const GROUP_META: Record<string, { icon: any; cls: string }> = {
+  "Vehicle Identity":      { icon: Car,         cls: "text-blue-500" },
+  "Purchase & Value":      { icon: DollarSign,  cls: "text-emerald-500" },
+  "Service & Maintenance": { icon: Wrench,      cls: "text-amber-500" },
+  "Insurance":             { icon: Shield,      cls: "text-green-500" },
+  "Financial":             { icon: Wallet,      cls: "text-violet-500" },
+  "Status":                { icon: Activity,    cls: "text-sky-500" },
+  "Address":               { icon: MapPin,      cls: "text-rose-500" },
+  "Contact Info":          { icon: Phone,       cls: "text-teal-500" },
+  "Contact":               { icon: Phone,       cls: "text-teal-500" },
+  "Personal Details":      { icon: User,        cls: "text-indigo-500" },
+  "Identification":        { icon: FileText,    cls: "text-slate-500" },
+  "Emergency":             { icon: HeartPulse,  cls: "text-red-500" },
+  "Pet Identity":          { icon: PawPrint,    cls: "text-orange-500" },
+  "Health & Care":         { icon: Stethoscope, cls: "text-pink-500" },
+  "Loan Details":          { icon: CreditCard,  cls: "text-purple-500" },
+  "Loan":                  { icon: CreditCard,  cls: "text-purple-500" },
+  "Subscription":          { icon: RefreshCw,   cls: "text-cyan-500" },
+  "Dates":                 { icon: Calendar,    cls: "text-amber-500" },
+  "Asset Details":         { icon: Package,     cls: "text-blue-500" },
+  "Account":               { icon: Wallet,      cls: "text-emerald-500" },
+  "Card Details":          { icon: CreditCard,  cls: "text-violet-500" },
+  "Rewards":               { icon: Star,        cls: "text-yellow-500" },
+  "Digital Asset":         { icon: Globe,       cls: "text-sky-500" },
+  "Access":                { icon: Link2,       cls: "text-slate-500" },
+  "Business":              { icon: Briefcase,   cls: "text-slate-500" },
+  "Item":                  { icon: Package,     cls: "text-blue-500" },
+  "Provenance":            { icon: BookOpen,    cls: "text-amber-600" },
+  "Location":              { icon: MapPin,      cls: "text-rose-500" },
+  "Details":               { icon: FileText,    cls: "text-slate-500" },
+  "Value":                 { icon: DollarSign,  cls: "text-emerald-500" },
+  "Policy":                { icon: Shield,      cls: "text-green-500" },
+};
+
+// ── Human formatting for field values on the Info tab ──
+// Money keys render as currency, odometer keys as "69,063 mi", ISO dates as
+// "Jul 22, 2026". Years, VINs, plates, phone numbers pass through untouched.
+function formatFieldDisplayValue(fieldKey: string, raw: string): string {
+  if (raw === "") return raw;
+  const k = fieldKey.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const num = Number(String(raw).replace(/[$,\s]/g, ""));
+  const isNum = raw.trim() !== "" && isFinite(num) && /\d/.test(raw) && /^[$\s]*-?[\d,]+(\.\d+)?\s*$/.test(raw.trim());
+  if (/^(year|vehicleyear|modelyear|caryear|yearbuilt)$/.test(k)) return String(raw);
+  if (isNum && /(price|value|premium|deductible|balance|amount|cost|payment|limit|debits|credits|worth|valuation)/.test(k)) {
+    return `$${num.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  }
+  if (isNum && /(mileage|odometer)/.test(k)) {
+    return `${num.toLocaleString()} mi`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) {
+    const d = new Date(`${raw.trim()}T12:00:00`);
+    if (!isNaN(d.getTime())) return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  }
+  return raw;
+}
+
 function InfoTab({
   profile,
   onEdit,
@@ -2950,7 +3009,9 @@ function InfoTab({
   const [addingField, setAddingField] = useState(false);
   const [newFieldKey, setNewFieldKey] = useState("");
   const [newFieldValue, setNewFieldValue] = useState("");
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  // "Other" starts collapsed — it's the catch-all; the curated groups are the
+  // primary read surface.
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set(["__other__"]));
   const { toast } = useToast();
 
   const saveCustomFieldMutation = useMutation({
@@ -3357,18 +3418,36 @@ function InfoTab({
           }))
           .slice().sort((a, b) => a.title.localeCompare(b.title)).map(group => {
           const isCollapsed = collapsedSections.has(group.title);
+          const meta = GROUP_META[group.title] || { icon: FileText, cls: "text-muted-foreground" };
+          const GroupIcon = meta.icon;
+          const filledCount = group.fields.filter(({ key }) => {
+            const v = profile.fields[key];
+            return v != null && v !== "" && typeof v !== "object";
+          }).length;
           return (
             <Card key={group.title}>
               <button
                 className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 transition-colors"
                 onClick={() => toggleSection(group.title)}
               >
-                <span className="text-xs font-semibold">{group.title}</span>
+                <span className="flex items-center gap-2 min-w-0">
+                  <GroupIcon className={`h-3.5 w-3.5 shrink-0 ${meta.cls}`} />
+                  <span className="text-xs font-semibold truncate">{group.title}</span>
+                  {filledCount > 0 && (
+                    <span className="text-[10px] px-1.5 py-0 rounded-full bg-muted text-muted-foreground tabular-nums shrink-0">{filledCount}</span>
+                  )}
+                </span>
                 {isCollapsed ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
               </button>
               {!isCollapsed && (
                 <CardContent className="px-4 pb-3 pt-0">
-                  {group.fields.map(({ key, label }) => (
+                  {group.fields
+                    .filter(({ key, hideWhenEmpty }) => {
+                      if (!hideWhenEmpty) return true;
+                      const v = profile.fields[key];
+                      return v != null && v !== "";
+                    })
+                    .map(({ key, label }) => (
                     <GroupedInlineField
                       key={key}
                       profileId={profile.id}
@@ -3420,7 +3499,11 @@ function InfoTab({
             className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-muted/20 transition-colors"
             onClick={() => toggleSection("__other__")}
           >
-            <span className="text-xs font-semibold">Other ({extraFields.length})</span>
+            <span className="flex items-center gap-2">
+              <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs font-semibold text-muted-foreground">Other</span>
+              <span className="text-[10px] px-1.5 py-0 rounded-full bg-muted text-muted-foreground tabular-nums">{extraFields.length}</span>
+            </span>
             {collapsedSections.has("__other__")
               ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
               : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}

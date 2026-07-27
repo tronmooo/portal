@@ -25,7 +25,7 @@ import { registerCacheBuster } from "./cache-bus";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
-import { fieldIdentity, PROFILE_FIELD_GROUPS } from "@shared/profile-field-identity";
+import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from "@shared/profile-field-identity";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -2413,7 +2413,9 @@ ${JSON.stringify(ctx, null, 2)}`;
           const expense = await storage.createExpense({
             description: exp.description,
             amount: amt,
-            category: exp.category || 'general',
+            // One vocabulary: "transportation"/"auto"/"car" all fold to their
+            // canonical bucket so the dashboard never splits one category.
+            category: canonicalExpenseCategory(exp.category || 'general'),
             vendor: exp.vendor,
             date: exp.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
             tags: [],
@@ -2444,7 +2446,7 @@ ${JSON.stringify(ctx, null, 2)}`;
             name: obl.name,
             amount: amt,
             frequency: obl.frequency || 'monthly',
-            category: obl.category || 'general',
+            category: canonicalObligationCategory(obl.category || 'general'),
             nextDueDate: obl.nextDueDate,
             autopay: false,
             linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
@@ -3039,6 +3041,30 @@ ${JSON.stringify(ctx, null, 2)}`;
     // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
     if ((detail as any).userId && (detail as any).userId !== (req as AuthenticatedRequest).userId) {
       return res.status(404).json({ error: "Not found" });
+    }
+    // SELF-HEALING FIELD CLEANUP: years of extraction runs left profiles
+    // storing the same fact under several spellings (mileage + currentMileage
+    // + vehicles.mileage). Collapse agreeing twins to ONE canonical field on
+    // read — the response carries the cleaned shape immediately, and the
+    // write-back converges storage in the background (only fires when
+    // something was actually redundant; differing values are never dropped).
+    try {
+      const cleanup = cleanupStoredProfileFields((detail as any).fields);
+      if (cleanup.changed) {
+        (detail as any).fields = cleanup.fields;
+        log.info(`[profile-cleanup] ${req.params.id} collapsed ${cleanup.removed.length} redundant field(s): ${cleanup.removed.join(", ")}`);
+        // Top-level removals need explicit null markers so the storage merge
+        // layer deletes them; rewritten nested groups replace wholesale.
+        const patch: Record<string, any> = { ...cleanup.fields };
+        for (const path of cleanup.removed) {
+          if (!path.includes(".") ) patch[path] = null;
+        }
+        storage.updateProfile(req.params.id, { fields: patch } as any).catch((e: any) =>
+          console.error(`[profile-cleanup] write-back failed for ${req.params.id}: ${e?.message || e}`)
+        );
+      }
+    } catch (cleanErr: any) {
+      console.error(`[profile-cleanup] skipped: ${cleanErr?.message || cleanErr}`);
     }
     res.json(detail);
   }));

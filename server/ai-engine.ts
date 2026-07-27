@@ -28,6 +28,7 @@ import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, t
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { createHash } from "crypto";
+import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
@@ -2221,12 +2222,12 @@ Return ONLY the JSON object, nothing else.`;
     if (numAmount && isFinite(numAmount) && numAmount > 0 && classification.destinations.expense !== true) {
       try {
         const docType = (parsed.documentType || "receipt").toLowerCase();
-        const category = ["vehicle", "registration", "citation", "parking", "toll", "dmv"].some(t => docType.includes(t)) ? "vehicle"
+        const category = canonicalExpenseCategory(["vehicle", "registration", "citation", "parking", "toll", "dmv"].some(t => docType.includes(t)) ? "vehicle"
           : ["medical", "prescription", "lab", "health", "doctor", "hospital"].some(t => docType.includes(t)) ? "health"
           : ["utility", "bill", "electric", "water", "gas"].some(t => docType.includes(t)) ? "utilities"
           : ["insurance"].some(t => docType.includes(t)) ? "insurance"
           : ["bank", "loan", "statement"].some(t => docType.includes(t)) ? "general"
-          : "general";
+          : "general");
         const desc = parsed.label || parsed.summary || fileName;
         const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
         // P0.3b: resolve EVERY profile the expense belongs to (target asset +
@@ -2516,7 +2517,11 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       // enum of documentClass strings. This works for any document the AI
       // invents — boat_registration, gym_membership, etc.
       const categoryFromBucket: Record<string, string> = {
-        'Vehicle': 'transportation',
+        // Vehicle documents (service receipts, oil changes, repairs) are
+        // "vehicle" expenses — mapping them to "transportation" split the
+        // dashboard into vehicle/transportation/transport buckets for what is
+        // one category.
+        'Vehicle': 'vehicle',
         'Property': 'housing',
         'Medical': 'medical',
         'Insurance': 'insurance',
@@ -2542,7 +2547,9 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         'restaurant_check': 'dining', 'event_ticket': 'entertainment',
         'medical_bill': 'medical', 'prescription': 'medical',
       };
-      const category = categoryFromType[classification.documentClass] || categoryFromType[docType] || categoryFromBucket[classification.category] || 'general';
+      // Fold through the shared canonicalizer so one concept can never be
+      // stored under two spellings (transportation → transport, auto → vehicle).
+      const category = canonicalExpenseCategory(categoryFromType[classification.documentClass] || categoryFromType[docType] || categoryFromBucket[classification.category] || 'general');
       const vendor = fieldLookup['vendorname'] || fieldLookup['merchantname'] || fieldLookup['companyname'] || fieldLookup['providername'] || fieldLookup['utilitycompany'] || fieldLookup['title'] || classification.label || parsed.label || '';
       const dueDate = fieldLookup['duedate'] || fieldLookup['paymentduedate'] || fieldLookup['nextduedate'] || '';
       // Recurring decision: classifier obligation flag first (intent-based),

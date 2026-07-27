@@ -20,6 +20,7 @@ import {
   dedupeDisplayFields,
   fieldBelongsOnProfileType,
   PROFILE_FIELD_GROUPS,
+  cleanupStoredProfileFields,
 } from "../shared/profile-field-identity";
 
 // The exact fields from the screenshot.
@@ -247,5 +248,56 @@ describe("the nested-group list is shared, not re-declared", () => {
     for (const g of ["identity", "other", "personal", "vehicles", "finance"]) {
       expect(PROFILE_FIELD_GROUPS as readonly string[]).toContain(g);
     }
+  });
+});
+
+// ─── cleanupStoredProfileFields — stored-twin collapse (2026-07-27) ─────────
+// The self-heal that runs on profile-detail read: one canonical storage key
+// per logical field, agreeing twins collapsed, differing values untouched.
+describe("cleanupStoredProfileFields", () => {
+  it("collapses agreeing top-level twins and nested-group copies of one field", () => {
+    const r = cleanupStoredProfileFields({
+      mileage: 69063,
+      currentMileage: 69063,               // agreeing top-level twin
+      vehicles: { mileage: 69063, licensePlate: "8YPJ480" }, // agreeing nested copy
+      make: "Honda",
+    });
+    expect(r.changed).toBe(true);
+    expect(r.fields.mileage).toBe(69063);
+    expect(r.fields).not.toHaveProperty("currentMileage");
+    expect(r.fields.vehicles).not.toHaveProperty("mileage");
+    expect(r.fields.vehicles.licensePlate).toBe("8YPJ480"); // untouched neighbor
+    expect(r.removed.sort()).toEqual(["currentMileage", "vehicles.mileage"].sort());
+  });
+
+  it("never drops a twin whose value disagrees", () => {
+    const r = cleanupStoredProfileFields({
+      mileage: 69063,
+      currentMileage: 80000, // conflicting — must survive
+    });
+    expect(r.fields.currentMileage).toBe(80000);
+    expect(r.fields.mileage).toBe(69063);
+  });
+
+  it("never deletes a nested value in favor of an empty top-level twin", () => {
+    const r = cleanupStoredProfileFields({
+      mileage: "",
+      vehicles: { mileage: 69063 },
+    });
+    expect(r.fields.vehicles.mileage).toBe(69063);
+  });
+
+  it("is idempotent and reports no change on a clean profile", () => {
+    const clean = { mileage: 69063, make: "Honda", vehicles: { licensePlate: "8YPJ480" } };
+    const r = cleanupStoredProfileFields(clean);
+    expect(r.changed).toBe(false);
+    expect(r.fields).toEqual(clean);
+    const r2 = cleanupStoredProfileFields(r.fields);
+    expect(r2.changed).toBe(false);
+  });
+
+  it("preserves reserved underscore metadata untouched", () => {
+    const r = cleanupStoredProfileFields({ _mileageHistory: [{ value: 80000 }], mileage: 69063 });
+    expect(r.fields._mileageHistory).toEqual([{ value: 80000 }]);
   });
 });
