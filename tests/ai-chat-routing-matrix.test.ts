@@ -40,7 +40,16 @@ const h = vi.hoisted(() => {
   };
 
   class FakeAnthropic {
-    messages = { create: fakeCreate, stream: () => { throw new Error("stream not scripted"); } };
+    // The fast lane calls messages.stream (inactivity-timer streaming); the
+    // agent loop uses messages.create when SSE is off. Both are scripted from
+    // the same per-model responses.
+    messages = {
+      create: fakeCreate,
+      stream: (params: any, _opts?: any) => {
+        const done = fakeCreate(params);
+        return { on: (_ev: string, _cb: any) => { /* no-op */ }, finalMessage: () => done };
+      },
+    };
     constructor(_opts: any) { /* apiKey ignored */ }
   }
 

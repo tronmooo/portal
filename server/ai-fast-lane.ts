@@ -37,9 +37,16 @@
 import { BULK_ACTION_TOOLS } from "./ai-bulk-log";
 
 export const FAST_LANE_MODEL = "claude-haiku-4-5-20251001";
-/** Bounded wait for the fast-model round. Generous enough for a cold
- * prompt-cache write over the big prefix; a miss just escalates. */
-export const FAST_LANE_TIMEOUT_MS = 8_000;
+/** Hard wall-clock cap for the fast-model round. The first fast-lane call in
+ * a cache window pays a COLD prompt-cache write over the ~60K-token prefix,
+ * which can legitimately take many seconds — the streaming inactivity timer
+ * below is the real hang detector, so this cap only needs to bound the
+ * worst-case total. A breach just escalates to the Sonnet loop. */
+export const FAST_LANE_TIMEOUT_MS = 12_000;
+/** Inactivity cutoff between stream events. A healthy-but-cold ingest keeps
+ * emitting stream progress and is allowed to run to the hard cap; a hung
+ * connection goes silent and dies fast. */
+export const FAST_LANE_IDLE_TIMEOUT_MS = 4_000;
 /** A "simple command" that fans out into more tool calls than this is not
  * simple — the full agent handles it better. */
 export const FAST_LANE_MAX_TOOL_CALLS = 3;

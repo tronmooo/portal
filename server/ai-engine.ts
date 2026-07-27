@@ -71,6 +71,7 @@ import {
 import {
   FAST_LANE_MODEL,
   FAST_LANE_TIMEOUT_MS,
+  FAST_LANE_IDLE_TIMEOUT_MS,
   fastLaneEnabled,
   fastLaneEligible,
   assessFastLaneResponse,
@@ -12631,9 +12632,14 @@ async function runFastLanePath(
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }> | undefined,
   userId: string | undefined,
   systemPromptParts: { staticText: string; dynamicText: string },
+  /** Out-param: escalation reason + stage timings, surfaced in meta.trace so
+   * production is diagnosable from the response (Vercel logs aren't always
+   * reachable). Written even when this function returns null. */
+  trace?: Record<string, any>,
 ): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[]; meta: { route: string; model: string } } | null> {
   const t0 = Date.now();
   const escalate = (reason: string): null => {
+    if (trace) { trace.escalated = reason; trace.fastLaneMs = Date.now() - t0; }
     try {
       console.log("[chat-trace] " + JSON.stringify({
         path: "fast-lane-escalated",
@@ -12655,21 +12661,36 @@ async function runFastLanePath(
   ];
   const messages = buildLoopMessages(userMessage, conversationHistory);
 
+  // Streamed call with an INACTIVITY timer instead of one flat deadline: the
+  // first fast-lane call per cache window pays a cold prompt-cache write over
+  // the ~60K-token prefix, which can take several healthy seconds — a flat 8s
+  // deadline was killing exactly the calls that were about to succeed. As long
+  // as stream events keep arriving the call may run to the hard cap; silence
+  // for FAST_LANE_IDLE_TIMEOUT_MS (a hung connection) aborts fast.
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), FAST_LANE_TIMEOUT_MS);
+  const hardTimer = setTimeout(() => ac.abort(), FAST_LANE_TIMEOUT_MS);
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const armIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => ac.abort(), FAST_LANE_IDLE_TIMEOUT_MS);
+  };
   let response: Anthropic.Messages.Message;
   try {
-    response = await getClient().messages.create({
+    const stream = getClient().messages.stream({
       model: FAST_LANE_MODEL,
       max_tokens: 2048,
       system: cachedSystem,
       tools: buildCachedChatTools(),
       messages,
     }, { signal: ac.signal });
+    armIdle();
+    stream.on("streamEvent", armIdle);
+    response = await stream.finalMessage();
   } catch (err: any) {
     return escalate(err?.name === "AbortError" || ac.signal.aborted ? "timeout" : `api-error:${String(err?.message || err).slice(0, 80)}`);
   } finally {
-    clearTimeout(timer);
+    clearTimeout(hardTimer);
+    if (idleTimer) clearTimeout(idleTimer);
   }
 
   const assessment = assessFastLaneResponse(response.content as any);
@@ -12685,8 +12706,10 @@ async function runFastLanePath(
   }
 
   const modelMs = Date.now() - t0;
+  if (trace) trace.fastLaneModelMs = modelMs;
   const { actions, results, operations, createdTrackers } =
     await executeExtractedOperations(ops, userMessage, userId, 30_000);
+  if (trace) trace.fastLaneToolsMs = Date.now() - t0 - modelMs;
 
   // Deterministic recap — no second model round. For the common single-action
   // case, drop the "Logged 1 of 1 actions:" header for a cleaner one-liner.
@@ -12759,7 +12782,7 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   artifact?: any;
   operations?: OperationOutcome[];
   /** Routing observability: which path/model served this reply (front door only). */
-  meta?: { route: string; model: string; attempts?: Array<{ model: string; error?: string }> };
+  meta?: { route: string; model: string; ms?: number; attempts?: Array<{ model: string; error?: string }>; trace?: Record<string, any> };
 }> {
   // Streaming progress emitter — no-op unless the caller opted into SSE
   // (routes.ts /api/chat?stream=1). A throwing listener must never break the
@@ -12770,6 +12793,19 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     try { options?.onEvent?.(ev); } catch { /* never break the turn */ }
   };
   const streamingEnabled = typeof options?.onEvent === "function";
+
+  // Route diagnostics: every reply carries meta { route, model, ms } so a
+  // client (or the latency probe) can see which path served it without server
+  // log access; { debug: true } additionally gets the full routeTrace —
+  // eligibility verdicts, escalation reasons, per-stage timings.
+  const turnT0 = Date.now();
+  const routeTrace: Record<string, any> = {};
+  const buildMeta = (route: string, model: string) => ({
+    route,
+    model,
+    ms: Date.now() - turnT0,
+    ...(options?.debug ? { trace: routeTrace } : {}),
+  });
 
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
@@ -13249,7 +13285,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   try {
     const fp = await tryFastPath(userMessage);
     if (fp.matched) {
-      return { reply: fp.reply, actions: fp.actions, results: fp.results };
+      return { reply: fp.reply, actions: fp.actions, results: fp.results, meta: buildMeta("fast-path", "none") };
     }
   } catch { /* fall through to AI */ }
 
@@ -13584,7 +13620,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         }));
       } catch { /* never let logging break the reply */ }
       if (diag.ok && diag.reply) {
-        return { reply: diag.reply, actions: [], results: [], operations: [], meta: { route: "frontdoor", model: diag.modelLabel! } };
+        return { reply: diag.reply, actions: [], results: [], operations: [], meta: buildMeta("frontdoor", diag.modelLabel!) };
       }
       // Front door was eligible but every provider failed. In debug mode,
       // surface exactly why (bad key, retired model, timeout) instead of
@@ -13614,7 +13650,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         profileNames: (allProfiles || []).map((p: any) => String(p.name)).filter(Boolean),
         habitNames: (habits || []).map((h: any) => String(h.name)).filter(Boolean),
       });
-      if (bulk) return bulk;
+      if (bulk) return { ...bulk, meta: buildMeta("bulk", chatModel) };
     } catch (err: any) {
       logger.warn("ai", `Bulk path crashed (${err?.message}) — continuing with the agentic loop`);
     }
@@ -13625,13 +13661,20 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // mom at 5") get one guarded round on the fast model. Any doubt — no tool
   // calls, off-allowlist tool, invalid input, timeout — falls through to the
   // Sonnet loop below before anything is written. See server/ai-fast-lane.ts.
-  if (fastLaneEnabled() && fastLaneEligible(userMessage).eligible) {
-    try {
-      const fast = await runFastLanePath(userMessage, conversationHistory, userId, systemPromptParts);
-      if (fast) return fast;
-    } catch (err: any) {
-      logger.warn("ai", `Fast lane crashed (${err?.message}) — continuing with the agentic loop`);
+  if (fastLaneEnabled()) {
+    const gate = fastLaneEligible(userMessage);
+    routeTrace.fastLaneGate = gate.eligible ? "eligible" : gate.reason;
+    if (gate.eligible) {
+      try {
+        const fast = await runFastLanePath(userMessage, conversationHistory, userId, systemPromptParts, routeTrace);
+        if (fast) return { ...fast, meta: { ...buildMeta("fast-lane", FAST_LANE_MODEL) } };
+      } catch (err: any) {
+        routeTrace.escalated = `crash:${String(err?.message || err).slice(0, 80)}`;
+        logger.warn("ai", `Fast lane crashed (${err?.message}) — continuing with the agentic loop`);
+      }
     }
+  } else {
+    routeTrace.fastLaneGate = "disabled";
   }
 
   try {
@@ -14345,6 +14388,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       }
     }
 
+    routeTrace.agentRounds = iterations;
+    routeTrace.agentToolCalls = totalToolCalls;
     return {
       reply: finalReply,
       actions: allActions,
@@ -14356,6 +14401,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       report: richReport,
       artifact: artifact || undefined,
       operations: allOperations.length > 0 ? allOperations : undefined,
+      meta: buildMeta("agent", chatModel),
     };
   } catch (err: any) {
     console.error("AI engine error:", err.message);
