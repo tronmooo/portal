@@ -65,8 +65,12 @@ const FIELD_ALIASES: Record<string, string[]> = {
   phone: ["primaryphone", "homephone", "cellphone", "mobilephone", "telephone"],
   address: ["homeaddress", "serviceaddress", "mailingaddress", "streetaddress"],
   // ── vehicle ──────────────────────────────────────────────────────────────
-  licensePlate: ["plate", "platenumber", "licenceplate", "tag", "tagnumber"],
-  vin: ["vinnumber", "vehicleidentificationnumber"],
+  licensePlate: ["plate", "platenumber", "licenceplate", "tag", "tagnumber", "licenseplatenumber"],
+  vin: ["vinnumber", "vehicleidentificationnumber", "vehiclevin"],
+  mileage: ["currentmileage", "odometer", "currentodometer", "odometerreading", "mileagereading", "miles"],
+  make: ["vehiclemake", "carmake"],
+  model: ["vehiclemodel", "carmodel"],
+  year: ["vehicleyear", "modelyear", "caryear"],
   // ── money (kept in step with shared/profile-field-canon) ─────────────────
   currentValue: ["value", "worth", "marketvalue", "estimatedvalue", "currentworth", "assetvalue", "presentvalue"],
   purchasePrice: ["pricepaid", "boughtfor", "purchaseamount", "originalprice", "purchasecost"],
@@ -254,6 +258,94 @@ function equivalentValue(a: unknown, b: unknown): boolean {
     return na === nb;
   }
   return false;
+}
+
+// ─── Stored-field cleanup ────────────────────────────────────────────────────
+
+export interface StoredFieldsCleanupResult {
+  fields: Record<string, any>;
+  /** Storage paths removed as redundant twins, e.g. "currentMileage", "vehicles.mileage". */
+  removed: string[];
+  changed: boolean;
+}
+
+/**
+ * One-pass cleanup of a profile's STORED fields: collapse alias twins so each
+ * logical field is stored exactly once.
+ *
+ * Years of extraction runs left profiles carrying `mileage` + `currentMileage`
+ * + `vehicles.mileage`, `license` + `licenseNumber`, `value` + `currentValue`…
+ * The display layer hides the twins, but the stored redundancy keeps leaking
+ * (exports, AI context, any reader that doesn't flatten). This produces the
+ * cleaned object storage should hold.
+ *
+ * Safety rule (same as everywhere in this module): a twin is only dropped when
+ * its value AGREES with the survivor (loosely — "$26,000" == 26000) or is
+ * empty. Differing values are never discarded.
+ *
+ * Pure: returns new objects, never mutates the input.
+ */
+export function cleanupStoredProfileFields(
+  fields: Record<string, any> | null | undefined,
+): StoredFieldsCleanupResult {
+  if (!fields || typeof fields !== "object") return { fields: {}, removed: [], changed: false };
+  const removed: string[] = [];
+  const out: Record<string, any> = { ...fields };
+
+  const isGroup = (k: string) =>
+    (PROFILE_FIELD_GROUPS as readonly string[]).includes(k) &&
+    out[k] && typeof out[k] === "object" && !Array.isArray(out[k]);
+
+  // 1. Collapse top-level twins (same identity, agreeing values).
+  const byIdentity = new Map<string, string[]>();
+  for (const k of Object.keys(out)) {
+    if (k.startsWith("_") || isGroup(k)) continue;
+    const id = fieldIdentity(k);
+    const list = byIdentity.get(id);
+    if (list) list.push(k); else byIdentity.set(id, [k]);
+  }
+  for (const [identity, keys] of byIdentity) {
+    if (keys.length < 2) continue;
+    const winner = pickPreferredKey(keys, identity, out);
+    for (const k of keys) {
+      if (k === winner) continue;
+      if (equivalentValue(out[k], out[winner])) {
+        delete out[k];
+        removed.push(k);
+      }
+    }
+  }
+
+  // 2. Sweep nested-group copies that duplicate a surviving top-level value.
+  const topIdentity = new Map<string, string>();
+  for (const k of Object.keys(out)) {
+    if (k.startsWith("_") || isGroup(k)) continue;
+    topIdentity.set(fieldIdentity(k), k);
+  }
+  for (const group of PROFILE_FIELD_GROUPS) {
+    if (!isGroup(group)) continue;
+    const nested = out[group] as Record<string, any>;
+    let cleaned: Record<string, any> | null = null;
+    for (const nk of Object.keys(nested)) {
+      const topKey = topIdentity.get(fieldIdentity(nk));
+      if (topKey === undefined) continue;
+      // Never delete a nested VALUE in favor of an empty top-level twin —
+      // equivalentValue treats empties as agreeing, which would lose data here.
+      const topVal = out[topKey];
+      if (topVal === undefined || topVal === null || String(topVal).trim() === "") continue;
+      if (equivalentValue(nested[nk], out[topKey])) {
+        if (!cleaned) cleaned = { ...nested };
+        delete cleaned[nk];
+        removed.push(`${group}.${nk}`);
+      }
+    }
+    if (cleaned) {
+      if (Object.keys(cleaned).length > 0) out[group] = cleaned;
+      else { delete out[group]; }
+    }
+  }
+
+  return { fields: out, removed, changed: removed.length > 0 };
 }
 
 // ─── Field relevance ─────────────────────────────────────────────────────────

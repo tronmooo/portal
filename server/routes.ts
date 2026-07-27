@@ -24,6 +24,8 @@ import { buildImportPrompt, planImport, applyImport, undoImport } from "./financ
 import { registerCacheBuster } from "./cache-bus";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
+import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
+import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from "@shared/profile-field-identity";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -2050,6 +2052,12 @@ ${JSON.stringify(ctx, null, 2)}`;
 
       log.info(`[confirm-extraction] extractionId=${extractionId}, fields=${confirmedFields?.length || 0}, profileId=${targetProfileId || 'NONE'}, events=${createCalendarEvents?.length || 0}, trackers=${trackerEntries?.length || 0}`);
 
+      // Helper: unwrap {value, confidence} objects into plain values.
+      // Declared BEFORE the AI profile-pick below — it used to sit after it,
+      // so the pick's `unwrap(f.value)` hit the const temporal dead zone and
+      // the whole AI profile-pick silently fell back to the self profile.
+      const unwrap = (v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+
       // If no profile was selected, AI-pick the best profile from extracted fields.
       // Falls back to self profile (legacy behaviour) if AI can't decide.
       let resolvedProfileId = targetProfileId;
@@ -2098,9 +2106,10 @@ ${JSON.stringify(ctx, null, 2)}`;
       // pretending everything worked. Previously these errors were caught
       // and only logged, then the route returned `success: true`.
       const failures: string[] = [];
-
-      // Helper: unwrap {value, confidence} objects into plain values
-      const unwrap = (v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+      // Fields the routing layer deliberately kept off the profile (document
+      // metadata / junk). Surfaced in the response so a "saved" that actually
+      // skipped something is visible instead of silent.
+      const skippedFields: string[] = [];
 
       // ═══ INTELLIGENT DATA ROUTING ═══
       // Each extracted field gets routed to the correct destination based on what it IS.
@@ -2129,44 +2138,15 @@ ${JSON.stringify(ctx, null, 2)}`;
         // Document-metadata fields that should NOT be saved to profiles
         const DOC_ONLY_FIELDS = new Set(['fileName', 'barcode', 'signatureType', 'documentTitle', 'reportTitle', 'signedBy', 'electronicSignature', 'electronicallySignedBy', 'facilityAddress']);
 
-        // Wave 2 #5 — AI extra classification for fields NOT already in DOC_ONLY_FIELDS.
-        // For each unfamiliar field, AI returns one of: "profile_fact" (default),
-        // "doc_only" (extra DOC_ONLY treatment), or "skip" (junk). Single batched call.
-        // Result is a Map<fieldKey, classification>; profile_fact preserves current behaviour.
-        const aiFieldClassification = new Map<string, "profile_fact" | "doc_only" | "skip">();
-        try {
-          const unknownFields = confirmedFields
-            .map((f: any) => f.key)
-            .filter((k: string) => !DOC_ONLY_FIELDS.has(k));
-          if (unknownFields.length > 0) {
-            const dec = await aiDecide<Record<string, string>>({
-              task: "field-destination-route",
-              system: `You decide where each extracted field should live in a personal-finance / life-management app.
-Return ONLY a JSON object mapping each field key (string) to one of these classifications:
-  - "profile_fact"  — a stable attribute of the person/entity (name, DOB, address, license #, blood type, employer, etc.)
-  - "doc_only"      — metadata that only makes sense on the document itself (barcode, page count, signature image ID, file checksum, etc.)
-  - "skip"          — obvious junk / unparseable / placeholder values ("N/A", empty form labels, OCR noise)
-If unsure, return "profile_fact".`,
-              user: `Classify these field keys:\n${JSON.stringify(unknownFields)}\n\nReturn JSON only.`,
-              timeoutMs: 3000,
-              maxTokens: Math.min(800, 30 + unknownFields.length * 18),
-              fallback: () => {
-                const out: Record<string, string> = {};
-                for (const k of unknownFields) out[k] = "profile_fact";
-                return out;
-              },
-              validate: (p: any) => p && typeof p === "object" && !Array.isArray(p),
-            });
-            for (const [k, v] of Object.entries(dec.value)) {
-              const c = (v === "profile_fact" || v === "doc_only" || v === "skip") ? v : "profile_fact";
-              aiFieldClassification.set(k, c as any);
-            }
-            log.info(`[confirm-extraction] AI classified ${aiFieldClassification.size} fields via ${dec.source} in ${dec.durationMs}ms`);
-          }
-        } catch (e: any) {
-          console.error(`[confirm-extraction] AI field classification failed silently: ${e?.message || e}`);
-        }
-
+        // The review checklist IS the routing decision. Every field the user
+        // ticked gets written to the profile — no AI second-guessing. An
+        // earlier "field-destination-route" AI pass used to reclassify ticked
+        // fields as "doc_only"/"skip" and silently drop them (bug report
+        // 2026-07-27: an oil-change receipt's service date, oil type, amount,
+        // and provider never reached the chosen vehicle while the response
+        // claimed success). The only exception is the tiny static
+        // DOC_ONLY_FIELDS list of pure file metadata, and even those skips are
+        // named in the response instead of hidden.
         const profileFields: Record<string, any> = {};
 
         // Smart type coercion: convert string values to appropriate JS types
@@ -2199,10 +2179,7 @@ If unsure, return "profile_fact".`,
           const val = unwrap(field.value);
 
           // Skip document-metadata fields — they belong on the document, not the profile
-          if (DOC_ONLY_FIELDS.has(key)) continue;
-          // Wave 2 #5: respect AI classification — skip junk + doc-only without altering profile.
-          const aiClass = aiFieldClassification.get(key);
-          if (aiClass === "doc_only" || aiClass === "skip") continue;
+          if (DOC_ONLY_FIELDS.has(key)) { skippedFields.push(key); continue; }
 
           // Normalize keys: dateOfBirth/dob → save as both dateOfBirth AND birthday
           if (key === 'dateOfBirth' || key === 'dob') {
@@ -2219,33 +2196,115 @@ If unsure, return "profile_fact".`,
 
         // Save to the resolved profile
         if (resolvedProfileId && Object.keys(profileFields).length > 0) {
-          const profile = await storage.getProfile(resolvedProfileId);
-          if (profile) {
-            const existingFields = profile.fields || {};
+          try {
+            const profile = await storage.getProfile(resolvedProfileId);
+            if (profile) {
+              const existingFields: Record<string, any> = profile.fields || {};
 
-            // Handle patientName → name normalization
-            if (profileFields['_patientName']) {
-              const patientNameVal = profileFields['_patientName'];
-              delete profileFields['_patientName'];
-              if (!existingFields['name'] && !profile.name) {
-                profileFields['name'] = patientNameVal;
+              // Handle patientName → name normalization
+              if (profileFields['_patientName']) {
+                const patientNameVal = profileFields['_patientName'];
+                delete profileFields['_patientName'];
+                if (!existingFields['name'] && !profile.name) {
+                  profileFields['name'] = patientNameVal;
+                }
+                // Always store patientName as well for reference
+                profileFields['patientName'] = patientNameVal;
               }
-              // Always store patientName as well for reference
-              profileFields['patientName'] = patientNameVal;
+
+              // Fold alias spellings to the canonical key (currentMileage →
+              // mileage, value → currentValue…) so a receipt's key naming
+              // can't mint a second copy of a field the profile already has.
+              const incoming = canonicalizeProfileFields(profileFields, existingFields).fields;
+
+              // The user confirmed each of these values, so a confirmed value
+              // REPLACES every other spelling of the same field — top-level
+              // twins and copies inside nested groups alike. Without this
+              // sweep the profile ends up showing "Mileage 80000" AND
+              // "Current Mileage 69063" as two separate rows. A twin at the
+              // top level is set to null (the storage merge layer treats null
+              // as a deletion intent); a modified nested group is rewritten
+              // wholesale. Replaced odometer readings are kept in
+              // _mileageHistory rather than lost.
+              const merged: Record<string, any> = { ...existingFields };
+              const replacedMileage: Array<{ from: string; value: any }> = [];
+              for (const [key, value] of Object.entries(incoming)) {
+                if (key.startsWith("_")) { merged[key] = value; continue; }
+                const identity = fieldIdentity(key);
+                for (const existingKey of Object.keys(merged)) {
+                  if (existingKey === key || existingKey.startsWith("_")) continue;
+                  if ((PROFILE_FIELD_GROUPS as readonly string[]).includes(existingKey)) continue;
+                  if (fieldIdentity(existingKey) !== identity) continue;
+                  if (identity === "mileage" && merged[existingKey] != null && !looselyEqual(merged[existingKey], value)) {
+                    replacedMileage.push({ from: existingKey, value: merged[existingKey] });
+                  }
+                  merged[existingKey] = null;
+                }
+                for (const group of PROFILE_FIELD_GROUPS) {
+                  const nested = merged[group];
+                  if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
+                  const twins = Object.keys(nested).filter((nk) => fieldIdentity(nk) === identity);
+                  if (twins.length === 0) continue;
+                  const cleaned: Record<string, any> = { ...nested };
+                  for (const nk of twins) {
+                    if (identity === "mileage" && cleaned[nk] != null && !looselyEqual(cleaned[nk], value)) {
+                      replacedMileage.push({ from: `${group}.${nk}`, value: cleaned[nk] });
+                    }
+                    delete cleaned[nk];
+                  }
+                  merged[group] = cleaned;
+                }
+                if (identity === "mileage" && merged[key] != null && !looselyEqual(merged[key], value)) {
+                  replacedMileage.push({ from: key, value: merged[key] });
+                }
+                merged[key] = value;
+              }
+              if (replacedMileage.length > 0) {
+                const history = Array.isArray(existingFields._mileageHistory) ? existingFields._mileageHistory : [];
+                merged._mileageHistory = [
+                  ...history,
+                  ...replacedMileage.map((m) => ({ value: m.value, from: m.from, replacedAt: new Date().toISOString() })),
+                ];
+              }
+
+              await storage.updateProfile(resolvedProfileId, { fields: merged });
+
+              // Verify the write actually landed before claiming success —
+              // re-read the profile and check every confirmed field. Any field
+              // that didn't persist is named individually in `failures`
+              // instead of the whole save being reported as done.
+              const after = await storage.getProfile(resolvedProfileId);
+              const afterFields: Record<string, any> = (after as any)?.fields || {};
+              const confirmedKeys = Object.keys(incoming).filter((k) => !k.startsWith("_"));
+              const unsavedKeys = confirmedKeys.filter((k) => !looselyEqual(afterFields[k], incoming[k]));
+              const savedKeys = confirmedKeys.filter((k) => !unsavedKeys.includes(k));
+              if (unsavedKeys.length > 0) {
+                failures.push(`fields did not persist to ${profile.name}: ${unsavedKeys.join(", ")}`);
+              }
+              if (savedKeys.length > 0) {
+                saved.push(`Saved ${savedKeys.length} field${savedKeys.length === 1 ? "" : "s"} to ${profile.name}`);
+              }
+              log.info(`[confirm-extraction] Routed ${savedKeys.length}/${confirmedKeys.length} fields to profile ${profile.name}${unsavedKeys.length > 0 ? ` (FAILED: ${unsavedKeys.join(", ")})` : ""}`);
+
+              // Link the document to the profile
+              try {
+                await storage.linkProfileTo(resolvedProfileId, "document", extractionId);
+                await storage.propagateDocumentToAncestors(extractionId, resolvedProfileId);
+              } catch { /* may already be linked */ }
+            } else {
+              // A profile id was resolved but the profile can't be loaded
+              // (deleted mid-flight?) — the fields did NOT reach any profile.
+              failures.push(`profile ${resolvedProfileId} not found — ${Object.keys(profileFields).length} confirmed field(s) were saved to the document only`);
             }
-
-            await storage.updateProfile(resolvedProfileId, {
-              fields: { ...existingFields, ...profileFields },
-            });
-            saved.push(`Saved ${Object.keys(profileFields).length} fields to ${profile.name}`);
-            log.info(`[confirm-extraction] Routed ${Object.keys(profileFields).length} fields to profile ${profile.name}`);
-
-            // Link the document to the profile
-            try {
-              await storage.linkProfileTo(resolvedProfileId, "document", extractionId);
-              await storage.propagateDocumentToAncestors(extractionId, resolvedProfileId);
-            } catch { /* may already be linked */ }
+          } catch (pErr: any) {
+            console.error("Failed to save fields to profile:", pErr?.message);
+            failures.push(`profile fields: ${pErr?.message || "unknown error"}`);
           }
+        } else if (!resolvedProfileId && Object.keys(profileFields).length > 0) {
+          // The user ticked fields but no destination profile could be
+          // resolved (none selected, no AI match, no self profile). Say so —
+          // the fields are on the document, NOT on any profile.
+          failures.push(`no profile selected — ${Object.keys(profileFields).length} confirmed field(s) were saved to the document only`);
         }
       }
 
@@ -2400,10 +2459,23 @@ If unsure, return "profile_fact".`,
           if (!isFinite(amt) || amt <= 0) {
             throw new Error("Expense amount must be a positive number");
           }
+          // Dedupe: one document must never yield two expenses. If an expense
+          // with the same date and amount already exists (e.g. auto-created at
+          // upload time, or the confirmation was replayed), skip creating a twin.
+          const priorExpenses = await storage.getExpenses();
+          const duplicate = (priorExpenses || []).find((e: any) =>
+            e.date === (exp.date || e.date) && Math.abs(Number(e.amount) - amt) < 0.005
+          );
+          if (duplicate) {
+            saved.push(`Expense $${amt.toFixed(2)} already exists (${duplicate.description}) — skipped duplicate`);
+            try { await storage.linkProfileTo(duplicate.id, "document", extractionId); } catch {}
+          } else {
           const expense = await storage.createExpense({
             description: exp.description,
             amount: amt,
-            category: exp.category || 'general',
+            // One vocabulary: "transportation"/"auto"/"car" all fold to their
+            // canonical bucket so the dashboard never splits one category.
+            category: canonicalExpenseCategory(exp.category || 'general'),
             vendor: exp.vendor,
             date: exp.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
             tags: [],
@@ -2412,6 +2484,7 @@ If unsure, return "profile_fact".`,
           saved.push(`Created expense: $${amt.toFixed(2)} ${exp.description}`);
           // Link document to expense
           try { await storage.linkProfileTo(expense.id, "document", extractionId); } catch {}
+          }
         } catch (eErr: any) {
           console.error("Failed to create expense from extraction:", eErr?.message);
           failures.push(`expense: ${eErr?.message || "unknown error"}`);
@@ -2433,7 +2506,7 @@ If unsure, return "profile_fact".`,
             name: obl.name,
             amount: amt,
             frequency: obl.frequency || 'monthly',
-            category: obl.category || 'general',
+            category: canonicalObligationCategory(obl.category || 'general'),
             nextDueDate: obl.nextDueDate,
             autopay: false,
             linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
@@ -2469,6 +2542,9 @@ If unsure, return "profile_fact".`,
           : (failures.length > 0 ? `All steps failed: ${failures.join("; ")}` : "No fields to save"),
         saved,
         failures,
+        // Fields deliberately kept on the document only (metadata/junk) —
+        // named so a partial save is visible instead of silently claimed.
+        skipped: skippedFields,
       });
     } catch (err: any) {
       log.error("[ConfirmExtraction]", err?.message || "unknown error");
@@ -3025,6 +3101,30 @@ If unsure, return "profile_fact".`,
     // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
     if ((detail as any).userId && (detail as any).userId !== (req as AuthenticatedRequest).userId) {
       return res.status(404).json({ error: "Not found" });
+    }
+    // SELF-HEALING FIELD CLEANUP: years of extraction runs left profiles
+    // storing the same fact under several spellings (mileage + currentMileage
+    // + vehicles.mileage). Collapse agreeing twins to ONE canonical field on
+    // read — the response carries the cleaned shape immediately, and the
+    // write-back converges storage in the background (only fires when
+    // something was actually redundant; differing values are never dropped).
+    try {
+      const cleanup = cleanupStoredProfileFields((detail as any).fields);
+      if (cleanup.changed) {
+        (detail as any).fields = cleanup.fields;
+        log.info(`[profile-cleanup] ${req.params.id} collapsed ${cleanup.removed.length} redundant field(s): ${cleanup.removed.join(", ")}`);
+        // Top-level removals need explicit null markers so the storage merge
+        // layer deletes them; rewritten nested groups replace wholesale.
+        const patch: Record<string, any> = { ...cleanup.fields };
+        for (const path of cleanup.removed) {
+          if (!path.includes(".") ) patch[path] = null;
+        }
+        storage.updateProfile(req.params.id, { fields: patch } as any).catch((e: any) =>
+          console.error(`[profile-cleanup] write-back failed for ${req.params.id}: ${e?.message || e}`)
+        );
+      }
+    } catch (cleanErr: any) {
+      console.error(`[profile-cleanup] skipped: ${cleanErr?.message || cleanErr}`);
     }
     res.json(detail);
   }));

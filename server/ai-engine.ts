@@ -27,6 +27,8 @@ import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderV
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { createHash } from "crypto";
+import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
@@ -1713,6 +1715,54 @@ export async function processFileUpload(
   if (cleanBase640.includes(",")) cleanBase640 = cleanBase640.split(",").pop() || cleanBase640;
   cleanBase640 = cleanBase640.replace(/\s/g, "");
 
+  // ── IDEMPOTENT RE-UPLOAD GUARD ─────────────────────────────────────────────
+  // A dropped connection ("Load failed" on iOS) leaves the client unsure
+  // whether the server finished processing, so it (or the user) retries the
+  // same upload — and a retry must NEVER create a second document or a second
+  // expense. Every stored upload is tagged with its content hash; an identical
+  // file re-sent within the window short-circuits to the existing document,
+  // rebuilding the extraction checklist from its saved extractedData so the
+  // confirm-and-save flow still works.
+  const uploadHashTag = `sha256:${createHash("sha256").update(cleanBase640).digest("hex").slice(0, 32)}`;
+  try {
+    const recentDocs = await storage.getDocuments();
+    const cutoffMs = Date.now() - 60 * 60 * 1000;
+    const existingUpload = (recentDocs || []).find((d: any) =>
+      Array.isArray(d.tags) && d.tags.includes(uploadHashTag) &&
+      new Date(d.createdAt || 0).getTime() >= cutoffMs
+    );
+    if (existingUpload) {
+      console.log(`[Upload] Duplicate upload of "${fileName}" — reusing document ${existingUpload.id} instead of reprocessing`);
+      const unwrapDup = (v: any) => (v && typeof v === "object" && "value" in v) ? v.value : v;
+      const dupFields = Object.entries(existingUpload.extractedData || {})
+        .filter(([, v]) => unwrapDup(v) != null && unwrapDup(v) !== "")
+        .map(([key, v]) => ({
+          key,
+          label: key.replace(/_/g, " ").replace(/([A-Z])/g, " $1").replace(/\s+/g, " ").trim().replace(/\b\w/g, (c: string) => c.toUpperCase()),
+          value: unwrapDup(v),
+          selected: true,
+        }));
+      return {
+        reply: `"${fileName}" is the same file you just uploaded — using the existing document "${existingUpload.name}" instead of creating a duplicate.${dupFields.length > 0 ? " Review the extracted fields below to save them to a profile." : ""}`,
+        actions: [],
+        results: [existingUpload],
+        documentId: existingUpload.id,
+        documentPreview: { id: existingUpload.id, name: existingUpload.name, mimeType: existingUpload.mimeType, data: "" },
+        pendingExtraction: dupFields.length > 0 ? {
+          extractionId: existingUpload.id,
+          fileName,
+          documentType: existingUpload.type || "other",
+          label: existingUpload.name,
+          extractedFields: dupFields,
+          trackerEntries: [],
+          documentPreview: { id: existingUpload.id, name: existingUpload.name, mimeType: existingUpload.mimeType },
+        } : undefined,
+      };
+    }
+  } catch (dupErr: any) {
+    console.error(`[Upload] duplicate-check failed (continuing with normal upload): ${dupErr?.message || dupErr}`);
+  }
+
   const classifierContent: any[] = [];
   if (isImage0 || isPdf0) {
     classifierContent.push({
@@ -2137,7 +2187,7 @@ Return ONLY the JSON object, nothing else.`;
         fileData: base64Data,
         extractedData: parsed.extractedData || {},
         linkedProfiles: Array.from(new Set([...existingDoc.linkedProfiles, ...linkedProfiles])),
-        tags: Array.from(new Set([...(existingDoc.tags || []), parsed.documentType || "uploaded"])),
+        tags: Array.from(new Set([...(existingDoc.tags || []), parsed.documentType || "uploaded", uploadHashTag])),
       });
       console.log(`[Upload] Updated existing document "${docName}" (${existingDoc.id}) instead of creating duplicate`);
     } else {
@@ -2151,7 +2201,7 @@ Return ONLY the JSON object, nothing else.`;
         fileData: base64Data,
         extractedData: parsed.extractedData || {},
         linkedProfiles,
-        tags: [parsed.documentType || "uploaded"],
+        tags: [parsed.documentType || "uploaded", uploadHashTag],
       }, "document");
       if (docPayload.ok) {
         document = await storage.createDocument(docPayload.data);
@@ -2164,7 +2214,7 @@ Return ONLY the JSON object, nothing else.`;
           fileData: base64Data,
           extractedData: {},
           linkedProfiles,
-          tags: ["uploaded"],
+          tags: ["uploaded", uploadHashTag],
         });
       }
     }
@@ -2194,20 +2244,27 @@ Return ONLY the JSON object, nothing else.`;
       savedItems.push(`${Object.keys(parsed.extractedData).length} fields ready for ${profileName} (confirm to save)`);
     }
 
-    // Auto-create expense if the document has any dollar amount
+    // Auto-create expense if the document has any dollar amount.
+    //
+    // ONLY when the classifier did NOT mark this document class as producing
+    // an expense. When destinations.expense is true, pendingFinancial.expense
+    // (built below) is offered in the review UI and created on confirmation —
+    // auto-creating here as well produced TWO expenses from one receipt
+    // (user report 2026-07-27: $118.14 auto-created at upload AND $113.33
+    // created again on confirm, from the same oil-change receipt).
     // Helper to unwrap {value, confidence} objects
     const unwrapVal = (v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
     const rawAmount = unwrapVal(parsed.extractedData?.totalAmount) || unwrapVal(parsed.extractedData?.totalAmountDue) || unwrapVal(parsed.extractedData?.totalDue) || unwrapVal(parsed.extractedData?.amountDue) || unwrapVal(parsed.extractedData?.amountPaid) || unwrapVal(parsed.extractedData?.balance) || unwrapVal(parsed.extractedData?.total_amount) || unwrapVal(parsed.extractedData?.amount_due) || unwrapVal(parsed.extractedData?.totalDispCD);
     const numAmount = typeof rawAmount === 'number' ? rawAmount : parseFloat(String(rawAmount));
-    if (numAmount && isFinite(numAmount) && numAmount > 0) {
+    if (numAmount && isFinite(numAmount) && numAmount > 0 && classification.destinations.expense !== true) {
       try {
         const docType = (parsed.documentType || "receipt").toLowerCase();
-        const category = ["vehicle", "registration", "citation", "parking", "toll", "dmv"].some(t => docType.includes(t)) ? "vehicle"
+        const category = canonicalExpenseCategory(["vehicle", "registration", "citation", "parking", "toll", "dmv"].some(t => docType.includes(t)) ? "vehicle"
           : ["medical", "prescription", "lab", "health", "doctor", "hospital"].some(t => docType.includes(t)) ? "health"
           : ["utility", "bill", "electric", "water", "gas"].some(t => docType.includes(t)) ? "utilities"
           : ["insurance"].some(t => docType.includes(t)) ? "insurance"
           : ["bank", "loan", "statement"].some(t => docType.includes(t)) ? "general"
-          : "general";
+          : "general");
         const desc = parsed.label || parsed.summary || fileName;
         const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
         // P0.3b: resolve EVERY profile the expense belongs to (target asset +
@@ -2413,21 +2470,29 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
 
     // Build a flat lookup from BOTH extractedData AND extractedFields
     // The AI puts data in different places depending on the document
+    // Values may arrive wrapped as {value, confidence} — unwrap BEFORE
+    // stringifying. A wrapped totalAmount used to stringify to
+    // "[object Object]", fail parseFloat, and let the amount picker fall
+    // through to a lesser key like `subtotal` — proposing the wrong amount
+    // ($113.33 subtotal instead of the $118.14 receipt total).
     const fieldLookup: Record<string, string> = {};
     if (parsed.extractedData) {
       for (const [k, v] of Object.entries(parsed.extractedData)) {
-        if (v != null) fieldLookup[k.toLowerCase()] = String(v);
+        const uv = unwrapVal(v);
+        if (uv != null) fieldLookup[k.toLowerCase()] = String(uv);
       }
     }
     for (const f of extractedFields) {
-      if (f.key && f.value != null) fieldLookup[f.key.toLowerCase()] = String(f.value);
+      const uv = unwrapVal(f.value);
+      if (f.key && uv != null) fieldLookup[f.key.toLowerCase()] = String(uv);
     }
 
     // Look for amount fields (check both camelCase and lowercase). Order matters
     // — the most authoritative "final amount paid/due" comes first; generic
     // "price"/"cost" only get used if no real total is found.
     const amountKeys = [
-      'totalamount', 'totalamountdue', 'grandtotal', 'amountdue', 'amountpaid',
+      'totalamount', 'totalamountdue', 'grandtotal', 'amountdue', 'amountduetoday',
+      'totaldue', 'amountpaid', 'amounttendered', 'amttendered', 'totalpaid',
       'amountcharged', 'amount', 'balancedue', 'currentcharges', 'totalcharges',
       'totaldueamount', 'paymenttotal', 'chargetotal', 'feetotal', 'total',
       'subtotal', 'parkingcost', 'parkingfee', 'parkingtotal', 'ticketprice',
@@ -2489,7 +2554,11 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       // enum of documentClass strings. This works for any document the AI
       // invents — boat_registration, gym_membership, etc.
       const categoryFromBucket: Record<string, string> = {
-        'Vehicle': 'transportation',
+        // Vehicle documents (service receipts, oil changes, repairs) are
+        // "vehicle" expenses — mapping them to "transportation" split the
+        // dashboard into vehicle/transportation/transport buckets for what is
+        // one category.
+        'Vehicle': 'vehicle',
         'Property': 'housing',
         'Medical': 'medical',
         'Insurance': 'insurance',
@@ -2515,7 +2584,9 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         'restaurant_check': 'dining', 'event_ticket': 'entertainment',
         'medical_bill': 'medical', 'prescription': 'medical',
       };
-      const category = categoryFromType[classification.documentClass] || categoryFromType[docType] || categoryFromBucket[classification.category] || 'general';
+      // Fold through the shared canonicalizer so one concept can never be
+      // stored under two spellings (transportation → transport, auto → vehicle).
+      const category = canonicalExpenseCategory(categoryFromType[classification.documentClass] || categoryFromType[docType] || categoryFromBucket[classification.category] || 'general');
       const vendor = fieldLookup['vendorname'] || fieldLookup['merchantname'] || fieldLookup['companyname'] || fieldLookup['providername'] || fieldLookup['utilitycompany'] || fieldLookup['title'] || classification.label || parsed.label || '';
       const dueDate = fieldLookup['duedate'] || fieldLookup['paymentduedate'] || fieldLookup['nextduedate'] || '';
       // Recurring decision: classifier obligation flag first (intent-based),
@@ -2604,7 +2675,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       fileData: base64Data,
       extractedData: {},
       linkedProfiles: profileId ? profileId.split(",").filter(Boolean) : [],
-      tags: ["uploaded"],
+      tags: ["uploaded", uploadHashTag],
     });
     const documentPreview = {
       id: document.id,

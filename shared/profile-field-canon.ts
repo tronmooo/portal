@@ -24,7 +24,12 @@ const CANONICAL_ALIASES: Record<string, string[]> = {
   monthlyPayment: ["paymentamount", "monthlycost", "monthlyamount"],
   purchaseDate: ["datepurchased", "boughton", "acquisitiondate", "dateacquired"],
   accountNumber: ["accountno", "acctnumber", "acctno"],
-  licensePlate: ["plate", "platenumber", "licenceplate"],
+  licensePlate: ["plate", "platenumber", "licenceplate", "licenseplatenumber"],
+  mileage: ["currentmileage", "odometer", "currentodometer", "odometerreading", "mileagereading", "miles"],
+  vin: ["vinnumber", "vehicleidentificationnumber", "vehiclevin"],
+  make: ["vehiclemake", "carmake"],
+  model: ["vehiclemodel", "carmodel"],
+  year: ["vehicleyear", "modelyear", "caryear"],
 };
 
 /** Lowercase + strip separators so camelCase / snake_case / spaced variants of
