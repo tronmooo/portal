@@ -2078,53 +2078,15 @@ ${JSON.stringify(ctx, null, 2)}`;
         // Document-metadata fields that should NOT be saved to profiles
         const DOC_ONLY_FIELDS = new Set(['fileName', 'barcode', 'signatureType', 'documentTitle', 'reportTitle', 'signedBy', 'electronicSignature', 'electronicallySignedBy', 'facilityAddress']);
 
-        // Wave 2 #5 — AI extra classification for fields NOT already in DOC_ONLY_FIELDS.
-        // For each unfamiliar field, AI returns one of: "profile_fact" (default),
-        // "doc_only" (extra DOC_ONLY treatment), or "skip" (junk). Single batched call.
-        // Result is a Map<fieldKey, classification>; profile_fact preserves current behaviour.
-        //
-        // ONLY runs when the destination profile was auto-resolved. When the
-        // user explicitly picked the target profile AND ticked each field in
-        // the review checklist, that selection is authoritative — the AI must
-        // not silently veto it. (Bug report 2026-07-27: oil-change receipt
-        // fields — service date, oil type, amount, provider — were classified
-        // "doc_only" and dropped from the chosen vehicle while the response
-        // still claimed success.)
-        const userPickedProfile = resolvedProfileSource === "caller";
-        const aiFieldClassification = new Map<string, "profile_fact" | "doc_only" | "skip">();
-        if (!userPickedProfile) try {
-          const unknownFields = confirmedFields
-            .map((f: any) => f.key)
-            .filter((k: string) => !DOC_ONLY_FIELDS.has(k));
-          if (unknownFields.length > 0) {
-            const dec = await aiDecide<Record<string, string>>({
-              task: "field-destination-route",
-              system: `You decide where each extracted field should live in a personal-finance / life-management app.
-Return ONLY a JSON object mapping each field key (string) to one of these classifications:
-  - "profile_fact"  — a stable attribute of the person/entity (name, DOB, address, license #, blood type, employer, etc.)
-  - "doc_only"      — metadata that only makes sense on the document itself (barcode, page count, signature image ID, file checksum, etc.)
-  - "skip"          — obvious junk / unparseable / placeholder values ("N/A", empty form labels, OCR noise)
-If unsure, return "profile_fact".`,
-              user: `Classify these field keys:\n${JSON.stringify(unknownFields)}\n\nReturn JSON only.`,
-              timeoutMs: 3000,
-              maxTokens: Math.min(800, 30 + unknownFields.length * 18),
-              fallback: () => {
-                const out: Record<string, string> = {};
-                for (const k of unknownFields) out[k] = "profile_fact";
-                return out;
-              },
-              validate: (p: any) => p && typeof p === "object" && !Array.isArray(p),
-            });
-            for (const [k, v] of Object.entries(dec.value)) {
-              const c = (v === "profile_fact" || v === "doc_only" || v === "skip") ? v : "profile_fact";
-              aiFieldClassification.set(k, c as any);
-            }
-            log.info(`[confirm-extraction] AI classified ${aiFieldClassification.size} fields via ${dec.source} in ${dec.durationMs}ms`);
-          }
-        } catch (e: any) {
-          console.error(`[confirm-extraction] AI field classification failed silently: ${e?.message || e}`);
-        }
-
+        // The review checklist IS the routing decision. Every field the user
+        // ticked gets written to the profile — no AI second-guessing. An
+        // earlier "field-destination-route" AI pass used to reclassify ticked
+        // fields as "doc_only"/"skip" and silently drop them (bug report
+        // 2026-07-27: an oil-change receipt's service date, oil type, amount,
+        // and provider never reached the chosen vehicle while the response
+        // claimed success). The only exception is the tiny static
+        // DOC_ONLY_FIELDS list of pure file metadata, and even those skips are
+        // named in the response instead of hidden.
         const profileFields: Record<string, any> = {};
 
         // Smart type coercion: convert string values to appropriate JS types
@@ -2158,9 +2120,6 @@ If unsure, return "profile_fact".`,
 
           // Skip document-metadata fields — they belong on the document, not the profile
           if (DOC_ONLY_FIELDS.has(key)) { skippedFields.push(key); continue; }
-          // Wave 2 #5: respect AI classification — skip junk + doc-only without altering profile.
-          const aiClass = aiFieldClassification.get(key);
-          if (aiClass === "doc_only" || aiClass === "skip") { skippedFields.push(key); continue; }
 
           // Normalize keys: dateOfBirth/dob → save as both dateOfBirth AND birthday
           if (key === 'dateOfBirth' || key === 'dob') {
@@ -2272,11 +2231,20 @@ If unsure, return "profile_fact".`,
                 await storage.linkProfileTo(resolvedProfileId, "document", extractionId);
                 await storage.propagateDocumentToAncestors(extractionId, resolvedProfileId);
               } catch { /* may already be linked */ }
+            } else {
+              // A profile id was resolved but the profile can't be loaded
+              // (deleted mid-flight?) — the fields did NOT reach any profile.
+              failures.push(`profile ${resolvedProfileId} not found — ${Object.keys(profileFields).length} confirmed field(s) were saved to the document only`);
             }
           } catch (pErr: any) {
             console.error("Failed to save fields to profile:", pErr?.message);
             failures.push(`profile fields: ${pErr?.message || "unknown error"}`);
           }
+        } else if (!resolvedProfileId && Object.keys(profileFields).length > 0) {
+          // The user ticked fields but no destination profile could be
+          // resolved (none selected, no AI match, no self profile). Say so —
+          // the fields are on the document, NOT on any profile.
+          failures.push(`no profile selected — ${Object.keys(profileFields).length} confirmed field(s) were saved to the document only`);
         }
       }
 

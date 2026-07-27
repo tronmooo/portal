@@ -216,6 +216,79 @@ describe("POST /api/chat/confirm-extraction", () => {
     expect(aiTasks).not.toContain("field-destination-route");
   });
 
+  it("saves every ticked field even when no profile was explicitly chosen (auto-resolves, never AI-vetoes)", async () => {
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        // No targetProfileId — the server falls back to the self profile.
+        confirmedFields: [
+          { key: "insurer", value: "Progressive" },
+          { key: "coverageType", value: "Full Coverage" },
+        ],
+        createCalendarEvents: [],
+        trackerEntries: [],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    const self = stubState.profiles.get("profile-self").fields;
+    expect(self.insurer).toBe("Progressive");
+    expect(self.coverageType).toBe("Full Coverage");
+    // The field-destination AI classifier is gone from this path entirely —
+    // ticked fields are saved deterministically on EVERY path.
+    expect(aiTasks).not.toContain("field-destination-route");
+  });
+
+  it("folds alias spellings into the canonical key for any field, replacing instead of duplicating", async () => {
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        targetProfileId: "profile-crv",
+        confirmedFields: [
+          { key: "vehicleMake", value: "HONDA" },
+          { key: "licensePlateNumber", value: "8YPJ480" },
+        ],
+        createCalendarEvents: [],
+        trackerEntries: [],
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).success).toBe(true);
+
+    const after = stubState.profiles.get("profile-crv").fields;
+    // vehicleMake folded into the existing canonical `make` — one make field.
+    expect(after.make).toBe("HONDA");
+    expect(after).not.toHaveProperty("vehicleMake");
+    // licensePlateNumber folded into `licensePlate`; the nested-group copy
+    // (vehicles.licensePlate) was swept so exactly ONE plate remains.
+    expect(after.licensePlate).toBe("8YPJ480");
+    expect(after.vehicles).not.toHaveProperty("licensePlate");
+  });
+
+  it("reports a failure when fields were ticked but no profile could be resolved", async () => {
+    stubState.profiles.delete("profile-self"); // no fallback available
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        confirmedFields: [{ key: "serviceDate", value: "2026-07-22" }],
+        createCalendarEvents: [],
+        trackerEntries: [],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    // Not silent success: the response says the fields reached the document only.
+    expect(data.success).toBe(false);
+    expect(data.failures.join("; ")).toContain("document only");
+  });
+
   it("names the specific fields that failed instead of claiming the whole save succeeded", async () => {
     // Wedge the verification: updates to THIS profile silently drop oilType,
     // simulating a backend that acknowledged the write but didn't persist it.

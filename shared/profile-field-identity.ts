@@ -65,9 +65,12 @@ const FIELD_ALIASES: Record<string, string[]> = {
   phone: ["primaryphone", "homephone", "cellphone", "mobilephone", "telephone"],
   address: ["homeaddress", "serviceaddress", "mailingaddress", "streetaddress"],
   // ── vehicle ──────────────────────────────────────────────────────────────
-  licensePlate: ["plate", "platenumber", "licenceplate", "tag", "tagnumber"],
-  vin: ["vinnumber", "vehicleidentificationnumber"],
+  licensePlate: ["plate", "platenumber", "licenceplate", "tag", "tagnumber", "licenseplatenumber"],
+  vin: ["vinnumber", "vehicleidentificationnumber", "vehiclevin"],
   mileage: ["currentmileage", "odometer", "currentodometer", "odometerreading", "mileagereading", "miles"],
+  make: ["vehiclemake", "carmake"],
+  model: ["vehiclemodel", "carmodel"],
+  year: ["vehicleyear", "modelyear", "caryear"],
   // ── money (kept in step with shared/profile-field-canon) ─────────────────
   currentValue: ["value", "worth", "marketvalue", "estimatedvalue", "currentworth", "assetvalue", "presentvalue"],
   purchasePrice: ["pricepaid", "boughtfor", "purchaseamount", "originalprice", "purchasecost"],
