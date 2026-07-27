@@ -753,6 +753,29 @@ interface ContextCache {
 const contextCacheMap = new Map<string, ContextCache>();
 const CONTEXT_CACHE_TTL = 5000; // 5 seconds
 
+// Chat-model preference cache — the "ai_chat_model" preference changes rarely
+// (a settings toggle) but was read from the DB on EVERY chat message. Per-user
+// keyed (getPreference is scoped to storage.userId); a changed setting takes
+// effect within a minute.
+const modelPrefCache = new Map<string, { value: string | null; at: number }>();
+const MODEL_PREF_TTL_MS = 60_000;
+
+async function getCachedModelPreference(userId: string | undefined): Promise<string | null> {
+  const key = userId || "_global";
+  const hit = modelPrefCache.get(key);
+  if (hit && Date.now() - hit.at < MODEL_PREF_TTL_MS) return hit.value;
+  let value: string | null = null;
+  try {
+    value = await storage.getPreference("ai_chat_model");
+  } catch { /* ignore — use default */ }
+  modelPrefCache.set(key, { value, at: Date.now() });
+  if (modelPrefCache.size > 200) {
+    const oldest = [...modelPrefCache.entries()].sort((a, b) => a[1].at - b[1].at);
+    for (let i = 0; i < 100; i++) modelPrefCache.delete(oldest[i][0]);
+  }
+  return value;
+}
+
 function invalidateContextCache(userId?: string) {
   if (userId) {
     contextCacheMap.delete(userId);
@@ -12558,8 +12581,16 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   // FAST-PATH: "open [document name]" — direct DB lookup, no AI needed
   // Only trigger for "open" / "pull up" / "view" (not "show" which is ambiguous with "show me my tasks")
   // Skip if it looks like a general query: "show me", "show my tasks", "get my tasks"
+  // The broad verbs (view/show/find/get) must ALSO name something document-ish
+  // before we pay this path's cost (getDocuments + getProfiles + a 4s-raced
+  // Haiku call). "show my tasks" / "get my net worth" used to take this detour
+  // on every miss and then run the full agent loop anyway. A doc request whose
+  // phrasing misses this noun list still works — it just goes straight to the
+  // agent, which has the open_document tools.
+  const DOC_NOUN = /\b(?:documents?|docs?|pdf|files?|receipts?|invoices?|licenses?|licence|dl|id|ids|passports?|registrations?|insurance|policy|policies|statements?|contracts?|leases?|deeds?|titles?|records?|certificates?|certs?|forms?|w-?[29]|1099|photos?|images?|scans?|cards?)\b/;
   const isDocOpen = lower.match(/^(?:open|pull up)\s+(?:up\s+)?(?:my\s+)?(.+)/) ||
-    (lower.match(/^(?:view|show|find|get)\s+(?:my\s+)?(.+)/) && 
+    (lower.match(/^(?:view|show|find|get)\s+(?:my\s+)?(.+)/) &&
+     DOC_NOUN.test(lower) &&
      !lower.match(/\b(?:tasks?|expenses?|trackers?|habits?|events?|calendar|bills?|obligations?|goals?|spending|journal|mood|summary|data|stats|schedule)\b/));
   if (isDocOpen) {
     const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:up\s+)?(?:my\s+)?/, "").trim();
@@ -13025,9 +13056,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     }
   } catch { /* fall through to AI */ }
 
-  // ALWAYS invalidate cache at the start of every chat request so AI sees the CURRENT database state.
-  // This ensures manual UI edits (creates, deletes, updates) are reflected immediately.
-  invalidateContextCache(userId);
+  // Context snapshot. The 5s per-user cache is honored here — invalidating it
+  // unconditionally before this read (as this used to) meant the cache NEVER
+  // hit and every message paid 11 full-table reads. Freshness is preserved
+  // where it matters: every AI tool write invalidates the cache immediately
+  // (agent loop + bulk path), so post-write reads are never stale. A manual UI
+  // edit followed by a chat message within the same 5s window on the same warm
+  // instance can see a snapshot up to 5s old — an accepted, bounded tradeoff.
   let [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
 
   // P4.5: honor the UI profile filter when the chat route passes it through.
@@ -13182,9 +13217,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     await (async () => {
       const liabProfiles = profiles.filter((p: any) => p.type === 'liability' || p.type === 'loan');
       if (liabProfiles.length === 0) return '';
+      // Ownership/collateral links cost 2 queries per liability, so bound the
+      // fan-out: only the first 20 liabilities get their links resolved. Every
+      // liability still appears by name below (allPartyLinks[idx] is simply
+      // undefined past the cap, rendering without owners/collateral).
+      const LIAB_LINK_CAP = 20;
+      const linkedLiabs = liabProfiles.slice(0, LIAB_LINK_CAP);
       const [allPartyLinks, allAssetLinks] = await Promise.all([
-        Promise.all(liabProfiles.map((l: any) => storage.getLiabilityProfileLinks(l.id).catch(() => []))),
-        Promise.all(liabProfiles.map((l: any) => storage.getLiabilityAssetLinks(l.id).catch(() => []))),
+        Promise.all(linkedLiabs.map((l: any) => storage.getLiabilityProfileLinks(l.id).catch(() => []))),
+        Promise.all(linkedLiabs.map((l: any) => storage.getLiabilityAssetLinks(l.id).catch(() => []))),
       ]);
       return `Liabilities (${liabProfiles.length}): ${liabProfiles.map((l: any, idx: number) => {
         const f = l.fields || {};
@@ -13295,10 +13336,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // Env-var ANTHROPIC_MODEL still wins (for emergency override).
   // User preference still wins (in case they explicitly pick a model in settings).
   const SONNET_MODEL = "claude-sonnet-4-6";
-  let preferredModel: string | null = null;
-  try {
-    preferredModel = await storage.getPreference("ai_chat_model");
-  } catch { /* ignore — use default */ }
+  let preferredModel: string | null = await getCachedModelPreference(userId);
 
   // Migrate retired/deprecated saved preferences to the current Sonnet so a
   // user who picked Sonnet 4.5 in the past doesn't get a 404 from Anthropic.
