@@ -266,6 +266,34 @@ describe("chat routing matrix", () => {
     expect(result.reply).toBe("You're welcome!");
   });
 
+  it("under-extraction: Haiku emits fewer tools than detected action clauses → escalates (no dropped action)", async () => {
+    // 3 action clauses (ate / walked / took) but Haiku only proposes 2 tools —
+    // executing them would silently drop an action, so the lane must escalate.
+    state.script = (model, nth) => {
+      if (model === HAIKU) {
+        return {
+          content: [
+            toolUse("create_expense", { amount: 3, description: "under-bagel" }, "tu-a"),
+            toolUse("create_expense", { amount: 1, description: "under-water" }, "tu-b"),
+          ],
+          stop_reason: "tool_use",
+        };
+      }
+      return nth === 1
+        ? { content: [toolUse("create_expense", { amount: 9, description: "full recap handled" })], stop_reason: "tool_use" }
+        : { content: [text("Logged all three.")], stop_reason: "end_turn" };
+    };
+
+    const result = await processMessage("I ate a bagel and walked 2 miles and took my vitamins", undefined, "user-1");
+
+    expect(models()[0]).toBe(HAIKU);
+    expect(models()).toContain(SONNET);
+    // Haiku's under-extracted pair never executed — only Sonnet's write did.
+    expect(state.writes.createExpense).toBe(1);
+    expect(state.expenses[0].description).toBe("full recap handled");
+    expect(result.reply).toBe("Logged all three.");
+  });
+
   it("follow-up with history → fast lane sees the conversation, not just the last message", async () => {
     state.script = (model) =>
       model === HAIKU

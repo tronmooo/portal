@@ -785,6 +785,12 @@ async function getCachedModelPreference(userId: string | undefined): Promise<str
 }
 
 function invalidateContextCache(userId?: string) {
+  // Also drop the storage layer's per-request read memo (see processMessage,
+  // which enables it for the whole chat turn): every tool write lands here, so
+  // post-write reads — the envelope's read-back verification in particular —
+  // always observe the write, while the many pre-write reads (context load,
+  // dedup scans, name resolution) stay deduplicated.
+  try { (storage as any).clearRequestMemo?.(); } catch { /* non-Supabase storage */ }
   if (userId) {
     contextCacheMap.delete(userId);
     return;
@@ -12616,6 +12622,36 @@ async function executeExtractedOperations(
   return { actions, results, operations, createdTrackers };
 }
 
+/**
+ * Slim context for the fast lane: only what a whitelisted WRITE command needs
+ * to be routed and named correctly — the complete profile-name index, tracker
+ * names/shapes, active task titles (complete_task), habit names, and stored
+ * memories. Deliberately EXCLUDES the heavy tables the full agent context
+ * loads (documents with extracted fields, expenses, events, obligations,
+ * goals, journal, liability link fan-out): the production probe showed that
+ * load dominating fast-lane latency (5-20s on data-heavy accounts), and none
+ * of it informs a simple log/create. Anything that actually needs the rich
+ * context escalates to the Sonnet loop, which still builds the full snapshot.
+ */
+function buildFastLaneContext(
+  profiles: any[],
+  trackers: any[],
+  tasks: any[],
+  habits: any[],
+  memories: any[],
+): string {
+  const profileNameIndex = `Profile Name Index (${profiles.length}, complete list — every profile owned by user):\n${profiles.map((p: any) => `- ${p.name} (${p.type}, id:${String(p.id).slice(0, 8)})`).join("\n") || "  (none)"}`;
+  const trackerBlock = `Trackers (${trackers.length}): ${trackers.slice(0, 40).map((t: any) => {
+    const last = (t.entries || [])[t.entries?.length - 1];
+    const ownerNames = (t.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name || String(pid).slice(0, 8)).join(",");
+    return `${t.name} (${t.category}, owner:${ownerNames || "unlinked"}${last ? `, latest: ${JSON.stringify(last.values).slice(0, 60)}` : ""})`;
+  }).join("; ") || "none"}`;
+  const taskBlock = `Active Tasks: ${tasks.filter((t: any) => t.status !== "done").slice(0, 20).map((t: any) => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`;
+  const habitBlock = `Habits (${habits.length}): ${habits.slice(0, 25).map((h: any) => h.name).join("; ") || "none"}`;
+  const memoryBlock = `Memories: ${memories.slice(0, 25).map((m: any) => `${m.key}: ${isSensitiveKey(m.key) ? REDACTED : String(m.value).slice(0, 50)}`).join("; ") || "none"}`;
+  return [profileNameIndex, trackerBlock, taskBlock, habitBlock, memoryBlock].join("\n");
+}
+
 // ============================================================
 // SINGLE-ACTION FAST LANE — one Haiku round, guarded, escalates
 // ============================================================
@@ -12695,6 +12731,16 @@ async function runFastLanePath(
 
   const assessment = assessFastLaneResponse(response.content as any);
   if (!assessment.ok) return escalate(assessment.reason || "assessment-failed");
+
+  // Under-extraction guard: a 2-3-clause message ("I ate X and walked Y and
+  // took Z") where the fast model emits FEWER tool calls than the detected
+  // action clauses would silently drop an action — the original sin this
+  // whole design exists to prevent. Escalate; the Sonnet loop handles it.
+  // Command phrasings ("log $5 coffee") count 0 clauses, so this is inert
+  // for the single-command majority.
+  if (assessment.toolUses.length < countActionClauses(userMessage)) {
+    return escalate("under-extraction");
+  }
 
   // Validate EVERY input before executing ANY — admission is all-or-nothing
   // so a pre-execution escalation is guaranteed side-effect free.
@@ -12806,6 +12852,15 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     ms: Date.now() - turnT0,
     ...(options?.debug ? { trace: routeTrace } : {}),
   });
+
+  // Per-request read memo for the WHOLE chat turn (production probe 2026-07-27:
+  // tool execution spent 3-11s re-reading full tables already loaded for the
+  // context snapshot — dedup scans, name resolution, envelope read-backs).
+  // Safe with writes because invalidateContextCache — called after every tool
+  // write — also clears this memo, so read-after-write verification always
+  // observes the write. The storage instance is request-scoped, so the memo
+  // dies with the request.
+  try { (storage as any).enableRequestMemo?.(); } catch { /* non-Supabase storage */ }
 
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
@@ -13289,6 +13344,47 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     }
   } catch { /* fall through to AI */ }
 
+  // ── SINGLE-ACTION FAST LANE (early, slim context) ──
+  // Short single-intent write commands ("log $5 coffee", "remind me to call
+  // mom at 5") run ONE guarded round on the fast model BEFORE the expensive
+  // 11-table context snapshot below — the production probe showed that load
+  // costing 5-20s on data-heavy accounts, dwarfing the model call itself. The
+  // lane's prompt is built from a slim 5-table context (what a whitelisted
+  // write actually needs — see buildFastLaneContext); anything the guards
+  // doubt (no tool calls, off-allowlist tool, fewer tools than detected action
+  // clauses, invalid input, timeout) falls through to the full snapshot +
+  // Sonnet loop below before anything is written. Bulk-eligible recaps (4+
+  // clauses) are excluded up front — they belong to the bulk path.
+  if (fastLaneEnabled()) {
+    const gate = fastLaneEligible(userMessage);
+    routeTrace.fastLaneGate = gate.eligible ? "eligible" : gate.reason;
+    if (gate.eligible && !shouldUseBulkPath(userMessage)) {
+      try {
+        const ctxT0 = Date.now();
+        const [flProfiles, flTrackers, flTasks, flHabits, flMemories] = await Promise.all([
+          storage.getProfiles().catch(() => [] as any[]),
+          storage.getTrackers().catch(() => [] as any[]),
+          storage.getTasks().catch(() => [] as any[]),
+          storage.getHabits().catch(() => [] as any[]),
+          storage.getMemories().catch(() => [] as any[]),
+        ]);
+        routeTrace.fastLaneCtxMs = Date.now() - ctxT0;
+        const slimContext = sanitize(buildFastLaneContext(flProfiles, flTrackers, flTasks, flHabits, flMemories)).replace(/```/g, "'''");
+        const slimSelfId = flProfiles.find((p: any) => p.type === "self")?.id || "";
+        const slimParts = buildSystemPromptParts(slimContext, slimSelfId, (storage as any)._timezone);
+        const fast = await runFastLanePath(userMessage, conversationHistory, userId, slimParts, routeTrace);
+        if (fast) return { ...fast, meta: buildMeta("fast-lane", FAST_LANE_MODEL) };
+        // Escalated — the 5 slim reads stay memoized, so the full snapshot
+        // below re-reads them for free.
+      } catch (err: any) {
+        routeTrace.escalated = `crash:${String(err?.message || err).slice(0, 80)}`;
+        logger.warn("ai", `Fast lane crashed (${err?.message}) — continuing with the agentic loop`);
+      }
+    }
+  } else {
+    routeTrace.fastLaneGate = "disabled";
+  }
+
   // Context snapshot. The 5s per-user cache is honored here — invalidating it
   // unconditionally before this read (as this used to) meant the cache NEVER
   // hit and every message paid 11 full-table reads. Freshness is preserved
@@ -13655,27 +13751,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       logger.warn("ai", `Bulk path crashed (${err?.message}) — continuing with the agentic loop`);
     }
   }
-
-  // ── SINGLE-ACTION FAST LANE ──
-  // Short single-intent write commands ("log $5 coffee", "remind me to call
-  // mom at 5") get one guarded round on the fast model. Any doubt — no tool
-  // calls, off-allowlist tool, invalid input, timeout — falls through to the
-  // Sonnet loop below before anything is written. See server/ai-fast-lane.ts.
-  if (fastLaneEnabled()) {
-    const gate = fastLaneEligible(userMessage);
-    routeTrace.fastLaneGate = gate.eligible ? "eligible" : gate.reason;
-    if (gate.eligible) {
-      try {
-        const fast = await runFastLanePath(userMessage, conversationHistory, userId, systemPromptParts, routeTrace);
-        if (fast) return { ...fast, meta: { ...buildMeta("fast-lane", FAST_LANE_MODEL) } };
-      } catch (err: any) {
-        routeTrace.escalated = `crash:${String(err?.message || err).slice(0, 80)}`;
-        logger.warn("ai", `Fast lane crashed (${err?.message}) — continuing with the agentic loop`);
-      }
-    }
-  } else {
-    routeTrace.fastLaneGate = "disabled";
-  }
+  // (The single-action fast lane runs EARLIER — before the full context
+  // snapshot — with a slim prompt; see the hook right after tryFastPath.)
 
   try {
     // Build the tool_use conversation loop.
