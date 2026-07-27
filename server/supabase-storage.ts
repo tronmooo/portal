@@ -625,6 +625,10 @@ export class SupabaseStorage implements IStorage {
   private memoCache: Map<string, Promise<any>> = new Map();
   enableRequestMemo(): void { this.memoEnabled = true; this.memoCache.clear(); }
   disableRequestMemo(): void { this.memoEnabled = false; this.memoCache.clear(); }
+  /** Drop memoized reads without disabling the memo — called after every AI
+   * tool write (ai-engine invalidateContextCache) so read-after-write
+   * verification observes the write while pre-write reads stay deduplicated. */
+  clearRequestMemo(): void { this.memoCache.clear(); }
   private memo<T>(key: string, fn: () => Promise<T>): Promise<T> {
     if (!this.memoEnabled) return fn();
     const hit = this.memoCache.get(key);

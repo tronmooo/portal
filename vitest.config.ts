@@ -122,6 +122,7 @@ export default defineConfig({
       'tests/design-kit.test.tsx',
       'tests/typography-hygiene.test.ts',
       'tests/chat-timeout-envelope.test.ts',
+      'tests/entry-date-anchor.test.ts',
       'tests/ai-owner-attribution.test.ts',
       'tests/asset-valuation.test.ts',
       'tests/improve-estimate.test.ts',

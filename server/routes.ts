@@ -969,19 +969,30 @@ export async function registerRoutes(
       // Opt-in routing diagnostics: clients never send this, but a probe can pass
       // { debug: true } to see which provider served the reply (meta.attempts).
       const debug = req.body?.debug === true;
-      const [result, classification] = await Promise.all([
-        (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, {
-          profileFilterIds,
-          debug,
-          // Forward engine progress frames (round / assistant_delta /
-          // tool_start / tool_result) straight onto the SSE stream.
-          ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),
-        }),
-        classifierContextPromise.then(ctx => classifyCapture(cleanMessage, ctx).catch(err => {
-          console.warn("[classifyCapture] swallowed error:", (err as Error).message);
-          return null;
-        })),
-      ]);
+      // Capture classifier, OFF the reply's critical path (perf fix): it still
+      // starts in parallel, but the route no longer blocks the reply on a full
+      // Haiku round-trip. When the engine routed the message (projections exist
+      // below) we take whatever the classifier has settled; only an unrouted
+      // message earns a bounded 2s wait — the one case where its
+      // clarifyingQuestion can improve the reply. The capture write stays
+      // before the response on purpose: a serverless instance may freeze the
+      // moment the response ends, and captures must never be lost.
+      let settledClassification: Awaited<ReturnType<typeof classifyCapture>> | null = null;
+      const classifierPromise: Promise<Awaited<ReturnType<typeof classifyCapture>> | null> =
+        classifierContextPromise
+          .then(ctx => classifyCapture(cleanMessage, ctx))
+          .then(c => { settledClassification = c; return c; })
+          .catch(err => {
+            console.warn("[classifyCapture] swallowed error:", (err as Error).message);
+            return null;
+          });
+      const result = await (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, {
+        profileFilterIds,
+        debug,
+        // Forward engine progress frames (round / assistant_delta /
+        // tool_start / tool_result) straight onto the SSE stream.
+        ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),
+      });
       if (idem) setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
 
       // ─── Universal Capture (PR Y + Z) ──────────────────────────────
@@ -1006,6 +1017,19 @@ export async function registerRoutes(
               at: new Date().toISOString(),
             }))
             .filter(p => p.id);
+
+          // Classifier result without blocking the reply on it: routed
+          // messages take whatever has already settled (Haiku usually
+          // finishes well inside a full agent turn); only an unrouted
+          // message waits, bounded to 2s, because its clarifyingQuestion may
+          // be appended to the reply below. On timeout the heuristic
+          // fallbacks in this block handle classification=null as before.
+          const classification = projections.length > 0
+            ? settledClassification
+            : await Promise.race([
+                classifierPromise,
+                new Promise<null>(resolve => setTimeout(() => resolve(null), 2000)),
+              ]);
 
           // Prefer classifier output; fall back to action-derived heuristic.
           const typeMap: Record<string, string> = {

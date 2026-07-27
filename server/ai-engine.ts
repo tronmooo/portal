@@ -755,7 +755,36 @@ interface ContextCache {
 const contextCacheMap = new Map<string, ContextCache>();
 const CONTEXT_CACHE_TTL = 5000; // 5 seconds
 
+// Chat-model preference cache — the "ai_chat_model" preference changes rarely
+// (a settings toggle) but was read from the DB on EVERY chat message. Per-user
+// keyed (getPreference is scoped to storage.userId); a changed setting takes
+// effect within a minute.
+const modelPrefCache = new Map<string, { value: string | null; at: number }>();
+const MODEL_PREF_TTL_MS = 60_000;
+
+async function getCachedModelPreference(userId: string | undefined): Promise<string | null> {
+  const key = userId || "_global";
+  const hit = modelPrefCache.get(key);
+  if (hit && Date.now() - hit.at < MODEL_PREF_TTL_MS) return hit.value;
+  let value: string | null = null;
+  try {
+    value = await storage.getPreference("ai_chat_model");
+  } catch { /* ignore — use default */ }
+  modelPrefCache.set(key, { value, at: Date.now() });
+  if (modelPrefCache.size > 200) {
+    const oldest = [...modelPrefCache.entries()].sort((a, b) => a[1].at - b[1].at);
+    for (let i = 0; i < 100; i++) modelPrefCache.delete(oldest[i][0]);
+  }
+  return value;
+}
+
 function invalidateContextCache(userId?: string) {
+  // Also drop the storage layer's per-request read memo (see processMessage,
+  // which enables it for the whole chat turn): every tool write lands here, so
+  // post-write reads — the envelope's read-back verification in particular —
+  // always observe the write, while the many pre-write reads (context load,
+  // dedup scans, name resolution) stay deduplicated.
+  try { (storage as any).clearRequestMemo?.(); } catch { /* non-Supabase storage */ }
   if (userId) {
     contextCacheMap.delete(userId);
     return;
@@ -5648,6 +5677,10 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
       // executor falls back to NOW(). Do NOT infer from the raw message here.
       if (normalized.at != null && String(normalized.at).trim()) {
         let atStr = String(normalized.at).trim();
+        // Defensive read: `storage` is a lazy proxy that throws without DB
+        // env (pure unit tests) — fall back to the default timezone.
+        let atTz = DEFAULT_TIMEZONE;
+        try { atTz = (storage as any)._timezone || DEFAULT_TIMEZONE; } catch { /* no storage in unit tests */ }
         // A bare clock time ("8:15 AM", "10pm") is Invalid Date to new Date()
         // and was silently dropped to "now" — compose it with today's date in
         // the USER'S timezone (the server clock is UTC on Vercel).
@@ -5656,10 +5689,6 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
           let hours = parseInt(bareTime[1], 10) % 12;
           if (/^p/i.test(bareTime[3])) hours += 12;
           const minutes = bareTime[2] ? parseInt(bareTime[2], 10) : 0;
-          // Defensive read: `storage` is a lazy proxy that throws without DB
-          // env (pure unit tests) — fall back to the default timezone.
-          let atTz = DEFAULT_TIMEZONE;
-          try { atTz = (storage as any)._timezone || DEFAULT_TIMEZONE; } catch { /* no storage in unit tests */ }
           atStr = todayAtTimeISO(hours, minutes, atTz);
         }
         const when = new Date(atStr);
@@ -5667,7 +5696,22 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
           warnings.push(`Couldn't parse entry date "${normalized.at}" — using now instead`);
           normalized.at = undefined;
         } else {
-          normalized.at = when.toISOString();
+          // DATE-ANCHORING FIX (2026-07-27, "yesterday shows as July 25"): a
+          // date-only value ("2026-07-26") or a midnight-UTC instant
+          // ("2026-07-26T00:00:00.000Z" — the model's way of saying "that
+          // day") parses to 00:00 UTC, which is the EVENING OF THE PREVIOUS
+          // DAY in every US timezone — the entry then renders on the wrong
+          // date. Anchor calendar-date intent to NOON in the user's timezone:
+          // noon is DST-safe and displays on the intended day everywhere.
+          // Values that carry a real clock time keep their exact instant.
+          const dateOnly = atStr.match(/^(\d{4}-\d{2}-\d{2})$/);
+          const midnightUtc = !dateOnly && when.toISOString().endsWith("T00:00:00.000Z");
+          if (dateOnly || midnightUtc) {
+            const calendarDate = dateOnly ? dateOnly[1] : when.toISOString().slice(0, 10);
+            normalized.at = zonedTimeToUTC(calendarDate, 12, 0, atTz).toISOString();
+          } else {
+            normalized.at = when.toISOString();
+          }
         }
       } else {
         normalized.at = undefined;
@@ -12653,6 +12697,15 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   };
   const streamingEnabled = typeof options?.onEvent === "function";
 
+  // Per-request read memo for the WHOLE chat turn (production probe 2026-07-27:
+  // tool execution spent 3-11s re-reading full tables already loaded for the
+  // context snapshot — dedup scans, name resolution, envelope read-backs).
+  // Safe with writes because invalidateContextCache — called after every tool
+  // write — also clears this memo, so read-after-write verification always
+  // observes the write. The storage instance is request-scoped, so the memo
+  // dies with the request.
+  try { (storage as any).enableRequestMemo?.(); } catch { /* non-Supabase storage */ }
+
   // ─── Pre-AI fast-path: handle operations that DON'T need the AI ───
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
   const lower = userMessage.toLowerCase().trim();
@@ -13127,9 +13180,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     }
   } catch { /* fall through to AI */ }
 
-  // ALWAYS invalidate cache at the start of every chat request so AI sees the CURRENT database state.
-  // This ensures manual UI edits (creates, deletes, updates) are reflected immediately.
-  invalidateContextCache(userId);
+  // Context snapshot. The 5s per-user cache is honored here — invalidating it
+  // unconditionally before this read (as this used to) meant the cache NEVER
+  // hit and every message paid 11 full-table reads. Freshness is preserved
+  // where it matters: every AI tool write invalidates the cache immediately
+  // (agent loop + bulk path), so post-write reads are never stale. A manual UI
+  // edit followed by a chat message within the same 5s window on the same warm
+  // instance can see a snapshot up to 5s old — an accepted, bounded tradeoff.
   let [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
 
   // P4.5: honor the UI profile filter when the chat route passes it through.
@@ -13397,10 +13454,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // Env-var ANTHROPIC_MODEL still wins (for emergency override).
   // User preference still wins (in case they explicitly pick a model in settings).
   const SONNET_MODEL = "claude-sonnet-4-6";
-  let preferredModel: string | null = null;
-  try {
-    preferredModel = await storage.getPreference("ai_chat_model");
-  } catch { /* ignore — use default */ }
+  let preferredModel: string | null = await getCachedModelPreference(userId);
 
   // Migrate retired/deprecated saved preferences to the current Sonnet so a
   // user who picked Sonnet 4.5 in the past doesn't get a 404 from Anthropic.
