@@ -1119,6 +1119,157 @@ interface AttachmentPanelProps {
   onSmartFill?: () => void;
 }
 
+// ── Guided destination picker ────────────────────────────────────────────────
+// Owner → does a specific destination exist? → destination profile → save.
+// Replaces the flat every-profile checkbox list: pick WHO the document belongs
+// to first, then (only if it belongs to a specific thing) narrow by category
+// to the item. No destination → it simply lives in the owner's documents.
+// Output contract (selectedProfileId string): "destId,ownerId" | "ownerId" |
+// "none" — destination FIRST so linkedProfiles[0] stays the primary home and
+// the owner rides along as a related link, never a duplicate copy.
+const DEST_CATEGORY_LABELS: Record<string, string> = {
+  vehicle: "Vehicles", property: "Properties", pet: "Pets",
+  subscription: "Subscriptions", insurance: "Insurance",
+  loan: "Liabilities", liability: "Liabilities",
+  business: "Business", digital_asset: "Digital",
+  asset: "Assets", bank_account: "Accounts", account: "Accounts",
+  credit_card: "Cards", investment: "Investments",
+  collectible: "Collectibles", loan_receivable: "Loans to Others",
+};
+
+function GuidedDestinationPicker({
+  profiles,
+  selectedProfileId,
+  onProfileChange,
+  disabled,
+}: {
+  profiles: Profile[];
+  selectedProfileId: string;
+  onProfileChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  const owners = useMemo(
+    () => profiles.filter((p) => p.type === "self" || p.type === "person")
+      .slice().sort((a, b) => (a.type === "self" ? -1 : b.type === "self" ? 1 : (a.name || "").localeCompare(b.name || ""))),
+    [profiles],
+  );
+  const categories = useMemo(() => {
+    const m = new Map<string, Profile[]>();
+    for (const p of profiles) {
+      if (p.type === "self" || p.type === "person") continue;
+      const label = DEST_CATEGORY_LABELS[p.type] || "Other";
+      const list = m.get(label);
+      if (list) list.push(p); else m.set(label, [p]);
+    }
+    for (const list of m.values()) list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    return m;
+  }, [profiles]);
+
+  // Derive owner/destination from the selection string so parent state stays
+  // the single source of truth.
+  const selectedIds = selectedProfileId.split(",").map((s) => s.trim()).filter((s) => s && s !== "none");
+  const isOwnerId = (id: string) => owners.some((o) => o.id === id);
+  const selfOwner = owners.find((o) => o.type === "self");
+  const ownerId = selectedIds.find(isOwnerId) || selfOwner?.id;
+  const owner = owners.find((o) => o.id === ownerId);
+  const destId = selectedIds.find((id) => !isOwnerId(id));
+  const dest = destId ? profiles.find((p) => p.id === destId) : undefined;
+  const destCategory = dest ? (DEST_CATEGORY_LABELS[dest.type] || "Other") : null;
+  const [openCategory, setOpenCategory] = useState<string | null>(null);
+  const activeCategory = openCategory ?? destCategory;
+
+  const commit = (nextOwner?: string, nextDest?: string) => {
+    const ids = Array.from(new Set([nextDest, nextOwner].filter(Boolean))) as string[];
+    onProfileChange(ids.length > 0 ? ids.join(",") : "none");
+  };
+
+  return (
+    <div className="space-y-2.5" data-testid="guided-destination-picker">
+      {/* Step 1 — who owns this document */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground">Owner</label>
+        <div className="flex flex-wrap gap-1.5">
+          {owners.map((o) => (
+            <button
+              key={o.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => commit(o.id, destId)}
+              className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${o.id === ownerId
+                ? "border-primary bg-primary/10 text-primary font-semibold"
+                : "border-border bg-background text-foreground hover:bg-muted"}`}
+              data-testid={`owner-chip-${o.id}`}
+            >
+              {o.name}{o.type === "self" ? " (me)" : ""}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Step 2 — does it belong to a specific thing? */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground">Belongs to</label>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => { setOpenCategory(null); commit(ownerId, undefined); }}
+            className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${!dest && !openCategory
+              ? "border-primary bg-primary/10 text-primary font-semibold"
+              : "border-border bg-background text-foreground hover:bg-muted"}`}
+            data-testid="dest-chip-owner-docs"
+          >
+            📁 {owner ? `${owner.name}'s documents` : "My documents"}
+          </button>
+          {[...categories.entries()].map(([label, list]) => (
+            <button
+              key={label}
+              type="button"
+              disabled={disabled}
+              onClick={() => setOpenCategory(activeCategory === label && !dest ? null : label)}
+              className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${activeCategory === label
+                ? "border-primary bg-primary/10 text-primary font-semibold"
+                : "border-border bg-background text-foreground hover:bg-muted"}`}
+              data-testid={`dest-category-${label}`}
+            >
+              {label} <span className="opacity-60">({list.length})</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Step 3 — only the profiles in the chosen category */}
+      {activeCategory && categories.has(activeCategory) && (
+        <div className="rounded-lg border border-border overflow-hidden">
+          {categories.get(activeCategory)!.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => { setOpenCategory(null); commit(ownerId, p.id === destId ? undefined : p.id); }}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors border-b border-border/30 last:border-0 ${p.id === destId ? "bg-primary/10" : "hover:bg-muted/50"}`}
+              data-testid={`dest-profile-${p.id}`}
+            >
+              <span className={`h-3.5 w-3.5 rounded-full border shrink-0 ${p.id === destId ? "border-primary bg-primary" : "border-border"}`} />
+              <span className="text-sm flex-1">{p.name}</span>
+              <ProfileTypeBadge type={p.type} />
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Where it will land */}
+      <p className="text-xs text-muted-foreground" data-testid="destination-summary">
+        {dest
+          ? <>Saves to <span className="font-medium text-foreground">{dest.name}</span>{owner ? <> · linked to {owner.name}</> : null}</>
+          : owner
+            ? <>Saves to <span className="font-medium text-foreground">{owner.name}'s documents</span></>
+            : <>Not linked — "Extract text & save" lets AI pick the destination for you</>}
+      </p>
+    </div>
+  );
+}
+
 function AttachmentPanel({
   attachment,
   profiles,
@@ -1180,45 +1331,15 @@ function AttachmentPanel({
             </button>
           </div>
 
-          {/* Profile selector — multi-select checkboxes */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">
-              Link to profiles
-            </label>
-            <div className="rounded-lg border border-border max-h-[200px] overflow-y-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
-              {profiles.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((profile) => {
-                const isChecked = selectedProfileId.split(",").filter(Boolean).includes(profile.id);
-                return (
-                  <label
-                    key={profile.id}
-                    className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors border-b border-border/30 last:border-0 ${isChecked ? "bg-primary/5" : ""}`}
-                    data-testid={`select-profile-${profile.id}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onChange={() => {
-                        const current = selectedProfileId.split(",").filter(Boolean);
-                        const next = isChecked
-                          ? current.filter(id => id !== profile.id)
-                          : [...current, profile.id];
-                        onProfileChange(next.length > 0 ? next.join(",") : "none");
-                      }}
-                      className="h-4 w-4 rounded border-border accent-primary"
-                      disabled={isSending}
-                    />
-                    <span className="text-sm flex-1">{profile.name}</span>
-                    <ProfileTypeBadge type={profile.type} />
-                  </label>
-                );
-              })}
-            </div>
-            {selectedProfileId !== "none" && selectedProfileId !== "" && (
-              <p className="text-xs text-muted-foreground">
-                {selectedProfileId.split(",").filter(Boolean).length} profile(s) selected
-              </p>
-            )}
-          </div>
+          {/* Guided destination: Owner → category (if any) → item. Replaces the
+              flat every-profile checkbox list that made the user scan their
+              whole world to file one receipt. */}
+          <GuidedDestinationPicker
+            profiles={profiles}
+            selectedProfileId={selectedProfileId}
+            onProfileChange={onProfileChange}
+            disabled={isSending}
+          />
 
           {/* Optional note */}
           <div className="space-y-1.5">

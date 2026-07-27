@@ -2466,16 +2466,23 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     // "[object Object]", fail parseFloat, and let the amount picker fall
     // through to a lesser key like `subtotal` — proposing the wrong amount
     // ($113.33 subtotal instead of the $118.14 receipt total).
+    // Keys are normalized to lowercase WITH separators stripped, so the
+    // extractor's freeform spelling can never dodge the picker: `totalAmount`,
+    // `total_amount`, and `Total Amount` all become `totalamount`. Before
+    // this, a receipt whose extractor happened to emit `total_amount` missed
+    // the `totalamount` lookup and the picker fell through to the subtotal —
+    // the reported "$84.97 proposed when Total Amount 92.40 is right there".
+    const normLookupKey = (k: string) => k.toLowerCase().replace(/[^a-z0-9]/g, '');
     const fieldLookup: Record<string, string> = {};
     if (parsed.extractedData) {
       for (const [k, v] of Object.entries(parsed.extractedData)) {
         const uv = unwrapVal(v);
-        if (uv != null) fieldLookup[k.toLowerCase()] = String(uv);
+        if (uv != null) fieldLookup[normLookupKey(k)] = String(uv);
       }
     }
     for (const f of extractedFields) {
       const uv = unwrapVal(f.value);
-      if (f.key && uv != null) fieldLookup[f.key.toLowerCase()] = String(uv);
+      if (f.key && uv != null) fieldLookup[normLookupKey(f.key)] = String(uv);
     }
 
     // Look for amount fields (check both camelCase and lowercase). Order matters
@@ -2513,7 +2520,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         }
         return 0;
       };
-      const reconstructed = amount + firstOf('tax', 'taxamount', 'salestax') + firstOf('tip', 'tipamount', 'gratuity');
+      const reconstructed = amount + firstOf('tax', 'taxtotal', 'totaltax', 'taxamount', 'salestax') + firstOf('tip', 'tipamount', 'gratuity');
       if (reconstructed > amount) {
         amount = Math.round(reconstructed * 100) / 100;
         console.log(`[extraction] No explicit total key — reconstructed total ${amount} from ${amountFromKey} + tax/tip`);
