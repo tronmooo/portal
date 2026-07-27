@@ -214,6 +214,74 @@ describe("POST /api/chat/confirm-extraction", () => {
     //    destination classifier must never run (it used to silently veto
     //    receipt fields as "doc_only" and drop them from the save).
     expect(aiTasks).not.toContain("field-destination-route");
+
+    // 7. Provenance: the profile records which document saved which fields,
+    //    so deleting the document can remove exactly its contribution.
+    const provenance = after._docFields?.["doc-receipt"];
+    expect(provenance).toBeTruthy();
+    expect(provenance.mileage).toBe(69063);
+    expect(provenance.serviceDate).toBe("2026-07-22");
+  });
+
+  it("deleting the document removes the fields it saved — but keeps values the user edited since", async () => {
+    // Save three fields from the receipt.
+    await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        targetProfileId: "profile-crv",
+        confirmedFields: [
+          { key: "currentMileage", value: 69063 },
+          { key: "serviceDate", value: "2026-07-22" },
+          { key: "oilType", value: "Kendall 0W20" },
+        ],
+        createCalendarEvents: [],
+        trackerEntries: [],
+      }),
+    });
+    // The user then hand-edits one of them.
+    const crv = stubState.profiles.get("profile-crv");
+    crv.fields.oilType = "Mobil 1 5W30 (user corrected)";
+
+    const res = await fetch(`${base}/api/documents/doc-receipt`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+
+    const after = stubState.profiles.get("profile-crv").fields;
+    // Document-sourced values are gone…
+    expect(after).not.toHaveProperty("mileage");
+    expect(after).not.toHaveProperty("serviceDate");
+    // …the user's own edit survives…
+    expect(after.oilType).toBe("Mobil 1 5W30 (user corrected)");
+    // …unrelated fields are untouched, and the provenance entry is cleared.
+    expect(after.make).toBe("Honda");
+    expect(after._docFields ?? {}).not.toHaveProperty("doc-receipt");
+  });
+
+  it("links a confirm-created expense to both the asset and the owner's self profile", async () => {
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        targetProfileId: "profile-crv",
+        confirmedFields: [{ key: "serviceDate", value: "2026-07-22" }],
+        createCalendarEvents: [],
+        trackerEntries: [],
+        createExpense: {
+          description: "Oil Change Service Receipt",
+          amount: 118.14,
+          category: "vehicle",
+          date: "2026-07-22",
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).success).toBe(true);
+    expect(stubState.expenses).toHaveLength(1);
+    // Visible on the Honda's Finance tab AND the owner's Recent Expenses.
+    expect(stubState.expenses[0].linkedProfiles).toContain("profile-crv");
+    expect(stubState.expenses[0].linkedProfiles).toContain("profile-self");
   });
 
   it("saves every ticked field even when no profile was explicitly chosen (auto-resolves, never AI-vetoes)", async () => {

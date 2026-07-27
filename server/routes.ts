@@ -2207,6 +2207,19 @@ ${JSON.stringify(ctx, null, 2)}`;
                 ];
               }
 
+              // PROVENANCE: remember which document saved which fields (and the
+              // values it saved), so deleting the document can remove exactly
+              // the data it contributed — and nothing the user edited since.
+              // Underscore-prefixed = reserved metadata, never rendered.
+              const priorSources = (existingFields._docFields && typeof existingFields._docFields === "object")
+                ? existingFields._docFields : {};
+              merged._docFields = {
+                ...priorSources,
+                [extractionId]: Object.fromEntries(
+                  Object.entries(incoming).filter(([k]) => !k.startsWith("_"))
+                ),
+              };
+
               await storage.updateProfile(resolvedProfileId, { fields: merged });
 
               // Verify the write actually landed before claiming success —
@@ -2410,6 +2423,13 @@ ${JSON.stringify(ctx, null, 2)}`;
             saved.push(`Expense $${amt.toFixed(2)} already exists (${duplicate.description}) — skipped duplicate`);
             try { await storage.linkProfileTo(duplicate.id, "document", extractionId); } catch {}
           } else {
+          // Link the expense to the asset AND its owner (self) so it shows in
+          // both the asset's Finance tab and the dashboard's Recent Expenses.
+          // Linking only the vehicle made the expense invisible on the owner's
+          // own feed.
+          const allProfilesForExpense = await storage.getProfiles();
+          const selfForExpense = allProfilesForExpense.find((p: any) => p.type === 'self');
+          const expenseLinks = Array.from(new Set([resolvedProfileId, selfForExpense?.id].filter(Boolean))) as string[];
           const expense = await storage.createExpense({
             description: exp.description,
             amount: amt,
@@ -2419,11 +2439,14 @@ ${JSON.stringify(ctx, null, 2)}`;
             vendor: exp.vendor,
             date: exp.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
             tags: [],
-            linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+            linkedProfiles: expenseLinks,
           });
           saved.push(`Created expense: $${amt.toFixed(2)} ${exp.description}`);
-          // Link document to expense
+          // Link document to expense; surface it on intermediate ancestors too.
           try { await storage.linkProfileTo(expense.id, "document", extractionId); } catch {}
+          if (resolvedProfileId) {
+            try { await storage.propagateEntityToAncestors("expense", expense.id, resolvedProfileId); } catch { /* non-critical */ }
+          }
           }
         } catch (eErr: any) {
           console.error("Failed to create expense from extraction:", eErr?.message);
@@ -5293,8 +5316,44 @@ Rules:
     res.json(updated);
   }));
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
-    // Idempotent: soft-delete succeeds even if already deleted
-    await storage.deleteDocument(req.params.id);
+    // Idempotent: soft-delete succeeds even if already deleted.
+    const docIdToDelete = req.params.id;
+    // CASCADE: remove the profile fields this document's extraction saved, so
+    // a deleted document doesn't leave orphaned data behind on the asset.
+    // Provenance (fields._docFields[docId] = {key: savedValue}) is written by
+    // confirm-extraction; only fields whose CURRENT value still matches what
+    // the document saved are removed — anything the user edited since stays.
+    try {
+      const profilesForCascade = await storage.getProfiles();
+      for (const p of profilesForCascade as any[]) {
+        const sources = p.fields?._docFields;
+        const recorded = (sources && typeof sources === "object") ? sources[docIdToDelete] : undefined;
+        if (!recorded || typeof recorded !== "object") continue;
+        const nextFields: Record<string, any> = { ...p.fields };
+        const removedKeys: string[] = [];
+        for (const [k, savedVal] of Object.entries(recorded)) {
+          if (k in nextFields && looselyEqual(nextFields[k], savedVal)) {
+            delete nextFields[k];
+            removedKeys.push(k);
+          }
+        }
+        const nextSources: Record<string, any> = { ...sources };
+        delete nextSources[docIdToDelete];
+        // Null markers = deletion intents for the storage merge layer.
+        const patch: Record<string, any> = { ...nextFields };
+        for (const k of removedKeys) patch[k] = null;
+        if (Object.keys(nextSources).length > 0) patch._docFields = nextSources;
+        else { delete patch._docFields; patch._docFields = null; }
+        await storage.updateProfile(p.id, { fields: patch } as any);
+        if (removedKeys.length > 0) {
+          log.info(`[doc-delete-cascade] ${docIdToDelete} → removed ${removedKeys.length} field(s) from ${p.name}: ${removedKeys.join(", ")}`);
+        }
+      }
+    } catch (cascadeErr: any) {
+      // Cascade is best-effort — the delete itself must still succeed.
+      console.error(`[doc-delete-cascade] failed for ${docIdToDelete}: ${cascadeErr?.message || cascadeErr}`);
+    }
+    await storage.deleteDocument(docIdToDelete);
     const uid_d3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
     res.json({ success: true });

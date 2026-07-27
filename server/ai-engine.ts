@@ -2462,11 +2462,33 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       'fareamount', 'totalfare', 'cost', 'price',
     ];
     let amount: number | null = null;
+    let amountFromKey: string | null = null;
     for (const key of amountKeys) {
       const val = fieldLookup[key];
       if (val) {
         const num = parseFloat(val.replace(/[$,\s]/g, ''));
-        if (num > 0 && !isNaN(num)) { amount = num; break; }
+        if (num > 0 && !isNaN(num)) { amount = num; amountFromKey = key; break; }
+      }
+    }
+    // ALWAYS the total, never the subtotal. When no explicit total key exists
+    // and the best match is a subtotal-tier key, reconstruct the total by
+    // adding tax and tip — a $113.33 subtotal with $4.81 tax is a $118.14
+    // charge, and proposing the subtotal undercounts every expense.
+    if (amount != null && amountFromKey && /^subtotal/.test(amountFromKey)) {
+      // First non-zero per family — 'tax' and 'taxAmount' are the same charge
+      // under two spellings, never two charges.
+      const firstOf = (...keys: string[]) => {
+        for (const k of keys) {
+          const v = fieldLookup[k];
+          const n = v ? parseFloat(v.replace(/[$,\s]/g, '')) : NaN;
+          if (isFinite(n) && n > 0) return n;
+        }
+        return 0;
+      };
+      const reconstructed = amount + firstOf('tax', 'taxamount', 'salestax') + firstOf('tip', 'tipamount', 'gratuity');
+      if (reconstructed > amount) {
+        amount = Math.round(reconstructed * 100) / 100;
+        console.log(`[extraction] No explicit total key — reconstructed total ${amount} from ${amountFromKey} + tax/tip`);
       }
     }
 
@@ -2547,9 +2569,18 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         'restaurant_check': 'dining', 'event_ticket': 'entertainment',
         'medical_bill': 'medical', 'prescription': 'medical',
       };
+      // Vehicle-ish freeform classes (vehicle_service_receipt, oil_change_receipt,
+      // tire_receipt…) must land in "vehicle" even when the classifier's broad
+      // bucket said "Receipt" — that bucket maps to general and produced
+      // "Oil Change Service Receipt - general".
+      const vehicleClassRe = /(vehicle|oil[_ ]?change|auto[_ ]?repair|tire|brake|smog|mechanic|car[_ ]?wash|dmv|registration)/i;
+      const classIsVehicle = vehicleClassRe.test(classification.documentClass) || vehicleClassRe.test(docType);
       // Fold through the shared canonicalizer so one concept can never be
       // stored under two spellings (transportation → transport, auto → vehicle).
-      const category = canonicalExpenseCategory(categoryFromType[classification.documentClass] || categoryFromType[docType] || categoryFromBucket[classification.category] || 'general');
+      const category = canonicalExpenseCategory(
+        categoryFromType[classification.documentClass] || categoryFromType[docType]
+        || (classIsVehicle ? 'vehicle' : undefined)
+        || categoryFromBucket[classification.category] || 'general');
       const vendor = fieldLookup['vendorname'] || fieldLookup['merchantname'] || fieldLookup['companyname'] || fieldLookup['providername'] || fieldLookup['utilitycompany'] || fieldLookup['title'] || classification.label || parsed.label || '';
       const dueDate = fieldLookup['duedate'] || fieldLookup['paymentduedate'] || fieldLookup['nextduedate'] || '';
       // Recurring decision: classifier obligation flag first (intent-based),
