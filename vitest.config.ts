@@ -125,6 +125,7 @@ export default defineConfig({
       'tests/system-prompt-split.test.ts',
       'tests/ai-fast-lane.test.ts',
       'tests/ai-fast-lane-escalation.test.ts',
+      'tests/ai-chat-routing-matrix.test.ts',
       'tests/ai-owner-attribution.test.ts',
       'tests/asset-valuation.test.ts',
       'tests/improve-estimate.test.ts',
