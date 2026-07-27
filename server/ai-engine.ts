@@ -4536,7 +4536,13 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
 // SYSTEM PROMPT (simplified — no JSON format instructions)
 // ============================================================
 
-function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: string): string {
+// The chat system prompt, split for prompt caching (see the cachedSystem
+// assembly in processMessage): `staticText` is byte-stable for a given user —
+// no data snapshot, no clock — so its cache_control breakpoint actually hits
+// across turns and rounds. Everything volatile (the DB context and the
+// current date/time lines, which change every minute) lives in `dynamicText`,
+// appended as a second, uncached system block AFTER the static one.
+export function buildSystemPromptParts(context: string, selfProfileId?: string, userTz?: string): { staticText: string; dynamicText: string } {
   // The user's IANA timezone is forwarded from the chat route via the
   // `x-timezone` header; falling back to LA preserves prior behavior so
   // model output stays sensible if the header is missing.
@@ -4546,7 +4552,7 @@ function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: str
     : tz === 'America/Chicago' ? 'Central Time'
     : tz === 'America/Denver' ? 'Mountain Time'
     : tz.replace(/_/g, ' ');
-  return `You are Portol AI — the intelligent brain of a unified personal life operating system. You have FULL access to the user's data: health trackers, finances, calendar, profiles, documents, habits, tasks, medications, and more. Your job is to both act on commands AND generate real, data-driven insights.
+  const staticText = `You are Portol AI — the intelligent brain of a unified personal life operating system. You have FULL access to the user's data: health trackers, finances, calendar, profiles, documents, habits, tasks, medications, and more. Your job is to both act on commands AND generate real, data-driven insights.
 
 *** RESPONSE STYLE — BE CONCISE ***
 After you finish acting, confirm in the FEWEST words that clearly state what was done. For multi-action requests use a short bulleted recap — ONE line per action (what + where it was saved), and flag anything that failed or was skipped. Do NOT restate the user's request, do NOT narrate your steps ("Now I'll create…", "Let me…"), do NOT add tips, encouragement, or long summaries. Aim for under ~80 words unless the user asked a question that needs a real answer.
@@ -4556,8 +4562,7 @@ Example for a multi-log request:
 ✅ Amoxicillin reminder: twice daily × 10 days
 ✅ Journal entry added
 
-EXISTING DATA (this is fresh from the database — use it for every answer):
-${context}
+EXISTING DATA: the snapshot of the user's stored data is in the FINAL system block below, under "EXISTING DATA" (fresh from the database — use it for every answer). The current date/time and the date rules are there too.
 
 *** PROFILE EXISTENCE — READ THE NAME INDEX FIRST ***
 The "Profile Name Index" at the top of EXISTING DATA is the COMPLETE list of every profile the user owns (no truncation). Before you ever say "I don't have a profile for X", "I don't see X in your data", "there's no profile named X", or any similar denial, you MUST scan the Profile Name Index for case-insensitive name matches, nickname matches, and partial matches. If the name appears in the index, that profile EXISTS — answer from its row in "Profile Details" (if present) or call get_profile_data by name. If a field (hair color, eye color, breed, etc.) isn't shown in Profile Details because it was truncated, say "I see Craig but don't have that specific field loaded — let me check" and call a profile read tool rather than denying the profile's existence. NEVER deny a profile that appears in the Name Index.
@@ -5277,10 +5282,7 @@ When the user asks /help, "what can you do", "how do I use this", or similar, su
 Do NOT suggest: "create a workout plan" or "workout routine" (no workout-plan page exists — only fitness trackers). Workouts are tracked via /trackers as fitness entries. Goals ARE visible — they live in the Goals widget on /dashboard.
 Keep help responses concise: 4-6 example commands max, each tied to a real route the user can click.
 
-Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz })} (${tzLabel}).
-Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}. Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz })}.
-${(() => { const now = new Date(); const ref: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(now.getTime() + i * 86400000); ref.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz }) + ' = ' + d.toLocaleDateString('en-CA', { timeZone: tz })); } return 'Reference: ' + ref.join(', '); })()}
-CRITICAL DATE RULES:
+CRITICAL DATE RULES (the current date/time and a 7-day reference are in the final system block — always calculate from those):
 - "tomorrow" = the day AFTER today in ${tzLabel}. Calculate carefully.
 - "by Friday" or "this Friday" = if today IS Friday, that means TODAY. If today is before Friday, it means the upcoming Friday of this week. NEVER push to next week.
 - "next Friday" = the Friday of NEXT week (7+ days away).
@@ -5289,7 +5291,7 @@ CRITICAL DATE RULES:
 - ALWAYS double-check: what day of the week is today? Then count forward from there.
 - If today is Friday and the user says "by Friday", the date is TODAY's date, not tomorrow.
 - ALWAYS double-check your date math. If today is Wednesday March 26, then tomorrow is Thursday March 27 — NOT March 28.
-- When mentioning dates in your response, ALWAYS verify the day of the week is correct. Use the reference dates above and count forward/backward. For example, if the reference shows "Sat Apr 12", then Apr 19 is also a Saturday (7 days later). Do NOT guess the day name — calculate it from the known reference.
+- When mentioning dates in your response, ALWAYS verify the day of the week is correct. Use the reference dates from the final system block and count forward/backward. For example, if the reference shows "Sat Apr 12", then Apr 19 is also a Saturday (7 days later). Do NOT guess the day name — calculate it from the known reference.
 - NEVER say "Friday, April 18" if April 18 is actually a Saturday. Getting the day name wrong destroys user trust.
 - When creating events or tasks with dates, state the resolved date explicitly in your response so the user can verify.
 
@@ -5340,6 +5342,23 @@ Do NOT create an artifact for simple answers, confirmations, or short responses.
 - NEVER fabricate trends or numbers
 - Currency values are raw numbers (no $ symbols)
 - Dates are ISO 8601`;
+
+  const dynamicText = `EXISTING DATA (this is fresh from the database — use it for every answer):
+${context}
+
+Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz })} (${tzLabel}).
+Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}. Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz })}.
+${(() => { const now = new Date(); const ref: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(now.getTime() + i * 86400000); ref.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz }) + ' = ' + d.toLocaleDateString('en-CA', { timeZone: tz })); } return 'Reference: ' + ref.join(', '); })()}
+Apply the CRITICAL DATE RULES from the instructions above to these dates.`;
+
+  return { staticText, dynamicText };
+}
+
+// Backward-compatible single-string form for callers/tests that don't split
+// cache blocks. The chat loop uses buildSystemPromptParts directly.
+export function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: string): string {
+  const parts = buildSystemPromptParts(context, selfProfileId, userTz);
+  return `${parts.staticText}\n\n${parts.dynamicText}`;
 }
 
 // ============================================================
@@ -13326,7 +13345,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // hiding in profile names, memory keys/values, tracker names, etc. Stripping
   // happens at the top level so per-row mistakes elsewhere can't leak through.
   const safeContext = sanitize(context).replace(/```/g, "'''");
-  const systemPrompt = buildSystemPrompt(safeContext, selfProfileId, (storage as any)._timezone);
+  const systemPromptParts = buildSystemPromptParts(safeContext, selfProfileId, (storage as any)._timezone);
 
   // ─── Model selection: Sonnet 4.5 ALWAYS ───
   // (2026-05-21) Haiku was dropping action-heavy multi-step prompts silently —
@@ -13506,15 +13525,18 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     const turnVerifyCtx = buildTurnVerifyContext(storage);
 
     // ── Prompt caching (speed/cost) ──
-    // The system prompt and the full tool schema (~40 tools) are identical on
-    // every one of the up-to-15 round-trips in this loop (and across turns
-    // within the 5-min cache window). Marking them with cache_control lets
-    // Anthropic reuse the computed prefix instead of reprocessing it each call,
-    // cutting time-to-first-token and input cost. This changes NOTHING about
-    // the model, the tools, or the outputs — same answers, just less repeated
-    // work. Two cache breakpoints: end of tools, and the system block.
+    // Two cache breakpoints: end of tools, and end of the STATIC system block.
+    // The static block deliberately contains no data snapshot and no clock
+    // (buildSystemPromptParts) — before that split, the volatile context lived
+    // inside the cached block and the date line changed every minute, so the
+    // system breakpoint effectively never hit across turns. Now the ~60K-token
+    // tools+instructions prefix is byte-stable per user and reuses the cache on
+    // every round and every turn inside the TTL window; only the small dynamic
+    // block (context + clock) is reprocessed. Same model, same content, same
+    // answers — just far less repeated prefix work.
     const cachedSystem = [
-      { type: "text" as const, text: systemPrompt, cache_control: { type: "ephemeral" as const } },
+      { type: "text" as const, text: systemPromptParts.staticText, cache_control: { type: "ephemeral" as const } },
+      { type: "text" as const, text: systemPromptParts.dynamicText },
     ];
     const cachedTools = TOOL_DEFINITIONS.map((t, i) =>
       i === TOOL_DEFINITIONS.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
