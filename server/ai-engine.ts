@@ -2157,12 +2157,19 @@ Return ONLY the JSON object, nothing else.`;
       savedItems.push(`${Object.keys(parsed.extractedData).length} fields ready for ${profileName} (confirm to save)`);
     }
 
-    // Auto-create expense if the document has any dollar amount
+    // Auto-create expense if the document has any dollar amount.
+    //
+    // ONLY when the classifier did NOT mark this document class as producing
+    // an expense. When destinations.expense is true, pendingFinancial.expense
+    // (built below) is offered in the review UI and created on confirmation —
+    // auto-creating here as well produced TWO expenses from one receipt
+    // (user report 2026-07-27: $118.14 auto-created at upload AND $113.33
+    // created again on confirm, from the same oil-change receipt).
     // Helper to unwrap {value, confidence} objects
     const unwrapVal = (v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
     const rawAmount = unwrapVal(parsed.extractedData?.totalAmount) || unwrapVal(parsed.extractedData?.totalAmountDue) || unwrapVal(parsed.extractedData?.totalDue) || unwrapVal(parsed.extractedData?.amountDue) || unwrapVal(parsed.extractedData?.amountPaid) || unwrapVal(parsed.extractedData?.balance) || unwrapVal(parsed.extractedData?.total_amount) || unwrapVal(parsed.extractedData?.amount_due) || unwrapVal(parsed.extractedData?.totalDispCD);
     const numAmount = typeof rawAmount === 'number' ? rawAmount : parseFloat(String(rawAmount));
-    if (numAmount && isFinite(numAmount) && numAmount > 0) {
+    if (numAmount && isFinite(numAmount) && numAmount > 0 && classification.destinations.expense !== true) {
       try {
         const docType = (parsed.documentType || "receipt").toLowerCase();
         const category = ["vehicle", "registration", "citation", "parking", "toll", "dmv"].some(t => docType.includes(t)) ? "vehicle"
@@ -2376,21 +2383,29 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
 
     // Build a flat lookup from BOTH extractedData AND extractedFields
     // The AI puts data in different places depending on the document
+    // Values may arrive wrapped as {value, confidence} — unwrap BEFORE
+    // stringifying. A wrapped totalAmount used to stringify to
+    // "[object Object]", fail parseFloat, and let the amount picker fall
+    // through to a lesser key like `subtotal` — proposing the wrong amount
+    // ($113.33 subtotal instead of the $118.14 receipt total).
     const fieldLookup: Record<string, string> = {};
     if (parsed.extractedData) {
       for (const [k, v] of Object.entries(parsed.extractedData)) {
-        if (v != null) fieldLookup[k.toLowerCase()] = String(v);
+        const uv = unwrapVal(v);
+        if (uv != null) fieldLookup[k.toLowerCase()] = String(uv);
       }
     }
     for (const f of extractedFields) {
-      if (f.key && f.value != null) fieldLookup[f.key.toLowerCase()] = String(f.value);
+      const uv = unwrapVal(f.value);
+      if (f.key && uv != null) fieldLookup[f.key.toLowerCase()] = String(uv);
     }
 
     // Look for amount fields (check both camelCase and lowercase). Order matters
     // — the most authoritative "final amount paid/due" comes first; generic
     // "price"/"cost" only get used if no real total is found.
     const amountKeys = [
-      'totalamount', 'totalamountdue', 'grandtotal', 'amountdue', 'amountpaid',
+      'totalamount', 'totalamountdue', 'grandtotal', 'amountdue', 'amountduetoday',
+      'totaldue', 'amountpaid', 'amounttendered', 'amttendered', 'totalpaid',
       'amountcharged', 'amount', 'balancedue', 'currentcharges', 'totalcharges',
       'totaldueamount', 'paymenttotal', 'chargetotal', 'feetotal', 'total',
       'subtotal', 'parkingcost', 'parkingfee', 'parkingtotal', 'ticketprice',

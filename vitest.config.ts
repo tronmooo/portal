@@ -126,6 +126,7 @@ export default defineConfig({
       'tests/asset-valuation.test.ts',
       'tests/improve-estimate.test.ts',
       'tests/lookup-value-route.test.ts',
+      'tests/confirm-extraction-save.test.ts',
       'tests/cache-bust-predicate.test.ts',
       'tests/recover-wedged-queries.test.ts',
       'tests/resume-refresh.test.ts',

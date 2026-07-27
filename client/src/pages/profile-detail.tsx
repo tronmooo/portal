@@ -2723,7 +2723,7 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
     { title: "Vehicle Identity", fields: [
       { key: "make", label: "Make" }, { key: "model", label: "Model" }, { key: "year", label: "Year" },
       { key: "trim", label: "Trim" }, { key: "vin", label: "VIN" }, { key: "licensePlate", label: "License Plate" },
-      { key: "color", label: "Color" },
+      { key: "color", label: "Color" }, { key: "engineType", label: "Engine" },
       // Also match extracted PDF keys
       { key: "vehicleMake", label: "Make" }, { key: "vehicleType", label: "Type" },
       { key: "vehicleYear", label: "Year" }, { key: "vehicleVIN", label: "VIN" },
@@ -2731,6 +2731,22 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
     { title: "Purchase & Value", fields: [
       { key: "purchaseDate", label: "Purchase Date" }, { key: "purchasePrice", label: "Purchase Price" },
       { key: "currentValue", label: "Current Value" }, { key: "mileage", label: "Mileage" },
+      // Alias spellings still on older profiles — same canonical field, so
+      // they belong here, not in the "Other" catch-all. New saves fold these
+      // into `mileage` server-side.
+      { key: "currentMileage", label: "Mileage" }, { key: "odometer", label: "Mileage" },
+    ]},
+    // Oil changes & service visits — the fields a service receipt extraction
+    // saves. Without this group they all dumped into "Other (N)".
+    { title: "Service & Maintenance", fields: [
+      { key: "serviceDate", label: "Service Date" }, { key: "lastServiceDate", label: "Last Service" },
+      { key: "serviceType", label: "Service Type" }, { key: "servicesPerformed", label: "Services Performed" },
+      { key: "serviceProvider", label: "Service Provider" }, { key: "serviceLocation", label: "Service Location" },
+      { key: "oilType", label: "Oil Type" }, { key: "oilFilter", label: "Oil Filter" },
+      { key: "nextServiceMileage", label: "Next Service (mi)" }, { key: "nextServiceDate", label: "Next Service Date" },
+      { key: "nextOilChangeMileage", label: "Next Oil Change (mi)" }, { key: "recommendedService", label: "Recommended Service" },
+      { key: "serviceAmount", label: "Service Amount" }, { key: "serviceNotes", label: "Service Notes" },
+      { key: "lastOilChange", label: "Last Oil Change" }, { key: "invoiceNumber", label: "Invoice #" },
     ]},
     { title: "Insurance", fields: [
       { key: "insurer", label: "Insurer" }, { key: "insurerCode", label: "Insurer Code" },
@@ -2748,6 +2764,8 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
     { title: "Status", fields: [
       { key: "condition", label: "Condition" }, { key: "location", label: "Location" },
       { key: "registration", label: "Registration Exp" },
+      { key: "registrationExpiration", label: "Registration Exp" },
+      { key: "registrationDate", label: "Registration Date" },
       { key: "ownerName", label: "Owner Name" },
     ]},
   ],
@@ -3030,6 +3048,14 @@ function InfoTab({
     "homeAddress", "serviceAddress",
     "patientName",
     "issuingAuthority",
+    // Internal bookkeeping written by the app itself (valuation runs,
+    // ownership plumbing) — never user-facing profile facts. These were
+    // rendering as junk rows in "Other (N)".
+    "ownerProfileId", "owner_profile_id",
+    "previousValue", "previous_value",
+    "valuationConfidence", "valuationMethod", "valuationDate", "valuationRange",
+    "valuation_confidence", "valuation_method", "valuation_date", "valuation_range",
+    "assetSubtype", "asset_subtype",
   ]);
   const extraFields = Object.entries(profile.fields).filter(
     ([k, v]) => !groupedKeys.has(k) && !ALWAYS_HIDDEN_FROM_OTHER.has(k) && !k.startsWith("_") && v != null && v !== "" && typeof v !== "object"

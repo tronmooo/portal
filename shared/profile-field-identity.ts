@@ -67,6 +67,7 @@ const FIELD_ALIASES: Record<string, string[]> = {
   // ── vehicle ──────────────────────────────────────────────────────────────
   licensePlate: ["plate", "platenumber", "licenceplate", "tag", "tagnumber"],
   vin: ["vinnumber", "vehicleidentificationnumber"],
+  mileage: ["currentmileage", "odometer", "currentodometer", "odometerreading", "mileagereading", "miles"],
   // ── money (kept in step with shared/profile-field-canon) ─────────────────
   currentValue: ["value", "worth", "marketvalue", "estimatedvalue", "currentworth", "assetvalue", "presentvalue"],
   purchasePrice: ["pricepaid", "boughtfor", "purchaseamount", "originalprice", "purchasecost"],
