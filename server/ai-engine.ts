@@ -68,6 +68,13 @@ import {
   type ExtractedOperation,
   type OperationOutcome,
 } from "./ai-bulk-log";
+import {
+  FAST_LANE_MODEL,
+  FAST_LANE_TIMEOUT_MS,
+  fastLaneEnabled,
+  fastLaneEligible,
+  assessFastLaneResponse,
+} from "./ai-fast-lane";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -12411,6 +12418,58 @@ function opRawLabel(toolUse: { name: string; input?: any }): string {
   return String(inp.trackerName || inp.title || inp.description || inp.name || toolUse.name);
 }
 
+/**
+ * Normalize client-sent history + the current message into a Claude-legal
+ * messages array: last 6 turns, strict user/assistant alternation, malformed
+ * entries dropped, consecutive same-role turns merged, no leading assistant
+ * turn. Shared by the main agentic loop and the fast lane so both paths see
+ * the identical conversation shape (the alternation rules here fixed
+ * BUG-20260529-ai-history-execute — see the comment at the loop call site).
+ */
+function buildLoopMessages(
+  userMessage: string,
+  conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>,
+): Anthropic.Messages.MessageParam[] {
+  const messages: Anthropic.Messages.MessageParam[] = [];
+  if (conversationHistory && conversationHistory.length > 0) {
+    const recent = conversationHistory.slice(-6);
+    for (const msg of recent) {
+      if (msg?.role !== "user" && msg?.role !== "assistant") continue;
+      if (typeof msg.content !== "string") continue;
+      const cleaned = sanitize(msg.content);
+      const content = cleaned.length > 1500 ? cleaned.slice(0, 1500) + "\n[...truncated]" : cleaned;
+      if (!content) continue;
+      const last = messages[messages.length - 1];
+      if (last && last.role === msg.role) {
+        last.content = `${last.content}\n---\n${content}`;
+      } else {
+        // Claude requires the messages array to start with a user turn.
+        if (messages.length === 0 && msg.role === "assistant") continue;
+        messages.push({ role: msg.role, content });
+      }
+    }
+  }
+  // Append the current user message. If the last carried-forward turn is
+  // also a user turn (e.g. history ended on a user message with no
+  // assistant reply persisted yet), merge so we don't break alternation.
+  const lastCarried = messages[messages.length - 1];
+  if (lastCarried && lastCarried.role === "user") {
+    lastCarried.content = `${lastCarried.content}\n---\n${userMessage}`;
+  } else {
+    messages.push({ role: "user", content: userMessage });
+  }
+  return messages;
+}
+
+/** The full tool schema with the prompt-cache breakpoint on the last tool —
+ * identical for every chat model call (main loop + fast lane), which is what
+ * lets the tools prefix cache across them. */
+function buildCachedChatTools(): Anthropic.Messages.Tool[] {
+  return TOOL_DEFINITIONS.map((t, i) =>
+    i === TOOL_DEFINITIONS.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
+  ) as Anthropic.Messages.Tool[];
+}
+
 async function runBulkLogPath(
   userMessage: string,
   userId: string | undefined,
@@ -12467,10 +12526,33 @@ async function runBulkLogPath(
   if (ops.length === 0) return null;
 
   // ── Phase B: execute every operation independently ──
+  // (Shared executor — the fast lane runs its tool calls through the same
+  // validate → before-rows → executeTool → envelope-verify → action-log
+  // pipeline, so both paths have identical write semantics.)
+  const { actions, results, operations, createdTrackers } =
+    await executeExtractedOperations(ops, userMessage, userId, 75_000);
+
+  logger.info("ai", `Bulk path: ${operations.filter(o => o.status === "ok").length}/${operations.length} ops ok (model ${chatModel})`);
+  return { reply: buildBulkReply(operations, createdTrackers), actions, results, operations };
+}
+
+/**
+ * Execute a list of extracted write operations independently, with the same
+ * per-tool verification pipeline the agentic loop uses. Never throws; each
+ * operation's outcome (ok/failed/skipped/deduped) is reported honestly.
+ * 75s default budget: the platform ceiling is 300s (vercel.json maxDuration),
+ * so the old 40s Vercel special-case (from the 60s-cap era) is gone.
+ */
+async function executeExtractedOperations(
+  // Wider than ExtractedOperation on purpose: the bulk path passes its
+  // whitelisted BulkActionTool ops, the fast lane adds complete_task. Every
+  // tool still goes through validateToolInput before executing.
+  ops: Array<{ tool: string; input: Record<string, any>; raw: string }>,
+  userMessage: string,
+  userId: string | undefined,
+  execBudgetMs: number,
+): Promise<{ actions: ParsedAction[]; results: any[]; operations: OperationOutcome[]; createdTrackers: Array<{ id: string; name: string }> }> {
   const startedAt = Date.now();
-  // 75s everywhere: the platform ceiling is 300s (vercel.json maxDuration),
-  // so the old 40s Vercel special-case (from the 60s-cap era) is gone.
-  const EXEC_BUDGET_MS = 75_000;
   const turnVerifyCtx = buildTurnVerifyContext(storage);
   const actions: ParsedAction[] = [];
   const results: any[] = [];
@@ -12482,7 +12564,7 @@ async function runBulkLogPath(
     const op = ops[i];
     const outcome: OperationOutcome = { index: i, raw: op.raw, tool: op.tool, status: "failed", trackerName: (op.input as any)?.trackerName, detail: summarizeOpDetail(op.input) || undefined };
     operations.push(outcome);
-    if (Date.now() - startedAt > EXEC_BUDGET_MS) {
+    if (Date.now() - startedAt > execBudgetMs) {
       outcome.status = "skipped";
       outcome.error = "Ran out of time this message";
       continue;
@@ -12530,8 +12612,104 @@ async function runBulkLogPath(
     }
   }
 
-  logger.info("ai", `Bulk path: ${operations.filter(o => o.status === "ok").length}/${operations.length} ops ok (${Date.now() - startedAt}ms, model ${chatModel})`);
-  return { reply: buildBulkReply(operations, createdTrackers), actions, results, operations };
+  return { actions, results, operations, createdTrackers };
+}
+
+// ============================================================
+// SINGLE-ACTION FAST LANE — one Haiku round, guarded, escalates
+// ============================================================
+// See server/ai-fast-lane.ts for the safety model. Summary: short single-
+// intent write commands get ONE round on the fast model with the IDENTICAL
+// system prompt + full tool schema as the main agent. The response is
+// assessed before anything executes; any doubt (no tools, wrong tools, too
+// many tools, invalid input, timeout, error) returns null and the caller
+// falls through to the normal Sonnet agentic loop — side-effect free,
+// because nothing has been written yet. Once tools DO execute, failures are
+// reported honestly and there is no Sonnet re-run (double-write risk).
+async function runFastLanePath(
+  userMessage: string,
+  conversationHistory: Array<{ role: "user" | "assistant"; content: string }> | undefined,
+  userId: string | undefined,
+  systemPromptParts: { staticText: string; dynamicText: string },
+): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[]; meta: { route: string; model: string } } | null> {
+  const t0 = Date.now();
+  const escalate = (reason: string): null => {
+    try {
+      console.log("[chat-trace] " + JSON.stringify({
+        path: "fast-lane-escalated",
+        reason,
+        model: FAST_LANE_MODEL,
+        duration_ms: Date.now() - t0,
+        user_id: userId,
+        msg_preview: (userMessage || "").slice(0, 80),
+      }));
+    } catch { /* never let logging break the turn */ }
+    return null;
+  };
+
+  // Same cached blocks as the main loop: static system + full tool schema.
+  // The fast model sees exactly what Sonnet would see — no trimmed grounding.
+  const cachedSystem = [
+    { type: "text" as const, text: systemPromptParts.staticText, cache_control: { type: "ephemeral" as const } },
+    { type: "text" as const, text: systemPromptParts.dynamicText },
+  ];
+  const messages = buildLoopMessages(userMessage, conversationHistory);
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), FAST_LANE_TIMEOUT_MS);
+  let response: Anthropic.Messages.Message;
+  try {
+    response = await getClient().messages.create({
+      model: FAST_LANE_MODEL,
+      max_tokens: 2048,
+      system: cachedSystem,
+      tools: buildCachedChatTools(),
+      messages,
+    }, { signal: ac.signal });
+  } catch (err: any) {
+    return escalate(err?.name === "AbortError" || ac.signal.aborted ? "timeout" : `api-error:${String(err?.message || err).slice(0, 80)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const assessment = assessFastLaneResponse(response.content as any);
+  if (!assessment.ok) return escalate(assessment.reason || "assessment-failed");
+
+  // Validate EVERY input before executing ANY — admission is all-or-nothing
+  // so a pre-execution escalation is guaranteed side-effect free.
+  const ops: Array<{ tool: string; input: Record<string, any>; raw: string }> = [];
+  for (const tu of assessment.toolUses) {
+    const validation = validateToolInput(tu.name, tu.input);
+    if (!validation.valid) return escalate(`invalid-input:${tu.name}`);
+    ops.push({ tool: tu.name, input: tu.input, raw: opRawLabel(tu) });
+  }
+
+  const modelMs = Date.now() - t0;
+  const { actions, results, operations, createdTrackers } =
+    await executeExtractedOperations(ops, userMessage, userId, 30_000);
+
+  // Deterministic recap — no second model round. For the common single-action
+  // case, drop the "Logged 1 of 1 actions:" header for a cleaner one-liner.
+  let reply = buildBulkReply(operations, createdTrackers);
+  if (operations.length === 1 && operations[0].status === "ok") {
+    reply = reply.replace(/^Logged 1 of 1 actions:\n/, "");
+  }
+
+  try {
+    console.log("[chat-trace] " + JSON.stringify({
+      path: "fast-lane",
+      model: FAST_LANE_MODEL,
+      tools: operations.map(o => o.tool),
+      ops_ok: operations.filter(o => o.status === "ok").length,
+      ops_total: operations.length,
+      model_ms: modelMs,
+      total_ms: Date.now() - t0,
+      user_id: userId,
+      msg_preview: (userMessage || "").slice(0, 80),
+    }));
+  } catch { /* never let logging break the turn */ }
+
+  return { reply, actions, results, operations, meta: { route: "fast-lane", model: FAST_LANE_MODEL } };
 }
 
 // ============================================================
@@ -13442,6 +13620,20 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     }
   }
 
+  // ── SINGLE-ACTION FAST LANE ──
+  // Short single-intent write commands ("log $5 coffee", "remind me to call
+  // mom at 5") get one guarded round on the fast model. Any doubt — no tool
+  // calls, off-allowlist tool, invalid input, timeout — falls through to the
+  // Sonnet loop below before anything is written. See server/ai-fast-lane.ts.
+  if (fastLaneEnabled() && fastLaneEligible(userMessage).eligible) {
+    try {
+      const fast = await runFastLanePath(userMessage, conversationHistory, userId, systemPromptParts);
+      if (fast) return fast;
+    } catch (err: any) {
+      logger.warn("ai", `Fast lane crashed (${err?.message}) — continuing with the agentic loop`);
+    }
+  }
+
   try {
     // Build the tool_use conversation loop.
     //
@@ -13460,39 +13652,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // So the correct shape is: keep proper user/assistant alternation, just
     // like a normal chat. The model can then see prior requests were already
     // resolved by prior assistant turns and won't re-fire their tool calls.
-    let messages: Anthropic.Messages.MessageParam[] = [];
-    if (conversationHistory && conversationHistory.length > 0) {
-      // Walk the last 6 turns and emit them, enforcing strict user/assistant
-      // alternation. Drop malformed entries. Merge consecutive same-role
-      // turns (rare — client should already alternate) so the API doesn't
-      // 400 on us. Drop a leading assistant turn since Claude requires the
-      // conversation to start with a user message.
-      const recent = conversationHistory.slice(-6);
-      for (const msg of recent) {
-        if (msg?.role !== "user" && msg?.role !== "assistant") continue;
-        if (typeof msg.content !== "string") continue;
-        const cleaned = sanitize(msg.content);
-        const content = cleaned.length > 1500 ? cleaned.slice(0, 1500) + "\n[...truncated]" : cleaned;
-        if (!content) continue;
-        const last = messages[messages.length - 1];
-        if (last && last.role === msg.role) {
-          last.content = `${last.content}\n---\n${content}`;
-        } else {
-          // Claude requires the messages array to start with a user turn.
-          if (messages.length === 0 && msg.role === "assistant") continue;
-          messages.push({ role: msg.role, content });
-        }
-      }
-    }
-    // Append the current user message. If the last carried-forward turn is
-    // also a user turn (e.g. history ended on a user message with no
-    // assistant reply persisted yet), merge so we don't break alternation.
-    const lastCarried = messages[messages.length - 1];
-    if (lastCarried && lastCarried.role === "user") {
-      lastCarried.content = `${lastCarried.content}\n---\n${userMessage}`;
-    } else {
-      messages.push({ role: "user", content: userMessage });
-    }
+    // (Assembly shared with the fast lane — buildLoopMessages.)
+    const messages: Anthropic.Messages.MessageParam[] = buildLoopMessages(userMessage, conversationHistory);
     const allActions: ParsedAction[] = [];
     const allResults: any[] = [];
     // Per-operation outcome report (success AND failure) so the client can
@@ -13538,9 +13699,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       { type: "text" as const, text: systemPromptParts.staticText, cache_control: { type: "ephemeral" as const } },
       { type: "text" as const, text: systemPromptParts.dynamicText },
     ];
-    const cachedTools = TOOL_DEFINITIONS.map((t, i) =>
-      i === TOOL_DEFINITIONS.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
-    );
+    const cachedTools = buildCachedChatTools();
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;

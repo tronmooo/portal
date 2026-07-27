@@ -123,6 +123,7 @@ export default defineConfig({
       'tests/typography-hygiene.test.ts',
       'tests/chat-timeout-envelope.test.ts',
       'tests/system-prompt-split.test.ts',
+      'tests/ai-fast-lane.test.ts',
       'tests/ai-owner-attribution.test.ts',
       'tests/asset-valuation.test.ts',
       'tests/improve-estimate.test.ts',
