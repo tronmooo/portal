@@ -2447,13 +2447,16 @@ ${JSON.stringify(ctx, null, 2)}`;
             saved.push(`Expense $${amt.toFixed(2)} already exists (${duplicate.description}) — skipped duplicate`);
             try { await storage.linkProfileTo(duplicate.id, "document", extractionId); } catch {}
           } else {
-          // Link the expense to the asset AND its owner (self) so it shows in
-          // both the asset's Finance tab and the dashboard's Recent Expenses.
-          // Linking only the vehicle made the expense invisible on the owner's
-          // own feed.
-          const allProfilesForExpense = await storage.getProfiles();
-          const selfForExpense = allProfilesForExpense.find((p: any) => p.type === 'self');
-          const expenseLinks = Array.from(new Set([resolvedProfileId, selfForExpense?.id].filter(Boolean))) as string[];
+          // OWNERSHIP MODEL (shared/cost-of-ownership.ts): the expense belongs
+          // to the ASSET — one row, one link. The owner sees it through the
+          // ownedAssetIds widening on /api/expenses and the dashboard, so it
+          // counts toward the owner exactly once and is never double-linked.
+          // Fall back to self only when no asset was resolved.
+          let expenseLinks: string[] = resolvedProfileId ? [resolvedProfileId] : [];
+          if (expenseLinks.length === 0) {
+            const selfForExpense = (await storage.getProfiles()).find((p: any) => p.type === 'self');
+            if (selfForExpense) expenseLinks = [selfForExpense.id];
+          }
           const expense = await storage.createExpense({
             description: exp.description,
             amount: amt,
@@ -2466,11 +2469,8 @@ ${JSON.stringify(ctx, null, 2)}`;
             linkedProfiles: expenseLinks,
           });
           saved.push(`Created expense: $${amt.toFixed(2)} ${exp.description}`);
-          // Link document to expense; surface it on intermediate ancestors too.
+          // Link document to expense
           try { await storage.linkProfileTo(expense.id, "document", extractionId); } catch {}
-          if (resolvedProfileId) {
-            try { await storage.propagateEntityToAncestors("expense", expense.id, resolvedProfileId); } catch { /* non-critical */ }
-          }
           }
         } catch (eErr: any) {
           console.error("Failed to create expense from extraction:", eErr?.message);

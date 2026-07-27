@@ -87,6 +87,19 @@ describe("ownedAssetIds", () => {
   it("returns empty for no selection", () => {
     expect(ownedAssetIds([], profiles).size).toBe(0);
   });
+
+  it("honors the legacy fields.ownerProfileId pointer as an ownership edge", () => {
+    // No parentProfileId, no asset_party_links row — ownership lives only in
+    // the JSONB fields, as on profiles that predate the relational table.
+    const legacy = [
+      { id: "self", type: "self", parentProfileId: null },
+      { id: "crv", type: "vehicle", parentProfileId: null, fields: { ownerProfileId: "self" } },
+      { id: "other", type: "vehicle", parentProfileId: null, fields: { ownerProfileId: "someone-else" } },
+    ];
+    const ids = ownedAssetIds(["self"], legacy as any);
+    expect(ids.has("crv")).toBe(true);
+    expect(ids.has("other")).toBe(false);
+  });
 });
 
 describe("ownedAssetExpenseTotal", () => {

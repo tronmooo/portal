@@ -2259,13 +2259,13 @@ Return ONLY the JSON object, nothing else.`;
           : "general");
         const desc = parsed.label || parsed.summary || fileName;
         const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-        // P0.3b: resolve EVERY profile the expense belongs to (target asset +
-        // self for the main Finance view) BEFORE the create, so linkedProfiles
-        // is written atomically with the row — no create-then-link window
-        // where the expense exists unowned.
+        // OWNERSHIP MODEL (shared/cost-of-ownership.ts): the expense belongs
+        // to the ASSET only — one row, one link. Owner-scoped views derive it
+        // via ownedAssetIds, so it counts toward the owner exactly once.
+        // Self is the link only when no asset profile was targeted.
         const profiles = await storage.getProfiles();
         const selfProfile = profiles.find(p => p.type === 'self');
-        const expenseLinks = Array.from(new Set([existingProfileId, selfProfile?.id].filter(Boolean))) as string[];
+        const expenseLinks = (existingProfileId ? [existingProfileId] : (selfProfile ? [selfProfile.id] : [])) as string[];
         // P0.3a: validate through the same zod schema the REST route uses.
         const expensePayload = validateAiPayload(insertExpenseSchema, {
           amount: numAmount,
@@ -2279,10 +2279,9 @@ Return ONLY the JSON object, nothing else.`;
           console.error("Auto-expense from document skipped:", expensePayload.error);
         } else {
           const expense = await storage.createExpense(expensePayload.data);
-          if (existingProfileId) {
-            // Propagate up: Honda → Me, so it shows in intermediate ancestors' Finance tabs too
-            try { await storage.propagateEntityToAncestors("expense", expense.id, existingProfileId); } catch (e: any) { logger.warn("ai", `Fast-path propagate failed for expense ${expense.id}: ${e?.message}`); }
-          }
+          // No ancestor propagation: multi-linking the same expense to Honda
+          // AND Me is how costs get double-attributed. Ancestor visibility is
+          // DERIVED (ownedAssetIds widening) from the single asset link.
           savedItems.push(`$${numAmount} expense saved to Finance`);
           actions.push({ type: "log_expense" as const, category: "finance" as const, data: { amount: numAmount, description: desc } });
           results.push(expense);

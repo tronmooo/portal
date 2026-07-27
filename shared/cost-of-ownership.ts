@@ -79,6 +79,10 @@ export interface ProfileNode {
   id: string;
   type?: string;
   parentProfileId?: string | null;
+  /** Legacy JSONB ownership pointer (fields.ownerProfileId) — read as a
+   * fallback edge so assets whose ownership never made it into
+   * parentProfileId or asset_party_links still count as owned. */
+  fields?: { ownerProfileId?: string | null; [k: string]: any } | null;
 }
 export interface AssetPartyLinkLike {
   assetProfileId?: string;
@@ -128,6 +132,16 @@ export function ownedAssetIds(
       const a = byId.get(l.assetProfileId);
       if (!a || ASSET_TYPES.has(String(a.type))) out.add(l.assetProfileId);
     }
+  }
+
+  // 3) Legacy JSONB pointer: fields.ownerProfileId names a selected person.
+  //    Some assets predate the relational link table (or drifted from it —
+  //    see storage.getOwnershipConsistency); without this edge their costs
+  //    silently vanish from the owner's feed.
+  for (const p of allProfiles) {
+    if (!p || out.has(p.id) || !ASSET_TYPES.has(String(p.type))) continue;
+    const legacyOwner = p.fields?.ownerProfileId;
+    if (typeof legacyOwner === "string" && persons.has(legacyOwner)) out.add(p.id);
   }
   return out;
 }

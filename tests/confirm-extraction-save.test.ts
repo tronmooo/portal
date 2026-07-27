@@ -37,6 +37,8 @@ const { stubState, stubStorage, aiTasks } = vi.hoisted(() => {
   const impl: any = {
     async getProfile(id: string) { return state.profiles.get(id); },
     async getProfiles() { return [...state.profiles.values()]; },
+    async getProfilesLite() { return [...state.profiles.values()]; },
+    async getAssetPartyLinks() { return []; },
     // Mirrors the Supabase merge semantics (mergeAndApplyDeletes): incoming
     // null/undefined is a deletion intent; other keys overwrite.
     async updateProfile(id: string, patch: any) {
@@ -112,6 +114,10 @@ const vehicleProfile = () => ({
     currentMileage: 64442,
     vehicles: { mileage: 80000, licensePlate: "8YPJ480" },
     currentValue: 21400,
+    // Legacy JSONB ownership pointer — the only ownership edge this fixture
+    // carries (no parentProfileId, no asset_party_links), mirroring profiles
+    // that predate the relational link table.
+    ownerProfileId: "profile-self",
   },
   tags: [], notes: "",
 });
@@ -258,7 +264,7 @@ describe("POST /api/chat/confirm-extraction", () => {
     expect(after._docFields ?? {}).not.toHaveProperty("doc-receipt");
   });
 
-  it("links a confirm-created expense to both the asset and the owner's self profile", async () => {
+  it("links a confirm-created expense to the ASSET only — the owner sees it by derivation, counted once", async () => {
     const res = await fetch(`${base}/api/chat/confirm-extraction`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -279,9 +285,20 @@ describe("POST /api/chat/confirm-extraction", () => {
     expect(res.status).toBe(200);
     expect((await res.json()).success).toBe(true);
     expect(stubState.expenses).toHaveLength(1);
-    // Visible on the Honda's Finance tab AND the owner's Recent Expenses.
-    expect(stubState.expenses[0].linkedProfiles).toContain("profile-crv");
-    expect(stubState.expenses[0].linkedProfiles).toContain("profile-self");
+    // ONE row, ONE link (shared/cost-of-ownership.ts model): the expense
+    // belongs to the Honda. Linking it to the owner as well is how costs get
+    // double-attributed.
+    expect(stubState.expenses[0].linkedProfiles).toEqual(["profile-crv"]);
+
+    // The OWNER still sees it: /api/expenses?profileIds=<self> widens the
+    // scope with the assets that person owns. The Honda's ownership here is
+    // recorded only via the legacy fields.ownerProfileId pointer — the edge
+    // real profiles carry when they predate the relational link table.
+    const feed = await fetch(`${base}/api/expenses?profileIds=profile-self`).then((r) => r.json());
+    const ids = (Array.isArray(feed) ? feed : []).map((e: any) => e.id);
+    expect(ids).toContain(stubState.expenses[0].id);
+    // Counted once — the widened feed returns the single row exactly once.
+    expect(ids.filter((id: string) => id === stubState.expenses[0].id)).toHaveLength(1);
   });
 
   it("saves every ticked field even when no profile was explicitly chosen (auto-resolves, never AI-vetoes)", async () => {
