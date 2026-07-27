@@ -145,7 +145,7 @@ async function syncLiabilityObligation(profileId: string): Promise<void> {
     console.warn("[syncLiabilityObligation] hook error:", err?.message || err);
   }
 }
-import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue, classifyCapture, reextractDocument } from "./ai-engine";
+import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue, classifyCapture, reextractDocument, executeTool, validateToolInput, READ_ONLY_TOOLS } from "./ai-engine";
 import { analyzeSmartFill, renderFilledPdf, type SmartFillSource, type FillFieldInput } from "./smart-fill";
 import { aiDecide, aiPickIndex } from "./ai-decide";
 
@@ -1143,6 +1143,42 @@ export async function registerRoutes(
       // Previously we surfaced `detail: <raw msg>` outside production, which exposed
       // SDK errors / stack traces / DB column names if NODE_ENV was misconfigured.
       fail(500, { error: "Failed to process message", reply: "Something went wrong. Please try again." });
+    }
+  }));
+
+  // ---- Direct read-only tool execution (artifact data refresh) ----
+  // artifacts.tsx used to refresh a chart's dataBindings by POSTing a synthetic
+  // natural-language prompt ("Use the X tool with params: ...") through the
+  // ENTIRE chat pipeline — a full model turn (plus the risk of the model doing
+  // something other than the one intended call) to run one deterministic tool.
+  // This endpoint executes exactly one READ-ONLY tool directly: allowlist
+  // enforced server-side, input validated, no model involved, writes impossible.
+  app.post("/api/tools/execute", asyncHandler(async (req, res) => {
+    const userId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+    if (rateLimit(`tools-execute:${userId}`, 60)) {
+      return res.status(429).json({ error: "Too many requests. Please wait a moment." });
+    }
+    const { tool, params } = req.body || {};
+    if (typeof tool !== "string" || !tool.trim()) {
+      return res.status(400).json({ error: "tool required" });
+    }
+    if (!READ_ONLY_TOOLS.has(tool)) {
+      return res.status(403).json({ error: `Tool "${tool}" is not read-only and cannot run via this endpoint` });
+    }
+    const input = (params && typeof params === "object" && !Array.isArray(params)) ? params : {};
+    const validation = validateToolInput(tool, input);
+    if (!validation.valid) {
+      return res.status(400).json({ error: `Validation failed: ${validation.errors.join(". ")}` });
+    }
+    const tz = getTimezone(req);
+    (storage as any)._timezone = tz;
+    try {
+      const result = await executeTool(tool, validation.normalized, userId);
+      if (result && result.error) return res.status(422).json({ error: result.error });
+      res.json({ tool, result });
+    } catch (err: any) {
+      log.error("[tools/execute]", err?.message || "unknown error");
+      res.status(500).json({ error: "Tool execution failed" });
     }
   }));
 
