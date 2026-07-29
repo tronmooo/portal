@@ -186,8 +186,12 @@ export function OwnershipEditor({
       <CardContent className="pt-0 space-y-3">
         {parentPerson && (
           <p className="text-[11px] text-muted-foreground" data-testid="ownership-parent-note">
-            Filed under <span className="font-medium text-foreground">{parentPerson.name}</span> — that's
-            location, not ownership.{" "}
+            {/* Was: "Filed under Test — that's location, not ownership." A
+                sentence arguing with the reader's assumption is developer
+                commentary, not product copy (audit finding U2). Both facts,
+                stated plainly, in the order they matter. */}
+            Listed under <span className="font-medium text-foreground">{parentPerson.name}</span>. This card
+            sets who owns it.{" "}
             {!(rows.length === 1 && rows[0].partyProfileId === parentPerson.id && rows[0].pct === 100) && (
               <button
                 className="text-primary hover:underline font-medium"
