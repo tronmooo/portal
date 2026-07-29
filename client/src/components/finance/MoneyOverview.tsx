@@ -74,9 +74,9 @@ function BreakdownCard({ title, rows, total, tone, testId, rowTestPrefix, onSeeA
     <Card className="p-4" data-testid={testId}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {title} · {money(total)}
+          {title} · <span data-testid={`${testId}-total`}>{money(total)}</span>
         </span>
-        <span className="text-[10px] text-muted-foreground tabular-nums">
+        <span className="text-[10px] text-muted-foreground tabular-nums" data-testid={`${testId}-count`}>
           {rows.length} {rows.length === 1 ? "item" : "items"}
         </span>
       </div>

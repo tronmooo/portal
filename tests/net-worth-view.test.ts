@@ -96,6 +96,11 @@ describe("every net-worth surface uses the one derivation", () => {
     "client/src/pages/finance.tsx",
     "client/src/pages/dashboard.tsx",
     "client/src/components/dashboard/HeroKPIPopups.tsx",
+    // The hub KPI strip renders directly above the Finance card. It was
+    // missing from this list and subtracting the snapshot's raw totals, so a
+    // browser check caught the two showing -80,586 and -80,771 on one screen
+    // — the $185 difference being a single "Test Laptop QA" row.
+    "client/src/components/hub/HubKpiStrip.tsx",
   ];
 
   /** Strip comments so prose ABOUT the old bug doesn't read as the bug. */
@@ -111,10 +116,20 @@ describe("every net-worth surface uses the one derivation", () => {
     });
   }
 
-  it("the Finance card never reads the snapshot totals directly", () => {
+  it("no surface subtracts the snapshot totals to get a net worth", () => {
     // Local names derived FROM the view are fine; what must not reappear is a
     // read of `snap.totalAssetValue` / `snap.totalLiabilities` off the wire.
-    const src = code("client/src/pages/finance.tsx");
-    expect(src).not.toMatch(/\bsnap(shot)?\s*[.?]\s*\.?\s*total(AssetValue|Liabilities)\b/);
+    for (const rel of ["client/src/pages/finance.tsx", "client/src/components/hub/HubKpiStrip.tsx"]) {
+      expect(code(rel), rel).not.toMatch(/\bsnap(shot)?\s*[.?]\s*\.?\s*total(AssetValue|Liabilities)\b/);
+    }
+  });
+
+  it("every net-worth surface agrees on the same snapshot", () => {
+    // The concrete failure: two chips on one screen, $185 apart. Whatever the
+    // surfaces do with it, they must start from this number.
+    const expected = REAL_ASSETS - REAL_LIABILITIES;
+    expect(netWorthView(SNAPSHOT, false).netWorth).toBe(expected);
+    // …and NOT the figure a raw subtraction of the server totals produces.
+    expect(SNAPSHOT.totalAssetValue - SNAPSHOT.totalLiabilities).not.toBe(expected);
   });
 });

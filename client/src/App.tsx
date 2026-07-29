@@ -6,6 +6,7 @@ import { queryClient, apiRequest } from "./lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { warmup } from "@/lib/warmup";
 import { hashNavigate } from "./lib/hashNavigate";
+import { isSectionRoute, sectionForLocation, titleForSection } from "@/lib/page-title";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -545,22 +546,15 @@ function RouteTitle() {
       "/privacy": "Privacy — Portol",
       "/terms": "Terms — Portol",
     };
-    // `/linked?tab=assets` and `/linked?tab=documents` are different places to
-    // the user, so they must not share one browser-tab title. The nav sends
-    // people to these with labels ("Assets", "Documents") that the title then
-    // contradicted by saying "Linked" (audit finding P3).
-    let title = map[path];
-    if (path === "/linked") {
-      const tab = new URLSearchParams(location.split("?")[1] || "").get("tab");
-      const byTab: Record<string, string> = {
-        assets: "Assets — Portol",
-        documents: "Documents — Portol",
-        liabilities: "Debts — Portol",
-        trackers: "Trackers — Portol",
-        profiles: "Assets — Portol",
-      };
-      if (tab && byTab[tab]) title = byTab[tab];
-    }
+    // The five section routes (/trackers, /linked, /liabilities, /assets,
+    // /documents) all render TrackersPage, which titles itself from the
+    // section it displays. Deriving from the same table here keeps the first
+    // paint correct without the two writers contradicting each other — the
+    // page mounts second, and used to overwrite this with "Trackers" for every
+    // route but /linked (audit finding P3).
+    let title = isSectionRoute(location)
+      ? titleForSection(sectionForLocation(location))
+      : map[path];
     if (!title) {
       if (path.startsWith("/profiles/") || path.startsWith("/profile/")) title = "Profile — Portol";
       else if (path.startsWith("/documents/")) title = "Document — Portol";

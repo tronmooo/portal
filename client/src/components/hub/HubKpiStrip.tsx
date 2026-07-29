@@ -20,6 +20,8 @@ import { hashNavigate } from "@/lib/hashNavigate";
 import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { computeHealthScore } from "@/lib/tracker-health";
+import { netWorthView, isNetWorthLoaded } from "@/lib/net-worth-view";
+import { useShowTestData } from "@/lib/showTestData";
 import type { DashboardStats, Tracker } from "@shared/schema";
 
 // Drill-down popups — the SAME components the dashboard uses (user rule:
@@ -102,11 +104,16 @@ export function HubKpiStrip() {
     placeholderData: undefined,
   });
 
-  // NET WORTH — the server's filtered finance snapshot is the single source of
-  // truth (same numbers HeroKPISection/NetWorthPopup trust, NW-5). No client
-  // roll-up fallback here: "—" until the snapshot lands beats a wrong flash.
+  // NET WORTH — through net-worth-view, the one client derivation, like the
+  // Hero KPI tile, the Net Worth popup and the Finance card. Reading the
+  // snapshot's raw totals here meant this strip counted synthetic QA rows the
+  // rest of the app filters out: browser check 2026-07-29 caught the strip
+  // showing -80,586 while the Finance card directly beneath it showed -80,771,
+  // the $185 gap being one "Test Laptop QA". No client roll-up fallback: "—"
+  // until the snapshot lands beats a wrong flash.
   const snap = enhanced?.financeSnapshot;
-  const netWorth = snap != null ? (snap.totalAssetValue ?? 0) - (snap.totalLiabilities ?? 0) : null;
+  const showTestData = useShowTestData();
+  const netWorth = isNetWorthLoaded(snap) ? netWorthView(snap, showTestData).netWorth : null;
 
   // CASH FLOW — mirrors HeroKPISection's definition exactly: monthly incomes
   // minus (month expenses + monthlyized active obligations).

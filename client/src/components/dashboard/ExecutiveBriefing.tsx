@@ -9,7 +9,7 @@
 // popup/surface for its module — TasksPopup and HabitsPopup are the same
 // components the dashboard KPI tiles always used (TaskHabitPopups.tsx); the
 // rest live in BriefingPopups.tsx. Nothing here duplicates functionality.
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
@@ -61,6 +61,17 @@ function Section({ id, title, count, summary, children, defaultOpen = true, test
   defaultOpen?: boolean; testId: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // `useState(defaultOpen)` reads its argument once. Every section mounts
+  // before its data arrives, so a section whose `defaultOpen` depends on a
+  // count ("open when something is overdue") was evaluated as 0 and stayed
+  // shut once the rows landed — the browser check found the Overdue section
+  // collapsed while its own badge read 4. Follow `defaultOpen` until the user
+  // expresses a preference, then leave them alone.
+  const userToggled = useRef(false);
+  useEffect(() => {
+    if (!userToggled.current) setOpen(defaultOpen);
+  }, [defaultOpen]);
+  const toggle = () => { userToggled.current = true; setOpen(o => !o); };
   const accent = ACCENTS[id] || "240 10% 60%";
   return (
     <div
@@ -69,7 +80,7 @@ function Section({ id, title, count, summary, children, defaultOpen = true, test
       data-testid={testId}
     >
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={toggle}
         className="w-full flex items-center gap-1.5 py-1.5 text-left group"
         aria-expanded={open}
       >

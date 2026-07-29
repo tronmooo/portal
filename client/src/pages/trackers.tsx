@@ -10,6 +10,7 @@ import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { goalProgress } from "@shared/goal-progress";
+import { sectionForPath, sectionForQuery, titleForSection } from "@/lib/page-title";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { liabilityFamily } from "@shared/liability-types";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -5541,15 +5542,13 @@ export default function TrackersPage() {
   // Hub consolidation (2026-07): true when rendered under the hub shell,
   // which then owns the profile switcher + section navigation.
   const hubEmbedded = useHubChrome();
-  // Title reflects the actual route the user landed on. Both /trackers and
-  // /linked render this same component. The app uses wouter path-based routing,
-  // so we read window.location.pathname (NOT hash, which is always empty here).
+  // Five routes render this component (/trackers, /linked, /liabilities,
+  // /assets, /documents). This effect used to name only /linked and call
+  // everything else "Trackers", which is why the Liabilities tab read
+  // "Trackers" during the audit. The title now comes from the section actually
+  // on screen — see the effect below, once `sectionFilter` exists — so it also
+  // follows the user switching tabs without changing the route.
   const [pageLoc] = useLocation();
-  useEffect(() => {
-    const path = pageLoc || window.location.pathname || '';
-    const isLinkedRoute = path.startsWith('/linked');
-    document.title = isLinkedRoute ? "Linked — Portol" : "Trackers — Portol";
-  }, [pageLoc]);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   // Always keep page-local filter state in lockstep with the global filter store,
@@ -5745,25 +5744,14 @@ export default function TrackersPage() {
   // route + query string. Route changes always reset the section so direct
   // links to /trackers or /dashboard/health behave predictably and
   // navigating away/back to /linked returns the user to a clean "All" view.
-  const getRouteDefaultSection = (path: string): "all" | "profiles" | "liabilities" | "documents" | "trackers" => {
-    const p = (path || "").toLowerCase();
-    if (p.startsWith("/trackers") || p.startsWith("/dashboard/health") || p.startsWith("/health")) return "trackers";
-    if (p.startsWith("/liabilities")) return "liabilities";
-    // Real routes for the two sections that were only reachable as
-    // `/linked?tab=…`. Typing `/#/assets` or `/#/documents` used to 404, so
-    // bookmarks and shared links to them broke (audit finding P3).
-    if (p.startsWith("/assets")) return "profiles";
-    if (p.startsWith("/documents")) return "documents";
-    return "all";
-  };
+  // Route → section and ?tab= → section both live in lib/page-title, so the
+  // browser title and the rendered section can never name different things.
+  const getRouteDefaultSection = sectionForPath;
   const getQuerySection = (): "all" | "profiles" | "liabilities" | "documents" | "trackers" | null => {
     try {
       const hash = window.location.hash || "";
       const q = hash.includes("?") ? hash.split("?")[1] : (window.location.search || "").replace(/^\?/, "");
-      if (!q) return null;
-      const tab = new URLSearchParams(q).get("tab");
-      if (tab === "assets") return "profiles";
-      if (tab && ["all", "trackers", "documents", "liabilities", "profiles"].includes(tab)) return tab as any;
+      return sectionForQuery(q);
     } catch {}
     return null;
   };
@@ -5783,6 +5771,13 @@ export default function TrackersPage() {
   const setSectionFilter = (val: "all" | "profiles" | "liabilities" | "documents" | "trackers") => {
     setSectionFilterRaw(val);
   };
+  // The browser tab names the section on screen. Both this and App.tsx's
+  // <RouteTitle> read one shared table, so whichever writes last says the same
+  // thing — previously this page mounted second and overwrote RouteTitle with
+  // "Trackers" for every route except /linked (audit finding P3).
+  useEffect(() => {
+    document.title = titleForSection(sectionFilter);
+  }, [sectionFilter]);
   // Document type filter
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
   // Tracker category filter
