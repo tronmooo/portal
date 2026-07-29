@@ -172,9 +172,17 @@ function toast({ ...props }: Toast) {
 
   // Auto-dismiss after delay so toasts don't persist indefinitely.
   // Destructive (error) toasts get longer so users have time to read them.
-  const dismissDelay = (props as any).variant === "destructive"
-    ? TOAST_AUTO_DISMISS_DELAY_DESTRUCTIVE
-    : TOAST_AUTO_DISMISS_DELAY
+  //
+  // An explicit `duration` wins over both defaults. Without it, a toast that
+  // carries an Undo action was unusable: the 4s default dismissed the only
+  // route back from a consequential write (recording a bill payment) before a
+  // user could reach for it. Callers that offer an undo pass a longer window.
+  const explicitDuration = (props as any).duration
+  const dismissDelay = typeof explicitDuration === "number" && explicitDuration > 0
+    ? explicitDuration
+    : (props as any).variant === "destructive"
+      ? TOAST_AUTO_DISMISS_DELAY_DESTRUCTIVE
+      : TOAST_AUTO_DISMISS_DELAY
   setTimeout(() => {
     dismiss()
   }, dismissDelay)

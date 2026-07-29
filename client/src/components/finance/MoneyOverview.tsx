@@ -12,15 +12,118 @@ import {
 } from "recharts";
 import { ShoppingCart, Utensils, Car, HeartPulse, Home, Zap, Film, CreditCard, Package } from "lucide-react";
 import { dayLabel } from "@shared/now-rank";
+import { MARK_PAID_LABEL } from "@/lib/mark-bill-paid";
 
 export interface MoneyBill {
   id: string; name: string; amount: number; dueDate?: string;
   daysUntil: number; status?: string; category?: string;
 }
-export interface Breakdown { id: string; name: string; type: string; value: number; }
+export interface Breakdown {
+  id: string;
+  name: string;
+  type: string;
+  /** The amount attributable to the current scope — `grossValue × share`. */
+  value: number;
+  /** The item's full worth, before ownership share. Defaults to `value`. */
+  grossValue?: number;
+  /** Percentage of the item owned by the current scope (0–100). */
+  share?: number;
+}
 
 const money = (n: number) => `${n < 0 ? "-" : ""}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
 const money2 = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+
+/** How many breakdown rows fit before the card summarises the remainder. */
+const BREAKDOWN_ROW_LIMIT = 8;
+
+/**
+ * A balance-sheet summary card whose header total always reconciles with what
+ * is on screen.
+ *
+ * Two audit findings met here:
+ *
+ *  D1 — a row showing an ownership-adjusted amount now says so. The balance
+ *  sheet reported "$250,000" for a house whose detail page says "$500,000";
+ *  both numbers were right (the sheet applies the 50% share) but nothing on
+ *  screen reconciled them, so "what is my house worth?" had two answers.
+ *
+ *  D2 — the header showed the FULL total while the list was silently capped at
+ *  8 rows, so a user could sum the rows and come up $223 short with no "other"
+ *  line and no footnote. The remainder is now an explicit row: visible count,
+ *  visible amount, and rows + remainder == header by construction.
+ */
+function BreakdownCard({ title, rows, total, tone, testId, rowTestPrefix, onSeeAll }: {
+  title: string;
+  rows: Breakdown[];
+  total: number;
+  tone: "pos" | "neg";
+  testId: string;
+  /** Row testid prefix, INCLUDING its trailing dash (e.g. "money-asset-"). */
+  rowTestPrefix: string;
+  onSeeAll?: () => void;
+}) {
+  const shown = rows.slice(0, BREAKDOWN_ROW_LIMIT);
+  const hidden = rows.slice(BREAKDOWN_ROW_LIMIT);
+  const hiddenTotal = hidden.reduce((s, r) => s + (Number(r.value) || 0), 0);
+  const chipClass = tone === "pos"
+    ? "bg-emerald-500/10 text-emerald-500"
+    : "bg-red-500/10 text-red-500";
+  const amountClass = tone === "neg" ? "text-red-500" : "";
+
+  return (
+    <Card className="p-4" data-testid={testId}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {title} · {money(total)}
+        </span>
+        <span className="text-[10px] text-muted-foreground tabular-nums">
+          {rows.length} {rows.length === 1 ? "item" : "items"}
+        </span>
+      </div>
+      <div className="divide-y divide-border/60">
+        {shown.map(r => {
+          // A share below 100 means the number shown is a slice of a larger
+          // value. Say which slice, and of what, right on the row.
+          const share = Number(r.share);
+          const gross = Number(r.grossValue);
+          const isPartial = Number.isFinite(share) && share > 0 && share < 100
+            && Number.isFinite(gross) && gross > 0;
+          return (
+            <Link key={r.id} href={`/profiles/${r.id}`}>
+              <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`${rowTestPrefix}${r.id}`}>
+                <span className={`text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded shrink-0 ${chipClass}`}>{r.type}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm truncate">{r.name}</div>
+                  {isPartial && (
+                    <div className="text-[10px] text-muted-foreground truncate" data-testid={`${rowTestPrefix}share-${r.id}`}>
+                      your {+share.toFixed(2)}% of {money(gross)}
+                    </div>
+                  )}
+                </div>
+                <span className={`text-sm font-semibold tabular-nums ${amountClass}`}>{money(r.value)}</span>
+              </div>
+            </Link>
+          );
+        })}
+        {hidden.length > 0 && (
+          <button
+            type="button"
+            onClick={() => onSeeAll?.()}
+            disabled={!onSeeAll}
+            className="w-full flex items-center gap-2 py-2 px-1 text-left rounded enabled:hover:bg-muted/40 enabled:cursor-pointer"
+            data-testid={`${testId}-remainder`}
+          >
+            <span className="flex-1 text-xs text-muted-foreground truncate">
+              +{hidden.length} more {hidden.length === 1 ? "item" : "items"}
+              {onSeeAll ? " · see all" : ""}
+            </span>
+            <span className={`text-xs font-semibold tabular-nums text-muted-foreground ${amountClass}`}>{money(hiddenTotal)}</span>
+          </button>
+        )}
+      </div>
+    </Card>
+  );
+}
 
 function Sparkline({ series }: { series: number[] }) {
   if (!series || series.length < 2) return null;
@@ -330,7 +433,7 @@ export function MoneyOverview(props: {
                     disabled={payingId === b.id}
                     onClick={() => onPayBill(b)}
                     data-testid={`money-pay-${b.id}`}
-                  >{payingId === b.id ? "…" : "Pay"}</Button>
+                  >{payingId === b.id ? "…" : MARK_PAID_LABEL}</Button>
                 </div>
               ))}
             </div>
@@ -364,40 +467,14 @@ export function MoneyOverview(props: {
       {(assetBreakdown.length > 0 || liabilityBreakdown.length > 0) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {assetBreakdown.length > 0 && (
-            <Card className="p-4" data-testid="money-assets">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Assets · {money(assets)}</span>
-              </div>
-              <div className="divide-y divide-border/60">
-                {assetBreakdown.slice(0, 8).map(a => (
-                  <Link key={a.id} href={`/profiles/${a.id}`}>
-                    <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-asset-${a.id}`}>
-                      <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 shrink-0">{a.type}</span>
-                      <span className="flex-1 text-sm truncate">{a.name}</span>
-                      <span className="text-sm font-semibold tabular-nums">{money(a.value)}</span>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </Card>
+            <BreakdownCard title="Assets" rows={assetBreakdown} total={assets}
+              tone="pos" testId="money-assets" rowTestPrefix="money-asset-"
+              onSeeAll={onOpenNetWorth} />
           )}
           {liabilityBreakdown.length > 0 && (
-            <Card className="p-4" data-testid="money-liabilities">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Liabilities · {money(liabilities)}</span>
-              </div>
-              <div className="divide-y divide-border/60">
-                {liabilityBreakdown.slice(0, 8).map(l => (
-                  <Link key={l.id} href={`/profiles/${l.id}`}>
-                    <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-liability-${l.id}`}>
-                      <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 shrink-0">{l.type}</span>
-                      <span className="flex-1 text-sm truncate">{l.name}</span>
-                      <span className="text-sm font-semibold tabular-nums text-red-500">{money(l.value)}</span>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </Card>
+            <BreakdownCard title="Liabilities" rows={liabilityBreakdown} total={liabilities}
+              tone="neg" testId="money-liabilities" rowTestPrefix="money-liability-"
+              onSeeAll={onOpenNetWorth} />
           )}
         </div>
       )}

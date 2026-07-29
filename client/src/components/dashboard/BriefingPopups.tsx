@@ -13,6 +13,7 @@ import { invalidateDomain } from "@/lib/cache-bus";
 import { addMonthsClamped, addYearsClamped, toISODate } from "@shared/date-math";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
+import { useMarkBillPaid, MARK_PAID_LABEL } from "@/lib/mark-bill-paid";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -194,11 +195,9 @@ export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: (
   const [editDue, setEditDue] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  const payBill = useMutation({
-    mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
-    onSuccess: () => { toast({ title: "Payment recorded" }); invalidateFinance(); },
-    onError: (e: any) => toast({ title: "Payment failed", description: e?.message, variant: "destructive" }),
-  });
+  // Shared hook: same endpoint, but the success toast carries a working Undo
+  // (audit finding P1 — this surface used to record a payment irreversibly).
+  const { markPaid, isPending: payPending } = useMarkBillPaid();
   const skipBill = useMutation({
     mutationFn: async (b: any) => {
       const due = String(b.dueDate || b.nextDueDate || "").slice(0, 10);
@@ -316,7 +315,7 @@ export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: (
                 </div>
               ) : (
                 <div className="flex items-center flex-wrap gap-1.5 pt-1">
-                  <ActionBtn label="Mark as paid" icon={Check} disabled={payBill.isPending} onClick={() => payBill.mutate(b.id)} testId={`popup-pay-${b.id}`} />
+                  <ActionBtn label={MARK_PAID_LABEL} icon={Check} disabled={payPending} onClick={() => markPaid(b)} testId={`popup-pay-${b.id}`} />
                   <ActionBtn label="Skip payment" icon={RefreshCw} disabled={skipBill.isPending} onClick={() => skipBill.mutate(b)} testId={`popup-skip-${b.id}`} />
                   <ActionBtn label="Edit" icon={Pencil} onClick={() => { setEditId(b.id); setEditAmount(String(b.amount ?? "")); setEditDue(due); }} testId={`popup-edit-${b.id}`} />
                   <ActionBtn label="Delete" icon={Trash2} danger onClick={() => setConfirmDeleteId(b.id)} testId={`popup-delete-${b.id}`} />

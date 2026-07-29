@@ -16,6 +16,7 @@ import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from 
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
+import { useMarkBillPaid, MARK_PAID_LABEL } from "@/lib/mark-bill-paid";
 import { ChevronDown } from "lucide-react";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import {
@@ -278,16 +279,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     return () => clearTimeout(t);
   }, [anyBriefPending]);
 
-  const payBill = useMutation({
-    mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
-    onSuccess: () => {
-      toast({ title: "Payment recorded" });
-      // Cache bus: obligations domain also refreshes stats/cashflow/loans so
-      // every linked surface updates in one shot.
-      invalidateDomain("obligations");
-    },
-    onError: () => toast({ title: "Payment failed", variant: "destructive" }),
-  });
+  // Recording a payment goes through the shared hook so this card offers the
+  // same working Undo as every other surface. It previously fired a bare
+  // "Payment recorded" toast with no way back (audit finding P1).
+  const { markPaid, isPending: payPending } = useMarkBillPaid();
 
   // ── Derivations ─────────────────────────────────────────────────────────────
   const pending = (tasks || []).filter((t: any) => t.status !== "done");
@@ -798,19 +793,21 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   {/* Two-tap pay (2026-07-29 tester report: rapid clicks landed
                       on re-sorted rows and paid Netflix/Gas by accident). The
                       first tap arms THIS bill id; only a second tap on the SAME
-                      id records the payment — a shifted list can't misdirect it. */}
+                      id records the payment — a shifted list can't misdirect it.
+                      The label says "Mark paid", not "Pay": this records that a
+                      payment happened, it does not move any money. */}
                   <button
                     onClick={() => {
-                      if (armedPayId === b.id) { setArmedPayId(null); payBill.mutate(b.id); }
+                      if (armedPayId === b.id) { setArmedPayId(null); markPaid(b); }
                       else setArmedPayId(b.id);
                     }}
-                    disabled={payBill.isPending}
+                    disabled={payPending}
                     className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded border shrink-0 ${
                       armedPayId === b.id
                         ? "border-emerald-500 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
                         : "border-border hover:bg-muted"}`}
                     data-testid={`brief-pay-${b.id}`}
-                  >{armedPayId === b.id ? `Pay $${Number(b.amount).toLocaleString()}?` : "Pay"}</button>
+                  >{armedPayId === b.id ? `Mark $${Number(b.amount).toLocaleString()} paid?` : MARK_PAID_LABEL}</button>
                 </div>
               ))}
             </div>

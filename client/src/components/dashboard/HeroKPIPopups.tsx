@@ -439,6 +439,13 @@ function EntityList({
         // not "% of total" — the old formula produced 200% on a 50%-owned home.
         const rowValue = Number(p.value ?? p._value ?? 0);
         const sharePct = Number.isFinite(Number(p.share)) ? Math.round(Number(p.share)) : 100;
+        // "50% owned" told the user the row was a share but not a share OF
+        // WHAT, so the item's own detail page still looked like a contradiction
+        // (audit finding D1). Naming the full value makes the two agree.
+        const grossValue = Number(p.grossValue ?? 0);
+        const shareNote = sharePct >= 100 ? ""
+          : grossValue > 0 ? `${sharePct}% of $${fmt(grossValue)}`
+          : `${sharePct}% owned`;
         return (
           <button
             key={p.id}
@@ -456,7 +463,7 @@ function EntityList({
             </div>
             <div className="text-right shrink-0">
               <p className="text-xs font-semibold tabular-nums">${fmt(rowValue)}</p>
-              <p className="text-[10px] text-muted-foreground tabular-nums">{sharePct < 100 ? `${sharePct}% owned` : ""}</p>
+              <p className="text-[10px] text-muted-foreground tabular-nums" data-testid={`entity-row-share-${p.id}`}>{shareNote}</p>
             </div>
             <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
           </button>

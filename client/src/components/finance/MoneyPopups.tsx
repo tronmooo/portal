@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import type { MoneyBill } from "@/components/finance/MoneyOverview";
+import { MARK_PAID_LABEL } from "@/lib/mark-bill-paid";
 
 const fmt = (n: number) => Math.round(Math.abs(n)).toLocaleString("en-US");
 const signed = (n: number) => `${n < 0 ? "-" : "+"}$${fmt(n)}`;
@@ -575,7 +576,7 @@ export function BillsDuePopup({
                           <Button size="sm" variant={b.status === "overdue" ? "destructive" : "outline"}
                             className="h-7 text-xs shrink-0" disabled={payingId === b.id}
                             onClick={() => onPayBill(b)} data-testid={`bill-pay-${b.id}`}>
-                            {payingId === b.id ? "…" : "Pay"}
+                            {payingId === b.id ? "…" : MARK_PAID_LABEL}
                           </Button>
                         )}
                       </div>

@@ -38,6 +38,7 @@ import { Link } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
+import { useMarkBillPaid } from "@/lib/mark-bill-paid";
 import { useToast } from "@/hooks/use-toast";
 import type { Expense } from "@shared/schema";
 import {
@@ -88,6 +89,28 @@ function buildCashTrend(expenses: any[], monthlyIncome: number): Array<{ month: 
     const outflow = Math.round(outByMonth[m.key] || 0);
     return { month: m.label, inflow: Math.round(monthlyIncome), outflow, net: Math.round(monthlyIncome) - outflow };
   });
+}
+
+/**
+ * Carry a balance-sheet row from the server snapshot to the view WITHOUT
+ * discarding what makes its number explicable.
+ *
+ * The server already computes `grossValue` (the item's full worth), `share`
+ * (the percentage attributable to the current scope) and `value`
+ * (grossValue × share). This mapper used to keep only `value`, so a 50%-owned
+ * house rendered as a bare "$250,000" here while its own detail page said
+ * "$500,000" — the same record showing two different numbers with nothing on
+ * screen reconciling them (audit finding D1). Both figures are correct; only
+ * the label was missing. Passing the share through lets the row say so.
+ */
+function toBreakdownRow(r: any) {
+  const gross = Number(r?.grossValue ?? r?.value ?? 0);
+  const value = Number(r?.value ?? r?.grossValue ?? 0);
+  // Treat a missing share as whole ownership — the pre-ownership snapshots and
+  // the "everyone" household total both legitimately omit it.
+  const rawShare = Number(r?.share);
+  const share = Number.isFinite(rawShare) && rawShare > 0 ? rawShare : 100;
+  return { id: r?.id, name: r?.name, type: r?.type, value, grossValue: gross, share };
 }
 
 /** Order profile-picker options: self ("Me") pinned first, everyone else A→Z. */
@@ -719,18 +742,10 @@ export default function FinancePage() {
     queryFn: () => apiRequest("GET", `/api/net-worth/history${profileParam}${profileParam ? "&" : "?"}lookbackDays=120`).then(r => r.json()).catch(() => []),
   });
 
-  // Pay a bill straight from the Finance "Bills · next 14d" card — same
-  // endpoint + optimistic pattern as ObligationsManager.payMut.
-  const payBillMut = useMutation<void, Error, { id: string; amount: number }>({
-    mutationFn: async ({ id }) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
-    onSuccess: () => {
-      toast({ title: "Payment recorded" });
-      invalidateDomain("obligations");
-      // No bus domain maps the calendar timeline to obligations — keep explicit.
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-    },
-    onError: (err) => toast({ title: "Failed to record payment", description: formatApiError(err), variant: "destructive" }),
-  });
+  // Record a bill payment from the Finance "Bills · next 14d" card. Shared
+  // hook, so the toast carries a working Undo and the invalidation set matches
+  // every other surface (audit finding P1).
+  const { markPaid, pendingId: payPendingId } = useMarkBillPaid();
 
   // ── Cashflow upsert mutation (POST /api/cashflow) ────────────────────────
   // RACE FIX: payload passed as variables — see addExpenseMutation comment.
@@ -1172,12 +1187,12 @@ export default function FinancePage() {
             incomeSeries={incomeSeries}
             billsSeries={billsSeries}
             alerts={alerts}
-            assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
-            liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map((l: any) => ({ id: l.id, name: l.name, type: l.type, value: Number(l.value ?? l.grossValue ?? 0) })) : []}
+            assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map(toBreakdownRow) : []}
+            liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map(toBreakdownRow) : []}
             monthLabel={monthLabel}
             onAddExpense={() => setAddOpen(true)}
-            onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
-            payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null}
+            onPayBill={(bill) => markPaid(bill)}
+            payingId={payPendingId}
             onOpenNetWorth={() => setFinancePopup("networth")}
             onOpenCashFlow={() => setFinancePopup("cashflow")}
             onOpenBudget={() => setFinancePopup("budget")}
@@ -1224,8 +1239,8 @@ export default function FinancePage() {
               incomes={incomes || []} monthlyIncome={monthlyIncome} />
             <BillsDuePopup open={financePopup === "bills"} onOpenChange={closer}
               bills={upcomingBills}
-              onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
-              payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null} />
+              onPayBill={(bill) => markPaid(bill)}
+              payingId={payPendingId} />
             <SavingsRatePopup open={financePopup === "savings"} onOpenChange={closer}
               incomeMtd={monthlyIncome} spendMtd={spendMtd} />
             <CashFlowOverviewPopup open={financePopup === "overview"} onOpenChange={closer}
