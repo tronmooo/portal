@@ -521,7 +521,15 @@ function RouteTitle() {
       "/health": "Wellness — Portol",
       "/wellness": "Wellness — Portol",
       "/trackers": "Trackers — Portol",
-      "/linked": "Linked — Portol",
+      // "Linked" is an internal word for a route, not a place the user was
+      // ever taught. The tab decides the title below; this is the bare
+      // fallback. `/liabilities` had no entry at all, so that page kept
+      // whatever title the previous route left behind — it showed "Trackers"
+      // during the audit (finding P3).
+      "/linked": "Assets & Documents — Portol",
+      "/liabilities": "Debts — Portol",
+      "/assets": "Assets — Portol",
+      "/documents": "Documents — Portol",
       "/profiles": "Profiles — Portol",
       "/profiles/list": "Profiles — Portol",
       "/calendar": "Calendar — Portol",
@@ -537,7 +545,22 @@ function RouteTitle() {
       "/privacy": "Privacy — Portol",
       "/terms": "Terms — Portol",
     };
+    // `/linked?tab=assets` and `/linked?tab=documents` are different places to
+    // the user, so they must not share one browser-tab title. The nav sends
+    // people to these with labels ("Assets", "Documents") that the title then
+    // contradicted by saying "Linked" (audit finding P3).
     let title = map[path];
+    if (path === "/linked") {
+      const tab = new URLSearchParams(location.split("?")[1] || "").get("tab");
+      const byTab: Record<string, string> = {
+        assets: "Assets — Portol",
+        documents: "Documents — Portol",
+        liabilities: "Debts — Portol",
+        trackers: "Trackers — Portol",
+        profiles: "Assets — Portol",
+      };
+      if (tab && byTab[tab]) title = byTab[tab];
+    }
     if (!title) {
       if (path.startsWith("/profiles/") || path.startsWith("/profile/")) title = "Profile — Portol";
       else if (path.startsWith("/documents/")) title = "Document — Portol";
@@ -756,6 +779,13 @@ function AppRouter() {
         <Route path="/trackers" component={TrackersPage} />
         <Route path="/linked" component={TrackersPage} />
         <Route path="/liabilities" component={TrackersPage} />
+        {/* Assets and Documents are top-level destinations in the nav, so they
+            get top-level routes. They were reachable only as `/linked?tab=…`,
+            which meant typing or bookmarking `/#/assets` hit "Page not found"
+            (audit finding P3). `/documents/:id` still matches its own route —
+            wouter paths are exact. */}
+        <Route path="/assets" component={TrackersPage} />
+        <Route path="/documents" component={TrackersPage} />
         {/* Info tab. No id → the combined "everyone" Info view (replaces the
             retired profiles grid). */}
         <Route path="/profiles" component={ProfileInfoPage} />

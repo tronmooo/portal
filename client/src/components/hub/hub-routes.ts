@@ -34,9 +34,13 @@ export const HUB_TABS: HubTab[] = [
   { id: "trackers",    label: "Trackers",    route: "/trackers" },
   { id: "finance",     label: "Finance",     route: "/dashboard/finance" },
   { id: "wellness",    label: "Wellness",    route: "/wellness" },
-  { id: "assets",      label: "Assets",      route: "/linked?tab=assets" },
+  // Assets and Documents point at their own routes. As `/linked?tab=…` the
+  // browser title read "Linked" — a word the user is never taught — and
+  // `/#/assets` typed or bookmarked hit "Page not found" (audit finding P3).
+  // The query form still resolves, so old links keep working.
+  { id: "assets",      label: "Assets",      route: "/assets" },
   { id: "liabilities", label: "Liabilities", route: "/liabilities" },
-  { id: "documents",   label: "Documents",   route: "/linked?tab=documents" },
+  { id: "documents",   label: "Documents",   route: "/documents" },
   { id: "info",        label: "Info",        route: "/profiles" },
 ];
 
@@ -88,6 +92,8 @@ export function activeHubTab(location: string, selectedIds: string[] = []): HubT
   if (path === "/dashboard/finance" || path === "/finance") return "finance";
   if (path === "/wellness" || path === "/health" || path === "/dashboard/health") return "wellness";
   if (path === "/liabilities") return "liabilities";
+  if (path === "/assets") return "assets";
+  if (path === "/documents") return "documents";
   if (path === "/profiles") return "info";
 
   // Lightweight Info page for a specific profile.
@@ -125,6 +131,8 @@ export function isHubRoute(location: string): boolean {
     path === "/trackers" ||
     path === "/linked" ||
     path === "/liabilities" ||
+    path === "/assets" ||
+    path === "/documents" ||
     path === "/health" ||
     path === "/wellness" ||
     path === "/profiles"

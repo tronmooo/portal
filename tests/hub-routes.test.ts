@@ -43,6 +43,69 @@ describe("activeHubTab", () => {
     expect(activeHubTab("/linked")).toBeNull();
   });
 
+  // Audit 2026-07-29, finding P3: "Nav labels don't match destinations, and
+  // two routes 404." The Assets and Documents chips navigated to
+  // `/linked?tab=…`, whose browser title read "Linked" — a word the user is
+  // never taught — while typing or bookmarking `/#/assets` hit "Page not
+  // found".
+  describe("assets and documents are real routes (P3)", () => {
+    it("activates its chip from the clean path", () => {
+      expect(activeHubTab("/assets")).toBe("assets");
+      expect(activeHubTab("/documents")).toBe("documents");
+    });
+
+    it("still honours the old query form so existing links survive", () => {
+      expect(activeHubTab("/linked?tab=assets")).toBe("assets");
+      expect(activeHubTab("/linked?tab=documents")).toBe("documents");
+    });
+
+    it("navigates the chips to the clean routes, not the query form", () => {
+      const byId = Object.fromEntries(HUB_TABS.map(t => [t.id, t.route]));
+      expect(byId.assets).toBe("/assets");
+      expect(byId.documents).toBe("/documents");
+    });
+
+    it("renders the hub shell on the new routes", () => {
+      expect(isHubRoute("/assets")).toBe(true);
+      expect(isHubRoute("/documents")).toBe(true);
+    });
+
+    it("does not swallow a document detail page", () => {
+      // /documents/:id is its own route; it must not light the Documents chip
+      // or be mistaken for the list.
+      expect(activeHubTab("/documents/abc123")).toBeNull();
+    });
+
+    it("App.tsx actually registers them, so they cannot 404", () => {
+      const app = fs.readFileSync(path.join(process.cwd(), "client/src/App.tsx"), "utf8");
+      expect(app).toMatch(/<Route\s+path="\/assets"/);
+      expect(app).toMatch(/<Route\s+path="\/documents"/);
+    });
+
+    it("every hub tab route is registered in App.tsx", () => {
+      // A chip pointing at an unregistered path is precisely the 404 this
+      // finding is about, so check the whole set rather than these two.
+      const app = fs.readFileSync(path.join(process.cwd(), "client/src/App.tsx"), "utf8");
+      for (const tab of HUB_TABS) {
+        const p = tab.route.split("?")[0];
+        expect(app, `${tab.id} route ${p} must be registered`)
+          .toContain(`path="${p}"`);
+      }
+    });
+
+    it("gives each destination its own browser title", () => {
+      // The title is what a bookmark and a browser tab are named. "Linked"
+      // named neither of the two pages it was applied to.
+      const app = fs.readFileSync(path.join(process.cwd(), "client/src/App.tsx"), "utf8");
+      expect(app).toContain('"/assets": "Assets — Portol"');
+      expect(app).toContain('"/documents": "Documents — Portol"');
+      // /liabilities had no entry at all, so it inherited the previous page's
+      // title — the audit saw "Trackers" there.
+      expect(app).toMatch(/"\/liabilities":\s*"/);
+      expect(app).not.toContain('"/linked": "Linked — Portol"');
+    });
+  });
+
   it("Info is active on the SELECTED profile's Info page only", () => {
     expect(activeHubTab("/profiles/abc/info", ["abc"])).toBe("info");
     expect(activeHubTab("/profiles/other/info", ["abc"])).toBeNull();

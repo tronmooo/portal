@@ -5749,6 +5749,11 @@ export default function TrackersPage() {
     const p = (path || "").toLowerCase();
     if (p.startsWith("/trackers") || p.startsWith("/dashboard/health") || p.startsWith("/health")) return "trackers";
     if (p.startsWith("/liabilities")) return "liabilities";
+    // Real routes for the two sections that were only reachable as
+    // `/linked?tab=…`. Typing `/#/assets` or `/#/documents` used to 404, so
+    // bookmarks and shared links to them broke (audit finding P3).
+    if (p.startsWith("/assets")) return "profiles";
+    if (p.startsWith("/documents")) return "documents";
     return "all";
   };
   const getQuerySection = (): "all" | "profiles" | "liabilities" | "documents" | "trackers" | null => {

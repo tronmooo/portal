@@ -13140,8 +13140,11 @@ export default function ProfileDetailPage() {
 
   const linkedTypes = ["vehicle", "asset", "subscription", "loan", "investment", "property", "insurance"];
   const isLinkedType = linkedTypes.includes(profile.type);
-  const backHref = isLinkedType ? "/trackers" : "/profiles";
-  const backLabel = isLinkedType ? "Back to Linked" : "Back to Profiles";
+  // The label said "Back to Linked" and the link went to /trackers — a name
+  // the user has never seen pointing at a page they did not come from (audit
+  // finding P3). Assets now have a real route, so label and destination match.
+  const backHref = isLinkedType ? "/assets" : "/profiles";
+  const backLabel = isLinkedType ? "Back to Assets" : "Back to Profiles";
 
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="page-profile-detail">
