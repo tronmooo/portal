@@ -146,6 +146,8 @@ export default defineConfig({
       'tests/tracker-entry-write-verification.test.ts',
       'tests/self-profile-race.test.ts',
       'tests/qa-2026-07-29-regressions.test.ts',
+      'tests/qa-2026-07-29-routes.test.ts',
+      'tests/qa-2026-07-29-ui.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

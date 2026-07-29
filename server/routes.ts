@@ -5833,7 +5833,11 @@ Rules:
   app.delete("/api/reminders/:id", asyncHandler(async (req, res) => {
     // Read the row BEFORE deleting: the mirrored calendar event is matched by
     // title + fire date, which are gone once the reminder is.
-    const before = (await storage.listReminders()).find(r => r.id === req.params.id);
+    // Snapshot before deleting — the mirror is matched by title + fire date,
+    // both of which are gone once the row is. Copying (rather than holding a
+    // reference) keeps this correct whatever the storage layer does to the row.
+    const prior = (await storage.listReminders()).find(r => r.id === req.params.id);
+    const before = prior ? { title: prior.title, fireAt: prior.fireAt } : undefined;
     const ok = await storage.deleteReminder(req.params.id);
     if (!ok) return res.status(404).json({ error: "Reminder not found" });
     // A reminder deleted here must not come back from the calendar mirror the
@@ -5870,7 +5874,13 @@ Rules:
     if (Object.keys(patch).length === 0) {
       return res.status(400).json({ error: "No supported fields to update" });
     }
-    const before = (await storage.listReminders()).find(r => r.id === req.params.id);
+    // SNAPSHOT, not a reference. The mirror is located by the reminder's OLD
+    // title and OLD fire date, so this value has to survive the update — and a
+    // storage layer that updates its row in place would otherwise hand us the
+    // same object and we'd search for the mirror at the new date and find
+    // nothing. Copy the two fields we need before anything mutates.
+    const prior = (await storage.listReminders()).find(r => r.id === req.params.id);
+    const before = prior ? { title: prior.title, fireAt: prior.fireAt } : undefined;
     const updated = await storage.updateReminder(req.params.id, patch);
     if (!updated) return res.status(404).json({ error: "Reminder not found" });
     // Carry the mirrored calendar entry to the new title/time instead of
