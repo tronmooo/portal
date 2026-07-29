@@ -1,11 +1,37 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation";
 import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-keys";
+import { getProfileFilterSnapshot } from "./profileFilter";
+import { ACTIVE_PROFILE_HEADER } from "@shared/active-scope";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
 /** Detect browser timezone once and reuse across all requests */
 export const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles';
+
+/**
+ * The profile scope the user is looking at RIGHT NOW, sent on every request.
+ *
+ * QA report 2026-07-29 PROP-005: with `Mike` selected, Add Expense wrote the
+ * row into the self profile's ledger. Each create surface resolved the owner
+ * on its own — so any surface that forgot (or whose profile list hadn't loaded
+ * yet) silently fell back to self, and the row landed in the wrong person's
+ * ledger with no error. Carrying the scope on the wire lets the server apply
+ * the invariant once, for every writer, instead of trusting N call sites.
+ *
+ * Read straight from the store snapshot: the header always reflects the same
+ * value `useProfileScope()` is rendering, with no extra subscription to keep
+ * in sync.
+ */
+function activeProfileHeader(): Record<string, string> {
+  try {
+    const snap = getProfileFilterSnapshot();
+    if (snap.mode !== "selected" || snap.selectedIds.length === 0) return {};
+    return { [ACTIVE_PROFILE_HEADER]: snap.selectedIds.join(",") };
+  } catch {
+    return {}; // store not ready (SSR/tests) — server keeps its old defaulting
+  }
+}
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -48,7 +74,7 @@ export async function apiRequest(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const headers: Record<string, string> = { "X-Timezone": BROWSER_TIMEZONE };
+    const headers: Record<string, string> = { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader() };
     if (data) headers["Content-Type"] = "application/json";
     const res = await fetch(`${API_BASE}${url}`, {
       method,
@@ -87,7 +113,7 @@ export const getQueryFn: <T>(options: {
     let res: Response;
     try {
       res = await window.fetch(`${API_BASE}${url}`, {
-        headers: { "X-Timezone": BROWSER_TIMEZONE },
+        headers: { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader() },
         signal: ctrl.signal,
       });
     } finally {

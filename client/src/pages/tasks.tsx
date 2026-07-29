@@ -6,6 +6,7 @@ import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
+import { formatStoredDate, farFutureWarning } from "@/lib/dates";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent } from "@/components/ui/card";
@@ -156,7 +157,12 @@ function TaskDialog({
         );
       }
       invalidateTaskQueries();
-      toast({ title: isEdit ? `"${title.trim()}" updated` : `"${title.trim()}" created`, description: dueDate ? `Due ${new Date(dueDate + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : undefined });
+      // `warning` is set when the server stripped unsafe markup from the title
+      // or description — surface it instead of silently changing their text.
+      toast({
+        title: isEdit ? `"${title.trim()}" updated` : `"${title.trim()}" created`,
+        description: (data as any)?.warning || (dueDate ? `Due ${formatStoredDate(dueDate)}` : undefined),
+      });
     },
     onError: (err: Error, _v, ctx) => {
       if (ctx?.prev) { for (const [k, d] of ctx.prev) queryClient.setQueryData(k, d); }
@@ -223,6 +229,14 @@ function TaskDialog({
                 onChange={e => setDueDate(e.target.value)}
                 data-testid="input-task-due-date"
               />
+              {/* A due date a century out is a mistyped year, not a plan
+                  (QA 2026-07-29 EDGE-004). Warn, don't block — someone may
+                  genuinely be tracking a 30-year bond. */}
+              {farFutureWarning(dueDate) && (
+                <p className="text-xs text-amber-600 dark:text-amber-500" data-testid="warn-task-due-date">
+                  {farFutureWarning(dueDate)}
+                </p>
+              )}
             </div>
           </div>
           <div className="space-y-1">
@@ -422,12 +436,9 @@ function TaskItem({
               {task.dueDate && (
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   <Calendar className="h-3 w-3" />
-                  {(() => {
-                    // Parse as local date to avoid off-by-one from UTC conversion
-                    const raw = task.dueDate.slice(0, 10); // "YYYY-MM-DD"
-                    const d = new Date(raw + "T00:00:00");
-                    return isNaN(d.getTime()) ? task.dueDate : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-                  })()}
+                  {/* One formatter, shared with every other due-date surface:
+                      never shifts a day, always shows a non-current year. */}
+                  {formatStoredDate(task.dueDate) || task.dueDate}
                 </span>
               )}
               {/* BUG-TSK-002: tags must wrap and never truncate */}

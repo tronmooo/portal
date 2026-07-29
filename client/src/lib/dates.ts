@@ -87,6 +87,54 @@ export function daysFromToday(input: unknown): number | null {
   return Math.round((target.getTime() - today.getTime()) / 86400000);
 }
 
+/**
+ * The one renderer for a stored due/target date.
+ *
+ * Two defects it closes, both from the QA report of 2026-07-29:
+ *
+ *   CRUD-T1-001 — a task due TODAY showed yesterday's date in the list while
+ *   the calendar showed the right day. Formatting a stored date has to start
+ *   from the calendar date the row actually carries, not from a `Date` built by
+ *   an engine that may read the string as UTC. So: take the YYYY-MM-DD prefix
+ *   and format THOSE numbers. There is no instant in the middle to shift.
+ *
+ *   EDGE-004 — a task due 12/31/2126 rendered as "Dec 31", indistinguishable
+ *   from this year. The year is always shown when it isn't the current one.
+ *
+ * Accepts a bare date, an ISO timestamp, or a Date. Returns "" for junk.
+ */
+export function formatStoredDate(input: unknown): string {
+  const raw = input instanceof Date
+    ? `${input.getFullYear()}-${String(input.getMonth() + 1).padStart(2, "0")}-${String(input.getDate()).padStart(2, "0")}`
+    : String(input ?? "").slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!m) return "";
+  const [, y, mo, d] = m;
+  const year = Number(y);
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const month = MONTHS[Number(mo) - 1];
+  if (!month) return "";
+  const day = Number(d);
+  return year === new Date().getFullYear() ? `${month} ${day}` : `${month} ${day}, ${year}`;
+}
+
+/**
+ * How far out a date may plausibly be before a form should say something.
+ * A due date a century away is a typo far more often than a plan (EDGE-004
+ * entered 12/31/2126 and it saved without a murmur).
+ */
+export const PLAUSIBLE_YEARS_AHEAD = 10;
+
+/** A human warning when a date is implausibly far out, else "". */
+export function farFutureWarning(input: unknown): string {
+  const raw = String(input ?? "").slice(0, 10);
+  const m = /^(\d{4})-\d{2}-\d{2}$/.exec(raw);
+  if (!m) return "";
+  const yearsOut = Number(m[1]) - new Date().getFullYear();
+  if (yearsOut <= PLAUSIBLE_YEARS_AHEAD) return "";
+  return `That's ${yearsOut} years from now — check the year.`;
+}
+
 /** Compact label: "Today", "Tomorrow", "in 4d", "3d ago", "May 24". */
 export function relativeDayLabel(input: unknown): string {
   const diff = daysFromToday(input);

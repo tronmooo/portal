@@ -18,8 +18,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Loader2, Receipt, ArrowDownToLine, CreditCard, StickyNote, Bell } from "lucide-react";
 import {
   buildExpensePayload, buildIncomePayload, buildBillPayload, buildNotePayload, buildReminderPayload,
-  type BuildResult,
+  parseAmount, type BuildResult,
 } from "@shared/quick-add";
+import { LARGE_TRANSACTION_AMOUNT } from "@shared/schema";
+import { useActiveCreateProfileId } from "@/hooks/useProfileScope";
 
 export type QuickAddKind = "expense" | "income" | "bill" | "note" | "reminder";
 
@@ -99,7 +101,17 @@ export function QuickAddDialog({
     [profiles],
   );
 
-  const owner = profileId || ownerProfileId || undefined;
+  // Owner resolution, most specific first:
+  //   1. what the user picked in this dialog
+  //   2. what the opening surface passed in
+  //   3. the profile currently in scope (the LAST line of defence — QA
+  //      2026-07-29 PROP-005: a surface that resolved (2) before its profile
+  //      list loaded passed "", and the row silently landed on the self
+  //      profile instead of the one the user was looking at)
+  // The server applies the same rule from the active-scope header, so a
+  // create can no longer land in someone else's ledger by omission.
+  const scopeOwnerId = useActiveCreateProfileId(profiles);
+  const owner = profileId || ownerProfileId || scopeOwnerId || undefined;
   const result: BuildResult = useMemo(() => {
     switch (kind) {
       case "expense": return cfg.build({ description: text1, amount, category, vendor, date }, owner);
@@ -116,8 +128,14 @@ export function QuickAddDialog({
       const res = await apiRequest("POST", cfg.endpoint, result.body);
       return res.json();
     },
-    onSuccess: () => {
-      toast({ title: `${cfg.successNoun} added`, description: text1.trim().slice(0, 60) });
+    onSuccess: (saved: any) => {
+      // The server strips unsafe markup. If it did, say so rather than letting
+      // the user discover later that their text is not what they typed.
+      if (saved?.warning) {
+        toast({ title: `${cfg.successNoun} added`, description: saved.warning });
+      } else {
+        toast({ title: `${cfg.successNoun} added`, description: text1.trim().slice(0, 60) });
+      }
       // Everything finance/dashboard is derived — refresh every /api surface
       // via the cache bus's nuclear domain (same predicate, one shot).
       invalidateDomain("everything");
@@ -126,8 +144,19 @@ export function QuickAddDialog({
     onError: (e: any) => toast({ title: "Couldn't save", description: e?.message || "Try again", variant: "destructive" }),
   });
 
+  // A big-but-legal amount is far more often a stray zero than a real
+  // transaction (QA 2026-07-29 EDGE-001 typed `1e10` and it saved silently).
+  // Amounts over the ceiling are rejected outright by the builder; this is the
+  // "are you sure?" band below it — standard practice in finance apps.
+  const needsLargeAmountConfirm =
+    (kind === "expense" || kind === "income" || kind === "bill") &&
+    parseAmount(amount) > LARGE_TRANSACTION_AMOUNT;
+  const [confirmedLarge, setConfirmedLarge] = useState(false);
+  useEffect(() => { setConfirmedLarge(false); }, [amount]);
+
   const submit = () => {
     setAttempted(true);
+    if (needsLargeAmountConfirm && !confirmedLarge) { setConfirmedLarge(true); return; }
     if (result.ok && !mut.isPending) mut.mutate();
   };
   const onKey = (e: React.KeyboardEvent) => { if (e.key === "Enter" && kind !== "note") submit(); };
@@ -216,18 +245,32 @@ export function QuickAddDialog({
 
           {showProfile && profileOptions.length > 0 && (
             <div className="space-y-1">
-              <Label className="text-xs">Profile</Label>
+              {/* "Profile" read as the app-wide profile-scope control and was
+                  mistaken for it (QA 2026-07-29 PROP-005). It is the OWNER of
+                  this one record — say so, and say where it lands. */}
+              <Label className="text-xs">Whose is this?</Label>
               <Select value={owner || ""} onValueChange={setProfileId}>
                 <SelectTrigger className="h-9 text-sm" data-testid={`select-quick-add-${kind}-profile`}><SelectValue placeholder="Profile" /></SelectTrigger>
                 <SelectContent>
                   {profileOptions.map((p: any) => <SelectItem key={p.id} value={p.id}>{p.type === "self" ? "Me" : p.name}</SelectItem>)}
                 </SelectContent>
               </Select>
+              <p className="text-[11px] text-muted-foreground">
+                Saved to {profileOptions.find((p: any) => p.id === owner)?.type === "self"
+                  ? "your"
+                  : `${profileOptions.find((p: any) => p.id === owner)?.name || "this profile"}'s`} records.
+              </p>
             </div>
           )}
 
           {attempted && !result.ok && (
             <p className="text-xs text-destructive" data-testid={`error-quick-add-${kind}`}>{result.error}</p>
+          )}
+
+          {needsLargeAmountConfirm && confirmedLarge && result.ok && (
+            <p className="text-xs text-amber-600 dark:text-amber-500" data-testid={`warn-quick-add-${kind}-large`}>
+              That's ${parseAmount(amount).toLocaleString("en-US")}. Save again to confirm.
+            </p>
           )}
 
           <div className="flex gap-2 justify-end pt-1">

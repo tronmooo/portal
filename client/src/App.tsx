@@ -544,7 +544,11 @@ function RouteTitle() {
       else if (path.startsWith("/editor/")) title = "Editor — Portol";
       else if (path.startsWith("/share/")) title = "Shared — Portol";
     }
-    if (title) document.title = title;
+    // Fall back to the product name rather than leaving the PREVIOUS page's
+    // title in the tab (QA 2026-07-29 UX-018). An unmapped route used to keep
+    // whatever was there before, so the tab claimed to be a page the user had
+    // already navigated away from — and browser history recorded it that way.
+    document.title = title || "Portol";
   }, [location]);
   return null;
 }

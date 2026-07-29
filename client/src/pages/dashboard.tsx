@@ -89,6 +89,7 @@ import {
   Zap, Receipt, StickyNote, ArrowDownToLine,
 } from "lucide-react";
 import { useShowTestData, toggleShowTestData } from "@/lib/showTestData";
+import { devToolsEnabled } from "@/lib/dev-affordances";
 import { isTestEntity } from "@shared/test-data";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
@@ -5336,6 +5337,8 @@ export default function DashboardPage() {
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   // Whether synthetic test/QA rows are shown (point 11). Default off.
   const showTestData = useShowTestData();
+  // Whether this build may render developer/QA-only menu items at all.
+  const devTools = useMemo(() => devToolsEnabled(), []);
   // Keep dashboard filter state in lockstep with the global filter store — prevents
   // multi-profile selections from silently collapsing if a child component's onChange
   // is stale or batched.
@@ -5781,21 +5784,31 @@ export default function DashboardPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setChatgptImportOpen(true)} data-testid="btn-refresh-from-chatgpt">
-                <Sparkles className="h-4 w-4 mr-2" /> Refresh from ChatGPT
-              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setCustomizeOpen(true)} data-testid="btn-customize">
                 <Settings className="h-4 w-4 mr-2" /> Customize
               </DropdownMenuItem>
+              {/* Export / Import stay: data portability is a user feature. */}
               <DropdownMenuItem onClick={handleExport} data-testid="btn-export">
                 <Download className="h-4 w-4 mr-2" /> Export Data
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setImportOpen(true)} data-testid="btn-import">
                 <UploadCloud className="h-4 w-4 mr-2" /> Import Backup
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => toggleShowTestData()} data-testid="btn-toggle-test-data">
-                <FlaskConical className="h-4 w-4 mr-2" /> {showTestData ? "Hide test data" : "Show test data"}
-              </DropdownMenuItem>
+              {/* Dev/QA only (QA 2026-07-29 UX-002). "Show test data" mixes
+                  synthetic suite rows into real money and health numbers with
+                  no visual distinction, and the ChatGPT re-import is a one-off
+                  migration tool — neither belongs in a normal user's menu.
+                  See lib/dev-affordances.ts for how to enable them. */}
+              {devTools && (
+                <>
+                  <DropdownMenuItem onClick={() => setChatgptImportOpen(true)} data-testid="btn-refresh-from-chatgpt">
+                    <Sparkles className="h-4 w-4 mr-2" /> Refresh from ChatGPT
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => toggleShowTestData()} data-testid="btn-toggle-test-data">
+                    <FlaskConical className="h-4 w-4 mr-2" /> {showTestData ? "Hide test data" : "Show test data"}
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

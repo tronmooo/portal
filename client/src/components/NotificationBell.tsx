@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
-import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
+import { useProfileScope } from "@/hooks/useProfileScope";
 
 interface Notification {
   id: string;
@@ -137,41 +137,45 @@ export function NotificationBell() {
   const [, setLocation] = useLocation();
   const [open, setOpen] = useState(false);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  // Whether the persisted dismissal list has come back yet. The badge stays
+  // hidden until it has: dismissals load one round trip AFTER the notifications
+  // do, so rendering in between shows a count that is about to drop for no
+  // reason the user can see (QA 2026-07-29 CRUD-T1-004 watched the badge run
+  // 7 → 8 → 20 → 19 → 7 with no matching event).
+  const [dismissedReady, setDismissedReady] = useState(false);
   const dismissedLoaded = useRef(false);
 
   // Load persisted dismissed IDs on mount
   useEffect(() => {
     if (dismissedLoaded.current) return;
     dismissedLoaded.current = true;
-    loadDismissedIds().then(ids => {
-      if (ids.length > 0) setDismissedIds(new Set(ids));
-    });
+    loadDismissedIds()
+      .then(ids => { if (ids.length > 0) setDismissedIds(new Set(ids)); })
+      .finally(() => setDismissedReady(true));
   }, []);
 
-  // Subscribe to global profile filter so the bell shows only the selected
-  // profile's alerts (was returning everyone's notifications).
-  const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
-  const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
-  useEffect(() => {
-    const unsub = subscribeProfileFilter(state => {
-      setFilterMode(state.mode);
-      setFilterIds([...state.selectedIds]);
-    });
-    return unsub;
-  }, []);
+  // Read the active profile scope from the ONE reactive store binding. The bell
+  // previously mirrored the store into local state, so during a profile switch
+  // it briefly rendered the old scope's count against the new scope's data —
+  // the other half of the fluctuating badge.
+  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const notifProfileParam = filterMode === "selected" && filterIds.length > 0
     ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["/api/notifications", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/notifications${notifProfileParam}`).then(r => r.json()),
     refetchInterval: 60000,
+    // Keep the previous scope's list on screen while the new one loads instead
+    // of flashing an empty (or default-keyed) count in between.
+    placeholderData: keepPreviousData,
   });
 
   // Filter out dismissed notifications
   const visibleNotifications = notifications.filter(n => !dismissedIds.has(n.id));
-  const urgentCount = visibleNotifications.filter(
-    n => n.severity === "critical" || n.severity === "warning"
-  ).length;
+  // ONE number for this surface. The badge used to count only critical +
+  // warning while the panel header counted everything, so the bell and the list
+  // it opens disagreed by design. The badge is "how many are waiting" — the
+  // same thing the panel lists.
   const totalCount = visibleNotifications.length;
 
   const handleDismissAll = useCallback(() => {
@@ -267,12 +271,12 @@ export function NotificationBell() {
           aria-label="Notifications"
         >
           <Bell className="h-4 w-4" />
-          {urgentCount > 0 && !open && (
+          {dismissedReady && totalCount > 0 && !open && (
             <span
               className="absolute -top-0.5 -right-0.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-xs font-bold leading-none animate-pulse"
               data-testid="badge-notification-count"
             >
-              {urgentCount > 99 ? "99+" : urgentCount}
+              {totalCount > 99 ? "99+" : totalCount}
             </span>
           )}
         </Button>

@@ -345,7 +345,21 @@ export function setFilterSelected(ids: string[], names: string[]) {
   warmScope("selected", ids);
 }
 
-/** Toggle a single profile in/out of the selection */
+/**
+ * Toggle a single profile in/out of the selection.
+ *
+ * Deselecting the LAST remaining profile is a no-op, not a fall-through to
+ * "Everyone". QA report 2026-07-29 (CRUD-E1-001 / PROP-006): after a
+ * switch-profile-then-mutate sequence the scope chip silently read "Everyone"
+ * and every dashboard started showing cross-profile aggregates — a profile
+ * isolation break the user never asked for and had no way to notice.
+ *
+ * Widening the scope is a decision with real consequences (it aggregates other
+ * people's money and health data onto the screen), so it belongs to the
+ * explicit "Everyone" action — `setFilterEveryone()` — and nothing else. An
+ * empty selection is not a scope; it is the absence of one, and the last
+ * meaningful scope is the safer thing to keep.
+ */
 export function toggleFilterProfile(id: string, name: string) {
   if (_state.mode === "everyone") {
     // Switching from everyone to selected — start with just this one
@@ -353,12 +367,10 @@ export function toggleFilterProfile(id: string, name: string) {
   } else {
     const idx = _state.selectedIds.indexOf(id);
     if (idx >= 0) {
+      // Never empty the selection — that used to silently become "Everyone".
+      if (_state.selectedIds.length === 1) return;
       _state.selectedIds.splice(idx, 1);
       _state.selectedNames.splice(idx, 1);
-      // If nothing selected, go back to everyone
-      if (_state.selectedIds.length === 0) {
-        _state.mode = "everyone";
-      }
     } else {
       _state.selectedIds.push(id);
       _state.selectedNames.push(name);

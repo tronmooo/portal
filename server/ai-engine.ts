@@ -55,7 +55,8 @@ import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
-import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC } from "@shared/timezone";
+import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime } from "@shared/timezone";
+import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { addMonthsClamped, addYearsClamped, addMonthsISO } from "@shared/date-math";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
@@ -112,6 +113,18 @@ function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY_PATTERN.test(key);
 }
 const REDACTED = "[REDACTED]";
+
+/**
+ * The user's timezone for this request, set from the `x-timezone` header
+ * upstream. `storage` is a lazy proxy that throws without DB env (pure unit
+ * tests), so the read is defensive — same pattern as the other `_timezone`
+ * reads in this file, hoisted here because the reminder write path needs it in
+ * three places and getting it wrong shifts every chat-set reminder by the
+ * user's UTC offset (QA 2026-07-29 CRUD-T2-001).
+ */
+function aiUserTimezone(): string {
+  try { return (storage as any)._timezone || DEFAULT_TIMEZONE; } catch { return DEFAULT_TIMEZONE; }
+}
 
 // ─── P0.3a: AI write-path validation ───────────────────────────────────────────
 // Every AI-initiated create runs through the same zod insert schema the REST
@@ -5620,7 +5633,11 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
     case "create_reminder": {
       if (!normalized.title?.trim()) errors.push("Reminder title is required");
       else normalized.title = normalized.title.trim();
-      const when = normalized.fireAt ? new Date(normalized.fireAt) : null;
+      // The model is asked for a zone-less ISO datetime ("2026-06-05T15:00:00"),
+      // which `new Date()` reads as the HOST's local time — UTC on Vercel. That
+      // is the 7-hour offset in QA 2026-07-29 CRUD-T2-001: "remind me at 5:51
+      // PM" persisted as 10:51 AM Pacific. Compose it against the USER's zone.
+      const when = normalized.fireAt ? parseUserDateTime(normalized.fireAt, aiUserTimezone()) : null;
       if (!when || isNaN(when.getTime())) errors.push(`Invalid reminder time: ${normalized.fireAt}`);
       else normalized.fireAt = when.toISOString();
       break;
@@ -6547,7 +6564,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // validator normally catches this, but defend the executor too so no
       // direct caller can write junk. Reject instead of creating garbage.
       {
-        const when = input.fireAt ? new Date(input.fireAt) : null;
+        // Zone-less datetimes are the user's wall clock, not the host's — see
+        // the create_reminder branch of validateAiPayload.
+        const when = input.fireAt ? parseUserDateTime(input.fireAt, aiUserTimezone()) : null;
         if (!when || isNaN(when.getTime())) {
           return { error: `I need a valid date and time for the reminder "${input.title || ""}". Tell me when (e.g. "tomorrow at 10am").` };
         }
@@ -6719,29 +6738,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const patch: { title?: string; fireAt?: string } = {};
       if (input.newTitle && String(input.newTitle).trim()) patch.title = String(input.newTitle).trim();
       if (input.newFireAt) {
-        const when = new Date(input.newFireAt);
+        const when = parseUserDateTime(input.newFireAt, aiUserTimezone());
         if (isNaN(when.getTime())) return { error: `Invalid new time: "${input.newFireAt}"` };
         patch.fireAt = when.toISOString();
       }
       if (!patch.title && !patch.fireAt) return { error: "Nothing to change — pass newFireAt and/or newTitle" };
       const updated = await storage.updateReminder(target.id, patch);
       // Move the mirrored calendar entry (same title, tagged "reminder") along.
-      try {
-        const _tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
-        const oldDate = new Date(target.fireAt).toLocaleDateString("en-CA", { timeZone: _tz });
-        const events = await storage.getEvents();
-        const mirror = events.find(e => e.title.toLowerCase() === safeLC(target.title) && e.date === oldDate && (e.tags || []).includes("reminder"));
-        if (mirror) {
-          const evPatch: any = {};
-          if (patch.title) evPatch.title = patch.title;
-          if (patch.fireAt) {
-            const nd = new Date(patch.fireAt);
-            evPatch.date = nd.toLocaleDateString("en-CA", { timeZone: _tz });
-            evPatch.time = nd.toLocaleTimeString("en-GB", { timeZone: _tz, hour: "2-digit", minute: "2-digit" });
-          }
-          await storage.updateEvent(mirror.id, evPatch);
-        }
-      } catch (e: any) { console.warn("[AI] Reminder mirror move failed:", e?.message || e); }
+      // Shared with PATCH /api/reminders/:id so an edit made in chat and an edit
+      // made in the UI leave the calendar in the same state.
+      if (updated) await syncReminderMirrors(storage as any, target, updated, aiUserTimezone());
       return { updated: true, reminder: updated, message: `Reminder "${target.title}" updated${patch.fireAt ? ` — now fires ${new Date(patch.fireAt).toLocaleString("en-US", { timeZone: (storage as any)._timezone || DEFAULT_TIMEZONE, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : ""}.` };
     }
 
@@ -6752,17 +6758,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (matches.length === 0) return { error: `No pending reminder found matching "${input.title}"`, candidates: pending.slice(0, 5).map(r => r.title) };
       let removed = 0;
       for (const r of matches) { if (await storage.deleteReminder(r.id)) removed++; }
-      // Best-effort: remove the mirrored calendar entries too.
-      try {
-        const _tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
-        const dates = new Set(matches.map(r => new Date(r.fireAt).toLocaleDateString("en-CA", { timeZone: _tz })));
-        const events = await storage.getEvents();
-        for (const e of events) {
-          if ((e.tags || []).includes("reminder") && e.title.toLowerCase() === safeLC(matches[0].title) && dates.has(e.date)) {
-            await storage.deleteEvent(e.id).catch(() => { /* best effort */ });
-          }
-        }
-      } catch (e: any) { console.warn("[AI] Reminder mirror cleanup failed:", e?.message || e); }
+      // Remove the mirrored calendar entries too — otherwise the deleted
+      // reminder keeps showing on the calendar. Shared with
+      // DELETE /api/reminders/:id (server/reminder-mirror.ts).
+      for (const r of matches) await deleteReminderMirrors(storage as any, r, aiUserTimezone());
       return { deleted: true, count: removed, title: matches[0].title, message: `Deleted ${removed} pending reminder${removed === 1 ? "" : "s"} for "${matches[0].title}".` };
     }
 

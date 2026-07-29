@@ -21,27 +21,50 @@ export default function CalendarPage() {
     try { return new URL(window.location.href).searchParams.get("tab") === "recurring" ? "recurring" : "calendar"; } catch { return "calendar"; }
   });
 
-  // v2 summary band — Today / This Week / Total events.
-  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const { data: events = [] } = useQuery<any[]>({
-    queryKey: ["/api/events", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then(r => r.json()).catch(() => []),
+  // ── Today / This Week / Total summary band ────────────────────────────────
+  //
+  // These tiles MUST count exactly what the grid below them shows. They used to
+  // read `/api/events` while <CalendarView> reads `/api/calendar/timeline` —
+  // two different datasets. Events is only the hand-entered calendar table;
+  // the timeline is the merged stream (events + bills and loan payments +
+  // tasks + reminders + document expirations). QA report 2026-07-29 (UX-001):
+  // the TODAY tile read 0 while the Day view for the same date listed two auto
+  // loan obligations. Both numbers came from working code; having two sources
+  // for one question was the bug.
+  //
+  // One source now, with the same date window and the same scope parameter the
+  // grid uses, so "TODAY: 0" can only mean the day is genuinely empty.
+  // The third tile used to read "Total" — the row count of /api/events, a number
+  // with no window and no relationship to what was on screen. It is now the
+  // 30-day horizon, which is answerable and comes from the same fetch.
+  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `&profileIds=${filterIds.join(",")}` : "";
+  const todayStr = new Date().toLocaleDateString("en-CA");
+  const addDays = (n: number) => {
+    const d = new Date(`${todayStr}T12:00:00`);
+    d.setDate(d.getDate() + n);
+    return d.toLocaleDateString("en-CA");
+  };
+  const weekEndStr = useMemo(() => addDays(7), [todayStr]);
+  const horizonEndStr = useMemo(() => addDays(30), [todayStr]);
+  const { data: timeline = [] } = useQuery<any[]>({
+    queryKey: ["/api/calendar/timeline", todayStr, horizonEndStr, filterMode, ...filterIds],
+    queryFn: () =>
+      apiRequest("GET", `/api/calendar/timeline?start=${todayStr}&end=${horizonEndStr}${profileParam}`)
+        .then(r => r.json())
+        .catch(() => []),
+    staleTime: 60_000,
   });
   const evSummary = useMemo(() => {
-    const todayStr = new Date().toLocaleDateString("en-CA");
-    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+    const list = Array.isArray(timeline) ? timeline : [];
     let today = 0, week = 0;
-    const list = Array.isArray(events) ? events : [];
-    for (const e of list) {
-      const d = String(e.date || "").slice(0, 10);
+    for (const item of list) {
+      const d = String(item?.date || "").slice(0, 10);
       if (!d) continue;
       if (d === todayStr) today++;
-      const dd = new Date(`${d}T12:00:00`);
-      const diff = Math.round((dd.getTime() - t0.getTime()) / 86400000);
-      if (diff >= 0 && diff <= 7) week++;
+      if (d >= todayStr && d <= weekEndStr) week++; // YYYY-MM-DD sorts lexically
     }
-    return { today, week, total: list.length };
-  }, [events]);
+    return { today, week, horizon: list.length };
+  }, [timeline, todayStr, weekEndStr]);
 
   // Legacy cleanup: strip old ?tab=obligations links (that tab is retired).
   // ?tab=recurring is the Recurring Dates manager and is kept.
@@ -86,7 +109,7 @@ export default function CalendarPage() {
             {[
               { label: "Today", value: evSummary.today, color: "200 80% 55%" },
               { label: "This Week", value: evSummary.week, color: "262 70% 62%" },
-              { label: "Total", value: evSummary.total, color: "155 60% 48%" },
+              { label: "Next 30 Days", value: evSummary.horizon, color: "155 60% 48%" },
             ].map(s => (
               <div key={s.label} className="rounded-xl border border-border/50 bg-card/60 p-2.5 text-center">
                 <p className="text-lg font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>

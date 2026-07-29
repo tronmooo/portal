@@ -541,9 +541,25 @@ export interface ObligationPayment {
 // absurd/overflow values (e.g. a $1e15 expense the API previously accepted).
 export const MAX_MONEY = 1_000_000_000_000; // $1 trillion
 
+// Ceiling for a SINGLE ledger transaction (one expense, one income line, one
+// bill instalment). MAX_MONEY is the right bound for a balance-sheet position
+// (a portfolio, a mortgage) but far too loose for a transaction: QA report
+// 2026-07-29 EDGE-001 entered `1e10` in the Add Expense amount field, the API
+// accepted it, and Cash Flow rendered -$9,999,972,024 — a number that then had
+// to be hunted down and deleted by hand. The field's own `valuemax` was already
+// $1B; this makes that the enforced contract on BOTH sides of the wire.
+export const MAX_TRANSACTION_AMOUNT = 1_000_000_000; // $1 billion
+
+/** Amount above which a UI should ask "did you really mean this?" before saving. */
+export const LARGE_TRANSACTION_AMOUNT = 1_000_000; // $1 million
+
+/** The one message every surface shows when a transaction blows the ceiling. */
+export const TRANSACTION_TOO_LARGE_MESSAGE =
+  `Amount must be less than $${MAX_TRANSACTION_AMOUNT.toLocaleString("en-US")}. Check for a typo or a stray zero.`;
+
 export const insertObligationSchema = z.object({
   name: z.string().min(1),
-  amount: z.number().nonnegative("Amount must be 0 or positive").max(MAX_MONEY, "Amount is unrealistically large"),
+  amount: z.number().nonnegative("Amount must be 0 or positive").max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE),
   frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"]).default("monthly"),
   category: z.string().default("general"),
   kind: z.enum(["bill","subscription","loan_payment","medication","maintenance","appointment","habit","doc_expiration","task"]).default("bill"),
@@ -775,7 +791,7 @@ export interface Expense {
 }
 
 export const insertExpenseSchema = z.object({
-  amount: z.number().positive("Amount must be a positive number").max(MAX_MONEY, "Amount is unrealistically large"),
+  amount: z.number().positive("Amount must be a positive number").max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE),
   category: z.string().default("general"),
   description: z.string().min(1, "Description must be non-empty"),
   vendor: z.string().optional(),
@@ -813,7 +829,7 @@ export interface Income {
 
 export const insertIncomeSchema = z.object({
   description: z.string().min(1),
-  amount: z.number().positive().max(MAX_MONEY, "Amount is unrealistically large"),
+  amount: z.number().positive().max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE),
   category: z.string().default("salary"),
   frequency: z.string().default("monthly"),
   date: z.string().optional(),

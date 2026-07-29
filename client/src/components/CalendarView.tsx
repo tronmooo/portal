@@ -1786,11 +1786,18 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             {allDayItems.length > 0 && (
               <div className="px-3 py-2 border-b border-border bg-muted/10">
                 <p className="text-xs font-medium text-muted-foreground uppercase mb-1">All Day</p>
+                {/* A task ticked off in the Task Manager must READ as done here
+                    too (QA 2026-07-29 CRUD-T1-002: the occurrence stayed plain
+                    black text, so the calendar quietly disagreed with the task
+                    list). The month grid already struck completed items
+                    through; the Day and Agenda views did not. */}
                 {allDayItems.map(item => (
                   <button key={item.id} onClick={() => setDetailItem(item)}
-                    className="flex items-center gap-2 w-full text-left py-1.5 px-2 rounded hover:bg-muted/50 transition-colors"
+                    className={`flex items-center gap-2 w-full text-left py-1.5 px-2 rounded hover:bg-muted/50 transition-colors ${item.completed ? "opacity-60" : ""}`}
                     style={{ borderLeft: `3px solid ${TYPE_COLORS[item.type] || "#888"}` }}>
-                    <span className="text-xs">{item.title}</span>
+                    <span className={`text-xs ${item.completed ? "line-through text-muted-foreground" : ""}`}>
+                      {item.completed ? "✓ " : ""}{item.title}
+                    </span>
                     <Badge variant="outline" className="text-xs-tight ml-auto">{item.type}</Badge>
                   </button>
                 ))}
@@ -1802,11 +1809,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
               )}
               {timedItems.map(item => (
                 <button key={item.id} onClick={() => setDetailItem(item)}
-                  className="flex items-center gap-3 w-full text-left py-2.5 px-3 hover:bg-muted/50 transition-colors">
+                  className={`flex items-center gap-3 w-full text-left py-2.5 px-3 hover:bg-muted/50 transition-colors ${item.completed ? "opacity-60" : ""}`}>
                   <span className="text-xs text-muted-foreground w-14 shrink-0">{fmt12(item.time)}</span>
                   <div className="w-1 h-6 rounded-full shrink-0" style={{ backgroundColor: TYPE_COLORS[item.type] || "#888" }} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate">{item.title}</p>
+                    <p className={`text-xs font-medium truncate ${item.completed ? "line-through text-muted-foreground" : ""}`}>
+                      {item.completed ? "✓ " : ""}{item.title}
+                    </p>
                     {item.description && <p className="text-xs text-muted-foreground truncate">{item.description}</p>}
                   </div>
                   <Badge variant="outline" className="text-xs-tight shrink-0">{item.type}</Badge>
@@ -1854,11 +1863,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                     const typeColor = ev.type === 'task' ? '#8b5cf6' : ev.type === 'obligation' ? '#f59e0b' : ev.type === 'habit' ? '#10b981' : '#3b82f6';
                     return (
                       <div key={`${ev.id}-${i}`}
-                        className="flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40 cursor-pointer hover:bg-muted/40 active:scale-[0.98] transition-all"
+                        className={`flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40 cursor-pointer hover:bg-muted/40 active:scale-[0.98] transition-all ${ev.completed ? "opacity-60" : ""}`}
                         onClick={() => { setSelectedDate(ev.date); setDetailItem(ev); }}>
                         <div className="w-1 self-stretch rounded-full shrink-0 mt-0.5" style={{ background: ev.color || typeColor }} />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate text-foreground">{ev.title}</p>
+                          <p className={`text-sm font-medium truncate ${ev.completed ? "line-through text-muted-foreground" : "text-foreground"}`}>
+                            {ev.completed ? "✓ " : ""}{ev.title}
+                          </p>
                           <div className="flex items-center gap-2 mt-0.5">
                             {ev.time && <span className="text-xs text-muted-foreground">{fmt12(ev.time)}</span>}
                             {ev.type && <span className="text-xs text-muted-foreground capitalize">{ev.type}</span>}

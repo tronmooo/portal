@@ -10,15 +10,51 @@
 // surface. Owner-profile defaulting (active filter → single selected profile,
 // else self) is handled by the caller passing `ownerProfileId`.
 
+import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE } from "./schema";
+
 export type BuildResult =
   | { ok: true; body: Record<string, any> }
   | { ok: false; error: string };
 
-/** Strip currency formatting and parse. Returns NaN on empty/garbage. */
+/**
+ * Strip currency formatting and parse. Returns NaN on empty/garbage.
+ *
+ * Exponent notation is preserved. The old regex dropped every character
+ * outside `[0-9.-]`, which quietly turned the QA report's `1e10` into the
+ * string "110" — so the dialog would have saved $110 for an input the user
+ * could reasonably read as ten billion, and either number is a wrong answer
+ * given silently. `1e10` now parses to 1e10 and is REJECTED by the amount
+ * ceiling, which is the honest outcome: the app says no rather than picking a
+ * number the user did not type.
+ */
 export function parseAmount(raw: string | number | null | undefined): number {
   if (typeof raw === "number") return raw;
   if (raw == null) return NaN;
-  return parseFloat(String(raw).replace(/[^0-9.\-]/g, ""));
+  return parseFloat(String(raw).replace(/[^0-9.eE+\-]/g, ""));
+}
+
+/**
+ * The single amount check every quick-add builder runs. Returns an error
+ * message, or null when the amount is a plausible transaction.
+ *
+ * `allowZero` is for obligations, whose schema accepts 0 (a placeholder bill).
+ *
+ * The upper bound is the point of this helper. Before it, `1e10` parsed to a
+ * finite positive number, passed every guard, and became a -$10,000,000,000
+ * line in Cash Flow (QA 2026-07-29 EDGE-001). Rejecting at the builder means
+ * the dialog says so inline, without a round trip — and the identical bound in
+ * `shared/schema.ts` means a direct API caller gets the same answer.
+ */
+export function validateTransactionAmount(
+  amount: number,
+  { allowZero = false }: { allowZero?: boolean } = {},
+): string | null {
+  if (!isFinite(amount)) return "Amount must be a positive number";
+  if (allowZero ? amount < 0 : amount <= 0) {
+    return allowZero ? "Amount must be 0 or a positive number" : "Amount must be a positive number";
+  }
+  if (amount > MAX_TRANSACTION_AMOUNT) return TRANSACTION_TOO_LARGE_MESSAGE;
+  return null;
 }
 
 function linkedProfiles(ownerProfileId?: string): Record<string, any> {
@@ -37,7 +73,8 @@ export function buildExpensePayload(input: ExpenseInput, ownerProfileId?: string
   const description = (input.description || "").trim();
   if (!description) return { ok: false, error: "Description is required" };
   const amount = parseAmount(input.amount);
-  if (!isFinite(amount) || amount <= 0) return { ok: false, error: "Amount must be a positive number" };
+  const amountError = validateTransactionAmount(amount);
+  if (amountError) return { ok: false, error: amountError };
   return {
     ok: true,
     body: {
@@ -64,7 +101,8 @@ export function buildIncomePayload(input: IncomeInput, ownerProfileId?: string):
   const description = (input.description || "").trim();
   if (!description) return { ok: false, error: "Description is required" };
   const amount = parseAmount(input.amount);
-  if (!isFinite(amount) || amount <= 0) return { ok: false, error: "Amount must be a positive number" };
+  const amountError = validateTransactionAmount(amount);
+  if (amountError) return { ok: false, error: amountError };
   return {
     ok: true,
     body: {
@@ -92,7 +130,8 @@ export function buildBillPayload(input: BillInput, ownerProfileId?: string): Bui
   const name = (input.name || "").trim();
   if (!name) return { ok: false, error: "Name is required" };
   const amount = parseAmount(input.amount);
-  if (!isFinite(amount) || amount <= 0) return { ok: false, error: "Amount must be a positive number" };
+  const amountError = validateTransactionAmount(amount);
+  if (amountError) return { ok: false, error: amountError };
   return {
     ok: true,
     body: {

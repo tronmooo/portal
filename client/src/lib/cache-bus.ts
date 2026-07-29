@@ -65,6 +65,11 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/calendar/timeline"],
     ["/api/insights"],
     ["/api/ai-digest"],
+    // ...and the notification feed, which derives "due today" / "overdue"
+    // straight from open tasks. Omitting it left a "X is due today" alert in
+    // the bell after X had been ticked off (QA 2026-07-29 CRUD-T1-003) — the
+    // server already excludes done tasks, the client just never re-asked.
+    ["/api/notifications"],
   ],
   habits: [
     ["/api/habits"],
@@ -147,6 +152,8 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/cashflow"],
     ["/api/insights"],
     ["/api/ai-digest"],
+    ["/api/calendar/timeline"], // bills and loan payments are calendar items
+    ["/api/notifications"],     // "bill due" alerts derive from obligations
   ],
   budgets: [
     ["/api/budgets"],

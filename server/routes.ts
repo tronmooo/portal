@@ -5,7 +5,8 @@ import { createClient } from "@supabase/supabase-js";
 import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
-import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { computeKeyFindings } from "@shared/tracker-insights";
@@ -30,6 +31,42 @@ import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
   return (req.headers['x-timezone'] as string) || DEFAULT_TIMEZONE;
+}
+
+/** The caller's active profile selection (the scope chip they can see). */
+function activeProfileIds(req: Request): string[] {
+  return parseActiveProfileIds(req.headers[ACTIVE_PROFILE_HEADER] as string | undefined);
+}
+
+/**
+ * Enforce the profile-isolation invariant on a create body: a record created
+ * while exactly one profile is in scope belongs to that profile.
+ *
+ * Mutates `body` in place (routes hand their `req.body` straight to Zod) and
+ * returns it. Only fills in an owner the request left blank — an explicitly
+ * chosen owner always wins. See shared/active-scope.ts for the reasoning.
+ *
+ * `field` is the entity's owner column: `linkedProfiles` (array) on expenses /
+ * incomes / obligations / tasks / events, `profileId` (scalar) on reminders.
+ */
+function applyActiveProfileScope(
+  req: Request,
+  body: any,
+  field: "linkedProfiles" | "profileId" = "linkedProfiles",
+): any {
+  if (!body || typeof body !== "object") return body;
+  const active = activeProfileIds(req);
+  if (active.length === 0) return body;
+  if (field === "profileId") {
+    if (typeof body.profileId === "string" && body.profileId) return body;
+    const owner = resolveCreateOwnerIds([], active);
+    if (owner.length === 1) body.profileId = owner[0];
+    return body;
+  }
+  const explicit = Array.isArray(body.linkedProfiles) ? body.linkedProfiles.filter(Boolean) : [];
+  const owners = resolveCreateOwnerIds(explicit, active);
+  if (owners.length > 0) body.linkedProfiles = owners;
+  return body;
 }
 
 // Augment Express Request with auth middleware userId
@@ -247,6 +284,8 @@ import {
   insertDocumentSchema,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
+import { validateTransactionAmount } from "@shared/quick-add";
+import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
 import { generateSmartInsights } from "./insights-engine";
 import { requireAdmin, resolveUserFromRequest } from "./auth";
 
@@ -522,6 +561,25 @@ function bustAllCaches(): void {
 // Input sanitizer — strip dangerous content but preserve readable text.
 // React handles HTML escaping at render time, so we store raw text in DB.
 // Only strip actual injection vectors, not encode legitimate characters like & < >
+/**
+ * True when `sanitize()` would actually REMOVE something from `input` — as
+ * opposed to merely trimming whitespace, which is not worth telling anyone
+ * about.
+ *
+ * QA report 2026-07-29 (EDGE-003) confirmed a `<script>` payload is safely
+ * neutralised, and then noted the real problem: the user was never told their
+ * text had been altered. Silently changing what someone typed and reporting
+ * success is its own kind of wrong answer — they'd find the missing characters
+ * later with no explanation. Routes pass this to the response so the UI can say
+ * so plainly.
+ */
+export function wasSanitized(input: string): boolean {
+  return typeof input === "string" && sanitize(input) !== input.trim().slice(0, 10000);
+}
+
+/** The one message the UI shows when input was altered for safety. */
+export const SANITIZE_NOTICE = "Some unsafe formatting was removed from your text.";
+
 function sanitize(input: string): string {
   return input
     .replace(/javascript:/gi, '')
@@ -4606,14 +4664,16 @@ Rules:
     if (!req.body.title || typeof req.body.title !== "string" || !req.body.title.trim()) {
       return res.status(400).json({ error: "Task title required" });
     }
+    const taskSanitized = wasSanitized(req.body.title) || (!!req.body.description && wasSanitized(req.body.description));
     req.body.title = sanitize(req.body.title);
     if (req.body.description) req.body.description = sanitize(req.body.description);
+    applyActiveProfileScope(req, req.body);
     const parsed = insertTaskSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newTask = await storage.createTask(parsed.data);
     const uid_t1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t1}`); bustCache(`notifications:${uid_t1}`);
-    res.status(201).json(newTask);
+    res.status(201).json(taskSanitized ? { ...newTask, warning: SANITIZE_NOTICE } : newTask);
   }));
   app.patch("/api/tasks/:id", asyncHandler(async (req, res) => {
     {
@@ -4885,6 +4945,14 @@ Rules:
     if (!req.body.amount || typeof req.body.amount !== "number" || req.body.amount <= 0) {
       return res.status(400).json({ error: "Positive amount required" });
     }
+    // Upper bound as well as lower (QA 2026-07-29 EDGE-001: a `1e10` expense was
+    // accepted and rendered as -$9,999,972,024 in Cash Flow). insertExpenseSchema
+    // enforces the same ceiling, but check here too so the caller gets the plain
+    // message rather than a Zod issue array.
+    {
+      const amountError = validateTransactionAmount(req.body.amount);
+      if (amountError) return res.status(400).json({ error: amountError });
+    }
     if (!req.body.description || typeof req.body.description !== "string" || !req.body.description.trim()) {
       return res.status(400).json({ error: "Description required" });
     }
@@ -4901,6 +4969,7 @@ Rules:
         return res.status(400).json({ error: "Date must be a valid date" });
       }
     }
+    const expenseSanitized = wasSanitized(req.body.description) || (!!req.body.vendor && wasSanitized(req.body.vendor));
     req.body.description = sanitize(req.body.description);
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
 
@@ -4925,12 +4994,18 @@ Rules:
       }
     }
 
+    // Profile isolation (QA 2026-07-29 PROP-005): an expense created while a
+    // single profile is in scope belongs to that profile, whether or not the
+    // form remembered to say so.
+    applyActiveProfileScope(req, req.body);
+
     const parsed = insertExpenseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newExpense = await storage.createExpense(parsed.data);
     const uid_e1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`); bustCache(`enhanced:`);
-    res.status(201).json(newExpense);
+    // Tell the caller when their text was altered — never change it silently.
+    res.status(201).json(expenseSanitized ? { ...newExpense, warning: SANITIZE_NOTICE } : newExpense);
   }));
   app.patch("/api/expenses/:id", asyncHandler(async (req, res) => {
     {
@@ -4938,8 +5013,10 @@ Rules:
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
     }
-    if (req.body.amount !== undefined && (typeof req.body.amount !== "number" || req.body.amount <= 0)) {
-      return res.status(400).json({ error: "Expense amount must be a positive number" });
+    if (req.body.amount !== undefined) {
+      if (typeof req.body.amount !== "number") return res.status(400).json({ error: "Expense amount must be a positive number" });
+      const amountError = validateTransactionAmount(req.body.amount);
+      if (amountError) return res.status(400).json({ error: amountError });
     }
     if (req.body.description) req.body.description = sanitize(req.body.description);
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
@@ -5661,6 +5738,7 @@ Rules:
     if (req.body?.category !== undefined) {
       req.body.category = canonicalObligationCategory(req.body.category);
     }
+    applyActiveProfileScope(req, req.body);
     const parsed = insertObligationSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const uid_o1 = cacheUserKey(req as AuthenticatedRequest);
@@ -5728,15 +5806,23 @@ Rules:
     if (!rawTitle) return res.status(400).json({ error: "Title is required" });
     // fireAt is optional — default to now so a quick "remind me" lands in the
     // feed immediately. An explicit date must be valid.
+    //
+    // TIMEZONE (QA 2026-07-29 CRUD-T2-001): the quick-add dialog posts an
+    // `<input type="datetime-local">` value — "2026-07-29T17:51", with no zone.
+    // `new Date()` read that as the HOST's local time, and the host is a UTC
+    // function, so 5:51 PM Pacific was stored as 5:51 PM UTC and displayed back
+    // as 10:51 AM. parseUserDateTime composes zone-less input against the
+    // caller's timezone; anything carrying an offset is untouched.
     let fireAt: string;
     if (req.body?.fireAt) {
-      const d = new Date(req.body.fireAt);
+      const d = parseUserDateTime(req.body.fireAt, getTimezone(req));
       if (isNaN(d.getTime())) return res.status(400).json({ error: "Invalid fireAt date" });
       fireAt = d.toISOString();
     } else {
       fireAt = new Date().toISOString();
     }
-    const profileId = typeof req.body?.profileId === "string" && req.body.profileId ? req.body.profileId : undefined;
+    const scoped = applyActiveProfileScope(req, { ...req.body }, "profileId");
+    const profileId = typeof scoped?.profileId === "string" && scoped.profileId ? scoped.profileId : undefined;
     const created = await storage.createReminder({ title: sanitize(rawTitle), fireAt, profileId });
     res.status(201).json(created);
   }));
@@ -5745,8 +5831,17 @@ Rules:
   // AI tools (update_reminder/delete_reminder) already used the same storage
   // methods; this is the first REST surface for it.
   app.delete("/api/reminders/:id", asyncHandler(async (req, res) => {
+    // Read the row BEFORE deleting: the mirrored calendar event is matched by
+    // title + fire date, which are gone once the reminder is.
+    const before = (await storage.listReminders()).find(r => r.id === req.params.id);
     const ok = await storage.deleteReminder(req.params.id);
     if (!ok) return res.status(404).json({ error: "Reminder not found" });
+    // A reminder deleted here must not come back from the calendar mirror the
+    // chat tool created for it (QA 2026-07-29 CRUD-T2-002: a deleted reminder
+    // reappeared at its original time on the next fetch).
+    if (before) await deleteReminderMirrors(storage as any, before, getTimezone(req));
+    const uid_rm = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`events:${uid_rm}`); bustCache(`calendar:${uid_rm}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
   // EDIT a reminder. `storage.updateReminder` has existed since the AI tools
@@ -5762,7 +5857,8 @@ Rules:
       patch.title = sanitize(t);
     }
     if (req.body?.fireAt !== undefined) {
-      const d = new Date(req.body.fireAt);
+      // Same zone-less-input rule as POST — see the comment there.
+      const d = parseUserDateTime(req.body.fireAt, getTimezone(req));
       if (isNaN(d.getTime())) return res.status(400).json({ error: "Invalid fireAt date" });
       patch.fireAt = d.toISOString();
     }
@@ -5774,8 +5870,14 @@ Rules:
     if (Object.keys(patch).length === 0) {
       return res.status(400).json({ error: "No supported fields to update" });
     }
+    const before = (await storage.listReminders()).find(r => r.id === req.params.id);
     const updated = await storage.updateReminder(req.params.id, patch);
     if (!updated) return res.status(404).json({ error: "Reminder not found" });
+    // Carry the mirrored calendar entry to the new title/time instead of
+    // leaving a stale copy behind at the old one.
+    if (before) await syncReminderMirrors(storage as any, before, updated, getTimezone(req));
+    const uid_rp = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`events:${uid_rp}`); bustCache(`calendar:${uid_rp}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
@@ -7630,11 +7732,13 @@ No emojis. No prose outside the JSON.`,
       return res.status(400).json({ error: "amount is required" });
     }
     const amt = typeof req.body.amount === "number" ? req.body.amount : Number(req.body.amount);
-    if (!isFinite(amt) || amt <= 0) {
-      return res.status(400).json({ error: "amount must be a finite positive number" });
+    {
+      const amountError = validateTransactionAmount(amt);
+      if (amountError) return res.status(400).json({ error: amountError });
     }
     req.body.amount = amt;
     req.body.description = sanitize(req.body.description);
+    applyActiveProfileScope(req, req.body);
     const income = await storage.createIncome(req.body);
     bustIncomeCaches(uid);
     res.status(201).json(income);
@@ -7647,9 +7751,8 @@ No emojis. No prose outside the JSON.`,
     }
     if (req.body.amount !== undefined) {
       const amt = typeof req.body.amount === "number" ? req.body.amount : Number(req.body.amount);
-      if (!isFinite(amt) || amt <= 0) {
-        return res.status(400).json({ error: "amount must be a finite positive number" });
-      }
+      const amountError = validateTransactionAmount(amt);
+      if (amountError) return res.status(400).json({ error: amountError });
       req.body.amount = amt;
     }
     if (req.body.description !== undefined) {

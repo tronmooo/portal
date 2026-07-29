@@ -181,6 +181,52 @@ export function addZonedDays(
   return zonedTimeToUTC(date, Math.floor(minuteOfDay / 60), minuteOfDay % 60, timezone);
 }
 
+// ─── Zone-less datetime parsing ──────────────────────────────────────────────
+//
+// QA report 2026-07-29 (CRUD-T2-001): chat "remind me to call the plumber at
+// 5:51 PM today" persisted a reminder for 10:51 AM — exactly 7 hours early,
+// the America/Los_Angeles offset.
+//
+// Cause: `new Date("2026-07-29T17:51:00")`. A zone-less ISO datetime is read as
+// the *host's* local time, and the host is a UTC serverless function — so 5:51
+// PM Pacific was stored as 5:51 PM UTC. The same trap sits under every REST
+// route that took a browser `<input type="datetime-local">` value, which is
+// also zone-less by definition.
+//
+// The wall clock the user typed is the user's, so it must be composed against
+// the USER's zone. Timestamps that DO carry a zone ("...Z", "+02:00") are
+// already unambiguous and pass through untouched.
+
+/** True when an ISO-ish datetime string carries no timezone designator. */
+export function isZonelessDateTime(input: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(input.trim());
+}
+
+/**
+ * Parse a user-supplied datetime, honouring `timezone` for zone-less input.
+ *
+ * Accepts what the app actually produces: `<input type="datetime-local">`
+ * values ("2026-07-29T17:51"), model-generated ISO datetimes without an offset,
+ * plain dates ("2026-07-29" → local noon, matching parseLocalDate), and fully
+ * qualified instants (passed straight to `new Date`).
+ *
+ * Returns an Invalid Date for junk, so callers keep using `isNaN(d.getTime())`.
+ */
+export function parseUserDateTime(input: string | Date | number, timezone: string = DEFAULT_TIMEZONE): Date {
+  if (input instanceof Date) return input;
+  if (typeof input === "number") return new Date(input);
+  const s = String(input || "").trim();
+  if (!s) return new Date(NaN);
+  // Date-only: noon local, so a day never rolls backwards across the offset.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return zonedTimeToUTC(s, 12, 0, timezone);
+  if (isZonelessDateTime(s)) {
+    const [datePart, timePart] = s.replace(" ", "T").split("T");
+    const [hh, mm] = timePart.split(":").map(Number);
+    return zonedTimeToUTC(datePart, hh || 0, mm || 0, timezone);
+  }
+  return new Date(s);
+}
+
 /**
  * Returns a formatted locale string for the system prompt / human-readable display.
  * e.g. "Tuesday, April 7, 2026 at 6:30 PM"

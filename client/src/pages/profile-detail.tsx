@@ -4362,7 +4362,17 @@ function DocumentsTab({
       ) : filteredDocs.length === 0 ? (
         <Card>
           <CardContent className="py-6 text-center">
-            <p className="text-sm text-muted-foreground">No documents match your search</p>
+            {/* "No documents match your search" was shown even with an empty
+                search box and no type filter (QA 2026-07-29 UX-014), which
+                blames the user for a filter they never set. Name the filter
+                that is actually hiding things. */}
+            <p className="text-sm text-muted-foreground">
+              {docSearch.trim()
+                ? "No documents match your search"
+                : docTypeFilter && docTypeFilter !== "all"
+                  ? `No ${docTypeFilter.replace(/_/g, " ")} documents`
+                  : "No documents to show"}
+            </p>
           </CardContent>
         </Card>
       ) : docView === "sheet" ? (
