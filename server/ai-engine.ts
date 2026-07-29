@@ -3818,7 +3818,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         date: { type: "string", description: "Date of the journal entry to update (YYYY-MM-DD). Defaults to today." },
         find: { type: "string", description: "Existing text to replace (exact or close phrase from the entry). PREFERRED for text edits." },
         replace: { type: "string", description: "Replacement text for the matched phrase." },
-        changes: { type: "object", description: "Direct field overwrites: mood, tags — or content (DANGER: replaces the ENTIRE entry text; only when the user dictated a full rewrite)." },
+        changes: { type: "object", description: "Direct field overwrites: mood, tags, 'date' (YYYY-MM-DD — MOVES the entry to a different day; use this for 'that entry was actually Tuesday' / 'change the date to X'. The top-level `date` param FINDS the entry, changes.date MOVES it — they are not the same field), or content (DANGER: replaces the ENTIRE entry text; only when the user dictated a full rewrite)." },
       },
       required: ["date"],
     },
@@ -10473,7 +10473,26 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
         changes.content = next;
       }
-      if (Object.keys(changes).length === 0) return { error: "No changes given — pass find/replace for a text edit, or changes for mood/tags." };
+      // MOVING an entry to another day (user QA 2026-07-27: "content updated,
+      // but the requested date change failed"). storage.updateJournalEntry has
+      // always written `date`; the tool schema never told the model it could,
+      // so "change the date" went into the top-level `date` param — which
+      // FINDS an entry rather than moving one. Validate the target day and
+      // refuse a collision instead of writing into another day's entry.
+      if (changes.date !== undefined) {
+        const newDate = String(changes.date).slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+          return { error: `"${changes.date}" isn't a valid date. Use YYYY-MM-DD.` };
+        }
+        if (newDate !== matchEntry2.date) {
+          const clash = entries.find(e => e.id !== matchEntry2!.id && e.date === newDate);
+          if (clash) {
+            return { error: `There's already a journal entry for ${newDate}, so moving the ${matchEntry2.date} entry there would collide with it. Do you want to merge them, or pick another date?` };
+          }
+        }
+        changes.date = newDate;
+      }
+      if (Object.keys(changes).length === 0) return { error: "No changes given — pass find/replace for a text edit, or changes for mood/tags/date." };
       const updated = await storage.updateJournalEntry(matchEntry2.id, changes);
       return { updated: true, journal: updated };
     }
