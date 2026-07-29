@@ -20,6 +20,21 @@ async function seedNewUser(userId: string): Promise<void> {
   }
 }
 
+/**
+ * Is this error Postgres' unique-constraint violation (SQLSTATE 23505)?
+ *
+ * Recognises both the PostgREST/supabase-js error shape (`{ code: "23505" }`)
+ * and a plain driver error, plus the message text as a last resort — the
+ * wrapper an error arrives in varies by client but the SQLSTATE does not.
+ */
+export function isUniqueViolation(e: any): boolean {
+  if (!e) return false;
+  const code = String(e.code ?? e.originalError?.code ?? e.cause?.code ?? "");
+  if (code === "23505") return true;
+  const text = String(e.message ?? e.details ?? e ?? "");
+  return /duplicate key value violates unique constraint/i.test(text);
+}
+
 // Track which users have had their self profile checked this session (auto-evict after 1 hour).
 // Map insertion order is preserved, so the oldest entry is map.keys().next().value.
 const autoProfileCreated = new Map<string, number>();
@@ -312,8 +327,29 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
               logger.info("auth", `Auto-created self profile for user ${user.id.slice(0, 8)}`);
             }
           } catch (e) {
-            // Non-fatal — don't block auth
-            console.error('[auth] Auto-profile creation failed:', e);
+            // AUTO-PROFILE RACE (production audit 2026-07-29).
+            //
+            // The check above is a check-then-act: read the profile list, see
+            // no self profile, create one. `autoProfileCreated` only suppresses
+            // repeats WITHIN one process, and on serverless every concurrent
+            // lambda instance has its own empty copy — so a burst of parallel
+            // first requests all read "no self profile" and all try to create
+            // one. The `profiles_one_self_per_user` unique index correctly
+            // stopped the duplicates, and production logged three of these
+            // races as errors.
+            //
+            // Losing that race is the index doing its job, not a failure: the
+            // self profile exists, which is the whole point. Swallow the
+            // unique-violation quietly and let anything else stay loud.
+            if (isUniqueViolation(e)) {
+              logger.info(
+                "auth",
+                `Self profile for user ${user.id.slice(0, 8)} was created concurrently — keeping the existing one`,
+              );
+            } else {
+              // Non-fatal — don't block auth
+              console.error('[auth] Auto-profile creation failed:', e);
+            }
           }
         })();
       }

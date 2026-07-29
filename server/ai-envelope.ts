@@ -58,6 +58,15 @@ type EntityMeta = {
   name: (row: any) => string;
   /** Rows the list returns include soft-deleted? (false everywhere today —
    *  get* methods filter deleted_at, which is exactly what "exists" means.) */
+  /**
+   * Optional authoritative single-row read-back. When present, verification
+   * uses this instead of scanning `list()` — one indexed lookup by primary key
+   * rather than a full per-user list read. Required for entity types whose
+   * list is expensive or truncated (tracker entries are capped at the 50
+   * newest per tracker, so a list scan can MISS a row that really exists and
+   * report a good write as failed).
+   */
+  byId?: (s: IStorage, id: string) => Promise<any | undefined>;
 };
 
 const ENTITY_META: Record<string, EntityMeta> = {
@@ -76,6 +85,21 @@ const ENTITY_META: Record<string, EntityMeta> = {
   reminder: { list: (s) => s.listReminders(), name: (r) => r.title },
   document: { list: (s) => s.getDocuments(), name: (r) => r.name },
   paycheck: { list: (s) => s.getPaychecks(), name: (r) => r.source },
+  // Tracker ENTRIES (the individual logged data points) verify by primary key.
+  // They were previously absent from this map entirely, which is what let
+  // "logged 24 oz" report success with no write verification at all
+  // (production audit 2026-07-29, blocker #2). `list` is only a fallback for
+  // storages without the by-id read; note it is truncated per tracker, which
+  // is exactly why `byId` exists and takes precedence.
+  trackerEntry: {
+    list: async (s) => (await s.getTrackers()).flatMap((t: any) => t.entries || []),
+    name: (r) => {
+      const vals = r?.values && typeof r.values === "object" ? r.values : {};
+      const first = Object.entries(vals).find(([k]) => !String(k).startsWith("_"));
+      return first ? `${first[0]}: ${first[1]}` : "entry";
+    },
+    byId: (s, id) => (s as any).getTrackerEntry?.(id),
+  },
 };
 
 /** Which entity a tool operates on. Tools absent from this map still get the
@@ -89,6 +113,8 @@ const TOOL_ENTITY: Record<string, string> = {
   create_habit: "habit", update_habit: "habit", delete_habit: "habit", restore_habit: "habit",
   checkin_habit: "habit", uncomplete_habit: "habit",
   create_tracker: "tracker", update_tracker: "tracker", delete_tracker: "tracker",
+  log_tracker_entry: "trackerEntry", update_tracker_entry: "trackerEntry",
+  delete_tracker_entry: "trackerEntry",
   create_goal: "goal", update_goal: "goal", delete_goal: "goal",
   create_profile: "profile", update_profile: "profile", delete_profile: "profile",
   create_liability: "profile", update_liability: "profile", revalue_asset: "profile",
@@ -431,6 +457,18 @@ export async function finalizeToolResult(
       // memoize the written type across a multi-write turn — the next write's
       // read-back must see this one too.
       const meta = ENTITY_META[entityType];
+      // Prefer an authoritative primary-key read-back when the entity type
+      // offers one: it is a single indexed lookup (cheaper than a per-user
+      // list) and it cannot be fooled by a truncated list.
+      if (meta.byId) {
+        let row: any | undefined;
+        let readFailed = false;
+        try { row = await meta.byId(ctx.storage, entityId); } catch { readFailed = true; }
+        if (!readFailed) {
+          verification.database_record_exists = op === "delete" ? !!row && !row.deletedAt : !!row;
+          if (row && op !== "delete") entityName = meta.name(row) || entityName;
+        }
+      } else {
       let rows: any[] | null = null;
       try { rows = await meta.list(ctx.storage); } catch { rows = null; }
       if (rows) {
@@ -462,6 +500,40 @@ export async function finalizeToolResult(
           }
         }
       }
+      }
+    }
+
+    // ── Failed verification is an ERROR, not a success ──────────────────────
+    // (production audit 2026-07-29, blocker #2.)
+    //
+    // Previously this function hardcoded `success: true` for every write that
+    // did not throw, and merely *reported* `database_record_exists` alongside
+    // it, leaving it to the model to notice the discrepancy and describe it
+    // honestly. It did not: the chat said "logged 24 oz" for a row that was
+    // never written. A write we affirmatively read back as absent is a failed
+    // write, and the envelope now says so in the machine-readable `success`
+    // field that the rest of the pipeline and the UI key off.
+    //
+    // Strictly `=== false`: an omitted/undefined check means "not computed"
+    // and must never be downgraded to a failure.
+    const writeUnconfirmed = verification.database_record_exists === false && op !== "delete";
+    const deleteUnconfirmed = verification.database_record_exists === true && op === "delete";
+    if (writeUnconfirmed || deleteUnconfirmed) {
+      const what = `${entityType || "record"}${entityName ? ` "${String(entityName).slice(0, 60)}"` : ""}`;
+      const detail = writeUnconfirmed
+        ? `The ${what} could NOT be confirmed in the database after ${op === "create" ? "creating" : "updating"} it — the record was not found on read-back. Nothing was saved. Tell the user the save failed and to try again; do NOT report success.`
+        : `The ${what} still exists after the delete — the delete did NOT take effect. Tell the user the deletion failed; do NOT report success.`;
+      try { console.error(`[ai-envelope] write verification FAILED for ${toolName} (${entityType}/${entityId})`); } catch { /* noop */ }
+      return {
+        ...result,
+        success: false,
+        action: toolName,
+        action_type: actionType,
+        error: detail,
+        message: detail,
+        verification,
+        ...(entityType && entityId ? { entity: { type: entityType, id: entityId, ...(entityName ? { name: String(entityName).slice(0, 80) } : {}) } } : {}),
+      };
     }
 
     const message = typeof result?.message === "string" && result.message

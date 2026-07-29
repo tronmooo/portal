@@ -27,16 +27,14 @@
 // ============================================================
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropicClient } from "./anthropic-client";
 import { selectModel, anthropicSpec, callModel, type TaskKind } from "./model-router";
 
 // Re-use the engine's lazy client so we don't double-init the SDK.
 let _client: Anthropic | null = null;
 function getClient(): Anthropic {
-  if (!_client) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-    _client = new Anthropic({ apiKey });
-  }
+  // Bounded client (see server/anthropic-client.ts).
+  if (!_client) _client = getAnthropicClient("standard");
   return _client;
 }
 

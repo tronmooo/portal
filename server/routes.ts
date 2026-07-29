@@ -225,6 +225,7 @@ Rules:
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { generateWeeklyReview, detectAnomalies } from "./weekly-review";
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropicClient } from "./anthropic-client";
 import {
   insertProfileSchema,
   insertTrackerSchema,
@@ -1836,7 +1837,7 @@ Never fabricate data not provided. End with one concrete suggestion.
 CONTEXT JSON:
 ${JSON.stringify(ctx, null, 2)}`;
 
-      const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+      const anthropicClient = getAnthropicClient();
       const resp = await anthropicClient.messages.create({
         model: "claude-sonnet-4-6",
         max_tokens: 400,
@@ -3732,7 +3733,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     try {
       // Use Claude to do a web-search-backed valuation
       const Anthropic = (await import("@anthropic-ai/sdk")).default;
-      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+      const client = getAnthropicClient();
 
       // Try web search first (Brave)
       let webContext = "";
@@ -3944,7 +3945,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       const userPrompt = `${typePrompt}\n\nProfile data:\n${JSON.stringify(profileData, null, 1)}`;
 
-      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const client = getAnthropicClient();
       const response = await client.messages.create({
         model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
         max_tokens: 1024,
@@ -7111,7 +7112,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       const userPrompt = `Here is my Portol data snapshot for the week of ${weekAgoStr} to ${todayStr}:\n\n${JSON.stringify(dataSnapshot, null, 1)}\n\nGenerate my Weekly Digest JSON.`;
 
-      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const client = getAnthropicClient();
       const response = await client.messages.create({
         model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
         max_tokens: 2048,

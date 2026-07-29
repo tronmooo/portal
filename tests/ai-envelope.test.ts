@@ -28,6 +28,7 @@ function stubStorage(overrides: Record<string, any> = {}): any {
     listReminders: async () => [],
     getDocuments: async () => [],
     getPaychecks: async () => [],
+    getTrackerEntry: async () => undefined,
     ...overrides,
   };
 }
@@ -72,11 +73,90 @@ describe("finalizeToolResult", () => {
     expect(env.verification.profile_isolation_valid).toBe(false);
   });
 
-  it("create: missing read-back row reports database_record_exists=false", async () => {
+  // Production audit 2026-07-29, blocker #2: a write we affirmatively read back
+  // as absent is a FAILED write. This used to assert `success: true` on the
+  // theory that the envelope only reports and "the MODEL decides how to phrase
+  // it" — in production the model did not decide correctly, and told users
+  // their data was saved when no row existed. The envelope now decides.
+  it("create: missing read-back row is a failure, not a success", async () => {
     const ctx = buildTurnVerifyContext(stubStorage()); // empty task list
     const env = await finalizeToolResult("create_task", "create_task", { title: "Ghost" }, { id: "nope" }, ctx);
-    expect(env.success).toBe(true); // envelope reports; the MODEL decides how to phrase it
+    expect(env.success).toBe(false);
     expect(env.verification.database_record_exists).toBe(false);
+    expect(env.error).toMatch(/could NOT be confirmed/i);
+    // The failure message must not read as a success to the model.
+    expect(env.message).toMatch(/do NOT report success/i);
+  });
+
+  // ── Blocker #2 regression: tracker entries (the "logged 24 oz" defect) ─────
+  // `log_tracker_entry` was absent from the tool→entity map entirely, so a
+  // logged entry got a `success: true` envelope with NO verification at all.
+  describe("tracker entries are verified by primary key", () => {
+    it("log_tracker_entry: confirmed row reports success", async () => {
+      const storage = stubStorage({
+        getTrackerEntry: async (id: string) =>
+          id === "te-1" ? { id: "te-1", values: { ounces: 24 }, timestamp: "2026-07-29T00:00:00Z" } : undefined,
+      });
+      const ctx = buildTurnVerifyContext(storage);
+      const env = await finalizeToolResult(
+        "log_tracker_entry", "log_entry",
+        { trackerName: "Hydration", values: { ounces: 24 } },
+        { id: "te-1", values: { ounces: 24 } }, ctx,
+      );
+      expect(env.success).toBe(true);
+      expect(env.verification.database_record_exists).toBe(true);
+      expect(env.entity).toMatchObject({ type: "trackerEntry", id: "te-1" });
+    });
+
+    it("log_tracker_entry: absent row is a failure, never a silent success", async () => {
+      // Exactly the audited scenario: the tool returned an entry object, but
+      // the database has no such row.
+      const ctx = buildTurnVerifyContext(stubStorage()); // getTrackerEntry → undefined
+      const env = await finalizeToolResult(
+        "log_tracker_entry", "log_entry",
+        { trackerName: "Hydration", values: { ounces: 24 } },
+        { id: "te-ghost", values: { ounces: 24 } }, ctx,
+      );
+      expect(env.success).toBe(false);
+      expect(env.verification.database_record_exists).toBe(false);
+      expect(env.error).toMatch(/could NOT be confirmed/i);
+    });
+
+    it("uses the by-id read-back, not the truncated tracker list", async () => {
+      // A real entry that the (capped) tracker list does not include must
+      // still verify as existing — otherwise a good write reports as failed.
+      let listCalls = 0;
+      const storage = stubStorage({
+        getTrackers: async () => { listCalls++; return [{ id: "tr-1", name: "Hydration", entries: [] }]; },
+        getTrackerEntry: async (id: string) => ({ id, values: { ounces: 24 } }),
+      });
+      const ctx = buildTurnVerifyContext(storage);
+      const env = await finalizeToolResult(
+        "log_tracker_entry", "log_entry", { trackerName: "Hydration" }, { id: "te-old" }, ctx,
+      );
+      expect(env.success).toBe(true);
+      expect(env.verification.database_record_exists).toBe(true);
+      expect(listCalls).toBe(0); // never paid for the list read
+    });
+
+    it("delete_tracker_entry: gone means the delete is confirmed", async () => {
+      const ctx = buildTurnVerifyContext(stubStorage());
+      const env = await finalizeToolResult(
+        "delete_tracker_entry", "delete_entity", {}, { deleted: true, id: "te-1" }, ctx,
+      );
+      expect(env.success).toBe(true);
+      expect(env.verification.database_record_exists).toBe(false);
+    });
+  });
+
+  it("delete: a row still present after delete is a failure", async () => {
+    const storage = stubStorage({
+      getExpenses: async () => [{ id: "e1", description: "coffee", linkedProfiles: [] }],
+    });
+    const ctx = buildTurnVerifyContext(storage);
+    const env = await finalizeToolResult("delete_expense", "delete_entity", { description: "coffee" }, { deleted: true, id: "e1" }, ctx);
+    expect(env.success).toBe(false);
+    expect(env.error).toMatch(/still exists/i);
   });
 
   it("delete: absence of the live row means the delete is confirmed", async () => {

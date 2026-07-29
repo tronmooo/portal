@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { getAnthropicClient } from "./anthropic-client";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { storage } from "./storage";
@@ -295,13 +296,12 @@ interface ReportSpec { title: string; subtitle?: string; sections: ReportSection
 // so we defer client creation until first use.
 let _client: Anthropic | null = null;
 function getClient(): Anthropic {
-  if (!_client) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error("ANTHROPIC_API_KEY environment variable is not set");
-    }
-    _client = new Anthropic({ apiKey });
-  }
+  // Bounded client (see server/anthropic-client.ts). The chat tool-loop runs
+  // on /api/ai (maxDuration 300) and makes several sequential model calls per
+  // turn, so it gets the "extended" per-call budget — still bounded, unlike
+  // the SDK's 10-minute default, which could park a single call for longer
+  // than the entire function limit.
+  if (!_client) _client = getAnthropicClient("extended");
   return _client;
 }
 
@@ -5037,7 +5037,7 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - If action succeeded → confirm with: what was done, for whom, the item name, and the new state.
 - Example success: "✅ Marked Joe's Water habit done for today (April 9). His streak is now 3 days."
 - Example failure: "❌ Couldn't find a task called 'stretching' for Joe. Do you want to check all his tasks?"
-- VERIFICATION: write tools return a "verification" object. If verification.database_record_exists is false after a create/update, tell the user the save could NOT be confirmed — do not say "done". After a delete, database_record_exists:false means the delete IS confirmed.
+- VERIFICATION (NEVER claim an unverified write): every write tool result carries "success". success:false means the write was read back from the database and was NOT there — the data was NOT saved. Say plainly that it failed and invite them to retry; NEVER say "logged", "saved", "done", or restate the value as if it were stored. This applies to tracker logs exactly like everything else: "logged 24 oz" on a success:false result is a lie about the user's data. Write tools also return a "verification" object; database_record_exists:false after a create/update means the same thing. After a delete, database_record_exists:false means the delete IS confirmed.
 - If verification.duplicate_count > 0, mention it once ("note: you already have N similar entries") but do NOT block, merge, or delete — duplicates are allowed.
 - Destructive BULK operations always take two turns: preview_bulk_action first (relay its counts + sample names verbatim), then execute_bulk_action({plan_id, confirm:true}) ONLY after the user explicitly confirms in their NEXT message. Never loop single delete_* calls for a "delete all …" request, and never call execute_bulk_action in the same turn as the preview.
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.

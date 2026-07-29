@@ -12,6 +12,7 @@
  * Safety: never overwrites original, never auto-submits, never fills signature fields.
  */
 import { PDFDocument, StandardFonts, rgb, PDFForm } from "pdf-lib";
+import { getAnthropicClient } from "./anthropic-client";
 import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
@@ -37,11 +38,10 @@ function sensitiveStripFor(profileFieldSets: Array<Record<string, any> | null | 
 // Reuse the same Anthropic client pattern as ai-engine.ts
 let _client: Anthropic | null = null;
 function getClient(): Anthropic {
-  if (!_client) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY environment variable is not set");
-    _client = new Anthropic({ apiKey });
-  }
+  // Bounded client (see server/anthropic-client.ts). Smart-fill runs on
+  // /api, whose platform budget is 60s — an unbounded 10-minute SDK default
+  // here is what let a single wedged call burn the whole request.
+  if (!_client) _client = getAnthropicClient("standard");
   return _client;
 }
 

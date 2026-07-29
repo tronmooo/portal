@@ -141,6 +141,10 @@ export default defineConfig({
       'tests/profile-edit-no-ai-regen.test.ts',
       'tests/bootstrap-seed-keys.test.ts',
       'tests/documents-page.test.ts',
+      // Production audit 2026-07-29 regressions.
+      'tests/anthropic-budget.test.ts',
+      'tests/tracker-entry-write-verification.test.ts',
+      'tests/self-profile-race.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

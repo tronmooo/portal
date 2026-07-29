@@ -9,6 +9,7 @@
 // automatically operate on the calling user's data.
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropicClient } from "./anthropic-client";
 import {
   computeBaseline,
   currentMonthYM,
@@ -21,9 +22,9 @@ import {
 } from "@shared/spending-baseline";
 
 function getAnthropic(): Anthropic {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY required");
-  return new Anthropic({ apiKey });
+  // Bounded + shared client (see server/anthropic-client.ts). This used to
+  // build a brand-new unbounded SDK client on every call.
+  return getAnthropicClient("standard");
 }
 
 function fmtMoney(n: number): string {

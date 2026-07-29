@@ -66,6 +66,8 @@ export interface IStorage {
   createTracker(data: InsertTracker): Promise<Tracker>;
   updateTracker(id: string, data: Partial<Tracker>): Promise<Tracker | undefined>;
   logEntry(data: InsertTrackerEntry): Promise<TrackerEntry | undefined>;
+  /** Authoritative by-id read-back for a logged entry (chat write verification). */
+  getTrackerEntry(entryId: string): Promise<TrackerEntry | undefined>;
   updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; notes?: string; mood?: any; tags?: string[]; timestamp?: string }): Promise<TrackerEntry | undefined>;
   deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean>;
   deleteTracker(id: string): Promise<boolean>;
@@ -1119,7 +1121,25 @@ export class MemStorage implements IStorage {
     if (computed.bloodPressureCategory) desc += ` (${computed.bloodPressureCategory})`;
     if (computed.sleepQuality) desc += ` (${computed.sleepQuality} quality)`;
     this.logActivity("tracker", desc);
-    return entry;
+    // Read-back verification, mirroring SupabaseStorage.logEntry: return the
+    // entry as it is actually stored rather than the object we just built, so
+    // a write that did not land can never be reported as a success
+    // (production audit 2026-07-29, blocker #2).
+    const stored = tracker.entries.find(e => e.id === entry.id);
+    if (!stored) {
+      throw new Error(
+        `Tracker entry write could not be confirmed: entry ${entry.id} is not present on ` +
+        `tracker "${tracker.name}" (${data.trackerId}) after logging.`
+      );
+    }
+    return stored;
+  }
+  async getTrackerEntry(entryId: string): Promise<TrackerEntry | undefined> {
+    for (const tracker of this.trackers.values()) {
+      const found = tracker.entries.find(e => e.id === entryId);
+      if (found) return found;
+    }
+    return undefined;
   }
   async updateTracker(id: string, data: Partial<Tracker>): Promise<Tracker | undefined> {
     const tracker = this.trackers.get(id);

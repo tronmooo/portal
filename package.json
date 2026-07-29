@@ -20,6 +20,7 @@
     "smoke:verify": "tsx tests/smoke/fixture/seed.ts --verify",
     "smoke:post-deploy": "tsx scripts/post-deploy-smoke.ts",
     "lint": "tsc --noEmit",
+    "test:migrations": "./scripts/test-migrations.sh",
     "db:push": "drizzle-kit push",
     "prepare": "git config core.hooksPath .githooks || true",
     "audit:ci": "npm audit --omit=dev --audit-level=high"

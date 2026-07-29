@@ -2869,28 +2869,71 @@ export class SupabaseStorage implements IStorage {
     // W4-4: honor an explicit entry timestamp when the caller supplies one
     // (already parsed to ISO upstream); otherwise stamp NOW().
     const ts = data.timestamp || new Date().toISOString();
-    const { error } = await this.supabase.from("tracker_entries").insert({
+    // AUTHORITATIVE WRITE + READ-BACK (production audit 2026-07-29, blocker #2).
+    //
+    // This method used to `.insert()` and then return an entry object built
+    // from LOCAL variables — it never asked the database what it actually
+    // stored. Any write that did not persist (RLS silently filtering the row,
+    // a rolled-back statement, a tracker deleted underneath us) still produced
+    // a fully-formed "success" return value, which the chat layer reported as
+    // a completed log. That is the "AI reports writes that never occurred"
+    // defect: the UI showed 24 oz, the database had nothing, and a refresh
+    // made it vanish.
+    //
+    // `.select().maybeSingle()` makes the INSERT return the row as the
+    // database committed it, so the value we hand back is read from storage
+    // rather than reconstructed from intent. A missing row is now a thrown
+    // error instead of a phantom success.
+    const { data: inserted, error } = await this.supabase.from("tracker_entries").insert({
       id, user_id: this.userId, tracker_id: data.trackerId,
       entry_values: values, computed, notes: data.notes || null,
       mood: data.mood || null, tags: data.tags || null,
       for_profile: data.forProfile || null,
       profile_id: data.profileId || null,
       timestamp: ts,
-    });
+    }).select().maybeSingle();
     if (error) throw error;
+    if (!inserted) {
+      throw new Error(
+        `Tracker entry write could not be confirmed: no row returned after inserting entry ${id} ` +
+        `into tracker "${tracker.name}" (${data.trackerId}).`
+      );
+    }
+    // Validate the persisted row is the one we meant to write, and that it is
+    // owned by and scoped to this user — never report someone else's row (or a
+    // row on a different tracker) as a successful log.
+    if (inserted.id !== id
+        || inserted.tracker_id !== data.trackerId
+        || inserted.user_id !== this.userId) {
+      throw new Error(
+        `Tracker entry write verification failed: expected entry ${id} on tracker ${data.trackerId} ` +
+        `for user ${this.userId}, but the database returned entry ${inserted.id} on tracker ` +
+        `${inserted.tracker_id} for user ${inserted.user_id}.`
+      );
+    }
     bustInsightsCacheFor(this.userId); // [P0] new entry → recompute insights
     this.logActivity("tracker", `Logged ${tracker.name}`);
-    return {
-      id,
-      values,
-      computed,
-      notes: data.notes,
-      mood: data.mood as any,
-      tags: data.tags,
-      forProfile: data.forProfile || undefined,
-      profileId: data.profileId || undefined,
-      timestamp: ts,
-    };
+    // Return the DATABASE's version of the row, not our intended one.
+    return this.rowToTrackerEntry(inserted);
+  }
+
+  /**
+   * Read a single tracker entry back by id, scoped to this user. This is the
+   * authoritative existence check the chat envelope uses to confirm a logged
+   * entry really landed before any success is reported to the user
+   * (production audit 2026-07-29, blocker #2). Returns undefined when the row
+   * does not exist, belongs to someone else, or has been soft-deleted.
+   */
+  async getTrackerEntry(entryId: string): Promise<TrackerEntry | undefined> {
+    const { data, error } = await this.supabase
+      .from("tracker_entries")
+      .select()
+      .eq("id", entryId)
+      .eq("user_id", this.userId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (error || !data) return undefined;
+    return this.rowToTrackerEntry(data);
   }
 
   async updateTrackerEntry(

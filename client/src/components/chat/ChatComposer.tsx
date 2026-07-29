@@ -189,9 +189,20 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   return (
     <div className="px-3 pt-2 pb-[env(safe-area-inset-bottom,12px)] bg-background/95 backdrop-blur-sm border-t border-border/40">
       <div className="max-w-2xl mx-auto">
+        {/* Persistent visible label. A placeholder alone disappears the moment
+            the user types, leaving the field unlabelled for both sighted users
+            and assistive tech (production audit 2026-07-29). The label stays
+            on screen; the placeholder is now only an example. */}
+        <label
+          htmlFor="chat-message-input"
+          className="block px-1 pb-1 text-xs font-medium text-muted-foreground"
+        >
+          Message
+        </label>
         {/* Large prominent input box */}
         <div className="relative rounded-2xl border border-border bg-card shadow-sm focus-within:border-primary/40 focus-within:shadow-md transition-all duration-200">
           <Textarea
+            id="chat-message-input"
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
