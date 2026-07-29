@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { goalProgress } from "../shared/goal-progress";
 import type {
   Insight, Profile, Tracker, Task, Expense, Habit, Obligation,
   JournalEntry, Document, Goal, CalendarEvent,
@@ -297,7 +298,10 @@ function analyzeGoals(goals: Goal[], now: Date, insights: Insight[]) {
   for (const goal of goals) {
     if (goal.status !== "active") continue;
 
-    const progress = goal.target > 0 ? (goal.current / goal.target) * 100 : 0;
+    // Direction-aware (U3): the raw ratio told a weight-loss goal it was
+    // 106% done, so "nearly complete" insights fired while the user was
+    // moving away from the target.
+    const progress = goalProgress(goal).percent;
 
     // Nearly complete
     if (progress >= 80 && progress < 100) {

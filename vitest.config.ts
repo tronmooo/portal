@@ -78,6 +78,7 @@ export default defineConfig({
       'tests/date-math.test.ts',
       'tests/net-worth-ownership.test.ts',
       'tests/net-worth-view.test.ts',
+      'tests/goal-progress.test.ts',
       'tests/tracker-taxonomy.test.ts',
       'tests/category-canon.test.ts',
       'tests/timezone-dst.test.ts',

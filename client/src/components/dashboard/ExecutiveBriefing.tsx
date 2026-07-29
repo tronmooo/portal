@@ -29,6 +29,7 @@ import type { DashboardStats } from "@shared/schema";
 // here is what produced "Lawn care ($40) due in -29d".
 import { dayLabel as relativeDay, dueLabel } from "@shared/now-rank";
 import { isTestDataRow } from "@shared/test-data";
+import { goalProgress } from "@shared/goal-progress";
 import { isRecurring as isRecurringRule, parseRecurrence } from "@shared/recurrence";
 import { useShowTestData } from "@/lib/showTestData";
 
@@ -861,12 +862,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           )}
         </Section>
 
+        {/* Progress is direction-aware AND clamped. This cell rendered an
+            unclamped 106% for a weight-loss goal whose own modal said 100%
+            (audit findings U3 / D2). */}
         <Section id="projects" title="Open Projects" count={projects.length} testId="brief-projects" defaultOpen={projects.length > 0}>
           {projects.length === 0 ? <Empty label="No active goals." /> : (
             <div className="divide-y divide-border/30">
               {projects.map((g: any) => (
                 <Row key={g.id}
-                  cells={["goal", g.title, g.target ? `${Math.round(((g.current ?? 0) / g.target) * 100)}%` : ""]}
+                  cells={["goal", g.title, g.target ? `${Math.round(goalProgress(g).percent)}%` : ""]}
                   valueTone="pos"
                   onClick={() => setPopup("projects")} />
               ))}

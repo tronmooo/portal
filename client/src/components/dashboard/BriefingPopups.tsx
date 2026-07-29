@@ -11,6 +11,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { addMonthsClamped, addYearsClamped, toISODate } from "@shared/date-math";
+import { goalProgress } from "@shared/goal-progress";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { useMarkBillPaid, MARK_PAID_LABEL } from "@/lib/mark-bill-paid";
@@ -521,7 +522,9 @@ export function ProjectsPopup({ open, onClose, goals }: { open: boolean; onClose
       subtitle={rows.length ? "Active goals with live progress" : undefined}
       footerLabel="Open Goals" footerHref="/goals">
       {rows.length === 0 ? <EmptyNote label="No active goals." /> : rows.map((g: any) => {
-        const pct = g.target ? Math.max(0, Math.min(100, Math.round(((g.current ?? 0) / g.target) * 100))) : null;
+        // Direction-aware (U3): a raw current/target ratio runs a
+        // weight-loss goal backwards and reports success above target.
+        const pct = g.target ? Math.round(goalProgress(g).percent) : null;
         const ownerNames = owners.names(g.linkedProfiles, false);
         const deadlineDays = g.deadline ? Math.round((new Date(String(g.deadline).slice(0, 10) + "T00:00:00").getTime() - todayMs) / 86400000) : null;
         const reached = (g.milestones || []).filter((m: any) => m.reached).length;

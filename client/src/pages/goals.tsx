@@ -6,6 +6,7 @@ import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { GoalsSection } from "@/pages/dashboard";
 import { goalsQueryKey } from "@shared/query-keys";
+import { goalProgress, goalStatus } from "@shared/goal-progress";
 import { apiRequest } from "@/lib/queryClient";
 
 export default function GoalsPage() {
@@ -29,12 +30,18 @@ export default function GoalsPage() {
     let active = 0, completed = 0, overdue = 0, atRisk = 0, pctSum = 0, pctCount = 0;
     for (const g of (Array.isArray(goals) ? goals : [])) {
       const status = String(g.status || "").toLowerCase();
-      const pct = Number(g.target) > 0 ? Math.min(100, (Number(g.current) || 0) / Number(g.target) * 100) : 0;
-      if (status === "completed" || pct >= 100) { completed++; continue; }
+      // Direction-aware progress and one shared status rule. The old
+      // `current / target` ratio ran a weight-loss goal backwards to >= 100%,
+      // which counted it as completed and `continue`d past the overdue branch
+      // — so these tiles reported "0 Overdue" directly above a section headed
+      // "OVERDUE — ACTION NEEDED (1)" (audit findings U3 and D2).
+      const { percent: pct } = goalProgress(g);
+      const state = goalStatus(g, now);
+      if (state === "complete") { completed++; continue; }
       if (status === "abandoned") continue;
       active++; pctSum += pct; pctCount++;
       const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - now) / 86400000) : null;
-      if (daysLeft != null && daysLeft < 0 && pct < 100) overdue++;
+      if (state === "overdue") overdue++;
       else if (daysLeft != null && daysLeft <= 14 && pct < 50) atRisk++;
     }
     return { active, completed, overdue, atRisk, avg: pctCount ? Math.round(pctSum / pctCount) : 0 };

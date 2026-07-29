@@ -10,6 +10,7 @@ import { categoryTheme } from "@/lib/category-theme";
 import { AccentCard } from "@/components/ui/accent-card";
 import { resolveAssetValue, resolveLiabilityBalance, isNetWorthLiabilityProfile } from "@shared/asset-value";
 import { goalsQueryKey } from "@shared/query-keys";
+import { goalProgress } from "@shared/goal-progress";
 import {
   RECUR_PRESETS, parseRecurrence, recurrenceToTags, isRecurring as isRecurringRule,
   nextOccurrence as nextRecurOccurrence, seriesEnded, humanSummary, freqToUnit,
@@ -2884,8 +2885,12 @@ interface GoalItem {
 
 function GoalProgressBar({ goal }: { goal: GoalItem }) {
   const hasValidTarget = goal.target > 0;
-  const pct = hasValidTarget ? Math.min(100, Math.round((goal.current / goal.target) * 100)) : 0;
-  const isComplete = normalizeFilter(goal.status) === normalizeFilter("completed") || pct >= 100;
+  // Direction-aware: `current / target` reads a weight-loss goal backwards and
+  // reported 106% (clamped to 100%, "Target reached") while the user was above
+  // target — audit finding U3.
+  const progress = goalProgress(goal);
+  const pct = Math.round(progress.percent);
+  const isComplete = normalizeFilter(goal.status) === normalizeFilter("completed") || progress.complete;
   const daysLeft = goal.deadline ? Math.ceil((new Date(goal.deadline).getTime() - Date.now()) / 86400000) : null;
 
   if (!hasValidTarget) {
@@ -3058,12 +3063,16 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
             // celebration — to avoid contradictory signals (e.g. "6d late 🎉 100%").
             const decorated = activeGoals.map(g => {
               const goalCurrent = g.current || g.startValue || 0;
-              const pct = g.target > 0 ? Math.min(100, Math.round((goalCurrent / g.target) * 100)) : 0;
+              // Direction-aware progress (U3): a weight-loss goal's raw
+              // current/target ratio runs backwards and hit 100% while the
+              // user was still above target.
+              const progress = goalProgress(g);
+              const pct = Math.round(progress.percent);
               const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000) : null;
               const isOverdue = daysLeft !== null && daysLeft < 0;
               const isAtRisk = !isOverdue && daysLeft !== null && daysLeft <= 30 && pct < 50 && daysLeft > 0;
               const explicitlyCompleted = normalizeFilter(g.status) === normalizeFilter("completed");
-              const isReadyToComplete = pct >= 100 && !isOverdue && !explicitlyCompleted;
+              const isReadyToComplete = progress.complete && !isOverdue && !explicitlyCompleted;
               return { g, goalCurrent, pct, daysLeft, isOverdue, isAtRisk, explicitlyCompleted, isReadyToComplete };
             });
             const overdueRows = decorated.filter(d => d.isOverdue).sort((a, b) => (a.daysLeft ?? 0) - (b.daysLeft ?? 0));
@@ -3166,8 +3175,11 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
         <SheetContent side="bottom" className="max-h-[60vh] rounded-t-2xl px-4 pb-8">
           {actionGoal && (() => {
             const currentVal = actionGoal.current || actionGoal.startValue || 0;
-            const pct = actionGoal.target > 0 ? Math.min(100, Math.round((currentVal / actionGoal.target) * 100)) : 0;
-            const remaining = Math.max(0, actionGoal.target - currentVal);
+            // Direction-aware (U3). This sheet is where the audited weight goal
+            // showed "100% · Target reached" 21 lbs from its target.
+            const goalProg = goalProgress(actionGoal);
+            const pct = Math.round(goalProg.percent);
+            const remaining = Math.abs(actionGoal.target - currentVal);
             // Pace analysis — only when both deadline and createdAt exist (no fabrication).
             const daysLeft = actionGoal.deadline
               ? Math.ceil((new Date(actionGoal.deadline).getTime() - Date.now()) / 86400000)
@@ -3180,7 +3192,10 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
               const elapsed = Math.max(0, Math.min(totalDays, Math.round((Date.now() - startMs) / 86400000)));
               const expectedPct = Math.round((elapsed / totalDays) * 100);
               const delta = pct - expectedPct;
-              if (pct >= 100) {
+              // Completion is checked against the direction-aware result, not
+              // a raw ratio, so "Target reached" and "80d overdue" can no
+              // longer appear on the same card.
+              if (goalProg.complete) {
                 pace = { label: 'Complete', tone: 'good', detail: 'Target reached' };
               } else if (daysLeft !== null && daysLeft < 0) {
                 pace = { label: 'Overdue', tone: 'bad', detail: `${Math.abs(daysLeft)}d past deadline` };

@@ -9,6 +9,7 @@ import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
+import { goalProgress } from "@shared/goal-progress";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { liabilityFamily } from "@shared/liability-types";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -4327,7 +4328,10 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
   // Goal ring — only when the user actually created a goal for this tracker.
   const { data: overviewGoals = [] } = useQuery<Goal[]>({ queryKey: goalsQueryKey([]) });
   const trackerGoal = overviewGoals.find((g) => g && g.trackerId === tracker.id && g.status === "active" && typeof g.target === "number");
-  const goalProgress = (() => {
+  // Named `goalRing`, not `goalProgress`: a local by that name shadowed the
+  // shared direction-aware helper, which is how this ring kept the inverted
+  // `current / target` math after every other surface was fixed (U3).
+  const goalRing = (() => {
     if (!trackerGoal || !pres.primaryField || trackerGoal.target <= 0) return null;
     const fld = pres.primaryField;
     let current = 0;
@@ -4343,8 +4347,14 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
       const nums = sorted.map((e) => Number(e.values?.[fld])).filter((v) => isFinite(v));
       current = nums.length ? nums[nums.length - 1] : 0;
     }
-    const pct = Math.max(0, Math.min(100, Math.round((current / trackerGoal.target) * 100)));
-    return { current, target: trackerGoal.target, pct, scope, unit: trackerGoal.unit || pres.unit, met: current >= trackerGoal.target };
+    // `current` comes from the tracker's own entries, so the ring reflects
+    // logged reality rather than a stale figure typed into the goal — the
+    // divergence that let a 160 lb target read "reached" at 181 lbs.
+    const prog = goalProgress({ ...trackerGoal, current });
+    return {
+      current, target: trackerGoal.target, pct: Math.round(prog.percent), scope,
+      unit: trackerGoal.unit || pres.unit, met: prog.complete,
+    };
   })();
 
   const timeRangeBtns: { label: string; value: TimeRange }[] = [
@@ -4388,23 +4398,23 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
       })()}
 
       {/* Goal ring/progress — only when a real goal exists for this tracker */}
-      {goalProgress && (
+      {goalRing && (
         <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Goal · {goalProgress.scope}</span>
-            <span className={`text-xs font-bold ${goalProgress.met ? "text-emerald-500" : "text-primary"}`}>
-              {goalProgress.met ? "✓ Goal met" : `${goalProgress.pct}%`}
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Goal · {goalRing.scope}</span>
+            <span className={`text-xs font-bold ${goalRing.met ? "text-emerald-500" : "text-primary"}`}>
+              {goalRing.met ? "✓ Goal met" : `${goalRing.pct}%`}
             </span>
           </div>
           <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all ${goalProgress.met ? "bg-emerald-500" : "bg-primary"}`}
-              style={{ width: `${goalProgress.pct}%` }}
+              className={`h-full rounded-full transition-all ${goalRing.met ? "bg-emerald-500" : "bg-primary"}`}
+              style={{ width: `${goalRing.pct}%` }}
             />
           </div>
           <p className="text-[11px] text-muted-foreground mt-1.5">
-            {Math.round(goalProgress.current * 10) / 10}{goalProgress.unit ? ` ${goalProgress.unit}` : ""} of {goalProgress.target}{goalProgress.unit ? ` ${goalProgress.unit}` : ""} goal
-            {!goalProgress.met && goalProgress.target > goalProgress.current ? ` · ${Math.round((goalProgress.target - goalProgress.current) * 10) / 10} to go` : ""}
+            {Math.round(goalRing.current * 10) / 10}{goalRing.unit ? ` ${goalRing.unit}` : ""} of {goalRing.target}{goalRing.unit ? ` ${goalRing.unit}` : ""} goal
+            {!goalRing.met && goalRing.target > goalRing.current ? ` · ${Math.round((goalRing.target - goalRing.current) * 10) / 10} to go` : ""}
           </p>
         </div>
       )}
@@ -5265,7 +5275,8 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
       ) : (
         <>
           {trackerGoals.map(g => {
-            const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
+            // Direction-aware (U3) — see shared/goal-progress.
+            const pct = Math.round(goalProgress(g).percent);
             const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000) : null;
             return (
               <div key={g.id} role="button" tabIndex={0} aria-label={`Edit goal: ${g.title}`} className="rounded-lg border p-3 space-y-2 cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => openEdit(g)} onKeyDown={onEnterOrSpace(() => openEdit(g))} data-testid={`tracker-goal-${g.id}`}>
