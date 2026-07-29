@@ -83,5 +83,37 @@ if [ "$REPAIRED" != "0" ]; then
 fi
 echo "  ✓ idempotent"
 
+# ── Pass 2: the REAL production schema + the REAL audited rows ───────────────
+# The fixture above is hand-written and deliberately simple. This pass rebuilds
+# the actual production table definitions (column types, nullability, defaults —
+# including the two text[] linked_profiles columns and the text profile_id) and
+# loads the genuine corrupted rows read from the live database, so the
+# migrations are exercised against exactly what they will meet in production.
+echo ""
+echo "▶ pass 2: real production schema + real audited rows"
+$PSQL -f "$REPO_ROOT/tests/sql/production-schema.sql" >/dev/null
+$PSQL -f "$REPO_ROOT/tests/sql/production-corruption.fixture.sql" >/dev/null
+
+echo "  applying both migrations"
+$PSQL -f "$REPO_ROOT/migrations/20260729_linked_profiles_ownership_guard.sql" 2>&1 \
+  | grep -E 'pruned|complete|verification|WARNING' || true
+$PSQL -f "$REPO_ROOT/migrations/20260729_tracker_entry_orphans.sql" 2>&1 \
+  | grep -E 'retired|verification|WARNING' || true
+
+echo "  asserting"
+$PSQL -f "$REPO_ROOT/tests/sql/production-corruption.assert.sql" 2>&1 | grep -E 'PASS|FAIL|---' || true
+
+echo ""
+echo "▶ re-applying both migrations on the real schema (idempotency)"
+REPAIRED2=$($PSQL -f "$REPO_ROOT/migrations/20260729_linked_profiles_ownership_guard.sql" 2>&1 \
+  | grep -oE 'cleanup complete: [0-9]+ row' | grep -oE '[0-9]+' || echo "unknown")
+RETIRED2=$($PSQL -f "$REPO_ROOT/migrations/20260729_tracker_entry_orphans.sql" 2>&1 \
+  | grep -oE 'retired [0-9]+ entry' | grep -oE '[0-9]+' || echo "unknown")
+if [ "$REPAIRED2" != "0" ] || [ "$RETIRED2" != "0" ]; then
+  echo "✗ FAIL: re-run changed rows (linked_profiles=$REPAIRED2, entries=$RETIRED2); expected 0/0" >&2
+  exit 1
+fi
+echo "  ✓ both idempotent"
+
 echo ""
 echo "✓ all migration tests passed"

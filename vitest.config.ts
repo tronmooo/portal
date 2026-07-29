@@ -148,6 +148,8 @@ export default defineConfig({
       'tests/qa-2026-07-29-regressions.test.ts',
       'tests/qa-2026-07-29-routes.test.ts',
       'tests/qa-2026-07-29-ui.test.tsx',
+      'tests/anthropic-timeout-behavior.test.ts',
+      'tests/no-unbounded-anthropic.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

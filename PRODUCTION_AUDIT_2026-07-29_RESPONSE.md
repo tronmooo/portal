@@ -158,9 +158,54 @@ churn. Treat blocker 3 as mitigated, not closed.
 
 ```bash
 npm run check           # typecheck
-npm test                # 1765 unit/integration tests
-npm run test:migrations # migrations against a throwaway PostgreSQL cluster
+npm test                # 1774 unit/integration tests
+npm run test:migrations # 37 assertions, two passes, throwaway PostgreSQL cluster
 ```
+
+`test:migrations` runs two passes. The first uses a simple hand-written
+fixture. The second rebuilds the **real production schema**
+(`tests/sql/production-schema.sql` — column types, nullability and defaults
+transcribed from `information_schema` on the live project) and loads the
+**real audited rows** with their genuine ids
+(`tests/sql/production-corruption.fixture.sql`), so the migrations are
+exercised against exactly what they will meet in production. That pass caught
+details a hand-written fixture would have missed: two `linked_profiles`
+columns are `text[]` rather than `jsonb`, and `tracker_entries.profile_id` is
+`text` rather than `uuid`.
+
+## Production dry run (read-only, 2026-07-29)
+
+Before applying anything, the migrations' cleanup logic was run against the
+live database as pure `SELECT`s to compute the exact change set:
+
+| | |
+| --- | --- |
+| JSONB rows rewritten | **9** (3 events, 5 habits, 1 tracker) |
+| `text[]` rows rewritten | **4** (incomes) |
+| Tracker entries retired | **3** (all on one soft-deleted "Supplements" tracker) |
+| **Total rows changed** | **16** |
+| JSONB rows left untouched | **23,343** |
+| Live tracker entries left untouched | **2,995** |
+
+Safety invariants, all verified against live data:
+
+- **0 rows gain a profile link** — the change is strictly subtractive.
+- **0 rows contain an invented link** — every surviving element was already
+  present before the rewrite.
+- Rows that are already clean are not written at all.
+
+The audit's three headline numbers reproduced exactly (3 events, 1 cross-user
+habit, 1 cross-user tracker, 3 orphaned entries). The sweep additionally found
+4 dangling habit references and 4 dangling income references the audit did not
+report.
+
+## Verification status per blocker
+
+| Blocker | How it was verified |
+| --- | --- |
+| 1 — cross-user links | Migration run against the real schema + real rows: 20 assertions covering cleanup, no collateral damage, the exact audited attack being rejected, and legitimate writes still working. Plus the read-only production dry run above. |
+| 2 — phantom writes | `logEntry()` driven against a scripted Supabase double for failed, delayed, interrupted, mismatched and duplicate inserts; envelope tested for the tracker-entry verification path and the success/failure contract. |
+| 3 — timeouts | Behavioural: a real Anthropic client pointed at a server that accepts and never responds, asserting it aborts near its budget rather than hanging. Plus a source-level guard that no server file may construct an unbounded client. **Still not verified end-to-end against production latency** — see the caveat above. |
 
 ## Deployment note
 
