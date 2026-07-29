@@ -11,17 +11,21 @@
 // shapes) is never mistaken for test junk.
 const TEST_PATTERNS: RegExp[] = [
   /^AUDIT[0-9A-F]{4,}/i,          // AUDIT4C9B25_Bob_exp
+  /^AUDIT[ _-]?TEST\b/i,          // "AUDIT TEST TASK — please delete"
   /^QAMULTI[0-9]/i,               // QAMULTI389053_asset_bob_kayak
   /^QASCALE/i,
   /^W2_[0-9]/i,                   // W2_1780532176_Hsub
   /^SMOKE[_ ]/i,
   /^QA_TEST/i,                    // QA_TEST_Coffee
-  /^QA TEST/i,                    // "QA Test Expense EDITED"
+  /^QA TEST/i,                    // "QA Test Expense EDITED", "QA Test Daily Habit"
   /^EMPTYPROBE_QA/i,
   /__qa[_a-z0-9]*__/i,            // __qa_e2e__, __qa_cascade_test__
   /__aichat_audit/i,              // __aichat_audit_cfd4d673__
   /\bTest Expense QA\b/i,
   /_QA\b/i,                       // trailing _QA token
+  /\bQA\d{3,}\b/i,                // "Buy printer paper QA778" (QA + run number)
+  /^Test QA\b/i,                  // "Test QA Task"
+  /^Test\b.*\bQA$/i,              // "Test Habit QA" (starts Test, ends QA)
 ];
 
 /**

@@ -105,6 +105,36 @@ describe("ExecutiveBriefing", () => {
     fireEvent.click(header);
     expect(header.getAttribute("aria-expanded")).toBe("false");
   });
+
+  it("hides QA bills, collapses duplicate bills, and scopes the overdue lead bullet (2026-07-29 report)", async () => {
+    const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
+    const enhanced: any = {
+      financeSnapshot: { upcomingBills: [
+        { id: "b1", name: "Verizon Phone Bill payment", amount: 86.5, daysUntil: -3, status: "overdue" },
+        { id: "b2", name: "Phone Bill payment", amount: 86.5, daysUntil: -3, status: "overdue" },
+        { id: "b3", name: "QA Test Subscription", amount: 15.99, daysUntil: 5, status: "upcoming" },
+        { id: "b4", name: "rent the 1st", amount: 2500, daysUntil: -28, status: "overdue" },
+        { id: "b5", name: "rent", amount: 300, daysUntil: 3, status: "upcoming" },
+      ] },
+      expiringDocuments: [],
+    };
+    wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={{} as any} enhanced={enhanced} />);
+    const bills = screen.getByTestId("brief-bills").textContent || "";
+    // Hide-test-data defaults ON — the QA subscription must not render.
+    expect(bills).not.toContain("QA Test Subscription");
+    // Same-amount name-nested pair renders once, keeping the specific name.
+    expect((bills.match(/Phone Bill payment/g) || []).length).toBe(1);
+    expect(bills).toContain("Verizon Phone Bill payment");
+    // Different amounts ($2,500 vs $300) are NOT collapsed — user must reconcile.
+    expect(bills).toContain("rent the 1st");
+    expect(bills).toContain("$300");
+    const ai = screen.getByTestId("brief-ai").textContent || "";
+    // Lead bullet may not claim "No overdue tasks." while bills are overdue.
+    expect(ai).toContain("No overdue to-do tasks");
+    // The -28d bill reads as overdue, never "due in -28d".
+    expect(ai).toContain("28d overdue");
+    expect(ai).not.toMatch(/due in -/);
+  });
 });
 
 describe("extracted TasksPopup / HabitsPopup still render (regression: 'popups destroyed')", () => {

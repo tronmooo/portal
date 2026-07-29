@@ -17,6 +17,15 @@ describe("isTestDataRow", () => {
       "__aichat_audit_cfd4d673__ weekly groceries",
       "Test Expense QA",
       "Internet bill_QA",
+      // Executive-tab leak report (2026-07-29): rows visible despite matching
+      // the AUDIT/QA naming conventions.
+      "AUDIT TEST TASK — please delete",
+      "Buy printer paper QA778",
+      "Test QA Task",
+      "Test Habit QA",
+      "QA Test Daily Habit",
+      "QA Test Subscription",
+      "QAMULTI389053_habit_self_read",
     ]) {
       expect(isTestDataRow(s), s).toBe(true);
     }
@@ -33,6 +42,9 @@ describe("isTestDataRow", () => {
       "Rent",
       "QA Manager salary", // 'QA' as a real word, not the QA_/QA Test prefix
       "Quarterly Audit fees",
+      "Audit the garage",       // AUDIT as a verb, not the AUDIT-TEST prefix
+      "Test drive the new car", // starts with Test but doesn't end in QA
+      "Room QA1 inspection",    // QA+digits needs 3+ digits
     ]) {
       expect(isTestDataRow(s), s).toBe(false);
     }

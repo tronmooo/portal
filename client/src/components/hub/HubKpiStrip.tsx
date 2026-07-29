@@ -60,7 +60,7 @@ function StatChip({ label, value, accent, sub, subTone, onClick, testId }: {
     <button
       onClick={onClick}
       data-testid={testId}
-      className="shrink-0 flex items-baseline gap-1.5 rounded-lg border border-border/60 bg-card/60 px-3 py-1.5 hover:bg-accent/50 transition-colors text-left"
+      className="shrink-0 flex items-baseline gap-1 sm:gap-1.5 rounded-lg border border-border/60 bg-card/60 px-2 sm:px-3 py-1.5 hover:bg-accent/50 transition-colors text-left"
     >
       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
       <span className={`text-sm font-bold tabular-nums ${tone(accent)}`}>{value}</span>
@@ -132,7 +132,12 @@ export function HubKpiStrip() {
     : null;
 
   return (
-    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar" data-testid="hub-kpi-strip">
+    // Horizontal scroll with an edge fade so cut-off chips read as "more to
+    // the right" instead of a broken layout at narrow widths.
+    <div
+      className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar [mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]"
+      data-testid="hub-kpi-strip"
+    >
       <StatChip
         label="Net Worth"
         value={netWorth == null ? "—" : `${netWorth < 0 ? "-" : ""}${fmtMoney(netWorth)}`}

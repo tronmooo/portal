@@ -53,7 +53,7 @@ export function HubShell() {
         <HubProfileSwitcher />
       </div>
       <HubKpiStrip />
-      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1 pb-2" role="tablist" aria-label="Hub sections">
+      <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1 pb-2 [mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]" role="tablist" aria-label="Hub sections">
         {HUB_TABS.map(tab => {
           const isActive = active === tab.id;
           return (
@@ -63,7 +63,7 @@ export function HubShell() {
               aria-selected={isActive}
               data-testid={`hub-tab-${tab.id}`}
               onClick={() => hashNavigate(tab.id === "info" ? infoTabRoute([...scope.selectedIds]) : tab.route)}
-              className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+              className={`shrink-0 rounded-full px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold transition-colors ${
                 isActive
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"

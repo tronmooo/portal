@@ -1497,7 +1497,17 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Habits ----
-  async getHabits() { return Array.from(this.habits.values()); }
+  async getHabits() {
+    // Refresh streaks on read — the stored value is a snapshot from the last
+    // check-in write and goes stale as days pass (see supabase rowToHabit).
+    const list = Array.from(this.habits.values());
+    for (const h of list) {
+      const { current, longest } = calculateStreak(h.checkins || [], h.targetPerDay || 1);
+      h.currentStreak = current;
+      h.longestStreak = Math.max(longest, h.longestStreak || 0);
+    }
+    return list;
+  }
   async getHabit(id: string) { return this.habits.get(id); }
   async createHabit(data: InsertHabit): Promise<Habit> {
     const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", targetPerDay: data.targetPerDay || 1, timeOfDay: data.timeOfDay ?? undefined, scheduledTime: data.scheduledTime ?? undefined, currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
@@ -1789,6 +1799,13 @@ export class MemStorage implements IStorage {
         if (t.entries.some(e => e.timestamp.slice(0, 10) === dayStr)) streak++; else if (i > 0) break;
       }
       if (streak >= 2) streaks.push({ name: t.name, days: streak });
+    }
+    // Habit streaks feed the header STREAK chip too (it opens the Habits
+    // popup, so the two must agree). Recompute live — the stored
+    // currentStreak is only refreshed on check-in writes and goes stale.
+    for (const h of habits) {
+      const { current } = calculateStreak(h.checkins || [], h.targetPerDay || 1);
+      if (current >= 1) streaks.push({ name: h.name, days: current });
     }
 
     // Habit completion rate (last 7 days)

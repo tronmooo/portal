@@ -27,6 +27,9 @@ import type { DashboardStats } from "@shared/schema";
 // One relative-due formatter for the whole app. Interpolating a raw `daysUntil`
 // here is what produced "Lawn care ($40) due in -29d".
 import { dayLabel as relativeDay, dueLabel } from "@shared/now-rank";
+import { isTestDataRow } from "@shared/test-data";
+import { isRecurring as isRecurringRule, parseRecurrence } from "@shared/recurrence";
+import { useShowTestData } from "@/lib/showTestData";
 
 type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | "projects" | "notes" | "reminders" | "attention" | "today" | null;
 
@@ -147,6 +150,27 @@ function dayLabel(dateStr: string, todayStr: string): string {
 const BIRTHDAY_RE = /birthday|anniversar|🎂|🎉/i;
 const APPT_RE = /appt|appointment|doctor|dentist|dental|vet\b|exam|check[- ]?up|physical|therapy/i;
 
+const normName = (s: any) => String(s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+
+// Display-level bill dedupe: "Verizon Phone Bill payment" and "Phone Bill
+// payment" at the same $86.50 are one bill entered twice. Collapses rows only
+// when the amounts match exactly AND the normalized names match or nest —
+// "rent the 1st" ($2,500) vs "rent" ($300) stays two rows for the user to
+// reconcile. The row with the more specific (longer) name survives.
+function dedupeBills(rows: any[]): any[] {
+  const out: any[] = [];
+  for (const b of rows || []) {
+    const n = normName(b.name);
+    const idx = out.findIndex(o => Number(o.amount) === Number(b.amount) && (() => {
+      const m = normName(o.name);
+      return m === n || (n && m && (m.includes(n) || n.includes(m)));
+    })());
+    if (idx === -1) out.push(b);
+    else if (n.length > normName(out[idx].name).length) out[idx] = b;
+  }
+  return out;
+}
+
 export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, ready = true }: {
   filterMode: string; filterIds: string[];
   stats: DashboardStats | undefined; enhanced: any;
@@ -174,13 +198,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // then renders as "0 in every category" for the whole staleTime window.
   // Letting the error propagate keeps react-query in error state (data stays
   // undefined → section shows empty NOW but refetches on mount/focus/switch).
-  const { data: tasks = [], isPending: tasksPending } = useQuery<any[]>({
+  const { data: tasksRaw = [], isPending: tasksPending } = useQuery<any[]>({
     queryKey: ["/api/tasks", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/tasks${param}`).then(r => r.json()),
     staleTime: 30_000,
   });
-  const { data: habits = [], isPending: habitsPending } = useQuery<any[]>({
+  const { data: habitsRaw = [], isPending: habitsPending } = useQuery<any[]>({
     queryKey: ["/api/habits", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/habits${param}`).then(r => r.json()),
@@ -188,7 +212,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   });
   // 45-day window: agenda + calendar preview slice ≤14d from it; birthdays /
   // appointments / important dates get the longer horizon. One fetch.
-  const { data: timeline = [], isPending: timelinePending } = useQuery<any[]>({
+  const { data: timelineRaw = [], isPending: timelinePending } = useQuery<any[]>({
     queryKey: ["/api/calendar/timeline", todayStr, in45, mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/calendar/timeline${param}${amp}start=${todayStr}&end=${in45}`).then(r => r.json()),
@@ -199,13 +223,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // server enforces strict isolation; unlinked reminders appear only in the
   // unfiltered "Everyone" view). Keying on mode/ids makes switching profiles
   // refetch instead of showing another profile's cached reminders.
-  const { data: reminders = [] } = useQuery<any[]>({
+  const { data: remindersRaw = [] } = useQuery<any[]>({
     queryKey: ["/api/reminders", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/reminders${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
-  const { data: goals = [], isPending: goalsPending } = useQuery<any[]>({
+  const { data: goalsRaw = [], isPending: goalsPending } = useQuery<any[]>({
     queryKey: ["/api/goals", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/goals${param}`).then(r => r.json()),
@@ -217,12 +241,29 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryFn: () => apiRequest("GET", `/api/journal${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
-  const { data: notifications = [] } = useQuery<any[]>({
+  const { data: notificationsRaw = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
+
+  // "Hide test data" (default) — the header toggle flips this flag app-wide,
+  // but this tab previously never consumed it, so AUDIT/QA/W2/SMOKE rows leaked
+  // into every section regardless of the toggle. Same shared detector the
+  // finance surfaces use (shared/test-data).
+  const showTestData = useShowTestData();
+  const isTestRow = (r: any) =>
+    isTestDataRow(r?.name) || isTestDataRow(r?.title) || isTestDataRow(r?.description) ||
+    isTestDataRow(r?.message) || isTestDataRow(r?.documentName);
+  const hideTest = <T,>(rows: T[]): T[] => (showTestData ? rows : (rows || []).filter(r => !isTestRow(r)));
+  const tasks = hideTest(tasksRaw || []);
+  const habits = hideTest(habitsRaw || []);
+  const timeline = hideTest(timelineRaw || []);
+  const reminders = hideTest(Array.isArray(remindersRaw) ? remindersRaw : []);
+  const notifications = hideTest(Array.isArray(notificationsRaw) ? notificationsRaw : []);
+  const goals = hideTest(goalsRaw || []);
+  const allBills = dedupeBills(hideTest(enhanced?.financeSnapshot?.upcomingBills || []));
 
   // STUCK-LOADING DEADLINE (2026-07-16): if any tile-feeding query is still
   // unresolved after 12s (wedged fetch, failed enhanced, cold instance), show
@@ -251,17 +292,39 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const overdueTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) < todayStr)
     .sort((a: any, b: any) => (a.dueDate || "").localeCompare(b.dueDate || "")).slice(0, 10);
   const highPriority = pending.filter((t: any) => ["high", "urgent"].includes(String(t.priority || "").toLowerCase()) && !(t.dueDate && t.dueDate.slice(0, 10) < todayStr)).slice(0, 8);
-  const agendaTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) === todayStr);
+  // Same "today" rule as TasksPopup's Today tab (minus its overdue section):
+  // due today, or undated — an undated one-off or unpaused recurring chore
+  // surfaces today. Keeping the two rules identical is what makes the TASKS
+  // tile's "due today" line up with the popup's tab counts.
+  const pausedRecurring = (t: any) => isRecurringRule(t.tags || []) && parseRecurrence(t.tags || []).paused;
+  const agendaTasks = pending.filter((t: any) =>
+    !pausedRecurring(t) && (t.dueDate ? t.dueDate.slice(0, 10) === todayStr : true));
+  // Strictly future-dated — today's and undated tasks already live on the
+  // agenda, so listing them here too would show one task in two sections.
   const upcomingTasks = pending
-    .filter((t: any) => !t.dueDate || t.dueDate.slice(0, 10) >= todayStr)
+    .filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) > todayStr)
     .sort((a: any, b: any) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999")).slice(0, 12);
 
   const tl = (timeline || []).filter((i: any) => (i.date || "").slice(0, 10) >= todayStr);
-  const todayItems = tl.filter((i: any) => (i.date || "").slice(0, 10) === todayStr);
+  // Loan / credit-card payments (timeline marks them meta.kind === "payment";
+  // recurring bills are kind "bill") are amortizing liabilities, not calendar
+  // commitments — the Liabilities/Bills lane already tracks them, so they stay
+  // off Today's Agenda (type-aware-liabilities rule). They remain on the
+  // full Calendar surfaces, which deliberately show every due date.
+  const isLoanPayment = (i: any) => i.type === "obligation" && i.meta?.kind === "payment";
+  const todayItems = tl.filter((i: any) => (i.date || "").slice(0, 10) === todayStr && !isLoanPayment(i));
   const events = tl.filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) > todayStr);
   const birthdays = events.filter((i: any) => BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
   const appointments = events.filter((i: any) => APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
-  const importantDates = events.filter((i: any) => !BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`) && !APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 10);
+  // One row per series: a recurring chore ("Lawn Care" weekly) otherwise fills
+  // the whole Important Dates list with its next 7 occurrences.
+  const importantDates = (() => {
+    const seen = new Set<string>();
+    return events
+      .filter((i: any) => !BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`) && !APPT_RE.test(`${i.title} ${i.category || ""}`))
+      .filter((i: any) => { const k = normName(i.title); if (seen.has(k)) return false; seen.add(k); return true; })
+      .slice(0, 10);
+  })();
   // EVENTS tile counts only real calendar EVENTS — not tasks / bills /
   // obligations that also live in the timeline (BUG-20260709: "3 events even
   // when Mike has no events"). `eventsToday` below keeps that semantics.
@@ -272,13 +335,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   });
   const missedCount = habitRows.filter(h => !h.doneToday).length;
 
-  const bills = (enhanced?.financeSnapshot?.upcomingBills || []).filter((b: any) => b.daysUntil <= 21).slice(0, 10);
+  const bills = allBills.filter((b: any) => b.daysUntil <= 21).slice(0, 10);
   // Docs: respect the shared 30-day dismisses (same map the KPI section and
   // DocsPopup use) so a dismissed alert disappears everywhere at once. The
   // tile counts the 30-day "expiring soon" window (expired + ≤30d); the
   // section/popup still list the longer 90-day horizon grouped by urgency.
   const docSnooze = loadDocSnoozeMap();
-  const allExpiringDocs = (enhanced?.expiringDocuments || []).filter((d: any) => !docSnooze[d.documentId]);
+  const allExpiringDocs = hideTest<any>(enhanced?.expiringDocuments || []).filter((d: any) => !docSnooze[d.documentId]);
   const docs = allExpiringDocs.slice(0, 10);
   const docsSoonCount = allExpiringDocs.filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil <= 30).length;
 
@@ -298,8 +361,18 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // Reminder rows carry { title, fireAt, firedAt } — there is no completed/
   // dismissed field (done = soft-delete, fired = firedAt set). Un-fired rows
   // are the active ones; sort soonest-first so the next reminder leads.
+  const seenReminders = new Set<string>();
   const activeReminders = (Array.isArray(reminders) ? reminders : [])
     .filter((r: any) => !r.firedAt)
+    // Exact duplicates (same title, same fire minute) render once. Distinct
+    // times survive on purpose — three amoxicillin doses a day is a regimen,
+    // not a dupe.
+    .filter((r: any) => {
+      const k = `${normName(r.title || r.message || r.content)}@${String(r.fireAt || "").slice(0, 16)}`;
+      if (seenReminders.has(k)) return false;
+      seenReminders.add(k);
+      return true;
+    })
     .sort((a: any, b: any) => new Date(a.fireAt || 0).getTime() - new Date(b.fireAt || 0).getTime())
     .slice(0, 8);
   const notifs = (Array.isArray(notifications) ? notifications : []).filter((n: any) => !n.dismissed);
@@ -396,16 +469,22 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     group: "Reminders", reason: "Fired — not dismissed", go: () => setPopup("reminders"),
   });
   const attnCritical = attention.filter(i => i.severity === "critical").length;
-  // Sub-line: the top two contributors, most severe first.
-  const attnParts: string[] = [];
-  if (overdueTasks.length) attnParts.push(`${plural(overdueTasks.length, "overdue task")}`);
-  if (overdueBillCount) attnParts.push(`${plural(overdueBillCount, "overdue bill")}`);
+  // Sub-line: top two contributors, most severe first, then a "N more" tail so
+  // the parts always account for the headline number (a "29" headline with a
+  // "9 · 6" sub-line read as broken math).
+  const attnParts: Array<{ label: string; n: number }> = [];
+  if (overdueTasks.length) attnParts.push({ label: plural(overdueTasks.length, "overdue task"), n: overdueTasks.length });
+  if (overdueBillCount) attnParts.push({ label: plural(overdueBillCount, "overdue bill"), n: overdueBillCount });
   const billsDueTodayCount = bills.filter((b: any) => b.status !== "overdue" && b.daysUntil === 0).length;
-  if (billsDueTodayCount) attnParts.push(`${plural(billsDueTodayCount, "bill")} due today`);
-  if (alerts.length) attnParts.push(`${plural(alerts.length, "alert")}`);
-  if (nextDoc) attnParts.push(`${plural(attention.filter(i => i.group === "Expiring documents").length, "expiring doc")}`);
-  if (missedCount) attnParts.push(`${plural(missedCount, "habit")} due`);
-  if (firedReminders.length) attnParts.push(`${plural(firedReminders.length, "reminder")} fired`);
+  if (billsDueTodayCount) attnParts.push({ label: `${plural(billsDueTodayCount, "bill")} due today`, n: billsDueTodayCount });
+  if (alerts.length) attnParts.push({ label: plural(alerts.length, "alert"), n: alerts.length });
+  const expiringDocCount = attention.filter(i => i.group === "Expiring documents").length;
+  if (nextDoc) attnParts.push({ label: plural(expiringDocCount, "expiring doc"), n: expiringDocCount });
+  if (missedCount) attnParts.push({ label: `${plural(missedCount, "habit")} due`, n: missedCount });
+  if (firedReminders.length) attnParts.push({ label: `${plural(firedReminders.length, "reminder")} fired`, n: firedReminders.length });
+  const attnShown = attnParts.slice(0, 2);
+  const attnMore = attention.length - attnShown.reduce((s, p) => s + p.n, 0);
+  const attnSub = [...attnShown.map(p => p.label), attnMore > 0 ? `${attnMore} more` : null].filter(Boolean).join(" · ");
 
   // ── Today's Overview: everything scheduled today, one chronological list. ───
   const tomorrowStr = new Date(nowMs + 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
@@ -429,12 +508,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     })),
   ];
   const tomorrowEntries: TodayEntry[] = tl
-    .filter((i: any) => (i.date || "").slice(0, 10) === tomorrowStr).slice(0, 8)
+    .filter((i: any) => (i.date || "").slice(0, 10) === tomorrowStr && !isLoanPayment(i)).slice(0, 8)
     .map((i: any) => ({ id: `tmw-${i.id}`, title: i.title, kind: String(i.type), time: i.time || null }));
   const todayRemainingTasks = agendaTasks.length;
   const todayDone = doneToday + habitsDone;
-  const todayTotal = todayEntries.length + doneToday;
-  const todayPct = todayTotal > 0 ? Math.round((todayDone / todayTotal) * 100) : 0;
+  // Day progress runs over COMPLETABLE items only (tasks + habits). Events,
+  // bills and reminders in todayEntries have no done-state, so dividing by the
+  // full entry list made "4 of 10 habits" render as 33% here while the Habits
+  // popup said 40% on the same data — and the bar could never reach 100%.
+  const todayCompletable = agendaTasks.length + doneToday + habitRows.length;
+  const todayPct = todayCompletable > 0 ? Math.round((todayDone / todayCompletable) * 100) : 0;
   const timedRemaining = todayEntries.filter(e => e.time && !e.done).sort((a, b) => String(a.time).localeCompare(String(b.time)));
   const nextTimed = timedRemaining.find(e => String(e.time) >= nowClock);
   const todayNextLabel = nextTimed
@@ -448,8 +531,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // (no per-load AI call). The AI chat can still create/modify any of the
   // underlying records; these lines just reflect the current state.
   const aiBrief: Array<{ text: string; tone?: "pos" | "neg" | "warn"; go?: () => void }> = [];
-  if (overdueTasks.length === 0) aiBrief.push({ text: "No overdue tasks.", tone: "pos" });
-  else aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => setPopup("tasks") });
+  // Lead bullet covers tasks AND bills: opening with a green "No overdue
+  // tasks." while overdue bills sit two bullets down read as a contradiction.
+  if (overdueTasks.length > 0) aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => setPopup("tasks") });
+  else if (overdueBillCount > 0) aiBrief.push({ text: `No overdue to-do tasks, but ${plural(overdueBillCount, "overdue bill")} to pay.`, tone: "warn", go: () => setPopup("bills") });
+  else aiBrief.push({ text: "Nothing overdue — tasks and bills are clear.", tone: "pos" });
   const soonestDoc = docs.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
   if (soonestDoc) aiBrief.push({ text: `${soonestDoc.documentName || soonestDoc.name || soonestDoc.fieldName || "A document"} ${soonestDoc.daysUntil < 0 ? `expired ${Math.abs(soonestDoc.daysUntil)} days ago` : soonestDoc.daysUntil === 0 ? "expires today" : `expires in ${soonestDoc.daysUntil} days`}.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => setPopup("docs") });
   if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => setPopup("habits") });
@@ -486,7 +572,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         <StatTile prominent label="Attention"
           value={tasksPending || enhanced === undefined ? "…" : String(attention.length)}
           unit={tasksPending || enhanced === undefined ? undefined : attention.length > 0 ? (attention.length === 1 ? "item needs review" : "items need review") : undefined}
-          sub={tasksPending || enhanced === undefined ? "loading" : attention.length === 0 ? "Nothing needs review" : attnParts.slice(0, 2).join(" · ")}
+          sub={tasksPending || enhanced === undefined ? "loading" : attention.length === 0 ? "Nothing needs review" : attnSub}
           accent={attention.length === 0 ? "155 65% 45%" : attnCritical > 0 ? "0 72% 58%" : "43 96% 56%"}
           onClick={() => setPopup("attention")} testId="brief-stat-attention" />
         <StatTile label="Tasks"
@@ -529,7 +615,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         <div className="flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: "hsl(262 80% 66%)", boxShadow: "0 0 5px hsl(262 80% 66% / 0.7)" }} />
           <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Today</span>
-          {todayTotal > 0 && <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">{todayPct}% done</span>}
+          {todayCompletable > 0 && <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">{todayPct}% done</span>}
         </div>
         <div className="mt-1 text-sm font-medium truncate" style={{ color: "hsl(262 80% 66%)" }}>
           {tasksPending || timelinePending ? "…" : todayNextLabel}
@@ -542,7 +628,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         {firstCritical && (
           <div className="text-[11px] text-red-500 mt-0.5 truncate">⚠ {firstCritical.title} — {firstCritical.reason}</div>
         )}
-        {todayTotal > 0 && (
+        {todayCompletable > 0 && (
           <div className="mt-1.5 h-1 rounded-full bg-muted overflow-hidden">
             <div className="h-full rounded-full" style={{ width: `${todayPct}%`, background: "hsl(262 80% 66%)" }} />
           </div>
@@ -787,7 +873,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           if a lazy chunk fetch would have failed. */}
       {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
-      {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={enhanced?.financeSnapshot?.upcomingBills || []} />}
+      {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={allBills} />}
       {popup === "events" && <EventsPopup open onClose={() => setPopup(null)} items={tl} todayStr={todayStr} />}
       {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={allExpiringDocs} />}
       {popup === "projects" && <ProjectsPopup open onClose={() => setPopup(null)} goals={goals} />}

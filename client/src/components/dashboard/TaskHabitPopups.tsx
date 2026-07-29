@@ -11,6 +11,8 @@ import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { isTestDataRow } from "@shared/test-data";
+import { useShowTestData } from "@/lib/showTestData";
 import {
   RECUR_PRESETS, parseRecurrence, recurrenceToTags, isRecurring as isRecurringRule,
   nextOccurrence as nextRecurOccurrence, seriesEnded, humanSummary, freqToUnit,
@@ -73,12 +75,19 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); } }, [open]);
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   // PERF: isPending (not isLoading) so placeholderData keepPreviousData keeps prior list visible on filter switch.
-  const { data: tasks = [], isPending } = useQuery<any[]>({
+  const { data: tasksRaw = [], isPending } = useQuery<any[]>({
     queryKey: ["/api/tasks", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
     enabled: open,
   });
   const isLoading = isPending;
+  // Same test-data preference the dashboard header toggle drives — QA/AUDIT
+  // rows stay out of the popup unless "Show test data" is on.
+  const showTestData = useShowTestData();
+  const tasks = useMemo(
+    () => showTestData ? tasksRaw : tasksRaw.filter((t: any) => !isTestDataRow(t.title) && !isTestDataRow(t.description)),
+    [tasksRaw, showTestData],
+  );
 
   const createMutation = useMutation({
     mutationFn: (payload: Record<string, any>) => apiRequest("POST", "/api/tasks", { status: "todo", priority: "medium", ...payload }).then(r => r.json()),
@@ -346,7 +355,9 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   // Recurring tab = every series (incl. paused) for management.
   const recurringTasks = useMemo(() => sortTasks(pendingAll.filter(isRecurringT)), [pendingAll, sortBy]);
   // Upcoming tab = everything after today, grouped into smart sections.
-  const upcomingPending = useMemo(() => sortTasks(pendingAll.filter((t: any) => datedVisible(t) && whenOf(t) && whenOf(t)! > todayStr)), [pendingAll, todayStr, sortBy]);
+  // Recurring series are managed on their own tab — listing their next
+  // occurrence here too showed one task on two tabs at once.
+  const upcomingPending = useMemo(() => sortTasks(pendingAll.filter((t: any) => !isRecurringT(t) && datedVisible(t) && whenOf(t) && whenOf(t)! > todayStr)), [pendingAll, todayStr, sortBy]);
   const upcomingSections = useMemo(() => {
     const buckets: Record<string, any[]> = { tomorrow: [], week: [], nextweek: [], later: [] };
     for (const t of upcomingPending) {
@@ -943,12 +954,19 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
 
   const habitsProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   // PERF: isPending (not isLoading) so placeholderData keeps prior habits visible on filter switch.
-  const { data: habits = [], isPending: habitsLoading } = useQuery<any[]>({
+  const { data: habitsRaw = [], isPending: habitsLoading } = useQuery<any[]>({
     queryKey: ["/api/habits", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/habits${habitsProfileParam}`).then(r => r.json()),
     enabled: open,
   });
   const isLoading = habitsLoading;
+  // Hide QA/AUDIT habits unless the header "Show test data" toggle is on —
+  // keeps the popup's counts/streaks in step with the executive tab.
+  const showTestData = useShowTestData();
+  const habits = useMemo(
+    () => showTestData ? habitsRaw : habitsRaw.filter((h: any) => !isTestDataRow(h.name)),
+    [habitsRaw, showTestData],
+  );
 
   // Optimistically bump stats.habitCompletionRate so the dashboard
   // donut ring jumps to 100% the instant the user marks every habit

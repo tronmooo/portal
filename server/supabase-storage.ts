@@ -1011,13 +1011,22 @@ export class SupabaseStorage implements IStorage {
   }
 
   private rowToHabit(r: any, checkins: HabitCheckin[]): Habit {
+    // Live streaks: the stored current_streak column is a snapshot from the
+    // last check-in WRITE, so it silently goes stale as days pass without one
+    // — a habit last checked Monday still showed "1🔥" on Thursday while its
+    // never-checked neighbors showed 0. Recompute from the loaded check-ins on
+    // every read; callers that don't load check-ins (deleted-habit listings)
+    // keep the stored snapshot.
+    const live = checkins.length > 0
+      ? calculateStreak(checkins, r.target_per_day || 1, this._timezone)
+      : { current: r.current_streak || 0, longest: r.longest_streak || 0 };
     return {
       id: r.id, name: r.name, icon: r.icon || undefined, color: r.color || undefined,
       frequency: r.frequency, targetDays: r.target_days || undefined,
       targetPerDay: r.target_per_day || 1,
       timeOfDay: r.time_of_day || undefined,
       scheduledTime: r.scheduled_time || undefined,
-      currentStreak: r.current_streak || 0, longestStreak: r.longest_streak || 0,
+      currentStreak: live.current, longestStreak: Math.max(live.longest, r.longest_streak || 0),
       linkedProfiles: r.linked_profiles || [],
       checkins, createdAt: r.created_at,
     };
@@ -5604,6 +5613,14 @@ export class SupabaseStorage implements IStorage {
         cursor = tzAddDays(cursor, -1);
       }
       if (streak >= 2) streaks.push({ name: t.name, days: streak });
+    }
+    // Habit streaks belong in this list too: the header STREAK chip takes
+    // max(streaks, journalStreak) and OPENS the Habits popup, so leaving
+    // habits out made the chip say "0D" while the popup said "1 Day Streak".
+    // currentStreak is recomputed live in rowToHabit, so this stays in step
+    // with what the popup derives from the same check-ins.
+    for (const h of habits) {
+      if ((h.currentStreak || 0) >= 1) streaks.push({ name: h.name, days: h.currentStreak });
     }
 
     const todayStr2 = getUserToday(this._timezone);
