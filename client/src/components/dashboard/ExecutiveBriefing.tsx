@@ -385,7 +385,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     else setPopup("events");
   };
 
-  const overdueBillCount = bills.filter((b: any) => b.status === "overdue").length;
+  // The overdue-bill LIST and its COUNT come from one filter, so the Overdue
+  // section can never disagree with the Attention summary about how many there
+  // are (audit finding D3 — a count is the length of the list it labels).
+  const overdueBills = bills.filter((b: any) => b.status === "overdue");
+  const overdueBillCount = overdueBills.length;
   const billsUpcomingTotal = bills.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
   const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
 
@@ -665,12 +669,27 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           )}
         </Section>
 
-        <Section id="overdue" title="Overdue" count={overdueTasks.length} testId="brief-overdue" defaultOpen={overdueTasks.length > 0}>
-          {overdueTasks.length === 0 ? <Empty label="Nothing overdue. 🎉" /> : (
+        {/* One section, one answer. This used to count ONLY overdue tasks while
+            wearing the unqualified title "Overdue" and the empty state
+            "Nothing overdue. 🎉" — so it cheerfully declared all-clear on a
+            screen where Attention, Bills, the brief above and the notification
+            bell all reported four overdue bills worth ~$2,817. A user who read
+            this card first stopped worrying and missed $2,500 of rent (audit
+            finding D3). Bills and tasks are both overdue things; they belong to
+            the same count. */}
+        <Section id="overdue" title="Overdue" count={overdueTasks.length + overdueBills.length}
+          testId="brief-overdue" defaultOpen={overdueTasks.length + overdueBills.length > 0}>
+          {overdueTasks.length + overdueBills.length === 0 ? <Empty label="Nothing overdue. 🎉" /> : (
             <div className="divide-y divide-border/30">
               {overdueTasks.map((t: any) => (
-                <Row key={t.id} cells={[dayLabel(t.dueDate.slice(0, 10), todayStr), t.title, t.priority || "—"]}
+                <Row key={t.id} testId={`brief-overdue-task-${t.id}`}
+                  cells={[dayLabel(t.dueDate.slice(0, 10), todayStr), t.title, t.priority || "—"]}
                   urgent onClick={() => setPopup("tasks")} />
+              ))}
+              {overdueBills.map((b: any) => (
+                <Row key={b.id} testId={`brief-overdue-bill-${b.id}`}
+                  cells={["overdue", b.name, `$${Number(b.amount).toLocaleString()}`]}
+                  urgent onClick={() => setPopup("bills")} />
               ))}
             </div>
           )}
