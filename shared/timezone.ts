@@ -48,15 +48,32 @@ export function parseLocalDate(dateStr: string): Date {
 }
 
 /**
+ * Format a Date's LOCAL calendar parts as YYYY-MM-DD.
+ *
+ * The trap this closes: constructing a date locally (`new Date(y, m, d)`) and
+ * then serializing it with `toISOString()` mixes two clocks. On any host east
+ * of UTC, local midnight on the 15th is 22:00 UTC on the 14th — which is how a
+ * payment requested for the 15th got generated for August 14 (user QA
+ * 2026-07-27). A calendar day has no timezone; read the parts you set.
+ */
+export function calendarDateStr(date: Date): string {
+  const y = String(date.getFullYear()).padStart(4, "0");
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
  * Timezone-safe date arithmetic. Adds N days to a YYYY-MM-DD string.
  * Consolidates the two separate addDays implementations in supabase-storage.ts.
  */
 export function addDays(dateStr: string, days: number): string {
   const d = parseLocalDate(dateStr);
   d.setDate(d.getDate() + days);
-  // Return using ISO slice — safe here because we're using noon UTC and only
-  // computing the calendar date (not time), so there's no risk of day shift.
-  return d.toISOString().slice(0, 10);
+  // Read back the LOCAL parts. The old `toISOString().slice(0,10)` claimed to
+  // be safe because of the noon anchor, but noon local is the PREVIOUS day in
+  // UTC for any offset at or past +12.
+  return calendarDateStr(d);
 }
 
 /**

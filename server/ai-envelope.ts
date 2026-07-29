@@ -32,6 +32,18 @@ export interface ToolVerification {
   duplicate_count?: number;
   /** Every profile id the record links to belongs to this user. */
   profile_isolation_valid?: boolean;
+  /** Fields from the request that ARE present on the persisted row. */
+  fields_applied?: string[];
+  /** Fields the request asked to change that did NOT land. A non-empty list
+   *  means the write silently no-opped — the tool must NOT report success. */
+  fields_not_applied?: string[];
+  /** The request named a target profile and the persisted row is linked to it.
+   *  False = the record was attributed to the wrong profile (e.g. filed under
+   *  the account owner instead of the person the user named). */
+  requested_profile_applied?: boolean;
+  /** Profile ids the row links to beyond the requested one — a reassignment
+   *  that added the destination but kept a stale link. */
+  unexpected_profile_links?: string[];
 }
 
 export interface TurnVerifyContext {
@@ -76,6 +88,17 @@ const ENTITY_META: Record<string, EntityMeta> = {
   reminder: { list: (s) => s.listReminders(), name: (r) => r.title },
   document: { list: (s) => s.getDocuments(), name: (r) => r.name },
   paycheck: { list: (s) => s.getPaychecks(), name: (r) => r.source },
+  // Tracker ENTRIES had no mapping at all, so `log_tracker_entry` — the single
+  // most-used write in the app — got ZERO read-back. A phantom log ("24 oz
+  // saved" with no row, gone after refresh) was reported as success because
+  // nothing ever looked (user QA 2026-07-27). Trackers embed their entries.
+  tracker_entry: {
+    list: async (s) => {
+      const trackers = await s.getTrackers();
+      return trackers.flatMap((t: any) => (t.entries || []).map((e: any) => ({ ...e, __trackerName: t.name })));
+    },
+    name: (r) => r.__trackerName || "entry",
+  },
 };
 
 /** Which entity a tool operates on. Tools absent from this map still get the
@@ -100,6 +123,8 @@ const TOOL_ENTITY: Record<string, string> = {
   duplicate_artifact: "artifact", toggle_artifact_item: "artifact",
   create_reminder: "reminder", update_reminder: "reminder", delete_reminder: "reminder",
   create_document: "document",
+  log_tracker_entry: "tracker_entry", update_tracker_entry: "tracker_entry",
+  delete_tracker_entry: "tracker_entry",
   log_expected_paycheck: "paycheck", confirm_paycheck_received: "paycheck", delete_paycheck: "paycheck",
 };
 
@@ -114,7 +139,7 @@ const normalizeName = (s: string): string =>
   String(s || "").toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
 
 function extractEntityId(result: any): string | undefined {
-  return result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id
+  return result?.id || result?.entry?.id || result?.task?.id || result?.expense?.id || result?.habit?.id
     || result?.obligation?.id || result?.income?.id || result?.artifact?.id
     || result?.reminder?.id || result?.memory?.id || result?.payment?.id
     || result?.entity?.id;
@@ -406,6 +431,134 @@ export async function executeReversePlan(
   }
 }
 
+// ── Applied-change verification ─────────────────────────────────────────────
+// "Row exists" is NOT proof an update worked. A rename that silently no-ops
+// leaves the row right there, so `database_record_exists` passed and the model
+// reported success while the profile kept its old name (user QA 2026-07-27:
+// birthday + notes applied, rename did not). Every update tool in this app
+// takes a LOOKUP key (name/title/date) plus a `changes` object, so the
+// requested values are unambiguous — read the row back and compare.
+
+/** Words different layers use for the same state. A verification pass must
+ *  never fail a WORKING write just because storage canonicalized a synonym —
+ *  a false "it didn't save" is as damaging as a false "saved". */
+const SYNONYMS: string[][] = [
+  ["done", "completed", "complete", "finished", "closed"],
+  ["todo", "pending", "open", "active", "not started", "incomplete"],
+  ["canceled", "cancelled", "abandoned"],
+  ["paused", "on hold", "inactive"],
+];
+function synonymous(a: string, b: string): boolean {
+  const x = a.trim().toLowerCase(), y = b.trim().toLowerCase();
+  return SYNONYMS.some((g) => g.includes(x) && g.includes(y));
+}
+
+/** Loose value equality across the shapes storage round-trips through. */
+function sameValue(want: any, got: any): boolean {
+  if (want === got) return true;
+  if (want == null || got == null) return false;
+  if (typeof want === "boolean" || typeof got === "boolean") return Boolean(want) === Boolean(got);
+  if (typeof want === "number" || typeof got === "number") {
+    const a = Number(want), b = Number(got);
+    if (isFinite(a) && isFinite(b)) return Math.abs(a - b) < 0.005;
+  }
+  if (Array.isArray(want) && Array.isArray(got)) {
+    if (want.length !== got.length) return false;
+    const norm = (x: any[]) => x.map((v) => String(v).trim().toLowerCase()).sort();
+    return JSON.stringify(norm(want)) === JSON.stringify(norm(got));
+  }
+  const ws = String(want).trim(), gs = String(got).trim();
+  if (ws.toLowerCase() === gs.toLowerCase()) return true;
+  if (synonymous(ws, gs)) return true;
+  // Dates: compare the calendar day, not the serialization.
+  const day = (v: string) => {
+    const m = v.match(/^\d{4}-\d{2}-\d{2}/);
+    if (m) return m[0];
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  };
+  const wd = day(ws), gd = day(gs);
+  return !!wd && wd === gd;
+}
+
+/**
+ * Compare the change set the caller requested against the row as persisted.
+ * Only reports a field as NOT applied when the row actually carries that
+ * property — an unknown key is "unverifiable", never a failure, so aliasing
+ * and server-side renames can't raise a false alarm.
+ */
+export function verifyAppliedChanges(
+  changes: Record<string, any> | null | undefined,
+  row: any,
+): { applied: string[]; notApplied: string[] } {
+  const applied: string[] = [];
+  const notApplied: string[] = [];
+  if (!changes || typeof changes !== "object" || !row) return { applied, notApplied };
+  const check = (key: string, want: any, target: any, label: string) => {
+    if (want === undefined) return;
+    if (!target || typeof target !== "object") return;
+    if (!(key in target)) return;                 // not a column we can verify
+    if (sameValue(want, target[key])) applied.push(label);
+    else notApplied.push(label);
+  };
+  // NB: no lookup-key filtering here. Lookup keys (name/title/date) live at the
+  // tool input's TOP level; inside `changes` those same words are the values
+  // being applied — filtering them is what let a failed RENAME read as success.
+  for (const [key, want] of Object.entries(changes)) {
+    if (key.startsWith("__")) continue;
+    // Profiles nest user data under `fields` — verify each leaf individually so
+    // "birthday applied, rename did not" is reported precisely.
+    if (key === "fields" && want && typeof want === "object" && !Array.isArray(want)) {
+      for (const [fk, fv] of Object.entries(want as Record<string, any>)) {
+        check(fk, fv, row.fields || {}, `fields.${fk}`);
+      }
+      continue;
+    }
+    check(key, want, row, key);
+  }
+  return { applied, notApplied };
+}
+
+// ── Requested-profile verification ──────────────────────────────────────────
+// `profile_isolation_valid` only asked "do the linked ids belong to this user?"
+// — which is TRUE when a note the user asked to file under a person lands on
+// the account owner instead. That is the whole class of "attached to the wrong
+// profile" reports (notes, medication, liability, expense reassignment). This
+// checks the row against the profile the request actually NAMED.
+
+function rowProfileLinks(row: any): string[] {
+  const out = new Set<string>();
+  if (Array.isArray(row?.linkedProfiles)) for (const id of row.linkedProfiles) if (id) out.add(String(id));
+  for (const k of ["profileId", "forProfile", "parentProfileId"]) {
+    const v = row?.[k];
+    if (typeof v === "string" && v) out.add(v);
+  }
+  return [...out];
+}
+
+export async function verifyRequestedProfile(
+  input: Record<string, any>,
+  row: any,
+  ctx: TurnVerifyContext,
+): Promise<{ applied?: boolean; unexpected?: string[] }> {
+  const requestedName = [input?.forProfile, input?.profileName, input?.assignToProfile]
+    .find((v) => typeof v === "string" && v.trim());
+  if (!requestedName || !row) return {};
+  let profiles: any[];
+  try { profiles = await ctx.storage.getProfiles(); } catch { return {}; }
+  const want = String(requestedName).trim().toLowerCase();
+  const target = profiles.find((p: any) => String(p.name || "").toLowerCase() === want)
+    || profiles.find((p: any) => String(p.name || "").toLowerCase().includes(want));
+  if (!target) return {};
+  const links = rowProfileLinks(row);
+  if (links.length === 0) return { applied: false };
+  const applied = links.includes(target.id);
+  // A reassignment that ADDED the destination but kept the old owner is still
+  // wrong — surface the extra links so the model reports them.
+  const unexpected = links.filter((id) => id !== target.id);
+  return { applied, ...(unexpected.length ? { unexpected } : {}) };
+}
+
 /**
  * Wrap a SUCCESSFUL write-tool result in the standard envelope. Never throws
  * usefully — callers get the raw result back if anything goes wrong here.
@@ -459,14 +612,68 @@ export async function finalizeToolResult(
               // Orphans belong to self by the app-wide scope rule — valid.
               verification.profile_isolation_valid = true;
             }
+            // Did the write land on the profile the request NAMED? Isolation
+            // being "valid" says nothing about this — the account owner is a
+            // valid profile too.
+            const profCheck = await verifyRequestedProfile(input, row, ctx);
+            if (profCheck.applied !== undefined) verification.requested_profile_applied = profCheck.applied;
+            if (profCheck.unexpected) verification.unexpected_profile_links = profCheck.unexpected;
+            // Did the requested CHANGES actually persist?
+            if (op === "update") {
+              const { applied, notApplied } = verifyAppliedChanges(input?.changes, row);
+              if (applied.length) verification.fields_applied = applied;
+              if (notApplied.length) verification.fields_not_applied = notApplied;
+            }
           }
         }
       }
     }
 
+    // ── Honest success ──────────────────────────────────────────────────
+    // `success: true` used to be asserted unconditionally, so a write whose
+    // own read-back proved it had NOT landed still told the model "success"
+    // with the contradicting evidence buried in `verification`. Every
+    // "Portol claimed it saved but nothing was there" report traces back to
+    // this line. If verification found a problem, the envelope FAILS.
+    const problems: string[] = [];
+    if (op === "delete") {
+      // `database_record_exists` refers to the LIVE row: true after a delete
+      // means the delete did not take.
+      if (verification.database_record_exists === true) {
+        problems.push("the record still exists after the delete");
+      }
+    } else if (verification.database_record_exists === false) {
+      problems.push("no database row exists after the write — nothing was saved");
+    }
+    if (verification.fields_not_applied?.length) {
+      problems.push(`these requested changes did NOT persist: ${verification.fields_not_applied.join(", ")}`);
+    }
+    if (verification.requested_profile_applied === false) {
+      problems.push(`the record was NOT attributed to the requested profile "${String(input?.forProfile || input?.profileName || "").slice(0, 40)}"`);
+    }
+    if (verification.unexpected_profile_links?.length) {
+      problems.push(`the record is still linked to ${verification.unexpected_profile_links.length} other profile(s) that were not requested`);
+    }
+
     const message = typeof result?.message === "string" && result.message
       ? result.message.slice(0, 200)
       : `${VERBS[op]} ${entityType || "record"}${entityName ? ` "${String(entityName).slice(0, 60)}"` : ""}.`;
+
+    if (problems.length > 0) {
+      // Shape this like every other tool failure so the model's existing
+      // "report ❌ on error" instructions fire. The raw result is spread FIRST
+      // here so it cannot overwrite the failure verdict.
+      return {
+        ...result,
+        success: false,
+        action: toolName,
+        action_type: actionType,
+        error: `Verification failed for ${toolName}: ${problems.join("; ")}. Tell the user this did NOT fully succeed and say exactly which part failed — do not claim success.`,
+        verification_failed: true,
+        ...(entityType && entityId ? { entity: { type: entityType, id: entityId, ...(entityName ? { name: String(entityName).slice(0, 80) } : {}) } } : {}),
+        verification,
+      };
+    }
 
     return {
       success: true,

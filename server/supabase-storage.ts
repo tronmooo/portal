@@ -45,7 +45,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
   _sharedKey = key;
   return _sharedClient;
 }
-import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
+import { getUserToday, parseLocalDate, toLocalDateStr, calendarDateStr, addDays as tzAddDays } from "../shared/timezone";
 import { passesProfileFilter } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
 import { selfIdsFrom, isInScope } from "../shared/scope";
@@ -1627,7 +1627,12 @@ export class SupabaseStorage implements IStorage {
         if (candidate.getMonth() !== ((targetMonth) % 12 + 12) % 12) {
           candidate.setDate(0);
         }
-        const iso = candidate.toISOString().slice(0, 10);
+        // LOCAL parts, never toISOString(): the date was constructed from local
+        // components, so serializing it as UTC shifted a due day of 15 to the
+        // 14th on any host east of UTC (user QA 2026-07-27). routes.ts's
+        // syncLiabilityObligation always did this correctly — the two paths
+        // disagreeing is what produced the wrong payment date.
+        const iso = calendarDateStr(candidate);
         // Mutate the fields snapshot we'll feed into the event generator below
         fields = { ...fields, nextPayment: iso };
       }

@@ -72,10 +72,16 @@ describe("finalizeToolResult", () => {
     expect(env.verification.profile_isolation_valid).toBe(false);
   });
 
-  it("create: missing read-back row reports database_record_exists=false", async () => {
+  it("create: missing read-back row FAILS the envelope", async () => {
+    // Behavior change (user QA 2026-07-27). This used to assert success:true on
+    // the theory that "the envelope reports; the MODEL decides how to phrase
+    // it". In practice the model reads success:true and says success — six
+    // different features were reported as saved when nothing had been written.
+    // Evidence of a failed write now produces a failed result.
     const ctx = buildTurnVerifyContext(stubStorage()); // empty task list
     const env = await finalizeToolResult("create_task", "create_task", { title: "Ghost" }, { id: "nope" }, ctx);
-    expect(env.success).toBe(true); // envelope reports; the MODEL decides how to phrase it
+    expect(env.success).toBe(false);
+    expect(env.error).toMatch(/nothing was saved/i);
     expect(env.verification.database_record_exists).toBe(false);
   });
 
