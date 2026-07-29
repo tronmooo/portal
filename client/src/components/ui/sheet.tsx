@@ -6,8 +6,14 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { useModalHistory } from "@/lib/modal-history"
 
-const Sheet = SheetPrimitive.Root
+// Back closes an open (controlled) sheet instead of leaving the page —
+// see lib/modal-history.
+const Sheet = (props: React.ComponentProps<typeof SheetPrimitive.Root>) => {
+  useModalHistory(props.open, () => props.onOpenChange?.(false))
+  return <SheetPrimitive.Root {...props} />
+}
 
 const SheetTrigger = SheetPrimitive.Trigger
 

@@ -22,6 +22,7 @@ import {
   reconcileProfileFilter, setFilterEveryone, setFilterSelected, toggleFilterProfile,
 } from "@/lib/profileFilter";
 import { prefetchScopeBootstrap } from "@/lib/scope-prefetch";
+import { modalJustClosed } from "@/lib/modal-history";
 
 interface LiteProfile { id: string; type: string; name: string; avatar?: string }
 
@@ -65,7 +66,16 @@ export function HubProfileSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5 rounded-lg px-2.5 text-xs font-semibold" data-testid="hub-profile-switcher">
+        <Button
+          variant="outline" size="sm"
+          className="h-8 gap-1.5 rounded-lg px-2.5 text-xs font-semibold"
+          // Ghost-click shield: the switcher sits at the same screen position
+          // as a dialog's X, so the tap that dismissed a modal could fall
+          // through onto it and open the menu (2026-07-29 tester report:
+          // accidental profile switches). Swallow opens within 350ms of any
+          // modal closing — Radix respects defaultPrevented on pointerdown.
+          onPointerDown={(e) => { if (modalJustClosed()) e.preventDefault(); }}
+          data-testid="hub-profile-switcher">
           <Gem className="h-3.5 w-3.5 text-primary" />
           <span className="max-w-[9rem] truncate">{label}</span>
           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />

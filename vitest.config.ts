@@ -98,6 +98,7 @@ export default defineConfig({
       'tests/due-label.test.ts',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
+      'tests/modal-history.test.tsx',
       'tests/wellness-metrics.test.ts',
       'tests/wellness-overview.test.tsx',
       'tests/wellness-dynamic.test.ts',

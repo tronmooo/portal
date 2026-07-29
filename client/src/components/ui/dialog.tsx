@@ -5,8 +5,15 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { useModalHistory } from "@/lib/modal-history"
 
-const Dialog = DialogPrimitive.Root
+// Back-button-aware root (lib/modal-history): while a CONTROLLED dialog is
+// open, the Back button closes it instead of leaving the page. Uncontrolled
+// dialogs (no `open` prop) pass through untouched.
+const Dialog = (props: React.ComponentProps<typeof DialogPrimitive.Root>) => {
+  useModalHistory(props.open, () => props.onOpenChange?.(false))
+  return <DialogPrimitive.Root {...props} />
+}
 
 const DialogTrigger = DialogPrimitive.Trigger
 

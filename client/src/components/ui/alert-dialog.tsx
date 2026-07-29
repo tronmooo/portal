@@ -3,8 +3,14 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
+import { useModalHistory } from "@/lib/modal-history"
 
-const AlertDialog = AlertDialogPrimitive.Root
+// Back closes an open (controlled) confirm instead of leaving the page —
+// see lib/modal-history.
+const AlertDialog = (props: React.ComponentProps<typeof AlertDialogPrimitive.Root>) => {
+  useModalHistory(props.open, () => props.onOpenChange?.(false))
+  return <AlertDialogPrimitive.Root {...props} />
+}
 
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger
 

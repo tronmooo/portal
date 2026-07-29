@@ -255,9 +255,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // into every section regardless of the toggle. Same shared detector the
   // finance surfaces use (shared/test-data).
   const showTestData = useShowTestData();
+  // Notification titles wrap the entity name in a prefix ("Overdue bill: QA
+  // Test Subscription") — the anchored patterns miss those, so also test each
+  // after-colon segment.
+  const testText = (s: any): boolean => {
+    if (isTestDataRow(s)) return true;
+    const str = String(s || "");
+    return str.includes(":") && str.split(":").slice(1).some((part: string) => isTestDataRow(part.trim()));
+  };
   const isTestRow = (r: any) =>
-    isTestDataRow(r?.name) || isTestDataRow(r?.title) || isTestDataRow(r?.description) ||
-    isTestDataRow(r?.message) || isTestDataRow(r?.documentName);
+    testText(r?.name) || testText(r?.title) || isTestDataRow(r?.description) ||
+    testText(r?.message) || isTestDataRow(r?.documentName);
   const hideTest = <T,>(rows: T[]): T[] => (showTestData ? rows : (rows || []).filter(r => !isTestRow(r)));
   const tasks = hideTest(tasksRaw || []);
   const habits = hideTest(habitsRaw || []);
