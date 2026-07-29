@@ -237,6 +237,34 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
   }
 }
 
+// ─── Cross-tab propagation ──────────────────────────────────────────
+// React Query caches are per-tab: a write in tab A invalidated tab A's
+// queries only, so tab B kept rendering the pre-write data until a hard
+// refresh (2026-07-29 tester report). Every invalidateDomains() call now
+// also posts its domain list on a BroadcastChannel; sibling tabs replay
+// the same invalidation against their own cache. Their queries with
+// active observers refetch immediately, everything else is marked stale
+// for its next mount — exactly the local semantics, one tab over.
+const CHANNEL_NAME = "portol-cache-bus";
+let _channel: BroadcastChannel | null = null;
+function channel(): BroadcastChannel | null {
+  if (_channel) return _channel;
+  try {
+    if (typeof BroadcastChannel === "undefined") return null; // old Safari / tests
+    _channel = new BroadcastChannel(CHANNEL_NAME);
+    _channel.onmessage = (e: MessageEvent) => {
+      const domains = Array.isArray(e.data?.domains) ? (e.data.domains as Domain[]) : [];
+      if (domains.length === 0) return;
+      // remote=true so the replay doesn't re-broadcast (no infinite ping-pong).
+      void invalidateDomainsInternal(domains, true);
+    };
+  } catch { return null; }
+  return _channel;
+}
+// Open the channel at module load so a tab that never mutates anything
+// still LISTENS for other tabs' writes.
+try { channel(); } catch {}
+
 // ─── Public API ─────────────────────────────────────────────────────
 
 // Invalidate one or more domains. Use `refetchType:"active"` so we only
@@ -247,6 +275,11 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
 // want to defer UI feedback until refresh — but most won't, because
 // optimistic updates already showed the change instantly.
 export function invalidateDomains(...domains: Domain[]): Promise<void> {
+  try { channel()?.postMessage({ domains }); } catch {}
+  return invalidateDomainsInternal(domains, true);
+}
+
+function invalidateDomainsInternal(domains: Domain[], _remote: boolean): Promise<void> {
   const seen = new Set<string>();
   const promises: Promise<unknown>[] = [];
 

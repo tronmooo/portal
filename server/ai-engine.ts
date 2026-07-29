@@ -4820,6 +4820,7 @@ BEHAVIOR:
   - If ambiguous between 2 items with similar names, pick the closest match and do it. You can mention in your response what you picked.
   - NEVER present numbered options for simple check-ins, completions, or mark-offs. That is hostile UX.
   - The ONLY time you should ask is if the user's message is genuinely unclear about WHAT action they want (not which entity).
+- VAGUE READS ASK, THEY DON'T DUMP: the bias-to-action rule above is for WRITES. A READ question that is missing the subject or timeframe needed to answer precisely — "how much have I spent" (on what? since when?), "when is my next thing", "what's going on" — gets ONE short clarifying question ("Over what period — this week, this month?" / "Next event, task, or bill?"), NOT a dump of every number you can find. Answer vague reads directly only when a single obvious interpretation exists (e.g. "what's due today"). Nonsense input (random punctuation, keyboard mashing) also gets a short "what would you like to know?" — never a data dump.
 - When searching, use the search tool to find relevant data before answering.
 
 PROFILE CREATION — CRITICAL RULE:
@@ -12716,6 +12717,17 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   // These run instantly without calling Anthropic, making the app snappy even when the API is down.
   const lower = userMessage.toLowerCase().trim();
 
+  // GIBBERISH GUARD (2026-07-29 tester report: "!!!!????" dumped unrelated
+  // financial data). A message with no letters or digits — punctuation,
+  // symbols, emoji only — carries no intent to route on; asking is the only
+  // honest response. Runs before every fast path and never calls the AI.
+  if (!/[\p{L}\p{N}]/u.test(lower)) {
+    return {
+      reply: "I'm not sure what you're asking — could you rephrase that? For example: \"how much did I spend on groceries this month\" or \"add a task to call the dentist\".",
+      actions: [], results: [],
+    };
+  }
+
   // FAST-PATH: "open [document name]" — direct DB lookup, no AI needed
   // Only trigger for "open" / "pull up" / "view" (not "show" which is ambiguous with "show me my tasks")
   // Skip if it looks like a general query: "show me", "show my tasks", "get my tasks"
@@ -13443,13 +13455,25 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     })(),
   ])).filter(Boolean).join("\n");
 
+  // ACTIVE SCOPE NOTE (2026-07-29 tester report: a $50 expense typed with no
+  // name got attributed to "QA Test Person"): the model was never told which
+  // profile the user is working in, so unnamed writes could land on whichever
+  // profile it fancied. State the active view and the write-default rule
+  // explicitly, at the top of the context where it outranks everything else.
+  const scopeNames = profileFilterIds
+    .map((id) => (allProfiles.find((p: any) => p.id === id) as any)?.name)
+    .filter(Boolean) as string[];
+  const scopeNote = scopeNames.length > 0
+    ? `ACTIVE PROFILE SCOPE: the user is currently working in ${scopeNames.join(", ")}'s view. Any NEW record they ask to create WITHOUT naming a person (expense, task, habit, event, reminder, tracker entry) MUST be linked to ${scopeNames[0]} — pass forProfile: "${scopeNames[0]}". NEVER attribute an unnamed record to any other profile; if genuinely unsure who a record belongs to, ask one short question instead of guessing.`
+    : `ACTIVE PROFILE SCOPE: the user is in the "Everyone" (household) view. Unnamed new records default to the Self profile. NEVER attribute a record to another person's profile unless the user names that person.`;
+
   // (selfProfileId was computed above from the UNFILTERED profile list, so the
   // system prompt keeps a valid self id even when the profile filter is active.)
   // A4 fix: scrub the assembled context once at the boundary before injection
   // into the system prompt — defense-in-depth against prompt-injection vectors
   // hiding in profile names, memory keys/values, tracker names, etc. Stripping
   // happens at the top level so per-row mistakes elsewhere can't leak through.
-  const safeContext = sanitize(context).replace(/```/g, "'''");
+  const safeContext = sanitize(`${scopeNote}\n\n${context}`).replace(/```/g, "'''");
   const systemPrompt = buildSystemPrompt(safeContext, selfProfileId, (storage as any)._timezone);
 
   // ─── Model selection: Sonnet 4.5 ALWAYS ───

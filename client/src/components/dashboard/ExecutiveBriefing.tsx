@@ -184,6 +184,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [popup, setPopup] = useState<PopupKind>(null);
+  // Which bill's Pay button is armed for the confirming second tap.
+  const [armedPayId, setArmedPayId] = useState<string | null>(null);
   const mode = filterMode;
   const ids = filterIds;
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
@@ -793,12 +795,22 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       valueTone="pos"
                       onClick={() => setPopup("bills")} />
                   </div>
+                  {/* Two-tap pay (2026-07-29 tester report: rapid clicks landed
+                      on re-sorted rows and paid Netflix/Gas by accident). The
+                      first tap arms THIS bill id; only a second tap on the SAME
+                      id records the payment — a shifted list can't misdirect it. */}
                   <button
-                    onClick={() => payBill.mutate(b.id)}
+                    onClick={() => {
+                      if (armedPayId === b.id) { setArmedPayId(null); payBill.mutate(b.id); }
+                      else setArmedPayId(b.id);
+                    }}
                     disabled={payBill.isPending}
-                    className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded border border-border hover:bg-muted shrink-0"
+                    className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded border shrink-0 ${
+                      armedPayId === b.id
+                        ? "border-emerald-500 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                        : "border-border hover:bg-muted"}`}
                     data-testid={`brief-pay-${b.id}`}
-                  >Pay</button>
+                  >{armedPayId === b.id ? `Pay $${Number(b.amount).toLocaleString()}?` : "Pay"}</button>
                 </div>
               ))}
             </div>

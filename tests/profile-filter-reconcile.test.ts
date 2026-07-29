@@ -53,10 +53,14 @@ describe("reconcileProfileFilter", () => {
     expect(getProfileFilter()).toMatchObject({ mode: "selected", selectedIds: ["self-1"] });
   });
 
-  it("falls back to Everyone when nothing re-maps and there is no Self profile", () => {
+  it("leaves the selection alone when nothing re-maps and there is no Self profile", () => {
+    // 2026-07-29: a background tab flipped itself to Everyone, breaking
+    // profile isolation. A list with no Self is more likely a partial/scoped
+    // fetch than a mass deletion, so reconcile must NOT silently widen the
+    // scope — it keeps the stored selection and waits for a complete list.
     setFilterSelected(["ghost-1"], ["Nobody"]);
     reconcileProfileFilter(LIVE.filter(p => p.type !== "self"));
-    expect(getProfileFilter().mode).toBe("everyone");
+    expect(getProfileFilter()).toMatchObject({ mode: "selected", selectedIds: ["ghost-1"] });
   });
 
   it("ignores transient empty/absent profile lists (never drops a selection on a failed load)", () => {

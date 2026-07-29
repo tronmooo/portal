@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -52,6 +53,8 @@ import type {
 } from "@shared/schema";
 import { EVENT_CATEGORY_COLORS } from "@shared/schema";
 import { isInScope, selfIdsFrom } from "@shared/scope";
+import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
+import { addDaysISO } from "@shared/date-math";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -175,6 +178,7 @@ interface EventFormData {
   location: string;
   category: EventCategory;
   recurrence: string;
+  recurrenceEnd: string;
   linkedProfiles: string[];
 }
 
@@ -184,12 +188,16 @@ function EventFormDialog({
   initial,
   eventId,
   defaultDate,
+  onSaved,
 }: {
   open: boolean;
   onClose: () => void;
   initial?: Partial<EventFormData>;
   eventId?: string;
   defaultDate?: string;
+  /** Fired once when the form is submitted — lets a caller chain a follow-up
+   *  write (e.g. skip the original occurrence after "edit just this date"). */
+  onSaved?: () => void;
 }) {
   const { toast } = useToast();
   const isEdit = !!eventId;
@@ -205,6 +213,7 @@ function EventFormDialog({
     location: initial?.location ?? "",
     category: initial?.category ?? "personal",
     recurrence: initial?.recurrence ?? "none",
+    recurrenceEnd: initial?.recurrenceEnd ?? "",
     linkedProfiles: initial?.linkedProfiles ?? [],
   });
 
@@ -220,6 +229,9 @@ function EventFormDialog({
         allDay: form.allDay,
         category: form.category,
         recurrence: form.recurrence,
+        // "Recurring events go forever" fix: an optional last date the series
+        // generates occurrences for. Cleared automatically for one-offs.
+        recurrenceEnd: form.recurrence !== "none" && form.recurrenceEnd ? form.recurrenceEnd : undefined,
         linkedProfiles: form.linkedProfiles,
         source: "manual",
       };
@@ -320,7 +332,6 @@ function EventFormDialog({
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      toast({ title: isEdit ? `"${form.title}" updated` : `"${form.title}" created`, description: form.date ? new Date(form.date + "T12:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : undefined });
     },
     onError: (err: Error, _vars, ctx) => {
       // Rollback optimistic insert
@@ -338,6 +349,12 @@ function EventFormDialog({
     e.preventDefault();
     if (!form.title.trim() || !form.date) return;
     mutation.mutate();
+    onSaved?.();
+    // Confirm INSTANTLY, matching the optimistic cache update — waiting for
+    // the server roundtrip left no visible confirmation on slow links, and
+    // testers retried into duplicates (2026-07-29 report). A failure still
+    // surfaces via the error toast + rollback.
+    toast({ title: isEdit ? `"${form.title}" updated` : `"${form.title}" created`, description: form.date ? new Date(form.date + "T12:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : undefined });
     // Close dialog immediately for snappy UX (optimistic update already in cache)
     onClose();
   };
@@ -502,6 +519,22 @@ function EventFormDialog({
             </Select>
           </div>
 
+          {/* Series end date — recurring events used to have no way to stop. */}
+          {form.recurrence !== "none" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="ev-recurrence-end">Ends on <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <Input
+                id="ev-recurrence-end"
+                type="date"
+                value={form.recurrenceEnd}
+                min={form.date}
+                onChange={e => setForm(f => ({ ...f, recurrenceEnd: e.target.value }))}
+                data-testid="input-event-recurrence-end"
+              />
+              <p className="text-[11px] text-muted-foreground">Leave empty to repeat indefinitely.</p>
+            </div>
+          )}
+
           {/* Link Profiles */}
           {profiles.length > 0 && (
             <div className="space-y-1.5">
@@ -593,10 +626,28 @@ export function EventDetailDialog({
     .map(id => profiles.find(p => p.id === id)?.name)
     .filter(Boolean);
 
-  const deleteMutation = useMutation<void, Error, void, { prevTimeline: [readonly unknown[], unknown][]; prevEntity: [readonly unknown[], unknown][]; entityKey: string }>({
-    mutationFn: async () => {
+  // A recurring EVENT needs delete scope — "just this date / this and
+  // following / whole series" — like every serious calendar. Before this,
+  // deleting one week's Lawn Care silently destroyed the entire series
+  // (2026-07-29 tester report).
+  const isRecurringEvent = item.type === "event" && !!item.meta?.recurrence && item.meta.recurrence !== "none";
+  type DeleteScope = "one" | "future" | "all";
+  const deleteMutation = useMutation<void, Error, DeleteScope, { prevTimeline: [readonly unknown[], unknown][]; prevEntity: [readonly unknown[], unknown][]; entityKey: string }>({
+    mutationFn: async (scope) => {
       if (item.type === "event") {
-        await apiRequest("DELETE", `/api/events/${item.sourceId}`);
+        const occDate = String(item.date || "").slice(0, 10);
+        if (isRecurringEvent && scope === "one") {
+          // Skip just this occurrence — the series survives. Same tag write
+          // the Recurring Dates manager uses (shared/recurring-dates).
+          const row = await apiRequest("GET", `/api/events/${item.sourceId}`).then(r => r.json());
+          const tags = pruneOccurrenceTags(markOccurrence(row?.tags ?? [], occDate, "skip"), toLocalDateStr(new Date()));
+          await apiRequest("PATCH", `/api/events/${item.sourceId}`, { tags });
+        } else if (isRecurringEvent && scope === "future") {
+          // End the series the day before this occurrence; history survives.
+          await apiRequest("PATCH", `/api/events/${item.sourceId}`, { recurrenceEnd: addDaysISO(occDate, -1) });
+        } else {
+          await apiRequest("DELETE", `/api/events/${item.sourceId}`);
+        }
       } else if (item.type === "task") {
         await apiRequest("DELETE", `/api/tasks/${item.sourceId}`);
       } else if (item.type === "obligation") {
@@ -612,7 +663,7 @@ export function EventDetailDialog({
         }
       }
     },
-    onMutate: async () => {
+    onMutate: async (scope) => {
       // Optimistically remove from the timeline + the underlying entity list so
       // the dialog can close and the row vanishes instantly.
       const entityKey = item.type === "event" ? "/api/events" : item.type === "task" ? "/api/tasks" : "/api/obligations";
@@ -620,38 +671,49 @@ export function EventDetailDialog({
       await queryClient.cancelQueries({ queryKey: [entityKey] });
       const prevTimeline = queryClient.getQueriesData({ queryKey: ["/api/calendar/timeline"] });
       const prevEntity = queryClient.getQueriesData({ queryKey: [entityKey] });
-      // For a single occurrence, drop only that dated entry; otherwise drop
-      // every timeline row sourced from the deleted entity.
+      // For a single occurrence, drop only that dated entry; scoped recurring-
+      // event deletes drop this date / this date forward; otherwise drop every
+      // timeline row sourced from the deleted entity.
       const occId = item.type === "obligation" ? item.meta?.occurrenceId : undefined;
-      const dropFromTimeline = (it: any) =>
-        it && (occId ? it.meta?.occurrenceId !== occId : it.sourceId !== item.sourceId);
+      const occDate = String(item.date || "").slice(0, 10);
+      const dropFromTimeline = (it: any) => {
+        if (!it) return false;
+        if (occId) return it.meta?.occurrenceId !== occId;
+        if (it.sourceId !== item.sourceId) return true;
+        if (isRecurringEvent && scope === "one") return String(it.date || "").slice(0, 10) !== occDate;
+        if (isRecurringEvent && scope === "future") return String(it.date || "").slice(0, 10) < occDate;
+        return false;
+      };
       queryClient.setQueriesData<any>({ queryKey: ["/api/calendar/timeline"] }, (old: any) => {
         if (!old) return old;
         if (Array.isArray(old)) return old.filter(dropFromTimeline);
         if (Array.isArray(old.items)) return { ...old, items: old.items.filter(dropFromTimeline) };
         return old;
       });
-      // Skipping a single occurrence must NOT remove the parent obligation from
-      // the list — only a full delete does.
-      if (!occId) {
+      // Skipping a single occurrence / ending a series must NOT remove the
+      // parent record from the entity list — only a full delete does.
+      if (!occId && !(isRecurringEvent && scope !== "all")) {
         queryClient.setQueriesData<any[]>({ queryKey: [entityKey] }, (old) =>
           Array.isArray(old) ? old.filter((e: any) => e.id !== item.sourceId) : old
         );
       }
       return { prevTimeline, prevEntity, entityKey };
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-      // Keep the liability's Schedule & Calendar (/api/liabilities/:id/schedule)
-      // in lock-step with a delete/skip performed from the main calendar.
-      queryClient.invalidateQueries({ queryKey: ["/api/liabilities"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    onSuccess: (_data, scope) => {
+      // Cache bus (not bare queryClient calls) so the dashboard's Upcoming
+      // section — and every OTHER open tab, via the bus's BroadcastChannel —
+      // refreshes from this delete without a hard reload.
+      void invalidateDomains("events", "tasks", "obligations", "liabilities", "dashboard");
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-      toast({ title: item.type === "obligation" && item.meta?.occurrenceId ? `Removed ${item?.title || "occurrence"} on ${fmtDateFull(item.date)}` : `"${item?.title || "Item"}" deleted` });
+      toast({
+        title: item.type === "obligation" && item.meta?.occurrenceId
+          ? `Removed ${item?.title || "occurrence"} on ${fmtDateFull(item.date)}`
+          : isRecurringEvent && scope === "one"
+            ? `Removed ${item?.title || "event"} on ${fmtDateFull(item.date)} — series unchanged`
+          : isRecurringEvent && scope === "future"
+            ? `"${item?.title || "Series"}" ended before ${fmtDateFull(item.date)}`
+          : `"${item?.title || "Item"}" deleted`,
+      });
     },
     onError: (err: Error, _v, ctx) => {
       if (ctx?.prevTimeline) { for (const [k, d] of ctx.prevTimeline) queryClient.setQueryData(k, d); }
@@ -905,29 +967,54 @@ export function EventDetailDialog({
         <AlertDialogContent data-testid="dialog-confirm-delete-event">
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {isOccurrence ? "Remove this date?" : `Delete "${item.title}"?`}
+              {isRecurringEvent
+                ? `Delete "${item.title}"?`
+                : isOccurrence ? "Remove this date?" : `Delete "${item.title}"?`}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {isOccurrence
-                ? "This skips this single occurrence. The rest of the series stays on your calendar."
-                : "This permanently removes it from your calendar and can't be undone."}
+              {isRecurringEvent
+                ? `This event repeats (${item.meta?.recurrence}). Choose what to delete — removing one date never touches the rest of the series.`
+                : isOccurrence
+                  ? "This skips this single occurrence. The rest of the series stays on your calendar."
+                  : "This permanently removes it from your calendar and can't be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="btn-cancel-delete-event">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                setConfirmDelete(false);
-                // Close immediately for snappy UX — optimistic removal in onMutate.
-                deleteMutation.mutate();
-                onClose();
-              }}
-              data-testid="btn-confirm-delete-event"
-            >
-              {isOccurrence ? "Remove date" : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
+          {isRecurringEvent ? (
+            <div className="flex flex-col gap-2">
+              <Button
+                variant="outline"
+                onClick={() => { setConfirmDelete(false); deleteMutation.mutate("one"); onClose(); }}
+                data-testid="btn-delete-scope-one"
+              >Just this date ({fmtDateFull(item.date)})</Button>
+              <Button
+                variant="outline"
+                onClick={() => { setConfirmDelete(false); deleteMutation.mutate("future"); onClose(); }}
+                data-testid="btn-delete-scope-future"
+              >This and following dates</Button>
+              <Button
+                variant="destructive"
+                onClick={() => { setConfirmDelete(false); deleteMutation.mutate("all"); onClose(); }}
+                data-testid="btn-delete-scope-all"
+              >The entire series</Button>
+              <AlertDialogCancel className="mt-0" data-testid="btn-cancel-delete-event">Cancel</AlertDialogCancel>
+            </div>
+          ) : (
+            <AlertDialogFooter>
+              <AlertDialogCancel data-testid="btn-cancel-delete-event">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => {
+                  setConfirmDelete(false);
+                  // Close immediately for snappy UX — optimistic removal in onMutate.
+                  deleteMutation.mutate("all");
+                  onClose();
+                }}
+                data-testid="btn-confirm-delete-event"
+              >
+                {isOccurrence ? "Remove date" : "Delete"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          )}
         </AlertDialogContent>
       </AlertDialog>
     </Dialog>
@@ -1035,6 +1122,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<CalendarTimelineItem | null>(null);
   const [editEvent, setEditEvent] = useState<CalendarEvent | null>(null);
+  // Recurring-event edit scope: editing one occurrence must never silently
+  // rewrite the whole series (2026-07-29 tester report). The chooser offers
+  // "just this date" (detach an editable one-off copy) or "all occurrences".
+  const [editScopeItem, setEditScopeItem] = useState<CalendarTimelineItem | null>(null);
+  const [oneOffDraft, setOneOffDraft] = useState<{ initial: Partial<EventFormData>; seriesId: string; date: string } | null>(null);
   const [filterType, setFilterType] = useState<string>("all");
   const [profileFilter, setProfileFilter] = useState<string>("all");
   const [syncing, setSyncing] = useState(false);
@@ -1212,6 +1304,14 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const handleEditFromDetail = () => {
     if (!detailItem) return;
     if (detailItem.type === "event") {
+      // A recurring occurrence needs a scope choice BEFORE the form opens —
+      // the form PATCHes the series record, so without asking, "fix this
+      // week's title" rewrote every past and future occurrence.
+      if (detailItem.meta?.recurrence && detailItem.meta.recurrence !== "none") {
+        setEditScopeItem(detailItem);
+        setDetailItem(null);
+        return;
+      }
       // Fetch the actual event to populate form (inline edit dialog)
       apiRequest("GET", `/api/events/${detailItem.sourceId}`)
         .then(r => r.json())
@@ -1805,7 +1905,91 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             location: editEvent.location ?? "",
             category: editEvent.category,
             recurrence: editEvent.recurrence,
+            recurrenceEnd: editEvent.recurrenceEnd ?? "",
             linkedProfiles: editEvent.linkedProfiles,
+          }}
+        />
+      )}
+
+      {/* Recurring-event edit scope chooser */}
+      {editScopeItem && (
+        <AlertDialog open onOpenChange={(o) => { if (!o) setEditScopeItem(null); }}>
+          <AlertDialogContent data-testid="dialog-edit-scope">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Edit "{editScopeItem.title}"</AlertDialogTitle>
+              <AlertDialogDescription>
+                This event repeats ({editScopeItem.meta?.recurrence}). What would you like to change?
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="flex flex-col gap-2">
+              <Button
+                variant="outline"
+                data-testid="btn-edit-scope-one"
+                onClick={async () => {
+                  const it = editScopeItem;
+                  setEditScopeItem(null);
+                  try {
+                    const ev: CalendarEvent = await apiRequest("GET", `/api/events/${it.sourceId}`).then(r => r.json());
+                    setOneOffDraft({
+                      seriesId: ev.id,
+                      date: String(it.date || "").slice(0, 10),
+                      initial: {
+                        title: ev.title,
+                        date: String(it.date || "").slice(0, 10),
+                        time: ev.time ?? "",
+                        endTime: ev.endTime ?? "",
+                        allDay: ev.allDay,
+                        description: ev.description ?? "",
+                        location: ev.location ?? "",
+                        category: ev.category,
+                        recurrence: "none",
+                        linkedProfiles: ev.linkedProfiles,
+                      },
+                    });
+                  } catch (err) { console.error("[CalendarView] failed to load event for one-off edit:", err); }
+                }}
+              >Just this date ({fmtDateFull(editScopeItem.date)})</Button>
+              <Button
+                variant="outline"
+                data-testid="btn-edit-scope-all"
+                onClick={async () => {
+                  const it = editScopeItem;
+                  setEditScopeItem(null);
+                  try {
+                    const ev: CalendarEvent = await apiRequest("GET", `/api/events/${it.sourceId}`).then(r => r.json());
+                    setEditEvent(ev);
+                  } catch (err) { console.error("[CalendarView] failed to load event for edit:", err); }
+                }}
+              >All occurrences</Button>
+              <AlertDialogCancel className="mt-0">Cancel</AlertDialogCancel>
+            </div>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+
+      {/* "Just this date" edit — a detached one-off copy of the occurrence.
+          Saving creates the standalone event AND skips the original slot in
+          the series, so the calendar shows exactly one (edited) entry. */}
+      {oneOffDraft && (
+        <EventFormDialog
+          open
+          onClose={() => setOneOffDraft(null)}
+          initial={oneOffDraft.initial}
+          defaultDate={oneOffDraft.date}
+          onSaved={() => {
+            const { seriesId, date } = oneOffDraft;
+            void (async () => {
+              try {
+                const row = await apiRequest("GET", `/api/events/${seriesId}`).then(r => r.json());
+                const tags = pruneOccurrenceTags(markOccurrence(row?.tags ?? [], date, "skip"), toLocalDateStr(new Date()));
+                await apiRequest("PATCH", `/api/events/${seriesId}`, { tags });
+              } catch (err) {
+                console.error("[CalendarView] failed to detach occurrence from series:", err);
+              } finally {
+                queryClient.invalidateQueries({ queryKey: ["/api/events"] });
+                queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+              }
+            })();
           }}
         />
       )}

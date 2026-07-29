@@ -3,7 +3,7 @@
 // can open the SAME popups the dashboard KPI tiles use, without importing the
 // ~7k-line dashboard page chunk. Exported: TasksPopup, HabitsPopup.
 // Behavior is unchanged — only the module boundary moved.
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -1166,12 +1166,21 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     if (n.includes('stretch') || n.includes('yoga')) return '🤸';
     return '⭐';
   };
-  const visible = useMemo(
-    () => active
-      .filter((h: any) => timeFilter === 'all' || bucketOf(h) === timeFilter)
-      .sort((a: any, b: any) => (b.currentStreak || 0) - (a.currentStreak || 0) || (a.name || '').localeCompare(b.name || '')),
-    [active, timeFilter]
-  );
+  // Row order is FROZEN for the life of the open popup (2026-07-29 tester
+  // report: sorting by live streak re-ordered the list mid-tap, so rapid
+  // toggles landed on the wrong habit — same failure mode as the bills PAY
+  // race). Each habit gets its position the first time it appears (streak
+  // order at that moment) and keeps it until the popup closes.
+  const habitOrderRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => { if (!open) habitOrderRef.current = new Map(); }, [open]);
+  const visible = useMemo(() => {
+    const list = active.filter((h: any) => timeFilter === 'all' || bucketOf(h) === timeFilter);
+    const order = habitOrderRef.current;
+    const newcomers = list.filter((h: any) => !order.has(h.id))
+      .sort((a: any, b: any) => (b.currentStreak || 0) - (a.currentStreak || 0) || (a.name || '').localeCompare(b.name || ''));
+    for (const h of newcomers) order.set(h.id, order.size);
+    return [...list].sort((a: any, b: any) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+  }, [active, timeFilter, open]);
 
   // Summary metrics for the selected period.
   const totalActive = active.length;

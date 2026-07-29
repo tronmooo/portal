@@ -271,10 +271,15 @@ export function reconcileProfileFilter(
   if (ids.length > 0) {
     _state = { mode: "selected", selectedIds: ids, selectedNames: names };
   } else {
+    // Nothing survived. Fall back to Self ONLY — never silently widen to
+    // "Everyone" (2026-07-29 tester report: a background tab flipped itself
+    // to Everyone, breaking profile isolation). A list with no Self profile
+    // is far more likely a partial/scoped fetch than a mass deletion, so in
+    // that case leave the stored selection alone and let a later, complete
+    // list heal it.
     const self = profiles.find(p => p?.type === "self");
-    _state = self
-      ? { mode: "selected", selectedIds: [self.id], selectedNames: [self.name || "Me"] }
-      : { mode: "everyone", selectedIds: [], selectedNames: [] };
+    if (!self) return;
+    _state = { mode: "selected", selectedIds: [self.id], selectedNames: [self.name || "Me"] };
   }
   saveToStorage();
 }

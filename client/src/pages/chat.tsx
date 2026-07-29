@@ -42,6 +42,8 @@ function preloadSmartFillDialog() {
   smartFillDialogPreloaded = true;
   import("@/components/SmartFillDialog").catch(() => { smartFillDialogPreloaded = false; });
 }
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ChatComposer, type ChatComposerHandle } from "@/components/chat/ChatComposer";
@@ -2146,6 +2148,50 @@ const coerceVal = (raw: string): any => {
   return t !== "" && !isNaN(n) && String(n) === t ? n : raw;
 };
 
+// Assistant replies are written in Markdown ([links](url), GFM tables, lists)
+// but were rendered as raw text — every "click here" was literal bracket
+// syntax (2026-07-29 tester report). Same renderer setup the Artifacts page
+// uses. In-app links (hash routes / relative paths) navigate in place;
+// external links open a new tab.
+function AssistantMarkdown({ content }: { content: string }) {
+  return (
+    <div className="prose prose-sm dark:prose-invert max-w-none [&>p]:my-1.5 [&>ul]:my-1.5 [&>ol]:my-1.5">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          table: ({ children }) => (
+            <div className="overflow-x-auto my-2">
+              <table className="w-full text-sm border-collapse">{children}</table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border border-border bg-muted/50 px-2 py-1 text-left font-semibold">{children}</th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-border px-2 py-1 align-top">{children}</td>
+          ),
+          a: ({ href, children }) => {
+            const h = String(href || "");
+            const internal = h.startsWith("#/") || (h.startsWith("/") && !h.startsWith("//"));
+            if (internal) {
+              return (
+                <a
+                  href={h.startsWith("#") ? h : `#${h}`}
+                  onClick={(e) => { e.preventDefault(); hashNavigate(h.replace(/^#/, "")); }}
+                  className="text-primary underline"
+                >{children}</a>
+              );
+            }
+            return <a href={h} target="_blank" rel="noreferrer noopener" className="text-primary underline">{children}</a>;
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 interface MessageRowProps {
   msg: ChatMessage;
   setActiveArtifact: (artifact: any) => void;
@@ -2238,9 +2284,15 @@ const MessageRow = memo(function MessageRow({
             </div>
           )}
 
-        <div className={`text-sm whitespace-pre-wrap leading-relaxed [&_ul]:ml-4 [&_ol]:ml-4 [&_li]:ml-2 ${msg.role === "user" ? "text-primary-foreground" : "text-foreground"}`}>
-          {msg.content}
-        </div>
+        {msg.role === "assistant" ? (
+          <div className="text-sm leading-relaxed text-foreground">
+            <AssistantMarkdown content={msg.content} />
+          </div>
+        ) : (
+          <div className="text-sm whitespace-pre-wrap leading-relaxed text-primary-foreground">
+            {msg.content}
+          </div>
+        )}
 
         {msg.role === "user" && msg.content?.trim() && (
           <div className="flex justify-end mt-1">
@@ -3837,6 +3889,25 @@ export default function ChatPage() {
         onChange={handleFileSelect}
         data-testid="input-camera"
       />
+
+      {/* Active-profile banner (2026-07-29 tester report: "the chat page
+          doesn't show you which profile you're in" — records were silently
+          attributed out of view). Read from the same global scope store the
+          dashboard uses, so the two can never disagree. */}
+      <div className="shrink-0 border-b border-border/40 bg-background/95 px-4 py-1.5" data-testid="chat-scope-banner">
+        <div className="max-w-2xl mx-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
+          <span>
+            Chatting as{" "}
+            <span className="font-semibold text-foreground">
+              {chatScope.mode === "everyone"
+                ? "Everyone"
+                : chatScope.selectedNames.join(", ") || "Selected profile"}
+            </span>
+            {chatScope.mode !== "everyone" && " — new records will be linked here"}
+          </span>
+        </div>
+      </div>
 
       {/* Messages area */}
       <div ref={scrollRef} onScroll={handleTranscriptScroll} className="flex-1 overflow-y-auto px-4 py-3">
