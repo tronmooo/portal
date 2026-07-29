@@ -26,6 +26,15 @@ const TEST_PATTERNS: RegExp[] = [
   /\bQA\d{3,}\b/i,                // "Buy printer paper QA778" (QA + run number)
   /^Test QA\b/i,                  // "Test QA Task"
   /^Test\b.*\bQA$/i,              // "Test Habit QA" (starts Test, ends QA)
+  // Audit 2026-07-29 (Tier 5): these shapes reached today's agenda, the
+  // calendar and Important Dates on a real account because no pattern covered
+  // them. All are bracket- or prefix-tagged by a QA harness, so none can
+  // collide with a name a person would type.
+  /^\[QA[-_ ]?[A-Z0-9]*\]/i,      // "[QA-TASK] chat-created", "[QA-REM] Call the plumber", "[QA-EDGE] double click test"
+  // Underscore-joined only: "QA_AUDIT_call mom" is a harness name, while
+  // "QA audit of the roof" is something a person could plausibly write.
+  /^QA_AUDIT/i,
+  /^PROBE[A-Z]?\d{2,}\b/i,        // "ProbeA500" (sibling of EMPTYPROBE_QA)
 ];
 
 /**

@@ -39,6 +39,7 @@ import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { useMarkBillPaid } from "@/lib/mark-bill-paid";
+import { netWorthView } from "@/lib/net-worth-view";
 import { useToast } from "@/hooks/use-toast";
 import type { Expense } from "@shared/schema";
 import {
@@ -1113,9 +1114,21 @@ export default function FinancePage() {
           cards. All values derive from data already fetched above. */}
       {(() => {
         const snap = enhanced?.financeSnapshot || {};
-        const assetValue = Number(snap.totalAssetValue || 0);
-        const liabilities = Number(snap.totalLiabilities || 0);
-        const netWorth = assetValue - liabilities;
+        // net-worth-view is the ONE client derivation of the balance sheet, and
+        // its contract is that the headline total is the sum of the rows the
+        // user can see. The Hero KPI tile and the Net Worth popup both went
+        // through it; this card did not — it read the server's raw
+        // `totalAssetValue` / `totalLiabilities` while rendering rows from
+        // `assetBreakdown`. Two consequences, both reported:
+        //   · synthetic QA rows ("Test Laptop QA", "__qa_cascade_test__") were
+        //     hidden from the LIST but still counted in the TOTAL (Tier 5);
+        //   · the header could not be reconciled against the rows (D2).
+        // Same call as every other surface, so all three now agree by
+        // construction rather than by coincidence.
+        const sheet = netWorthView(snap, showTestData);
+        const assetValue = sheet.totalAssets;
+        const liabilities = sheet.totalLiabilities;
+        const netWorth = sheet.netWorth;
 
         // Net-worth trend: history is newest-first → reverse to oldest→newest.
         const nwSeries = (Array.isArray(nwHistory) ? nwHistory : [])
@@ -1187,8 +1200,8 @@ export default function FinancePage() {
             incomeSeries={incomeSeries}
             billsSeries={billsSeries}
             alerts={alerts}
-            assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map(toBreakdownRow) : []}
-            liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map(toBreakdownRow) : []}
+            assetBreakdown={sheet.assets.map(toBreakdownRow)}
+            liabilityBreakdown={sheet.liabilities.map(toBreakdownRow)}
             monthLabel={monthLabel}
             onAddExpense={() => setAddOpen(true)}
             onPayBill={(bill) => markPaid(bill)}

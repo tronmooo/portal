@@ -26,6 +26,13 @@ describe("isTestDataRow", () => {
       "QA Test Daily Habit",
       "QA Test Subscription",
       "QAMULTI389053_habit_self_read",
+      // Audit 2026-07-29 (Tier 5): these reached today's agenda, the calendar
+      // and Important Dates on a real account — no pattern covered them.
+      "[QA-TASK] chat-created",
+      "[QA-REM] Call the plumber",
+      "[QA-EDGE] double click test",
+      "QA_AUDIT_call mom",
+      "ProbeA500",
     ]) {
       expect(isTestDataRow(s), s).toBe(true);
     }
@@ -45,6 +52,13 @@ describe("isTestDataRow", () => {
       "Audit the garage",       // AUDIT as a verb, not the AUDIT-TEST prefix
       "Test drive the new car", // starts with Test but doesn't end in QA
       "Room QA1 inspection",    // QA+digits needs 3+ digits
+      // Guards for the 2026-07-29 additions. Hiding a real row is worse than
+      // showing a synthetic one, so each new pattern stays boundaried.
+      "[Draft] Renew passport", // bracket tag, but not a QA one
+      "[Urgent] Call the plumber",
+      "QA audit of the roof",   // needs the QA_AUDIT / "QA AUDIT" token, not prose
+      "Probe the drain",        // PROBE needs 2+ trailing digits
+      "Probe A",
     ]) {
       expect(isTestDataRow(s), s).toBe(false);
     }
