@@ -3595,11 +3595,27 @@ export class SupabaseStorage implements IStorage {
     // Build fingerprint set from existing stored events to prevent duplicates
     const storedEventFPs = new Set<string>();
     for (const item of items) {
-      if (item.type === "event") storedEventFPs.add(`${item.title.toLowerCase().trim()}::${item.date}`);
+      if (item.type !== "event") continue;
+      const t = item.title.toLowerCase().trim();
+      storedEventFPs.add(`${t}::${item.date}`);
+      // Anniversary fingerprint, YEARLY events only. A yearly event is stored
+      // at its anchor year (a birthday sits on the birth date) — but stored
+      // recurrences are already expanded into the requested window above, so
+      // the exact-date key normally suffices. This is the belt for an anchor
+      // whose expansion didn't reach the window. Scoped to yearly on purpose:
+      // applying it to one-off events would suppress a genuine 2027 vet visit
+      // because a different 2026 one shares its month-day.
+      if (String(item.meta?.recurrence || "").toLowerCase() === "yearly") {
+        const md = String(item.date || "").slice(5, 10);
+        if (md) storedEventFPs.add(`${t}::MMDD:${md}`);
+      }
     }
     const addVirtualEvent = (item: CalendarTimelineItem) => {
-      const fp = `${item.title.toLowerCase().trim()}::${item.date}`;
-      if (!storedEventFPs.has(fp)) items.push(item);
+      const t = item.title.toLowerCase().trim();
+      const md = String(item.date || "").slice(5, 10);
+      if (storedEventFPs.has(`${t}::${item.date}`)) return;
+      if (md && storedEventFPs.has(`${t}::MMDD:${md}`)) return;
+      items.push(item);
     };
     for (const profile of profiles) {
       const f = profile.fields || {};

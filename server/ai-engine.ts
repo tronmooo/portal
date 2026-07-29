@@ -5035,7 +5035,7 @@ CRITICAL ROUTING RULES (NEVER VIOLATE):
 - "My blood type is X" or personal health info (allergies, height, weight, etc.) → ALWAYS update_profile on the self/Me profile with fields: { bloodType: "O+" } (or the appropriate field). NEVER use save_memory for profile-level data. Same for any profile: "Mom's blood type", "Max's breed".
 - ANY concrete personal ATTRIBUTE of a person (self or a named person) → ALWAYS update_profile on that profile with a fields entry, NEVER save_memory. This includes sizes and measurements (shoe/foot size, shirt/pant/dress/ring/hat sizes, height, weight, inseam, waist, chest), physical attributes (eye color, hair color), IDs/numbers (license, passport, SSN-last4, member numbers), and contact/identity details. Examples: "I have size 12 feet" → update_profile name:"Me" changes:{ fields:{ shoeSize: "12" } }; "my shirt size is L" → fields:{ shirtSize: "L" }; "my ring size is 9" → fields:{ ringSize: "9" }. Pick a short, clear camelCase field key that matches the attribute.
 - EXPLICIT "save to my info" — when the user says "save this to my info", "add this to my info tab", "put this in my info", "keep this in my profile", or similar → ALWAYS update_profile with a fields entry on the referenced profile (default to self/Me when unspecified). NEVER use save_memory for these; the Info tab reads profile fields.
-- "X's birthday is Y" → ALWAYS do BOTH: (1) update_profile with name: "X" and changes: { fields: { birthday: "Y" } } — if the profile doesn't exist, it will be auto-created. (2) create_event with title: "🎂 X's Birthday", date: Y (with correct year), recurrence: "yearly". Do NOT ask for confirmation. Just do it.
+- "X's birthday is Y" → update_profile with name: "X" and changes: { fields: { birthday: "Y" } } — if the profile doesn't exist, it will be auto-created. That is ALL. Do NOT also call create_event: the birthday calendar entry is generated automatically from the profile field, and creating one yourself produces TWO birthday entries (user QA 2026-07-27: "the same birthday appeared in multiple dashboard locations"). The auto-generated entry also stays in sync if the birthday is later corrected; a hand-made event does not. Do NOT ask for confirmation. Just save the field.
 - save_memory is ONLY for abstract facts/preferences, NOT for concrete data that belongs in a profile field, task, expense, or event. If a fact is a concrete attribute of a person (a size, measurement, number, physical trait, contact detail), it is profile-level data → use update_profile, not save_memory.
 - "save a note that X" / "remember that X" for a HOUSEHOLD/OBJECT fact (a door code, wifi password, locker combo, where something is stored) → save_memory, NOT journal_entry. Journal entries are dated diary text; codes and reference facts must be retrievable later via recall_memory.
 - QUOTED CONTENT BOUNDARIES (CRITICAL for multi-action messages): when an instruction embeds quoted text ('add a journal entry saying "..."', 'create a note that says "..."'), the quoted content ENDS at the closing quotation mark. Everything AFTER the closing quote is a NEW instruction you must still execute — never absorb trailing commands into the journal/note content, and never stop processing the message after the quoted item. Re-scan the whole message and execute EVERY requested action.
@@ -9173,6 +9173,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       // Dedup: skip if a very similar event exists on the same date
       const allEvents = await storage.getEvents();
+      // BIRTHDAY GUARD (user QA 2026-07-27: "the same birthday appeared in
+      // multiple dashboard locations"). A birthday calendar entry is generated
+      // automatically from profile.fields.birthday, so a hand-made one is a
+      // duplicate by construction — and it never matches the auto entry's
+      // same-date dedup because the auto entry is anchored at the BIRTH year
+      // while a model writes the upcoming year. The prompt now says not to;
+      // this makes it structural. Match on the recurring day, not the year.
+      const isBirthdayEvt = /\bbirthday\b|🎂/i.test(String(input.title || ""));
+      if (isBirthdayEvt && input.date) {
+        const md = String(input.date).slice(5, 10);           // MM-DD
+        const dupBday = allEvents.find(e =>
+          /\bbirthday\b|🎂/i.test(e.title || "")
+          && String(e.date || "").slice(5, 10) === md
+          && safeLC(e.title).replace(/[^a-z]/g, "") === safeLC(input.title).replace(/[^a-z]/g, ""));
+        if (dupBday) {
+          logger.info("ai", `Birthday already on the calendar: "${dupBday.title}" (${dupBday.date}) — not creating a second one`);
+          return dupBday;
+        }
+      }
       const dupEvent = allEvents.find(e =>
         e.title.toLowerCase() === safeLC(input.title) &&
         e.date === input.date
