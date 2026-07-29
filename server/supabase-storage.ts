@@ -1890,7 +1890,7 @@ export class SupabaseStorage implements IStorage {
     const safeList = async <T>(tag: string, fn: () => Promise<T[]>): Promise<T[] | null> => {
       try { return await fn(); } catch { errors.push(tag); return null; }
     };
-    const [allTrackers, allExpenses, allTasks, allHabits, allEvents, allDocuments, allArtifacts, allGoals, allIncomes, journalRows] = await Promise.all([
+    const [allTrackers, allExpenses, allTasks, allHabits, allEvents, allDocuments, allArtifacts, allGoals, allIncomes, allObligations, journalRows] = await Promise.all([
       safeList("trackers", () => this.getTrackers()),
       safeList("expenses", () => this.getExpenses()),
       safeList("tasks", () => this.getTasks()),
@@ -1900,6 +1900,7 @@ export class SupabaseStorage implements IStorage {
       safeList("artifacts", () => this.getArtifacts()),
       safeList("goals", () => this.getGoals()),
       safeList("incomes", () => this.getIncomes()),
+      safeList("obligations", () => this.getObligations()),
       safeList("journal", async () => {
         const { data, error } = await this.supabase.from("journal_entries").select("id, linked_profiles").eq("user_id", this.userId);
         if (error) throw error;
@@ -1960,11 +1961,19 @@ export class SupabaseStorage implements IStorage {
       } catch (e) { errors.push("ownership_links"); }
     };
 
-    // Run every independent table cascade concurrently. (Obligations retired —
-    // recurring bills are liability child profiles deleted via the recursive
-    // child-profile pass above, so there's no obligations table step here.)
+    // Run every independent table cascade concurrently.
+    //
+    // BUG (user QA 2026-07-27: "Portol claimed everything was deleted, but a
+    // generated liability-payment profile remained orphaned"). This step used
+    // to be absent, justified by a comment claiming obligations were "retired".
+    // They are not: syncLiabilityObligation in routes.ts still auto-creates one
+    // per liability with a monthly payment, and the atomic RPC path
+    // (migrations/009) deletes sole-owned obligations — so ONLY this legacy
+    // fallback leaked them. The two paths must have identical semantics or the
+    // fallback silently leaves orphans behind whenever the RPC isn't deployed.
     await Promise.all([
       cascadeTrackers(),
+      cascadeSharedTable("obligations", "obligations", allObligations as any),
       cascadeSharedTable("expenses", "expenses", allExpenses),
       cascadeSharedTable("tasks", "tasks", allTasks),
       cascadeSharedTable("habits", "habits", allHabits as any, {

@@ -119,6 +119,7 @@ export default defineConfig({
       'tests/strength-tracker-routing.test.ts',
       'tests/exercise-routing.test.ts',
       'tests/write-verification.test.ts',
+      'tests/profile-attribution.test.ts',
       'tests/liability-due-day.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],

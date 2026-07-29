@@ -2689,7 +2689,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Name of the profile to update (partial match). Use 'Me' for self profile." },
-        changes: { type: "object", description: "Fields to update — use 'fields' object for data like { bloodType: 'O+', allergies: 'penicillin', height: '5\'10\"', currentValue: 1200, purchasePrice: 800 }. Can also include 'notes' (string) or 'tags' (array)." },
+        changes: { type: "object", description: "Fields to update — use 'fields' object for data like { bloodType: 'O+', allergies: 'penicillin', height: '5\'10\"', currentValue: 1200, purchasePrice: 800 }. Can also include 'name' (string — RENAMES the profile; use this for 'rename X to Y', 'call it Z instead'), 'notes' (string) or 'tags' (array)." },
         parentProfileName: { type: "string", description: "Move this profile under a different parent. Pass the EXACT name of the new parent profile (e.g. 'My House', 'Kitchen', 'Bob'). Use this for commands like 'Move freezer from garage to basement' — set name='freezer' and parentProfileName='basement'. Pass empty string to detach (make top-level)." },
       },
       required: ["name", "changes"],
@@ -5717,6 +5717,42 @@ async function rememberCategoryMapping(name: string, category: string, opts: { o
 // Returns undefined when 0 matches OR multiple word-boundary matches (caller
 // can surface a disambiguation error). Single longest-name preference applies
 // for the bidirectional case.
+/**
+ * Resolve a user-NAMED owner profile, or explain why not.
+ *
+ * BUG CLASS (user QA 2026-07-27): "the note was linked to the account owner
+ * instead of the selected profile", "medication attached to the account owner
+ * instead of the requested profile", "liability attached to the wrong profile".
+ * Every one of those came from the same shape —
+ *
+ *     const p = matchProfileByName(profiles, input.forProfile);
+ *     if (p) link(p.id);            // …and silently nothing when it didn't match
+ *
+ * — so an unresolvable name produced an UNLINKED record, which the app shows
+ * under the account owner. The user asked for a specific person and got silence.
+ * When the user names a profile, failing to resolve it is an ERROR: better to
+ * ask than to file someone's medication under the wrong person.
+ */
+function resolveOwnerOrError<T extends { id: string; name: string }>(
+  profiles: T[],
+  rawName: any,
+  what: string,
+): { profile: T } | { error: string } {
+  const asked = String(rawName ?? "").trim();
+  if (!asked) return { error: `No profile name was given for ${what}.` };
+  const res = resolveProfileByName(profiles, asked);
+  if (res.kind === "found") return { profile: res.profile as T };
+  if (res.kind === "ambiguous") {
+    return {
+      error: `"${asked}" matches more than one profile: ${res.matches.slice(0, 5).map((p: any) => `"${p.name}"`).join(", ")}. Which one should own ${what}? I won't guess — filing it under the wrong profile hides it from the right one.`,
+    };
+  }
+  const known = profiles.slice(0, 8).map((p) => p.name).join(", ");
+  return {
+    error: `I couldn't find a profile named "${asked}", so I did NOT create ${what} — it would have been filed under you instead of them. Existing profiles: ${known || "none yet"}. Tell me the exact name, or say "create a profile for ${asked}" first.`,
+  };
+}
+
 function matchProfileByName<T extends { name: string }>(profiles: T[], rawName: any): T | undefined {
   const result = resolveProfileByName(profiles, rawName);
   if (result.kind === "found") return result.profile;
@@ -6115,8 +6151,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const profiles = await storage.getProfiles();
         // If forProfile is specified, find that profile as parent
         if (input.forProfile) {
-          const parent = matchProfileByName(profiles, input.forProfile);
-          if (parent) parentProfileId = parent.id;
+          const owner = resolveOwnerOrError(profiles, input.forProfile, `"${input.name}"`);
+          if ("error" in owner) return { error: owner.error };
+          parentProfileId = owner.profile.id;
         }
         // Default: link to self profile
         if (!parentProfileId) {
@@ -6299,6 +6336,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const previousNotes = input.changes.notes !== undefined ? (profile.notes ?? null) : undefined;
       const previousTags = input.changes.tags !== undefined ? (profile.tags || []) : undefined;
       const previousType = input.changes.type !== undefined ? profile.type : undefined;
+      const previousName = input.changes.name !== undefined ? profile.name : undefined;
 
       // GUARDRAIL: weight (and other time-series measurements) belong in a
       // tracker, NOT on the profile row. If the AI tried to stuff a weight-like
@@ -6358,6 +6396,28 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.changes.notes !== undefined) changes.notes = input.changes.notes;
       if (input.changes.tags) changes.tags = input.changes.tags;
       if (input.changes.type) changes.type = input.changes.type;
+      // ---- Rename ----
+      // BUG (user QA 2026-07-27: "birthday and notes updated, but the requested
+      // rename failed even though AI reported success"): changes.name was
+      // simply never read here, so every rename request was silently dropped
+      // while the sibling edits in the same call went through. storage's
+      // updateProfile has always written `name` — nothing ever handed it one.
+      if (input.changes.name !== undefined) {
+        const newName = String(input.changes.name).trim();
+        if (!newName) {
+          return { error: "A profile name can't be empty. Tell me the new name you want." };
+        }
+        if (newName.toLowerCase() !== profile.name.toLowerCase()) {
+          // Refuse to mint a duplicate — this app treats same-named profiles as
+          // a defect (see merge_profiles), and a silent collision is worse than
+          // an explicit ask.
+          const clash = profiles.find(p => p.id !== profile.id && p.name.trim().toLowerCase() === newName.toLowerCase());
+          if (clash) {
+            return { error: `A profile named "${clash.name}" already exists, so renaming "${profile.name}" to it would create two profiles with the same name. Do you want to merge them instead?` };
+          }
+        }
+        changes.name = newName;
+      }
 
       // ---- Parent reassignment (parentProfileName) ----
       const previousParentProfileId = input.parentProfileName !== undefined ? (profile.parentProfileId ?? null) : undefined;
@@ -6394,6 +6454,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           notes: previousNotes,
           tags: previousTags,
           type: previousType,
+          name: previousName,
           parentProfileId: previousParentProfileId,
         },
       };
@@ -6404,7 +6465,40 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const dpResult = safeMatchEntity(profiles, input.name || "", p => p.name, { isDestructive: true });
       if (!dpResult.match) return { error: dpResult.error || "Profile not found", candidates: dpResult.candidates };
       const profile = dpResult.match;
-      await storage.deleteProfile(profile.id);
+      const ok = await storage.deleteProfile(profile.id);
+      if (ok === false) {
+        return { error: `Deleting "${profile.name}" failed and was rolled back — nothing was removed. Try again.` };
+      }
+      // ORPHAN SWEEP (user QA 2026-07-27: "Portol claimed everything was
+      // deleted, but a generated liability-payment profile remained orphaned").
+      // A liability auto-creates a backing obligation, and the non-transactional
+      // fallback cascade used to skip the obligations table entirely. The
+      // cascade is fixed, but "everything is gone" is a claim worth CHECKING
+      // rather than asserting — a leftover that the user has to find and delete
+      // themselves is exactly the trust problem.
+      const leftovers: string[] = [];
+      try {
+        const stillLinked = <T extends { linkedProfiles?: string[]; name?: string; title?: string }>(rows: T[]) =>
+          rows.filter(r => Array.isArray(r.linkedProfiles) && r.linkedProfiles.includes(profile.id));
+        const [oblig, trk, prof] = await Promise.all([
+          storage.getObligations().catch(() => [] as any[]),
+          storage.getTrackers().catch(() => [] as any[]),
+          storage.getProfiles().catch(() => [] as any[]),
+        ]);
+        for (const o of stillLinked(oblig as any)) leftovers.push(`bill "${(o as any).name}"`);
+        for (const t of stillLinked(trk as any)) leftovers.push(`tracker "${(t as any).name}"`);
+        for (const p2 of (prof as any[])) {
+          if (p2.id === profile.id) leftovers.push(`the profile "${p2.name}" itself`);
+          else if (p2.parentProfileId === profile.id) leftovers.push(`child profile "${p2.name}"`);
+        }
+      } catch { /* the sweep is diagnostic — never fail the delete on it */ }
+      if (leftovers.length > 0) {
+        return {
+          deleted: true, name: profile.name, id: profile.id,
+          orphansRemaining: leftovers,
+          error: `"${profile.name}" was deleted but ${leftovers.length} linked record(s) survived: ${leftovers.slice(0, 6).join(", ")}. Tell the user these are still there and offer to remove them — do NOT say everything was deleted.`,
+        };
+      }
       return { deleted: true, name: profile.name, id: profile.id };
     }
 
@@ -6500,18 +6594,43 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // only stand-alone reminders mirror onto the calendar.
       const isLeadUpReminder = /(?:[—-]\s*)?\b\d+\s*(?:day|days|hour|hours|week|weeks|month|months)\s*(?:away|before|out|prior|ahead)\b/i.test(input.title || "");
       let calendarEvent: any = null;
+      let mirrorProblem: string | null = null;
+      // BUG (user QA 2026-07-27): "generated conflicting times between the
+      // reminder and calendar-event records, then failed to appear on the
+      // calendar". Both halves were real:
+      //
+      //  (a) The reminder row stores an absolute instant (fireAt, UTC) while
+      //      the mirrored event stores a NAIVE wall-clock date+time. Deriving
+      //      them from different clocks makes the two records disagree, so the
+      //      date/time below is computed once, in one timezone, and checked by
+      //      round-tripping it back to an instant before anything is written.
+      //  (b) Three separate paths left calendarEvent null WITHOUT a word to the
+      //      user: an in-memory dedup lock, a payload-validation failure, and a
+      //      swallowed exception. The reminder then reported clean success while
+      //      nothing reached the calendar.
       try {
         if (isLeadUpReminder) {
           // Skip the calendar mirror — notification-only lead-up reminder.
         } else {
         const evDate = fireDate.toLocaleDateString("en-CA", { timeZone: _remTz }); // YYYY-MM-DD
         const evTime = fireDate.toLocaleTimeString("en-GB", { timeZone: _remTz, hour: "2-digit", minute: "2-digit" }); // HH:MM (24h)
-        const evDedupKey = `event:${safeLC(reminderForProfile || "")}:${safeLC(input.title)}:${evDate}`;
+        // Consistency check: the wall-clock we're about to store must describe
+        // the same minute as the reminder's instant when read back in the same
+        // zone. A mismatch means the two records would show different times.
+        const roundTrip = new Date(`${evDate}T${evTime}:00`);
+        const sameMinute = Math.abs(roundTrip.getTime() - fireDate.getTime()) < 60_000
+          || fireDate.toLocaleTimeString("en-GB", { timeZone: _remTz, hour: "2-digit", minute: "2-digit" }) === evTime;
+        if (!sameMinute) {
+          mirrorProblem = `the calendar entry's time (${evTime}) did not match the reminder's time`;
+        }
         const existingEvents = await storage.getEvents();
         const dupEvent = existingEvents.find(e => e.title.toLowerCase() === safeLC(input.title) && e.date === evDate);
         if (dupEvent) {
           calendarEvent = dupEvent;
-        } else if (!isDuplicateCreation(dedupUser, evDedupKey)) {
+        } else {
+          // The DATABASE is the duplicate authority — the in-memory lock used to
+          // gate this, so a lock hit with no matching row meant no event was
+          // created and no error was raised. We already know there's no dup row.
           const remEventPayload = validateAiPayload(insertEventSchema, {
             title: input.title.trim(),
             date: evDate,
@@ -6526,18 +6645,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }, "event");
           if (remEventPayload.ok) {
             calendarEvent = await storage.createEvent(remEventPayload.data);
-            markCreation(dedupUser, evDedupKey);
+            markCreation(dedupUser, `event:${safeLC(reminderForProfile || "")}:${safeLC(input.title)}:${evDate}`);
             if (reminderProfileId) {
               await storage.linkProfileTo(reminderProfileId, "event", calendarEvent.id)
                 .catch((e: any) => console.warn("[AI] Reminder event linking failed:", e?.message));
             }
+          } else {
+            mirrorProblem = `the calendar entry was rejected (${remEventPayload.error})`;
           }
         }
         }
       } catch (e: any) {
         // Calendar mirroring is best-effort — a failure here must not lose the
-        // reminder itself, which was already persisted above.
+        // reminder itself, which was already persisted above. But it must not
+        // be invisible either.
         console.warn("[AI] Failed to mirror reminder onto calendar:", e?.message || e);
+        mirrorProblem = `the calendar entry failed to save (${e?.message || e})`;
+      }
+      if (!isLeadUpReminder && !calendarEvent && !mirrorProblem) {
+        mirrorProblem = "the calendar entry was not created";
       }
 
       return {
@@ -6551,9 +6677,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         date: calendarEvent?.date,
         time: calendarEvent?.time,
         forProfile: input.forProfile,
+        // Never claim "added to your calendar" when it wasn't. The reminder
+        // itself IS saved, so this is a partial success, not an error — say
+        // exactly which half worked.
+        ...(mirrorProblem ? { calendarWarning: mirrorProblem } : {}),
         message: recur
-          ? `Set ${occ.length} ${recur.replace(/_/g, " ")} reminders starting ${human}.`
-          : `Reminder set for ${human} and added to your calendar. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
+          ? `Set ${occ.length} ${recur.replace(/_/g, " ")} reminders starting ${human}.${mirrorProblem ? ` NOTE: ${mirrorProblem} — tell the user the reminder will still fire but is NOT on the calendar.` : ""}`
+          : mirrorProblem
+            ? `Reminder set for ${human} — it will fire an in-app notification. BUT ${mirrorProblem}, so it is NOT on the calendar. Tell the user exactly that; do not say it was added to the calendar.`
+            : `Reminder set for ${human} and added to your calendar. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
         actions: [{ type: "create", category: "reminder", data: reminder }],
       };
     }
@@ -7623,8 +7755,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const ctProfiles = await storage.getProfiles();
       let ctTargetId: string | undefined;
       if (input.forProfile) {
-        const match = ctProfiles.find(p => p.name.toLowerCase() === (input.forProfile || "").toLowerCase());
-        if (match) ctTargetId = match.id;
+        // BUG (user QA 2026-07-27: "medication attached to the account owner
+        // instead of the requested profile"). This used to be an EXACT
+        // lowercase string compare with a silent fall-through to self — so
+        // "Rex " or any name needing the normal word-boundary resolution
+        // created the tracker on the ACCOUNT OWNER. A medication filed under
+        // the wrong person is a safety problem, not a cosmetic one.
+        const owner = resolveOwnerOrError(ctProfiles, input.forProfile, `the "${input.name}" tracker`);
+        if ("error" in owner) return { error: owner.error };
+        ctTargetId = owner.profile.id;
       }
       if (!ctTargetId) {
         const selfP = ctProfiles.find(p => p.type === "self");
@@ -7700,8 +7839,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       let budgetProfileId: string | undefined;
       if (input.forProfile && String(input.forProfile).trim()) {
         const profiles = await storage.getProfiles();
-        const matched = matchProfileByName(profiles, input.forProfile);
-        if (matched) budgetProfileId = matched.id;
+        const owner = resolveOwnerOrError(profiles, input.forProfile, `the ${input.category} budget`);
+        if ("error" in owner) return { error: owner.error };
+        budgetProfileId = owner.profile.id;
       }
       const budget = await storage.addBudget(month, input.category, input.amount, input.notes, budgetProfileId);
       return { ...budget, month, message: `Budget set: $${input.amount} for ${input.category} in ${month}` };
@@ -7907,10 +8047,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const forProfileProvided = !!(input.forProfile && String(input.forProfile).trim());
       let parentProfileId: string | undefined;
       if (input.forProfile) {
-        const fp = String(input.forProfile).toLowerCase().trim();
-        const parent = profiles.find((p: any) => p.name.toLowerCase() === fp)
-          || profiles.find((p: any) => p.name.toLowerCase().includes(fp));
-        if (parent) parentProfileId = parent.id;
+        // BUG (user QA 2026-07-27: "liability attached to the wrong profile").
+        // The old resolution was a bare `.includes()` — which happily picks the
+        // FIRST profile whose name merely contains the string (the same class
+        // as the "Honda" overwriting "Honda HR-V" report) — and then fell back
+        // to SELF without a word when nothing matched. Use the shared strict
+        // resolver: ambiguous asks, unknown refuses.
+        const owner = resolveOwnerOrError(profiles as any, input.forProfile, `the liability "${input.name}"`);
+        if ("error" in owner) return { error: owner.error };
+        parentProfileId = owner.profile.id;
       }
       if (!parentProfileId) {
         const selfP = profiles.find((p: any) => p.type === "self");
@@ -9040,8 +9185,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       let eventLinkedProfiles: string[] = [];
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const target = matchProfileByName(profiles, input.forProfile);
-        if (target) eventLinkedProfiles.push(target.id);
+        const owner = resolveOwnerOrError(profiles, input.forProfile, `the event "${input.title}"`);
+        if ("error" in owner) return { error: owner.error };
+        eventLinkedProfiles.push(owner.profile.id);
       }
       // Bug #42: when AI omits forProfile for a medical-looking event, try to
       // pull the doctor/dentist/therapist name out of the title/description and
@@ -9496,7 +9642,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       let targetProfile: any = null;
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        targetProfile = matchProfileByName(profiles, input.forProfile);
+        const owner = resolveOwnerOrError(profiles, input.forProfile, "the journal entry");
+        if ("error" in owner) return { error: owner.error };
+        targetProfile = owner.profile;
       }
 
       let entry: any;
@@ -9669,8 +9817,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       });
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const profile = matchProfileByName(profiles, input.forProfile);
-        if (profile) await storage.linkProfileTo(profile.id, "document", doc.id);
+        const owner = resolveOwnerOrError(profiles, input.forProfile, `the document "${input.name}"`);
+        if ("error" in owner) {
+          // Don't strand an unlinked document under the account owner — undo the
+          // create and tell the user, so the note isn't silently missing from
+          // the profile's Artifacts page.
+          await storage.deleteDocument(doc.id).catch(() => { /* best effort */ });
+          return { error: owner.error };
+        }
+        await storage.linkProfileTo(owner.profile.id, "document", doc.id);
+        // Confirm the link actually landed — a link that fails silently is the
+        // same invisible-note bug by a different route.
+        const linked = await storage.getDocuments().catch(() => [] as any[]);
+        const row: any = linked.find((d: any) => d.id === doc.id);
+        const links: string[] = Array.isArray(row?.linkedProfiles) ? row.linkedProfiles : [];
+        if (row && links.length > 0 && !links.includes(owner.profile.id)) {
+          return { error: `The document "${input.name}" was created but could NOT be linked to ${owner.profile.name} — it won't appear on their Artifacts page. Try again or link it from the profile.` };
+        }
+        return { ...doc, linkedProfiles: [owner.profile.id], forProfileName: owner.profile.name };
       }
       return doc;
     }
@@ -9869,12 +10033,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // matches the create-path rule that explicit forProfile does NOT
       // auto-link self for non-expense entities).
       if (input.forProfile) {
+        // Strict resolution: a bare `.includes()` picks the first profile whose
+        // name merely CONTAINS the string, so "move it to Bob" could land on
+        // "Bobby". Ambiguity asks; an unknown name refuses.
         const profiles = await storage.getProfiles();
-        const fpLC = safeLC(String(input.forProfile)).trim();
-        const target = profiles.find(p => p.name.toLowerCase() === fpLC)
-          || profiles.find(p => p.name.toLowerCase().includes(fpLC));
-        if (!target) return { error: `I couldn't find a profile named "${input.forProfile}". Which person/pet did you mean?` };
-        changes.linkedProfiles = [target.id];
+        const owner = resolveOwnerOrError(profiles, input.forProfile, `the task "${match.title}"`);
+        if ("error" in owner) return { error: owner.error };
+        changes.linkedProfiles = [owner.profile.id];
       }
       if (Object.keys(changes).length === 0) return { error: "No changes provided" };
       const updated = await storage.updateTask(match.id, changes);
@@ -9886,19 +10051,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const match = expenses.find(e => e.description.toLowerCase().includes(safeLC(input.description)));
       if (!match) return { error: `No expense found matching "${input.description}"` };
       const changes: any = { ...(input.changes || {}) };
-      // forProfile = MOVE: replace the owner set. Expenses keep the app-wide
-      // convention of also linking self so they stay visible in the main
-      // Finance view (mirrors the create_expense path).
+      // forProfile = MOVE: REPLACE the owner set with the destination.
+      //
+      // BUG (user QA 2026-07-27: "added the destination profile but retained an
+      // incorrect extra profile link"). This used to append self alongside the
+      // target, on the theory that expenses must stay visible in the main
+      // Finance view. That theory is wrong twice over: the canonical filter
+      // rule (shared/profile-filter) passes every item when no filter is
+      // active, so an expense owned solely by Luna is already visible under
+      // Everyone — and while a "Me" filter IS active, the extra self link made
+      // Luna's expense show up as the account owner's. create_expense links
+      // ONLY the target, so the comment's claim to "mirror the create path" was
+      // also untrue. A move moves.
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        const fpLC = safeLC(String(input.forProfile)).trim();
-        const target = profiles.find(p => p.name.toLowerCase() === fpLC)
-          || profiles.find(p => p.name.toLowerCase().includes(fpLC));
-        if (!target) return { error: `I couldn't find a profile named "${input.forProfile}". Which person/pet did you mean?` };
-        const selfProfile = profiles.find(p => p.type === "self");
-        changes.linkedProfiles = (selfProfile && target.id !== selfProfile.id)
-          ? [target.id, selfProfile.id]
-          : [target.id];
+        const owner = resolveOwnerOrError(profiles, input.forProfile, `the expense "${match.description}"`);
+        if ("error" in owner) return { error: owner.error };
+        changes.linkedProfiles = [owner.profile.id];
       }
       if (Object.keys(changes).length === 0) return { error: "No changes given for the expense update." };
       const updated = await storage.updateExpense(match.id, changes);
@@ -11191,8 +11360,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       let budgetProfileId: string | undefined;
       if (input.forProfile && String(input.forProfile).trim()) {
         const profiles = await storage.getProfiles();
-        const matched = matchProfileByName(profiles, input.forProfile);
-        if (matched) budgetProfileId = matched.id;
+        const owner = resolveOwnerOrError(profiles, input.forProfile, `the ${input.category} budget`);
+        if ("error" in owner) return { error: owner.error };
+        budgetProfileId = owner.profile.id;
       }
       const budget = await storage.addBudget(month, input.category, Number(input.amount), undefined, budgetProfileId);
       return { ...budget, month, message: `Budget created: $${input.amount} for ${input.category} in ${month}`, actions: [{ type: "create", category: "budget", data: { ...budget, month } }] };

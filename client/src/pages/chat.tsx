@@ -2379,6 +2379,9 @@ const MessageRow = memo(function MessageRow({
                             if (ps.notes !== undefined) body.notes = ps.notes;
                             if (ps.tags !== undefined) body.tags = ps.tags;
                             if (ps.type !== undefined) body.type = ps.type;
+                            // Renames are revertible too now that update_profile
+                            // actually applies changes.name.
+                            if (ps.name !== undefined) body.name = ps.name;
                             await apiRequest("PATCH", `/api/profiles/${ps.profileId}`, body);
                             action.data = { ...action.data, _undone: true };
                             setMessages(prev => prev.map(m => ({
