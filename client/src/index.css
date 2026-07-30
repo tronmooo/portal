@@ -986,3 +986,46 @@ button, a, [role="button"], .card-lift {
   animation: bar-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) backwards;
   animation-delay: calc(var(--i, 0) * 40ms);
 }
+
+/* ── Interaction states ──────────────────────────────────────────────────────
+   One place that answers "is this thing clickable?". Applied to any card or
+   box that opens something, and deliberately NOT to decorative containers: a
+   surface that lifts under the cursor but does nothing when pressed is worse
+   than a flat one.
+
+   focus-visible rather than :focus, so keyboard users get a clear ring while a
+   mouse press doesn't leave one behind. */
+.pressable {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.18s cubic-bezier(0.34, 1.4, 0.64, 1),
+              box-shadow 0.18s ease, background-color 0.16s ease;
+}
+.pressable:active { transform: scale(0.985); }
+.pressable:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring) / 0.65);
+}
+/* Selected / current, e.g. the active row in a list. */
+.pressable[aria-current="true"],
+.pressable[aria-current="page"],
+.pressable[aria-selected="true"],
+.pressable[data-selected="true"] {
+  border-color: hsl(var(--primary) / 0.5);
+  background-image: linear-gradient(135deg, hsl(var(--primary) / 0.10) 0%, transparent 60%);
+}
+
+/* Dialogs, sheets and popovers share the bubble radius, so a modal reads as
+   the same material as the page behind it. */
+.surface-panel {
+  border-radius: 1.25rem;
+  box-shadow:
+    0 1px 2px hsl(0 0% 0% / 0.06),
+    0 24px 60px -20px hsl(0 0% 0% / 0.35);
+}
+.dark .surface-panel {
+  box-shadow:
+    0 1px 2px hsl(0 0% 0% / 0.5),
+    0 28px 70px -24px hsl(0 0% 0% / 0.8),
+    inset 0 1px 0 hsl(0 0% 100% / 0.04);
+}

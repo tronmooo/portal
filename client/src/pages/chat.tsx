@@ -2355,7 +2355,7 @@ const MessageRow = memo(function MessageRow({
             role="button"
             tabIndex={0}
             aria-label={`View artifact: ${(msg as any).artifact.title}`}
-            className="mt-2 border border-primary/30 rounded-lg overflow-hidden cursor-pointer"
+            className="mt-2 border border-primary/30 rounded-lg overflow-hidden cursor-pointer pressable"
             onClick={() => setActiveArtifact((msg as any).artifact)}
             onKeyDown={onEnterOrSpace(() => setActiveArtifact((msg as any).artifact))}
           >

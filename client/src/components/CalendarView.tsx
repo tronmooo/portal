@@ -1863,7 +1863,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                     const typeColor = ev.type === 'task' ? '#8b5cf6' : ev.type === 'obligation' ? '#f59e0b' : ev.type === 'habit' ? '#10b981' : '#3b82f6';
                     return (
                       <div key={`${ev.id}-${i}`}
-                        className={`flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40 cursor-pointer hover:bg-muted/40 active:scale-[0.98] transition-all ${ev.completed ? "opacity-60" : ""}`}
+                        className={`flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40 cursor-pointer pressable hover:bg-muted/40 transition-all ${ev.completed ? "opacity-60" : ""}`}
                         onClick={() => { setSelectedDate(ev.date); setDetailItem(ev); }}>
                         <div className="w-1 self-stretch rounded-full shrink-0 mt-0.5" style={{ background: ev.color || typeColor }} />
                         <div className="flex-1 min-w-0">

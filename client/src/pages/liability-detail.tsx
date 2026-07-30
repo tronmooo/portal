@@ -908,7 +908,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             data-testid="input-avatar-upload"
           />
           <button
-            className="relative rounded-2xl bg-rose-500/10 text-rose-600 flex items-center justify-center overflow-hidden group cursor-pointer shrink-0"
+            className="relative rounded-2xl bg-rose-500/10 text-rose-600 flex items-center justify-center overflow-hidden group cursor-pointer shrink-0 pressable"
             style={{ width: 56, height: 56 }}
             onClick={() => avatarInputRef.current?.click()}
             disabled={avatarMutation.isPending}
@@ -2731,7 +2731,7 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
               <div
                 key={node.id}
                 style={{ height: 160 }}
-                className="w-40 shrink-0 rounded-xl border bg-card p-3 flex flex-col justify-between cursor-pointer hover:bg-accent transition-colors"
+                className="w-40 shrink-0 rounded-xl border bg-card p-3 flex flex-col justify-between cursor-pointer hover:bg-accent transition-colors pressable"
                 onClick={() => navigate(`/profiles/${node.id}`)}
                 data-testid={`nested-liability-${node.id}`}
               >

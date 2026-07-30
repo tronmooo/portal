@@ -2871,7 +2871,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   return (
     <div
       data-testid={`card-tracker-${tracker.id}`}
-      className="rounded-xl overflow-hidden cursor-pointer card-lift transition-all flex flex-col relative"
+      className="rounded-xl overflow-hidden cursor-pointer card-lift transition-all flex flex-col relative pressable"
       style={{
         height: cardHeight,
         background: `linear-gradient(135deg, hsl(${catAccent} / 0.12) 0%, hsl(var(--card)) 75%)`,
@@ -4879,7 +4879,7 @@ function HistoryEntryRow({
 
   return (
     <div
-      className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm gap-2 cursor-pointer"
+      className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm gap-2 cursor-pointer pressable"
       data-testid={`entry-row-${entry.id}`}
       role="button"
       tabIndex={0}
@@ -5269,7 +5269,7 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
             const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
             const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000) : null;
             return (
-              <div key={g.id} role="button" tabIndex={0} aria-label={`Edit goal: ${g.title}`} className="rounded-lg border p-3 space-y-2 cursor-pointer hover:bg-muted/30 transition-colors" onClick={() => openEdit(g)} onKeyDown={onEnterOrSpace(() => openEdit(g))} data-testid={`tracker-goal-${g.id}`}>
+              <div key={g.id} role="button" tabIndex={0} aria-label={`Edit goal: ${g.title}`} className="rounded-lg border p-3 space-y-2 cursor-pointer hover:bg-muted/30 transition-colors pressable" onClick={() => openEdit(g)} onKeyDown={onEnterOrSpace(() => openEdit(g))} data-testid={`tracker-goal-${g.id}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">{g.title}</span>
                   <Badge variant={g.status === "completed" ? "default" : "secondary"} className="text-xs capitalize">{g.status}</Badge>
@@ -6912,7 +6912,7 @@ export default function TrackersPage() {
                   return (
                     <Link key={child.id} href={`/profiles/${child.id}`} className="block" style={{ height: 160 }} onMouseEnter={() => warmProfileDetail(child.id)} onTouchStart={() => warmProfileDetail(child.id)}>
                       <div
-                        className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] grid"
+                        className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] grid pressable"
                         style={{
                           height: 160,
                           minHeight: 160,
@@ -7110,7 +7110,7 @@ export default function TrackersPage() {
                 return (
                   <Link key={liab.id} href={`/profiles/${liab.id}`} className="block h-full" onMouseEnter={() => warmProfileDetail(liab.id)} onTouchStart={() => warmProfileDetail(liab.id)}>
                     <div
-                      className="rounded-xl p-2.5 cursor-pointer transition-all hover:border-[hsl(0_72%_55%/0.45)] active:scale-[0.98] h-full flex flex-col"
+                      className="rounded-xl p-2.5 cursor-pointer transition-all hover:border-[hsl(0_72%_55%/0.45)] active:scale-[0.98] h-full flex flex-col pressable"
                       style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.12) 0%, hsl(var(--card)) 55%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 14px hsl(${accentHsl} / 0.06)` }}
                       data-testid={`liab-card-${liab.id}`}
                     >
@@ -7326,7 +7326,7 @@ export default function TrackersPage() {
                         const daysSince = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
                         const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
                         return (
-                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ height: 160, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onPointerDown={() => prefetchDocument(doc.id, doc.mimeType)} onClick={() => setViewingDoc(doc)} role="button" tabIndex={0} aria-label={`View document: ${doc.name}`} onKeyDown={onEnterOrSpace(() => setViewingDoc(doc))}>
+                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col pressable" style={{ height: 160, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onPointerDown={() => prefetchDocument(doc.id, doc.mimeType)} onClick={() => setViewingDoc(doc)} role="button" tabIndex={0} aria-label={`View document: ${doc.name}`} onKeyDown={onEnterOrSpace(() => setViewingDoc(doc))}>
                             <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
                               <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><FileText className="h-3.5 w-3.5" /></div>
                               <p className="text-[10px] font-bold text-foreground truncate">{doc.name}</p>

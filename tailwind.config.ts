@@ -11,10 +11,14 @@ export default {
         'xs': ['0.625rem', { lineHeight: '0.875rem' }],      // 10px — overrides default 12px
         'xs-loose': ['0.6875rem', { lineHeight: '1rem' }],   // 11px
       },
+      // Softened to match the bubble language on the dashboard. Every shadcn
+      // primitive (inputs, selects, dropdowns, tabs, buttons) reads from this
+      // scale, so raising it is what makes a form feel like it belongs to the
+      // same product as a dashboard card.
       borderRadius: {
-        lg: ".5625rem", /* 9px */
-        md: ".375rem", /* 6px */
-        sm: ".1875rem", /* 3px */
+        lg: ".875rem",  /* 14px */
+        md: ".625rem",  /* 10px */
+        sm: ".375rem",  /*  6px */
       },
       colors: {
         // Flat / base colors (regular buttons)

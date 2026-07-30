@@ -409,7 +409,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
   const animatedCount = useCountUp(count);
   const fillPct = Math.min(100, Math.round((count / Math.max(count, 50)) * 100));
   return (
-    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
       style={{ background: 'linear-gradient(135deg, hsl(262 65% 62% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-open-tasks"
       role="button" tabIndex={0} aria-label="Open tasks" onKeyDown={onEnterOrSpace(onClick)}>
@@ -440,7 +440,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
   const bars = finSnap?.dailySpend?.slice(-7) || Array.from({length:7}, (_,i) => i === 6 ? amount * 0.3 : Math.random() * amount * 0.15);
   const maxBar = Math.max(...bars, 1);
   return (
-    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
       style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-monthly-spend"
       role="button" tabIndex={0} aria-label="Monthly spend" onKeyDown={onEnterOrSpace(onClick)}>
@@ -479,7 +479,7 @@ function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct:
   const animatedPct = useCountUp(pct);
   const dash = (pct / 100) * circ;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
       style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-habits-today"
       role="button" tabIndex={0} aria-label="Habits today" onKeyDown={onEnterOrSpace(onClick)}>
@@ -507,7 +507,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
   const dots = Array.from({length:7}, (_,i) => i >= (7 - Math.min(streak, 7)));
   const moodConf = mood ? MOOD_CONFIG[mood as MoodLevel] : null;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
       style={{ background: 'linear-gradient(135deg, hsl(310 50% 58% / 0.10) 0%, transparent 60%)' }}
       data-testid="stat-card-journal-streak"
       role="button" tabIndex={0} aria-label="Journal streak" onKeyDown={onEnterOrSpace(onClick)}>
@@ -541,7 +541,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   // state is blue (all-clear) — the popup is where the user takes action.
   const accent = isUrgent ? '0 72% 52%' : '205 90% 58%';
   return (
-    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all"
+    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
       style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, transparent 60%)`, borderColor: isUrgent ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.4)' }}
       data-testid="stat-card-expiring-docs"
       role="button" tabIndex={0} aria-label="Expiring documents" onKeyDown={onEnterOrSpace(onClick)}>
@@ -2394,7 +2394,7 @@ function KeyFindingRow({ finding }: { finding: KeyFinding }) {
       tabIndex={0}
       onKeyDown={onEnterOrSpace(onOpen)}
       data-testid={`finding-${finding.id}`}
-      className="group flex items-start gap-2.5 py-2 px-2 -mx-2 rounded-lg cursor-pointer hover:bg-muted/40 transition-colors border-l-2"
+      className="group flex items-start gap-2.5 py-2 px-2 -mx-2 rounded-lg cursor-pointer hover:bg-muted/40 transition-colors border-l-2 pressable"
       style={{ borderLeftColor: `hsl(${colors.border})` }}
     >
       <div
@@ -3845,19 +3845,19 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
       {/* LEFT: KPIs + budget */}
       <div className="space-y-2">
         <div className="grid grid-cols-2 gap-2">
-          <button data-testid="fw-drill-spending" onClick={() => setDrill("spending")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+          <button data-testid="fw-drill-spending" onClick={() => setDrill("spending")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <p className="text-xs text-muted-foreground">Spending</p>
             {/* Color discipline: spending = amber, never red. Red is reserved for
                 overdue/breach states only. */}
             <p className="text-sm font-bold tabular-nums text-amber-500">${monthlySpend.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">{monthExpenses.length} this month</p>
           </button>
-          <button data-testid="fw-drill-income" onClick={() => setDrill("income")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+          <button data-testid="fw-drill-income" onClick={() => setDrill("income")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <p className="text-xs text-muted-foreground">Income</p>
             <p className="text-sm font-bold tabular-nums text-green-500">${monthlyIncome.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">{(incomes || []).length} sources</p>
           </button>
-          <button data-testid="fw-drill-cashflow" onClick={() => setDrill("cashflow")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+          <button data-testid="fw-drill-cashflow" onClick={() => setDrill("cashflow")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <p className="text-xs text-muted-foreground">Cash Flow</p>
             {/* Negative cash flow uses amber (warning), not red (overdue). */}
             <p className={`text-sm font-bold tabular-nums ${cashFlow >= 0 ? "text-green-500" : "text-amber-500"}`}>
@@ -3865,7 +3865,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
             </p>
             <p className="text-xs-tight text-muted-foreground">income - spending</p>
           </button>
-          <button data-testid="fw-drill-networth" onClick={() => setDrill("networth")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+          <button data-testid="fw-drill-networth" onClick={() => setDrill("networth")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <p className="text-xs text-muted-foreground">Net Worth</p>
             <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
@@ -3875,7 +3875,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
                 stored historical snapshots yet, so showing nothing is correct.
                 See audit finding 7.7 and BUG-20260528-fabricated-sparkline. */}
           </button>
-          <button onClick={() => setDrill("budget")} className="col-span-2 rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer">
+          <button onClick={() => setDrill("budget")} className="col-span-2 rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <div className="flex items-center justify-center gap-2">
               <Target className="h-3.5 w-3.5 text-muted-foreground" />
               <p className="text-xs text-muted-foreground">Monthly Budget</p>
@@ -4508,7 +4508,7 @@ function UpcomingDateRow({
       tabIndex={0}
       onKeyDown={onEnterOrSpace(onOpen)}
       data-testid={`upcoming-item-${item.id}`}
-      className="group flex items-center gap-2.5 py-1.5 px-1.5 -mx-1.5 rounded-lg cursor-pointer hover:bg-muted/40 transition-colors"
+      className="group flex items-center gap-2.5 py-1.5 px-1.5 -mx-1.5 rounded-lg cursor-pointer hover:bg-muted/40 transition-colors pressable"
     >
       <div
         className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-base"

@@ -76,7 +76,7 @@ export function AppSidebar() {
                       onClick={() => { navigate(item.href); }}
                       aria-current={isActive ? "page" : undefined}
                       style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
-                      className="flex items-center gap-2.5 w-full px-2 py-2 rounded-lg relative cursor-pointer"
+                      className="flex items-center gap-2.5 w-full px-2 py-2 rounded-lg relative cursor-pointer pressable"
                     >
                         <div
                           className="absolute inset-0 rounded-lg"

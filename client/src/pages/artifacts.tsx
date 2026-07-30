@@ -603,7 +603,7 @@ function ArtifactCard({ item, onSelect, onTogglePin, onDelete }: { item: Unified
       role="button"
       tabIndex={0}
       aria-label={`Open ${item.title}`}
-      className="p-3 rounded-lg border border-border/50 bg-card hover:bg-accent/5 cursor-pointer transition-colors group"
+      className="p-3 rounded-lg border border-border/50 bg-card hover:bg-accent/5 cursor-pointer transition-colors group pressable"
       onClick={handleClick}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {

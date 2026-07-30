@@ -1092,7 +1092,7 @@ function ChildAssetsCard({
                 return (
                   <div
                     key={child.id}
-                    className="w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg border hover:bg-muted/30 transition-colors text-left min-h-[44px] cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg border hover:bg-muted/30 transition-colors text-left min-h-[44px] cursor-pointer pressable"
                     style={{ marginLeft: visualDepth * 14 }}
                     onClick={() => setLocation(`/profiles/${child.id}`)}
                     role="button"
@@ -3596,7 +3596,7 @@ function InfoTab({
                 const subtypeRaw = (l.type_key || l.fields?.subtype || "").toString().replace(/_/g, " ");
                 return (
                   <Link key={l.id} href={`/profiles/${l.id}`}>
-                    <div className="flex items-center gap-2.5 p-2.5 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer" data-testid={`liability-row-${l.id}`}>
+                    <div className="flex items-center gap-2.5 p-2.5 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer pressable" data-testid={`liability-row-${l.id}`}>
                       <div className="h-7 w-7 rounded-full bg-orange-500/10 flex items-center justify-center shrink-0">
                         <Wallet className="h-3.5 w-3.5 text-orange-500" />
                       </div>
@@ -3637,7 +3637,7 @@ function InfoTab({
               const ChildIcon = iconMap[child.type] || Link2;
               return (
                 <Link key={child.id} href={`/profiles/${child.id}`}>
-                  <div className="flex items-center gap-2.5 p-2.5 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer">
+                  <div className="flex items-center gap-2.5 p-2.5 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer pressable">
                     <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                       <ChildIcon className="h-3.5 w-3.5 text-primary" />
                     </div>
@@ -11134,7 +11134,7 @@ export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profile
             return (
               <Link key={person.id} href={`/profiles/${person.id}`}>
                 <div
-                  className="group flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer hover:shadow-md hover:-translate-y-px"
+                  className="group flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer hover:shadow-md hover:-translate-y-px pressable"
                   style={{
                     background: `linear-gradient(135deg, hsl(${accent} / 0.10) 0%, hsl(var(--card)) 60%)`,
                     borderColor: `hsl(${accent} / 0.25)`,
@@ -13188,7 +13188,7 @@ export default function ProfileDetailPage() {
             data-testid="input-avatar-upload"
           />
           <button
-            className={`relative w-20 h-20 rounded-2xl flex items-center justify-center overflow-hidden group cursor-pointer ring-2 ring-white/40 shadow-lg ${profileAccent(profile.type)}`}
+            className={`relative w-20 h-20 rounded-2xl flex items-center justify-center overflow-hidden group cursor-pointer ring-2 ring-white/40 shadow-lg ${profileAccent(profile.type)} pressable`}
             onClick={() => avatarInputRef.current?.click()}
             disabled={avatarMutation.isPending}
             title="Change profile picture"

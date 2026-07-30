@@ -28,7 +28,7 @@ import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
 import {
   ChevronDown, SlidersHorizontal, TriangleAlert, CheckCircle2, CalendarDays,
-  DollarSign, FolderOpen, Flame, Sparkles, type LucideIcon,
+  DollarSign, FolderOpen, Flame, Sparkles, Gauge, type LucideIcon,
 } from "lucide-react";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import { BillsPopup, EventsPopup, DocsPopup } from "@/components/dashboard/BriefingPopups";
@@ -315,6 +315,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const habitsDoneCount = habitsDueToday.filter((h: any) => isHabitDoneOn(h, todayStr)).length;
   const missedCount = habitsDueToday.length - habitsDoneCount;
 
+  // Day progress over COMPLETABLE items only. Events, bills and reminders have
+  // no done-state, so including them would make the figure unable to reach
+  // 100% — the bug that made "4 of 10 habits" render as 33%.
+  const dayCompletable = agendaTasks.length + doneToday + habitsDueToday.length;
+  const dayDone = doneToday + habitsDoneCount;
+  const dayPct = dayCompletable > 0 ? Math.round((dayDone / dayCompletable) * 100) : 0;
+
   const tl = (timeline || []).filter((i: any) => (i.date || "").slice(0, 10) >= todayStr);
   const eventsToday = tl.filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) === todayStr);
   const futureEvents = tl.filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) > todayStr);
@@ -527,6 +534,19 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           unit={habitsPending || habitsDueToday.length === 0 ? undefined : "completed"}
           sub={habitsPending ? "loading" : habitsDueToday.length === 0 ? "No habits scheduled today" : missedCount > 0 ? `${missedCount} remaining today` : "all done today"}
           accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
+        {/* The six tiles above leave one empty cell in the 2-column mobile
+            grid. Rather than pad it with another count that's already on
+            screen, it carries the one thing nothing else answers: how much of
+            today is actually finished. Completable items only — tasks and
+            habits have a done-state, events and bills do not, so counting them
+            would make the bar unable to reach 100%. */}
+        <StatTile label="Today" icon={Gauge}
+          value={tasksPending || habitsPending ? "…" : dayCompletable === 0 ? "—" : `${dayPct}%`}
+          unit={tasksPending || habitsPending || dayCompletable === 0 ? undefined : "done"}
+          sub={tasksPending || habitsPending ? "loading"
+            : dayCompletable === 0 ? "Nothing scheduled today"
+            : `${dayDone} of ${dayCompletable} tasks & habits`}
+          accent="262 80% 66%" onClick={() => setPopup("tasks")} testId="brief-stat-today" />
       </div>
 
       <BriefBubble>
