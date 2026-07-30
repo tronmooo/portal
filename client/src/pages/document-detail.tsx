@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
-import { useDocumentBlobUrl, classifyDocument } from "@/lib/document-preview";
+import { useDocumentBlobUrl, classifyDocument, prefetchDocumentBlob } from "@/lib/document-preview";
 
 // PDF.js renderer is code-split — only loaded when a PDF is actually viewed.
 const PdfCanvas = lazy(() => import("@/components/PdfCanvas"));
@@ -676,10 +676,16 @@ export default function DocumentDetailPage() {
   const { toast } = useToast();
   const id = params?.id ?? "";
 
+  // PERF: start pulling the binary from the route id alone, in parallel with
+  // the metadata query. The preview can't mount until `doc` resolves, but its
+  // bytes don't depend on that response — so there's no reason to wait for it.
+  useEffect(() => { if (id) prefetchDocumentBlob(id); }, [id]);
+
   const { data: doc, isLoading, error } = useQuery<Document>({
     queryKey: ["/api/documents", id],
     queryFn: () => apiRequest("GET", `/api/documents/${id}`).then((r) => r.json()),
     enabled: !!id,
+    staleTime: 60_000,
   });
 
   const mutation = useMutation<Document, Error, Partial<Document>, { prevDetail: unknown; prevList: [readonly unknown[], unknown][] }>({

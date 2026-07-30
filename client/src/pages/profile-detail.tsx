@@ -276,6 +276,7 @@ import { getUserToday, toLocalDateStr } from "@shared/timezone";
 import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
+import { prefetchDocument } from "@/lib/document-preview";
 import { Progress } from "@/components/ui/progress";
 import EditableTitle from "@/components/EditableTitle";
 import { LinkedSheetView, LinkedViewToggle, useLinkedView, type SheetColumn } from "@/components/LinkedSheetView";
@@ -4392,7 +4393,7 @@ function DocumentsTab({
             } },
             { key: "tags", label: "Tags", width: "140px", render: (d: any) => (d.tags || []).slice(0, 3).join(", ") || "—" },
           ]}
-          onRowClick={(d: any) => setViewingDoc(d)}
+          onRowClick={(d: any) => { prefetchDocument(d.id, d.mimeType); setViewingDoc(d); }}
           emptyMessage="No documents match your search"
           testId="linked-docs-sheet"
         />
@@ -4441,21 +4442,18 @@ function DocumentsTab({
                       role="button"
                       tabIndex={0}
                       className="flex-1 min-w-0 text-left cursor-pointer"
-                      onClick={async () => {
-                        try {
-                          const res = await apiRequest("GET", `/api/documents/${doc.id}`);
-                          const fullDoc = await res.json();
-                          setViewingDoc(fullDoc);
-                        } catch { setViewingDoc(doc); }
-                      }}
-                      onKeyDown={async (e) => {
+                      // PERF: open immediately. This used to AWAIT
+                      // GET /api/documents/:id before mounting the dialog —
+                      // which then fetched the very same metadata again, so the
+                      // viewer couldn't even start until two round-trips had
+                      // completed. The dialog owns that query now; the pointer
+                      // handler just warms the binary + PDF renderer on touch.
+                      onPointerDown={() => prefetchDocument(doc.id, doc.mimeType)}
+                      onClick={() => setViewingDoc(doc)}
+                      onKeyDown={(e) => {
                         if (e.key !== "Enter" && e.key !== " ") return;
                         e.preventDefault();
-                        try {
-                          const res = await apiRequest("GET", `/api/documents/${doc.id}`);
-                          const fullDoc = await res.json();
-                          setViewingDoc(fullDoc);
-                        } catch { setViewingDoc(doc); }
+                        setViewingDoc(doc);
                       }}
                     >
                       <div className="text-sm font-medium text-primary" onClick={(e) => e.stopPropagation()}>
@@ -4496,16 +4494,11 @@ function DocumentsTab({
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
-                        onClick={async () => {
-                          // Fetch full document with file data on-demand
-                          try {
-                            const res = await apiRequest("GET", `/api/documents/${doc.id}`);
-                            const fullDoc = await res.json();
-                            setViewingDoc(fullDoc);
-                          } catch {
-                            setViewingDoc(doc); // Fallback to what we have
-                          }
-                        }}
+                        // The dialog fetches its own metadata (React Query,
+                        // cached) — opening it directly saves a round-trip the
+                        // user spent staring at an unchanged list.
+                        onPointerDown={() => prefetchDocument(doc.id, doc.mimeType)}
+                        onClick={() => setViewingDoc(doc)}
                         data-testid={`button-view-doc-${doc.id}`}
                         aria-label={`View ${doc.name}`}
                       >

@@ -105,6 +105,15 @@ export interface IStorage {
   // the getDocuments path — see SupabaseStorage.getDocumentsPage).
   getDocumentsPage(opts?: { profileIds?: string[]; limit?: number; offset?: number }): Promise<{ rows: Document[]; total: number }>;
   getDocument(id: string): Promise<Document | undefined>;
+  // PERF: metadata-only read for the document detail route. getDocument() has
+  // to materialize the binary (a Supabase Storage download + base64 encode) even
+  // though the JSON response strips it — that made simply OPENING a document
+  // pay for a full file transfer before the preview could even start. This
+  // returns the same row WITHOUT fileData plus a cheap `hasFile` flag.
+  getDocumentMeta(id: string): Promise<(Omit<Document, "fileData"> & { hasFile: boolean }) | undefined>;
+  // PERF: raw bytes for /api/documents/:id/file. Skips the base64 round-trip
+  // (Storage blob → base64 string → Buffer) that getDocument() forces.
+  getDocumentFile(id: string): Promise<{ buffer: Buffer; mimeType: string; name: string; version: string; userId?: string } | undefined>;
   createDocument(data: Partial<InsertDocument> & { name: string; type: string } & Record<string, unknown>): Promise<Document>;
   updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined>;
   deleteDocument(id: string): Promise<boolean>;
@@ -1453,6 +1462,24 @@ export class MemStorage implements IStorage {
     return { rows, total };
   }
   async getDocument(id: string) { return this.documents.get(id); }
+  async getDocumentMeta(id: string) {
+    const doc = this.documents.get(id) as any;
+    if (!doc) return undefined;
+    const { fileData, ...meta } = doc;
+    return { ...meta, hasFile: !!fileData && String(fileData).length > 0 };
+  }
+  async getDocumentFile(id: string) {
+    const doc = this.documents.get(id) as any;
+    if (!doc || !doc.fileData) return undefined;
+    const buffer = Buffer.from(String(doc.fileData), "base64");
+    return {
+      buffer,
+      mimeType: doc.mimeType || "application/octet-stream",
+      name: doc.name || "document",
+      version: `${doc.updatedAt || doc.createdAt || ""}-${buffer.length}`,
+      userId: doc.userId,
+    };
+  }
   async createDocument(data: any): Promise<Document> {
     const document: Document = {
       id: randomUUID(),

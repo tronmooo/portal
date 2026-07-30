@@ -1,0 +1,191 @@
+// Guards for how fast a document OPENS.
+//
+// The reported symptom: tapping a document showed its extracted fields
+// immediately and then spun on the file preview for seconds — on the dashboard
+// and in chat alike. The cause was a chain of avoidable serial work, and each
+// link has a test here so it can't come back:
+//
+//  1. GET /api/documents/:id materialized the whole binary (a Supabase Storage
+//     download + base64 encode) purely to strip it back out of the JSON — so
+//     merely opening a document paid for a full file transfer BEFORE the
+//     preview could start, and the client then fetched the same bytes again.
+//  2. GET /api/documents/:id/file sent the whole body every single time, with
+//     no validator, so reopening a document re-downloaded megabytes over LTE.
+//  3. The client re-fetched and re-decoded a document's bytes on every open,
+//     and a prefetch racing the viewer issued two downloads of the same file.
+
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { startHarness, type Harness } from "./helpers/route-harness";
+
+// "hello" — small, but the assertions are about which reads happen, not size.
+const FILE_B64 = "aGVsbG8=";
+
+const DOC = {
+  id: "doc-1",
+  name: "CA DMV Park/Toll Citation Disposition.pdf",
+  type: "citation",
+  mimeType: "application/pdf",
+  fileData: FILE_B64,
+  extractedData: { totalDue: "1085", licensePlate: "8YP3480" },
+  linkedProfiles: [],
+  tags: [],
+  createdAt: "2026-07-29T00:00:00.000Z",
+  updatedAt: "2026-07-29T00:00:00.000Z",
+};
+
+let h: Harness;
+beforeEach(async () => { h = await startHarness({ documents: [{ ...DOC }] }); });
+afterEach(async () => { await h.close(); });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server: opening a document must not read its bytes
+// ─────────────────────────────────────────────────────────────────────────────
+describe("GET /api/documents/:id is metadata-only", () => {
+  it("never calls the binary-materializing read", async () => {
+    const r = await h.api("GET", "/api/documents/doc-1");
+    expect(r.status).toBe(200);
+    // The whole point: the detail read costs no file transfer.
+    expect(h.db.getDocumentCalls).toBe(0);
+  });
+
+  it("still returns the fields the viewer renders, and never the binary", async () => {
+    const r = await h.api("GET", "/api/documents/doc-1");
+    expect(r.data.extractedData).toEqual(DOC.extractedData);
+    expect(r.data.type).toBe("citation");
+    expect(r.data.mimeType).toBe("application/pdf");
+    expect(r.data.hasFile).toBe(true);
+    expect(r.data.fileData).toBeUndefined();
+  });
+
+  it("reports hasFile:false for a document stored without a file", async () => {
+    h.db.documents.push({ ...DOC, id: "doc-2", fileData: "" });
+    const r = await h.api("GET", "/api/documents/doc-2");
+    expect(r.status).toBe(200);
+    expect(r.data.hasFile).toBe(false);
+  });
+
+  it("404s an unknown id", async () => {
+    const r = await h.api("GET", "/api/documents/nope");
+    expect(r.status).toBe(404);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server: the binary route revalidates instead of re-sending
+// ─────────────────────────────────────────────────────────────────────────────
+describe("GET /api/documents/:id/file", () => {
+  it("serves the bytes with a validator the client can revalidate against", async () => {
+    const r = await h.api("GET", "/api/documents/doc-1/file");
+    expect(r.status).toBe(200);
+    expect(r.data).toBe("hello");
+    expect(r.headers["etag"]).toBeTruthy();
+    expect(r.headers["content-type"]).toContain("application/pdf");
+  });
+
+  it("answers 304 with no body when the client already has that version", async () => {
+    const first = await h.api("GET", "/api/documents/doc-1/file");
+    const etag = first.headers["etag"];
+    const second = await h.api("GET", "/api/documents/doc-1/file", undefined, { "If-None-Match": etag });
+    expect(second.status).toBe(304);
+    expect(second.data).toBeFalsy();
+  });
+
+  it("changes the validator when the file is replaced, so a stale copy can't stick", async () => {
+    const before = (await h.api("GET", "/api/documents/doc-1/file")).headers["etag"];
+    // "goodbye" — different bytes AND a later updated_at, as a re-upload writes.
+    h.db.documents[0].fileData = Buffer.from("goodbye").toString("base64");
+    h.db.documents[0].updatedAt = "2026-07-30T00:00:00.000Z";
+    const after = await h.api("GET", "/api/documents/doc-1/file", undefined, { "If-None-Match": before });
+    expect(after.status).toBe(200);
+    expect(after.data).toBe("goodbye");
+    expect(after.headers["etag"]).not.toBe(before);
+  });
+
+  it("keeps the response uncacheable by shared caches", async () => {
+    const r = await h.api("GET", "/api/documents/doc-1/file");
+    expect(r.headers["cache-control"]).toContain("private");
+    expect(r.headers["x-content-type-options"]).toBe("nosniff");
+  });
+
+  it("404s a document with no file attached", async () => {
+    h.db.documents.push({ ...DOC, id: "doc-3", fileData: "" });
+    const r = await h.api("GET", "/api/documents/doc-3/file");
+    expect(r.status).toBe(404);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Client: the resolved-blob cache
+// ─────────────────────────────────────────────────────────────────────────────
+const apiRequest = vi.fn();
+vi.mock("../client/src/lib/queryClient", () => ({
+  apiRequest: (...args: any[]) => apiRequest(...args),
+}));
+
+describe("document blob cache", () => {
+  // Imported lazily so the vi.mock above is in place first, and re-imported per
+  // test so each one starts with an empty module-level cache.
+  async function freshModule() {
+    vi.resetModules();
+    apiRequest.mockReset();
+    apiRequest.mockImplementation(async () => ({
+      blob: async () => new Blob(["hello"], { type: "image/png" }),
+    }));
+    return await import("../client/src/lib/document-preview");
+  }
+
+  it("collapses a prefetch and the viewer's own fetch into ONE request", async () => {
+    const m = await freshModule();
+    // Both start before either resolves — exactly the pointer-down → dialog-open
+    // sequence that used to download the same file twice.
+    m.prefetchDocumentBlob("doc-1", "image/png");
+    m.prefetchDocumentBlob("doc-1", "image/png");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    expect(apiRequest).toHaveBeenCalledWith("GET", "/api/documents/doc-1/file");
+  });
+
+  it("serves a second open from cache without touching the network", async () => {
+    const m = await freshModule();
+    m.prefetchDocumentBlob("doc-1", "image/png");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+
+    m.prefetchDocumentBlob("doc-1", "image/png");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-fetches after the document's bytes are invalidated", async () => {
+    const m = await freshModule();
+    m.prefetchDocumentBlob("doc-1", "image/png");
+    await new Promise((r) => setTimeout(r, 0));
+
+    m.invalidateDocumentBlob("doc-1");
+    m.prefetchDocumentBlob("doc-1", "image/png");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps documents separate", async () => {
+    const m = await freshModule();
+    m.prefetchDocumentBlob("doc-1", "image/png");
+    m.prefetchDocumentBlob("doc-2", "image/png");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache a failed fetch — the next open retries", async () => {
+    const m = await freshModule();
+    apiRequest.mockRejectedValue(new Error("404: Not found"));
+    m.prefetchDocumentBlob("doc-1", "image/png");
+    await new Promise((r) => setTimeout(r, 0));
+
+    apiRequest.mockImplementation(async () => ({
+      blob: async () => new Blob(["hello"], { type: "image/png" }),
+    }));
+    m.prefetchDocumentBlob("doc-1", "image/png");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+  });
+});

@@ -28,6 +28,10 @@ export interface FakeDb {
   tasks: any[];
   events: any[];
   reminders: any[];
+  documents: any[];
+  /** Call counter for the binary-materializing read, so a test can prove the
+   *  metadata route never touches it. */
+  getDocumentCalls: number;
 }
 
 let seq = 0;
@@ -109,6 +113,39 @@ export function makeFakeStorage(db: FakeDb) {
       return db.events.length < before;
     },
 
+    // Documents. getDocument() is the expensive read (in production it
+    // downloads the object out of Supabase Storage and base64-encodes it), so
+    // it counts its calls — /api/documents/:id must never reach for it.
+    getDocuments: async () => db.documents.map(d => ({ ...d, fileData: "" })),
+    getDocument: async (rid: string) => {
+      db.getDocumentCalls++;
+      return db.documents.find(d => d.id === rid);
+    },
+    getDocumentMeta: async (rid: string) => {
+      const row = db.documents.find(d => d.id === rid);
+      if (!row) return undefined;
+      const { fileData, ...meta } = row;
+      return { ...meta, hasFile: !!fileData && String(fileData).length > 0 };
+    },
+    getDocumentFile: async (rid: string) => {
+      const row = db.documents.find(d => d.id === rid);
+      if (!row || !row.fileData) return undefined;
+      const buffer = Buffer.from(String(row.fileData), "base64");
+      return {
+        buffer,
+        mimeType: row.mimeType || "application/octet-stream",
+        name: row.name || "document",
+        version: `${row.updatedAt || row.createdAt || ""}-${buffer.length}`,
+        userId: row.userId,
+      };
+    },
+    updateDocument: async (rid: string, patch: any) => {
+      const row = db.documents.find(d => d.id === rid);
+      if (!row) return undefined;
+      Object.assign(row, patch);
+      return row;
+    },
+
     listReminders: async () => db.reminders,
     createReminder: async (data: any) => {
       const row = { id: id("rem"), ...data };
@@ -142,14 +179,14 @@ export interface Harness {
   db: FakeDb;
   /** HTTP call against the booted app. `headers` go on the wire verbatim. */
   api: (method: string, path: string, body?: any, headers?: Record<string, string>) =>
-    Promise<{ status: number; ok: boolean; data: any }>;
+    Promise<{ status: number; ok: boolean; data: any; headers: Record<string, string> }>;
   close: () => Promise<void>;
 }
 
 export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness> {
   const db: FakeDb = {
     profiles: [], expenses: [], incomes: [], obligations: [],
-    tasks: [], events: [], reminders: [], ...seed,
+    tasks: [], events: [], reminders: [], documents: [], getDocumentCalls: 0, ...seed,
   };
   const storage = makeFakeStorage(db);
 
@@ -178,7 +215,9 @@ export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness>
     const text = await r.text();
     let data: any = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-    return { status: r.status, ok: r.ok, data };
+    const responseHeaders: Record<string, string> = {};
+    r.headers.forEach((v, k) => { responseHeaders[k] = v; });
+    return { status: r.status, ok: r.ok, data, headers: responseHeaders };
   };
 
   return {

@@ -1,6 +1,7 @@
 import express, { type Express, type Request } from "express";
 import { canonicalExpenseCategory, canonicalObligationCategory, EXPENSE_CATEGORIES } from "@shared/category-canon";
 import { createServer, type Server } from "http";
+import { createHash } from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -5327,19 +5328,22 @@ Rules:
     res.json(paginate(items, req, res));
   }));
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {
-    const doc = await storage.getDocument(req.params.id);
+    // PERF: metadata-only read. This route never returns the binary (clients
+    // fetch it from /file), so it must not PAY for it either — getDocument()
+    // downloads the object out of Supabase Storage and base64-encodes it, which
+    // meant every "open document" tap waited on a full file transfer, then
+    // waited on a SECOND one for /file. getDocumentMeta does neither.
+    const doc = await storage.getDocumentMeta(req.params.id);
     if (!doc) return res.status(404).json({ error: "Not found" });
     // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
     if ((doc as any).userId && (doc as any).userId !== (req as AuthenticatedRequest).userId) {
       return res.status(404).json({ error: "Not found" });
     }
-    // Strip base64 fileData from JSON response — clients fetch binary via /file.
-    // But tell the client whether a binary exists so the preview UI can render
-    // <img src=/file> instead of showing "No preview available" for docs that
-    // DO have a file.
-    const { fileData, ...docMeta } = doc as any;
-    const hasFile = !!fileData && String(fileData).length > 0;
-    res.json({ ...docMeta, hasFile, fileSize: hasFile ? Math.floor(String(fileData).length * 0.75) : 0 });
+    // `hasFile` tells the preview UI a binary exists so it renders the viewer
+    // instead of "No preview available". `fileSize` is no longer computed —
+    // knowing the exact byte count would require reading the file we just
+    // avoided reading — so it's reported only as the boolean it was used as.
+    res.json(doc);
   }));
   app.post("/api/documents", asyncHandler(async (req, res) => {
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
@@ -5505,16 +5509,31 @@ Rules:
 
   // ---- Document file serving (for download / share) ----
   app.get("/api/documents/:id/file", asyncHandler(async (req, res) => {
-    const doc = await storage.getDocument(req.params.id);
-    if (!doc || !doc.fileData) return res.status(404).json({ error: "Not found" });
+    // PERF: getDocumentFile reads the bytes straight into a Buffer (the old
+    // getDocument path went Storage blob → base64 string → Buffer, doubling the
+    // work and the peak memory on the hot path of every document preview).
+    const file = await storage.getDocumentFile(req.params.id);
+    if (!file) return res.status(404).json({ error: "Not found" });
     // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
-    if ((doc as any).userId && (doc as any).userId !== (req as AuthenticatedRequest).userId) {
+    if (file.userId && file.userId !== (req as AuthenticatedRequest).userId) {
       return res.status(404).json({ error: "Not found" });
     }
-    const buffer = Buffer.from(doc.fileData, "base64");
-    res.setHeader("Content-Type", doc.mimeType);
+    const { buffer, mimeType, name } = file;
+
+    // PERF: a document's bytes are immutable until it's re-uploaded, and the
+    // ETag folds in updated_at + length so a replacement invalidates instantly.
+    // `no-cache` still revalidates every time (never serve a stale file), but a
+    // 304 costs one small round-trip instead of re-sending megabytes over LTE —
+    // which is the difference between reopening a PDF in ~100ms and in seconds.
+    const etag = `"doc-${req.params.id}-${createHash("sha1").update(file.version).digest("hex").slice(0, 16)}"`;
+    res.setHeader("ETag", etag);
+    res.setHeader("Cache-Control", "private, no-cache, max-age=0");
+    res.setHeader("Vary", "Authorization");
+    if (req.headers["if-none-match"] === etag) return res.status(304).end();
+
+    res.setHeader("Content-Type", mimeType);
     // Sanitize filename: strip all non-alphanumeric except dots, hyphens, underscores
-    const safeName = (doc.name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
+    const safeName = (name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
     // Defence against MIME-confused script execution: force download for active
     // content types and strip browser sniffing on every response.
     const activeMime = new Set([
@@ -5522,7 +5541,7 @@ Rules:
       "image/svg+xml",
       "application/xhtml+xml",
     ]);
-    const disposition = activeMime.has((doc.mimeType || "").toLowerCase()) ? "attachment" : "inline";
+    const disposition = activeMime.has((mimeType || "").toLowerCase()) ? "attachment" : "inline";
     res.setHeader("Content-Disposition", `${disposition}; filename="${safeName}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Content-Security-Policy", "default-src 'none'");

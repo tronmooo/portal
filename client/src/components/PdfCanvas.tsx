@@ -33,6 +33,17 @@ function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
   return pdfjsPromise;
 }
 
+/**
+ * Start loading PDF.js + its worker before any PDF bytes have arrived.
+ *
+ * Called from `preloadPdfRenderer()` the moment we know a PDF is about to be
+ * viewed, so the ~1MB chunk downloads in parallel with the file instead of
+ * after it.
+ */
+export function preloadPdfjs() {
+  loadPdfjs().catch(() => { /* best-effort warm-up; render() retries + reports */ });
+}
+
 export default function PdfCanvas({
   blob,
   className,
@@ -66,8 +77,12 @@ export default function PdfCanvas({
       // Cap backing-store resolution so a high-DPI phone doesn't allocate huge
       // canvases for a many-page document.
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const frag = document.createDocumentFragment();
 
+      // PERF: pages are appended AS THEY RASTERIZE and the spinner clears after
+      // page 1. The previous version buffered every page into a fragment and
+      // swapped it in at the end, so a 10-page PDF showed nothing but a spinner
+      // until the last page finished — even though page 1 was ready in a
+      // fraction of that. Time-to-first-page is what the reader actually feels.
       for (let n = 1; n <= numPages; n++) {
         const page = await pdf.getPage(n);
         if (seq !== seqRef.current) { pdf.destroy(); return; }
@@ -87,12 +102,22 @@ export default function PdfCanvas({
 
         await page.render({ canvasContext: ctx, viewport }).promise;
         if (seq !== seqRef.current) { pdf.destroy(); return; }
-        frag.appendChild(canvas);
+        // First page replaces whatever the previous render left behind; the
+        // rest stream in underneath it.
+        if (n === 1) {
+          host.replaceChildren(canvas);
+          setStatus("ready");
+        } else {
+          host.appendChild(canvas);
+          // Yield between pages so scrolling/pinching the page already on
+          // screen stays responsive while the tail of the document renders.
+          await new Promise<void>((r) => requestAnimationFrame(() => r()));
+          if (seq !== seqRef.current) { pdf.destroy(); return; }
+        }
       }
 
       pdf.destroy();
       if (seq !== seqRef.current) return;
-      host.replaceChildren(frag);
       setStatus("ready");
     } catch (e) {
       console.error("[PdfCanvas] failed to render PDF:", e);

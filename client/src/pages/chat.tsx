@@ -28,6 +28,7 @@ const SmartFillDialog = lazy(() =>
   import("@/components/SmartFillDialog").then((m) => ({ default: m.SmartFillDialog }))
 );
 const DocumentViewer = lazy(() => import("@/components/DocumentViewer"));
+import { prefetchDocument } from "@/lib/document-preview";
 const ChatChartBody = lazy(() => import("@/components/ChatChartRenderer"));
 
 // SmartFillDialog preload (QA audit, same-file fix): the lazy chunk otherwise
@@ -541,6 +542,11 @@ function LazyDocumentPreview({
   extractedData?: Record<string, any>;
 }) {
   const isPdf = mimeType === "application/pdf";
+  // PERF: start the binary download (and, for a PDF, the PDF.js chunk) the
+  // moment the message renders. DocumentViewer itself is code-split, so waiting
+  // for its chunk before the fetch could even begin put two serial downloads in
+  // front of the first pixel of the document.
+  useEffect(() => { prefetchDocument(id, mimeType); }, [id, mimeType]);
   // DocumentViewer (inline mode) already knows how to handle data==="__LAZY_LOAD__":
   // it fetches the binary via GET /api/documents/:id/file as a blob URL. We just
   // need to give it a parent with a real height so its h-full doesn't collapse.

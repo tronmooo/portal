@@ -144,6 +144,7 @@ import { Link, useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile, Document, Goal } from "@shared/schema";
 import { ShareButton, DocumentViewerDialog } from "@/components/DocumentViewer";
+import { prefetchDocument } from "@/lib/document-preview";
 import {
   LineChart,
   Line,
@@ -7325,7 +7326,7 @@ export default function TrackersPage() {
                         const daysSince = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
                         const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
                         return (
-                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ height: 160, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onClick={() => setViewingDoc(doc)} role="button" tabIndex={0} aria-label={`View document: ${doc.name}`} onKeyDown={onEnterOrSpace(() => setViewingDoc(doc))}>
+                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col" style={{ height: 160, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onPointerDown={() => prefetchDocument(doc.id, doc.mimeType)} onClick={() => setViewingDoc(doc)} role="button" tabIndex={0} aria-label={`View document: ${doc.name}`} onKeyDown={onEnterOrSpace(() => setViewingDoc(doc))}>
                             <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
                               <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><FileText className="h-3.5 w-3.5" /></div>
                               <p className="text-[10px] font-bold text-foreground truncate">{doc.name}</p>

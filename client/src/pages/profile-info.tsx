@@ -23,6 +23,7 @@ import { infoFieldsForType, readField, computeAge } from "@/lib/profile-fields";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
+import { prefetchDocument } from "@/lib/document-preview";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -437,6 +438,7 @@ function DocumentsSection({ documents }: { documents: any[] }) {
         {documents.map((d: any) => (
           <button
             key={d.id}
+            onPointerDown={() => prefetchDocument(d.id, d.mimeType)}
             onClick={() => setViewing(d)}
             className="flex items-center gap-2 p-2.5 rounded-lg border hover:border-primary/50 text-left min-w-0"
             data-testid={`info-doc-${d.id}`}

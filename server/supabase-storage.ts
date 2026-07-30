@@ -112,6 +112,11 @@ const DOCUMENTS_BUCKET = "documents";
 const DOCUMENT_LIST_COLUMNS =
   "id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at";
 
+// Single-document metadata projection. Same as the list projection plus
+// storage_path — deliberately WITHOUT file_data so opening a document never
+// pulls its (multi-MB, base64) binary down just to render the details pane.
+const DOCUMENT_META_COLUMNS = `${DOCUMENT_LIST_COLUMNS}, storage_path`;
+
 /**
  * Merge an incoming JSONB-style patch into an existing object AND honor deletion
  * intents. Without explicit deletion support, shallow-merge (`{ ...existing,
@@ -3991,6 +3996,83 @@ export class SupabaseStorage implements IStorage {
       doc.fileData = data.file_data;
     }
     return doc;
+  }
+
+  /**
+   * PERF: metadata-only single-document read.
+   *
+   * `getDocument()` selects `*` (pulling the whole base64 `file_data` column for
+   * legacy rows) AND downloads the object from Supabase Storage — even though
+   * every JSON consumer strips the binary right back out. Opening a document
+   * therefore paid for a full file transfer before the preview could start, and
+   * the client then fetched the same bytes AGAIN via /file.
+   *
+   * This reads the metadata projection only. `hasFile` is resolved without
+   * moving any bytes: a storage_path is proof on its own, and for legacy
+   * base64-in-DB rows we run a filtered existence probe that selects just `id`.
+   */
+  async getDocumentMeta(id: string): Promise<(Omit<Document, "fileData"> & { hasFile: boolean }) | undefined> {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
+    const { data, error } = await this.supabase.from("documents")
+      .select(DOCUMENT_META_COLUMNS)
+      .eq("id", id).eq("user_id", this.userId).is("deleted_at", null)
+      .maybeSingle();
+    if (error || !data) return undefined;
+    const { fileData, ...meta } = this.rowToDocument({ ...(data as any), file_data: "" });
+
+    let hasFile = !!(data as any).storage_path;
+    if (!hasFile) {
+      // Existence probe for pre-Storage rows: the filter runs in Postgres and
+      // the projection is a single uuid, so no file bytes cross the wire.
+      const { data: probe } = await this.supabase.from("documents")
+        .select("id")
+        .eq("id", id).eq("user_id", this.userId).is("deleted_at", null)
+        .not("file_data", "is", null).neq("file_data", "")
+        .maybeSingle();
+      hasFile = !!probe;
+    }
+    return { ...meta, hasFile };
+  }
+
+  /**
+   * PERF: raw bytes for the /file route. Downloads straight into a Buffer
+   * instead of the Storage-blob → base64 → Buffer round-trip `getDocument()`
+   * forces (which doubles peak memory and burns CPU on every view).
+   *
+   * `version` is a cheap content identity used to build the route's ETag.
+   */
+  async getDocumentFile(id: string): Promise<{ buffer: Buffer; mimeType: string; name: string; version: string; userId?: string } | undefined> {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
+    const { data, error } = await this.supabase.from("documents")
+      .select("id, user_id, name, mime_type, storage_path, file_data, updated_at, created_at")
+      .eq("id", id).eq("user_id", this.userId).is("deleted_at", null)
+      .maybeSingle();
+    if (error || !data) return undefined;
+    const row = data as any;
+    const mimeType = row.mime_type || "application/octet-stream";
+    const name = row.name || "document";
+
+    let buffer: Buffer | undefined;
+    if (row.storage_path) {
+      try {
+        const { data: blob, error: dlErr } = await this.supabase.storage
+          .from(DOCUMENTS_BUCKET)
+          .download(row.storage_path);
+        if (dlErr) console.error(`[getDocumentFile] Storage download failed for ${row.storage_path}:`, dlErr.message);
+        else if (blob) buffer = Buffer.from(await blob.arrayBuffer());
+      } catch (e: any) {
+        console.error(`[getDocumentFile] Storage download error for ${row.storage_path}:`, e.message);
+      }
+    }
+    if (!buffer && row.file_data && String(row.file_data).length > 10) {
+      buffer = Buffer.from(String(row.file_data), "base64");
+    }
+    if (!buffer || buffer.length === 0) return undefined;
+    return {
+      buffer, mimeType, name,
+      version: `${row.updated_at || row.created_at || ""}-${buffer.length}`,
+      userId: row.user_id,
+    };
   }
 
   async createDocument(data: any): Promise<Document> {
