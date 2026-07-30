@@ -11,13 +11,18 @@
 //   SavingsRatePopup       — violet · semicircle gauge + income−spend equation
 //   CashFlowOverviewPopup  — indigo · glowing donut + 6-month trend + month table
 //
+// UPDATE 2026-07-30: the charts below still differ — a waterfall and a gauge
+// really are different things — but the *chrome* no longer does. This file used
+// to state as a goal that "no two of them share a header design", and six
+// bespoke full-bleed gradient heroes with six eyebrow treatments is a large
+// part of why the app read as several products. They all use BubbleModal +
+// PopupHero now: one medallion, one title, one headline number, one stat strip.
+//
 // Pure presentation: every number arrives as a prop from finance.tsx, which
 // already owns the queries — no fetching here, so these stay jsdom-testable.
 import { useMemo } from "react";
 import { useLocation } from "wouter";
-import {
-  Dialog, DialogContent, DialogTitle, DialogDescription,
-} from "@/components/ui/dialog";
+import { BubbleModal, PopupHero } from "@/components/ui/bubble-modal";
 import { Button } from "@/components/ui/button";
 import {
   ComposedChart, Bar, Area, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer,
@@ -28,6 +33,7 @@ import {
   HeartPulse, Home, Film, CreditCard, Package, PiggyBank,
 } from "lucide-react";
 import { toMonthlyAmount } from "@shared/obligation-windows";
+import { dayLabel } from "@shared/now-rank";
 import type { MoneyBill } from "@/components/finance/MoneyOverview";
 
 const fmt = (n: number) => Math.round(Math.abs(n)).toLocaleString("en-US");
@@ -42,43 +48,9 @@ const CAT_ICON: Record<string, any> = {
 };
 const catIcon = (name: string) => CAT_ICON[String(name || "").toLowerCase()] || Package;
 
-// ─── shared frame ─────────────────────────────────────────────────────────────
-// Deliberately minimal: just the Radix dialog + scroll body. Every popup paints
-// its own full-bleed hero so no two of them share a header design.
-function PopupFrame({ open, onOpenChange, testId, children }: {
-  open: boolean; onOpenChange: (o: boolean) => void; testId: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md p-0 gap-0 overflow-hidden flex flex-col max-h-[90dvh]" data-testid={testId}>
-        {children}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// Hero building block — each popup passes its own gradient + layout children.
-function Hero({ gradient, children }: { gradient: string; children: React.ReactNode }) {
-  return (
-    <div className="relative shrink-0 px-4 pt-4 pb-3" style={{ background: gradient }}>
-      {children}
-    </div>
-  );
-}
-
-function Eyebrow({ icon: Icon, color, children }: { icon: any; color: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-1.5 pr-8">
-      <span className="rounded-md p-1 inline-flex" style={{ background: `${color.replace(")", " / 0.18)")}` }}>
-        <Icon className="h-3.5 w-3.5" style={{ color }} />
-      </span>
-      <DialogTitle className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-        {children}
-      </DialogTitle>
-    </div>
-  );
-}
+// One accent per popup, as HSL triples — BubbleModal and PopupHero wrap them.
+const SKY = "203 92% 60%", AMBER = "38 96% 54%", EMERALD = "155 65% 45%";
+const ROSE = "350 80% 58%", VIOLET = "262 80% 66%", INDIGO = "234 85% 68%";
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 1 · CASH FLOW — sky waterfall
@@ -117,18 +89,13 @@ export function CashFlowWaterfallPopup({
     .sort((a, b) => b.amt - a.amt).slice(0, 4), [spendByCategory]);
 
   return (
-    <PopupFrame open={open} onOpenChange={onOpenChange} testId="popup-cashflow-waterfall">
-      <Hero gradient={`linear-gradient(150deg, hsl(203 92% 60% / 0.28), hsl(210 60% 40% / 0.10) 55%, transparent)`}>
-        <Eyebrow icon={Waves} color={sky}>Cash Flow · {monthLabel}</Eyebrow>
-        <div className="mt-2 flex items-end justify-between">
-          <p className="metric-value text-3xl leading-none" style={{ color: net >= 0 ? sky : "hsl(38 96% 54%)" }}>{signed(net)}</p>
-          <DialogDescription className="text-[11px] text-muted-foreground text-right">
-            how money moved<br />through this month
-          </DialogDescription>
-        </div>
-      </Hero>
+    <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-cashflow-waterfall"
+      title={`Cash Flow · ${monthLabel}`} icon={Waves} accent={SKY}>
+      <PopupHero accent={SKY} value={signed(net)}
+        valueTone={net >= 0 ? sky : "hsl(38 96% 54%)"}
+        caption={<>how money moved<br />through this month</>} />
 
-      <div className="overflow-y-auto min-h-0 flex-1 p-3 space-y-3">
+      <div className="space-y-3">
         {/* Waterfall */}
         <div className="bubble p-3">
           <svg viewBox="0 0 340 172" className="w-full" role="img" aria-label="Cash flow waterfall">
@@ -207,7 +174,7 @@ export function CashFlowWaterfallPopup({
           </div>
         )}
       </div>
-    </PopupFrame>
+    </BubbleModal>
   );
 }
 
@@ -250,34 +217,21 @@ export function SpendPopup({
     .sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0)).slice(0, 5), [monthExpenses]);
 
   return (
-    <PopupFrame open={open} onOpenChange={onOpenChange} testId="popup-spend">
-      <Hero gradient={`linear-gradient(150deg, hsl(38 96% 54% / 0.30), hsl(24 90% 45% / 0.10) 55%, transparent)`}>
-        <Eyebrow icon={Flame} color={amber}>Spend · {monthLabel}</Eyebrow>
-        <div className="mt-2 flex items-end justify-between">
-          <p className="metric-value text-3xl leading-none" style={{ color: amber }}>${fmt(spendMtd)}</p>
-          <DialogDescription className="text-[11px] text-right text-muted-foreground">
-            {spendTrendPct != null ? (
-              <span className="font-semibold" style={{ color: spendTrendPct > 0 ? "hsl(0 72% 58%)" : "hsl(155 65% 45%)" }}>
-                {spendTrendPct > 0 ? "▲" : "▼"} {Math.abs(Math.round(spendTrendPct))}% vs last month
-              </span>
-            ) : "spent so far this month"}
-          </DialogDescription>
-        </div>
-        <div className="mt-2.5 grid grid-cols-3 gap-2">
-          {[
-            ["Daily avg", `$${fmt(dailyAvg)}`],
-            ["Purchases", String((monthExpenses || []).length)],
-            ["Busiest day", busiest ? `${monthLabel} ${busiest[0]}` : "—"],
-          ].map(([l, v]) => (
-            <div key={l} className="rounded-xl bg-background/50 border border-border/60 px-2 py-1.5">
-              <p className="text-[9px] uppercase tracking-wider text-muted-foreground">{l}</p>
-              <p className="text-sm font-bold tabular-nums">{v}</p>
-            </div>
-          ))}
-        </div>
-      </Hero>
+    <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-spend"
+      title={`Spend · ${monthLabel}`} icon={Flame} accent={AMBER}>
+      <PopupHero accent={AMBER} value={`$${fmt(spendMtd)}`}
+        caption={spendTrendPct != null ? (
+          <span className="font-semibold" style={{ color: spendTrendPct > 0 ? "hsl(0 72% 58%)" : "hsl(155 65% 45%)" }}>
+            {spendTrendPct > 0 ? "▲" : "▼"} {Math.abs(Math.round(spendTrendPct))}% vs last month
+          </span>
+        ) : "spent so far this month"}
+        stats={[
+          { label: "Daily avg", value: `$${fmt(dailyAvg)}` },
+          { label: "Purchases", value: String((monthExpenses || []).length) },
+          { label: "Busiest day", value: busiest ? `${monthLabel} ${busiest[0]}` : "—" },
+        ]} />
 
-      <div className="overflow-y-auto min-h-0 flex-1 p-3 space-y-3">
+      <div className="space-y-3">
         {/* Daily heat calendar */}
         <div className="bubble p-3">
           <p className="micro-label text-muted-foreground mb-2">Spending heatmap</p>
@@ -364,7 +318,7 @@ export function SpendPopup({
           </div>
         )}
       </div>
-    </PopupFrame>
+    </BubbleModal>
   );
 }
 
@@ -395,15 +349,10 @@ export function IncomePopup({
   const top = sources[0];
 
   return (
-    <PopupFrame open={open} onOpenChange={onOpenChange} testId="popup-income">
-      <Hero gradient={`linear-gradient(150deg, hsl(155 65% 45% / 0.28), hsl(173 60% 30% / 0.10) 55%, transparent)`}>
-        <Eyebrow icon={Sparkles} color={emerald}>Income · this month</Eyebrow>
-        <div className="mt-2 flex items-end justify-between">
-          <p className="metric-value text-3xl leading-none" style={{ color: emerald }}>${fmt(monthlyIncome)}</p>
-          <DialogDescription className="text-[11px] text-right text-muted-foreground">
-            ≈ <span className="font-semibold text-foreground">${fmt(monthlyIncome * 12)}</span> / year
-          </DialogDescription>
-        </div>
+    <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-income"
+      title="Income · this month" icon={Sparkles} accent={EMERALD}>
+      <PopupHero accent={EMERALD} value={`$${fmt(monthlyIncome)}`}
+        caption={<>≈ <span className="font-semibold text-foreground">${fmt(monthlyIncome * 12)}</span> / year</>} />
         {/* Stacked source ribbon */}
         {sources.length > 0 && (
           <div className="mt-3">
@@ -423,9 +372,8 @@ export function IncomePopup({
             </div>
           </div>
         )}
-      </Hero>
 
-      <div className="overflow-y-auto min-h-0 flex-1 p-3 space-y-3">
+      <div className="space-y-3">
         <div className="grid grid-cols-3 gap-2">
           {[
             ["Sources", String(sources.length)],
@@ -470,7 +418,7 @@ export function IncomePopup({
           </div>
         )}
       </div>
-    </PopupFrame>
+    </BubbleModal>
   );
 }
 
@@ -525,23 +473,15 @@ export function BillsDuePopup({
   const overdueCount = bills.filter((b) => Number(b.daysUntil) < 0).length;
 
   return (
-    <PopupFrame open={open} onOpenChange={onOpenChange} testId="popup-bills">
-      <Hero gradient={`linear-gradient(150deg, hsl(350 80% 58% / 0.28), hsl(0 60% 35% / 0.10) 55%, transparent)`}>
-        <Eyebrow icon={CalendarDays} color={rose}>Bills due · next 30 days</Eyebrow>
-        <div className="mt-2 flex items-end justify-between">
-          <div className="flex items-baseline gap-2">
-            <p className="metric-value text-3xl leading-none" style={{ color: rose }}>{bills.length}</p>
-            <p className="text-sm font-semibold text-muted-foreground">bills · ${fmt(total)}</p>
-          </div>
-          <DialogDescription className="text-[11px] text-right">
-            {overdueCount > 0
-              ? <span className="font-semibold text-red-500">{overdueCount} overdue — needs attention</span>
-              : <span className="text-muted-foreground">nothing overdue 🎉</span>}
-          </DialogDescription>
-        </div>
-      </Hero>
+    <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-bills"
+      title="Bills due · next 30 days" icon={CalendarDays} accent={ROSE} count={bills.length}>
+      <PopupHero accent={ROSE}
+        value={<>{bills.length}<span className="text-sm font-semibold text-muted-foreground ml-2">bills · ${fmt(total)}</span></>}
+        caption={overdueCount > 0
+          ? <span className="font-semibold text-red-500">{overdueCount} overdue — needs attention</span>
+          : <span className="text-muted-foreground">nothing overdue 🎉</span>} />
 
-      <div className="overflow-y-auto min-h-0 flex-1 p-3">
+      <div>
         {bills.length === 0 ? (
           <p className="text-xs text-muted-foreground text-center py-8">No bills due in the next 30 days.</p>
         ) : (
@@ -567,12 +507,12 @@ export function BillsDuePopup({
                           className={`flex-1 min-w-0 text-left ${b.linkedLiabilityId ? "cursor-pointer" : "cursor-default"}`}>
                           <p className="text-xs font-semibold truncate">{b.name}</p>
                           <p className="text-[10px] text-muted-foreground capitalize truncate">
-                            {[b.category, (b as any).autopay ? "autopay" : null, b.status === "overdue" ? `${Math.abs(Number(b.daysUntil))}d late` : b.daysUntil === 0 ? "today" : `in ${b.daysUntil}d`].filter(Boolean).join(" · ")}
+                            {[b.category, (b as any).autopay ? "autopay" : null, dayLabel(Number(b.daysUntil))].filter(Boolean).join(" · ")}
                           </p>
                         </button>
                         <span className="text-sm font-bold tabular-nums shrink-0">${fmt(Number(b.amount) || 0)}</span>
                         {onPayBill && (
-                          <Button size="sm" variant={b.status === "overdue" ? "destructive" : "outline"}
+                          <Button size="sm" variant={Number(b.daysUntil) < 0 ? "destructive" : "outline"}
                             className="h-7 text-xs shrink-0" disabled={payingId === b.id}
                             onClick={() => onPayBill(b)} data-testid={`bill-pay-${b.id}`}>
                             {payingId === b.id ? "…" : "Pay"}
@@ -587,7 +527,7 @@ export function BillsDuePopup({
           </div>
         )}
       </div>
-    </PopupFrame>
+    </BubbleModal>
   );
 }
 
@@ -619,12 +559,10 @@ export function SavingsRatePopup({
   const clamped = Math.min(100, Math.max(0, rate ?? 0));
 
   return (
-    <PopupFrame open={open} onOpenChange={onOpenChange} testId="popup-savings">
-      <Hero gradient={`linear-gradient(150deg, hsl(262 80% 66% / 0.28), hsl(280 60% 35% / 0.10) 55%, transparent)`}>
-        <Eyebrow icon={Gauge} color={violet}>Savings rate · this month</Eyebrow>
-        <DialogDescription className="sr-only">Share of income kept after spending</DialogDescription>
-
-        <div className="mt-1 flex justify-center">
+    <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-savings"
+      title="Savings rate · this month" subtitle="Share of income kept after spending"
+      icon={Gauge} accent={VIOLET}>
+        <div className="flex justify-center">
           <svg viewBox="0 0 220 128" className="w-56">
             <defs>
               <linearGradient id="savings-gauge-grad" x1="0" y1="0" x2="1" y2="0">
@@ -655,9 +593,8 @@ export function SavingsRatePopup({
           </svg>
         </div>
         <p className="text-center text-xs font-semibold -mt-1" style={{ color: `hsl(${band.color})` }}>{band.label}</p>
-      </Hero>
 
-      <div className="overflow-y-auto min-h-0 flex-1 p-3 space-y-3">
+      <div className="space-y-3">
         {/* Equation */}
         <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-1">
           <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-2.5 text-center">
@@ -711,7 +648,7 @@ export function SavingsRatePopup({
           Savings rate = (income − spend) ÷ income, using this month&apos;s logged spending.
         </p>
       </div>
-    </PopupFrame>
+    </BubbleModal>
   );
 }
 
@@ -733,11 +670,10 @@ export function CashFlowOverviewPopup({
   const inFrac = cashIn / total;
 
   return (
-    <PopupFrame open={open} onOpenChange={onOpenChange} testId="popup-cashflow-overview">
-      <Hero gradient={`linear-gradient(150deg, hsl(234 85% 68% / 0.30), hsl(260 60% 40% / 0.12) 55%, transparent)`}>
-        <Eyebrow icon={Layers} color={indigo}>Cash Flow Overview</Eyebrow>
-        <DialogDescription className="sr-only">Inflow vs outflow with a six-month trend</DialogDescription>
-        <div className="mt-2 flex items-center gap-4">
+    <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-cashflow-overview"
+      title="Cash Flow Overview" subtitle="Inflow vs outflow with a six-month trend"
+      icon={Layers} accent={INDIGO}>
+        <div className="flex items-center gap-4">
           {/* Glowing donut */}
           <svg viewBox="0 0 140 140" className="w-32 h-32 shrink-0">
             <defs>
@@ -767,9 +703,8 @@ export function CashFlowOverviewPopup({
             </div>
           </div>
         </div>
-      </Hero>
 
-      <div className="overflow-y-auto min-h-0 flex-1 p-3 space-y-3">
+      <div className="space-y-3">
         {cashTrend.length >= 2 && (
           <div className="bubble p-3">
             <p className="micro-label text-muted-foreground mb-2">6-month flow</p>
@@ -813,6 +748,6 @@ export function CashFlowOverviewPopup({
           </div>
         )}
       </div>
-    </PopupFrame>
+    </BubbleModal>
   );
 }

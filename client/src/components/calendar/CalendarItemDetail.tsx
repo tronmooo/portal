@@ -21,6 +21,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Medallion } from "@/components/dashboard/visuals";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -232,12 +233,9 @@ export function CalendarItemDetail({
           {/* ── Header ─────────────────────────────────────────────────── */}
           <SheetHeader className="px-4 pt-4 pb-3 space-y-0 text-left">
             <div className="flex items-start gap-3">
-              <span className="mt-0.5 shrink-0 w-10 h-10 rounded-xl flex items-center justify-center"
-                style={{ background: `hsl(${hsl} / 0.14)` }}>
-                <Icon className="w-5 h-5" style={{ color: `hsl(${hsl})` }} />
-              </span>
+              <Medallion icon={Icon} accent={hsl} />
               <div className="min-w-0 flex-1">
-                <SheetTitle className="text-base font-semibold leading-tight" data-testid="cal-detail-title">
+                <SheetTitle className="text-base font-bold tracking-tight leading-tight" data-testid="cal-detail-title">
                   {series.title}
                 </SheetTitle>
                 <SheetDescription className="text-xs mt-0.5">

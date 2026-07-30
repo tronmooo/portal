@@ -8,7 +8,10 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { BubbleModal } from "@/components/ui/bubble-modal";
+
+// Quick-add is a creation flow, not a report — the Executive tab's purple.
+const QUICK_ADD_ACCENT = "262 70% 62%";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -164,13 +167,12 @@ export function QuickAddDialog({
   const text1Label = kind === "bill" ? "Name" : kind === "reminder" ? "Title" : kind === "note" ? "Note" : "Description";
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-sm" data-testid={`dialog-quick-add-${kind}`}>
-        <DialogHeader>
-          <DialogTitle className="text-sm flex items-center gap-2"><Icon className="h-4 w-4" /> {cfg.title}</DialogTitle>
-          <DialogDescription className="text-xs">{cfg.description}</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
+    <BubbleModal
+      open={open} onClose={onClose} title={cfg.title} subtitle={cfg.description}
+      icon={Icon} accent={QUICK_ADD_ACCENT} width="sm"
+      testId={`dialog-quick-add-${kind}`}
+    >
+        <div className="space-y-3 pt-1">
           <div className="space-y-1">
             <Label className="text-xs">{text1Label} <span className="text-destructive">*</span></Label>
             {kind === "note" ? (
@@ -280,7 +282,6 @@ export function QuickAddDialog({
             </Button>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+    </BubbleModal>
   );
 }

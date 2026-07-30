@@ -7,6 +7,7 @@
 // TasksPopup/HabitsPopup already live in TaskHabitPopups.tsx.
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
+import { BubbleModal } from "@/components/ui/bubble-modal";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -16,6 +17,7 @@ import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
+  // (kept for the confirm dialogs below)
 } from "@/components/ui/dialog";
 import {
   AlertTriangle, ArrowRight, BellOff, CalendarDays, Check, ChevronDown,
@@ -93,36 +95,21 @@ function useOwnerNames() {
 }
 
 // ── Shared shell + primitives ────────────────────────────────────────────────
-function PopupShell({ open, onClose, title, icon: Icon, accent, count, subtitle, footerLabel, footerHref, children }: {
+// PopupShell is now BubbleModal — this file used to hand-roll a fourth popup
+// header (a glowing dot, a bare icon, a 14px title) alongside the finance
+// heroes, the ModalShell chip and the hub tabs' medallion. The signature is
+// unchanged so the three popups below didn't move.
+function PopupShell({ open, onClose, title, icon, accent, count, subtitle, footerLabel, footerHref, children }: {
   open: boolean; onClose: () => void; title: string; icon: any; accent: string;
   count?: number; subtitle?: string; footerLabel?: string; footerHref?: string; children: React.ReactNode;
 }) {
-  const [, navigate] = useLocation();
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-md max-h-[82vh] flex flex-col p-0 gap-0">
-        <DialogHeader className="px-4 pt-4 pb-2 border-b border-border/40">
-          <DialogTitle className="flex items-center gap-2 text-sm">
-            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: `hsl(${accent})`, boxShadow: `0 0 6px hsl(${accent} / 0.7)` }} />
-            <Icon className="h-4 w-4" style={{ color: `hsl(${accent})` }} />
-            {title}
-            {typeof count === "number" && (
-              <span className="text-[11px] px-1.5 rounded-full font-normal" style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}>{count}</span>
-            )}
-          </DialogTitle>
-          {subtitle && <p className="text-[11px] text-muted-foreground mt-0.5">{subtitle}</p>}
-        </DialogHeader>
-        <div className="flex-1 overflow-y-auto px-2 py-1.5">{children}</div>
-        {footerLabel && footerHref && (
-          <div className="px-3 py-2 border-t border-border/40">
-            <Button variant="ghost" size="sm" className="w-full h-8 text-xs justify-between"
-              onClick={() => { onClose(); navigate(footerHref); }}>
-              {footerLabel} <ArrowRight className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
+    <BubbleModal
+      open={open} onClose={onClose} title={title} icon={icon} accent={accent}
+      count={count} subtitle={subtitle} footerLabel={footerLabel} footerHref={footerHref}
+    >
+      {children}
+    </BubbleModal>
   );
 }
 

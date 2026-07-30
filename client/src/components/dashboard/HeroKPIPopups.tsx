@@ -38,7 +38,7 @@ import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { netWorthView } from "@/lib/net-worth-view";
 import { EmptyState } from "@/components/ui/empty-state";
-import { ModalShell } from "@/components/ui/modal-shell";
+import { BubbleModal } from "@/components/ui/bubble-modal";
 
 // P1.2 remediation: the asset/liability value resolvers are imported from
 // @shared/asset-value (the single source of truth) instead of the hand-copied
@@ -155,24 +155,30 @@ interface ShellProps {
   children: React.ReactNode;
   testId?: string;
 }
-// Thin wrapper over the shared ModalShell (design-system unification, 2026-07)
-// so the NetWorth/CashFlow/Budget popups use the exact same shell — radius,
-// close button, icon-chip header, 90dvh scroll body — as every other popup.
+// Thin wrapper over BubbleModal so NetWorth/CashFlow/Budget use the exact same
+// shell as every other popup — medallion, bold title, one radius, one close
+// button. This used to wrap ModalShell, a second shell with a squarer icon chip
+// and a smaller title, which meant the popups reachable from the KPI strip
+// looked like a different app from the ones reachable from a tab.
+//
+// `iconColor` arrives as a full `hsl(...)` string from the callers; BubbleModal
+// wants the bare triple so it can derive tints from it.
+const bareHsl = (c: string) => c.replace(/^hsl\(|\)$/g, "");
+
 function MetricPopupShell({ open, onOpenChange, icon: Icon, iconColor, title, description, total, children, testId }: ShellProps) {
   return (
-    <ModalShell
+    <BubbleModal
       open={open}
-      onOpenChange={onOpenChange}
+      onClose={() => onOpenChange(false)}
       icon={Icon}
-      accent={iconColor}
+      accent={bareHsl(iconColor)}
       title={title}
-      description={description}
-      width="md"
+      subtitle={description}
       testId={testId}
       headerRight={total ? <p className="metric-value text-lg leading-none" style={{ color: iconColor }}>{total}</p> : undefined}
     >
       {children}
-    </ModalShell>
+    </BubbleModal>
   );
 }
 

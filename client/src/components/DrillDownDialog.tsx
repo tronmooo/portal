@@ -1,4 +1,9 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { BubbleModal } from "@/components/ui/bubble-modal";
+
+// Generic drill-down: informational blue, the app's "here are the records
+// behind that number" colour.
+const ACCENT = "213 90% 62%";
+import { Layers } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
@@ -82,18 +87,12 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
   const discrepancy = expenseMatch === false ? Math.abs(expenseTotal - headerNum) : 0;
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-md max-h-[80vh] overflow-hidden flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="flex items-center justify-between">
-            <span>{title}</span>
-            {total != null && (
-              <span className="text-lg font-bold tabular-nums">{total}</span>
-            )}
-          </DialogTitle>
-          {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
-        </DialogHeader>
-        <div className="overflow-y-auto flex-1 -mx-6 px-6">
+    <BubbleModal
+      open={open} onClose={onClose} title={title} subtitle={subtitle}
+      icon={Layers} accent={ACCENT}
+      headerRight={total != null ? <span className="metric-value text-lg leading-none" style={{ color: `hsl(${ACCENT})` }}>{total}</span> : undefined}
+    >
+        <div>
           {items.length === 0 && !hasRecords ? (
             <p className="text-xs text-muted-foreground text-center py-8">{emptyMessage || "No data"}</p>
           ) : (
@@ -130,7 +129,7 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
               {expenses && expenses.length > 0 && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">All Expenses</p>
+                    <p className="micro-label text-muted-foreground">All Expenses</p>
                     <span className="text-xs text-muted-foreground">{expenses.length} items</span>
                   </div>
                   <ScrollArea className="max-h-[40vh]">
@@ -239,8 +238,7 @@ export function DrillDownDialog({ open, onClose, title, subtitle, total, items, 
             <Plus className="h-3.5 w-3.5 mr-1.5" /> {addLabel}
           </Button>
         )}
-      </DialogContent>
-    </Dialog>
+    </BubbleModal>
   );
 }
 

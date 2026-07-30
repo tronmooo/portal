@@ -15,7 +15,7 @@ import { invalidateDomain } from "@/lib/cache-bus";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { useToast } from "@/hooks/use-toast";
 import { HeartPulse, Plus } from "lucide-react";
-import { ModalShell } from "@/components/ui/modal-shell";
+import { BubbleModal } from "@/components/ui/bubble-modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -552,14 +552,15 @@ export default function WellnessPage() {
         />
       )}
 
-      {/* Inline quick-log dialog for weight / mood / sleep / steps — shared ModalShell. */}
-      <ModalShell
+      {/* Inline quick-log dialog for weight / mood / sleep / steps — the same
+          shell every other popup uses, so a form and a drill-down are one app. */}
+      <BubbleModal
         open={logKind != null}
-        onOpenChange={(o) => { if (!o) { setLogKind(null); setLogValue(""); } }}
+        onClose={() => { setLogKind(null); setLogValue(""); }}
         title={`Log ${logKind ? logMeta[logKind].label : ""}`}
         icon={Plus}
         accent="199 89% 60%"
-        width="xs"
+        width="sm"
         testId="wellness-quicklog-dialog"
         footer={
           <div className="flex justify-end gap-2">
@@ -571,7 +572,7 @@ export default function WellnessPage() {
         }
       >
         {logKind && (
-          <div className="space-y-2 px-4 py-4">
+          <div className="space-y-2 pt-1">
             <Label htmlFor="wellness-log-input" className="text-xs">{logMeta[logKind].label} ({logMeta[logKind].unit})</Label>
             <Input
               id="wellness-log-input" type="number" inputMode="decimal" autoFocus
@@ -585,7 +586,7 @@ export default function WellnessPage() {
             </p>
           </div>
         )}
-      </ModalShell>
+      </BubbleModal>
     </div>
   );
 }

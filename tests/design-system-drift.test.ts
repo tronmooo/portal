@@ -90,11 +90,11 @@ describe("one card surface", () => {
     // kit.tsx's bordered box, ModalShell's second popup header. Deleting them
     // is only durable if re-adding one fails: an unused component today is an
     // imported component next week, and that is how five card recipes happened.
-    for (const gone of ["components/ui/accent-card.tsx", "components/ui/kit.tsx"]) {
+    for (const gone of ["components/ui/accent-card.tsx", "components/ui/kit.tsx", "components/ui/modal-shell.tsx"]) {
       expect(fs.existsSync(path.resolve(ROOT, gone)), `${gone} was deleted — do not bring it back`)
         .toBe(false);
     }
-    const bad = offenders(/from ["']@\/components\/ui\/(accent-card|kit)["']/);
+    const bad = offenders(/from ["']@\/components\/ui\/(accent-card|kit|modal-shell)["']/);
     expect(bad, `Import from @/components/ui/kit-index instead:\n${bad.join("\n")}`).toEqual([]);
   });
 

@@ -21,9 +21,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
+import { BubbleModal } from "@/components/ui/bubble-modal";
+
+// Tasks and habits are Executive-tab concepts; they take its accent so opening
+// this popup from anywhere still reads as the same part of the app.
+const TASKS_ACCENT = "262 70% 62%";
+const HABITS_ACCENT = "155 65% 45%";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -684,34 +687,43 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
 
 
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingTo(null); setNewTaskTitle(""); setExpandedId(null); setTab("today"); setComposer(emptyComposer); setShowCompleted(false); } }}>
-      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-md flex flex-col p-0 gap-0 rounded-2xl max-h-[85vh] overflow-hidden">
-        {/* Header with a subtle top glow + today's progress */}
-        <div className="relative px-4 pt-3.5 pb-2.5 border-b border-border/40">
-          <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-rose-500/10 to-transparent pointer-events-none" />
-          <div className="relative flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-md bg-red-500 flex items-center justify-center">
-                <Check className="h-4 w-4 text-white" strokeWidth={3} />
-              </div>
-              <span className="font-bold text-sm uppercase tracking-wide text-foreground">Task Manager</span>
-              <Badge variant="secondary">{pendingAll.length}</Badge>
-            </div>
-            <DialogClose className="relative w-10 h-10 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
-              <X className="h-5 w-5" />
-            </DialogClose>
+    <>
+    {/* The header here was a FIFTH popup design — a red rounded square, an
+        ALL-CAPS "TASK MANAGER", a hand-rolled 40px close button and a rose glow.
+        BubbleModal supplies all of that now. The progress bar stays, because it
+        is information rather than chrome, and moves into the body. */}
+    <BubbleModal
+      open={open}
+      onClose={() => { onClose(); setAddingTo(null); setNewTaskTitle(""); setExpandedId(null); setTab("today"); setComposer(emptyComposer); setShowCompleted(false); }}
+      title="Tasks" icon={CheckCircle2} accent={TASKS_ACCENT} count={pendingAll.length}
+      testId="popup-tasks"
+      footer={
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+            <ListTodo className="h-4 w-4 text-primary" />
           </div>
-          {/* Today's progress bar */}
-          <div className="relative mt-2 flex items-center gap-2">
-            <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-              <div className="h-full bg-emerald-500 transition-all" style={{ width: `${todayTotal ? Math.round((doneToday / todayTotal) * 100) : 0}%` }} />
-            </div>
-            <span className="text-[10px] text-muted-foreground tabular-nums">{doneToday}/{todayTotal} done today</span>
+          <input
+            className="flex-1 text-sm bg-transparent focus:outline-none text-muted-foreground placeholder:text-muted-foreground/60"
+            placeholder="I want to..."
+            data-testid="input-quick-task"
+            value={addingTo === 'quick' ? newTaskTitle : ''}
+            onChange={e => { setNewTaskTitle(e.target.value); setAddingTo('quick'); }}
+            onKeyDown={handleAdd}
+            onFocus={() => setAddingTo('quick')}
+          />
+        </div>
+      }
+    >
+        {/* Today's progress */}
+        <div className="flex items-center gap-2">
+          <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+            <div className="h-full bg-emerald-500 transition-all" style={{ width: `${todayTotal ? Math.round((doneToday / todayTotal) * 100) : 0}%` }} />
           </div>
+          <span className="text-[11px] text-muted-foreground tabular-nums">{doneToday}/{todayTotal} done today</span>
         </div>
 
         {/* Tabs — Today / Recurring / Upcoming + sort */}
-        <div className="flex items-center gap-1 px-2 py-2 border-b border-border/30 overflow-x-auto scrollbar-hide">
+        <div className="flex items-center gap-1 py-1 overflow-x-auto scrollbar-hide -mx-1 px-1">
           {([
             { key: "today", label: "Today", icon: Flame },
             { key: "recurring", label: "Recurring", icon: Repeat },
@@ -740,14 +752,14 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
+        <div>
           {isLoading ? (
-            <div className="p-4 space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>
+            <div className="space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>
           ) : (
-            <div className="p-3">
+            <div>
               {/* Section header for the active tab */}
               <div className="flex items-center justify-between px-1 mb-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                <span className="micro-label text-muted-foreground">
                   {tab === "today" ? "Today's priorities" : tab === "recurring" ? "Recurring schedules" : "Upcoming"}
                 </span>
                 <button onClick={() => setComposer(c => ({ ...emptyComposer, open: !c.open, recurrence: tab === "recurring" ? "weekly" : "" }))} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors" data-testid="button-add-task"><Plus className="h-4 w-4 text-muted-foreground" /></button>
@@ -854,23 +866,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
             </div>
           )}
         </div>
-
-        {/* Bottom input — Any.do "I want to..." bar */}
-        <div className="border-t border-border/30 px-4 py-3 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-            <ListTodo className="h-4 w-4 text-primary" />
-          </div>
-          <input
-            className="flex-1 text-sm bg-transparent focus:outline-none text-muted-foreground placeholder:text-muted-foreground/60"
-            placeholder="I want to..."
-            data-testid="input-quick-task"
-            value={addingTo === 'quick' ? newTaskTitle : ''}
-            onChange={e => { setNewTaskTitle(e.target.value); setAddingTo('quick'); }}
-            onKeyDown={handleAdd}
-            onFocus={() => setAddingTo('quick')}
-          />
-        </div>
-      </DialogContent>
+    </BubbleModal>
       {/* U1 fix: confirmation dialog for the task delete — prevents accidental loss
           when the dimmed completed-task X is hover-clicked. */}
       <AlertDialog open={taskToDelete !== null} onOpenChange={(open) => { if (!open) setTaskToDelete(null); }}>
@@ -894,7 +890,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Dialog>
+    </>
   );
 }
 
@@ -1205,28 +1201,27 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   const ringR = 26, ringC = 2 * Math.PI * ringR;
 
   return (
-    <Dialog open={open} onOpenChange={o => { if (!o) { onClose(); setAddingHabit(false); setNewHabitName(''); } }}>
-      <DialogContent hideCloseButton className="w-[calc(100vw-16px)] sm:max-w-md flex flex-col p-0 gap-0 rounded-2xl max-h-[92vh] overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 pt-3 pb-2">
-          <span className="w-9" />
-          <span className="font-bold text-lg text-foreground">Habits</span>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setAddingHabit(v => !v)}
-              aria-label="Add habit"
-              className={`w-9 h-9 flex items-center justify-center rounded-full transition-colors ${addingHabit ? 'bg-primary text-primary-foreground' : 'bg-primary/15 text-primary hover:bg-primary/25'}`}
-            >
-              <Plus className="h-5 w-5" />
-            </button>
-            <DialogClose className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-muted active:bg-muted/80 transition-colors text-muted-foreground">
-              <X className="h-5 w-5" />
-            </DialogClose>
-          </div>
-        </div>
-
+    // A SIXTH header design lived here: a centre-aligned title flanked by a
+    // spacer and two 36px circles. BubbleModal now owns the frame; the add
+    // control moves to headerRight, where every other popup puts its action.
+    <BubbleModal
+      open={open}
+      onClose={() => { onClose(); setAddingHabit(false); setNewHabitName(''); }}
+      title="Habits" icon={Flame} accent={HABITS_ACCENT} count={active.length}
+      testId="popup-habits"
+      headerRight={
+        <button
+          onClick={() => setAddingHabit(v => !v)}
+          aria-label="Add habit"
+          data-testid="button-add-habit"
+          className={`pressable w-8 h-8 flex items-center justify-center rounded-full transition-colors ${addingHabit ? 'bg-primary text-primary-foreground' : 'bg-primary/15 text-primary hover:bg-primary/25'}`}
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+      }
+    >
         {/* Period tabs */}
-        <div className="px-3">
+        <div>
           <div className="flex gap-1 rounded-xl bg-muted/40 p-1">
             {(['today', 'week', 'month', 'year'] as const).map((p) => (
               <button key={p} onClick={() => setPeriod(p)}
@@ -1239,7 +1234,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
 
         {/* Inline add habit form — name + frequency + profile, saves on Enter/Add */}
         {addingHabit && (
-          <div className="px-3 pt-2.5 space-y-2">
+          <div className="pt-2.5 space-y-2">
             <div className="flex gap-2">
               <input
                 autoFocus
@@ -1299,7 +1294,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
         )}
 
         {/* Summary: overall ring + stat chips */}
-        <div className="px-3 pt-3">
+        <div className="pt-3">
           <div className="bubble flex items-center gap-3 p-3">
             <div className="relative shrink-0" style={{ width: 64, height: 64 }}>
               <svg width="64" height="64" className="-rotate-90">
@@ -1328,7 +1323,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
         </div>
 
         {/* Time-of-day filter chips */}
-        <div className="px-3 pt-2.5 pb-1">
+        <div className="pt-2.5 pb-1">
           <div className="flex flex-wrap gap-1.5">
             {TIME_FILTERS.map((f) => (
               <button key={f.key} onClick={() => setTimeFilter(f.key)}
@@ -1340,7 +1335,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
         </div>
 
         {/* Habit list — native scroll (ScrollArea is broken on iOS Safari in dialogs) */}
-        <div className="flex-1 overflow-y-auto overscroll-contain px-3 pb-2" style={{ WebkitOverflowScrolling: 'touch' }}>
+        <div className="pb-2">
           {isLoading ? (
             <div className="space-y-2 py-2">{[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-16 rounded-2xl" />)}</div>
           ) : active.length === 0 ? (
@@ -1460,9 +1455,8 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
         </div>
 
         {/* Motivational footer */}
-        <div className="px-3 pb-3 pt-1">
-          <div className="flex items-center gap-3 rounded-2xl px-4 py-3"
-            style={{ background: 'linear-gradient(135deg, hsl(262 70% 55% / 0.18), hsl(280 70% 55% / 0.05))' }}>
+        <div className="pt-1">
+          <div className="bubble flex items-center gap-3 px-4 py-3" style={{ ["--accent-hsl" as any]: "262 70% 62%" }}>
             <Sparkles className="h-5 w-5 shrink-0" style={{ color: 'hsl(262 70% 62%)' }} />
             <div className="min-w-0">
               <p className="text-sm font-semibold">Small habits, big changes.</p>
@@ -1475,7 +1469,6 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
             </div>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+    </BubbleModal>
   );
 }
