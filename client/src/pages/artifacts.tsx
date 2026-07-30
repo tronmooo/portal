@@ -603,7 +603,7 @@ function ArtifactCard({ item, onSelect, onTogglePin, onDelete }: { item: Unified
       role="button"
       tabIndex={0}
       aria-label={`Open ${item.title}`}
-      className="p-3 rounded-lg border border-border/50 bg-card hover:bg-accent/5 cursor-pointer transition-colors group pressable"
+      className="bubble p-3 hover:bg-accent/5 cursor-pointer transition-colors group pressable"
       onClick={handleClick}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -986,7 +986,7 @@ export default function ArtifactsPage() {
           <div key={s.label} className="rounded-xl border p-2.5 text-center card-lift transition-all"
             style={{ borderColor: `hsl(${s.color} / 0.30)`, background: `linear-gradient(135deg, hsl(${s.color} / 0.12) 0%, hsl(var(--card)) 75%)` }}>
             <p className="metric-value text-lg leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
-            <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</p>
+            <p className="mt-1 micro-label text-muted-foreground">{s.label}</p>
           </div>
         ))}
       </div>
@@ -1087,7 +1087,7 @@ export default function ArtifactsPage() {
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5 px-1">
             <Pin className="h-3 w-3 text-muted-foreground" />
-            <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Pinned</span>
+            <span className="micro-label text-muted-foreground">Pinned</span>
             <span className="text-[11px] text-muted-foreground">({pinnedItems.length})</span>
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-hide">

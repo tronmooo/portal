@@ -60,9 +60,9 @@ function StatChip({ label, value, accent, sub, subTone, onClick, testId }: {
     <button
       onClick={onClick}
       data-testid={testId}
-      className="shrink-0 flex items-baseline gap-1 sm:gap-1.5 rounded-lg border border-border/60 bg-card/60 px-2 sm:px-3 py-1.5 hover:bg-accent/50 transition-colors text-left"
+      className="bubble shrink-0 flex items-baseline gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 hover:bg-accent/50 transition-colors text-left"
     >
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
+      <span className="micro-label text-muted-foreground">{label}</span>
       <span className={`text-sm font-bold tabular-nums ${tone(accent)}`}>{value}</span>
       {sub && <span className={`text-[10px] font-semibold ${tone(subTone)}`}>{sub}</span>}
     </button>

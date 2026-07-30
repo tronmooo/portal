@@ -324,14 +324,14 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
             {grouped.map((g) => (
               <div key={g.date}>
                 <div className="flex items-baseline justify-between px-1 mb-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <p className="micro-label text-muted-foreground">
                     {fmtDayHeading(g.date)}
                   </p>
                   <p className="text-[10px] text-muted-foreground">
                     {relativeDayLabel(g.date, today)}
                   </p>
                 </div>
-                <div className="rounded-xl border border-border bg-card divide-y divide-border/50 overflow-hidden">
+                <div className="bubble divide-y divide-border/50 overflow-hidden">
                   {g.items.map((o) => (
                     <OccurrenceRow
                       key={o.id}

@@ -98,7 +98,7 @@ function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void })
           {FEATURES.map((f) => (
             <div
               key={f.title}
-              className="snap-start shrink-0 w-[240px] rounded-xl border border-border/40 bg-card p-4 space-y-2.5"
+              className="bubble snap-start shrink-0 w-[240px] p-4 space-y-2.5"
             >
               <div className={`inline-flex items-center justify-center w-9 h-9 rounded-lg ${f.bg}`}>
                 <f.icon className={`h-4.5 w-4.5 ${f.color}`} />
@@ -123,7 +123,7 @@ function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void })
         </div>
         <div className="grid grid-cols-1 gap-1.5">
           {EXAMPLE_COMMANDS.map((ex, i) => (
-            <div key={i} className="flex items-center gap-2 rounded-lg border border-border/30 bg-card/50 px-3 py-2">
+            <div key={i} className="bubble flex items-center gap-2 px-3 py-2">
               <span className="text-xs font-mono text-foreground/90 flex-1">{ex.cmd}</span>
               <span className="text-xs font-medium text-primary/70 bg-primary/10 px-1.5 py-0.5 rounded shrink-0">{ex.tag}</span>
             </div>
@@ -132,7 +132,7 @@ function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void })
       </div>
 
       {/* How It Works */}
-      <div className="rounded-xl border border-border/40 bg-card p-4 space-y-3">
+      <div className="bubble p-4 space-y-3">
         <h2 className="text-sm font-semibold text-foreground">How It Works</h2>
         {[
           { step: "1", text: "Sign in with Google or email" },

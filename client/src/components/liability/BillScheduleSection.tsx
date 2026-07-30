@@ -45,7 +45,7 @@ function StatusBadge({ status }: { status: OccStatus }) {
 function Fact({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="rounded-lg bg-muted/40 px-3 py-2">
-      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="micro-label text-muted-foreground">{label}</p>
       <p className="text-sm font-medium tabular-nums">{value}</p>
     </div>
   );

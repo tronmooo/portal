@@ -59,7 +59,7 @@ export default function ChartCard({ spec, defaultOpen = true }: { spec: ChartSpe
     conf >= 0.5 ? "bg-amber-500/15 text-amber-500" : "bg-red-500/15 text-red-500";
 
   return (
-    <div className="mt-3 rounded-xl border border-border bg-card/60 overflow-hidden">
+    <div className="mt-3 bubble/60 overflow-hidden">
       {/* Header: title + copy + collapse */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border/60">
         <button
@@ -95,7 +95,7 @@ export default function ChartCard({ spec, defaultOpen = true }: { spec: ChartSpe
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 px-1 pt-3 pb-1">
               {spec.kpis.map((k, i) => (
                 <div key={i} className="rounded-lg bg-muted/40 px-2.5 py-2 min-w-0">
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{k.label}</div>
+                  <div className="micro-label text-muted-foreground truncate">{k.label}</div>
                   <div className="text-sm font-semibold text-foreground truncate" title={k.value}>{k.value}</div>
                 </div>
               ))}
@@ -117,7 +117,7 @@ export default function ChartCard({ spec, defaultOpen = true }: { spec: ChartSpe
             <div className="mt-2 px-2 pt-2 border-t border-border/60">
               {typeof spec.confidence === "number" && (
                 <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Confidence</span>
+                  <span className="micro-label text-muted-foreground">Confidence</span>
                   <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${confClass}`}>{Math.round((conf as number) * 100)}%</span>
                 </div>
               )}

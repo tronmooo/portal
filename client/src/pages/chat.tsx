@@ -192,7 +192,7 @@ function ChatChart({ spec }: { spec: ChartSpec2 }) {
 function ChatTable({ spec }: { spec: TableSpec2 }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="mt-3 rounded-xl border border-border bg-card/60 overflow-hidden">
+    <div className="mt-3 bubble/60 overflow-hidden">
       <div
         role="button"
         tabIndex={0}
@@ -247,7 +247,7 @@ function ChatReport({ spec }: { spec: ReportSpec2 }) {
   const [open, setOpen] = useState(true);
   const [expanded, setExpanded] = useState<Record<number,boolean>>({});
   return (
-    <div className="mt-3 rounded-xl border border-border bg-card/60 overflow-hidden">
+    <div className="mt-3 bubble/60 overflow-hidden">
       <div
         role="button"
         tabIndex={0}
@@ -584,7 +584,7 @@ function LazyDocumentPreview({
       {fields.length > 0 && (
         <div className="rounded-xl border border-border bg-muted/10 overflow-hidden">
           <div className="px-3 py-2 border-b border-border bg-muted/20">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <p className="micro-label text-muted-foreground">
               Extracted data · {fields.length} field{fields.length === 1 ? "" : "s"}
             </p>
           </div>
@@ -909,7 +909,7 @@ function ExtractionConfirmation({
     <div className="mt-3 rounded-lg bg-muted/40 border border-border overflow-hidden text-foreground">
       {/* Header bar */}
       <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-border bg-muted/60 flex-wrap">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="micro-label text-muted-foreground">
           Review extracted data · {fields.length}
         </span>
         <button
@@ -941,7 +941,7 @@ function ExtractionConfirmation({
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-xs">
           <thead>
-            <tr className="bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
+            <tr className="bg-muted/40 micro-label text-muted-foreground">
               <th className="w-7 border-b border-border px-1 py-1 font-medium"></th>
               <th className="border-b border-border px-2 py-1 text-left font-medium">Field</th>
               <th className="border-b border-border px-2 py-1 text-left font-medium">Value</th>
@@ -1382,7 +1382,7 @@ function AttachmentPanel({
       data-testid="attachment-panel"
     >
       <div className="max-w-2xl mx-auto">
-        <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+        <div className="bubble p-4 space-y-3">
           {/* File preview */}
           <div className="flex items-start gap-3">
             <div className="shrink-0">
@@ -1446,7 +1446,7 @@ function AttachmentPanel({
 
           {/* Action buttons — three clear choices */}
           <div className="space-y-2">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80">
+            <p className="micro-label text-muted-foreground/80">
               {isProcessing ? "Preparing photo…" : "What do you want to do with this file?"}
             </p>
 
@@ -1554,7 +1554,7 @@ function BatchAttachmentPanel({
   return (
     <div className="px-4 pb-3" data-testid="batch-attachment-panel">
       <div className="max-w-2xl mx-auto">
-        <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+        <div className="bubble p-4 space-y-3">
           {/* Header with count and global profile selector */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">

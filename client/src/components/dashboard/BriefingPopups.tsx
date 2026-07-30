@@ -284,12 +284,12 @@ export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: (
               </div>
               {upcoming.length > 0 && (
                 <div>
-                  <p className="font-semibold text-muted-foreground uppercase text-[10px] tracking-wide mb-0.5">Upcoming</p>
+                  <p className="micro-label text-muted-foreground mb-0.5">Upcoming</p>
                   {upcoming.map(d => <div key={d} className="flex justify-between"><span>{fmtDate(d)}</span><span className="tabular-nums">${Number(b.amount).toLocaleString()}</span></div>)}
                 </div>
               )}
               <div>
-                <p className="font-semibold text-muted-foreground uppercase text-[10px] tracking-wide mb-0.5">Payment history</p>
+                <p className="micro-label text-muted-foreground mb-0.5">Payment history</p>
                 {payments.length === 0 ? <p className="text-muted-foreground">No payments recorded yet.</p> :
                   payments.slice(0, 6).map((p: any) => (
                     <div key={p.id} className="flex justify-between">
@@ -434,7 +434,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
       footerLabel="Open Documents" footerHref="/linked?tab=documents">
       {visible.length === 0 ? <EmptyNote label="Nothing expiring in the next 90 days." /> : bands.map(band => band.rows.length === 0 ? null : (
         <div key={band.key}>
-          <div className={`text-[10px] font-semibold uppercase tracking-wider px-1 pt-2 pb-1 ${band.tone === "neg" ? "text-red-500" : band.tone === "warn" ? "text-amber-500" : "text-muted-foreground"}`}>
+          <div className={`micro-label px-1 pt-2 pb-1 ${band.tone === "neg" ? "text-red-500" : band.tone === "warn" ? "text-amber-500" : "text-muted-foreground"}`}>
             {band.label} · {band.rows.length}
           </div>
           {band.rows.map(renderRow)}
@@ -470,7 +470,7 @@ export function EventsPopup({ open, onClose, items, todayStr, title = "Calendar 
       {days.length === 0 ? <EmptyNote label="Nothing scheduled." /> : days.map(d => (
         <div key={d.day}>
           <div className="flex items-baseline px-1 pt-2 pb-0.5">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{d.day}</span>
+            <span className="micro-label text-muted-foreground">{d.day}</span>
             <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">{daysAway(d.date) === 0 ? "" : `in ${daysAway(d.date)}d`}</span>
           </div>
           {d.items.map((i: any) => {

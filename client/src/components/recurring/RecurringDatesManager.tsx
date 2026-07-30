@@ -265,7 +265,7 @@ function SeriesDialog({ mode, event, profiles, onClose }: {
                 <SelectItem value="none">Not linked</SelectItem>
                 {profileGroups.map(g => (
                   <div key={g.label}>
-                    <p className="px-2 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{g.label}</p>
+                    <p className="px-2 pt-1.5 pb-0.5 micro-label text-muted-foreground">{g.label}</p>
                     {g.items.map((p: any) => (
                       <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                     ))}
@@ -499,7 +499,7 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
   };
 
   return (
-    <div className="rounded-2xl border bg-card overflow-hidden" style={{ borderColor: `hsl(${kd.hsl} / 0.25)` }} data-testid={`rd-series-${ev.id}`}>
+    <div className="bubble overflow-hidden" style={{ borderColor: `hsl(${kd.hsl} / 0.25)` }} data-testid={`rd-series-${ev.id}`}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
         <button type="button" onClick={() => setExpanded(e => !e)} className="flex items-start gap-2.5 flex-1 min-w-0 text-left">
           <span className="mt-0.5 shrink-0 w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `hsl(${kd.hsl} / 0.14)` }}>
@@ -576,7 +576,7 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
               <div key={d} className="flex items-center gap-2 px-3 py-1.5" data-testid={`rd-occ-${ev.id}-${d}`}>
                 <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: `hsl(${stColor})` }} />
                 <span className={`text-xs tabular-nums flex-1 ${st === "done" || st === "skipped" ? "line-through text-muted-foreground" : ""}`}>{fmtDate(d)}</span>
-                <span className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: `hsl(${stColor})` }}>
+                <span className="micro-label font-semibold" style={{ color: `hsl(${stColor})` }}>
                   {st === "past" ? "" : st}
                 </span>
                 {(st === "done" || st === "skipped") ? (
@@ -792,12 +792,12 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
       {statusFilter === "all" && streamOccurrences.length > 0 && (
         <div className="pt-1" data-testid="rd-stream-section">
           <div className="flex items-baseline justify-between px-1 mb-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <p className="micro-label text-muted-foreground">
               Upcoming · {streamOccurrences.length}
             </p>
             <p className="text-[10px] text-muted-foreground">birthdays · bills · subscriptions · reminders</p>
           </div>
-          <div className="rounded-2xl border border-border bg-card divide-y divide-border/50 overflow-hidden">
+          <div className="bubble divide-y divide-/50 overflow-hidden">
             {streamOccurrences.slice(0, 60).map(occ => (
               <OccurrenceRow key={occ.id} occ={occ} todayISO={cal.todayISO}
                 profileName={cal.profileName} onOpen={setDetail} />

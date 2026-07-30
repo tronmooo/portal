@@ -98,7 +98,7 @@ export default function ProfilesListPage() {
       <div className="space-y-6">
         {groups.map(group => (
           <section key={group.key} data-testid={`profiles-group-${group.key}`}>
-            <h2 className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">
+            <h2 className="micro-label text-muted-foreground mb-2">
               {group.label}
             </h2>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">

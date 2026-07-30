@@ -116,7 +116,7 @@ function PastActivityList({
         data-testid="button-toggle-past-activity"
       >
         <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Past</p>
+        <p className="micro-label text-muted-foreground">Past</p>
         <span className="text-[10px] text-muted-foreground">({items.length})</span>
         <ChevronDown
           className={`h-3 w-3 ml-auto text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
@@ -3247,7 +3247,7 @@ function InfoTab({
               <Icon className="h-3.5 w-3.5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+              <p className="micro-label text-muted-foreground">{label}</p>
               <p className="text-xs font-semibold mt-0.5 truncate" title={typeof value === "string" ? value : undefined}>{value}</p>
             </div>
           </div>
@@ -3292,8 +3292,8 @@ function InfoTab({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">{items}</div>
               )}
               {notes && (
-                <div className="rounded-lg border bg-card/60 p-2.5" style={{ borderColor: accentBorder }}>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">About</p>
+                <div className="bubble/60 p-2.5" style={{ borderColor: accentBorder }}>
+                  <p className="micro-label text-muted-foreground mb-1">About</p>
                   <p className="text-xs leading-relaxed text-foreground/90">{String(notes)}</p>
                 </div>
               )}
@@ -3831,19 +3831,19 @@ function ProductivityHubTab({
           <div className="grid grid-cols-4 gap-2">
             <div className="text-center py-2 rounded-lg bg-muted/40">
               <p className="text-lg font-bold tabular-nums">{habitsDoneToday}<span className="text-xs font-normal text-muted-foreground">/{habits.length}</span></p>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Habits</p>
+              <p className="micro-label text-muted-foreground">Habits</p>
             </div>
             <div className="text-center py-2 rounded-lg bg-muted/40">
               <p className="text-lg font-bold tabular-nums">{tasksDueToday.length}</p>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Tasks Due</p>
+              <p className="micro-label text-muted-foreground">Tasks Due</p>
             </div>
             <div className="text-center py-2 rounded-lg bg-muted/40">
               <p className="text-lg font-bold tabular-nums">{eventsToday.length}</p>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Events</p>
+              <p className="micro-label text-muted-foreground">Events</p>
             </div>
             <div className="text-center py-2 rounded-lg bg-muted/40">
               <p className="text-lg font-bold tabular-nums">{openTasks.length}</p>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Open</p>
+              <p className="micro-label text-muted-foreground">Open</p>
             </div>
           </div>
         </CardContent>
@@ -6563,7 +6563,7 @@ function TrackersTab({
                 how it will be compared across the app. */}
             <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5 text-[11px] space-y-1" data-testid="metric-definition-preview">
               <div className="flex items-center justify-between">
-                <span className="font-semibold uppercase tracking-wider text-muted-foreground text-[10px]">Metric Definition</span>
+                <span className="micro-label text-muted-foreground">Metric Definition</span>
                 <Badge variant="outline" className="h-4 px-1 text-[9px] capitalize">{previewMetricDefinition.dataType}</Badge>
               </div>
               <p className="text-muted-foreground leading-snug">{previewMetricDefinition.definition}</p>
@@ -7359,7 +7359,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                       <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                         {t.category && (
                           <span
-                            className="inline-flex items-center text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                            className="inline-flex items-center micro-label px-1.5 py-0.5 rounded"
                             style={{ background: `hsl(${accent.hsl} / 0.15)`, color: lineColor }}
                           >
                             {t.category}
@@ -7523,7 +7523,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
               {buckets.label.length > 0 && (
                 <>
                   {buckets.active.length > 0 && (
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider pt-2 px-0.5">Labels</p>
+                    <p className="micro-label text-muted-foreground pt-2 px-0.5">Labels</p>
                   )}
                   {buckets.label.map(renderRow)}
                 </>
@@ -7537,7 +7537,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                     onClick={() => setNotLoggedOpen(v => !v)}
                     data-testid="button-toggle-not-logged"
                   >
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <span className="micro-label text-muted-foreground">
                       Not yet logged ({buckets.empty.length})
                     </span>
                     {notLoggedOpen
@@ -10417,7 +10417,7 @@ function CoOwnersEditor({ liabilityId, coOwners, allProfiles, onChanged }: {
   return (
     <div data-testid="coowners-editor">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Co-owners</span>
+        <span className="micro-label text-muted-foreground">Co-owners</span>
         <div className="flex items-center gap-1">
           <Badge variant="outline" className={`text-[10px] h-5 px-1.5 ${totalPct === 100 ? "" : "text-yellow-600 border-yellow-500/30"}`} data-testid="badge-total-ownership">
             Total: {totalPct}%
@@ -10529,7 +10529,7 @@ function CollateralEditor({ liabilityId, collateral, allProfiles, onChanged }: {
   return (
     <div data-testid="collateral-editor">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Collateral / Linked Assets</span>
+        <span className="micro-label text-muted-foreground">Collateral / Linked Assets</span>
         {!adding && (
           <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => setAdding(true)} data-testid="button-add-collateral">
             <Plus className="h-3 w-3" /> Add
@@ -11115,7 +11115,7 @@ export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profile
     return (
       <div className="space-y-3">
         <div className="flex items-center justify-between px-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+          <span className="micro-label text-muted-foreground font-semibold">
             {parties.length} {parties.length === 1 ? "person" : "people"} in your network
           </span>
           <Link href="/profiles">
@@ -11423,19 +11423,19 @@ function NetWorthStrip({ profileId }: { profileId: string }) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" data-testid="net-worth-strip">
       <div className="rounded-lg border border-border/40 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Assets</p>
+        <p className="micro-label text-muted-foreground">Assets</p>
         <p className="text-sm font-bold tabular-nums">{formatCurrency(totalAssets)}</p>
       </div>
       <div className="rounded-lg border border-border/40 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Liabilities</p>
+        <p className="micro-label text-muted-foreground">Liabilities</p>
         <p className="text-sm font-bold tabular-nums text-red-500">{formatCurrency(totalLiab)}</p>
       </div>
       <div className="rounded-lg border border-border/40 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Net Worth</p>
+        <p className="micro-label text-muted-foreground">Net Worth</p>
         <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-emerald-500" : "text-red-500"}`}>{formatCurrency(netWorth)}</p>
       </div>
       <div className="rounded-lg border border-border/40 px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Monthly debt</p>
+        <p className="micro-label text-muted-foreground">Monthly debt</p>
         <p className="text-sm font-bold tabular-nums">{formatCurrency(monthly)}</p>
       </div>
     </div>
@@ -11496,17 +11496,17 @@ function CostOfOwnershipCard({ profile }: { profile: any }) {
       <CardContent className="pt-0">
         <div className="grid grid-cols-3 gap-2">
           <div className="text-center p-2 rounded-lg bg-muted/30">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Trailing 12mo</p>
+            <p className="micro-label text-muted-foreground">Trailing 12mo</p>
             <p className="text-sm font-bold tabular-nums">{formatCurrency(trailing12Total)}</p>
             <p className="text-[10px] text-muted-foreground/70">{trailing12.length} expenses</p>
           </div>
           <div className="text-center p-2 rounded-lg bg-muted/30">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Avg / month</p>
+            <p className="micro-label text-muted-foreground">Avg / month</p>
             <p className="text-sm font-bold tabular-nums">{formatCurrency(expensesMonthlyAvg)}</p>
             <p className="text-[10px] text-muted-foreground/70">from expenses</p>
           </div>
           <div className="text-center p-2 rounded-lg bg-muted/30">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Recurring</p>
+            <p className="micro-label text-muted-foreground">Recurring</p>
             <p className="text-sm font-bold tabular-nums">{formatCurrency(recurringMonthly)}/mo</p>
             <p className="text-[10px] text-muted-foreground/70">{obligations.length} bill{obligations.length !== 1 ? "s" : ""}</p>
           </div>
@@ -12298,7 +12298,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
                   </div>
                 ))}
                 {recentPast.length > 0 && upcoming.length > 0 && (
-                  <div className="text-[10px] uppercase font-semibold tracking-wider text-muted-foreground/60 pt-1.5">Past</div>
+                  <div className="micro-label text-muted-foreground/60 pt-1.5">Past</div>
                 )}
                 {recentPast.map((ev: any) => (
                   <div key={ev.id} className="flex items-center justify-between py-1.5 border-b border-border/30 last:border-0 opacity-60">
@@ -13252,7 +13252,7 @@ export default function ProfileDetailPage() {
               {stats.map(stat => (
                 <div key={stat.label} className="text-center py-2.5 rounded-lg bg-white/15 backdrop-blur-md border border-white/20 shadow-sm">
                   <p className="text-lg font-bold tabular-nums text-white">{stat.value}</p>
-                  <p className="text-[10px] uppercase tracking-wider text-white/80 font-medium">{stat.label}</p>
+                  <p className="micro-label text-white/80 font-medium">{stat.label}</p>
                 </div>
               ))}
             </div>
@@ -13594,7 +13594,7 @@ export default function ProfileDetailPage() {
                           <div>
                             <div className="flex items-center gap-2 mb-1.5 px-0.5">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                              <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">Upcoming</p>
+                              <p className="micro-label text-emerald-700 dark:text-emerald-400">Upcoming</p>
                               <span className="text-[10px] text-muted-foreground">({upcoming.length})</span>
                             </div>
                             {upcoming.length === 0 ? (

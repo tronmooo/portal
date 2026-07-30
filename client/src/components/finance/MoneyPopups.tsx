@@ -130,7 +130,7 @@ export function CashFlowWaterfallPopup({
 
       <div className="overflow-y-auto min-h-0 flex-1 p-3 space-y-3">
         {/* Waterfall */}
-        <div className="rounded-2xl border border-border bg-card p-3">
+        <div className="bubble p-3">
           <svg viewBox="0 0 340 172" className="w-full" role="img" aria-label="Cash flow waterfall">
             {/* dashed step connectors */}
             <line x1={X(0) + W} y1={y(lvl1)} x2={X(1) + W} y2={y(lvl1)} stroke="hsl(var(--muted-foreground))" strokeDasharray="3 3" strokeOpacity="0.5" />
@@ -160,7 +160,7 @@ export function CashFlowWaterfallPopup({
           <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-3">
             <div className="flex items-center gap-1.5 mb-2">
               <ArrowDownToLine className="h-3.5 w-3.5 text-emerald-500" />
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500">Money in</span>
+              <span className="micro-label text-emerald-500">Money in</span>
             </div>
             {topIncomes.length === 0 ? <p className="text-[11px] text-muted-foreground">No income sources</p> : (
               <ul className="space-y-1.5">
@@ -176,7 +176,7 @@ export function CashFlowWaterfallPopup({
           <div className="rounded-2xl border border-red-500/25 bg-red-500/5 p-3">
             <div className="flex items-center gap-1.5 mb-2">
               <ArrowUpFromLine className="h-3.5 w-3.5 text-red-500" />
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-red-500">Money out</span>
+              <span className="micro-label text-red-500">Money out</span>
             </div>
             <ul className="space-y-1.5">
               <li className="flex items-baseline justify-between gap-2 text-xs">
@@ -195,8 +195,8 @@ export function CashFlowWaterfallPopup({
 
         {/* Keep ratio */}
         {cashIn > 0 && (
-          <div className="rounded-2xl border border-border bg-card p-3">
-            <div className="flex justify-between text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+          <div className="bubble p-3">
+            <div className="flex justify-between micro-label text-muted-foreground mb-1.5">
               <span>Kept {Math.max(0, Math.round((net / cashIn) * 100))}¢ of every $1 earned</span>
               <span className="tabular-nums">{signed(net)}</span>
             </div>
@@ -279,8 +279,8 @@ export function SpendPopup({
 
       <div className="overflow-y-auto min-h-0 flex-1 p-3 space-y-3">
         {/* Daily heat calendar */}
-        <div className="rounded-2xl border border-border bg-card p-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Spending heatmap</p>
+        <div className="bubble p-3">
+          <p className="micro-label text-muted-foreground mb-2">Spending heatmap</p>
           <div className="grid grid-cols-7 gap-1 text-center">
             {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
               <span key={`${d}${i}`} className="text-[9px] text-muted-foreground font-medium">{d}</span>
@@ -316,8 +316,8 @@ export function SpendPopup({
 
         {/* Category bars */}
         {cats.length > 0 && (
-          <div className="rounded-2xl border border-border bg-card p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Where it went</p>
+          <div className="bubble p-3">
+            <p className="micro-label text-muted-foreground mb-2">Where it went</p>
             <div className="space-y-2">
               {cats.map((c) => {
                 const Icon = catIcon(c.name);
@@ -345,10 +345,10 @@ export function SpendPopup({
 
         {/* Largest purchases — receipt style */}
         {biggest.length > 0 && (
-          <div className="rounded-2xl border border-dashed border-border bg-card p-3">
+          <div className="bubble -dashed p-3">
             <div className="flex items-center gap-1.5 mb-2">
               <Receipt className="h-3.5 w-3.5 text-muted-foreground" />
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Largest purchases</p>
+              <p className="micro-label text-muted-foreground">Largest purchases</p>
             </div>
             <ul className="divide-y divide-dashed divide-border/70">
               {biggest.map((e) => (
@@ -442,7 +442,7 @@ export function IncomePopup({
         {sources.length === 0 ? (
           <p className="text-xs text-muted-foreground text-center py-6">No income sources yet — add income from the Finance tab.</p>
         ) : (
-          <div className="rounded-2xl border border-border bg-card divide-y divide-border/60">
+          <div className="bubble divide-y divide-/60">
             {sources.map((s, i) => {
               const share = Math.round((s.monthly / total) * 100);
               const color = STREAM_COLORS[i % STREAM_COLORS.length];
@@ -554,14 +554,14 @@ export function BillsDuePopup({
                   <div className="relative mb-1.5">
                     <span className="absolute -left-[13.5px] top-1 h-2.5 w-2.5 rounded-full border-2 border-background"
                       style={{ background: g.key === "overdue" ? "hsl(0 72% 58%)" : g.key === "today" ? "hsl(38 96% 54%)" : rose }} />
-                    <p className="text-[10px] font-bold uppercase tracking-wider"
+                    <p className="micro-label"
                       style={{ color: g.key === "overdue" ? "hsl(0 72% 58%)" : g.key === "today" ? "hsl(38 96% 54%)" : "hsl(var(--muted-foreground))" }}>
                       {g.label} · {g.items.length}
                     </p>
                   </div>
                   <div className="space-y-1.5">
                     {g.items.map((b: any) => (
-                      <div key={b.id} className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-2.5 py-2" data-testid={`bill-row-${b.id}`}>
+                      <div key={b.id} className="flex items-center gap-2.5 bubble px-2.5 py-2" data-testid={`bill-row-${b.id}`}>
                         <DueChip dueDate={b.dueDate} />
                         <button type="button" onClick={() => goBill(b)} disabled={!b.linkedLiabilityId}
                           className={`flex-1 min-w-0 text-left ${b.linkedLiabilityId ? "cursor-pointer" : "cursor-default"}`}>
@@ -677,8 +677,8 @@ export function SavingsRatePopup({
         </div>
 
         {/* Benchmark ladder */}
-        <div className="rounded-2xl border border-border bg-card p-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Where you stand</p>
+        <div className="bubble p-3">
+          <p className="micro-label text-muted-foreground mb-2">Where you stand</p>
           <div className="space-y-1">
             {[...BANDS].reverse().map((b) => {
               const active = b === band;
@@ -698,7 +698,7 @@ export function SavingsRatePopup({
 
         {/* Projection */}
         {saved > 0 && (
-          <div className="rounded-2xl border border-border bg-card p-3 flex items-center gap-3">
+          <div className="bubble p-3 flex items-center gap-3">
             <span className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "hsl(262 80% 66% / 0.14)" }}>
               <PiggyBank className="w-5 h-5" style={{ color: violet }} />
             </span>
@@ -754,15 +754,15 @@ export function CashFlowOverviewPopup({
           </svg>
           <div className="flex-1 space-y-2">
             <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-1.5 flex items-center justify-between">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500">In</span>
+              <span className="micro-label text-emerald-500">In</span>
               <span className="text-sm font-bold tabular-nums text-emerald-500">${fmt(cashIn)}</span>
             </div>
             <div className="rounded-xl border border-red-500/25 bg-red-500/5 px-2.5 py-1.5 flex items-center justify-between">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-red-500">Out</span>
+              <span className="micro-label text-red-500">Out</span>
               <span className="text-sm font-bold tabular-nums text-red-500">${fmt(cashOut)}</span>
             </div>
             <div className="rounded-xl px-2.5 py-1.5 flex items-center justify-between" style={{ border: `1px solid hsl(234 85% 68% / 0.35)`, background: "hsl(234 85% 68% / 0.08)" }}>
-              <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: indigo }}>Net</span>
+              <span className="micro-label" style={{ color: indigo }}>Net</span>
               <span className="text-sm font-bold tabular-nums" style={{ color: indigo }}>{signed(net)}</span>
             </div>
           </div>
@@ -771,8 +771,8 @@ export function CashFlowOverviewPopup({
 
       <div className="overflow-y-auto min-h-0 flex-1 p-3 space-y-3">
         {cashTrend.length >= 2 && (
-          <div className="rounded-2xl border border-border bg-card p-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">6-month flow</p>
+          <div className="bubble p-3">
+            <p className="micro-label text-muted-foreground mb-2">6-month flow</p>
             <div className="h-40 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={cashTrend} margin={{ top: 4, right: 4, left: -16, bottom: 0 }}>
@@ -798,7 +798,7 @@ export function CashFlowOverviewPopup({
         )}
 
         {cashTrend.length > 0 && (
-          <div className="rounded-2xl border border-border bg-card overflow-hidden">
+          <div className="bubble overflow-hidden">
             <div className="grid grid-cols-4 px-3 py-1.5 border-b border-border bg-muted/30 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
               <span>Month</span><span className="text-right">In</span><span className="text-right">Out</span><span className="text-right">Net</span>
             </div>

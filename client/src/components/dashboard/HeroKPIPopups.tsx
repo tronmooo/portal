@@ -338,7 +338,7 @@ export function NetWorthPopup({
         <div className="px-4 pt-3 pb-2 border-b border-border">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Net worth</p>
+              <p className="micro-label text-muted-foreground">Net worth</p>
               <p className="text-xl font-bold tabular-nums leading-tight" style={{ color: netWorth < 0 ? "hsl(0 80% 60%)" : "hsl(155 60% 44%)" }}>
                 {netWorth < 0 ? "-" : ""}${fmt(Math.abs(netWorth))}
               </p>
@@ -566,15 +566,15 @@ export function CashFlowPopup({
     >
       <div className="p-3 space-y-3">
         {/* Summary — net, savings rate, in/out ratio, recurring vs one-time */}
-        <div className="rounded-lg border border-border bg-card p-3">
+        <div className="bubble p-3">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Net this month</p>
+              <p className="micro-label text-muted-foreground">Net this month</p>
               <p className="text-xl font-bold tabular-nums leading-tight" style={{ color: net >= 0 ? "hsl(200 70% 55%)" : "hsl(43 85% 52%)" }}>{net >= 0 ? "+" : "−"}${fmt(Math.abs(net))}</p>
             </div>
             {monthlyIncome > 0 && (
               <div className="text-right">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Savings rate</p>
+                <p className="micro-label text-muted-foreground">Savings rate</p>
                 <p className="text-lg font-bold tabular-nums leading-tight" style={{ color: net >= 0 ? "hsl(155 60% 44%)" : "hsl(0 72% 52%)" }}>{Math.round((net / monthlyIncome) * 100)}%</p>
               </div>
             )}
@@ -617,7 +617,7 @@ export function CashFlowPopup({
         />
 
         {/* Recurring out */}
-        <div className="rounded-lg border border-border bg-card">
+        <div className="bubble">
           <div className="px-3 py-2 flex items-center gap-2 border-b border-border">
             <div className="rounded-md p-1 shrink-0" style={{ background: "hsl(0 72% 52% / 0.16)" }}>
               <RefreshCw className="h-3 w-3" style={{ color: "hsl(0 72% 52%)" }} />
@@ -628,7 +628,7 @@ export function CashFlowPopup({
           {Object.entries(recurringGroups).map(([groupName, items]) =>
             items.length === 0 ? null : (
               <div key={groupName} className="px-3 py-2 border-b border-border/40 last:border-b-0">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">{groupName}</p>
+                <p className="micro-label text-muted-foreground mb-1.5">{groupName}</p>
                 <ul className="space-y-1">
                   {items.slice(0, 5).map((o) => (
                     <li key={o.id} className="flex items-center justify-between text-xs">
@@ -720,7 +720,7 @@ function SectionCard({
   extraNote?: string;
 }) {
   return (
-    <div className="rounded-lg border border-border bg-card">
+    <div className="bubble">
       <div className="px-3 py-2 flex items-center gap-2 border-b border-border">
         <div className="rounded-md p-1 shrink-0" style={{ background: `${color}1f` }}>
           <Icon className="h-3 w-3" style={{ color }} />
@@ -832,7 +832,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
 
       {/* Summary stat cards */}
       <div className="grid grid-cols-3 gap-2">
-        <div className="rounded-xl border border-border bg-card/60 p-2.5">
+        <div className="bubble/60 p-2.5">
           <p className="text-[10px] text-muted-foreground">Total Spent</p>
           <p className="text-base font-bold tabular-nums leading-tight">${fmt(view.total)}</p>
           {view.trendPct != null && (
@@ -841,11 +841,11 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
             </p>
           )}
         </div>
-        <div className="rounded-xl border border-border bg-card/60 p-2.5">
+        <div className="bubble/60 p-2.5">
           <p className="text-[10px] text-muted-foreground">Daily Average</p>
           <p className="text-base font-bold tabular-nums leading-tight">${fmt(view.dailyAvg)}</p>
         </div>
-        <div className="rounded-xl border border-border bg-card/60 p-2.5">
+        <div className="bubble/60 p-2.5">
           <p className="text-[10px] text-muted-foreground">Transactions</p>
           <p className="text-base font-bold tabular-nums leading-tight">{view.txns}</p>
           <p className="text-[10px] text-muted-foreground">~{view.perDay.toFixed(1)}/day</p>
@@ -854,7 +854,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
 
       {/* Donut by category */}
       {view.total > 0 ? (
-        <div className="rounded-xl border border-border bg-card/60 p-3">
+        <div className="bubble/60 p-3">
           <p className="text-xs font-semibold mb-2">Spending by Category</p>
           <div className="flex items-center gap-3">
             <div className="relative shrink-0" style={{ width: 116, height: 116 }}>

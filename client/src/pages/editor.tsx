@@ -1589,7 +1589,7 @@ export default function EditorPage() {
                   return (
                     <div key={item.id}>
                       {showHeader && (
-                        <div className="px-2 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                        <div className="micro-label px-2 pt-2 pb-1 text-muted-foreground">
                           {item.group === "basic" ? "Basic blocks" : "AI commands"}
                         </div>
                       )}
@@ -1712,7 +1712,7 @@ export default function EditorPage() {
                 <Button variant="ghost" size="sm" className="h-7 px-2 text-xs font-normal" data-testid="menu-format">Format</Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56">
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">Number</DropdownMenuLabel>
+                <DropdownMenuLabel className="micro-label text-muted-foreground">Number</DropdownMenuLabel>
                 <DropdownMenuItem onClick={() => toggleNumberFormat("plain")} data-testid="menu-format-plain">Automatic / Plain</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => toggleNumberFormat("number")} data-testid="menu-format-number"><Hash className="h-3.5 w-3.5 mr-2" /> Number</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => toggleNumberFormat("currency")} data-testid="menu-format-currency"><DollarSign className="h-3.5 w-3.5 mr-2" /> Currency</DropdownMenuItem>
@@ -2464,7 +2464,7 @@ function CrossLinkSidebar({
             if (!list || list.length === 0) return null;
             return (
               <div key={t} className="mb-3">
-                <div className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                <div className="micro-label px-2 pb-1 text-muted-foreground">
                   {groupLabel(t)}
                 </div>
                 <div className="space-y-0.5">

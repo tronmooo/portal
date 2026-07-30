@@ -73,7 +73,7 @@ function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, test
       aria-label={onClick ? `${label} details` : undefined}
       onKeyDown={onClick ? (e: any) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
       style={{ ["--accent-hsl" as any]: tone }}>
-      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="flex items-center gap-1.5 micro-label text-muted-foreground">
         <Icon className="w-3 h-3" style={{ color: `hsl(${tone})` }} /> {label}
       </div>
       <div className="flex items-end justify-between mt-1">
@@ -147,7 +147,7 @@ function DynamicCard({ card }: { card: WellnessCard }) {
       <Card className="p-3 card-lift transition-all cursor-pointer" data-testid={`wellness-metric-${card.id}`}
         style={{ borderColor: `hsl(${tone} / 0.22)` }}>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-semibold uppercase tracking-wide truncate" style={{ color: `hsl(${tone})` }}>{card.name}</span>
+          <span className="micro-label truncate" style={{ color: `hsl(${tone})` }}>{card.name}</span>
           {card.changePct != null && card.favorable !== "neutral" && (
             <span className="flex items-center gap-0.5 text-[10px] shrink-0" style={{ color: favColor.startsWith("var") ? undefined : `hsl(${favColor})` }}>
               <TrendIco className="w-3 h-3" /> {Math.abs(card.changePct).toFixed(0)}%
@@ -172,7 +172,7 @@ function DynamicMetricGrid({ cards }: { cards: WellnessCard[] }) {
     <div className="space-y-3" data-testid="wellness-dynamic">
       {groups.map((g) => (
         <div key={g.group}>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 px-0.5">{g.group}</div>
+          <div className="micro-label text-muted-foreground mb-1.5 px-0.5">{g.group}</div>
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
             {g.cards.map((c) => <DynamicCard key={c.id} card={c} />)}
           </div>

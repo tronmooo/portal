@@ -122,9 +122,9 @@ export function AttentionFilters({ prefs, onChange }: {
   };
 
   return (
-    <div className="mb-2 rounded-lg border border-border bg-card/40 px-3 py-2.5 space-y-2.5" data-testid="attention-filters">
+    <div className="mb-2 bubble/40 px-3 py-2.5 space-y-2.5" data-testid="attention-filters">
       <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Show</p>
+        <p className="micro-label text-muted-foreground mb-1.5">Show</p>
         <div className="flex flex-wrap gap-1.5">
           <Toggle label="Tasks" on={draft.includeTasks} onChange={v => set({ includeTasks: v })} testId="attention-toggle-tasks" />
           <Toggle label="Habits" on={draft.includeHabits} onChange={v => set({ includeHabits: v })} testId="attention-toggle-habits" />
@@ -141,7 +141,7 @@ export function AttentionFilters({ prefs, onChange }: {
       </div>
 
       <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Urgency</p>
+        <p className="micro-label text-muted-foreground mb-1.5">Urgency</p>
         <div className="flex flex-wrap gap-1.5">
           {TIERS.map(t => (
             <button

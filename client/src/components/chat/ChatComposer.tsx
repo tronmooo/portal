@@ -200,7 +200,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           Message
         </label>
         {/* Large prominent input box */}
-        <div className="relative rounded-2xl border border-border bg-card shadow-sm focus-within:border-primary/40 focus-within:shadow-md transition-all duration-200">
+        <div className="bubble relative focus-within:-primary/40 focus-within:shadow-md transition-all duration-200">
           <Textarea
             id="chat-message-input"
             ref={textareaRef}
@@ -290,7 +290,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                       <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-2" style={{ height: 10 }} />
                       <span className="w-0.5 bg-red-500 rounded-full animate-voice-bar-1" style={{ height: 6 }} />
                     </span>
-                    <span className="text-[10px] font-medium uppercase tracking-wide">Rec</span>
+                    <span className="micro-label">Rec</span>
                   </>
                 ) : (
                   <Mic className="h-4 w-4" />

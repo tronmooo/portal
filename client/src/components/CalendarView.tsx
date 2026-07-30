@@ -1346,7 +1346,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   // mode this sits to the RIGHT of the grid; in week/agenda modes it stacks
   // below. Defined once so both placements stay in sync.
   const agendaPanel = (
-    <div className="rounded-lg border border-border/40 bg-card/50 lg:min-h-[320px]" data-testid="section-day-agenda">
+    <div className="bubble lg:min-h-[320px]" data-testid="section-day-agenda">
       <div className="px-3 pt-2.5 pb-1.5 flex items-center justify-between border-b border-border/40">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-xs font-semibold truncate">{fmtDateFull(selectedDate)}</span>
@@ -1683,7 +1683,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                 const isTodayCol = wd.date === todayStr;
                 return (
                   <div key={wd.date} className={`text-center py-1.5 border-r border-border/40 ${isTodayCol ? 'bg-primary/5' : ''}`}>
-                    <div className={`text-[10px] uppercase tracking-wider ${isTodayCol ? 'text-primary font-bold' : 'text-muted-foreground'}`}>{wd.label}</div>
+                    <div className={`micro-label ${isTodayCol ? 'text-primary font-bold' : 'text-muted-foreground'}`}>{wd.label}</div>
                     <div className={`text-sm font-medium ${isTodayCol ? 'text-primary' : ''}`}>{wd.num}</div>
                   </div>
                 );

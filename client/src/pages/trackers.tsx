@@ -367,7 +367,7 @@ function CrossGroupPanel({ fromGroup, allTrackers, onSelectTracker }: {
     <div className="mt-3 rounded-xl border border-border/40 bg-muted/20 overflow-hidden">
       <div className="px-3 py-2 flex items-center gap-2 border-b border-border/30">
         <Link2 className="h-3 w-3 text-muted-foreground/60" />
-        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/60">Connected Categories</span>
+        <span className="micro-label text-muted-foreground/60">Connected Categories</span>
       </div>
       {connected.map(({ groupName, def: gDef, trackers: gTrackers }) => (
         <div key={groupName} className="px-3 py-2">
@@ -391,7 +391,7 @@ function CrossGroupPanel({ fromGroup, allTrackers, onSelectTracker }: {
                 <button
                   key={t.id}
                   onClick={() => onSelectTracker(t)}
-                  className="relative rounded-lg bg-card/60 border border-border/40 p-2 text-left hover:bg-muted/40 active:scale-[0.98] transition-all overflow-hidden"
+                  className="bubble relative p-2 text-left hover:bg-muted/40 active:scale-[0.98] transition-all overflow-hidden"
                 >
                   <div className="absolute left-0 top-0 bottom-0 w-0.5" style={{ background: `hsl(${tAccent})` }} />
                   <div className="pl-1.5">
@@ -4879,7 +4879,7 @@ function HistoryEntryRow({
 
   return (
     <div
-      className="group flex items-center justify-between py-2 px-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors text-sm gap-2 cursor-pointer pressable"
+      className="group flex items-center justify-between py-2 px-3 bubble hover:bg-muted/30 transition-colors text-sm gap-2 cursor-pointer pressable"
       data-testid={`entry-row-${entry.id}`}
       role="button"
       tabIndex={0}
@@ -6545,7 +6545,7 @@ export default function TrackersPage() {
         }
         if (rows.length === 0) {
           return (
-            <div className="rounded-lg border bg-card p-8 text-center" data-testid="linked-list-empty">
+            <div className="bubble p-8 text-center" data-testid="linked-list-empty">
               <p className="text-sm text-muted-foreground">Nothing to list here yet</p>
             </div>
           );
@@ -6629,7 +6629,7 @@ export default function TrackersPage() {
         return (
           <div className="space-y-3" data-testid="linked-list-view">
             {sortedGroups.map(group => (
-              <div key={group.ownerId} className="rounded-lg border border-border/40 overflow-hidden bg-card" data-testid={`linked-list-group-${group.ownerId}`}>
+              <div key={group.ownerId} className="bubble overflow-hidden" data-testid={`linked-list-group-${group.ownerId}`}>
                 {/* Person header with avatar + count */}
                 <div
                   className="flex items-center gap-2.5 px-3 py-2 border-b border-border/40"
@@ -6773,7 +6773,7 @@ export default function TrackersPage() {
           return true;
         });
         if (childProfiles.length === 0) return (
-          <div className="rounded-lg border bg-card p-6 text-center">
+          <div className="bubble p-6 text-center">
             <Star className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No assets or vehicles yet</p>
             <p className="text-xs text-muted-foreground mt-1">Add vehicles, property, or investments to track them here</p>
@@ -7004,7 +7004,7 @@ export default function TrackersPage() {
           return true;
         });
         if (liabs.length === 0) return (
-          <div className="rounded-lg border bg-card p-6 text-center">
+          <div className="bubble p-6 text-center">
             <TrendingDown className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No liabilities yet</p>
             <p className="text-xs text-muted-foreground mt-1">Track mortgages, loans, credit cards, subscriptions, and recurring bills here</p>
@@ -7116,7 +7116,7 @@ export default function TrackersPage() {
                     >
                       <div className="flex items-start gap-1.5 mb-1.5">
                         <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.18)`, color: ac }}><TrendingDown className="h-3 w-3" /></div>
-                        <p className="flex-1 min-w-0 text-[10px] font-bold uppercase tracking-wide text-foreground leading-tight line-clamp-2" title={liab.name}>{liab.name}</p>
+                        <p className="micro-label flex-1 min-w-0 text-foreground leading-tight line-clamp-2" title={liab.name}>{liab.name}</p>
                         <Pencil className="h-3 w-3 text-muted-foreground/50 shrink-0" />
                       </div>
                       {/* Headline: current balance (debt) or recurring amount (bills) */}
@@ -7156,7 +7156,7 @@ export default function TrackersPage() {
               };
               const Group = ({ title, items }: { title: string; items: any[] }) => items.length === 0 ? null : (
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 px-0.5">{title}</p>
+                  <p className="micro-label text-muted-foreground mb-1.5 px-0.5">{title}</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 items-start" style={{ gridAutoRows: 168 }}>{items.map(renderCard)}</div>
                 </div>
               );
@@ -7273,7 +7273,7 @@ export default function TrackersPage() {
           </div>
         )}
         {(!collapsedSections.has("documents") || (hubEmbedded && sectionFilter !== "all")) && (filteredDocuments.length === 0 ? (
-          <div className="rounded-lg border bg-card p-6 text-center">
+          <div className="bubble p-6 text-center">
             <FileText className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">{allDocuments.length === 0 ? "No documents yet" : "No documents match your search"}</p>
             <p className="text-xs text-muted-foreground mt-1">Upload files or ask Portol to save documents</p>

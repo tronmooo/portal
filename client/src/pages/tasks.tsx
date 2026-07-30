@@ -666,9 +666,9 @@ export default function TasksPage() {
           { label: "Upcoming", value: taskSummary.upcoming, color: "200 80% 55%" },
           { label: "Done", value: taskSummary.done, color: "155 60% 48%" },
         ].map(s => (
-          <div key={s.label} className="rounded-xl border border-border/50 bg-card/60 p-2.5 text-center">
+          <div key={s.label} className="bubble p-2.5 text-center">
             <p className="text-lg font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
-            <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</p>
+            <p className="mt-1 micro-label text-muted-foreground">{s.label}</p>
           </div>
         ))}
       </div>

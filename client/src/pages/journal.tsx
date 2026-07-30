@@ -772,7 +772,7 @@ export default function JournalPage() {
             }
             return groups.map((g) => (
               <div key={g.day} className="space-y-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground pt-1">{g.day}</p>
+                <p className="micro-label text-muted-foreground pt-1">{g.day}</p>
                 {g.items.map((entry) => (
                   <JournalCard key={entry.id} entry={entry} onEdit={handleEditEntry} />
                 ))}

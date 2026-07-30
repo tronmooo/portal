@@ -157,7 +157,7 @@ export function QuickCreateFab() {
                 <button
                   key={t.key}
                   onClick={() => handleTile(t.key)}
-                  className="flex flex-col items-center gap-2 p-3 rounded-xl border border-border/50 bg-card hover:bg-muted/50 active:scale-95 transition-all"
+                  className="bubble flex flex-col items-center gap-2 p-3 hover:bg-muted/50 active:scale-95 transition-all"
                   data-testid={`quick-create-${t.key}`}
                 >
                   <div className={`w-10 h-10 flex items-center justify-center rounded-lg ${t.tone}`}>

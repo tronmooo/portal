@@ -112,7 +112,7 @@ export function RecurringRuleCard({
 
   return (
     <div
-      className="rounded-xl border border-border bg-card flex items-center gap-2.5 pl-2.5 pr-1.5 py-2"
+      className="bubble flex items-center gap-2.5 pl-2.5 pr-1.5 py-2"
       data-testid={`rule-card-${series.id}`}
     >
       <button

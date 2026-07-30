@@ -1015,6 +1015,17 @@ button, a, [role="button"], .card-lift {
   background-image: linear-gradient(135deg, hsl(var(--primary) / 0.10) 0%, transparent 60%);
 }
 
+/* The small uppercase label above a group of content.
+   There were SIX variants of this in the app — 10px vs 11px, semibold vs
+   normal, tracking-wide vs tracking-wider — which is most of why the tabs read
+   as separate products. One class now, sized to the Executive tab's. */
+.micro-label {
+  font-size: 0.6875rem;   /* 11px — 10px was below comfortable on a phone */
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 /* Dialogs, sheets and popovers share the bubble radius, so a modal reads as
    the same material as the page behind it. */
 .surface-panel {

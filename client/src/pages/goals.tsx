@@ -53,9 +53,9 @@ export default function GoalsPage() {
         actions={<MultiProfileFilter onChange={() => {}} compact />} />
 
       {/* v2 summary header — overall progress + status breakdown */}
-      <div className="rounded-2xl border border-border/50 bg-card/60 p-3">
+      <div className="bubble p-3">
         <div className="mb-2 flex items-center justify-between">
-          <p className="text-[11px] uppercase tracking-wider text-muted-foreground/70">Overall progress</p>
+          <p className="micro-label text-muted-foreground/70">Overall progress</p>
           <p className="text-sm font-bold tabular-nums" style={{ color: "hsl(262 70% 62%)" }}>{summary.avg}%</p>
         </div>
         <div className="mb-3 h-2 overflow-hidden rounded-full bg-muted/60">

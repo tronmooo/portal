@@ -171,7 +171,7 @@ export function ChatGPTImportDialog({ open, onOpenChange }: { open: boolean; onO
             )}
             {plan!.signals && plan!.signals.length > 0 && (
               <div className="space-y-1.5" data-testid="import-signals">
-                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <p className="micro-label text-muted-foreground flex items-center gap-1.5">
                   <Sparkles className="h-3 w-3 text-primary" /> Smart detection
                 </p>
                 <div className="space-y-1">
@@ -228,7 +228,7 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: "goo
   return (
     <div className="rounded-md border py-2">
       <p className={`text-base font-semibold tabular-nums ${color}`}>{value}</p>
-      <p className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</p>
+      <p className="micro-label text-muted-foreground">{label}</p>
     </div>
   );
 }

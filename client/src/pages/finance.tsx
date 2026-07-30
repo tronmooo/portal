@@ -1859,7 +1859,7 @@ export default function FinancePage() {
                         const isCurrent = nextUnpaid?.id === p.id;
                         return (
                           <tr key={p.id}
-                            className={`${p.paid ? 'bg-green-500/5 text-muted-foreground' : ''} ${isCurrent ? 'bg-primary/10 font-medium' : ''}`}>
+                            className={` ${p.paid ? 'bg-green-500/5 text-muted-foreground' : ''} ${isCurrent ? 'bg-primary/10 font-medium' : ''}`}>
                             <td className="px-2 py-1">{p.payment_number}</td>
                             <td className="px-2 py-1">{new Date(p.payment_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}</td>
                             <td className="px-2 py-1 text-right tabular-nums">${p.principal_amount?.toFixed(0)}</td>

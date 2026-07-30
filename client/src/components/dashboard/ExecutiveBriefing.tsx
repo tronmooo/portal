@@ -104,7 +104,7 @@ function StatTile({ label, value, unit, sub, accent, icon, onClick, testId, prom
       <div className="flex items-start gap-2.5">
         <Medallion icon={icon} accent={accent} size={prominent ? "lg" : "sm"} />
         <div className="min-w-0 flex-1">
-          <span className="block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground truncate">
+          <span className="block micro-label text-muted-foreground truncate">
             {label}
           </span>
           <div className="flex items-baseline gap-1 mt-0.5 min-w-0">
@@ -564,7 +564,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
       {/* ── The feed ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-2 mb-1.5 mt-3">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <h2 className="micro-label text-muted-foreground">
           Needs your attention
         </h2>
         <button

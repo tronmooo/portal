@@ -532,7 +532,7 @@ function SourceGroup({
   if (items.length === 0) return null;
   return (
     <div className="space-y-1.5">
-      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{title}</p>
+      <p className="micro-label text-muted-foreground">{title}</p>
       <div className="grid grid-cols-2 gap-1.5">
         {items.map((s) => {
           const checked = !!selected[`${s.kind}:${s.id}`];

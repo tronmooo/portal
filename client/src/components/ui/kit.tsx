@@ -82,7 +82,7 @@ export function IconButton({
 export function DashboardCard({ className, children, testId, ...rest }: React.HTMLAttributes<HTMLDivElement> & { testId?: string }) {
   return (
     <div data-testid={testId}
-      className={cn("shadcn-card rounded-xl border border-card-border bg-card p-4 shadow-sm", className)} {...rest}>
+      className={cn("shadcn-card bubble p-4", className)} {...rest}>
       {children}
     </div>
   );
@@ -116,7 +116,7 @@ export function DataTable<T>({
         <thead>
           <tr className="border-b border-border/60">
             {columns.map((c) => (
-              <th key={c.key} className={cn("py-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground", alignClass(c.align))}>
+              <th key={c.key} className={cn("py-2 px-2 micro-label text-muted-foreground", alignClass(c.align))}>
                 {c.header}
               </th>
             ))}

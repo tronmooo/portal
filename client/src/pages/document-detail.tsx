@@ -224,7 +224,7 @@ function PreviewPanel({ doc }: { doc: Document }) {
   }, [previewUrl, doc.name]);
 
   return (
-    <div className="flex flex-col h-full rounded-xl border border-border bg-card overflow-hidden">
+    <div className="flex flex-col h-full bubble overflow-hidden">
       {/* Zoom toolbar */}
       <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-muted/10 shrink-0">
         <Button
@@ -453,7 +453,7 @@ function DataPanel({
   const extractedEntries = Object.entries(doc.extractedData || {});
 
   return (
-    <div className="flex flex-col h-full rounded-xl border border-border bg-card overflow-hidden">
+    <div className="flex flex-col h-full bubble overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3 border-b border-border bg-muted/10 shrink-0">
         <div className="flex items-start justify-between gap-2">

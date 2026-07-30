@@ -145,7 +145,7 @@ function GroupSection({
         <>
           {hasContext && related.length > 0 && (
             <>
-              <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 px-2 pt-1 pb-0.5">
+              <p className="micro-label text-muted-foreground/60 px-2 pt-1 pb-0.5">
                 Related
               </p>
               {related.map((p) => (
@@ -159,7 +159,7 @@ function GroupSection({
             </>
           )}
           {hasContext && related.length > 0 && others.length > 0 && (
-            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 px-2 pt-2 pb-0.5">
+            <p className="micro-label text-muted-foreground/60 px-2 pt-2 pb-0.5">
               All others
             </p>
           )}

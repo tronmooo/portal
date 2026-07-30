@@ -284,11 +284,11 @@ function SingleProfileInfo({ id }: { id: string }) {
       {addingField && (
         <Card className="p-3 flex flex-wrap items-end gap-2" data-testid="info-add-field-form">
           <div className="flex-1 min-w-[120px]">
-            <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Field</label>
+            <label className="micro-label text-muted-foreground">Field</label>
             <Input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="e.g. Nickname" className="h-8 text-xs" data-testid="info-new-key" />
           </div>
           <div className="flex-1 min-w-[120px]">
-            <label className="text-[10px] uppercase tracking-wide text-muted-foreground">Value</label>
+            <label className="micro-label text-muted-foreground">Value</label>
             <Input value={newVal} onChange={e => setNewVal(e.target.value)} placeholder="Value" className="h-8 text-xs" data-testid="info-new-val" />
           </div>
           <Button
@@ -525,7 +525,7 @@ function FieldCell({ label, value, editable, onSave, onRemove }: {
   if (editing && editable) {
     return (
       <Card className="p-2.5">
-        <label className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</label>
+        <label className="micro-label text-muted-foreground">{label}</label>
         <div className="flex items-center gap-1 mt-1">
           <Input value={draft} onChange={e => setDraft(e.target.value)} className="h-7 text-xs" autoFocus
             onKeyDown={e => { if (e.key === "Enter") { onSave?.(draft); setEditing(false); } if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
@@ -542,7 +542,7 @@ function FieldCell({ label, value, editable, onSave, onRemove }: {
       onClick={() => editable && setEditing(true)}
       data-testid={`info-cell-${label}`}
     >
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="micro-label text-muted-foreground">{label}</div>
       <div className="text-sm font-medium truncate mt-0.5">{value}</div>
       {onRemove && (
         // ALWAYS VISIBLE. This was `opacity-0 group-hover:opacity-100`, so the

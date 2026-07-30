@@ -71,7 +71,7 @@ function KpiCard({ label, value, trend, tone, series, chartKind = "line", sub, o
     <button onClick={onClick} data-testid={testId}
       className="text-left rounded-xl border p-3 card-lift transition-all min-w-[8.5rem] flex-1"
       style={{ borderColor: `hsl(${color} / 0.30)`, background: `linear-gradient(135deg, hsl(${color} / 0.12) 0%, hsl(var(--card)) 75%)` }}>
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="micro-label text-muted-foreground">{label}</div>
       <div className="metric-value text-xl mt-0.5" style={{ color: `hsl(${color})` }}>{value}</div>
       {trend && <div className="text-[10px] mt-0.5" style={{ color: `hsl(${color})` }}>{trend}</div>}
       {sub && <div className="text-[10px] text-muted-foreground mt-1 truncate">{sub}</div>}
@@ -204,7 +204,7 @@ export function MoneyOverview(props: {
         <Card className="p-4 cursor-pointer card-lift" data-testid="money-cashflow-overview"
           onClick={() => (onOpenOverview ?? onOpenCashFlow)?.()}>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cash Flow Overview</span>
+            <span className="micro-label text-muted-foreground">Cash Flow Overview</span>
             <button className="text-[10px] text-primary hover:underline" onClick={(e) => { e.stopPropagation(); (onOpenOverview ?? onOpenCashFlow)?.(); }} data-testid="money-view-cashflow">View →</button>
           </div>
           <div className="flex items-center gap-4">
@@ -219,7 +219,7 @@ export function MoneyOverview(props: {
 
         <Card className="p-4" data-testid="money-categories">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Spending by Category · MTD</span>
+            <span className="micro-label text-muted-foreground">Spending by Category · MTD</span>
           </div>
           {categories.length === 0 ? <p className="text-xs text-muted-foreground">No spending this month.</p> : (
             <div className="space-y-1.5">
@@ -246,7 +246,7 @@ export function MoneyOverview(props: {
       {cashTrend.length >= 2 && (
         <Card className="p-4" data-testid="money-cashflow-trend">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Cash Flow Trend</span>
+            <span className="micro-label text-muted-foreground">Cash Flow Trend</span>
             <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500" />In</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-red-500" />Out</span>
@@ -275,7 +275,7 @@ export function MoneyOverview(props: {
       {budgets.length > 0 && (
         <Card className="p-4" data-testid="money-budgets">
           <div className="flex items-center justify-between mb-3">
-            <button className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground" onClick={() => onOpenBudget?.()} data-testid="money-budgets-header">Budgets · MTD vs limit →</button>
+            <button className="micro-label text-muted-foreground hover:text-foreground" onClick={() => onOpenBudget?.()} data-testid="money-budgets-header">Budgets · MTD vs limit →</button>
             <div className="flex gap-1.5">
               {onOpenBudget && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onOpenBudget} data-testid="money-manage-budgets">+ Budget</Button>}
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onAddExpense} data-testid="money-add-expense">+ Expense</Button>
@@ -311,7 +311,7 @@ export function MoneyOverview(props: {
       {/* Bills + Balance sheet */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Card className="p-4" data-testid="money-bills">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">Bills · next 14d</div>
+          <div className="micro-label text-muted-foreground mb-3">Bills · next 14d</div>
           {bills.length === 0 ? (
             <p className="text-xs text-muted-foreground">No bills due in the next 14 days.</p>
           ) : (
@@ -338,7 +338,7 @@ export function MoneyOverview(props: {
         </Card>
 
         <Card className="p-4" data-testid="money-balance-sheet">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">Balance Sheet · Assets vs Liabilities</div>
+          <div className="micro-label text-muted-foreground mb-3">Balance Sheet · Assets vs Liabilities</div>
           {(() => {
             const scale = Math.max(assets, liabilities, 1);
             return (
@@ -366,7 +366,7 @@ export function MoneyOverview(props: {
           {assetBreakdown.length > 0 && (
             <Card className="p-4" data-testid="money-assets">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Assets · {money(assets)}</span>
+                <span className="micro-label text-muted-foreground">Assets · {money(assets)}</span>
               </div>
               <div className="divide-y divide-border/60">
                 {assetBreakdown.slice(0, 8).map(a => (
@@ -384,7 +384,7 @@ export function MoneyOverview(props: {
           {liabilityBreakdown.length > 0 && (
             <Card className="p-4" data-testid="money-liabilities">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Liabilities · {money(liabilities)}</span>
+                <span className="micro-label text-muted-foreground">Liabilities · {money(liabilities)}</span>
               </div>
               <div className="divide-y divide-border/60">
                 {liabilityBreakdown.slice(0, 8).map(l => (
@@ -405,7 +405,7 @@ export function MoneyOverview(props: {
       {/* Financial Alerts & Insights — derived, each row deep-links. */}
       {alerts.length > 0 && (
         <Card className="p-4" data-testid="money-alerts">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Financial Alerts & Insights</div>
+          <div className="micro-label text-muted-foreground mb-2">Financial Alerts & Insights</div>
           <div className="space-y-1">
             {alerts.map(a => (
               <button key={a.id} onClick={a.onClick} disabled={!a.onClick}

@@ -497,7 +497,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
             className="w-full text-sm font-semibold bg-transparent border-b border-border/40 pb-1.5 mt-1 focus:outline-none focus:border-primary" data-testid="task-title-edit" />
           {/* Priority — 4 levels incl. Critical */}
           <div>
-            <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Flag className="h-3 w-3" />Priority</label>
+            <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Flag className="h-3 w-3" />Priority</label>
             <div className="grid grid-cols-4 gap-1.5">
               {(["low", "medium", "high", "critical"] as const).map(p => (
                 <button key={p} onClick={() => setPriority(t, p)}
@@ -511,12 +511,12 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           {/* Due date + time */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Calendar className="h-3 w-3" />Due date</label>
+              <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Calendar className="h-3 w-3" />Due date</label>
               <input type="date" value={t.dueDate || ""} onChange={e => updateMutation.mutate({ id: t.id, patch: { dueDate: e.target.value || undefined } })}
                 className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-due-date" />
             </div>
             <div>
-              <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Clock className="h-3 w-3" />Due time</label>
+              <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Clock className="h-3 w-3" />Due time</label>
               <input type="time" value={dTime} disabled={hasFlag(t, 'allday')} onChange={e => setMetaTag(t, 'time:', e.target.value)}
                 className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-40" data-testid="task-due-time" />
             </div>
@@ -538,7 +538,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           </div>
           {/* Repeat preset + live preview */}
           <div>
-            <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Repeat className="h-3 w-3" />Repeat</label>
+            <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Repeat className="h-3 w-3" />Repeat</label>
             <select value={RECUR_PRESETS.some(o => o.value === rule.freq) ? rule.freq : (rule.freq ? "__custom" : "")}
               onChange={e => { if (e.target.value === "__custom") return; const f = e.target.value; const u = freqToUnit(f); setRule(t, { ...rule, freq: f, unit: u.unit, interval: u.interval, ...(f ? {} : { until: undefined, count: undefined, done: 0, paused: false }) }); }}
               className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-recurrence">
@@ -564,7 +564,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           )}
           {/* Subtasks / checklist with progress */}
           <div>
-            <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><ListChecks className="h-3 w-3" />Subtasks{subs.length > 0 && <span className="text-muted-foreground/60 normal-case">· {subDone}/{subs.length}</span>}</label>
+            <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><ListChecks className="h-3 w-3" />Subtasks{subs.length > 0 && <span className="text-muted-foreground/60 normal-case">· {subDone}/{subs.length}</span>}</label>
             {subs.length > 0 && (
               <div className="h-1 rounded-full bg-muted overflow-hidden mb-2"><div className="h-full bg-emerald-500 transition-all" style={{ width: `${Math.round((subDone / subs.length) * 100)}%` }} /></div>
             )}
@@ -585,7 +585,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           </div>
           {/* Notes */}
           <div>
-            <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><FileText className="h-3 w-3" />Notes</label>
+            <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><FileText className="h-3 w-3" />Notes</label>
             <textarea defaultValue={t.description || ""} rows={2} placeholder="Add notes…"
               onBlur={e => { if ((e.target.value || "") !== (t.description || "")) updateMutation.mutate({ id: t.id, patch: { description: e.target.value } }); }}
               className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-notes" />
@@ -598,7 +598,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
             <div className="space-y-3 rounded-lg bg-muted/20 p-2.5">
               {/* Custom recurrence builder */}
               <div>
-                <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground mb-1 block">Custom repeat</label>
+                <label className="micro-label font-semibold text-muted-foreground mb-1 block">Custom repeat</label>
                 <div className="flex items-center gap-1.5 text-xs">
                   <span className="text-muted-foreground">Every</span>
                   <input type="number" min={1} value={rule.interval}
@@ -633,13 +633,13 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
               {/* Category + Reminder */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><TagIcon className="h-3 w-3" />Category</label>
+                  <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><TagIcon className="h-3 w-3" />Category</label>
                   <select value={cat} onChange={e => setMetaTag(t, 'cat:', e.target.value)} className="w-full text-xs bg-background border border-border rounded-lg px-2 py-1.5 capitalize focus:outline-none" data-testid="task-category">
                     {CATEGORY_OPTS.map(c => <option key={c} value={c}>{c || "None"}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><AlarmClock className="h-3 w-3" />Reminder</label>
+                  <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><AlarmClock className="h-3 w-3" />Reminder</label>
                   <select value={metaOf(t, "remind:")} onChange={e => setMetaTag(t, 'remind:', e.target.value)} className="w-full text-xs bg-background border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="task-reminder">
                     {REMINDER_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
@@ -647,13 +647,13 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
               </div>
               {/* Estimated duration */}
               <div>
-                <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Timer className="h-3 w-3" />Estimated minutes</label>
+                <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Timer className="h-3 w-3" />Estimated minutes</label>
                 <input type="number" min={0} value={est} onChange={e => setMetaTag(t, 'est:', e.target.value)} placeholder="e.g. 30"
                   className="w-full text-xs bg-background border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="task-estimate" />
               </div>
               {/* Free tags */}
               <div>
-                <label className="text-[10px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1 mb-1"><TagIcon className="h-3 w-3" />Tags</label>
+                <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><TagIcon className="h-3 w-3" />Tags</label>
                 <div className="flex flex-wrap gap-1.5 mb-1">
                   {freeTagsOf(t).map((tag: string) => (
                     <span key={tag} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">#{tag}
@@ -755,7 +755,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
 
               {/* ── Rich add-task composer ── */}
               {composer.open && (
-                <div className="mb-3 rounded-xl border border-border bg-card p-3 space-y-2.5" data-testid="task-composer">
+                <div className="mb-3 bubble p-3 space-y-2.5" data-testid="task-composer">
                   <input autoFocus value={composer.title} onChange={e => setComposer(c => ({ ...c, title: e.target.value }))}
                     onKeyDown={e => { if (e.key === 'Enter') submitComposer(); }}
                     placeholder="What needs doing?" data-testid="composer-title"
@@ -807,13 +807,13 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                   <div className="space-y-4">
                     {overdueTasks.length > 0 && (
                       <div data-testid="section-overdue">
-                        <div className="flex items-center gap-1.5 px-1 mb-1.5 text-[11px] font-bold uppercase tracking-wider text-red-500"><AlertTriangle className="h-3 w-3" />Overdue ({overdueTasks.length})</div>
+                        <div className="micro-label flex items-center gap-1.5 px-1 mb-1.5 text-red-500"><AlertTriangle className="h-3 w-3" />Overdue ({overdueTasks.length})</div>
                         <div className="space-y-2">{overdueTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
                       </div>
                     )}
                     {todayTasks.length > 0 && (
                       <div data-testid="section-today">
-                        {overdueTasks.length > 0 && <div className="px-1 mb-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Today</div>}
+                        {overdueTasks.length > 0 && <div className="micro-label px-1 mb-1.5 text-muted-foreground">Today</div>}
                         <div className="space-y-2">{todayTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
                       </div>
                     )}
@@ -832,7 +832,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                   <div className="space-y-4">
                     {upcomingSections.map((s) => (
                       <div key={s.key} data-testid={`section-${s.key}`}>
-                        <div className="px-1 mb-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{s.label} ({s.items.length})</div>
+                        <div className="micro-label px-1 mb-1.5 text-muted-foreground">{s.label} ({s.items.length})</div>
                         <div className="space-y-2">{s.items.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
                       </div>
                     ))}
@@ -1282,7 +1282,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
             </div>
             {/* When during the day this habit should occur */}
             <div>
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground/70 mb-1 flex items-center gap-1">
+              <p className="micro-label text-muted-foreground/70 mb-1 flex items-center gap-1">
                 <Clock className="h-3 w-3" /> When?
               </p>
               <div className="flex flex-wrap gap-1.5">
@@ -1300,7 +1300,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
 
         {/* Summary: overall ring + stat chips */}
         <div className="px-3 pt-3">
-          <div className="flex items-center gap-3 rounded-2xl border border-border/50 bg-card/60 p-3">
+          <div className="bubble flex items-center gap-3 p-3">
             <div className="relative shrink-0" style={{ width: 64, height: 64 }}>
               <svg width="64" height="64" className="-rotate-90">
                 <circle cx="32" cy="32" r={ringR} fill="none" stroke="hsl(var(--muted))" strokeWidth="6" />
@@ -1362,7 +1362,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                 const sLabel = schedLabel(h);
                 const editing = editingScheduleId === h.id;
                 return (
-                  <div key={h.id} className="rounded-2xl border border-border/50 bg-card/60">
+                  <div key={h.id} className="bubble">
                     <div className="flex items-center gap-3 px-3 py-2.5">
                       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg"
                         style={{ background: `${color}22`, border: `1px solid ${color}55` }}>
@@ -1409,7 +1409,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                     {editing && (
                       <div className="border-t border-border/50 px-3 py-2.5 space-y-2">
                         <div className="flex items-center justify-between">
-                          <p className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Scheduled for</p>
+                          <p className="micro-label text-muted-foreground/70">Scheduled for</p>
                           <button type="button" onClick={() => setEditingScheduleId(null)}
                             data-testid={`habit-schedule-done-${h.id}`}
                             className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold text-primary hover:bg-primary/10 transition-colors">

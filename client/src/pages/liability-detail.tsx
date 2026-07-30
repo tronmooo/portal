@@ -1635,8 +1635,8 @@ function KpiTile({
   testid?: string;
 }) {
   return (
-    <div className="rounded-xl border border-card-border p-3 bg-card card-lift transition-all" data-testid={testid}>
-      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <div className="bubble -card- p-3 card-lift transition-all" data-testid={testid}>
+      <div className="flex items-center gap-1.5 micro-label text-muted-foreground">
         {icon}
         <span>{label}</span>
       </div>
@@ -1951,7 +1951,7 @@ function ImpactTile({
   testid?: string;
 }) {
   return (
-    <div className="rounded-lg border p-3 bg-card" data-testid={testid}>
+    <div className="bubble p-3" data-testid={testid}>
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {icon}
         <span>{label}</span>
@@ -2731,7 +2731,7 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
               <div
                 key={node.id}
                 style={{ height: 160 }}
-                className="w-40 shrink-0 rounded-xl border bg-card p-3 flex flex-col justify-between cursor-pointer hover:bg-accent transition-colors pressable"
+                className="w-40 shrink-0 bubble p-3 flex flex-col justify-between cursor-pointer hover:bg-accent transition-colors pressable"
                 onClick={() => navigate(`/profiles/${node.id}`)}
                 data-testid={`nested-liability-${node.id}`}
               >

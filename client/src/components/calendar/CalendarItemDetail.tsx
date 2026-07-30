@@ -108,7 +108,7 @@ const fmtMoney = (n?: number) =>
 function Field({ label, children, testId }: { label: string; children: React.ReactNode; testId?: string }) {
   return (
     <div className="flex items-start justify-between gap-3 py-1.5" data-testid={testId}>
-      <span className="text-[11px] uppercase tracking-wider text-muted-foreground shrink-0 pt-px">{label}</span>
+      <span className="micro-label text-muted-foreground shrink-0 pt-px">{label}</span>
       <span className="text-xs font-medium text-right min-w-0">{children}</span>
     </div>
   );
@@ -294,7 +294,7 @@ export function CalendarItemDetail({
 
           {/* ── Actions for THIS occurrence ──────────────────────────────── */}
           <div className="px-4 py-3 border-b border-border/60">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            <p className="micro-label text-muted-foreground mb-2">
               This occurrence · {fmtShort(occurrence.effectiveDate)}
             </p>
             <div className="grid grid-cols-2 gap-1.5">
@@ -313,7 +313,7 @@ export function CalendarItemDetail({
           {/* ── Every future occurrence, individually actionable ─────────── */}
           <div className="px-4 py-3">
             <div className="flex items-baseline justify-between mb-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <p className="micro-label text-muted-foreground">
                 Upcoming occurrences
               </p>
               <span className="text-[10px] text-muted-foreground tabular-nums">{future.length}</span>

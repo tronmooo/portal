@@ -90,7 +90,7 @@ function StatStrip({ series, unit, accent, lowerIsBetter }: {
     <div className="grid grid-cols-3 gap-2">
       {cells.map(([label, v]) => (
         <div key={label} className="bubble-row px-3 py-2.5 text-center" style={{ ["--accent-hsl" as any]: accent }}>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className="micro-label text-muted-foreground">{label}</p>
           <p className="metric-value text-lg mt-0.5" style={{ color: `hsl(${accent})` }}>
             {fmt(v, 1)}<span className="text-[11px] font-semibold ml-0.5">{unit}</span>
           </p>
@@ -128,7 +128,7 @@ function MetricBody({ value, unit, series, accent, goal, lowerIsBetter, emptyTex
       </div>
       {s.length >= 2 && (
         <div className="bubble-row px-4 py-3" style={{ ["--accent-hsl" as any]: accent }}>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+          <p className="micro-label text-muted-foreground mb-2">
             Last {s.length} readings
           </p>
           <MiniBars values={s} accent={accent} height={44} />
@@ -155,7 +155,7 @@ function StreakHeatmap({ dates, accent }: { dates: string[]; accent: string }) {
   }, [set]);
   return (
     <div className="bubble-row px-4 py-3" style={{ ["--accent-hsl" as any]: accent }}>
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Last 8 weeks</p>
+      <p className="micro-label text-muted-foreground mb-2">Last 8 weeks</p>
       <div className="grid grid-flow-col grid-rows-7 gap-[3px]" role="img" aria-label={`${dates.length} check-ins in the last 8 weeks`}>
         {days.map((d) => (
           <span

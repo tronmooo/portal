@@ -481,7 +481,7 @@ function ObligationCard({ ob, onOpen, ownerLabel }: { ob: Obligation; onOpen?: (
                   </span>
                 )}
                 {obligationSource(ob) && (
-                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{obligationSource(ob)}</span>
+                  <span className="micro-label text-muted-foreground/70">{obligationSource(ob)}</span>
                 )}
               </div>
 
@@ -895,22 +895,22 @@ function ObligationDrawerInner({ ob, onClose }: { ob: Obligation; onClose: () =>
         {/* Core facts grid */}
         <div className="grid grid-cols-2 gap-3 py-2 text-xs">
           <div>
-            <p className="text-muted-foreground uppercase tracking-wide text-[10px] mb-0.5">Amount</p>
+            <p className="micro-label text-muted-foreground mb-0.5">Amount</p>
             <p className="text-base font-semibold tabular-nums">${ob.amount.toLocaleString()}</p>
           </div>
           <div>
-            <p className="text-muted-foreground uppercase tracking-wide text-[10px] mb-0.5">Next due</p>
+            <p className="micro-label text-muted-foreground mb-0.5">Next due</p>
             <p className={`text-base font-semibold tabular-nums ${isOverdue ? "text-red-500" : ""}`}>
               {dueDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
               {isOverdue && <span className="ml-1 text-[10px] text-red-500">({Math.abs(daysOff)}d overdue)</span>}
             </p>
           </div>
           <div>
-            <p className="text-muted-foreground uppercase tracking-wide text-[10px] mb-0.5">Repeats</p>
+            <p className="micro-label text-muted-foreground mb-0.5">Repeats</p>
             <p className="text-sm font-medium capitalize">{ob.frequency}</p>
           </div>
           <div>
-            <p className="text-muted-foreground uppercase tracking-wide text-[10px] mb-0.5">Category</p>
+            <p className="micro-label text-muted-foreground mb-0.5">Category</p>
             <p className="text-sm font-medium capitalize">{ob.category}</p>
           </div>
           {ob.autopay && (
@@ -929,7 +929,7 @@ function ObligationDrawerInner({ ob, onClose }: { ob: Obligation; onClose: () =>
         {ob.frequency !== "once" && (
           <div className="border-t border-border/40 pt-3 space-y-2">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">This obligation's calendar</p>
+              <p className="micro-label text-muted-foreground">This obligation's calendar</p>
               {seriesSummary && (
                 <span className="text-[11px] tabular-nums text-muted-foreground">
                   {seriesSummary.count} occurrence{seriesSummary.count === 1 ? "" : "s"}
@@ -958,7 +958,7 @@ function ObligationDrawerInner({ ob, onClose }: { ob: Obligation; onClose: () =>
                           {d ? d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : iso}
                         </span>
                       </div>
-                      <span className={`text-[10px] uppercase tracking-wide ${isDone ? "text-green-600" : isSkipped ? "text-muted-foreground line-through" : ob.amount > 0 ? "tabular-nums" : "text-muted-foreground"}`}>
+                      <span className={`micro-label ${isDone ? "text-green-600" : isSkipped ? "text-muted-foreground line-through" : ob.amount > 0 ? "tabular-nums" : "text-muted-foreground"}`}>
                         {isDone ? "Paid" : isSkipped ? "Skipped" : ob.amount > 0 ? `$${Number(ob.amount).toFixed(2)}` : "Pending"}
                       </span>
                     </div>
@@ -982,7 +982,7 @@ function ObligationDrawerInner({ ob, onClose }: { ob: Obligation; onClose: () =>
         {/* Linked source */}
         {linked && (
           <div className="border-t border-border/40 pt-3">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">Linked to</p>
+            <p className="micro-label text-muted-foreground mb-1.5">Linked to</p>
             <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { navigate(linked.route); onClose(); }} data-testid="drawer-view-linked">
               <Link2 className="h-3 w-3 mr-1" /> {linked.label} <ChevronRight className="h-3 w-3 ml-1 opacity-50" />
             </Button>
@@ -992,7 +992,7 @@ function ObligationDrawerInner({ ob, onClose }: { ob: Obligation; onClose: () =>
         {/* Payment history */}
         {ob.payments && ob.payments.length > 0 && (
           <div className="border-t border-border/40 pt-3">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">Recent payments</p>
+            <p className="micro-label text-muted-foreground mb-1.5">Recent payments</p>
             <div className="space-y-1">
               {ob.payments.slice(-5).reverse().map(p => (
                 <div key={p.id} className="flex items-center justify-between text-xs">
@@ -1009,7 +1009,7 @@ function ObligationDrawerInner({ ob, onClose }: { ob: Obligation; onClose: () =>
 
         {/* Reschedule next occurrence */}
         <div className="border-t border-border/40 pt-3">
-          <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">Reschedule next occurrence</p>
+          <p className="micro-label text-muted-foreground mb-1.5">Reschedule next occurrence</p>
           <div className="flex gap-2">
             <Input type="date" value={rescheduleDate || ob.nextDueDate?.slice(0, 10) || ""}
               onChange={e => setRescheduleDate(e.target.value)}

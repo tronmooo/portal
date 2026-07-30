@@ -417,7 +417,7 @@ export function AssetSummaryCard({
         {/* Owner + parent */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+            <p className="micro-label text-muted-foreground font-medium">
               Owner
             </p>
             {owner ? (
@@ -436,7 +436,7 @@ export function AssetSummaryCard({
             )}
           </div>
           <div>
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+            <p className="micro-label text-muted-foreground font-medium">
               Inside
             </p>
             {parent ? (
@@ -666,7 +666,7 @@ export function FinancialsBreakdown({
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-left text-[10px] uppercase tracking-wider text-muted-foreground border-b">
+              <tr className="text-left micro-label text-muted-foreground border-b">
                 <th className="pb-2 font-medium">Item</th>
                 <th className="pb-2 font-medium text-right">Value</th>
                 <th className="pb-2 font-medium text-right">Liab.</th>
@@ -970,7 +970,7 @@ export function AdoptAsChildDialog({
         ) : (
           <div className="flex-1 flex flex-col gap-3" data-testid="adopt-preview">
             <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              <p className="micro-label text-muted-foreground">
                 Confirm move
               </p>
               <p className="text-sm">
@@ -1351,13 +1351,13 @@ function MoveChildDialog({
         ) : (
           <div className="flex-1 flex flex-col gap-3" data-testid="move-preview">
             <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              <p className="micro-label text-muted-foreground">
                 Current path
               </p>
               <p className="text-xs line-through opacity-60">
                 {oldChain.map((n) => n.name).join(" > ")}
               </p>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground pt-1">
+              <p className="micro-label text-muted-foreground pt-1">
                 New path
               </p>
               <p className="text-sm font-semibold text-primary">

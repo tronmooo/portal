@@ -287,7 +287,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
               className={`gap-1.5 ${compact ? "h-8 text-xs px-2.5" : "h-9 text-sm px-3"} ${!isEveryone ? "border-primary/50 bg-primary/5" : ""}`}
               data-testid="button-profile-filter"
             >
-              <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
+              <Filter className={` ${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
               <span className="truncate max-w-[100px]">{label}</span>
               {selectedCount > 0 && (
                 <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-1.5">{selectedCount}</Badge>
@@ -328,7 +328,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
           onClick={() => setMobileOpen(true)}
           data-testid="button-profile-filter-mobile"
         >
-          <Filter className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
+          <Filter className={` ${compact ? "h-3.5 w-3.5" : "h-4 w-4"} ${!isEveryone ? "text-primary" : "text-muted-foreground"}`} />
           <span className="truncate max-w-[100px]">{label}</span>
           {selectedCount > 0 && (
             <Badge variant="secondary" className="h-4 px-1 text-xs-tight ml-1.5">{selectedCount}</Badge>

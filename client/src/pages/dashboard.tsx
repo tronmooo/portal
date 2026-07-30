@@ -345,7 +345,7 @@ function MiniStat({
       <div className="mt-1 relative z-10">
         <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
       </div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
+      <p className="micro-label text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
       {sub && <p className="text-[9px] text-muted-foreground/60 leading-tight mt-0.5 truncate w-full relative z-10">{sub}</p>}
       {/* Bottom accent dashes (matches the mockup's tile footer) */}
       {accent && !sparkData && (
@@ -365,7 +365,7 @@ function SkeletonGrid({ cols = 4, rows = 1, h = "h-14" }: { cols?: number; rows?
   return (
     <div className={`grid grid-cols-2 ${MD_GRID_COLS[cols] || "md:grid-cols-4"} gap-2`}>
       {Array.from({ length: cols * rows }).map((_, i) => (
-        <Skeleton key={`skel-${i}`} className={`${h} rounded-lg`} />
+        <Skeleton key={`skel-${i}`} className={` ${h} rounded-lg`} />
       ))}
     </div>
   );
@@ -422,7 +422,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
       <div className="mt-1 relative z-10">
         <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
       </div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Open Tasks</p>
+      <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Open Tasks</p>
       {/* Fill bar */}
       <div className="mt-1.5 relative z-10">
         <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
@@ -462,7 +462,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
           <span className="ml-1 text-[9px] text-muted-foreground tabular-nums">+${Math.round(finSnap.monthlyObligationTotal).toLocaleString()}/mo bills</span>
         )}
       </div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
+      <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
       {/* Mini bar chart */}
       <div className="mt-1.5 flex items-end gap-0.5 h-5 relative z-10">
         {bars.map((v: number, i: number) => (
@@ -487,7 +487,7 @@ function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct:
       <div className="flex items-start justify-between gap-2 relative z-10">
         <div>
           <div className="text-sm font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5">Habits Today</p>
+          <p className="micro-label text-muted-foreground/70 mt-0.5">Habits Today</p>
           <p className="text-[9px] text-muted-foreground/60">{totalHabits} tracked</p>
         </div>
         {/* Donut ring */}
@@ -520,7 +520,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
       <div className="mt-1 relative z-10">
         <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
       </div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
+      <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
       <p className="text-[9px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{streak > 0 ? `${streak}-day streak!` : "Keep it going!"}</p>
       {/* 7-day dots */}
       <div className="flex gap-0.5 mt-1.5 relative z-10">
@@ -555,7 +555,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
       <div className="mt-1 relative z-10">
         <span className="text-sm font-bold metric-value tracking-tight leading-none tabular-nums" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
       </div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
+      <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
       {count === 0 ? (
         <p className="text-[9px] mt-0.5 relative z-10 truncate flex items-center gap-1" style={{ color: `hsl(${accent})` }}>
           <CheckCircle2 className="h-2.5 w-2.5" /> You're all set!
@@ -926,11 +926,11 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
 
         <div className="relative z-10 mt-3 flex gap-2">
           <div className="flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 backdrop-blur-sm">
-            <p className="text-[10px] uppercase tracking-wider text-white/45">Assets</p>
+            <p className="micro-label text-white/45">Assets</p>
             <p className="text-base font-bold tabular-nums" style={{ color: 'hsl(155 70% 58%)' }}>{money(totalAssetValue)}</p>
           </div>
           <div className="flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 backdrop-blur-sm">
-            <p className="text-[10px] uppercase tracking-wider text-white/45">Liabilities</p>
+            <p className="micro-label text-white/45">Liabilities</p>
             <p className="text-base font-bold tabular-nums" style={{ color: 'hsl(270 80% 74%)' }}>{money(totalLiabilities)}</p>
           </div>
         </div>
@@ -952,7 +952,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
                 ? <TrendingUp className="h-4 w-4" style={{ color: 'hsl(200 80% 60%)' }} />
                 : <TrendingDown className="h-4 w-4" style={{ color: 'hsl(0 80% 62%)' }} />}
             </div>
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Cash Flow</span>
+            <span className="micro-label text-muted-foreground/70">Cash Flow</span>
           </div>
           {/* A partially-loaded sum is not a smaller number — it is the WRONG
               number. Hold the skeleton until In and Out have both landed
@@ -999,7 +999,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
               <div className="icon-badge" style={{ background: 'hsl(155 60% 44% / 0.12)' }}>
                 <Target className="h-4 w-4" style={{ color: 'hsl(155 65% 50% / 0.5)' }} />
               </div>
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/50">Budget</span>
+              <span className="micro-label text-muted-foreground/50">Budget</span>
             </div>
             <div className="mt-3 h-7 w-24 rounded bg-muted/40 animate-pulse" />
             <div className="mt-2 h-3 w-20 rounded bg-muted/30 animate-pulse" />
@@ -1018,7 +1018,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
             <div className="icon-badge" style={{ background: budgetBreached ? 'hsl(0 72% 52% / 0.16)' : 'hsl(155 60% 44% / 0.16)' }}>
               <Target className="h-4 w-4" style={{ color: budgetBreached ? 'hsl(0 72% 55%)' : 'hsl(155 65% 50%)' }} />
             </div>
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Budget</span>
+            <span className="micro-label text-muted-foreground/70">Budget</span>
             {budgetBreached && <span className="ml-auto rounded bg-red-500/10 px-1.5 py-0.5 text-[9px] font-bold text-red-500">OVER</span>}
           </div>
           <div className="mt-2 flex items-center gap-3">
@@ -1119,7 +1119,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
 
   return (
     <>
-      <div className="rounded-xl border border-border/40 bg-card/50 backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
+      <div className="bubble backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
           <KPITaskCard count={safeStats.activeTasks} onClick={() => setPopup("tasks")} />
           {/* Bug fix: prefer financeSnapshot.totalMonthlySpend (same source as the drilldown popup)
@@ -1181,15 +1181,15 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                 {total > 0 && (
                   <div className="grid grid-cols-3 gap-2 p-2 rounded-lg bg-muted/40">
                     <div>
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total</p>
+                      <p className="micro-label text-muted-foreground">Total</p>
                       <p className="text-sm font-bold tabular-nums">{formatMoney(total)}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Avg/day</p>
+                      <p className="micro-label text-muted-foreground">Avg/day</p>
                       <p className="text-sm font-bold tabular-nums">{formatMoney(avgPerDay)}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Categories</p>
+                      <p className="micro-label text-muted-foreground">Categories</p>
                       <p className="text-sm font-bold tabular-nums">{categories.length}</p>
                     </div>
                   </div>
@@ -1311,16 +1311,16 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                 {bills.length > 0 && (
                   <div className="grid grid-cols-3 gap-2 p-2 rounded-lg bg-muted/40 mt-1">
                     <div>
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total due</p>
+                      <p className="micro-label text-muted-foreground">Total due</p>
                       <p className="text-sm font-bold tabular-nums">{formatMoney(total)}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Manual</p>
+                      <p className="micro-label text-muted-foreground">Manual</p>
                       <p className="text-sm font-bold tabular-nums">{formatMoney(manualTotal)}</p>
                       <p className="text-[9px] text-muted-foreground">{manualBills.length} bill{manualBills.length !== 1 ? 's' : ''}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Autopay</p>
+                      <p className="micro-label text-muted-foreground">Autopay</p>
                       <p className="text-sm font-bold tabular-nums text-green-500">{formatMoney(autopayTotal)}</p>
                       <p className="text-[9px] text-muted-foreground">{autopayBills.length} bill{autopayBills.length !== 1 ? 's' : ''}</p>
                     </div>
@@ -1597,7 +1597,7 @@ function HeroBriefing({ enhanced, allProfiles, filterIds = [], filterMode = "eve
   return (
     <div className="rounded-2xl border border-border/50 p-4" style={{ background: `linear-gradient(135deg, hsl(${meta.color} / 0.10) 0%, transparent 60%)` }} data-testid="section-hero-briefing">
       <p className="text-sm text-muted-foreground">{timeGreeting()}, <span className="font-semibold text-foreground">{name}</span>.</p>
-      <span className="mt-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide" style={{ background: `hsl(${meta.color} / 0.15)`, color: `hsl(${meta.color})` }}>
+      <span className="micro-label mt-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ background: `hsl(${meta.color} / 0.15)`, color: `hsl(${meta.color})` }}>
         <Icon className="h-3 w-3" /> {meta.label}
       </span>
       <p className="mt-2 text-[15px] font-semibold leading-snug">{briefing.sentence}</p>
@@ -1724,17 +1724,17 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
   return (
     <CollapsibleSection accent="200 80% 55%" icon={Activity} label="Trends" testId="section-trends">
       {cards.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-border/50 bg-card/40 p-4 text-center" data-testid="trend-empty">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">No movement yet</p>
+        <div className="bubble -dashed p-4 text-center" data-testid="trend-empty">
+          <p className="micro-label text-muted-foreground/70">No movement yet</p>
           <p className="mt-1 text-[11px] leading-snug text-muted-foreground">Trends compare this week to last. Keep logging habits and trackers for a couple of weeks and your direction shows up here.</p>
         </div>
       ) : (
         <div className={`grid grid-cols-1 ${gridCols} gap-2.5`}>
           {cards.map((c) => (
             <button key={c.key} type="button" onClick={() => navigate(c.href)}
-              className="flex flex-col rounded-2xl border border-border/50 bg-card/60 p-3 text-left card-lift active:scale-[0.98] transition-all"
+              className="bubble flex flex-col p-3 text-left card-lift active:scale-[0.98] transition-all"
               data-testid={`trend-${c.key}`}>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{c.title}</p>
+              <p className="micro-label text-muted-foreground/70">{c.title}</p>
               <p className="mt-0.5 text-lg font-bold tabular-nums" style={{ color: `hsl(${c.accent})` }}>{c.headline}</p>
               {c.body}
               <p className="mt-2 text-[10px] leading-snug text-muted-foreground">{c.caption}</p>
@@ -1778,7 +1778,7 @@ function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filte
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
         {hubs.map(({ key, label, Icon, accent, value, href }) => (
           <button key={key} type="button" onClick={() => navigate(href)}
-            className="flex items-center gap-2.5 rounded-xl border border-border/50 bg-card/60 p-2.5 text-left card-lift active:scale-[0.98] transition-all"
+            className="bubble flex items-center gap-2.5 p-2.5 text-left card-lift active:scale-[0.98] transition-all"
             data-testid={`hub-${key}`}>
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ background: `hsl(${accent} / 0.15)` }}>
               <Icon className="h-4 w-4" style={{ color: `hsl(${accent})` }} />
@@ -2804,7 +2804,7 @@ function ObligationsSection({ data }: { data: any[] }) {
                 </DialogHeader>
                 {/* Amount hero */}
                 <div className="rounded-lg border bg-muted/30 p-3 mt-1">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Amount due</p>
+                  <p className="micro-label text-muted-foreground">Amount due</p>
                   <p className="text-xl font-bold tabular-nums">{formatMoney(bill.amount || 0)}</p>
                   {typeof days === 'number' && (
                     <span className={`inline-flex items-center gap-1 mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${chipColor}`}>
@@ -3124,7 +3124,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
               <div className="space-y-1">
                 {overdueRows.length > 0 && (
                   <>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-red-500/80 mt-0.5 mb-0.5 px-1">
+                    <p className="micro-label text-red-500/80 mt-0.5 mb-0.5 px-1">
                       Overdue — action needed ({overdueRows.length})
                     </p>
                     {overdueRows.map(renderRow)}
@@ -3134,7 +3134,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                 {activeRows.length > 0 && (
                   <>
                     {overdueRows.length > 0 && (
-                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-0.5 px-1">
+                      <p className="micro-label text-muted-foreground/70 mb-0.5 px-1">
                         In progress ({activeRows.length})
                       </p>
                     )}
@@ -3143,7 +3143,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                 )}
                 {completedGoals.length > 0 && (
                   <div className="pt-1.5 mt-1 border-t border-border/30">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80 mb-0.5 px-1">
+                    <p className="micro-label text-emerald-500/80 mb-0.5 px-1">
                       Completed 🎉 ({completedGoals.length})
                     </p>
                     {completedGoals.slice().sort((a, b) => a.title.localeCompare(b.title)).slice(0, 3).map(g => (
@@ -3338,7 +3338,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
           {/* Live preview — only shows when meaningful values entered */}
           {(formTitle.trim() || formTarget) && (
             <div className="rounded-lg border bg-muted/30 p-2.5 mt-1 space-y-1">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Preview</p>
+              <p className="micro-label text-muted-foreground">Preview</p>
               <p className="text-xs font-semibold truncate">{formTitle.trim() || "Untitled goal"}</p>
               <div className="flex items-center gap-2 flex-wrap text-[10px]">
                 {formTarget && Number(formTarget) > 0 && (
@@ -3845,19 +3845,19 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
       {/* LEFT: KPIs + budget */}
       <div className="space-y-2">
         <div className="grid grid-cols-2 gap-2">
-          <button data-testid="fw-drill-spending" onClick={() => setDrill("spending")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
+          <button data-testid="fw-drill-spending" onClick={() => setDrill("spending")} className="bubble p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <p className="text-xs text-muted-foreground">Spending</p>
             {/* Color discipline: spending = amber, never red. Red is reserved for
                 overdue/breach states only. */}
             <p className="text-sm font-bold tabular-nums text-amber-500">${monthlySpend.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">{monthExpenses.length} this month</p>
           </button>
-          <button data-testid="fw-drill-income" onClick={() => setDrill("income")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
+          <button data-testid="fw-drill-income" onClick={() => setDrill("income")} className="bubble p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <p className="text-xs text-muted-foreground">Income</p>
             <p className="text-sm font-bold tabular-nums text-green-500">${monthlyIncome.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">{(incomes || []).length} sources</p>
           </button>
-          <button data-testid="fw-drill-cashflow" onClick={() => setDrill("cashflow")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
+          <button data-testid="fw-drill-cashflow" onClick={() => setDrill("cashflow")} className="bubble p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <p className="text-xs text-muted-foreground">Cash Flow</p>
             {/* Negative cash flow uses amber (warning), not red (overdue). */}
             <p className={`text-sm font-bold tabular-nums ${cashFlow >= 0 ? "text-green-500" : "text-amber-500"}`}>
@@ -3865,7 +3865,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
             </p>
             <p className="text-xs-tight text-muted-foreground">income - spending</p>
           </button>
-          <button data-testid="fw-drill-networth" onClick={() => setDrill("networth")} className="rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
+          <button data-testid="fw-drill-networth" onClick={() => setDrill("networth")} className="bubble p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <p className="text-xs text-muted-foreground">Net Worth</p>
             <p className={`text-sm font-bold tabular-nums ${netWorth >= 0 ? "text-green-500" : "text-red-500"}`}>${netWorth.toLocaleString()}</p>
             <p className="text-xs-tight text-muted-foreground">assets - liabilities</p>
@@ -3875,7 +3875,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
                 stored historical snapshots yet, so showing nothing is correct.
                 See audit finding 7.7 and BUG-20260528-fabricated-sparkline. */}
           </button>
-          <button onClick={() => setDrill("budget")} className="col-span-2 rounded-lg border border-border/40 bg-card p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
+          <button onClick={() => setDrill("budget")} className="bubble col-span-2 p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <div className="flex items-center justify-center gap-2">
               <Target className="h-3.5 w-3.5 text-muted-foreground" />
               <p className="text-xs text-muted-foreground">Monthly Budget</p>
@@ -4181,7 +4181,7 @@ function ExpiringWarrantiesCard({
   return (
     <div
       data-testid="expiring-warranties-card"
-      className="relative rounded-xl border border-border/40 bg-card overflow-hidden transition-shadow hover:shadow-sm"
+      className="bubble relative overflow-hidden transition-shadow hover:"
     >
       {/* Header accent strip */}
       <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: "linear-gradient(90deg, hsl(25 90% 55%), transparent)" }} />
@@ -4362,7 +4362,7 @@ function AISummaryWidget({
     <CollapsibleSection accent="262 65% 62%" icon={Sparkles} label="AI Summary" testId="section-ai-summary">
       <div className="space-y-2">
         {scope && (
-          <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80" data-testid="ai-summary-scope">
+          <div className="micro-label flex items-center gap-1.5 text-muted-foreground/80" data-testid="ai-summary-scope">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary/70" />
             Scope: {scope}
           </div>
@@ -4718,7 +4718,7 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
         {grouped.map(group => (
           <div key={group.timeframe}>
             <div className="flex items-center gap-1.5 mb-1 px-1.5">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+              <span className="micro-label text-muted-foreground/70">
                 {UPCOMING_TIMEFRAME_LABELS[group.timeframe]}
               </span>
               <span className="text-[10px] text-muted-foreground/50 tabular-nums">{group.items.length}</span>
@@ -4852,7 +4852,7 @@ export function WeeklySummarySection({ stats, filterIds }: { stats: DashboardSta
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
         {cells.map(c => (
           <div key={c.label} className="rounded-lg border p-2.5">
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{c.label}</div>
+            <div className="micro-label text-muted-foreground">{c.label}</div>
             <div className="text-lg font-bold tabular-nums mt-0.5">{c.value}</div>
           </div>
         ))}
@@ -5135,7 +5135,7 @@ function HouseholdGroupHeader({ icon: Icon, label }: { icon: any; label: string 
   return (
     <div className="flex items-center gap-2 mt-3 mb-1 px-0.5">
       <Icon className="h-4 w-4 text-muted-foreground/80" aria-hidden="true" />
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">{label}</span>
+      <span className="micro-label text-muted-foreground/80">{label}</span>
       <div className="flex-1 h-px bg-border/40" />
     </div>
   );
@@ -5183,7 +5183,7 @@ function HouseholdHero({ allProfiles }: { allProfiles: any[] }) {
   return (
     <div className="rounded-2xl border border-border bg-gradient-to-br from-primary/[0.08] to-transparent p-4" data-testid="household-hero">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="flex items-center gap-1.5 micro-label text-muted-foreground">
           <Users className="h-3.5 w-3.5" /> Household net worth
         </div>
         {peopleCount > 0 && <span className="text-[11px] text-muted-foreground">{peopleCount} {peopleCount === 1 ? "person" : "people"}</span>}
@@ -5238,7 +5238,7 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
 
   if (cards.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-border bg-card/50 p-6 text-center">
+      <div className="bubble -dashed p-6 text-center">
         <Users className="h-7 w-7 text-muted-foreground/40 mx-auto mb-2" />
         <p className="text-sm text-muted-foreground">No people or pets yet</p>
         <p className="text-xs text-muted-foreground/70 mt-0.5">Add a profile to see household totals here</p>
@@ -5255,7 +5255,7 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
           <button
             key={c.id}
             onClick={() => setFilterSelected([c.id], [c.name])}
-            className="text-left rounded-xl border border-border bg-card hover:bg-muted/20 transition-colors p-3"
+            className="text-left bubble hover:bg-muted/20 transition-colors p-3"
             style={{ borderLeft: `3px solid hsl(${accent})` }}
             data-testid={`household-profile-${c.id}`}
           >
@@ -5269,7 +5269,7 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold truncate">{c.type === "self" ? `${c.name} (You)` : c.name}</p>
-                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{c.type}</p>
+                  <p className="micro-label text-muted-foreground">{c.type}</p>
                 </div>
               </div>
               <div className="text-right shrink-0">
@@ -5928,7 +5928,7 @@ export default function DashboardPage() {
           return (
             <div className="flex items-center gap-2 mt-3 mb-1 px-0.5" data-testid={`swimlane-${g.key}`}>
               <span className="text-base leading-none" aria-hidden="true">{g.emoji}</span>
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">{g.label}</span>
+              <span className="micro-label text-muted-foreground/80">{g.label}</span>
               <div className="flex-1 h-px bg-border/40" />
             </div>
           );
@@ -5960,7 +5960,7 @@ export default function DashboardPage() {
                   headerNodes.push(
                     <div key={`header-${g.key}`} className="flex items-center gap-2 mt-3 mb-1 px-0.5" data-testid={`swimlane-${g.key}`}>
                       <span className="text-base leading-none" aria-hidden="true">{g.emoji}</span>
-                      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">{g.label}</span>
+                      <span className="micro-label text-muted-foreground/80">{g.label}</span>
                       <div className="flex-1 h-px bg-border/40" />
                     </div>
                   );

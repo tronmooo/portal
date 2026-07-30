@@ -599,7 +599,7 @@ export default function DocumentViewer({
   // Card mode
   return (
     <div
-      className="rounded-xl border border-border bg-card overflow-hidden"
+      className="bubble overflow-hidden"
       data-testid={`doc-card-${id}`}
     >
       <div className="relative">
@@ -883,7 +883,7 @@ export function DocumentViewerDialog({
           {/* ── Left sidebar: Extracted Data ────────────────────────────── */}
           <aside className="shrink-0 md:w-[40%] md:max-w-[480px] md:min-w-[320px] border-b md:border-b-0 md:border-r border-border bg-muted/30 flex flex-col min-h-0 max-h-[35vh] md:max-h-none">
             <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border/60 bg-background/40">
-              <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+              <p className="micro-label text-muted-foreground">
                 Extracted Data
               </p>
             </div>
@@ -898,7 +898,7 @@ export function DocumentViewerDialog({
                       if (!display || display === 'null' || display === 'undefined') return null;
                       return (
                         <div key={key} className="flex flex-col gap-0.5">
-                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground/80">{formatFieldKey(key)}</span>
+                          <span className="micro-label text-muted-foreground/80">{formatFieldKey(key)}</span>
                           <span className="text-sm font-medium text-foreground break-words" title={display}>{display}</span>
                         </div>
                       );

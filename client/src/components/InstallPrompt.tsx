@@ -55,7 +55,7 @@ export function InstallPrompt() {
   }
 
   return (
-    <div className="fixed bottom-20 md:bottom-4 right-4 z-40 flex items-center gap-3 p-3 bg-card border border-border rounded-xl shadow-lg max-w-xs animate-in slide-in-from-bottom-2" data-testid="install-prompt">
+    <div className="bubble fixed bottom-20 md:bottom-4 right-4 z-40 flex items-center gap-3 p-3 shadow-lg max-w-xs animate-in slide-in-from-bottom-2" data-testid="install-prompt">
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium">Install Portol</p>
         <p className="text-xs text-muted-foreground">Add to your home screen for quick access</p>
