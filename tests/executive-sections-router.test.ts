@@ -1,0 +1,278 @@
+// tests/executive-sections-router.test.ts
+//
+// The Executive tab is ten named sections again, and the whole risk of that
+// shape is the one the 2026-07-29 report was about: the same record showing up
+// in several places at once. The router's contract is that every record is
+// claimed by EXACTLY ONE section, so these tests mostly ask "where did it go,
+// and is it only there?".
+
+import { describe, it, expect } from "vitest";
+import {
+  buildExecutiveSections,
+  SECTION_DISPLAY_ORDER,
+  isHealthText,
+  isBirthdayText,
+  type ExecSectionId,
+} from "../shared/executive-sections";
+
+const TODAY = "2026-07-29";       // a Wednesday
+const NOW = new Date("2026-07-29T09:58:00");
+
+function day(offset: number): string {
+  const d = new Date(`${TODAY}T12:00:00`);
+  d.setDate(d.getDate() + offset);
+  return d.toLocaleDateString("en-CA");
+}
+
+function run(input: any = {}, cfg?: any) {
+  return buildExecutiveSections({ now: NOW, today: TODAY, ...input }, cfg);
+}
+
+const byId = (secs: any[]) => Object.fromEntries(secs.map(s => [s.id, s]));
+const titles = (secs: any[], id: ExecSectionId) => (byId(secs)[id]?.items || []).map((i: any) => i.title);
+
+/** Every sourceKey across every section, to prove nothing is listed twice. */
+function allKeys(secs: any[]): string[] {
+  return secs.flatMap(s => s.items.map((i: any) => i.sourceKey));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe("one record, one section", () => {
+  it("never emits the same sourceKey in two sections", () => {
+    const secs = run({
+      tasks: [
+        { id: "t1", title: "Overdue thing", status: "todo", dueDate: day(-2) },
+        { id: "t2", title: "Due today", status: "todo", dueDate: TODAY },
+        { id: "t3", title: "This week", status: "todo", dueDate: day(3) },
+      ],
+      bills: [
+        { id: "b1", name: "Electric", amount: 140, daysUntil: -3 },
+        { id: "b2", name: "Internet", amount: 80, daysUntil: 4 },
+      ],
+      documents: [
+        { documentId: "d1", documentName: "Passport", daysUntil: -5 },
+        { documentId: "d2", documentName: "Insurance card", daysUntil: 12 },
+      ],
+      habits: [{ id: "h1", name: "Stretch", frequency: "daily", targetPerDay: 1, checkins: [] }],
+      reminders: [{ id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-07-29T08:00:00" }],
+      events: [
+        { id: "e1", type: "event", title: "Dentist", date: TODAY, time: "15:00" },
+        { id: "e2", type: "event", title: "Standup", date: TODAY, time: "09:00" },
+        { id: "e3", type: "event", title: "Mom's Birthday", date: day(4) },
+        { id: "e4", type: "event", title: "Team offsite", date: day(5), time: "10:00" },
+      ],
+      notifications: [
+        { id: "task-overdue-t1", severity: "critical", title: "Overdue: Overdue thing", entityId: "t1", entityType: "task" },
+        { id: "bill-overdue-b1", severity: "critical", title: "Overdue bill: Electric", entityId: "b1", entityType: "obligation" },
+      ],
+    });
+    const keys = allKeys(secs);
+    expect(keys.length, "a record was claimed by two sections").toBe(new Set(keys).size);
+  });
+
+  it("routes each kind to the section a person would look in", () => {
+    const secs = run({
+      tasks: [
+        { id: "t1", title: "Overdue thing", status: "todo", dueDate: day(-2) },
+        { id: "t2", title: "Due today", status: "todo", dueDate: TODAY },
+        { id: "t3", title: "This week", status: "todo", dueDate: day(3) },
+      ],
+      bills: [
+        { id: "b1", name: "Electric", amount: 140, daysUntil: -3 },
+        { id: "b2", name: "Internet", amount: 80, daysUntil: 4 },
+      ],
+      documents: [
+        { documentId: "d1", documentName: "Passport", daysUntil: -5 },
+        { documentId: "d2", documentName: "Insurance card", daysUntil: 12 },
+      ],
+      habits: [{ id: "h1", name: "Stretch", frequency: "daily", targetPerDay: 1, checkins: [] }],
+      reminders: [{ id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-07-29T08:00:00" }],
+      events: [
+        { id: "e1", type: "event", title: "Dentist", date: TODAY, time: "15:00" },
+        { id: "e2", type: "event", title: "Standup", date: TODAY, time: "09:00" },
+        { id: "e3", type: "event", title: "Mom's Birthday", date: day(4) },
+        { id: "e4", type: "event", title: "Team offsite", date: day(5), time: "10:00" },
+      ],
+    });
+    // On fire: past-date task, past-date bill, expired document.
+    expect(titles(secs, "immediate").sort()).toEqual(["Electric", "Overdue thing", "Passport"]);
+    // Scheduled today, minus what Health and Birthdays took.
+    expect(titles(secs, "today").sort()).toEqual(["Due today", "Standup"]);
+    expect(titles(secs, "habits")).toEqual(["Stretch"]);
+    expect(titles(secs, "bills")).toEqual(["Internet"]);
+    expect(titles(secs, "upcoming").sort()).toEqual(["Team offsite", "This week"]);
+    expect(titles(secs, "birthdays")).toEqual(["Mom's Birthday"]);
+    expect(titles(secs, "documents")).toEqual(["Insurance card"]);
+    // Dentist is an appointment AND health — Health wins over Today's Agenda.
+    expect(titles(secs, "health").sort()).toEqual(["Dentist", "Take Amoxicillin 500mg"]);
+  });
+
+  it("collapses a derived alert onto the record it came from", () => {
+    // notification-service synthesizes these from the same tables.
+    const secs = run({
+      bills: [{ id: "b1", name: "Electric", amount: 140, daysUntil: -3 }],
+      notifications: [{
+        id: "bill-overdue-b1", severity: "critical", title: "Overdue bill: Electric",
+        entityId: "b1", entityType: "obligation",
+      }],
+    });
+    expect(titles(secs, "immediate")).toEqual(["Electric"]);
+    expect(allKeys(secs)).toEqual(["obligation:b1"]);
+  });
+
+  it("keeps an alert that represents nothing else", () => {
+    const secs = run({
+      notifications: [{ id: "custom:1", severity: "critical", title: "Two profiles share one VIN" }],
+    });
+    expect(titles(secs, "immediate")).toEqual(["Two profiles share one VIN"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe("section behaviour", () => {
+  it("hides empty sections", () => {
+    const secs = run({ habits: [{ id: "h1", name: "Stretch", frequency: "daily", targetPerDay: 1, checkins: [] }] });
+    expect(secs.map(s => s.id)).toEqual(["habits"]);
+  });
+
+  it("returns nothing at all on a genuinely clear day", () => {
+    expect(run({})).toEqual([]);
+  });
+
+  it("renders in the order the user reads, not the order sections claim", () => {
+    const secs = run({
+      habits: [{ id: "h1", name: "Stretch", frequency: "daily", targetPerDay: 1, checkins: [] }],
+      bills: [{ id: "b1", name: "Electric", amount: 140, daysUntil: -3 }],
+      events: [{ id: "e1", type: "event", title: "Mom's Birthday", date: day(2) }],
+    });
+    // immediate < habits < birthdays in display order, even though birthdays
+    // claims before habits.
+    const order = secs.map(s => s.id);
+    expect(order.indexOf("immediate")).toBeLessThan(order.indexOf("habits"));
+    expect(order.indexOf("habits")).toBeLessThan(order.indexOf("birthdays"));
+    for (let i = 1; i < order.length; i++) {
+      expect(SECTION_DISPLAY_ORDER.indexOf(order[i] as any))
+        .toBeGreaterThan(SECTION_DISPLAY_ORDER.indexOf(order[i - 1] as any));
+    }
+  });
+
+  it("says where the overdue bills went, so Bills doesn't look broken", () => {
+    const secs = run({
+      bills: [
+        { id: "b1", name: "Electric", amount: 140, daysUntil: -3 },
+        { id: "b2", name: "Internet", amount: 80, daysUntil: 4 },
+      ],
+    });
+    expect(byId(secs).bills.subtitle).toBe("1 overdue — see Immediate Attention");
+    expect(byId(secs).documents).toBeUndefined();
+  });
+
+  it("shows habit progress for the day", () => {
+    const secs = run({
+      habits: [
+        { id: "h1", name: "Done one", frequency: "daily", targetPerDay: 1, checkins: [{ date: TODAY }] },
+        { id: "h2", name: "Not yet", frequency: "daily", targetPerDay: 1, checkins: [] },
+      ],
+    });
+    expect(byId(secs).habits.subtitle).toBe("1 of 2 done today");
+    expect(titles(secs, "habits")).toEqual(["Not yet"]);
+  });
+
+  it("is complete within its own window, unlike Immediate Attention", () => {
+    // Ten events this week all show (capped for display, counted honestly),
+    // where the attention threshold would have dropped most of them.
+    const events = Array.from({ length: 10 }, (_, i) => ({
+      id: `e${i}`, type: "event", title: `Event ${i}`, date: day(1 + (i % 7)), time: "10:00",
+    }));
+    const secs = run({ events });
+    expect(byId(secs).upcoming.total).toBe(10);
+    expect(byId(secs).upcoming.items.length).toBe(8);   // display cap
+  });
+
+  it("does not count a weekly habit on a day it isn't scheduled", () => {
+    const secs = run({
+      habits: [{ id: "h1", name: "Weigh in", frequency: "weekly", targetDays: [1], targetPerDay: 1, checkins: [] }],
+    });
+    expect(byId(secs).habits).toBeUndefined();
+  });
+
+  it("sorts soonest first inside a section", () => {
+    const secs = run({
+      tasks: [
+        { id: "t1", title: "Friday", status: "todo", dueDate: day(3) },
+        { id: "t2", title: "Tomorrow", status: "todo", dueDate: day(1) },
+        { id: "t3", title: "Next week", status: "todo", dueDate: day(6) },
+      ],
+    });
+    expect(titles(secs, "upcoming")).toEqual(["Tomorrow", "Friday", "Next week"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe("health, activity and insights", () => {
+  it("puts medications, refills and medical appointments under Health", () => {
+    const secs = run({
+      reminders: [
+        { id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-07-29T08:00:00" },
+        { id: "r2", title: "Refill Lisinopril at CVS", fireAt: "2026-07-29T08:30:00" },
+        { id: "r3", title: "Move the car", fireAt: "2026-07-29T08:45:00" },
+      ],
+      events: [{ id: "e1", type: "event", title: "Annual physical", date: day(3), time: "11:00" }],
+    });
+    expect(titles(secs, "health").sort()).toEqual(["Annual physical", "Refill Lisinopril at CVS", "Take Amoxicillin 500mg"]);
+    // A non-health reminder stays on Today's Agenda.
+    expect(titles(secs, "today")).toEqual(["Move the car"]);
+  });
+
+  it("still collapses a medication's doses into one row", () => {
+    const secs = run({
+      reminders: [
+        { id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-07-29T08:00:00" },
+        { id: "r2", title: "Take Amoxicillin 500mg (Morning Dose)", fireAt: "2026-07-29T09:00:00" },
+        { id: "r3", title: "Take Amoxicillin 500mg (Evening Dose)", fireAt: "2026-07-29T09:30:00" },
+      ],
+    });
+    expect(byId(secs).health.items).toHaveLength(1);
+    expect(byId(secs).health.items[0].count).toBe(3);
+  });
+
+  it("still drops month-old reminders that were never stamped fired", () => {
+    const secs = run({
+      reminders: [{ id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-06-24T02:00:00" }],
+    });
+    expect(secs).toEqual([]);
+  });
+
+  it("lists what was finished today and what was recently added", () => {
+    const secs = run({
+      tasks: [{ id: "t1", title: "Filed taxes", status: "done", completedAt: `${TODAY}T08:00:00` }],
+      recentActivity: [{ id: "a1", type: "habit", description: "Logged weight 179 lbs", timestamp: `${TODAY}T07:00:00` }],
+    });
+    expect(titles(secs, "activity").sort()).toEqual(["Filed taxes", "Logged weight 179 lbs"]);
+  });
+
+  it("surfaces the insights engine's output", () => {
+    const secs = run({
+      insights: [
+        { id: "i1", title: "Grocery spend up 31%", description: "vs last month", severity: "warning" },
+        { id: "i2", title: "7-day journal streak", description: "Keep going", severity: "positive" },
+      ],
+    });
+    expect(titles(secs, "insights")).toEqual(["Grocery spend up 31%", "7-day journal streak"]);
+  });
+
+  it("classifies health and occasion text", () => {
+    expect(isHealthText("Take Amoxicillin 500mg")).toBe(true);
+    expect(isHealthText("Dentist appointment")).toBe(true);
+    expect(isHealthText("Refill prescription")).toBe(true);
+    expect(isHealthText("Take Lisinopril")).toBe(true);        // -pril drug name
+    expect(isHealthText("Pay the electric bill")).toBe(false);
+    // "April" ends in -pril and must not read as a drug.
+    expect(isHealthText("April planning meeting")).toBe(false);
+    expect(isHealthText("Book the tennis court")).toBe(false);
+    expect(isBirthdayText("Mom's Birthday")).toBe(true);
+    expect(isBirthdayText("Wedding Anniversary")).toBe(true);
+    expect(isBirthdayText("Thanksgiving")).toBe(true);
+    expect(isBirthdayText("Team offsite")).toBe(false);
+  });
+});

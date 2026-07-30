@@ -143,6 +143,7 @@ export default defineConfig({
       'tests/documents-page.test.ts',
       'tests/document-open-perf.test.ts',
       'tests/attention.test.ts',
+      'tests/executive-sections-router.test.ts',
       'tests/reminder-cron.test.ts',
       'tests/document-open-hook.dom.test.tsx',
       // Production audit 2026-07-29 regressions.

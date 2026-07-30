@@ -9,18 +9,16 @@
 // Liabilities, Goals or profile pages. The same record could appear three
 // times under three different labels.
 //
-// What's left is: six context tiles, a one-glance brief, and a single ranked
-// feed. What qualifies as attention — and, critically, the dedupe that stops
-// one record being counted twice — lives in shared/attention.ts, so this file
-// only decides presentation and which mutation a button fires.
+// What's here now is six context tiles, a one-glance brief, and ten named
+// sections: Immediate Attention, Today's Agenda, Habits Due Today, Bills,
+// Upcoming (7d), Birthdays & Anniversaries, Documents & Expirations, Health,
+// Recent Activity, and Insights.
 //
-// Removed content was not deleted from the app, only from this tab:
-//   agenda/calendar/birthdays/appointments/important dates → /calendar
-//   upcoming + high-priority tasks                          → /dashboard/tasks
-//   full habit list                                         → /dashboard/habits
-//   bills module                                            → /dashboard/obligations
-//   projects/goals                                          → /goals
-//   recent activity + notes                                 → /journal
+// The sections are NOT the old board. Every record is routed to exactly ONE of
+// them by shared/executive-sections.ts, so an overdue bill appears under
+// Immediate Attention and nowhere else, and a derived "Critical notification"
+// collapses onto the record it was derived from. This file only decides
+// presentation and which mutation a button fires.
 import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -31,13 +29,14 @@ import { loadDocSnoozeMap } from "@/lib/docSnooze";
 import { ChevronDown, SlidersHorizontal } from "lucide-react";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import { BillsPopup, EventsPopup, DocsPopup } from "@/components/dashboard/BriefingPopups";
-import { AttentionFeed } from "@/components/dashboard/AttentionFeed";
+import { ExecutiveSections } from "@/components/dashboard/ExecutiveSections";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
 import type { DashboardStats } from "@shared/schema";
 // One relative-due formatter for the whole app. Interpolating a raw `daysUntil`
 // here is what produced "Lawn care ($40) due in -29d".
 import { dueLabel } from "@shared/now-rank";
-import { computeAttention, type AttentionItem } from "@shared/attention";
+import type { AttentionItem } from "@shared/attention";
+import { buildExecutiveSections } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
@@ -146,7 +145,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // Which item's money-moving button is armed for the confirming second tap.
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
-  const [showSuppressed, setShowSuppressed] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const mode = filterMode;
   const ids = filterIds;
@@ -204,6 +202,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
+  // §10 Insights & Suggestions. The insights engine reads across trackers,
+  // spending, habits, bills, journal, documents and goals — observations that
+  // exist nowhere else on this tab. Lowest priority of the queries here, so it
+  // gets the longest staleTime.
+  const { data: insights = [] } = useQuery<any[]>({
+    queryKey: ["/api/insights", mode, ...ids],
+    enabled: ready,
+    queryFn: () => apiRequest("GET", `/api/insights${param}`).then(r => r.json()),
+    staleTime: 5 * 60_000,
+  });
   // Dismissed alerts. The old panel filtered on `n.dismissed` — a field
   // buildNotifications never sets — and never read this preference, so an alert
   // the user dismissed from the bell came straight back on the dashboard.
@@ -255,20 +263,25 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     return () => clearTimeout(t);
   }, [anyBriefPending]);
 
-  // ── The feed ───────────────────────────────────────────────────────────────
+  // ── The ten sections ───────────────────────────────────────────────────────
   const snoozedDocumentIds = useMemo(() => Object.keys(loadDocSnoozeMap()), [allExpiringDocs.length]);
-  const attention = useMemo(() => computeAttention({
+  const sectionInput = useMemo(() => ({
     today: todayStr,
     tasks, bills: allBills, documents: allExpiringDocs, habits,
     reminders, events: timeline, goals, notifications,
     dismissedNotificationIds: dismissedIds,
     snoozedDocumentIds,
-  }, showSuppressed
-    // "Show lower-priority" widens the same model rather than switching to a
-    // second one — one set of rules, one place to reason about.
-    ? { ...prefs, minTier: "upcoming" as const, upcomingMinBillAmount: 0, docsWithinDays: 90, billsWithinDays: 60, tasksWithinDays: 30 }
-    : prefs),
-  [todayStr, tasks, allBills, allExpiringDocs, habits, reminders, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, prefs, showSuppressed]);
+    recentActivity: stats?.recentActivity || [],
+    insights,
+  }), [todayStr, tasks, allBills, allExpiringDocs, habits, reminders, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, stats, insights]);
+
+  const sections = useMemo(
+    () => buildExecutiveSections(sectionInput, prefs),
+    [sectionInput, prefs]);
+
+  // The Attention tile counts the Immediate Attention section — the same rows
+  // the user will see under it, so the headline can't disagree with the list.
+  const immediate = sections.find(s => s.id === "immediate");
 
   // ── Tile derivations ───────────────────────────────────────────────────────
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -321,22 +334,18 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
   // Attention tile sub-line: top two contributors, most severe first, then a
   // "N more" tail so the parts always account for the headline number (a "29"
-  // headline with a "9 · 6" sub-line read as broken math).
-  const attnCounts = attention.counts;
-  const byKind = (k: string) => attention.items.filter(i => i.kind === k).length;
+  // headline with a "9 · 6" sub-line read as broken math). It counts the
+  // Immediate Attention SECTION, so the tile and the list under it agree.
+  const immediateItems = immediate?.items || [];
+  const attnCount = immediate?.total ?? 0;
+  const byKind = (k: string) => immediateItems.filter(i => i.kind === k).length;
   const attnParts: Array<{ label: string; n: number }> = [];
-  const overdueTaskItems = attention.items.filter(i => i.kind === "task" && (i.daysUntil ?? 0) < 0).length;
-  if (overdueTaskItems) attnParts.push({ label: plural(overdueTaskItems, "overdue task"), n: overdueTaskItems });
-  const overdueBillItems = attention.items.filter(i => i.kind === "bill" && (i.daysUntil ?? 0) < 0).length;
-  if (overdueBillItems) attnParts.push({ label: plural(overdueBillItems, "overdue bill"), n: overdueBillItems });
-  const billsDueTodayItems = attention.items.filter(i => i.kind === "bill" && i.daysUntil === 0).length;
-  if (billsDueTodayItems) attnParts.push({ label: `${plural(billsDueTodayItems, "bill")} due today`, n: billsDueTodayItems });
-  if (byKind("document")) attnParts.push({ label: plural(byKind("document"), "expiring doc"), n: byKind("document") });
+  if (byKind("task")) attnParts.push({ label: plural(byKind("task"), "overdue task"), n: byKind("task") });
+  if (byKind("bill")) attnParts.push({ label: plural(byKind("bill"), "overdue bill"), n: byKind("bill") });
+  if (byKind("document")) attnParts.push({ label: plural(byKind("document"), "expired doc"), n: byKind("document") });
   if (byKind("alert")) attnParts.push({ label: plural(byKind("alert"), "alert"), n: byKind("alert") });
-  if (byKind("reminder")) attnParts.push({ label: `${plural(byKind("reminder"), "reminder")} due`, n: byKind("reminder") });
-  if (byKind("habit")) attnParts.push({ label: `${plural(byKind("habit"), "habit card")}`, n: byKind("habit") });
   const attnShown = attnParts.slice(0, 2);
-  const attnMore = attention.items.length - attnShown.reduce((s, p) => s + p.n, 0);
+  const attnMore = attnCount - attnShown.reduce((s, p) => s + p.n, 0);
   const attnSub = [...attnShown.map(p => p.label), attnMore > 0 ? `${attnMore} more` : null].filter(Boolean).join(" · ");
 
   // AI Executive Brief — honest, instant bullets derived from the feed above
@@ -434,7 +443,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     }
   };
 
-  const feedLoading = anyBriefPending && attention.items.length === 0;
+  const feedLoading = anyBriefPending && sections.length === 0;
 
   return (
     <div data-testid="executive-briefing">
@@ -459,11 +468,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           never a hard 0 — a wall of zeros reads as "aggregation is broken". */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2" data-testid="brief-stat-row">
         <StatTile prominent label="Attention"
-          value={tasksPending || enhanced === undefined ? "…" : String(attention.items.length)}
-          unit={tasksPending || enhanced === undefined ? undefined : attention.items.length > 0 ? (attention.items.length === 1 ? "item needs review" : "items need review") : undefined}
-          sub={tasksPending || enhanced === undefined ? "loading" : attention.items.length === 0 ? "Nothing needs review" : attnSub}
-          accent={attention.items.length === 0 ? "155 65% 45%" : attnCounts.immediate > 0 ? "0 72% 58%" : "43 96% 56%"}
-          onClick={() => document.querySelector('[data-testid="attention-feed"]')?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          value={tasksPending || enhanced === undefined ? "…" : String(attnCount)}
+          unit={tasksPending || enhanced === undefined ? undefined : attnCount > 0 ? (attnCount === 1 ? "item needs action" : "items need action") : undefined}
+          sub={tasksPending || enhanced === undefined ? "loading" : attnCount === 0 ? "Nothing is overdue" : attnSub}
+          accent={attnCount === 0 ? "155 65% 45%" : "0 72% 58%"}
+          onClick={() => document.querySelector('[data-testid="exec-section-immediate"]')?.scrollIntoView({ behavior: "smooth", block: "start" })}
           testId="brief-stat-attention" />
         <StatTile label="Tasks"
           value={tasksPending ? "…" : String(agendaTasks.length)} unit={tasksPending ? undefined : "due today"}
@@ -525,16 +534,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       </div>
       {filtersOpen && <AttentionFilters prefs={prefs} onChange={setPrefs} />}
 
-      <AttentionFeed
-        items={attention.items}
-        counts={attention.counts}
-        suppressed={attention.suppressed}
+      <ExecutiveSections
+        sections={sections}
         loading={feedLoading}
         onAction={onAction}
         busyKeys={busyKeys}
         armedKey={armedKey}
-        onShowSuppressed={() => setShowSuppressed(s => !s)}
-        showingSuppressed={showSuppressed}
       />
 
       {/* The SAME popups the dashboard KPI tiles use — statically imported here
