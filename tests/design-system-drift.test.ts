@@ -84,10 +84,26 @@ describe("one card surface", () => {
       .toEqual([]);
   });
 
-  it("AccentCard composes the bubble rather than its own recipe", () => {
-    const src = fs.readFileSync(path.resolve(ROOT, "components/ui/accent-card.tsx"), "utf8");
+  it("the retired primitives stay retired", () => {
+    // Nine components existed that no page imported, each a competing version
+    // of something the app already had — AccentCard's flatter card recipe,
+    // kit.tsx's bordered box, ModalShell's second popup header. Deleting them
+    // is only durable if re-adding one fails: an unused component today is an
+    // imported component next week, and that is how five card recipes happened.
+    for (const gone of ["components/ui/accent-card.tsx", "components/ui/kit.tsx"]) {
+      expect(fs.existsSync(path.resolve(ROOT, gone)), `${gone} was deleted — do not bring it back`)
+        .toBe(false);
+    }
+    const bad = offenders(/from ["']@\/components\/ui\/(accent-card|kit)["']/);
+    expect(bad, `Import from @/components/ui/kit-index instead:\n${bad.join("\n")}`).toEqual([]);
+  });
+
+  it("MetricCard is the one stat tile, built on the bubble + Medallion", () => {
+    const src = fs.readFileSync(path.resolve(ROOT, "components/ui/metric-card.tsx"), "utf8");
     expect(src).toContain("bubble");
-    expect(src).not.toMatch(/borderColor:\s*`hsl\(/);
+    expect(src).toContain("Medallion");
+    expect(src).toContain("micro-label");
+    expect(src).not.toContain("AccentCard");
   });
 
   it("never writes `bubble/60` — slash-opacity silently matches nothing", () => {

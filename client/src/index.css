@@ -508,7 +508,10 @@ h1, h2, h3, .text-xl, .text-2xl {
     hsl(var(--muted)) 75%
   );
   background-size: 200% 100%;
+  /* --i staggers the wave across a grid so a dozen placeholders don't pulse in
+     lockstep, which reads as a broken loop rather than loading. */
   animation: shimmer-anim 1.6s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 90ms);
 }
 @keyframes shimmer-anim {
   0%   { background-position: 200% 0; }

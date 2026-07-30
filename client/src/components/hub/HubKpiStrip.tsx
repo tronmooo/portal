@@ -21,6 +21,9 @@ import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { computeHealthScore } from "@/lib/tracker-health";
 import type { DashboardStats, Tracker } from "@shared/schema";
+import { MetricCard } from "@/components/ui/metric-card";
+import { HUB_TABS } from "./hub-routes";
+import { Wallet, ArrowLeftRight, HeartPulse, Flame, CheckCircle2, FileText } from "lucide-react";
 
 // Drill-down popups — the SAME components the dashboard uses (user rule:
 // every stat opens its existing popup; never duplicate one). Lazy-loaded:
@@ -45,27 +48,49 @@ function fmtMoney(n: number): string {
   return Math.round(Math.abs(n)).toLocaleString("en-US");
 }
 
-function StatChip({ label, value, accent, sub, subTone, onClick, testId }: {
+// One KPI chip. This was a bare label + number in a pill — the first thing you
+// see on every screen and the least informative element on it. It is now a
+// MetricCard, the same tile the dashboard and wellness tabs use: an icon
+// medallion, a number that counts up, and the sub-badge promoted to a coloured
+// corner marker instead of grey text trailing the value.
+//
+// No sparkline here on purpose. A trend line would need net-worth history,
+// which this strip does not fetch, and the strip's whole design constraint is
+// that it resolves from caches the bootstrap already filled and issues zero
+// extra requests. A chart that is empty on every cold load is worse than none.
+function StatChip({ label, value, icon, accent, tone, sub, subTone, onClick, testId }: {
   label: string;
   value: string;
-  accent?: "pos" | "neg" | "warn";
+  icon: any;
+  /** Tab-identity colour for the medallion (hub-routes.ts). */
+  accent: string;
+  /** Overrides the accent when the value itself is good or bad. */
+  tone?: "pos" | "neg" | "warn";
   sub?: string;
   subTone?: "pos" | "neg" | "warn";
   onClick: () => void;
   testId: string;
 }) {
-  const tone = (t?: "pos" | "neg" | "warn") =>
-    t === "pos" ? "text-emerald-500" : t === "neg" ? "text-red-500" : t === "warn" ? "text-amber-500" : "text-foreground";
+  const TONE_HSL: Record<string, string> = {
+    pos: "155 65% 45%", neg: "0 72% 58%", warn: "38 96% 54%",
+  };
+  const valueAccent = tone ? TONE_HSL[tone] : accent;
   return (
-    <button
+    <MetricCard
+      label={label}
+      value={value}
+      accent={valueAccent}
+      icon={icon}
       onClick={onClick}
-      data-testid={testId}
-      className="bubble shrink-0 flex items-baseline gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 hover:bg-accent/50 transition-colors text-left"
-    >
-      <span className="micro-label text-muted-foreground">{label}</span>
-      <span className={`text-sm font-bold tabular-nums ${tone(accent)}`}>{value}</span>
-      {sub && <span className={`text-[10px] font-semibold ${tone(subTone)}`}>{sub}</span>}
-    </button>
+      testId={testId}
+      density="dense"
+      className="shrink-0"
+      headerRight={sub ? (
+        <span className={`text-[11px] font-bold whitespace-nowrap ${
+          subTone === "pos" ? "text-emerald-500" : subTone === "neg" ? "text-red-500" : "text-amber-500"
+        }`}>{sub}</span>
+      ) : undefined}
+    />
   );
 }
 
@@ -131,6 +156,10 @@ export function HubKpiStrip() {
     ? Math.min(...expDocs.map((d: any) => (typeof d.daysUntil === "number" ? d.daysUntil : Infinity)))
     : null;
 
+  // Each chip wears the colour of the tab it belongs to, from the one place
+  // those colours are declared.
+  const tabAccent = (id: string) => HUB_TABS.find(t => t.id === id)!.accent;
+
   return (
     // Horizontal scroll with an edge fade so cut-off chips read as "more to
     // the right" instead of a broken layout at narrow widths.
@@ -139,27 +168,35 @@ export function HubKpiStrip() {
       data-testid="hub-kpi-strip"
     >
       <StatChip
+        icon={Wallet}
+        accent={tabAccent("finance")}
         label="Net Worth"
         value={netWorth == null ? "—" : `${netWorth < 0 ? "-" : ""}${fmtMoney(netWorth)}`}
-        accent={netWorth != null && netWorth < 0 ? "neg" : undefined}
+        tone={netWorth != null && netWorth < 0 ? "neg" : undefined}
         onClick={() => setPopup("networth")}
         testId="hub-kpi-networth"
       />
       <StatChip
+        icon={ArrowLeftRight}
+        accent={tabAccent("finance")}
         label="Cash Flow"
         value={cashFlow == null ? "—" : `${cashFlow >= 0 ? "+" : "-"}${fmtMoney(cashFlow)}`}
-        accent={cashFlow == null ? undefined : cashFlow >= 0 ? "pos" : "neg"}
+        tone={cashFlow == null ? undefined : cashFlow >= 0 ? "pos" : "neg"}
         onClick={() => setPopup("cashflow")}
         testId="hub-kpi-cashflow"
       />
       <StatChip
+        icon={HeartPulse}
+        accent={tabAccent("wellness")}
         label="Wellness"
         value={health == null ? "—" : String(health)}
-        accent={health != null && health >= 70 ? "pos" : health != null && health < 45 ? "warn" : undefined}
+        tone={health != null && health >= 70 ? "pos" : health != null && health < 45 ? "warn" : undefined}
         onClick={() => navigate("/wellness")}
         testId="hub-kpi-health"
       />
       <StatChip
+        icon={Flame}
+        accent="25 90% 58%"
         label="Streak"
         value={streak == null ? "—" : `${streak}D`}
         sub={streak != null && streak > 0 ? "★" : undefined}
@@ -168,6 +205,8 @@ export function HubKpiStrip() {
         testId="hub-kpi-streak"
       />
       <StatChip
+        icon={CheckCircle2}
+        accent={tabAccent("executive")}
         label="Tasks Due"
         value={tasksDue == null ? "—" : String(tasksDue)}
         sub={tasksLate > 0 ? `${tasksLate} late` : undefined}
@@ -176,6 +215,8 @@ export function HubKpiStrip() {
         testId="hub-kpi-tasks"
       />
       <StatChip
+        icon={FileText}
+        accent={tabAccent("documents")}
         label="Docs Exp"
         value={String(expDocs.length)}
         sub={minDocDays != null && isFinite(minDocDays) ? (minDocDays < 0 ? "overdue" : `≤${minDocDays}d`) : undefined}

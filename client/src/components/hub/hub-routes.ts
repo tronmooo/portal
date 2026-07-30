@@ -27,18 +27,32 @@ export interface HubTab {
   /** Default navigation target. The Info tab's real target depends on the
    *  current profile selection — use infoTabRoute() instead. */
   route: string;
+  /** The tab's identity colour as an HSL triple (`H S% L%`, no wrapper).
+   *
+   *  One place, so a tab is the same colour everywhere it appears. Documents
+   *  orange used to be written out independently in three files — the section
+   *  header in trackers.tsx, the doc-type map, and the KPI chip — and they
+   *  drifted. HubShell publishes the active tab's value as `--tab-accent`, so
+   *  the chip, the headings and the cards on that page all read one variable. */
+  accent: string;
 }
 
 export const HUB_TABS: HubTab[] = [
-  { id: "executive",   label: "Executive",   route: "/dashboard" },
-  { id: "trackers",    label: "Trackers",    route: "/trackers" },
-  { id: "finance",     label: "Finance",     route: "/dashboard/finance" },
-  { id: "wellness",    label: "Wellness",    route: "/wellness" },
-  { id: "assets",      label: "Assets",      route: "/linked?tab=assets" },
-  { id: "liabilities", label: "Liabilities", route: "/liabilities" },
-  { id: "documents",   label: "Documents",   route: "/linked?tab=documents" },
-  { id: "info",        label: "Info",        route: "/profiles" },
+  { id: "executive",   label: "Executive",   route: "/dashboard",              accent: "262 70% 62%" },
+  { id: "trackers",    label: "Trackers",    route: "/trackers",               accent: "173 60% 44%" },
+  { id: "finance",     label: "Finance",     route: "/dashboard/finance",      accent: "155 65% 45%" },
+  { id: "wellness",    label: "Wellness",    route: "/wellness",               accent: "0 72% 58%" },
+  { id: "assets",      label: "Assets",      route: "/linked?tab=assets",      accent: "262 60% 62%" },
+  { id: "liabilities", label: "Liabilities", route: "/liabilities",            accent: "0 72% 55%" },
+  { id: "documents",   label: "Documents",   route: "/linked?tab=documents",   accent: "25 80% 54%" },
+  { id: "info",        label: "Info",        route: "/profiles",               accent: "213 90% 62%" },
 ];
+
+/** The active tab's accent, or the app's default when no chip is lit (a deep
+ *  profile page). Never returns undefined, so callers can set it blindly. */
+export function hubTabAccent(id: HubTabId | null): string {
+  return HUB_TABS.find(t => t.id === id)?.accent ?? "213 90% 62%";
+}
 
 /** Info tab target: the selected profile's lightweight Info page when exactly
  *  one profile is selected; otherwise the People grid. (User decision

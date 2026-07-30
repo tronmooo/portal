@@ -7,7 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
 import { categoryTheme } from "@/lib/category-theme";
-import { AccentCard } from "@/components/ui/accent-card";
+import { MetricCard } from "@/components/ui/metric-card";
 import { resolveAssetValue, resolveLiabilityBalance, isNetWorthLiabilityProfile } from "@shared/asset-value";
 import { goalsQueryKey } from "@shared/query-keys";
 import {
@@ -2554,46 +2554,36 @@ function HealthSection({ data }: { data: any[] }) {
             const daysAgo = lastEntryMs != null ? Math.floor((Date.now() - lastEntryMs) / 86400000) : null;
             const lastLogLabel = daysAgo == null ? null : daysAgo === 0 ? "today" : daysAgo === 1 ? "1d ago" : daysAgo < 30 ? `${daysAgo}d ago` : `${Math.floor(daysAgo/30)}mo ago`;
             return (
-              <AccentCard
+              <MetricCard
                 key={item.trackerId}
-                hsl={theme.hsl}
+                accent={theme.hsl}
                 icon={ItemIcon}
                 label={item.name}
-                interactive
                 onClick={() => setSelectedTracker(item)}
-                role="button"
-                tabIndex={0}
                 aria-label={`View tracker: ${item.name}`}
-                onKeyDown={onEnterOrSpace(() => setSelectedTracker(item))}
                 headerRight={<TrendIcon trend={item.trend} />}
-                footer={<>
-                  <span className="font-medium">{item.average != null && isNumeric ? `7d avg ${item.average}` : ""}</span>
-                  {lastLogLabel && <span>{lastLogLabel}</span>}
-                </>}
-              >
-                <div className="flex items-baseline gap-1">
+                value={
                   <span
-                    className={isNumeric ? "text-2xl font-bold tabular-nums leading-none" : "text-sm italic text-muted-foreground/90 truncate"}
+                    className={isNumeric ? "" : "text-sm italic text-muted-foreground/90 truncate"}
                     style={isNumeric ? { color: statusColor } : undefined}
                     title={!isNumeric ? String(displayVal) : undefined}
                   >
                     {isNumeric ? Number(displayVal).toLocaleString(undefined, { maximumFractionDigits: 1 }) : displayVal}
                   </span>
-                  {isNumeric && item.unit && <span className="text-[10px] text-muted-foreground font-medium">{item.unit}</span>}
-                </div>
-                {spark.length > 1 && isNumeric && (
-                  <svg width="100%" height="18" viewBox={`0 0 ${spark.length * 8} 18`} preserveAspectRatio="none" className="mt-0.5 opacity-80">
+                }
+                unit={isNumeric && item.unit ? item.unit : undefined}
+                chart={spark.length > 1 && isNumeric ? (
+                  <svg width="100%" height="18" viewBox={`0 0 ${spark.length * 8} 18`} preserveAspectRatio="none" className="opacity-80">
                     <polyline
                       points={spark.map((v,i) => `${i*8},${18 - ((v-sparkMin)/sparkRange)*16}`).join(' ')}
                       fill="none" stroke={statusColor} strokeWidth="1.75" />
                   </svg>
-                )}
-                {(spark.length <= 1 || !isNumeric) && (
-                  <div className="h-[18px] flex items-center">
-                    <div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/30 to-transparent" />
-                  </div>
-                )}
-              </AccentCard>
+                ) : undefined}
+                footer={<>
+                  <span className="font-medium">{item.average != null && isNumeric ? `7d avg ${item.average}` : ""}</span>
+                  {lastLogLabel && <span>{lastLogLabel}</span>}
+                </>}
+              />
             );
           })}
         </div>

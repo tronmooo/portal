@@ -51,12 +51,16 @@ export interface EntityCardProps extends Omit<React.HTMLAttributes<HTMLDivElemen
   progress?: { value: number; left?: React.ReactNode; right?: React.ReactNode };
   /** Adds the press affordances. Leave off for a purely decorative container. */
   interactive?: boolean;
+  /** Same spelling as every other kit primitive. Without it, `testId` fell
+   *  through to the DOM as an invalid lowercase `testid` attribute and every
+   *  selector written against it missed. */
+  testId?: string;
 }
 
 export const EntityCard = React.forwardRef<HTMLDivElement, EntityCardProps>(function EntityCard(
   {
     accent, icon, title, value, valueUnit, emptyValue, meta = [],
-    pills, actions, progress, interactive, className, children, ...rest
+    pills, actions, progress, interactive, testId, className, children, ...rest
   },
   ref,
 ) {
@@ -72,6 +76,7 @@ export const EntityCard = React.forwardRef<HTMLDivElement, EntityCardProps>(func
         className,
       )}
       style={{ ["--accent-hsl" as any]: accent, ...(rest.style || {}) }}
+      data-testid={testId ?? (rest as any)["data-testid"]}
       {...rest}
     >
       <div className="flex items-start gap-2">

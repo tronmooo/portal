@@ -16,7 +16,7 @@ import { BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { hashNavigate, hashReplace } from "@/lib/hashNavigate";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useResumeTick } from "@/hooks/useResumeTick";
-import { HUB_TABS, activeHubTab, infoTabRoute, reconcileInfoRoute } from "./hub-routes";
+import { HUB_TABS, activeHubTab, hubTabAccent, infoTabRoute, reconcileInfoRoute } from "./hub-routes";
 import { HubKpiStrip } from "./HubKpiStrip";
 import { HubProfileSwitcher } from "./HubProfileSwitcher";
 
@@ -47,7 +47,14 @@ export function HubShell() {
   });
 
   return (
-    <div className="shrink-0 border-b border-border/50 bg-background/95 px-3 md:px-6 pt-2 pb-0 space-y-2" data-testid="hub-shell">
+    // --tab-accent is published here and read by the tab chip, the KPI strip's
+    // underline, and every SectionHeading on the page below. One variable, so a
+    // tab is one colour instead of three files each picking their own.
+    <div
+      className="shrink-0 border-b border-border/50 bg-background/95 px-3 md:px-6 pt-2 pb-0 space-y-2"
+      style={{ ["--tab-accent" as any]: hubTabAccent(active) }}
+      data-testid="hub-shell"
+    >
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-muted-foreground truncate" data-testid="hub-date">{dateLabel}</span>
         <HubProfileSwitcher />
@@ -63,10 +70,16 @@ export function HubShell() {
               aria-selected={isActive}
               data-testid={`hub-tab-${tab.id}`}
               onClick={() => hashNavigate(tab.id === "info" ? infoTabRoute([...scope.selectedIds]) : tab.route)}
-              className={`shrink-0 rounded-full px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-                isActive
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
+              // The active chip wears the tab's own colour rather than one
+              // app-wide primary, so the strip tells you where you are at a
+              // glance and agrees with the page it opens.
+              style={isActive ? {
+                background: `hsl(${tab.accent} / 0.16)`,
+                color: `hsl(${tab.accent})`,
+                boxShadow: `inset 0 0 0 1px hsl(${tab.accent} / 0.35)`,
+              } : undefined}
+              className={`pressable shrink-0 rounded-full px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                isActive ? "" : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
             >
               {tab.label}
