@@ -58,13 +58,21 @@ function Ring({ value, max, color, label, unit }: { value: number; max: number; 
 }
 
 // KPI tile in the top strip.
-function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, testId }: {
+function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, testId, onClick }: {
   label: string; value: string; unit?: string; sub?: string; tone: string;
   series?: number[]; icon: any; ring?: { value: number; max: number }; testId: string;
+  /** Opens the metric's detail popup. Omit and the tile stays inert — a tile
+   *  that lifts under the cursor but opens nothing is worse than a flat one. */
+  onClick?: () => void;
 }) {
   return (
-    <Card className="p-3 min-w-[8.5rem] flex-1 card-lift transition-all" data-testid={testId}
-      style={{ borderColor: `hsl(${tone} / 0.30)`, background: `linear-gradient(135deg, hsl(${tone} / 0.12) 0%, hsl(var(--card)) 75%)` }}>
+    <Card interactive={!!onClick} className="p-3 min-w-[8.5rem] flex-1" data-testid={testId}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-label={onClick ? `${label} details` : undefined}
+      onKeyDown={onClick ? (e: any) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+      style={{ ["--accent-hsl" as any]: tone }}>
       <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         <Icon className="w-3 h-3" style={{ color: `hsl(${tone})` }} /> {label}
       </div>
@@ -82,18 +90,31 @@ function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, test
 }
 
 // A titled card with an accent header + optional "View all →".
-function SectionCard({ title, icon: Icon, tone, badge, viewAllHref, onViewAll, children, testId }: {
+function SectionCard({ title, icon: Icon, tone, badge, viewAllHref, onViewAll, onOpen, children, testId }: {
   title: string; icon: any; tone: string; badge?: string;
-  viewAllHref?: string; onViewAll?: () => void; children: React.ReactNode; testId: string;
+  viewAllHref?: string; onViewAll?: () => void;
+  /** Opens this section's detail popup. */
+  onOpen?: () => void;
+  children: React.ReactNode; testId: string;
 }) {
   return (
-    <Card className="p-4 flex flex-col" data-testid={testId} style={{ borderColor: `hsl(${tone} / 0.22)` }}>
-      <div className="flex items-center justify-between mb-3">
-        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider" style={{ color: `hsl(${tone})` }}>
-          <Icon className="w-3.5 h-3.5" /> {title}
-        </span>
-        {badge && <span className="text-[10px] text-muted-foreground">{badge}</span>}
-      </div>
+    <Card className="p-4 flex flex-col" data-testid={testId} style={{ ["--accent-hsl" as any]: tone }}>
+      {onOpen ? (
+        <button onClick={onOpen} className="pressable -mx-1 -mt-1 px-1 pt-1 pb-2 mb-2 flex items-center justify-between gap-2 rounded-xl text-left"
+          data-testid={`${testId}-open`} aria-label={`${title} details`}>
+          <span className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-wider" style={{ color: `hsl(${tone})` }}>
+            <Icon className="w-4 h-4" /> {title}
+          </span>
+          {badge && <span className="text-[10px] text-muted-foreground shrink-0">{badge}</span>}
+        </button>
+      ) : (
+        <div className="flex items-center justify-between mb-3">
+          <span className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-wider" style={{ color: `hsl(${tone})` }}>
+            <Icon className="w-4 h-4" /> {title}
+          </span>
+          {badge && <span className="text-[10px] text-muted-foreground">{badge}</span>}
+        </div>
+      )}
       <div className="flex-1">{children}</div>
       {(viewAllHref || onViewAll) && (
         viewAllHref
@@ -240,6 +261,8 @@ export interface WellnessOverviewProps {
 
   /** Dynamic per-tracker cards — one per metric the user actually logs. */
   dynamicCards?: WellnessCard[];
+  /** Opens a detail popup for a KPI tile or section card. */
+  onOpenPopup?: (kind: string) => void;
   /** Called when the user taps "AI Deep Dive". */
   onAiDeepDive?: () => void;
   aiDeepDiveLoading?: boolean;
@@ -257,8 +280,9 @@ export function WellnessOverview(props: WellnessOverviewProps) {
     schedule, medications, onToggleMed, togglingMedId, vitals, sleep, nutrition, mood, activity,
     appointments, reminders, labs, supplements, documents, conditions, allergies,
     recentActivity, weightUnit = "lbs", onQuickLog,
-    dynamicCards = [], onAiDeepDive, aiDeepDiveLoading, aiNarrative,
+    dynamicCards = [], onOpenPopup, onAiDeepDive, aiDeepDiveLoading, aiNarrative,
   } = props;
+  const open = (kind: string) => (onOpenPopup ? () => onOpenPopup(kind) : undefined);
 
   const dueMeds = medications.filter((m) => !m.taken).length;
   // Dynamic visibility: only render a section when it actually has data — an
@@ -286,31 +310,31 @@ export function WellnessOverview(props: WellnessOverviewProps) {
       {/* ── KPI strip — only tiles that actually have a value ── */}
       <div className="flex flex-wrap gap-2" data-testid="wellness-kpis">
         {wellnessScore != null && (
-          <KpiTile testId="wellness-kpi-score" label="Wellness Score" tone={wellnessScore >= 80 ? T.green : wellnessScore >= 60 ? T.amber : T.red}
+          <KpiTile onClick={open("score")} testId="wellness-kpi-score" label="Wellness Score" tone={wellnessScore >= 80 ? T.green : wellnessScore >= 60 ? T.amber : T.red}
             icon={Sparkles} value={String(wellnessScore)} unit={wellnessScoreLabel} />
         )}
         {sleepHours != null && (
-          <KpiTile testId="wellness-kpi-sleep" label="Sleep" tone={T.purple} icon={Moon}
+          <KpiTile onClick={open("sleep")} testId="wellness-kpi-sleep" label="Sleep" tone={T.purple} icon={Moon}
             value={`${fmt(sleepHours, 1)}h`} sub="last night" series={sleepSeries} />
         )}
         {steps != null && (
-          <KpiTile testId="wellness-kpi-activity" label="Activity" tone={T.blue} icon={Footprints}
+          <KpiTile onClick={open("activity")} testId="wellness-kpi-activity" label="Activity" tone={T.blue} icon={Footprints}
             value={fmt(steps)} unit="steps" series={stepsSeries} />
         )}
         {restingHr != null && (
-          <KpiTile testId="wellness-kpi-hr" label="Resting HR" tone={T.green} icon={Heart}
+          <KpiTile onClick={open("hr")} testId="wellness-kpi-hr" label="Resting HR" tone={T.green} icon={Heart}
             value={String(restingHr)} unit="bpm" series={restingHrSeries} />
         )}
         {hydrationOz != null && (
-          <KpiTile testId="wellness-kpi-hydration" label="Hydration" tone={T.cyan} icon={Droplet}
+          <KpiTile onClick={open("hydration")} testId="wellness-kpi-hydration" label="Hydration" tone={T.cyan} icon={Droplet}
             value={fmt(hydrationOz)} unit={`/ ${hydrationGoal} oz`} ring={{ value: hydrationOz || 0, max: hydrationGoal }} />
         )}
         {calories != null && (
-          <KpiTile testId="wellness-kpi-calories" label="Calories" tone={T.orange} icon={Flame}
+          <KpiTile onClick={open("calories")} testId="wellness-kpi-calories" label="Calories" tone={T.orange} icon={Flame}
             value={fmt(calories)} unit={`/ ${caloriesGoal} kcal`} ring={{ value: calories || 0, max: caloriesGoal }} />
         )}
         {streak != null && (
-          <KpiTile testId="wellness-kpi-streak" label="Streak" tone={T.orange} icon={Flame}
+          <KpiTile onClick={open("streak")} testId="wellness-kpi-streak" label="Streak" tone={T.orange} icon={Flame}
             value={String(streak)} unit="days" />
         )}
       </div>
@@ -328,7 +352,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
 
       {/* ── AI Wellness Insights (deterministic every load + optional deep dive) ── */}
       {has.insights && (
-        <SectionCard testId="wellness-insights" title="AI Wellness Insights" icon={Sparkles} tone={T.purple}>
+        <SectionCard onOpen={open("insights")} testId="wellness-insights" title="AI Wellness Insights" icon={Sparkles} tone={T.purple}>
           {insights.length === 0 && !aiNarrative ? <Empty text="Log a few days of trackers to unlock insights." /> : (
             <ul className="space-y-2">
               {insights.slice(0, 6).map((t, i) => (
@@ -365,7 +389,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
       {/* ── Aggregate / list cards — each rendered ONLY when it has data ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         {has.habits && (
-        <SectionCard testId="wellness-habits" title="Today's Habits" icon={CheckCircle2} tone={T.green}
+        <SectionCard onOpen={open("habits")} testId="wellness-habits" title="Today's Habits" icon={CheckCircle2} tone={T.green}
           badge={`${habitsCompleted} / ${habits.length} done`} viewAllHref="/habits">
           {habits.length === 0 ? <Empty text="No habits yet — add one from chat." /> : (
             <ul className="space-y-1.5">
@@ -387,7 +411,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
 
         {has.missed && (
-        <SectionCard testId="wellness-missed-habits" title="Missed Habits" icon={AlertTriangle} tone={T.amber}
+        <SectionCard onOpen={open("missed")} testId="wellness-missed-habits" title="Missed Habits" icon={AlertTriangle} tone={T.amber}
           badge={missedHabits.length ? `${missedHabits.length} to do` : undefined} viewAllHref="/habits">
           {missedHabits.length === 0 ? <Empty text="All habits on track today. ✓" /> : (
             <ul className="space-y-1.5">
@@ -407,7 +431,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
 
         {has.schedule && (
-        <SectionCard testId="wellness-schedule" title="Today's Schedule" icon={CalendarClock} tone={T.blue} viewAllHref="/calendar">
+        <SectionCard onOpen={open("schedule")} testId="wellness-schedule" title="Today's Schedule" icon={CalendarClock} tone={T.blue} viewAllHref="/calendar">
           {schedule.length === 0 ? <Empty text="Nothing scheduled today." /> : (
             <ul className="space-y-2">
               {schedule.slice(0, 6).map((e) => (
@@ -422,7 +446,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
 
         {has.meds && (
-        <SectionCard testId="wellness-medications" title="Medications" icon={Pill} tone={T.pink}
+        <SectionCard onOpen={open("meds")} testId="wellness-medications" title="Medications" icon={Pill} tone={T.pink}
           badge={dueMeds > 0 ? `${dueMeds} due` : "all taken"} viewAllHref="/obligations">
           {medications.length === 0 ? <Empty text="No medications tracked." /> : (
             <ul className="space-y-1.5">
@@ -451,7 +475,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
            each rendered ONLY when it has data (dynamic, no empty cards). ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         {has.appts && (
-        <SectionCard testId="wellness-appointments" title="Upcoming Appointments" icon={CalendarClock} tone={T.blue}
+        <SectionCard onOpen={open("appts")} testId="wellness-appointments" title="Upcoming Appointments" icon={CalendarClock} tone={T.blue}
           badge={`${appointments.length} upcoming`} viewAllHref="/calendar">
           <ul className="space-y-2 text-sm">
             {appointments.slice(0, 5).map((a) => (
@@ -465,7 +489,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
 
         {has.reminders && (
-        <SectionCard testId="wellness-reminders" title="Health Reminders" icon={Bell} tone={T.amber}
+        <SectionCard onOpen={open("reminders")} testId="wellness-reminders" title="Health Reminders" icon={Bell} tone={T.amber}
           badge={`${reminders.length} active`}>
           <ul className="space-y-1.5 text-xs">
             {reminders.slice(0, 5).map((r, i) => (
@@ -476,7 +500,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
 
         {has.labs && (
-        <SectionCard testId="wellness-labs" title="Lab Results" icon={FlaskConical} tone={T.teal} viewAllHref="/trackers">
+        <SectionCard onOpen={open("labs")} testId="wellness-labs" title="Lab Results" icon={FlaskConical} tone={T.teal} viewAllHref="/trackers">
           <ul className="space-y-2 text-sm">
             {labs.slice(0, 5).map((l) => (
               <li key={l.id} className="flex items-center gap-2" data-testid={`wellness-lab-${l.id}`}>
@@ -490,7 +514,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
 
         {has.supps && (
-        <SectionCard testId="wellness-supplements" title="Supplements" icon={Leaf} tone={T.green}
+        <SectionCard onOpen={open("supps")} testId="wellness-supplements" title="Supplements" icon={Leaf} tone={T.green}
           badge={`${supplements.length} active`} viewAllHref="/obligations">
           <ul className="space-y-1.5 text-sm">
             {supplements.slice(0, 5).map((s) => (
@@ -505,7 +529,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
 
         {has.docs && (
-        <SectionCard testId="wellness-documents" title="Health Documents" icon={FileText} tone={T.blue}
+        <SectionCard onOpen={open("docs")} testId="wellness-documents" title="Health Documents" icon={FileText} tone={T.blue}
           badge={`${documents.length} docs`} viewAllHref="/linked?tab=documents">
           <ul className="space-y-2 text-sm">
             {documents.slice(0, 5).map((d) => (
@@ -520,7 +544,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
 
         {has.conditions && (
-        <SectionCard testId="wellness-conditions" title="Medical Conditions" icon={Stethoscope} tone={T.orange}
+        <SectionCard onOpen={open("conditions")} testId="wellness-conditions" title="Medical Conditions" icon={Stethoscope} tone={T.orange}
           badge={`${conditions.length} known`}>
           <ul className="space-y-2 text-sm">
             {conditions.slice(0, 5).map((c) => (
@@ -534,7 +558,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
 
         {has.allergies && (
-        <SectionCard testId="wellness-allergies" title="Allergies" icon={AlertTriangle} tone={T.red}
+        <SectionCard onOpen={open("allergies")} testId="wellness-allergies" title="Allergies" icon={AlertTriangle} tone={T.red}
           badge={`${allergies.length} known`}>
           <ul className="space-y-2 text-sm">
             {allergies.slice(0, 5).map((a) => (
@@ -548,7 +572,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
 
         {has.activity && (
-        <SectionCard testId="wellness-activity" title="Recent Activity" icon={Activity} tone={T.teal}>
+        <SectionCard onOpen={open("recent")} testId="wellness-activity" title="Recent Activity" icon={Activity} tone={T.teal}>
           <ul className="space-y-2 text-sm">
             {recentActivity.slice(0, 6).map((r) => (
               <li key={r.id} className="flex items-center gap-2" data-testid={`wellness-activity-${r.id}`}>

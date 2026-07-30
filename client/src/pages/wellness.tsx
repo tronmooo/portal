@@ -31,6 +31,7 @@ import {
   WellnessOverview,
   type WellnessMed, type WellnessSupp, type WellnessAppt,
 } from "@/components/wellness/WellnessOverview";
+import { WellnessPopup, type WellnessPopupKind } from "@/components/wellness/WellnessPopups";
 
 const HYDRATION_GOAL = 100; // oz/day — matches the reference dial
 const CALORIE_GOAL = 2300;  // kcal/day
@@ -100,6 +101,9 @@ export default function WellnessPage() {
   // ── Habit check-in toggle — the SAME mutation shape the dashboard habit
   // popup uses, invalidating ["/api/habits"] + ["/api/stats"] so the dashboard
   // ring and Trackers habit view update in lockstep. ──
+  // Which detail popup is open. Popups render from data already fetched above,
+  // so opening one issues no request and shows no loading state.
+  const [popup, setPopup] = useState<WellnessPopupKind | null>(null);
   const [togglingHabitId, setTogglingHabitId] = useState<string | null>(null);
   const toggleHabit = useMutation({
     mutationFn: async ({ id, next }: { id: string; next: boolean }) => {
@@ -504,10 +508,49 @@ export default function WellnessPage() {
         weightUnit={vitals.weightUnit}
         onQuickLog={onQuickLog}
         dynamicCards={dynamicCards}
+        onOpenPopup={(k) => setPopup(k as WellnessPopupKind)}
         onAiDeepDive={() => aiDeepDive.mutate()}
         aiDeepDiveLoading={aiDeepDive.isPending}
         aiNarrative={aiNarrative}
       />
+
+      {popup && (
+        <WellnessPopup
+          kind={popup}
+          onClose={() => setPopup(null)}
+          d={{
+            wellnessScore,
+            wellnessScoreLabel: wellnessScore == null ? undefined : wellnessScore >= 80 ? "Good" : wellnessScore >= 60 ? "Fair" : "Needs care",
+            sleepHours: sleep.value, sleepSeries: sleep.series,
+            steps: steps.value, stepsSeries: steps.series,
+            restingHr: restingHr.value, restingHrSeries: restingHr.series,
+            hydrationOz: hydration.value, hydrationGoal: HYDRATION_GOAL,
+            calories: calories.value, caloriesGoal: CALORIE_GOAL,
+            streak,
+            // Every check-in date across the user's habits — the heatmap needs
+            // the history, not just the current run length.
+            checkinDates: (habits || []).flatMap((h: any) => (h.checkins || []).map((c: any) => String(c.date || "").slice(0, 10))).filter(Boolean),
+            insights,
+            aiNarrative,
+            habits: habitCards,
+            missedHabits,
+            schedule,
+            medications,
+            appointments,
+            reminders,
+            labs,
+            supplements,
+            documents: healthDocs,
+            conditions,
+            allergies,
+            recentActivity,
+            onToggleHabit: (id, next) => toggleHabit.mutate({ id, next }),
+            togglingHabitId,
+            onToggleMed: (id, next) => toggleMed.mutate({ id, next }),
+            togglingMedId,
+          }}
+        />
+      )}
 
       {/* Inline quick-log dialog for weight / mood / sleep / steps — shared ModalShell. */}
       <ModalShell

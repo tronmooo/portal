@@ -145,6 +145,7 @@ export default defineConfig({
       'tests/attention.test.ts',
       'tests/executive-sections-router.test.ts',
       'tests/dashboard-visuals.dom.test.tsx',
+      'tests/wellness-popups.dom.test.tsx',
       'tests/reminder-cron.test.ts',
       'tests/document-open-hook.dom.test.tsx',
       // Production audit 2026-07-29 regressions.
