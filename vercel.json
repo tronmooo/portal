@@ -88,7 +88,7 @@
   "crons": [
     {
       "path": "/api/cron/fire-due-reminders",
-      "schedule": "0 * * * *"
+      "schedule": "0 9 * * *"
     }
   ],
   "functions": {

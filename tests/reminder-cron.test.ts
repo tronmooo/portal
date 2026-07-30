@@ -32,6 +32,27 @@ describe("vercel.json schedules the reminder firer", () => {
     const entry = (cfg.crons || []).find((c: any) => c.path === ROUTE);
     expect(entry?.schedule).toMatch(/^[\d*/,\- ]+$/);
   });
+
+  it("runs at most once a day, because a faster schedule fails the whole deploy", () => {
+    // Vercel's Hobby plan caps cron jobs at once per day (and two jobs total)
+    // and REJECTS a more frequent schedule at deploy time — the deployment
+    // fails, so nothing ships, not just the cron. This bit us: an hourly
+    // "0 * * * *" here is why the Executive-tab redesign sat on main while
+    // production kept serving the old bundle.
+    //
+    // Daily is enough. The user-visible symptom (June reminders still on
+    // screen in July) is fixed independently by the feed's reminderStaleHours
+    // window in shared/attention.ts, which does not depend on this running.
+    for (const c of cfg.crons || []) {
+      const [minute, hour] = String(c.schedule).split(/\s+/);
+      expect(minute, `${c.path}: minute must be fixed, got "${c.schedule}"`).toMatch(/^\d+$/);
+      expect(hour, `${c.path}: hour must be fixed, got "${c.schedule}"`).toMatch(/^\d+$/);
+    }
+  });
+
+  it("stays within the two-job Hobby limit", () => {
+    expect((cfg.crons || []).length).toBeLessThanOrEqual(2);
+  });
 });
 
 describe(`GET ${ROUTE} auth`, () => {
