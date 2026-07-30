@@ -29,8 +29,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain } from "lucide-react";
+import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag } from "lucide-react";
 import { deleteProfileFields } from "@shared/profile-field-identity";
+import { stringifyField } from "@/lib/field-display";
+import { SectionHeading } from "@/components/ui/section-heading";
 
 function timeAgo(ts: string | undefined): string {
   if (!ts) return "";
@@ -41,6 +43,19 @@ function timeAgo(ts: string | undefined): string {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
+
+// The Executive tab's accents, so a heading here is the same colour it is
+// there: blue = informational, purple = AI/derived, orange = documents.
+const INFO_TONE = {
+  fields: "213 90% 62%",
+  group: "240 60% 65%",
+  notes: "43 96% 53%",
+  tags: "173 60% 44%",
+  docs: "25 80% 54%",
+  memories: "280 75% 62%",
+  activity: "155 65% 45%",
+  journal: "262 70% 62%",
+};
 
 function fieldLabel(key: string): string {
   return key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
@@ -225,7 +240,11 @@ function SingleProfileInfo({ id }: { id: string }) {
   for (const d of defs) {
     const v = readField(fields, d.key);
     if (v === undefined || v === null || v === "") continue;
-    rows.push({ key: d.key, label: d.label, value: String(v) });
+    // String(v) on a composite field renders the literal "[object Object]" —
+    // which is what ADDRESS showed on this screen.
+    const text = stringifyField(v);
+    if (!text) continue;
+    rows.push({ key: d.key, label: d.label, value: text });
   }
   // Custom scalar fields the user (or chat) added that aren't in the identity
   // whitelist and aren't nested storage groups — surfaced so "+ Add field" AND
@@ -244,7 +263,7 @@ function SingleProfileInfo({ id }: { id: string }) {
       continue;
     }
     if (NESTED_GROUP_KEYS.has(k)) continue; // group key holding a scalar — skip label noise
-    rows.push({ key: k, label: fieldLabel(k), value: String(v) });
+    rows.push({ key: k, label: fieldLabel(k), value: stringifyField(v) });
   }
 
   const timeline: any[] = Array.isArray(profile.timeline) ? profile.timeline.slice(0, 6) : [];
@@ -260,19 +279,19 @@ function SingleProfileInfo({ id }: { id: string }) {
       <div className="flex items-center gap-3">
         <button
           onClick={() => avatarInputRef.current?.click()}
-          className="relative w-9 h-9 rounded-xl overflow-hidden shrink-0 flex items-center justify-center"
-          style={{ background: "hsl(213 90% 62% / 0.15)" }}
+          className="medallion pressable relative w-11 h-11 overflow-hidden"
+          style={{ ["--accent-hsl" as any]: INFO_TONE.fields }}
           aria-label="Change photo"
           data-testid="info-avatar"
           title="Change photo"
         >
           {profile.avatar
-            ? <img src={profile.avatar} alt="" className="w-full h-full object-cover" />
-            : <span className="text-sm font-bold" style={{ color: "hsl(213 90% 62%)" }}>{initial}</span>}
+            ? <img src={profile.avatar} alt="" className="w-full h-full object-cover rounded-full" />
+            : <span className="text-base font-bold">{initial}</span>}
         </button>
         <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={onAvatarChange} />
         <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold leading-tight truncate" data-testid="info-name">{profile.name}</h1>
+          <h1 className="text-lg font-bold tracking-tight leading-tight truncate" data-testid="info-name">{profile.name}</h1>
           <p className="text-xs text-muted-foreground capitalize">{profile.type}</p>
         </div>
         <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAddingField(v => !v)} data-testid="info-add-field">
@@ -320,7 +339,7 @@ function SingleProfileInfo({ id }: { id: string }) {
       {/* Nested field groups (e.g. finance, health, credentials) */}
       {nestedGroups.map(g => (
         <Card className="p-4" key={g.key} data-testid={`info-group-${g.key}`}>
-          <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{fieldLabel(g.key)}</span>
+          <SectionHeading title={fieldLabel(g.key)} icon={Layers} accent={INFO_TONE.group} count={g.entries.length} />
           {/*
             Nested-group fields used to render as plain <div> text — no
             FieldCell, no onSave, no onRemove. Every value under IDENTITY,
@@ -341,7 +360,7 @@ function SingleProfileInfo({ id }: { id: string }) {
               <FieldCell
                 key={k}
                 label={fieldLabel(k)}
-                value={String(v)}
+                value={stringifyField(v)}
                 editable
                 onSave={(nv) => saveField(k, nv)}
                 onRemove={() => removeField(k)}
@@ -368,10 +387,7 @@ function SingleProfileInfo({ id }: { id: string }) {
       {/* Activity + Journal */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Card className="p-4" data-testid="info-activity">
-          <div className="flex items-center gap-2 mb-3">
-            <ActivityIcon className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Activity · {profile.name}</span>
-          </div>
+          <SectionHeading title={`Activity · ${profile.name}`} icon={ActivityIcon} accent={INFO_TONE.activity} count={timeline.length} />
           {timeline.length === 0 ? (
             <p className="text-xs text-muted-foreground">No recent activity.</p>
           ) : (
@@ -397,13 +413,10 @@ function SingleProfileInfo({ id }: { id: string }) {
           onClick={() => navigate("/journal")}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") navigate("/journal"); }}
         >
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Journal</span>
-            </div>
-            {latestJournal && <span className="text-[10px] text-muted-foreground">Last {timeAgo(latestJournal.date || latestJournal.createdAt)} ago</span>}
-          </div>
+          <SectionHeading
+            title="Journal" icon={BookOpen} accent={INFO_TONE.journal}
+            meta={latestJournal ? `Last ${timeAgo(latestJournal.date || latestJournal.createdAt)} ago` : undefined}
+          />
           {latestJournal ? (
             <p className="text-sm italic text-foreground/90 flex-1">"{String(latestJournal.content || "").slice(0, 140)}…"</p>
           ) : (
@@ -429,11 +442,7 @@ function DocumentsSection({ documents }: { documents: any[] }) {
   if (!documents || documents.length === 0) return null;
   return (
     <Card className="p-4" data-testid="info-documents">
-      <div className="flex items-center gap-2 mb-3">
-        <FileText className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Documents</span>
-        <span className="text-[10px] text-muted-foreground">· {documents.length}</span>
-      </div>
+      <SectionHeading title="Documents" icon={FileText} accent={INFO_TONE.docs} count={documents.length} />
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
         {documents.map((d: any) => (
           <button
@@ -489,17 +498,13 @@ function MemoriesSection() {
 
   return (
     <Card className="p-4" data-testid="info-memories">
-      <div className="flex items-center gap-2 mb-3">
-        <Brain className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Facts from chat</span>
-        <span className="text-[10px] text-muted-foreground">· {memories.length}</span>
-      </div>
+      <SectionHeading title="Facts from chat" icon={Brain} accent={INFO_TONE.memories} count={memories.length} />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {memories.map((m: any) => (
           <FieldCell
             key={m.id}
             label={fieldLabel(m.key || m.category || "note")}
-            value={String(m.value ?? "")}
+            value={stringifyField(m.value)}
             editable
             onSave={(v) => update.mutate({ id: m.id, value: v })}
             onRemove={() => remove.mutate(m.id)}
@@ -584,10 +589,12 @@ function NotesTags({ notes, tags, onSaveNotes, onSaveTags }: {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
       <Card className="p-4" data-testid="info-notes">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Notes</span>
-          {!editingNotes && <button onClick={() => setEditingNotes(true)} className="text-muted-foreground hover:text-foreground" aria-label="Edit notes"><Pencil className="h-3.5 w-3.5" /></button>}
-        </div>
+        <SectionHeading
+          title="Notes" icon={StickyNote} accent={INFO_TONE.notes}
+          meta={!editingNotes ? (
+            <button onClick={() => setEditingNotes(true)} className="text-muted-foreground hover:text-foreground" aria-label="Edit notes"><Pencil className="h-3.5 w-3.5" /></button>
+          ) : undefined}
+        />
         {editingNotes ? (
           <div className="space-y-2">
             <Textarea value={draft} onChange={e => setDraft(e.target.value)} rows={3} className="text-xs" placeholder="Add notes…" data-testid="info-notes-input" />
@@ -602,8 +609,8 @@ function NotesTags({ notes, tags, onSaveNotes, onSaveTags }: {
       </Card>
 
       <Card className="p-4" data-testid="info-tags">
-        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Tags</span>
-        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+        <SectionHeading title="Tags" icon={Tag} accent={INFO_TONE.tags} count={tags.length} />
+        <div className="flex flex-wrap items-center gap-1.5">
           {tags.map(tag => (
             <Badge key={tag} variant="secondary" className="gap-1 text-xs">
               {tag}

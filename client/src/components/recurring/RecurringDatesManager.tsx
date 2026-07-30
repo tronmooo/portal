@@ -499,7 +499,7 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
   };
 
   return (
-    <div className="bubble overflow-hidden" style={{ borderColor: `hsl(${kd.hsl} / 0.25)` }} data-testid={`rd-series-${ev.id}`}>
+    <div className="bubble overflow-hidden" style={{ ["--accent-hsl" as any]: kd.hsl }} data-testid={`rd-series-${ev.id}`}>
       <div className="flex items-start gap-2.5 px-3 py-2.5">
         <button type="button" onClick={() => setExpanded(e => !e)} className="flex items-start gap-2.5 flex-1 min-w-0 text-left">
           <span className="mt-0.5 shrink-0 w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `hsl(${kd.hsl} / 0.14)` }}>

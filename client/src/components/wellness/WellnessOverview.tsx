@@ -17,6 +17,8 @@ import {
   CheckCircle2, Circle, Footprints, Dumbbell, Plus, TrendingUp, TrendingDown, Minus,
 } from "lucide-react";
 import { groupWellnessCards, type WellnessCard } from "@/lib/wellness-dynamic";
+import { Medallion } from "@/components/dashboard/visuals";
+import { SectionHeading } from "@/components/ui/section-heading";
 
 // ── shared bits ──────────────────────────────────────────────────────────────
 const T = {
@@ -58,9 +60,12 @@ function Ring({ value, max, color, label, unit }: { value: number; max: number; 
 }
 
 // KPI tile in the top strip.
-function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, testId, onClick }: {
+function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, progress, testId, onClick }: {
   label: string; value: string; unit?: string; sub?: string; tone: string;
-  series?: number[]; icon: any; ring?: { value: number; max: number }; testId: string;
+  series?: number[]; icon: any; ring?: { value: number; max: number };
+  /** A 0–1 bar with a caption, for tiles that have no series to plot. */
+  progress?: { value: number; caption: string };
+  testId: string;
   /** Opens the metric's detail popup. Omit and the tile stays inert — a tile
    *  that lifts under the cursor but opens nothing is worse than a flat one. */
   onClick?: () => void;
@@ -73,18 +78,30 @@ function KpiTile({ label, value, unit, sub, tone, series, icon: Icon, ring, test
       aria-label={onClick ? `${label} details` : undefined}
       onKeyDown={onClick ? (e: any) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
       style={{ ["--accent-hsl" as any]: tone }}>
-      <div className="flex items-center gap-1.5 micro-label text-muted-foreground">
-        <Icon className="w-3 h-3" style={{ color: `hsl(${tone})` }} /> {label}
+      {/* The icon rides a tinted circle here exactly as it does on the
+          Executive tab — a bare 12px glyph next to a label was the tell that
+          this tab was built separately. */}
+      <div className="flex items-center gap-2">
+        <Medallion icon={Icon} accent={tone} size="sm" />
+        <span className="micro-label text-muted-foreground leading-tight">{label}</span>
       </div>
-      <div className="flex items-end justify-between mt-1">
-        <div>
-          <div className="metric-value text-2xl leading-none" style={{ color: `hsl(${tone})` }}>{value}</div>
-          {unit && <div className="text-[10px] text-muted-foreground mt-0.5">{unit}</div>}
+      <div className="flex items-end justify-between mt-2 gap-2">
+        <div className="min-w-0">
+          <div className="metric-value text-[28px] leading-none" style={{ color: `hsl(${tone})` }}>{value}</div>
+          {unit && <div className="text-[11px] text-muted-foreground mt-1">{unit}</div>}
         </div>
         {ring && <Ring value={ring.value} max={ring.max} color={tone} label="" />}
       </div>
-      {series && series.length >= 2 && <div className="mt-1.5"><Spark series={series} color={tone} /></div>}
-      {sub && <div className="text-[10px] text-muted-foreground mt-1">{sub}</div>}
+      {series && series.length >= 2 && <div className="mt-2"><Spark series={series} color={tone} /></div>}
+      {progress && (
+        <div className="mt-2.5">
+          <div className="h-1.5 w-full rounded-full overflow-hidden" style={{ background: `hsl(${tone} / 0.16)` }}>
+            <div className="h-full rounded-full" style={{ width: `${Math.round(Math.max(0, Math.min(1, progress.value)) * 100)}%`, background: `hsl(${tone})` }} />
+          </div>
+          <div className="text-[11px] text-muted-foreground mt-1">{progress.caption}</div>
+        </div>
+      )}
+      {sub && <div className="text-[11px] text-muted-foreground mt-1.5">{sub}</div>}
     </Card>
   );
 }
@@ -99,22 +116,10 @@ function SectionCard({ title, icon: Icon, tone, badge, viewAllHref, onViewAll, o
 }) {
   return (
     <Card className="p-4 flex flex-col" data-testid={testId} style={{ ["--accent-hsl" as any]: tone }}>
-      {onOpen ? (
-        <button onClick={onOpen} className="pressable -mx-1 -mt-1 px-1 pt-1 pb-2 mb-2 flex items-center justify-between gap-2 rounded-xl text-left"
-          data-testid={`${testId}-open`} aria-label={`${title} details`}>
-          <span className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-wider" style={{ color: `hsl(${tone})` }}>
-            <Icon className="w-4 h-4" /> {title}
-          </span>
-          {badge && <span className="text-[10px] text-muted-foreground shrink-0">{badge}</span>}
-        </button>
-      ) : (
-        <div className="flex items-center justify-between mb-3">
-          <span className="flex items-center gap-2 text-[12px] font-bold uppercase tracking-wider" style={{ color: `hsl(${tone})` }}>
-            <Icon className="w-4 h-4" /> {title}
-          </span>
-          {badge && <span className="text-[10px] text-muted-foreground">{badge}</span>}
-        </div>
-      )}
+      <SectionHeading
+        title={title} icon={Icon} accent={tone} meta={badge}
+        onClick={onOpen} testId={onOpen ? `${testId}-open` : undefined}
+      />
       <div className="flex-1">{children}</div>
       {(viewAllHref || onViewAll) && (
         viewAllHref
@@ -135,6 +140,12 @@ const GROUP_TONE: Record<string, string> = {
   Health: T.red, Fitness: T.green, Nutrition: T.orange, Mental: T.purple,
   Sleep: T.purple, Medication: T.pink, Lifestyle: T.teal, Other: T.blue,
 };
+// Heart = health, flame = nutrition, moon = sleep … the same icon vocabulary
+// the Executive tab uses, so a group reads the same wherever it appears.
+const GROUP_ICON: Record<string, any> = {
+  Health: HeartPulse, Fitness: Dumbbell, Nutrition: Flame, Mental: Brain,
+  Sleep: Moon, Medication: Pill, Lifestyle: Leaf, Other: Activity,
+};
 function DynamicCard({ card }: { card: WellnessCard }) {
   const tone = GROUP_TONE[card.group] || T.blue;
   const favColor = card.favorable === "good" ? T.green : card.favorable === "bad" ? T.red : "var(--muted-foreground)";
@@ -143,24 +154,25 @@ function DynamicCard({ card }: { card: WellnessCard }) {
     ? `${card.pair.systolic ?? "—"}/${card.pair.diastolic ?? "—"}`
     : fmt(card.value, card.isCount ? 0 : 1);
   return (
-    <Link href="/trackers">
-      <Card className="p-3 card-lift transition-all cursor-pointer" data-testid={`wellness-metric-${card.id}`}
-        style={{ borderColor: `hsl(${tone} / 0.22)` }}>
-        <div className="flex items-center justify-between gap-2">
-          <span className="micro-label truncate" style={{ color: `hsl(${tone})` }}>{card.name}</span>
+    <Link href="/trackers" className="block h-full">
+      {/* --accent-hsl, not an inline borderColor: the bubble paints its own
+          border from the accent, and an inline one silently wins over it. */}
+      <Card interactive className="p-3 h-full flex flex-col" data-testid={`wellness-metric-${card.id}`}
+        style={{ ["--accent-hsl" as any]: tone }}>
+        <div className="flex items-center gap-2">
+          <Medallion icon={GROUP_ICON[card.group] || Activity} accent={tone} size="sm" />
+          <span className="micro-label text-muted-foreground truncate flex-1 min-w-0">{card.name}</span>
           {card.changePct != null && card.favorable !== "neutral" && (
-            <span className="flex items-center gap-0.5 text-[10px] shrink-0" style={{ color: favColor.startsWith("var") ? undefined : `hsl(${favColor})` }}>
+            <span className="flex items-center gap-0.5 text-[11px] font-semibold shrink-0" style={{ color: favColor.startsWith("var") ? undefined : `hsl(${favColor})` }}>
               <TrendIco className="w-3 h-3" /> {Math.abs(card.changePct).toFixed(0)}%
             </span>
           )}
         </div>
-        <div className="flex items-end justify-between mt-1 gap-2">
-          <div className="metric-value text-2xl leading-none" style={{ color: `hsl(${tone})` }}>
-            {valueText}<span className="text-[11px] text-muted-foreground ml-1">{card.unit}</span>
-          </div>
+        <div className="mt-2 metric-value text-[26px] leading-none" style={{ color: `hsl(${tone})` }}>
+          {valueText}<span className="text-[11px] text-muted-foreground ml-1">{card.unit}</span>
         </div>
-        {card.series.length >= 2 && <div className="mt-1.5"><Spark series={card.series} color={tone} /></div>}
-        <div className="text-[10px] text-muted-foreground mt-1">{card.entryCount} logged</div>
+        {card.series.length >= 2 && <div className="mt-2 flex-1 flex items-end"><Spark series={card.series} color={tone} /></div>}
+        <div className="text-[11px] text-muted-foreground mt-1.5">{card.entryCount} logged</div>
       </Card>
     </Link>
   );
@@ -172,8 +184,8 @@ function DynamicMetricGrid({ cards }: { cards: WellnessCard[] }) {
     <div className="space-y-3" data-testid="wellness-dynamic">
       {groups.map((g) => (
         <div key={g.group}>
-          <div className="micro-label text-muted-foreground mb-1.5 px-0.5">{g.group}</div>
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
+          <SectionHeading title={g.group} icon={GROUP_ICON[g.group] || Activity} accent={GROUP_TONE[g.group] || T.blue} count={g.cards.length} />
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 items-stretch">
             {g.cards.map((c) => <DynamicCard key={c.id} card={c} />)}
           </div>
         </div>
@@ -308,10 +320,11 @@ export function WellnessOverview(props: WellnessOverviewProps) {
   return (
     <div className="space-y-3" data-testid="wellness-overview">
       {/* ── KPI strip — only tiles that actually have a value ── */}
-      <div className="flex flex-wrap gap-2" data-testid="wellness-kpis">
+      <div className="flex flex-wrap gap-3 content-start items-stretch" data-testid="wellness-kpis">
         {wellnessScore != null && (
           <KpiTile onClick={open("score")} testId="wellness-kpi-score" label="Wellness Score" tone={wellnessScore >= 80 ? T.green : wellnessScore >= 60 ? T.amber : T.red}
-            icon={Sparkles} value={String(wellnessScore)} unit={wellnessScoreLabel} />
+            icon={Sparkles} value={String(wellnessScore)} unit={wellnessScoreLabel}
+            ring={{ value: wellnessScore, max: 100 }} />
         )}
         {sleepHours != null && (
           <KpiTile onClick={open("sleep")} testId="wellness-kpi-sleep" label="Sleep" tone={T.purple} icon={Moon}
@@ -335,7 +348,13 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         )}
         {streak != null && (
           <KpiTile onClick={open("streak")} testId="wellness-kpi-streak" label="Streak" tone={T.orange} icon={Flame}
-            value={String(streak)} unit="days" />
+            value={String(streak)} unit="days"
+            // Milestone progress, derived from the streak itself — the tile
+            // used to end here with a third of it blank.
+            progress={(() => {
+              const next = [7, 30, 60, 100, 365].find((m) => m > streak) ?? null;
+              return next == null ? undefined : { value: streak / next, caption: `${next - streak} to a ${next}-day streak` };
+            })()} />
         )}
       </div>
 

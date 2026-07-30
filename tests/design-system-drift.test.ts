@@ -73,6 +73,60 @@ describe("one card surface", () => {
     expect(css).toMatch(/\.bubble-interactive:active/);
   });
 
+  it("no card re-implements the bubble's gradient inline", () => {
+    // This is the failure that made a whole redesign invisible: these cards
+    // already had an accent gradient painted inline, so swapping their class to
+    // `bubble` changed nothing the eye could see — inline style wins over the
+    // stylesheet. Set --accent-hsl and let .bubble draw the surface.
+    const INLINE_SURFACE = /background:\s*`linear-gradient\([^`]*hsl\(var\(--card\)\)/;
+    const bad = offenders(INLINE_SURFACE);
+    expect(bad, `Set \`--accent-hsl\` and let .bubble paint it:\n${bad.join("\n")}`)
+      .toEqual([]);
+  });
+
+  it("AccentCard composes the bubble rather than its own recipe", () => {
+    const src = fs.readFileSync(path.resolve(ROOT, "components/ui/accent-card.tsx"), "utf8");
+    expect(src).toContain("bubble");
+    expect(src).not.toMatch(/borderColor:\s*`hsl\(/);
+  });
+
+  it("never writes `bubble/60` — slash-opacity silently matches nothing", () => {
+    // Tailwind's `/opacity` suffix only works on Tailwind utilities. On a
+    // custom class it produces a class name no stylesheet defines, so the box
+    // renders with no surface at all — eight of these were shipped, which is
+    // part of why a finished redesign was invisible on several screens.
+    const bad = offenders(/\bbubble\/\d+\b/);
+    expect(bad, `Use plain \`bubble\` (tune the tint with --accent-hsl):\n${bad.join("\n")}`)
+      .toEqual([]);
+  });
+
+  it("no .bubble overrides its own border inline", () => {
+    // Same class of failure as the inline gradient above: .bubble draws its
+    // border from --accent-hsl, and an inline borderColor wins over it.
+    const bad: string[] = [];
+    for (const f of FILES) {
+      fs.readFileSync(f, "utf8").split("\n").forEach((line, i) => {
+        if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+        if (/className=(["'`])[^"'`]*\bbubble\b/.test(line) && /borderColor:/.test(line)) {
+          bad.push(`${rel(f)}:${i + 1} — ${line.trim().slice(0, 110)}`);
+        }
+      });
+    }
+    expect(bad, `Set \`--accent-hsl\` instead of an inline borderColor:\n${bad.join("\n")}`)
+      .toEqual([]);
+  });
+
+  it("EntityCard is the one grid-card shape, built on the bubble + Medallion", () => {
+    // Assets, Liabilities and Documents each had their own near-identical card
+    // recipe. If this component stops composing the shared pieces, they drift
+    // apart again.
+    const src = fs.readFileSync(path.resolve(ROOT, "components/ui/entity-card.tsx"), "utf8");
+    expect(src).toContain("bubble");
+    expect(src).toContain("Medallion");
+    expect(src).toContain("micro-label");
+    expect(src).toContain("metric-value");
+  });
+
   it("the shared Card renders the bubble, so its 23 consumers inherit it", () => {
     const card = fs.readFileSync(path.resolve(ROOT, "components/ui/card.tsx"), "utf8");
     expect(card).toContain("bubble");

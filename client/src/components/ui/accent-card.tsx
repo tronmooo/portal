@@ -41,17 +41,18 @@ export const AccentCard = React.forwardRef<HTMLDivElement, AccentCardProps>(func
   return (
     <div
       ref={ref}
+      // The surface — radius, gradient wash, layered shadow — comes from
+      // `.bubble`, driven by --accent-hsl. This component used to hand-roll the
+      // same recipe with a smaller radius and a flatter shadow, which is how it
+      // drifted away from the dashboard it was meant to match.
       className={cn(
-        "relative rounded-xl border overflow-hidden flex flex-col transition-all",
+        "relative bubble overflow-hidden flex flex-col",
         size === "sm" ? "p-3 gap-1.5" : "p-3.5 gap-2",
-        interactive && "cursor-pointer hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        interactive && "bubble-interactive pressable",
         className,
       )}
       style={{
-        borderColor: `hsl(${hsl} / 0.30)`,
-        background: `linear-gradient(135deg, hsl(${hsl} / 0.12) 0%, hsl(var(--card)) 75%)`,
-        // @ts-expect-error custom CSS var for ring color on interactive cards
-        "--tw-ring-color": `hsl(${hsl} / 0.55)`,
+        ["--accent-hsl" as any]: hsl,
       }}
       {...rest}
     >

@@ -25,6 +25,12 @@ import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
 import { CreateProfileDialog } from "@/components/CreateProfileDialog";
+// One card shape and one heading treatment for every hub tab — the Executive
+// tab's, so Assets / Liabilities / Documents stop reading as three products.
+import { EntityCard } from "@/components/ui/entity-card";
+import { SectionHeading } from "@/components/ui/section-heading";
+import { Medallion, Pill as StatusPill, toneForDays } from "@/components/dashboard/visuals";
+import { dayLabel } from "@shared/now-rank";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -2871,13 +2877,11 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   return (
     <div
       data-testid={`card-tracker-${tracker.id}`}
-      className="rounded-xl overflow-hidden cursor-pointer card-lift transition-all flex flex-col relative pressable"
-      style={{
-        height: cardHeight,
-        background: `linear-gradient(135deg, hsl(${catAccent} / 0.12) 0%, hsl(var(--card)) 75%)`,
-        border: `1px solid hsl(${catAccent} / 0.30)`,
-        boxShadow: `0 2px 16px hsl(${catAccent} / 0.07), inset 0 1px 0 hsl(${catAccent} / 0.1)`,
-      }}
+      // The bubble owns the surface — radius, gradient wash, layered shadow —
+      // driven by --accent-hsl. Setting background/border/shadow inline here is
+      // what kept this card looking flat while the rest of the app moved.
+      className="bubble bubble-interactive overflow-hidden cursor-pointer flex flex-col relative pressable"
+      style={{ ["--accent-hsl" as any]: catAccent, height: cardHeight }}
       onClick={() => onOpenDetail?.(tracker.id)}
       role="button"
       tabIndex={0}
@@ -3440,12 +3444,7 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
   return (
     <div
       className="rounded-xl overflow-hidden flex flex-col relative"
-      style={{
-        height: 150,
-        background: `linear-gradient(135deg, hsl(${catAccent} / 0.12) 0%, hsl(var(--card)) 75%)`,
-        border: `1px solid hsl(${catAccent} / 0.30)`,
-        boxShadow: `0 2px 16px hsl(${catAccent} / 0.08), inset 0 1px 0 hsl(${catAccent} / 0.12)`,
-      }}
+      style={{ ["--accent-hsl" as any]: catAccent, height: 150 }}
     >
       <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
         <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: ac }}>
@@ -6804,13 +6803,11 @@ export default function TrackersPage() {
             {/* Hub single-section view: the active tab chip already names this
                 section, so its redundant title/toggle is hidden (frees space). */}
             {!(hubEmbedded && sectionFilter !== "all") && (
-            <button onClick={() => toggleSection("profiles")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: 'linear-gradient(135deg, hsl(262 60% 62% / 0.06) 0%, transparent 50%)' }} data-testid="section-toggle-profiles">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'hsl(262 60% 62% / 0.15)' }}>
-                <Car className="h-4 w-4" style={{ color: 'hsl(262 60% 62%)' }} />
-              </div>
+            <button onClick={() => toggleSection("profiles")} className="pressable flex items-center gap-3 w-full px-1 py-1 rounded-xl text-left" data-testid="section-toggle-profiles">
+              <Medallion icon={Car} accent="262 60% 62%" size="sm" />
               <div className="flex-1 text-left">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold" style={{ color: 'hsl(262 60% 62%)' }}>Assets & Vehicles</span>
+                  <span className="text-sm font-bold tracking-tight" style={{ color: 'hsl(262 60% 62%)' }}>Assets & Vehicles</span>
                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'hsl(262 60% 62% / 0.15)', color: 'hsl(262 60% 62%)' }}>{childProfiles.length}</span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">Vehicles, property, investments and more</p>
@@ -6819,7 +6816,7 @@ export default function TrackersPage() {
             </button>
             )}
             {(!collapsedSections.has("profiles") || (hubEmbedded && sectionFilter !== "all")) && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 items-start" style={{ gridAutoRows: 160 }}>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch" style={{ gridAutoRows: 178 }}>
                 {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
                   const Icon = typeIcons[child.type] || Star;
                   const fields = child.fields || {};
@@ -6910,55 +6907,27 @@ export default function TrackersPage() {
                   const valueLabel = (currentVal == null || currentVal === 0) && purchaseVal != null && purchaseVal > 0 ? 'purchase' : null;
 
                   return (
-                    <Link key={child.id} href={`/profiles/${child.id}`} className="block" style={{ height: 160 }} onMouseEnter={() => warmProfileDetail(child.id)} onTouchStart={() => warmProfileDetail(child.id)}>
-                      <div
-                        className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] grid pressable"
-                        style={{
-                          height: 160,
-                          minHeight: 160,
-                          maxHeight: 160,
-                          boxSizing: 'border-box',
-                          background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`,
-                          border: `1px solid hsl(${accentHsl} / 0.2)`,
-                          boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)`,
-                          gridTemplateRows: 'auto 1fr auto',
-                        }}
+                    <Link key={child.id} href={`/profiles/${child.id}`} className="block h-full" onMouseEnter={() => warmProfileDetail(child.id)} onTouchStart={() => warmProfileDetail(child.id)}>
+                      <EntityCard
+                        interactive
+                        accent={accentHsl}
+                        icon={Icon}
+                        title={child.name}
+                        value={displayValue != null ? `$${displayValue.toLocaleString()}` : undefined}
+                        valueUnit={valueLabel ?? undefined}
+                        emptyValue="Tap to add value"
+                        meta={metaLines}
+                        // Type and year were an 8px chip and an 8px string in the
+                        // dead strip at the bottom. Same facts, in the app's one
+                        // pill treatment.
+                        pills={
+                          <>
+                            <StatusPill accent={accentHsl} className="capitalize">{child.type}</StatusPill>
+                            {year && <StatusPill tone="neutral">{year}</StatusPill>}
+                          </>
+                        }
                         data-testid={`button-view-child-${child.id}`}
-                      >
-                        {/* Header: icon + name */}
-                        <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
-                          <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}>
-                            <Icon className="h-3.5 w-3.5" />
-                          </div>
-                          <p className="text-[11px] font-bold text-foreground truncate">{child.name}</p>
-                        </div>
-
-                        {/* Body: value + 2 fixed meta slots (empty slots reserve space so heights align) */}
-                        <div className="px-2.5 flex flex-col justify-start gap-1">
-                          <div className="h-7 flex items-baseline gap-1">
-                            {displayValue != null ? (
-                              <>
-                                <span className="text-xl font-black tabular-nums text-foreground leading-none">${displayValue.toLocaleString()}</span>
-                                {valueLabel && <span className="text-[8px] text-muted-foreground">{valueLabel}</span>}
-                              </>
-                            ) : (
-                              <span className="text-[11px] text-muted-foreground/60 italic">Tap to add value</span>
-                            )}
-                          </div>
-                          <div className="h-4">
-                            {metaLines[0] ? <KpiLine label={metaLines[0].label} value={metaLines[0].value} /> : <span className="block h-full" aria-hidden="true" />}
-                          </div>
-                          <div className="h-4">
-                            {metaLines[1] ? <KpiLine label={metaLines[1].label} value={metaLines[1].value} /> : <span className="block h-full" aria-hidden="true" />}
-                          </div>
-                        </div>
-
-                        {/* Footer: type chip pinned bottom-left, year pinned bottom-right */}
-                        <div className="px-2.5 pb-2 pt-1 flex items-center justify-between">
-                          <span className="text-[8px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{child.type}</span>
-                          {year ? <span className="text-[8px] text-muted-foreground">{year}</span> : <span aria-hidden="true" />}
-                        </div>
-                      </div>
+                      />
                     </Link>
                   );
                 })}
@@ -7052,13 +7021,11 @@ export default function TrackersPage() {
         return (
           <div className="space-y-2">
             {!(hubEmbedded && sectionFilter !== "all") && (
-            <button onClick={() => toggleSection("liabilities")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: `linear-gradient(135deg, hsl(${accentHsl} / 0.06) 0%, transparent 50%)` }} data-testid="section-toggle-liabilities">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: `hsl(${accentHsl} / 0.15)` }}>
-                <TrendingDown className="h-4 w-4" style={{ color: ac }} />
-              </div>
+            <button onClick={() => toggleSection("liabilities")} className="pressable flex items-center gap-3 w-full px-1 py-1 rounded-xl text-left" data-testid="section-toggle-liabilities">
+              <Medallion icon={TrendingDown} accent={accentHsl} size="sm" />
               <div className="flex-1 text-left">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-bold" style={{ color: ac }}>Liabilities</span>
+                  <span className="text-sm font-bold tracking-tight" style={{ color: ac }}>Liabilities</span>
                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: `hsl(${accentHsl} / 0.15)`, color: ac }}>{liabs.length}</span>
                   {totalBalance > 0 && <span className="text-[10px] text-muted-foreground tabular-nums">${Math.round(totalBalance).toLocaleString()} total</span>}
                   {totalMonthly > 0 && <span className="text-[10px] text-muted-foreground tabular-nums">· ${Math.round(totalMonthly).toLocaleString()}/mo</span>}
@@ -7078,19 +7045,25 @@ export default function TrackersPage() {
               const fixed = liabs.filter(l => liabilityFamily(l.type_key) === 'amortizing').sort(sortByName);
               const variable = liabs.filter(l => liabilityFamily(l.type_key) !== 'amortizing').sort(sortByName);
               const fmtMoney = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-              const fmtDue = (raw: any): string | null => {
+              const parseDue = (raw: any): Date | null => {
                 if (!raw) return null;
                 const d = new Date(String(raw).slice(0, 10) + "T00:00:00");
-                return isNaN(d.getTime()) ? null : d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+                return isNaN(d.getTime()) ? null : d;
               };
-              // Compact label/value row — tuned to fit the narrow grid boxes
-              // (matches the density of the Assets / Documents boxes on this page).
-              const Row = ({ label, value }: { label: string; value: React.ReactNode }) => (
-                <div className="flex items-baseline justify-between gap-1.5">
-                  <span className="text-[9px] text-muted-foreground shrink-0">{label}</span>
-                  <span className="text-[10px] font-medium text-foreground text-right truncate min-w-0">{value}</span>
-                </div>
-              );
+              const fmtDue = (raw: any): string | null => {
+                const d = parseDue(raw);
+                return d ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null;
+              };
+              // Whole days from today to the due date — drives the countdown pill
+              // in the footer, which is what now fills the space these cards used
+              // to leave blank.
+              const daysUntilDue = (raw: any): number | null => {
+                const d = parseDue(raw);
+                if (!d) return null;
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                return Math.round((d.getTime() - today.getTime()) / 86400000);
+              };
               const renderCard = (liab: any) => {
                 const fields: any = liab.fields || {};
                 const fin = fields.finance || {};
@@ -7103,61 +7076,59 @@ export default function TrackersPage() {
                 const subtype = liabilitySubcategoryOf(liab);
                 const original = toNumLiab(fields.originalBalance ?? fin.originalBalance ?? fields.originalLoanAmount ?? fin.originalLoanAmount ?? fields.creditLimit ?? fin.creditLimit);
                 const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
-                const due = fmtDue(fields.dueDate ?? fields.nextDueDate ?? fields.due_date ?? fin.dueDate);
+                const rawDue = fields.dueDate ?? fields.nextDueDate ?? fields.due_date ?? fin.dueDate;
+                const due = fmtDue(rawDue);
+                const dueIn = daysUntilDue(rawDue);
                 const freqUnit = subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo';
                 const isRecurring = isSubscription || liabilityFamily(liab.type_key) === 'recurring';
                 const hasProgress = original != null && original > 0 && balance != null;
+
+                // Headline: current balance (debt) or the recurring amount (bills).
+                const headline = (balance != null && balance > 0)
+                  ? { value: fmtMoney(balance), unit: "bal" }
+                  : (isRecurring && subCost != null && subCost > 0)
+                    ? { value: fmtMoney(subCost), unit: `/${freqUnit}` }
+                    : null;
+
+                const meta: { label: string; value: React.ReactNode }[] = [
+                  { label: "Type", value: <span className="capitalize">{subtype}</span> },
+                ];
+                if (lender) meta.push({ label: "Creditor", value: String(lender) });
+                if (apr != null && apr > 0) meta.push({ label: "APR", value: `${apr < 1 ? (apr * 100).toFixed(2) : apr.toFixed(2)}%` });
+                if (due && !hasProgress) meta.push({ label: "Due", value: due });
+
                 return (
                   <Link key={liab.id} href={`/profiles/${liab.id}`} className="block h-full" onMouseEnter={() => warmProfileDetail(liab.id)} onTouchStart={() => warmProfileDetail(liab.id)}>
-                    <div
-                      className="rounded-xl p-2.5 cursor-pointer transition-all hover:border-[hsl(0_72%_55%/0.45)] active:scale-[0.98] h-full flex flex-col pressable"
-                      style={{ background: `linear-gradient(160deg, hsl(${accentHsl} / 0.12) 0%, hsl(var(--card)) 55%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 14px hsl(${accentHsl} / 0.06)` }}
+                    <EntityCard
+                      interactive
+                      accent={accentHsl}
+                      icon={TrendingDown}
+                      title={liab.name}
+                      value={headline?.value}
+                      valueUnit={headline?.unit}
+                      emptyValue="No balance set"
+                      meta={meta}
+                      progress={hasProgress ? {
+                        value: paidPct,
+                        left: `${Math.round(paidPct * 100)}% paid`,
+                        right: `of ${fmtMoney(original!)}`,
+                      } : undefined}
+                      // The countdown is the one thing you actually want off a
+                      // liability card at a glance, and it fills the bottom third
+                      // that used to be blank.
+                      pills={dueIn != null
+                        ? <StatusPill tone={toneForDays(dueIn)}>{dayLabel(dueIn)}</StatusPill>
+                        : <StatusPill tone="neutral">No due date</StatusPill>}
+                      actions={<Pencil className="h-3.5 w-3.5 text-muted-foreground/60" aria-hidden="true" />}
                       data-testid={`liab-card-${liab.id}`}
-                    >
-                      <div className="flex items-start gap-1.5 mb-1.5">
-                        <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.18)`, color: ac }}><TrendingDown className="h-3 w-3" /></div>
-                        <p className="micro-label flex-1 min-w-0 text-foreground leading-tight line-clamp-2" title={liab.name}>{liab.name}</p>
-                        <Pencil className="h-3 w-3 text-muted-foreground/50 shrink-0" />
-                      </div>
-                      {/* Headline: current balance (debt) or recurring amount (bills) */}
-                      {balance != null && balance > 0 ? (
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-base font-black tabular-nums text-foreground leading-none">{fmtMoney(balance)}</span>
-                          <span className="text-[8px] text-muted-foreground">bal</span>
-                        </div>
-                      ) : isRecurring && subCost != null && subCost > 0 ? (
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-base font-black tabular-nums text-foreground leading-none">{fmtMoney(subCost)}</span>
-                          <span className="text-[8px] text-muted-foreground">/{freqUnit}</span>
-                        </div>
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground/50 italic">No balance set</span>
-                      )}
-                      <div className="mt-1.5 space-y-0.5 flex-1">
-                        <Row label="Type" value={<span className="capitalize">{subtype}</span>} />
-                        {lender && <Row label="Creditor" value={String(lender)} />}
-                        {apr != null && apr > 0 && <Row label="APR" value={`${apr < 1 ? (apr * 100).toFixed(2) : apr.toFixed(2)}%`} />}
-                        {due && !hasProgress && <Row label="Due" value={due} />}
-                      </div>
-                      {hasProgress && (
-                        <div className="mt-1.5">
-                          <div className="h-1.5 w-full rounded-full overflow-hidden" style={{ background: `hsl(${accentHsl} / 0.12)` }}>
-                            <div className="h-full rounded-full" style={{ width: `${Math.round(paidPct * 100)}%`, background: ac }} />
-                          </div>
-                          <div className="mt-0.5 flex justify-between text-[8px] text-muted-foreground tabular-nums">
-                            <span>{Math.round(paidPct * 100)}% paid</span>
-                            <span>of {fmtMoney(original!)}</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    />
                   </Link>
                 );
               };
               const Group = ({ title, items }: { title: string; items: any[] }) => items.length === 0 ? null : (
                 <div>
-                  <p className="micro-label text-muted-foreground mb-1.5 px-0.5">{title}</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 items-start" style={{ gridAutoRows: 168 }}>{items.map(renderCard)}</div>
+                  <SectionHeading title={title} icon={TrendingDown} accent={accentHsl} count={items.length} />
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch" style={{ gridAutoRows: 178 }}>{items.map(renderCard)}</div>
                 </div>
               );
               return (
@@ -7175,13 +7146,11 @@ export default function TrackersPage() {
       {viewMode === "cards" && (sectionFilter === "all" || sectionFilter === "documents") && <div className="space-y-2">
         <div className="flex items-center justify-between">
           {!(hubEmbedded && sectionFilter !== "all") && (
-          <button onClick={() => toggleSection("documents")} className="flex items-center gap-3 w-full px-1 py-1 rounded-xl" style={{ background: 'linear-gradient(135deg, hsl(25 80% 54% / 0.06) 0%, transparent 50%)' }} data-testid="section-toggle-documents">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'hsl(25 80% 54% / 0.15)' }}>
-                <FileText className="h-4 w-4" style={{ color: 'hsl(25 80% 54%)' }} />
-              </div>
+          <button onClick={() => toggleSection("documents")} className="pressable flex items-center gap-3 w-full px-1 py-1 rounded-xl text-left" data-testid="section-toggle-documents">
+              <Medallion icon={FileText} accent="25 80% 54%" size="sm" />
               <div className="flex-1 text-left">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold" style={{ color: 'hsl(25 80% 54%)' }}>Documents</span>
+                  <span className="text-sm font-bold tracking-tight" style={{ color: 'hsl(25 80% 54%)' }}>Documents</span>
                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'hsl(25 80% 54% / 0.15)', color: 'hsl(25 80% 54%)' }}>{filteredDocuments.length}</span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">IDs, insurance, contracts, and more</p>
@@ -7313,39 +7282,61 @@ export default function TrackersPage() {
                 return (
                   <div key={docType}>
                     {showTypeHeaders && (
-                      <h4 className="text-xs font-semibold uppercase tracking-wider mt-3 mb-1.5 flex items-center gap-1.5" style={{ color: `hsl(${accentHslForType})` }}>
-                        <span>{DOC_TYPE_EMOJI[docType] || '📄'}</span> {docType.replace(/_/g, ' ')} <span className="text-muted-foreground font-normal">({docs.length})</span>
-                      </h4>
+                      <div className="mt-3">
+                        <SectionHeading
+                          title={docType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                          icon={FileText}
+                          accent={accentHslForType}
+                          count={docs.length}
+                        />
+                      </div>
                     )}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch" style={{ gridAutoRows: 196 }}>
                       {docs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(doc => {
                         const accentHsl = DOC_TYPE_HSL[doc.type] || '25 80% 54%';
-                        const ac = `hsl(${accentHsl})`;
                         const linkedNames = (doc.linkedProfiles || []).map((pid: string) => (profiles || []).find(p => p.id === pid)?.name).filter(Boolean);
                         const createdDate = new Date(doc.createdAt);
                         const daysSince = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
                         const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
+                        const docMeta = [
+                          { label: "Format", value: mimeShort },
+                          { label: "Added", value: createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) },
+                          ...(linkedNames.length > 0 ? [{ label: "Owner", value: linkedNames.join(', ') }] : []),
+                        ];
                         return (
-                          <div key={doc.id} className="rounded-xl overflow-hidden cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] flex flex-col pressable" style={{ height: 160, background: `linear-gradient(160deg, hsl(${accentHsl} / 0.14) 0%, hsl(var(--card)) 45%)`, border: `1px solid hsl(${accentHsl} / 0.2)`, boxShadow: `0 2px 16px hsl(${accentHsl} / 0.07)` }} data-testid={`global-doc-${doc.id}`} onPointerDown={() => prefetchDocument(doc.id, doc.mimeType)} onClick={() => setViewingDoc(doc)} role="button" tabIndex={0} aria-label={`View document: ${doc.name}`} onKeyDown={onEnterOrSpace(() => setViewingDoc(doc))}>
-                            <div className="px-2.5 pt-2 pb-1 flex items-center gap-1.5">
-                              <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${accentHsl} / 0.2)`, color: ac }}><FileText className="h-3.5 w-3.5" /></div>
-                              <p className="text-[10px] font-bold text-foreground truncate">{doc.name}</p>
-                            </div>
-                            <div className="px-2.5 pb-1 flex-1 min-h-0 overflow-hidden flex flex-col gap-0.5">
-                              <span className="text-base font-black text-foreground capitalize line-clamp-2 break-words leading-tight">{doc.type?.replace(/_/g, ' ') || 'Document'}</span>
-                              <KpiLine label="Format" value={mimeShort} />
-                              <KpiLine label="Added" value={createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} />
-                              {linkedNames.length > 0 && <KpiLine label="Owner" value={linkedNames.join(', ')} />}
-                              {daysSince <= 7 && <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-500 font-bold self-start mt-0.5">New</span>}
-                            </div>
-                            <div className="px-2.5 pb-2 pt-0.5 shrink-0 flex items-center justify-between">
-                              <span className="text-[7px] font-semibold capitalize px-1.5 py-0.5 rounded" style={{ backgroundColor: `hsl(${accentHsl} / 0.12)`, color: ac }}>{doc.type?.replace(/_/g, ' ') || 'doc'}</span>
-                              <div className="flex gap-1">
-                                <button onClick={stopProp(() => handleShareDoc(doc))} className="text-muted-foreground/60 hover:text-foreground"><Share2 className="h-3 w-3" /></button>
-                                <button onClick={stopProp(() => setDocDeleteConfirmId(doc.id))} className="text-muted-foreground/60 hover:text-destructive"><X className="h-3 w-3" /></button>
-                              </div>
-                            </div>
-                          </div>
+                          <EntityCard
+                            key={doc.id}
+                            interactive
+                            accent={accentHsl}
+                            icon={FileText}
+                            title={doc.name}
+                            // No headline: a document has no number worth
+                            // shouting, and the type it used to shout is
+                            // already in the section heading above and in the
+                            // footer pill below.
+                            meta={docMeta}
+                            pills={
+                              <>
+                                <StatusPill accent={accentHsl} className="capitalize">{doc.type?.replace(/_/g, ' ') || 'doc'}</StatusPill>
+                                {daysSince <= 7
+                                  ? <StatusPill tone="good">New</StatusPill>
+                                  : <StatusPill tone="neutral">{daysSince}d ago</StatusPill>}
+                              </>
+                            }
+                            actions={
+                              <>
+                                <button onClick={stopProp(() => handleShareDoc(doc))} aria-label={`Share ${doc.name}`} className="text-muted-foreground/70 hover:text-foreground"><Share2 className="h-3.5 w-3.5" /></button>
+                                <button onClick={stopProp(() => setDocDeleteConfirmId(doc.id))} aria-label={`Delete ${doc.name}`} className="text-muted-foreground/70 hover:text-destructive"><X className="h-3.5 w-3.5" /></button>
+                              </>
+                            }
+                            data-testid={`global-doc-${doc.id}`}
+                            onPointerDown={() => prefetchDocument(doc.id, doc.mimeType)}
+                            onClick={() => setViewingDoc(doc)}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`View document: ${doc.name}`}
+                            onKeyDown={onEnterOrSpace(() => setViewingDoc(doc))}
+                          />
                         );
                       })}
                     </div>

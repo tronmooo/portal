@@ -59,7 +59,7 @@ export default function ChartCard({ spec, defaultOpen = true }: { spec: ChartSpe
     conf >= 0.5 ? "bg-amber-500/15 text-amber-500" : "bg-red-500/15 text-red-500";
 
   return (
-    <div className="mt-3 bubble/60 overflow-hidden">
+    <div className="mt-3 bubble overflow-hidden">
       {/* Header: title + copy + collapse */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border/60">
         <button

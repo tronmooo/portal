@@ -192,7 +192,7 @@ function ChatChart({ spec }: { spec: ChartSpec2 }) {
 function ChatTable({ spec }: { spec: TableSpec2 }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="mt-3 bubble/60 overflow-hidden">
+    <div className="mt-3 bubble overflow-hidden">
       <div
         role="button"
         tabIndex={0}
@@ -247,7 +247,7 @@ function ChatReport({ spec }: { spec: ReportSpec2 }) {
   const [open, setOpen] = useState(true);
   const [expanded, setExpanded] = useState<Record<number,boolean>>({});
   return (
-    <div className="mt-3 bubble/60 overflow-hidden">
+    <div className="mt-3 bubble overflow-hidden">
       <div
         role="button"
         tabIndex={0}

@@ -832,7 +832,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
 
       {/* Summary stat cards */}
       <div className="grid grid-cols-3 gap-2">
-        <div className="bubble/60 p-2.5">
+        <div className="bubble p-2.5">
           <p className="text-[10px] text-muted-foreground">Total Spent</p>
           <p className="text-base font-bold tabular-nums leading-tight">${fmt(view.total)}</p>
           {view.trendPct != null && (
@@ -841,11 +841,11 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
             </p>
           )}
         </div>
-        <div className="bubble/60 p-2.5">
+        <div className="bubble p-2.5">
           <p className="text-[10px] text-muted-foreground">Daily Average</p>
           <p className="text-base font-bold tabular-nums leading-tight">${fmt(view.dailyAvg)}</p>
         </div>
-        <div className="bubble/60 p-2.5">
+        <div className="bubble p-2.5">
           <p className="text-[10px] text-muted-foreground">Transactions</p>
           <p className="text-base font-bold tabular-nums leading-tight">{view.txns}</p>
           <p className="text-[10px] text-muted-foreground">~{view.perDay.toFixed(1)}/day</p>
@@ -854,7 +854,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
 
       {/* Donut by category */}
       {view.total > 0 ? (
-        <div className="bubble/60 p-3">
+        <div className="bubble p-3">
           <p className="text-xs font-semibold mb-2">Spending by Category</p>
           <div className="flex items-center gap-3">
             <div className="relative shrink-0" style={{ width: 116, height: 116 }}>

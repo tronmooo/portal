@@ -983,8 +983,8 @@ export default function ArtifactsPage() {
           { label: "Artifacts", value: profileFiltered.filter(i => i.isArtifact).length, color: "262 70% 62%" },
           { label: "Showing", value: profileFiltered.length, color: "155 60% 48%" },
         ].map(s => (
-          <div key={s.label} className="rounded-xl border p-2.5 text-center card-lift transition-all"
-            style={{ borderColor: `hsl(${s.color} / 0.30)`, background: `linear-gradient(135deg, hsl(${s.color} / 0.12) 0%, hsl(var(--card)) 75%)` }}>
+          <div key={s.label} className=" bubble  p-2.5 text-center card-lift transition-all"
+            style={{ ["--accent-hsl" as any]: s.color }}>
             <p className="metric-value text-lg leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
             <p className="mt-1 micro-label text-muted-foreground">{s.label}</p>
           </div>

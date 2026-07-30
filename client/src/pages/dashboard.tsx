@@ -263,10 +263,7 @@ function CollapsibleSection({
     <div
       data-testid={testId}
       className="rounded-xl border overflow-hidden transition-shadow hover:shadow-md"
-      style={accent ? {
-        borderColor: `hsl(${accent} / 0.30)`,
-        background: `linear-gradient(135deg, hsl(${accent} / 0.08) 0%, hsl(var(--card)) 75%)`,
-      } : { borderColor: 'hsl(var(--border) / 0.5)', background: 'hsl(var(--card))' }}
+      style={accent ? { ["--accent-hsl" as any]: accent } : undefined}
     >
       <button
         className="w-full flex items-center gap-2.5 px-3 py-3 text-left transition-colors hover:bg-muted/20"

@@ -1,5 +1,6 @@
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
+import { formatFieldKey, stringifyField } from "@/lib/field-display";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
 // profile-detail stays under control. The legacy ChildAssetsCard /
 // ValueRollupCard / MaintenanceCard below still exist and are still used for
@@ -381,39 +382,10 @@ function timelineIcon(type: string) {
   return <Icon className="h-3.5 w-3.5" />;
 }
 
-function formatKey(key: string) {
-  return key
-    .replace(/([A-Z])/g, " $1")
-    .replace(/_/g, " ")
-    .replace(/^\w/, (c) => c.toUpperCase())
-    .trim();
-}
-
-// Safely stringify a profile field for display. Profile fields can be primitives,
-// nested objects (legacy AI-extracted blobs), or arrays. Never render "[object Object]".
-function stringifyField(value: any): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string" || typeof value === "number") return String(value);
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (Array.isArray(value)) {
-    return value.map(v => stringifyField(v)).filter(Boolean).join(", ");
-  }
-  if (typeof value === "object") {
-    const preferredKeys = ["value", "name", "label", "display", "text", "title"];
-    for (const k of preferredKeys) {
-      if (value[k] !== undefined && (typeof value[k] === "string" || typeof value[k] === "number")) {
-        return String(value[k]);
-      }
-    }
-    const entries = Object.entries(value)
-      .filter(([_, v]) => v !== null && v !== undefined && v !== "" && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"))
-      .slice(0, 2)
-      .map(([k, v]) => `${formatKey(k)}: ${v}`);
-    if (entries.length) return entries.join(", ");
-    return "";
-  }
-  try { return String(value); } catch { return ""; }
-}
+// formatKey / stringifyField now live in @/lib/field-display so the Info tab
+// renders identical text — it had its own String(v) and showed "[object Object]"
+// for any composite field (the user's ADDRESS).
+const formatKey = formatFieldKey;
 
 function formatCurrency(val: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(val);
@@ -3276,8 +3248,8 @@ function InfoTab({
         if (items.length === 0 && !notes) return null;
         return (
           <Card
-            className="overflow-hidden border"
-            style={{ borderColor: accentBorder, background: `linear-gradient(135deg, ${accentSoft} 0%, hsl(var(--card)) 60%)` }}
+            className="overflow-hidden"
+            style={{ ["--accent-hsl" as any]: accentHsl }}
           >
             <CardContent className="p-3 space-y-2.5">
               <div className="flex items-center gap-2">
@@ -3292,7 +3264,7 @@ function InfoTab({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">{items}</div>
               )}
               {notes && (
-                <div className="bubble/60 p-2.5" style={{ borderColor: accentBorder }}>
+                <div className="bubble p-2.5">
                   <p className="micro-label text-muted-foreground mb-1">About</p>
                   <p className="text-xs leading-relaxed text-foreground/90">{String(notes)}</p>
                 </div>
@@ -7136,10 +7108,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                 <div
                   key={tracker.id}
                   className="relative rounded-xl border p-3 flex flex-col gap-1.5 overflow-hidden transition-all hover:-translate-y-0.5 hover:shadow-md"
-                  style={{
-                    borderColor: `hsl(${accent.hsl} / 0.30)`,
-                    background: `linear-gradient(135deg, hsl(${accent.hsl} / 0.12) 0%, hsl(var(--card)) 70%)`,
-                  }}
+                  style={{ ["--accent-hsl" as any]: accent.hsl }}
                 >
                   <div className="flex items-center gap-1.5">
                     <span
@@ -11135,10 +11104,7 @@ export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profile
               <Link key={person.id} href={`/profiles/${person.id}`}>
                 <div
                   className="group flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer hover:shadow-md hover:-translate-y-px pressable"
-                  style={{
-                    background: `linear-gradient(135deg, hsl(${accent} / 0.10) 0%, hsl(var(--card)) 60%)`,
-                    borderColor: `hsl(${accent} / 0.25)`,
-                  }}
+                  style={{ ["--accent-hsl" as any]: accent }}
                   data-testid={`linked-person-${person.id}`}
                 >
                   {person.avatar ? (

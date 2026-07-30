@@ -179,10 +179,14 @@ export function toneForDays(daysUntil: number | null | undefined): PillTone {
   return "info";
 }
 
-export function Pill({ children, tone = "neutral", className = "", pulse = false }: {
-  children: React.ReactNode; tone?: PillTone; className?: string; pulse?: boolean;
+export function Pill({ children, tone = "neutral", accent, className = "", pulse = false }: {
+  children: React.ReactNode; tone?: PillTone;
+  /** Raw HSL triple that overrides `tone` — for a pill that must match the
+   *  colour of the card it sits in (a purple asset's "vehicle" chip). */
+  accent?: string;
+  className?: string; pulse?: boolean;
 }) {
-  const hsl = TONE_HSL[tone];
+  const hsl = accent ?? TONE_HSL[tone];
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-[3px] text-[11px] font-semibold whitespace-nowrap ${pulse ? "pulse-attention" : ""} ${className}`}

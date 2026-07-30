@@ -122,7 +122,7 @@ export function AttentionFilters({ prefs, onChange }: {
   };
 
   return (
-    <div className="mb-2 bubble/40 px-3 py-2.5 space-y-2.5" data-testid="attention-filters">
+    <div className="mb-2 bubble px-3 py-2.5 space-y-2.5" data-testid="attention-filters">
       <div>
         <p className="micro-label text-muted-foreground mb-1.5">Show</p>
         <div className="flex flex-wrap gap-1.5">

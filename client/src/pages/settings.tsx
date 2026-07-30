@@ -48,7 +48,7 @@ function PWAInstallCard() {
   if (installed || !deferredPrompt) return null;
 
   return (
-    <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 flex items-center gap-3 mb-4">
+    <div className=" bubble border -primary/30 bg-primary/5 p-4 flex items-center gap-3 mb-4">
       <div className="w-14 h-14 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
         <img src="/portol-logo-clean.png" alt="Portol" className="w-9 h-9 object-contain" />
       </div>
@@ -76,8 +76,8 @@ function StatCard({ icon: Icon, label, value, href, accent }: { icon: any; label
   return (
     <button
       onClick={() => navigate(href)}
-      className="flex items-center gap-3 p-3 rounded-xl border active:scale-[0.98] transition-all text-left card-lift w-full"
-      style={{ borderColor: `hsl(${accent} / 0.30)`, background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, hsl(var(--card)) 75%)` }}
+      className="flex items-center gap-3 p-3 bubble  active:scale-[0.98] transition-all text-left card-lift w-full"
+      style={{ ["--accent-hsl" as any]: accent }}
     >
       <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: `hsl(${accent} / 0.15)` }}>
         <Icon className="h-4 w-4" style={{ color: `hsl(${accent})` }} />
