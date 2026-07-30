@@ -5,6 +5,7 @@ import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
 
 // Per-request storage context — eliminates the global userId race condition (C-1)
 // Auth middleware runs storage within this context so all downstream code
@@ -1404,12 +1405,12 @@ export class MemStorage implements IStorage {
       const end = parseLocalDate(endDate);
       for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
         const dateStr = d.toLocaleDateString('en-CA');
-        const dayOfWeek = d.getDay();
-        const showOnDay = habit.frequency === "daily" ||
-          (habit.frequency === "weekly" && (habit.targetDays?.includes(dayOfWeek) ?? dayOfWeek === 1)) ||
-          (habit.frequency === "custom" && habit.targetDays?.includes(dayOfWeek));
-        if (showOnDay) {
-          const checkedToday = habit.checkins.filter(c => c.date === dateStr).length;
+        // The frequency→day rule now lives in shared/habit-schedule so the
+        // dashboard applies the same one. It used to exist ONLY here, and
+        // SupabaseStorage's timeline excludes habits — so in production nothing
+        // applied it and every surface treated every habit as due every day.
+        if (isHabitDueOn(habit, dateStr)) {
+          const checkedToday = habitCheckinCount(habit, dateStr);
           const target = habit.targetPerDay || 1;
           const isDone = checkedToday >= target;
           items.push({

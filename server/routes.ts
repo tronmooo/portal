@@ -1355,7 +1355,17 @@ export async function registerRoutes(
   // task marker, and stamp fired_at so they don't re-fire.
   const cronFireDueReminders: any = asyncHandler(async (req: any, res: any) => {
     const secret = process.env.CRON_SECRET;
-    const provided = String(req.query.key || "").trim();
+    // Accept the Bearer header as well as ?key=. Vercel Cron authenticates with
+    // `Authorization: Bearer $CRON_SECRET` and cannot append a query string, so
+    // the ?key=-only check is why this endpoint was never reachable from a
+    // schedule — the comment above claimed vercel.json configured it, and
+    // vercel.json had no `crons` block at all. Reminders therefore never got
+    // stamped fired_at, and listReminders (which filters `fired_at IS NULL`
+    // with no lower bound on fire_at) kept serving month-old rows as live.
+    // ?key= is kept so the job can still be triggered by hand.
+    const provided = String(
+      req.query.key || (req.headers.authorization || "").replace("Bearer ", "")
+    ).trim();
     if (!secret || !provided || !safeEqual(provided, secret)) {
       return res.status(401).json({ error: "Unauthorized" });
     }

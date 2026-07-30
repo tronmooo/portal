@@ -9,6 +9,7 @@
 import type { IStorage } from "./storage";
 import { getUserToday } from "@shared/timezone";
 import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "@shared/recurring-dates";
+import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 
 export interface AppNotification {
   id: string;
@@ -283,9 +284,15 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   // --- Habit Streak Risk & Milestones ---
   const streakMilestones = [7, 14, 30, 60, 90, 100, 365];
   for (const habit of habits) {
-    // Streak risk: hasn't checked in today and has streak >= 3
-    const checkedInToday = habit.checkins?.some(c => c.date === todayStr);
-    if (!checkedInToday && habit.currentStreak >= 3) {
+    // Streak risk: hasn't checked in today and has streak >= 3.
+    // Both halves come from shared/habit-schedule so this agrees with the
+    // dashboard: `isHabitDoneOn` honors targetPerDay (a "3× daily" habit isn't
+    // done after one check-in), and a habit that isn't scheduled today can't be
+    // at risk today.
+    // (Milestones below are not day-scheduled, so this only gates the risk.)
+    const dueToday = isHabitDueOn(habit, todayStr);
+    const checkedInToday = isHabitDoneOn(habit, todayStr);
+    if (dueToday && !checkedInToday && habit.currentStreak >= 3) {
       notifications.push({
         id: `habit-risk-${habit.id}`,
         type: "habit_at_risk",

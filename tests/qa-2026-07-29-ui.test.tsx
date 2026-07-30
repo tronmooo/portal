@@ -323,13 +323,22 @@ describe("Active-profile header (PROP-005 wire contract)", () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
   const headersOf = (call: any) => call[1].headers as Record<string, string>;
+  // Pick the call under test by URL rather than trusting position. Changing the
+  // scope fires a fire-and-forget bootstrap prefetch (profileFilter.warmScope
+  // -> scope-prefetch), so `calls[0]` is only the write when that prefetch
+  // happens to lose the race — which under load it does not.
+  const callTo = (path: string) => {
+    const call = fetchMock.mock.calls.find((c: any) => String(c[0]).includes(path));
+    expect(call, `no fetch to ${path}`).toBeTruthy();
+    return call;
+  };
 
   it("sends the selected profile on every write", async () => {
     const filter = await import("@/lib/profileFilter");
     const { apiRequest: realApiRequest } = await import("@/lib/queryClient");
     filter.setFilterSelected(["mike-1"], ["Mike"]);
     await realApiRequest("POST", "/api/expenses", { description: "Gas", amount: 40 });
-    expect(headersOf(fetchMock.mock.calls[0])["x-active-profile-ids"]).toBe("mike-1");
+    expect(headersOf(callTo("/api/expenses"))["x-active-profile-ids"]).toBe("mike-1");
   });
 
   it("sends nothing when the scope is Everyone", async () => {
@@ -337,7 +346,7 @@ describe("Active-profile header (PROP-005 wire contract)", () => {
     const { apiRequest: realApiRequest } = await import("@/lib/queryClient");
     filter.setFilterEveryone();
     await realApiRequest("POST", "/api/expenses", { description: "Gas", amount: 40 });
-    expect(headersOf(fetchMock.mock.calls[0])["x-active-profile-ids"]).toBeUndefined();
+    expect(headersOf(callTo("/api/expenses"))["x-active-profile-ids"]).toBeUndefined();
   });
 
   it("sends both ids for a multi-selection, so the server can decline to guess", async () => {
@@ -345,13 +354,13 @@ describe("Active-profile header (PROP-005 wire contract)", () => {
     const { apiRequest: realApiRequest } = await import("@/lib/queryClient");
     filter.setFilterSelected(["mike-1", "jane-1"], ["Mike", "Jane"]);
     await realApiRequest("POST", "/api/expenses", {});
-    expect(headersOf(fetchMock.mock.calls[0])["x-active-profile-ids"]).toBe("mike-1,jane-1");
+    expect(headersOf(callTo("/api/expenses"))["x-active-profile-ids"]).toBe("mike-1,jane-1");
   });
 
   it("keeps the timezone header the reminder fix depends on", async () => {
     const { apiRequest: realApiRequest } = await import("@/lib/queryClient");
     await realApiRequest("POST", "/api/reminders", { title: "x" });
-    expect(headersOf(fetchMock.mock.calls[0])["X-Timezone"]).toBeTruthy();
+    expect(headersOf(callTo("/api/reminders"))["X-Timezone"]).toBeTruthy();
   });
 });
 

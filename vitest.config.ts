@@ -142,6 +142,8 @@ export default defineConfig({
       'tests/bootstrap-seed-keys.test.ts',
       'tests/documents-page.test.ts',
       'tests/document-open-perf.test.ts',
+      'tests/attention.test.ts',
+      'tests/reminder-cron.test.ts',
       'tests/document-open-hook.dom.test.tsx',
       // Production audit 2026-07-29 regressions.
       'tests/anthropic-budget.test.ts',

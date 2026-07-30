@@ -5,7 +5,7 @@
 // and never enters the section-grid path, so this jsdom mount is where we
 // actually exercise the new sections with live React + providers.
 import React from "react";
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Router } from "wouter";
@@ -26,7 +26,18 @@ function wrap(ui: React.ReactNode) {
   );
 }
 
-afterEach(cleanup);
+// These mount real components that fetch on mount. Without a stub each render
+// fires a dozen real `window.fetch` calls into a backendless jsdom, and those
+// rejections land wherever the event loop happens to be — which is how an
+// unrelated test file that asserts on `fetch.mock.calls[0]` starts failing
+// under load. Answer every request with an empty list so the mounts are
+// hermetic and nothing outlives the test.
+let fetchStub: ReturnType<typeof vi.fn>;
+beforeEach(() => {
+  fetchStub = vi.fn(async () => new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }));
+  vi.stubGlobal("fetch", fetchStub);
+});
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("QuickActionsSection", () => {
   it("renders all five quick-add buttons", () => {
@@ -65,50 +76,92 @@ describe("WeeklySummarySection", () => {
   });
 });
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The Executive tab — an attention center, not a board.
+//
+// It used to render 17 collapsible sections and a Today strip, and the same
+// record could appear in several of them at once. These assert the shape the
+// 2026-07-29 report asked for: context tiles, a one-glance brief, and ONE
+// ranked feed where every row is a distinct thing to act on.
+// ─────────────────────────────────────────────────────────────────────────────
 describe("ExecutiveBriefing", () => {
-  it("renders every dense briefing section with collapse arrows", async () => {
+  const enhancedWith = (over: any = {}) => ({
+    financeSnapshot: { upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: 0, status: "due_today" }] },
+    expiringDocuments: [{ documentId: "d1", name: "Passport", documentName: "Passport", expirationDate: "2026-10-01", daysUntil: 85 }],
+    ...over,
+  });
+
+  async function mount(enhanced: any, stats: any = {}) {
     const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
-    const stats: any = { recentActivity: [{ type: "habit", description: "Completed Workout", timestamp: new Date().toISOString() }] };
-    const enhanced: any = {
-      financeSnapshot: { upcomingBills: [{ id: "b1", name: "Phone", amount: 86.5, daysUntil: 0, status: "due_today" }] },
-      expiringDocuments: [{ documentId: "d1", name: "Passport", expirationDate: "2026-10-01", daysUntil: 85 }],
-    };
     wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
-    for (const id of ["brief-agenda", "brief-tasks", "brief-habits", "brief-reminders", "brief-dates", "brief-docs", "brief-bills", "brief-calendar", "brief-projects", "brief-activity", "brief-notes"]) {
-      expect(screen.getByTestId(id), id).toBeTruthy();
-    }
-    // Attention-first top grid (Attention/Tasks/Events + Bills/Documents/Habits)
-    // plus the full-width Today's Overview strip + AI Executive Brief render.
-    expect(screen.getByTestId("brief-stat-row")).toBeTruthy();
-    for (const id of ["brief-stat-attention", "brief-stat-tasks", "brief-stat-events", "brief-stat-bills", "brief-stat-documents", "brief-stat-habits", "brief-today-card"]) {
-      expect(screen.getByTestId(id), id).toBeTruthy();
-    }
-    // Once the (backend-less) queries settle, the bill due today from
-    // `enhanced` must surface on the Attention tile — not a vague score.
+    // The tiles settle out of their loading placeholder once `enhanced` lands.
     await waitFor(() => {
       expect(screen.getByTestId("brief-stat-attention").textContent).not.toContain("loading");
     });
-    const attnTxt = screen.getByTestId("brief-stat-attention").textContent || "";
-    expect(attnTxt).toContain("1");
-    expect(attnTxt).toContain("bill due today");
-    // Zero habits must NOT read "all done" — nothing is scheduled.
-    expect(screen.getByTestId("brief-stat-habits").textContent).toContain("No habits scheduled");
+  }
+
+  it("renders the tiles, the brief, and one feed — and none of the old sections", async () => {
+    await mount(enhancedWith());
+
+    // Context layer survives: six tiles, unchanged testids.
+    expect(screen.getByTestId("brief-stat-row")).toBeTruthy();
+    for (const id of ["brief-stat-attention", "brief-stat-tasks", "brief-stat-events", "brief-stat-bills", "brief-stat-documents", "brief-stat-habits"]) {
+      expect(screen.getByTestId(id), id).toBeTruthy();
+    }
     expect(screen.getByTestId("brief-ai")).toBeTruthy();
-    // Bills row + Pay button render from enhanced data (no fetch needed).
-    expect(screen.getByTestId("brief-bills").textContent).toContain("Phone");
-    expect(screen.getByTestId("brief-pay-b1")).toBeTruthy();
-    // Docs row renders with days-left.
-    expect(screen.getByTestId("brief-docs").textContent).toContain("Passport");
-    // Sections collapse on header click.
-    const header = screen.getByTestId("brief-bills").querySelector("button[aria-expanded]") as HTMLElement;
+    expect(screen.getByTestId("attention-feed")).toBeTruthy();
+
+    // The board is gone. Every one of these used to render on this tab and
+    // restated something that already lives on Calendar / Tasks / Habits /
+    // Documents / Bills / Goals / Journal.
+    for (const id of [
+      "brief-agenda", "brief-overdue", "brief-tasks", "brief-priority", "brief-habits",
+      "brief-reminders", "brief-birthdays", "brief-appointments", "brief-dates",
+      "brief-docs", "brief-bills", "brief-calendar", "brief-notifications",
+      "brief-projects", "brief-activity", "brief-notes", "brief-today-card",
+    ]) {
+      expect(screen.queryByTestId(id), `${id} should no longer render`).toBeNull();
+    }
+  });
+
+  it("the bill due today reaches the feed and the Attention tile agrees with it", async () => {
+    await mount(enhancedWith());
+    const attn = screen.getByTestId("brief-stat-attention").textContent || "";
+    expect(attn).toContain("1");
+    expect(attn).toContain("bill due today");
+    // …and the same single item is what the feed shows.
+    expect(screen.getByTestId("attention-item-bill:b1")).toBeTruthy();
+    expect(screen.getByTestId("attention-item-bill:b1").textContent).toContain("Phone");
+    expect(screen.getByTestId("attention-item-bill:b1").textContent).toContain("$87 due today");
+  });
+
+  it("groups by urgency with collapsible headers", async () => {
+    await mount(enhancedWith());
+    const group = screen.getByTestId("attention-group-immediate");
+    const header = group.querySelector("button[aria-expanded]") as HTMLElement;
     expect(header.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(header);
     expect(header.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("hides QA bills, collapses duplicate bills, and scopes the overdue lead bullet (2026-07-29 report)", async () => {
-    const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
-    const enhanced: any = {
+  it("offers a one-tap action on every row, and arms a payment before taking it", async () => {
+    await mount(enhancedWith());
+    const pay = screen.getByTestId("attention-action-bill:b1");
+    expect(pay.textContent).toContain("Pay");
+    // Money moves on the second tap, never the first.
+    fireEvent.click(pay);
+    expect(screen.getByTestId("attention-action-bill:b1").textContent).toContain("Confirm");
+  });
+
+  it("shows a real all-clear when nothing needs attention", async () => {
+    await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+    expect(screen.getByTestId("attention-feed").textContent).toContain("Nothing needs your attention");
+    expect(screen.getByTestId("brief-stat-attention").textContent).toContain("Nothing needs review");
+  });
+
+  it("hides QA bills and collapses the duplicate-bill pair (2026-07-29 report)", async () => {
+    await mount(enhancedWith({
       financeSnapshot: { upcomingBills: [
         { id: "b1", name: "Verizon Phone Bill payment", amount: 86.5, daysUntil: -3, status: "overdue" },
         { id: "b2", name: "Phone Bill payment", amount: 86.5, daysUntil: -3, status: "overdue" },
@@ -117,17 +170,25 @@ describe("ExecutiveBriefing", () => {
         { id: "b5", name: "rent", amount: 300, daysUntil: 3, status: "upcoming" },
       ] },
       expiringDocuments: [],
-    };
-    wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={{} as any} enhanced={enhanced} />);
-    const bills = screen.getByTestId("brief-bills").textContent || "";
+    }));
+    const feed = screen.getByTestId("attention-feed").textContent || "";
     // Hide-test-data defaults ON — the QA subscription must not render.
-    expect(bills).not.toContain("QA Test Subscription");
+    expect(feed).not.toContain("QA Test Subscription");
     // Same-amount name-nested pair renders once, keeping the specific name.
-    expect((bills.match(/Phone Bill payment/g) || []).length).toBe(1);
-    expect(bills).toContain("Verizon Phone Bill payment");
+    expect((feed.match(/Phone Bill payment/g) || []).length).toBe(1);
+    expect(feed).toContain("Verizon Phone Bill payment");
     // Different amounts ($2,500 vs $300) are NOT collapsed — user must reconcile.
-    expect(bills).toContain("rent the 1st");
-    expect(bills).toContain("$300");
+    expect(feed).toContain("rent the 1st");
+    expect(feed).toContain("$300");
+  });
+
+  it("keeps the lead brief bullet honest about bills, and never says 'due in -28d'", async () => {
+    await mount(enhancedWith({
+      financeSnapshot: { upcomingBills: [
+        { id: "b4", name: "rent the 1st", amount: 2500, daysUntil: -28, status: "overdue" },
+      ] },
+      expiringDocuments: [],
+    }));
     const ai = screen.getByTestId("brief-ai").textContent || "";
     // Lead bullet may not claim "No overdue tasks." while bills are overdue.
     expect(ai).toContain("No overdue to-do tasks");
@@ -135,21 +196,16 @@ describe("ExecutiveBriefing", () => {
     expect(ai).toContain("28d overdue");
     expect(ai).not.toMatch(/due in -/);
   });
-});
 
-describe("extracted TasksPopup / HabitsPopup still render (regression: 'popups destroyed')", () => {
-  it("TasksPopup mounts open with its dialog content", async () => {
-    const { TasksPopup } = await import("../client/src/components/dashboard/TaskHabitPopups");
-    wrap(<TasksPopup open onClose={() => {}} filterMode="everyone" filterIds={[]} />);
-    const dialog = document.querySelector('[role="dialog"]');
-    expect(dialog, "tasks dialog mounts").not.toBeNull();
-    expect((dialog!.textContent || "").length).toBeGreaterThan(0);
-  });
-  it("HabitsPopup mounts open with its dialog content", async () => {
-    const { HabitsPopup } = await import("../client/src/components/dashboard/TaskHabitPopups");
-    wrap(<HabitsPopup open onClose={() => {}} filterMode="everyone" filterIds={[]} />);
-    const dialog = document.querySelector('[role="dialog"]');
-    expect(dialog, "habits dialog mounts").not.toBeNull();
-    expect((dialog!.textContent || "").length).toBeGreaterThan(0);
+  it("opens the filters and lets a whole source be switched off", async () => {
+    await mount(enhancedWith());
+    expect(screen.queryByTestId("attention-filters")).toBeNull();
+    fireEvent.click(screen.getByTestId("attention-filters-toggle"));
+    const filters = screen.getByTestId("attention-filters");
+    expect(filters).toBeTruthy();
+    const habits = screen.getByTestId("attention-toggle-habits");
+    expect(habits.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(habits);
+    expect(screen.getByTestId("attention-toggle-habits").getAttribute("aria-checked")).toBe("false");
   });
 });

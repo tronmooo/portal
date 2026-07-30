@@ -68,7 +68,11 @@ function daysBetween(now: Date, dateStr: string | undefined | null): number | nu
 }
 
 // Urgency curve — overdue dominates, then today, then a smooth decay outward.
-function urgencyScore(daysUntil: number | null): number {
+//
+// Exported so shared/attention.ts ranks on the SAME curve instead of growing a
+// second one. Two urgency models that disagree is how the dashboard ended up
+// with four sections that each thought something different was most urgent.
+export function urgencyScore(daysUntil: number | null): number {
   if (daysUntil == null) return 120;            // undated but surfaced (e.g. a flagged item)
   if (daysUntil < 0) return 1000 + Math.min(365, -daysUntil); // overdue: older = higher
   if (daysUntil === 0) return 950;              // today

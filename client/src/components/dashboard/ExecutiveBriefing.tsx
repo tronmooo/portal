@@ -1,68 +1,66 @@
-// ── Executive briefing (2026-07-16, v3 attention-first top) ──────────────────
-// Top of the board answers "what needs my attention today, what's coming up,
-// and what's going wrong" — not just totals. Row 1: Attention Required (the
-// Score replacement, most prominent) / Tasks / Events; row 2: Bills /
-// Documents / Habits; then a full-width Today's Overview strip. Projects moved
-// down into the section grid. Below that, the dense multi-column command-center
-// sections remain: compact spreadsheet-like sections in a responsive masonry
-// (1/2/3 columns), each collapsible, and every row opens the EXISTING
-// popup/surface for its module — TasksPopup and HabitsPopup are the same
-// components the dashboard KPI tiles always used (TaskHabitPopups.tsx); the
-// rest live in BriefingPopups.tsx. Nothing here duplicates functionality.
-import { useState, useEffect } from "react";
+// ── Executive tab — an attention center, not a board ─────────────────────────
+// One question: what requires my attention right now?
+//
+// This tab used to render 17 collapsible sections (agenda, overdue, tasks,
+// priority, habits, reminders, birthdays, appointments, important dates, docs,
+// bills, calendar, notifications, projects, activity, notes, AI brief) plus a
+// Today strip. Four of them were urgency from a different angle, and the rest
+// restated data that already has a home on the Calendar, Trackers, Documents,
+// Liabilities, Goals or profile pages. The same record could appear three
+// times under three different labels.
+//
+// What's left is: six context tiles, a one-glance brief, and a single ranked
+// feed. What qualifies as attention — and, critically, the dedupe that stops
+// one record being counted twice — lives in shared/attention.ts, so this file
+// only decides presentation and which mutation a button fires.
+//
+// Removed content was not deleted from the app, only from this tab:
+//   agenda/calendar/birthdays/appointments/important dates → /calendar
+//   upcoming + high-priority tasks                          → /dashboard/tasks
+//   full habit list                                         → /dashboard/habits
+//   bills module                                            → /dashboard/obligations
+//   projects/goals                                          → /goals
+//   recent activity + notes                                 → /journal
+import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, SlidersHorizontal } from "lucide-react";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
-import {
-  BillsPopup, EventsPopup, DocsPopup, ProjectsPopup, NotesPopup, RemindersPopup,
-  AttentionPopup, TodayOverviewPopup, fmtClock,
-  type AttentionEntry, type TodayEntry,
-} from "@/components/dashboard/BriefingPopups";
+import { BillsPopup, EventsPopup, DocsPopup } from "@/components/dashboard/BriefingPopups";
+import { AttentionFeed } from "@/components/dashboard/AttentionFeed";
+import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
 import type { DashboardStats } from "@shared/schema";
 // One relative-due formatter for the whole app. Interpolating a raw `daysUntil`
 // here is what produced "Lawn care ($40) due in -29d".
-import { dayLabel as relativeDay, dueLabel } from "@shared/now-rank";
+import { dueLabel } from "@shared/now-rank";
+import { computeAttention, type AttentionItem } from "@shared/attention";
+import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { isTestDataRow } from "@shared/test-data";
-import { isRecurring as isRecurringRule, parseRecurrence } from "@shared/recurrence";
 import { useShowTestData } from "@/lib/showTestData";
 
-type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | "projects" | "notes" | "reminders" | "attention" | "today" | null;
+type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | null;
 
-// Per-section accent colors (HSL) — the "colorful, visually organized" pass.
 const ACCENTS: Record<string, string> = {
-  agenda:        "199 89% 60%",  // sky
-  overdue:       "0 72% 58%",    // red
-  tasks:         "217 91% 65%",  // blue
-  priority:      "25 95% 58%",   // orange
-  habits:        "155 65% 45%",  // emerald
-  reminders:     "43 96% 56%",   // amber
-  birthdays:     "330 80% 62%",  // pink
-  appointments:  "262 80% 66%",  // violet
-  dates:         "187 80% 50%",  // cyan
-  docs:          "0 72% 58%",    // red
-  bills:         "48 96% 53%",   // yellow
-  calendar:      "239 84% 67%",  // indigo
-  notifications: "350 85% 62%",  // rose
-  projects:      "142 70% 45%",  // green
-  alerts:        "280 75% 62%",  // purple
-  activity:      "173 60% 44%",  // teal
-  notes:         "240 10% 60%",  // stone
+  tasks:    "217 91% 65%",  // blue
+  habits:   "155 65% 45%",  // emerald
+  docs:     "0 72% 58%",    // red
+  bills:    "48 96% 53%",   // yellow
+  calendar: "239 84% 67%",  // indigo
+  alerts:   "280 75% 62%",  // purple
 };
 
-function Section({ id, title, count, summary, children, defaultOpen = true, testId }: {
-  id: string; title: string; count?: number; summary?: string; children: React.ReactNode;
-  defaultOpen?: boolean; testId: string;
+function Section({ id, title, children, testId }: {
+  id: string; title: string; children: React.ReactNode; testId: string;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(true);
   const accent = ACCENTS[id] || "240 10% 60%";
   return (
     <div
-      className="break-inside-avoid mb-2 rounded-lg border bg-card/40 px-2 pt-0.5 pb-1.5"
+      className="mb-2 rounded-lg border bg-card/40 px-2 pt-0.5 pb-1.5"
       style={{ borderColor: `hsl(${accent} / 0.25)` }}
       data-testid={testId}
     >
@@ -73,20 +71,16 @@ function Section({ id, title, count, summary, children, defaultOpen = true, test
       >
         <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-foreground transition-colors">{title}</span>
-        {typeof count === "number" && count > 0 && (
-          <span className="text-[10px] px-1.5 rounded-full" style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}>{count}</span>
-        )}
-        {summary && <span className="ml-auto mr-1 text-[10px] tabular-nums" style={{ color: `hsl(${accent})` }}>{summary}</span>}
-        <ChevronDown className={`h-3 w-3 ${summary ? "" : "ml-auto"} text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
+        <ChevronDown className={`h-3 w-3 ml-auto text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
       </button>
       {open && children}
     </div>
   );
 }
 
-// Top stat tile (2026-07-16 redesign) — big count plus a small unit next to it
-// ("3 due today"), a decision-oriented sub-line, clickable. `prominent` gives
-// the Attention tile the strongest visual weight on the board.
+// Top stat tile — big count plus a small unit next to it ("3 due today"), a
+// decision-oriented sub-line, clickable. `prominent` gives the Attention tile
+// the strongest visual weight on the board.
 function StatTile({ label, value, unit, sub, accent, onClick, testId, prominent }: {
   label: string; value: string; unit?: string; sub?: string; accent: string;
   onClick: () => void; testId: string; prominent?: boolean;
@@ -114,41 +108,6 @@ function StatTile({ label, value, unit, sub, accent, onClick, testId, prominent 
     </button>
   );
 }
-
-function Row({ cells, onClick, testId, urgent, valueTone }: {
-  cells: React.ReactNode[]; onClick?: () => void; testId?: string;
-  urgent?: boolean; valueTone?: "pos" | "neg" | "warn";
-}) {
-  const toneCls = valueTone === "pos" ? "text-emerald-500" : valueTone === "neg" ? "text-red-500" : valueTone === "warn" ? "text-amber-500" : "";
-  return (
-    <button
-      onClick={onClick}
-      data-testid={testId}
-      className={`w-full flex items-baseline gap-2 py-[3px] px-1 text-left text-xs hover:bg-muted/40 rounded-sm ${urgent ? "text-red-500" : ""}`}
-    >
-      <span className="text-[10px] uppercase text-muted-foreground w-16 shrink-0 truncate">{cells[0]}</span>
-      <span className="flex-1 truncate">{cells[1]}</span>
-      {cells.length > 2 && <span className={`text-[11px] tabular-nums text-right shrink-0 ${toneCls}`}>{cells[2]}</span>}
-    </button>
-  );
-}
-
-const Empty = ({ label }: { label: string }) => (
-  <p className="text-[11px] text-muted-foreground py-0.5 px-1">{label}</p>
-);
-
-function dayLabel(dateStr: string, todayStr: string): string {
-  if (dateStr === todayStr) return "Today";
-  const d = new Date(dateStr + "T00:00:00");
-  const t = new Date(todayStr + "T00:00:00");
-  const diff = Math.round((d.getTime() - t.getTime()) / 86400000);
-  if (diff === 1) return "Tomorrow";
-  if (diff > 1 && diff < 7) return d.toLocaleDateString("en-US", { weekday: "long" });
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-const BIRTHDAY_RE = /birthday|anniversar|🎂|🎉/i;
-const APPT_RE = /appt|appointment|doctor|dentist|dental|vet\b|exam|check[- ]?up|physical|therapy/i;
 
 const normName = (s: any) => String(s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
 
@@ -184,15 +143,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [popup, setPopup] = useState<PopupKind>(null);
-  // Which bill's Pay button is armed for the confirming second tap.
-  const [armedPayId, setArmedPayId] = useState<string | null>(null);
+  // Which item's money-moving button is armed for the confirming second tap.
+  const [armedKey, setArmedKey] = useState<string | null>(null);
+  const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
+  const [showSuppressed, setShowSuppressed] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const mode = filterMode;
   const ids = filterIds;
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
   const amp = param ? "&" : "?";
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
   const in45 = new Date(Date.now() + 45 * 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
-  const in14 = new Date(Date.now() + 14 * 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
 
   // NOTE (BUG-20260715-everyone-zeros): none of these query functions may
   // swallow errors into a cached-as-success empty value (`.catch(() => [])`).
@@ -212,15 +173,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryFn: () => apiRequest("GET", `/api/habits${param}`).then(r => r.json()),
     staleTime: 30_000,
   });
-  // 45-day window: agenda + calendar preview slice ≤14d from it; birthdays /
-  // appointments / important dates get the longer horizon. One fetch.
+  // 45-day window: the feed only uses today's timed events, but the tiles show
+  // "next up" beyond today. One fetch serves both.
   const { data: timelineRaw = [], isPending: timelinePending } = useQuery<any[]>({
     queryKey: ["/api/calendar/timeline", todayStr, in45, mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/calendar/timeline${param}${amp}start=${todayStr}&end=${in45}`).then(r => r.json()),
     staleTime: 60_000,
   });
-  // Reminders are profile-scoped like every other briefing section — pass the
+  // Reminders are profile-scoped like every other briefing query — pass the
   // active filter so a selected profile shows only its own reminders (the
   // server enforces strict isolation; unlinked reminders appear only in the
   // unfiltered "Everyone" view). Keying on mode/ids makes switching profiles
@@ -237,18 +198,25 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryFn: () => apiRequest("GET", `/api/goals${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
-  const { data: journal = [] } = useQuery<any[]>({
-    queryKey: ["/api/journal", mode, ...ids],
-    enabled: ready,
-    queryFn: () => apiRequest("GET", `/api/journal${param}`).then(r => r.json()),
-    staleTime: 60_000,
-  });
   const { data: notificationsRaw = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
+  // Dismissed alerts. The old panel filtered on `n.dismissed` — a field
+  // buildNotifications never sets — and never read this preference, so an alert
+  // the user dismissed from the bell came straight back on the dashboard.
+  const { data: dismissedIds = [] } = useQuery<string[]>({
+    queryKey: ["/api/preferences/dismissed_notifications"],
+    enabled: ready,
+    queryFn: () => apiRequest("GET", "/api/preferences/dismissed_notifications")
+      .then(r => r.json())
+      .then(d => { try { return JSON.parse(d?.value || "[]"); } catch { return []; } }),
+    staleTime: 60_000,
+  });
+
+  const { prefs, setPrefs } = useAttentionPrefs(ready);
 
   // "Hide test data" (default) — the header toggle flips this flag app-wide,
   // but this tab previously never consumed it, so AUDIT/QA/W2/SMOKE rows leaked
@@ -274,6 +242,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const notifications = hideTest(Array.isArray(notificationsRaw) ? notificationsRaw : []);
   const goals = hideTest(goalsRaw || []);
   const allBills = dedupeBills(hideTest(enhanced?.financeSnapshot?.upcomingBills || []));
+  const allExpiringDocs = hideTest<any>(enhanced?.expiringDocuments || []);
 
   // STUCK-LOADING DEADLINE (2026-07-16): if any tile-feeding query is still
   // unresolved after 12s (wedged fetch, failed enhanced, cold instance), show
@@ -286,6 +255,108 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     return () => clearTimeout(t);
   }, [anyBriefPending]);
 
+  // ── The feed ───────────────────────────────────────────────────────────────
+  const snoozedDocumentIds = useMemo(() => Object.keys(loadDocSnoozeMap()), [allExpiringDocs.length]);
+  const attention = useMemo(() => computeAttention({
+    today: todayStr,
+    tasks, bills: allBills, documents: allExpiringDocs, habits,
+    reminders, events: timeline, goals, notifications,
+    dismissedNotificationIds: dismissedIds,
+    snoozedDocumentIds,
+  }, showSuppressed
+    // "Show lower-priority" widens the same model rather than switching to a
+    // second one — one set of rules, one place to reason about.
+    ? { ...prefs, minTier: "upcoming" as const, upcomingMinBillAmount: 0, docsWithinDays: 90, billsWithinDays: 60, tasksWithinDays: 30 }
+    : prefs),
+  [todayStr, tasks, allBills, allExpiringDocs, habits, reminders, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, prefs, showSuppressed]);
+
+  // ── Tile derivations ───────────────────────────────────────────────────────
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const fmtShort = (d: string) => new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const nowClock = new Date().toTimeString().slice(0, 5);
+
+  const pending = (tasks || []).filter((t: any) => t.status !== "done");
+  const overdueTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) < todayStr);
+  const agendaTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) === todayStr);
+  const highCount = pending.filter((t: any) => ["high", "urgent"].includes(String(t.priority || "").toLowerCase())).length;
+  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
+
+  // Habits: scheduled-today only. The frequency rule lives in shared now, so a
+  // weekly habit no longer counts as "due" on the other six days.
+  const habitsDueToday = (habits || []).filter((h: any) => isHabitDueOn(h, todayStr));
+  const habitsDoneCount = habitsDueToday.filter((h: any) => isHabitDoneOn(h, todayStr)).length;
+  const missedCount = habitsDueToday.length - habitsDoneCount;
+
+  const tl = (timeline || []).filter((i: any) => (i.date || "").slice(0, 10) >= todayStr);
+  const eventsToday = tl.filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) === todayStr);
+  const futureEvents = tl.filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) > todayStr);
+  const nextTodayEvent = eventsToday
+    .filter((i: any) => i.time && i.time >= nowClock)
+    .sort((a: any, b: any) => String(a.time).localeCompare(String(b.time)))[0]
+    || eventsToday.find((i: any) => !i.time);
+  const nextFutureEvent = futureEvents.slice().sort((a: any, b: any) => String(a.date || "").localeCompare(String(b.date || "")))[0];
+  const nextEventLabel = nextTodayEvent
+    ? `Next: ${nextTodayEvent.title}${nextTodayEvent.time ? ` · ${nextTodayEvent.time}` : ""}`
+    : nextFutureEvent
+      ? `Next: ${nextFutureEvent.title} · ${fmtShort(String(nextFutureEvent.date))}`
+      : "nothing scheduled";
+
+  const bills = allBills.filter((b: any) => b.daysUntil <= 21);
+  const overdueBillCount = bills.filter((b: any) => b.status === "overdue").length;
+  const billsUpcomingTotal = bills.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
+  const nextBill = bills.filter((b: any) => b.status !== "overdue")
+    .slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+  const nextBillDate = nextBill
+    ? fmtShort(String(nextBill.dueDate || "").slice(0, 10) || new Date(Date.now() + (nextBill.daysUntil || 0) * 86400000).toLocaleDateString("en-CA"))
+    : null;
+
+  const docExpiryPhrase = (d: number) =>
+    d < 0 ? (d === -1 ? "expired yesterday" : `expired ${Math.abs(d)} days ago`)
+    : d === 0 ? "expires today" : d === 1 ? "expires tomorrow" : `expires in ${d} days`;
+  const visibleDocs = allExpiringDocs.filter((d: any) => !snoozedDocumentIds.includes(d.documentId));
+  const docsSoonCount = visibleDocs.filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil <= 30).length;
+  const nextDoc = visibleDocs
+    .filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil <= 30)
+    .slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+
+  // Attention tile sub-line: top two contributors, most severe first, then a
+  // "N more" tail so the parts always account for the headline number (a "29"
+  // headline with a "9 · 6" sub-line read as broken math).
+  const attnCounts = attention.counts;
+  const byKind = (k: string) => attention.items.filter(i => i.kind === k).length;
+  const attnParts: Array<{ label: string; n: number }> = [];
+  const overdueTaskItems = attention.items.filter(i => i.kind === "task" && (i.daysUntil ?? 0) < 0).length;
+  if (overdueTaskItems) attnParts.push({ label: plural(overdueTaskItems, "overdue task"), n: overdueTaskItems });
+  const overdueBillItems = attention.items.filter(i => i.kind === "bill" && (i.daysUntil ?? 0) < 0).length;
+  if (overdueBillItems) attnParts.push({ label: plural(overdueBillItems, "overdue bill"), n: overdueBillItems });
+  const billsDueTodayItems = attention.items.filter(i => i.kind === "bill" && i.daysUntil === 0).length;
+  if (billsDueTodayItems) attnParts.push({ label: `${plural(billsDueTodayItems, "bill")} due today`, n: billsDueTodayItems });
+  if (byKind("document")) attnParts.push({ label: plural(byKind("document"), "expiring doc"), n: byKind("document") });
+  if (byKind("alert")) attnParts.push({ label: plural(byKind("alert"), "alert"), n: byKind("alert") });
+  if (byKind("reminder")) attnParts.push({ label: `${plural(byKind("reminder"), "reminder")} due`, n: byKind("reminder") });
+  if (byKind("habit")) attnParts.push({ label: `${plural(byKind("habit"), "habit card")}`, n: byKind("habit") });
+  const attnShown = attnParts.slice(0, 2);
+  const attnMore = attention.items.length - attnShown.reduce((s, p) => s + p.n, 0);
+  const attnSub = [...attnShown.map(p => p.label), attnMore > 0 ? `${attnMore} more` : null].filter(Boolean).join(" · ");
+
+  // AI Executive Brief — honest, instant bullets derived from the feed above
+  // (no per-load AI call). The AI chat can still create/modify any of the
+  // underlying records; these lines just reflect the current state.
+  const aiBrief: Array<{ text: string; tone?: "pos" | "neg" | "warn"; go?: () => void }> = [];
+  // Lead bullet covers tasks AND bills: opening with a green "No overdue
+  // tasks." while overdue bills sit two bullets down read as a contradiction.
+  if (overdueTasks.length > 0) aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => setPopup("tasks") });
+  else if (overdueBillCount > 0) aiBrief.push({ text: `No overdue to-do tasks, but ${plural(overdueBillCount, "overdue bill")} to pay.`, tone: "warn", go: () => setPopup("bills") });
+  else aiBrief.push({ text: "Nothing overdue — tasks and bills are clear.", tone: "pos" });
+  if (nextDoc) aiBrief.push({ text: `${nextDoc.documentName || nextDoc.name || nextDoc.fieldName || "A document"} ${docExpiryPhrase(nextDoc.daysUntil)}.`, tone: nextDoc.daysUntil <= 21 ? "neg" : "warn", go: () => setPopup("docs") });
+  if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => setPopup("habits") });
+  const soonestBill = bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
+  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) ${dueLabel(soonestBill.daysUntil)}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => setPopup("bills") });
+
+  // ── Actions ────────────────────────────────────────────────────────────────
+  const markBusy = (key: string, on: boolean) =>
+    setBusyKeys(prev => { const next = new Set(prev); on ? next.add(key) : next.delete(key); return next; });
+
   const payBill = useMutation({
     mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
     onSuccess: () => {
@@ -296,263 +367,74 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     },
     onError: () => toast({ title: "Payment failed", variant: "destructive" }),
   });
-
-  // ── Derivations ─────────────────────────────────────────────────────────────
-  const pending = (tasks || []).filter((t: any) => t.status !== "done");
-  const overdueTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) < todayStr)
-    .sort((a: any, b: any) => (a.dueDate || "").localeCompare(b.dueDate || "")).slice(0, 10);
-  const highPriority = pending.filter((t: any) => ["high", "urgent"].includes(String(t.priority || "").toLowerCase()) && !(t.dueDate && t.dueDate.slice(0, 10) < todayStr)).slice(0, 8);
-  // Same "today" rule as TasksPopup's Today tab (minus its overdue section):
-  // due today, or undated — an undated one-off or unpaused recurring chore
-  // surfaces today. Keeping the two rules identical is what makes the TASKS
-  // tile's "due today" line up with the popup's tab counts.
-  const pausedRecurring = (t: any) => isRecurringRule(t.tags || []) && parseRecurrence(t.tags || []).paused;
-  const agendaTasks = pending.filter((t: any) =>
-    !pausedRecurring(t) && (t.dueDate ? t.dueDate.slice(0, 10) === todayStr : true));
-  // Strictly future-dated — today's and undated tasks already live on the
-  // agenda, so listing them here too would show one task in two sections.
-  const upcomingTasks = pending
-    .filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) > todayStr)
-    .sort((a: any, b: any) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999")).slice(0, 12);
-
-  const tl = (timeline || []).filter((i: any) => (i.date || "").slice(0, 10) >= todayStr);
-  // Loan / credit-card payments (timeline marks them meta.kind === "payment";
-  // recurring bills are kind "bill") are amortizing liabilities, not calendar
-  // commitments — the Liabilities/Bills lane already tracks them, so they stay
-  // off Today's Agenda (type-aware-liabilities rule). They remain on the
-  // full Calendar surfaces, which deliberately show every due date.
-  const isLoanPayment = (i: any) => i.type === "obligation" && i.meta?.kind === "payment";
-  const todayItems = tl.filter((i: any) => (i.date || "").slice(0, 10) === todayStr && !isLoanPayment(i));
-  const events = tl.filter((i: any) => i.type === "event" && (i.date || "").slice(0, 10) > todayStr);
-  const birthdays = events.filter((i: any) => BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
-  const appointments = events.filter((i: any) => APPT_RE.test(`${i.title} ${i.category || ""}`)).slice(0, 8);
-  // One row per series: a recurring chore ("Lawn Care" weekly) otherwise fills
-  // the whole Important Dates list with its next 7 occurrences.
-  const importantDates = (() => {
-    const seen = new Set<string>();
-    return events
-      .filter((i: any) => !BIRTHDAY_RE.test(`${i.title} ${i.category || ""}`) && !APPT_RE.test(`${i.title} ${i.category || ""}`))
-      .filter((i: any) => { const k = normName(i.title); if (seen.has(k)) return false; seen.add(k); return true; })
-      .slice(0, 10);
-  })();
-  // EVENTS tile counts only real calendar EVENTS — not tasks / bills /
-  // obligations that also live in the timeline (BUG-20260709: "3 events even
-  // when Mike has no events"). `eventsToday` below keeps that semantics.
-
-  const habitRows = (habits || []).slice(0, 12).map((h: any) => {
-    const doneToday = (h.checkins || []).some((c: any) => (c.date || "").slice(0, 10) === todayStr);
-    return { id: h.id, name: h.name, doneToday, streak: h.currentStreak ?? h.streak ?? 0 };
+  const completeTask = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("PATCH", `/api/tasks/${id}`, { status: "done" }); },
+    onSuccess: () => { toast({ title: "Task completed" }); invalidateDomain("tasks"); },
+    onError: () => toast({ title: "Couldn't complete task", variant: "destructive" }),
   });
-  const missedCount = habitRows.filter(h => !h.doneToday).length;
+  const checkinHabit = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("POST", `/api/habits/${id}/checkin`, {}); },
+    onSuccess: () => { toast({ title: "Checked in" }); invalidateDomain("habits"); },
+    onError: () => toast({ title: "Check-in failed", variant: "destructive" }),
+  });
+  const dismissReminders = useMutation({
+    mutationFn: async (idList: string[]) => {
+      for (const id of idList) await apiRequest("DELETE", `/api/reminders/${id}`);
+    },
+    onSuccess: () => { toast({ title: "Reminder dismissed" }); queryClient.invalidateQueries({ queryKey: ["/api/reminders"] }); },
+    onError: () => toast({ title: "Couldn't dismiss reminder", variant: "destructive" }),
+  });
+  const dismissAlert = useMutation({
+    // Same store the bell and the AI's dismiss_notifications tool write to, so
+    // a dismissal here silences it everywhere.
+    mutationFn: async (id: string) => {
+      const merged = Array.from(new Set([...(dismissedIds || []), id]));
+      await apiRequest("PUT", "/api/preferences/dismissed_notifications", { value: JSON.stringify(merged) });
+    },
+    onSuccess: () => {
+      toast({ title: "Alert dismissed" });
+      queryClient.invalidateQueries({ queryKey: ["/api/preferences/dismissed_notifications"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+    },
+    onError: () => toast({ title: "Couldn't dismiss alert", variant: "destructive" }),
+  });
 
-  const bills = allBills.filter((b: any) => b.daysUntil <= 21).slice(0, 10);
-  // Docs: respect the shared 30-day dismisses (same map the KPI section and
-  // DocsPopup use) so a dismissed alert disappears everywhere at once. The
-  // tile counts the 30-day "expiring soon" window (expired + ≤30d); the
-  // section/popup still list the longer 90-day horizon grouped by urgency.
-  const docSnooze = loadDocSnoozeMap();
-  const allExpiringDocs = hideTest<any>(enhanced?.expiringDocuments || []).filter((d: any) => !docSnooze[d.documentId]);
-  const docs = allExpiringDocs.slice(0, 10);
-  const docsSoonCount = allExpiringDocs.filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil <= 30).length;
+  const idOf = (item: AttentionItem) => item.sourceKey.split(":").slice(1).join(":");
 
-  const calendarDays: Array<{ day: string; items: any[] }> = [];
-  for (const item of tl) {
-    const d = (item.date || "").slice(0, 10);
-    if (!d || d > in14) continue;
-    const label = dayLabel(d, todayStr);
-    const bucket = calendarDays.find(b => b.day === label);
-    if (bucket) { if (bucket.items.length < 4) bucket.items.push(item); }
-    else if (calendarDays.length < 7) calendarDays.push({ day: label, items: [item] });
-  }
-
-  const projects = (goals || []).filter((g: any) => g.status === "active" || !g.status).slice(0, 8);
-  const activity = (stats?.recentActivity || []).slice(0, 8);
-  const notes = (journal || []).slice(0, 4);
-  // Reminder rows carry { title, fireAt, firedAt } — there is no completed/
-  // dismissed field (done = soft-delete, fired = firedAt set). Un-fired rows
-  // are the active ones; sort soonest-first so the next reminder leads.
-  const seenReminders = new Set<string>();
-  const activeReminders = (Array.isArray(reminders) ? reminders : [])
-    .filter((r: any) => !r.firedAt)
-    // Exact duplicates (same title, same fire minute) render once. Distinct
-    // times survive on purpose — three amoxicillin doses a day is a regimen,
-    // not a dupe.
-    .filter((r: any) => {
-      const k = `${normName(r.title || r.message || r.content)}@${String(r.fireAt || "").slice(0, 16)}`;
-      if (seenReminders.has(k)) return false;
-      seenReminders.add(k);
-      return true;
-    })
-    .sort((a: any, b: any) => new Date(a.fireAt || 0).getTime() - new Date(b.fireAt || 0).getTime())
-    .slice(0, 8);
-  const notifs = (Array.isArray(notifications) ? notifications : []).filter((n: any) => !n.dismissed);
-  const alerts = notifs.filter((n: any) => n.severity === "critical").slice(0, 6);
-  const infoNotifs = notifs.filter((n: any) => n.severity !== "critical").slice(0, 6);
-
-  const daysLeft = (dateStr: string) => Math.max(0, Math.round((new Date(dateStr + "T00:00:00").getTime() - new Date(todayStr + "T00:00:00").getTime()) / 86400000));
-  const goNotif = (n: any) => {
-    if (n.entityType === "document" && n.entityId) navigate(`/documents/${n.entityId}`);
-    else if (n.entityType === "profile" && n.entityId) navigate(`/profiles/${n.entityId}`);
-    else if (n.entityType === "task") setPopup("tasks");
-    else if (n.entityType === "habit") setPopup("habits");
-    else setPopup("events");
+  const onAction = (item: AttentionItem) => {
+    const kind = item.action?.kind;
+    if (!kind || kind === "open") { navigate(item.href); return; }
+    const key = item.key;
+    const run = (p: Promise<any>) => { markBusy(key, true); p.finally(() => markBusy(key, false)); };
+    switch (kind) {
+      case "pay":
+        // Money moves once. First tap arms, second commits; the arm lapses so a
+        // stray tap can't sit primed on screen.
+        if (armedKey !== key) {
+          setArmedKey(key);
+          setTimeout(() => setArmedKey(k => (k === key ? null : k)), 4000);
+          return;
+        }
+        setArmedKey(null);
+        run(payBill.mutateAsync(idOf(item)));
+        return;
+      case "complete": run(completeTask.mutateAsync(idOf(item))); return;
+      case "checkin": run(checkinHabit.mutateAsync(idOf(item))); return;
+      case "dismiss":
+        if (item.kind === "reminder") {
+          // A rolled-up medication row stands for every dose under it.
+          const idList = item.children?.length ? item.children.map(idOf) : [idOf(item)];
+          run(dismissReminders.mutateAsync(idList));
+        } else {
+          run(dismissAlert.mutateAsync(item.key.replace(/^alert:/, "")));
+        }
+        return;
+      default:
+        navigate(item.href);
+    }
   };
 
-  const overdueBillCount = bills.filter((b: any) => b.status === "overdue").length;
-  const billsUpcomingTotal = bills.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0);
-  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
-
-  // ── Top-card derivations (2026-07-16 redesign: attention over totals) ───────
-  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  const fmtShort = (d: string) => new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  const nowClock = new Date().toTimeString().slice(0, 5);
-  const nowMs = Date.now();
-
-  // Tasks: high-priority count includes overdue ones (unlike the section list).
-  const highCount = pending.filter((t: any) => ["high", "urgent"].includes(String(t.priority || "").toLowerCase())).length;
-  const habitsDone = habitRows.length - missedCount;
-
-  // Events: what's left today, and the single next thing on the calendar.
-  const eventsToday = todayItems.filter((i: any) => i.type === "event");
-  const nextTodayEvent = eventsToday
-    .filter((i: any) => i.time && i.time >= nowClock)
-    .sort((a: any, b: any) => String(a.time).localeCompare(String(b.time)))[0]
-    || eventsToday.find((i: any) => !i.time);
-  const nextFutureEvent = events.slice().sort((a: any, b: any) => String(a.date || "").localeCompare(String(b.date || "")))[0];
-  const nextEventLabel = nextTodayEvent
-    ? `Next: ${nextTodayEvent.title}${nextTodayEvent.time ? ` · ${fmtClock(nextTodayEvent.time)}` : ""}`
-    : nextFutureEvent
-      ? `Next: ${nextFutureEvent.title} · ${dayLabel(String(nextFutureEvent.date).slice(0, 10), todayStr)}`
-      : "nothing scheduled";
-
-  // Bills: risk + timing, not just a count.
-  const nextBill = bills.filter((b: any) => b.status !== "overdue")
-    .slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-  const nextBillDate = nextBill
-    ? fmtShort(String(nextBill.dueDate || "").slice(0, 10) || new Date(nowMs + (nextBill.daysUntil || 0) * 86400000).toLocaleDateString("en-CA"))
-    : null;
-
-  // Documents: expired or ≤30d, soonest first.
-  const docExpiryPhrase = (d: number) =>
-    d < 0 ? (d === -1 ? "expired yesterday" : `expired ${Math.abs(d)} days ago`)
-    : d === 0 ? "expires today" : d === 1 ? "expires tomorrow" : `expires in ${d} days`;
-  const nextDoc = allExpiringDocs
-    .filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil <= 30)
-    .slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-
-  // ── Attention Required: every urgent issue across the profile, one list. ────
-  const firedReminders = activeReminders.filter((r: any) => r.fireAt && new Date(r.fireAt).getTime() < nowMs);
-  const attention: AttentionEntry[] = [];
-  for (const t of overdueTasks) attention.push({
-    id: `task-${t.id}`, title: t.title, severity: "critical", group: "Overdue tasks",
-    reason: `Overdue — was due ${fmtShort(String(t.dueDate))}`, go: () => setPopup("tasks"),
-  });
-  for (const b of bills) {
-    if (b.status === "overdue") attention.push({
-      id: `bill-${b.id}`, title: b.name, severity: "critical", group: "Bills requiring action",
-      reason: `$${Number(b.amount).toLocaleString()} overdue`, go: () => setPopup("bills"),
-    });
-    else if (b.daysUntil === 0) attention.push({
-      id: `bill-${b.id}`, title: b.name, severity: "warning", group: "Bills requiring action",
-      reason: `$${Number(b.amount).toLocaleString()} due today`, go: () => setPopup("bills"),
-    });
-  }
-  for (const d of allExpiringDocs) {
-    if (typeof d.daysUntil !== "number" || d.daysUntil > 30) continue;
-    attention.push({
-      id: `doc-${d.documentId}-${d.fieldName || ""}`,
-      title: d.documentName || d.name || d.fieldName || "Document",
-      severity: d.daysUntil < 0 ? "critical" : "warning", group: "Expiring documents",
-      reason: docExpiryPhrase(d.daysUntil), go: () => setPopup("docs"),
-    });
-  }
-  for (const h of habitRows) if (!h.doneToday) attention.push({
-    id: `habit-${h.id}`, title: h.name, severity: "warning", group: "Habits still due today",
-    reason: "Not checked in yet", go: () => setPopup("habits"),
-  });
-  for (const n of alerts) attention.push({
-    id: `alert-${n.id}`, title: n.title, severity: "critical", group: "Alerts",
-    reason: "Critical notification", go: () => goNotif(n),
-  });
-  for (const r of firedReminders) attention.push({
-    id: `rem-${r.id}`, title: r.title || r.message || r.content || "Reminder", severity: "warning",
-    group: "Reminders", reason: "Fired — not dismissed", go: () => setPopup("reminders"),
-  });
-  const attnCritical = attention.filter(i => i.severity === "critical").length;
-  // Sub-line: top two contributors, most severe first, then a "N more" tail so
-  // the parts always account for the headline number (a "29" headline with a
-  // "9 · 6" sub-line read as broken math).
-  const attnParts: Array<{ label: string; n: number }> = [];
-  if (overdueTasks.length) attnParts.push({ label: plural(overdueTasks.length, "overdue task"), n: overdueTasks.length });
-  if (overdueBillCount) attnParts.push({ label: plural(overdueBillCount, "overdue bill"), n: overdueBillCount });
-  const billsDueTodayCount = bills.filter((b: any) => b.status !== "overdue" && b.daysUntil === 0).length;
-  if (billsDueTodayCount) attnParts.push({ label: `${plural(billsDueTodayCount, "bill")} due today`, n: billsDueTodayCount });
-  if (alerts.length) attnParts.push({ label: plural(alerts.length, "alert"), n: alerts.length });
-  const expiringDocCount = attention.filter(i => i.group === "Expiring documents").length;
-  if (nextDoc) attnParts.push({ label: plural(expiringDocCount, "expiring doc"), n: expiringDocCount });
-  if (missedCount) attnParts.push({ label: `${plural(missedCount, "habit")} due`, n: missedCount });
-  if (firedReminders.length) attnParts.push({ label: `${plural(firedReminders.length, "reminder")} fired`, n: firedReminders.length });
-  const attnShown = attnParts.slice(0, 2);
-  const attnMore = attention.length - attnShown.reduce((s, p) => s + p.n, 0);
-  const attnSub = [...attnShown.map(p => p.label), attnMore > 0 ? `${attnMore} more` : null].filter(Boolean).join(" · ");
-
-  // ── Today's Overview: everything scheduled today, one chronological list. ───
-  const tomorrowStr = new Date(nowMs + 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
-  const remindersToday = activeReminders.filter((r: any) => {
-    const f = r.fireAt ? new Date(r.fireAt) : null;
-    return f && !isNaN(f.getTime()) && f.toLocaleDateString("en-CA") === todayStr;
-  });
-  const todayEntries: TodayEntry[] = [
-    // Timeline supplies events/bills for today; tasks come from /api/tasks so
-    // completed-vs-pending state is authoritative (skip timeline task rows).
-    ...todayItems.filter((i: any) => i.type !== "task").map((i: any) => ({
-      id: String(i.id), title: i.title, kind: String(i.type), time: i.time || null,
-      urgent: i.type === "bill" || i.type === "obligation",
-      go: () => setPopup(i.type === "bill" || i.type === "obligation" ? "bills" : "events"),
-    })),
-    ...agendaTasks.map((t: any) => ({ id: `task-${t.id}`, title: t.title, kind: "task", time: null, go: () => setPopup("tasks") })),
-    ...habitRows.map(h => ({ id: `habit-${h.id}`, title: h.name, kind: "habit", time: null, done: h.doneToday, go: () => setPopup("habits") })),
-    ...remindersToday.map((r: any) => ({
-      id: `rem-${r.id}`, title: r.title || r.message || r.content || "Reminder", kind: "reminder",
-      time: r.fireAt ? new Date(r.fireAt).toTimeString().slice(0, 5) : null, go: () => setPopup("reminders"),
-    })),
-  ];
-  const tomorrowEntries: TodayEntry[] = tl
-    .filter((i: any) => (i.date || "").slice(0, 10) === tomorrowStr && !isLoanPayment(i)).slice(0, 8)
-    .map((i: any) => ({ id: `tmw-${i.id}`, title: i.title, kind: String(i.type), time: i.time || null }));
-  const todayRemainingTasks = agendaTasks.length;
-  const todayDone = doneToday + habitsDone;
-  // Day progress runs over COMPLETABLE items only (tasks + habits). Events,
-  // bills and reminders in todayEntries have no done-state, so dividing by the
-  // full entry list made "4 of 10 habits" render as 33% here while the Habits
-  // popup said 40% on the same data — and the bar could never reach 100%.
-  const todayCompletable = agendaTasks.length + doneToday + habitRows.length;
-  const todayPct = todayCompletable > 0 ? Math.round((todayDone / todayCompletable) * 100) : 0;
-  const timedRemaining = todayEntries.filter(e => e.time && !e.done).sort((a, b) => String(a.time).localeCompare(String(b.time)));
-  const nextTimed = timedRemaining.find(e => String(e.time) >= nowClock);
-  const todayNextLabel = nextTimed
-    ? `Next: ${nextTimed.title} · ${fmtClock(nextTimed.time)}`
-    : agendaTasks[0] ? `Next: ${agendaTasks[0].title}`
-    : nextFutureEvent ? `Next: ${nextFutureEvent.title} · ${dayLabel(String(nextFutureEvent.date).slice(0, 10), todayStr)}`
-    : "Nothing scheduled today";
-  const firstCritical = attention.find(i => i.severity === "critical");
-
-  // AI Executive Brief — honest, instant bullets derived from the data above
-  // (no per-load AI call). The AI chat can still create/modify any of the
-  // underlying records; these lines just reflect the current state.
-  const aiBrief: Array<{ text: string; tone?: "pos" | "neg" | "warn"; go?: () => void }> = [];
-  // Lead bullet covers tasks AND bills: opening with a green "No overdue
-  // tasks." while overdue bills sit two bullets down read as a contradiction.
-  if (overdueTasks.length > 0) aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => setPopup("tasks") });
-  else if (overdueBillCount > 0) aiBrief.push({ text: `No overdue to-do tasks, but ${plural(overdueBillCount, "overdue bill")} to pay.`, tone: "warn", go: () => setPopup("bills") });
-  else aiBrief.push({ text: "Nothing overdue — tasks and bills are clear.", tone: "pos" });
-  const soonestDoc = docs.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-  if (soonestDoc) aiBrief.push({ text: `${soonestDoc.documentName || soonestDoc.name || soonestDoc.fieldName || "A document"} ${soonestDoc.daysUntil < 0 ? `expired ${Math.abs(soonestDoc.daysUntil)} days ago` : soonestDoc.daysUntil === 0 ? "expires today" : `expires in ${soonestDoc.daysUntil} days`}.`, tone: soonestDoc.daysUntil <= 21 ? "neg" : "warn", go: () => setPopup("docs") });
-  if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => setPopup("habits") });
-  const soonestBill = bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) ${dueLabel(soonestBill.daysUntil)}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => setPopup("bills") });
-  for (const n of alerts.slice(0, 2)) aiBrief.push({ text: n.title, tone: "neg", go: () => goNotif(n) });
-  if (birthdays[0]) aiBrief.push({ text: `${birthdays[0].title} ${relativeDay(daysLeft(birthdays[0].date.slice(0, 10)))}.`, tone: "warn", go: () => setPopup("events") });
+  const feedLoading = anyBriefPending && attention.items.length === 0;
 
   return (
     <div data-testid="executive-briefing">
@@ -569,22 +451,20 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           >Retry</button>
         </div>
       )}
-      {/* Attention-first top grid (2026-07-16 redesign): row 1 = Attention /
-          Tasks / Events, row 2 = Bills / Documents / Habits, then a full-width
-          Today's Overview strip. Every card answers "what needs my attention,
-          what's coming up, what's going wrong" — not just totals. The opaque
-          Score tile is replaced by Attention Required (most prominent card);
-          Projects moved down into the section grid (Open Projects).
+
+      {/* Context tiles. These are the "am I OK right now" layer — they open the
+          owning module's popup and never duplicate the feed below.
           Loading-vs-empty (BUG-20260715-everyone-zeros): while a tile's query
           is still pending (cold Everyone switch, cold reload) it shows "…",
           never a hard 0 — a wall of zeros reads as "aggregation is broken". */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2" data-testid="brief-stat-row">
         <StatTile prominent label="Attention"
-          value={tasksPending || enhanced === undefined ? "…" : String(attention.length)}
-          unit={tasksPending || enhanced === undefined ? undefined : attention.length > 0 ? (attention.length === 1 ? "item needs review" : "items need review") : undefined}
-          sub={tasksPending || enhanced === undefined ? "loading" : attention.length === 0 ? "Nothing needs review" : attnSub}
-          accent={attention.length === 0 ? "155 65% 45%" : attnCritical > 0 ? "0 72% 58%" : "43 96% 56%"}
-          onClick={() => setPopup("attention")} testId="brief-stat-attention" />
+          value={tasksPending || enhanced === undefined ? "…" : String(attention.items.length)}
+          unit={tasksPending || enhanced === undefined ? undefined : attention.items.length > 0 ? (attention.items.length === 1 ? "item needs review" : "items need review") : undefined}
+          sub={tasksPending || enhanced === undefined ? "loading" : attention.items.length === 0 ? "Nothing needs review" : attnSub}
+          accent={attention.items.length === 0 ? "155 65% 45%" : attnCounts.immediate > 0 ? "0 72% 58%" : "43 96% 56%"}
+          onClick={() => document.querySelector('[data-testid="attention-feed"]')?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          testId="brief-stat-attention" />
         <StatTile label="Tasks"
           value={tasksPending ? "…" : String(agendaTasks.length)} unit={tasksPending ? undefined : "due today"}
           sub={tasksPending ? "loading"
@@ -611,300 +491,62 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           accent={ACCENTS.docs} onClick={() => setPopup("docs")} testId="brief-stat-documents" />
         {/* Zero habits ≠ "all done" — it means nothing is scheduled. */}
         <StatTile label="Habits"
-          value={habitsPending ? "…" : habitRows.length === 0 ? "—" : `${habitsDone} of ${habitRows.length}`}
-          unit={habitsPending || habitRows.length === 0 ? undefined : "completed"}
-          sub={habitsPending ? "loading" : habitRows.length === 0 ? "No habits scheduled today" : missedCount > 0 ? `${missedCount} remaining today` : "all done today"}
+          value={habitsPending ? "…" : habitsDueToday.length === 0 ? "—" : `${habitsDoneCount} of ${habitsDueToday.length}`}
+          unit={habitsPending || habitsDueToday.length === 0 ? undefined : "completed"}
+          sub={habitsPending ? "loading" : habitsDueToday.length === 0 ? "No habits scheduled today" : missedCount > 0 ? `${missedCount} remaining today` : "all done today"}
           accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
       </div>
 
-      {/* Today's Overview — full-width strip replacing the old Projects tile:
-          next action, remaining work, the most urgent issue, day progress. */}
-      <button onClick={() => setPopup("today")} data-testid="brief-today-card"
-        className="w-full rounded-xl border px-3 py-2.5 text-left card-lift transition-all mb-2"
-        style={{ borderColor: "hsl(262 80% 66% / 0.30)", background: "linear-gradient(135deg, hsl(262 80% 66% / 0.10) 0%, hsl(var(--card)) 70%)" }}>
-        <div className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: "hsl(262 80% 66%)", boxShadow: "0 0 5px hsl(262 80% 66% / 0.7)" }} />
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Today</span>
-          {todayCompletable > 0 && <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">{todayPct}% done</span>}
+      <Section id="alerts" title="AI Executive Brief" testId="brief-ai">
+        <div className="space-y-0.5 pb-0.5">
+          {aiBrief.map((b, i) => (
+            <button key={i} onClick={b.go} className="w-full flex items-start gap-1.5 py-[3px] px-1 text-left text-xs hover:bg-muted/40 rounded-sm">
+              <span className="mt-[3px]" style={{ color: "hsl(280 75% 66%)" }}>✦</span>
+              <span className={`flex-1 ${b.tone === "neg" ? "text-red-500" : b.tone === "warn" ? "text-amber-500" : b.tone === "pos" ? "text-emerald-500" : ""}`}>{b.text}</span>
+            </button>
+          ))}
         </div>
-        <div className="mt-1 text-sm font-medium truncate" style={{ color: "hsl(262 80% 66%)" }}>
-          {tasksPending || timelinePending ? "…" : todayNextLabel}
-        </div>
-        <div className="text-[11px] text-muted-foreground mt-0.5 truncate">
-          {plural(todayRemainingTasks, "task")} remaining
-          {habitRows.length > 0 ? ` · ${plural(missedCount, "habit")} remaining` : ""}
-          {todayDone > 0 ? ` · ${todayDone} done` : ""}
-        </div>
-        {firstCritical && (
-          <div className="text-[11px] text-red-500 mt-0.5 truncate">⚠ {firstCritical.title} — {firstCritical.reason}</div>
-        )}
-        {todayCompletable > 0 && (
-          <div className="mt-1.5 h-1 rounded-full bg-muted overflow-hidden">
-            <div className="h-full rounded-full" style={{ width: `${todayPct}%`, background: "hsl(262 80% 66%)" }} />
-          </div>
-        )}
-      </button>
+      </Section>
 
-      <div className="md:columns-2 xl:columns-3 gap-2">
-        <Section id="alerts" title="AI Executive Brief" count={aiBrief.length} testId="brief-ai" defaultOpen>
-          {aiBrief.length === 0 ? <Empty label="All clear." /> : (
-            <div className="space-y-0.5 pb-0.5">
-              {aiBrief.map((b, i) => (
-                <button key={i} onClick={b.go} disabled={!b.go}
-                  className={`w-full flex items-start gap-1.5 py-[3px] px-1 text-left text-xs rounded-sm ${b.go ? "hover:bg-muted/40" : ""} ${b.tone === "neg" ? "text-red-500" : b.tone === "warn" ? "text-amber-500" : b.tone === "pos" ? "text-emerald-500" : ""}`}>
-                  <span className="mt-[3px]" style={{ color: "hsl(280 75% 66%)" }}>✦</span>
-                  <span className="flex-1">{b.text}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="agenda" title="Today's Agenda" count={todayItems.length + agendaTasks.length} testId="brief-agenda">
-          {todayItems.length + agendaTasks.length === 0 ? <Empty label="Nothing scheduled today." /> : (
-            <div className="divide-y divide-border/30">
-              {todayItems.map((i: any) => (
-                <Row key={i.id} testId={`brief-agenda-${i.id}`}
-                  cells={[i.time || (i.allDay ? "all day" : "today"), i.title, i.type]}
-                  urgent={i.type === "bill" || i.type === "obligation"}
-                  onClick={() => i.type === "task" ? setPopup("tasks") : setPopup("events")} />
-              ))}
-              {agendaTasks.map((t: any) => (
-                <Row key={t.id} testId={`brief-agenda-task-${t.id}`}
-                  cells={["today", t.title, t.priority || "—"]}
-                  onClick={() => setPopup("tasks")} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="overdue" title="Overdue" count={overdueTasks.length} testId="brief-overdue" defaultOpen={overdueTasks.length > 0}>
-          {overdueTasks.length === 0 ? <Empty label="Nothing overdue. 🎉" /> : (
-            <div className="divide-y divide-border/30">
-              {overdueTasks.map((t: any) => (
-                <Row key={t.id} cells={[dayLabel(t.dueDate.slice(0, 10), todayStr), t.title, t.priority || "—"]}
-                  urgent onClick={() => setPopup("tasks")} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="tasks" title="Upcoming Tasks" count={upcomingTasks.length} testId="brief-tasks">
-          {upcomingTasks.length === 0 ? <Empty label="No open tasks." /> : (
-            <div className="divide-y divide-border/30">
-              {upcomingTasks.map((t: any) => (
-                <Row key={t.id} cells={[t.dueDate ? dayLabel(t.dueDate.slice(0, 10), todayStr) : "—", t.title, t.priority || "—"]}
-                  onClick={() => setPopup("tasks")} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="priority" title="High Priority" count={highPriority.length} testId="brief-priority" defaultOpen={highPriority.length > 0}>
-          {highPriority.length === 0 ? <Empty label="No high-priority items." /> : (
-            <div className="divide-y divide-border/30">
-              {highPriority.map((t: any) => (
-                <Row key={t.id} cells={[t.dueDate ? dayLabel(t.dueDate.slice(0, 10), todayStr) : "—", t.title, "high"]}
-                  valueTone="warn" onClick={() => setPopup("tasks")} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="habits" title={missedCount > 0 ? `Habits · ${missedCount} due` : "Habits"} count={habitRows.length} testId="brief-habits">
-          {habitRows.length === 0 ? <Empty label="No habits yet." /> : (
-            <div className="divide-y divide-border/30">
-              {habitRows.map(h => (
-                <Row key={h.id} cells={[h.doneToday ? "✓ done" : "✗ due", h.name, `${h.streak}🔥`]}
-                  urgent={!h.doneToday} valueTone={h.streak > 0 ? "warn" : undefined}
-                  onClick={() => setPopup("habits")} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="reminders" title="Reminders" count={activeReminders.length} testId="brief-reminders" defaultOpen={activeReminders.length > 0}>
-          {activeReminders.length === 0 ? <Empty label="No reminders." /> : (
-            <div className="divide-y divide-border/30">
-              {activeReminders.map((r: any) => {
-                // Reminders fire at a timestamp (fireAt), not a bare date.
-                const fire = r.fireAt ? new Date(r.fireAt) : null;
-                const when = fire && !isNaN(fire.getTime())
-                  ? dayLabel(fire.toLocaleDateString("en-CA"), todayStr)
-                  : "—";
-                const time = fire && !isNaN(fire.getTime())
-                  ? fire.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-                  : "";
-                return (
-                  <Row key={r.id} cells={[when, r.title || r.message || r.content, time]}
-                    onClick={() => setPopup("reminders")} />
-                );
-              })}
-            </div>
-          )}
-        </Section>
-
-        <Section id="birthdays" title="Birthdays & Anniversaries" count={birthdays.length} testId="brief-birthdays" defaultOpen={birthdays.length > 0}>
-          {birthdays.length === 0 ? <Empty label="None in the next 45 days." /> : (
-            <div className="divide-y divide-border/30">
-              {birthdays.map((i: any) => (
-                <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
-                  onClick={() => setPopup("events")} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="appointments" title="Appointments" count={appointments.length} testId="brief-appointments" defaultOpen={appointments.length > 0}>
-          {appointments.length === 0 ? <Empty label="No upcoming appointments." /> : (
-            <div className="divide-y divide-border/30">
-              {appointments.map((i: any) => (
-                <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
-                  onClick={() => setPopup("events")} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="dates" title="Important Dates" count={importantDates.length} testId="brief-dates">
-          {importantDates.length === 0 ? <Empty label="Nothing coming up." /> : (
-            <div className="divide-y divide-border/30">
-              {importantDates.map((i: any) => (
-                <Row key={i.id} cells={[i.date?.slice(5, 10), i.title, `${daysLeft(i.date.slice(0, 10))}d`]}
-                  onClick={() => setPopup("events")} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="docs" title="Document Expirations" count={docs.length} testId="brief-docs">
-          {docs.length === 0 ? <Empty label="Nothing expiring soon." /> : (
-            <div className="divide-y divide-border/30">
-              {docs.map((d: any) => (
-                <Row key={d.documentId || d.id}
-                  cells={[d.expirationDate?.slice(5, 10) || "—", d.documentName || d.name || d.fieldName || "Document", relativeDay(d.daysUntil)]}
-                  urgent={typeof d.daysUntil === "number" && d.daysUntil <= 21}
-                  valueTone={typeof d.daysUntil === "number" && d.daysUntil <= 45 ? "warn" : undefined}
-                  onClick={() => setPopup("docs")} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="bills" title="Bills & Obligations" count={bills.length} testId="brief-bills">
-          {bills.length === 0 ? <Empty label="No bills due soon." /> : (
-            <div className="divide-y divide-border/30">
-              {bills.map((b: any) => (
-                <div key={b.id} className="flex items-baseline gap-1">
-                  <div className="flex-1 min-w-0">
-                    <Row
-                      cells={[b.status === "overdue" ? "overdue" : relativeDay(b.daysUntil), b.name, `$${Number(b.amount).toLocaleString()}`]}
-                      urgent={b.status === "overdue" || b.daysUntil === 0}
-                      valueTone="pos"
-                      onClick={() => setPopup("bills")} />
-                  </div>
-                  {/* Two-tap pay (2026-07-29 tester report: rapid clicks landed
-                      on re-sorted rows and paid Netflix/Gas by accident). The
-                      first tap arms THIS bill id; only a second tap on the SAME
-                      id records the payment — a shifted list can't misdirect it. */}
-                  <button
-                    onClick={() => {
-                      if (armedPayId === b.id) { setArmedPayId(null); payBill.mutate(b.id); }
-                      else setArmedPayId(b.id);
-                    }}
-                    disabled={payBill.isPending}
-                    className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded border shrink-0 ${
-                      armedPayId === b.id
-                        ? "border-emerald-500 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                        : "border-border hover:bg-muted"}`}
-                    data-testid={`brief-pay-${b.id}`}
-                  >{armedPayId === b.id ? `Pay $${Number(b.amount).toLocaleString()}?` : "Pay"}</button>
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="calendar" title="Calendar · Next 14d" count={calendarDays.length} testId="brief-calendar">
-          {calendarDays.length === 0 ? <Empty label="Nothing scheduled." /> : (
-            <div className="space-y-0.5">
-              {calendarDays.map(d => (
-                <div key={d.day}>
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 pt-1">{d.day}</div>
-                  {d.items.map((i: any) => (
-                    <Row key={i.id} cells={[i.time || "", i.title]} onClick={() => setPopup("events")} />
-                  ))}
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="notifications" title="Notifications" count={notifs.length} testId="brief-notifications" defaultOpen={alerts.length > 0}>
-          {notifs.length === 0 ? <Empty label="All caught up." /> : (
-            <div className="divide-y divide-border/30">
-              {[...alerts, ...infoNotifs].map((n: any) => (
-                <Row key={n.id} cells={[n.severity === "critical" ? "⚠" : n.severity === "warning" ? "!" : "·", n.title]}
-                  urgent={n.severity === "critical"}
-                  valueTone={n.severity === "warning" ? "warn" : undefined}
-                  onClick={() => goNotif(n)} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="projects" title="Open Projects" count={projects.length} testId="brief-projects" defaultOpen={projects.length > 0}>
-          {projects.length === 0 ? <Empty label="No active goals." /> : (
-            <div className="divide-y divide-border/30">
-              {projects.map((g: any) => (
-                <Row key={g.id}
-                  cells={["goal", g.title, g.target ? `${Math.round(((g.current ?? 0) / g.target) * 100)}%` : ""]}
-                  valueTone="pos"
-                  onClick={() => setPopup("projects")} />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="activity" title="Recently Added" count={activity.length} testId="brief-activity" defaultOpen={false}>
-          {activity.length === 0 ? <Empty label="No recent activity." /> : (
-            <div className="divide-y divide-border/30">
-              {activity.map((a: any, i: number) => (
-                <Row key={i} cells={["✓", a.description]} valueTone="pos" />
-              ))}
-            </div>
-          )}
-        </Section>
-
-        <Section id="notes" title="Quick Notes" count={notes.length} testId="brief-notes" defaultOpen={false}>
-          {notes.length === 0 ? <Empty label="No notes." /> : (
-            <div className="divide-y divide-border/30">
-              {notes.map((n: any) => (
-                <Row key={n.id} cells={[String(n.date || n.createdAt || "").slice(5, 10), String(n.content || "").slice(0, 90)]}
-                  onClick={() => setPopup("notes")} />
-              ))}
-            </div>
-          )}
-        </Section>
+      {/* ── The feed ─────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between gap-2 mb-1.5 mt-3">
+        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Needs your attention
+        </h2>
+        <button
+          onClick={() => setFiltersOpen(o => !o)}
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          data-testid="attention-filters-toggle"
+          aria-expanded={filtersOpen}
+        >
+          <SlidersHorizontal className="h-3 w-3" />
+          Filters
+        </button>
       </div>
+      {filtersOpen && <AttentionFilters prefs={prefs} onChange={setPrefs} />}
+
+      <AttentionFeed
+        items={attention.items}
+        counts={attention.counts}
+        suppressed={attention.suppressed}
+        loading={feedLoading}
+        onAction={onAction}
+        busyKeys={busyKeys}
+        armedKey={armedKey}
+        onShowSuppressed={() => setShowSuppressed(s => !s)}
+        showingSuppressed={showSuppressed}
+      />
 
       {/* The SAME popups the dashboard KPI tiles use — statically imported here
-          (part of the dashboard chunk), so a row click always opens them even
+          (part of the dashboard chunk), so a tile click always opens them even
           if a lazy chunk fetch would have failed. */}
       {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={allBills} />}
       {popup === "events" && <EventsPopup open onClose={() => setPopup(null)} items={tl} todayStr={todayStr} />}
-      {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={allExpiringDocs} />}
-      {popup === "projects" && <ProjectsPopup open onClose={() => setPopup(null)} goals={goals} />}
-      {popup === "notes" && <NotesPopup open onClose={() => setPopup(null)} notes={(journal || []).slice(0, 20)} />}
-      {popup === "reminders" && <RemindersPopup open onClose={() => setPopup(null)} reminders={reminders} />}
-      {popup === "attention" && <AttentionPopup open onClose={() => setPopup(null)} items={attention} />}
-      {popup === "today" && (
-        <TodayOverviewPopup open onClose={() => setPopup(null)} entries={todayEntries}
-          tomorrow={tomorrowEntries} completedTasks={doneToday}
-          alerts={attention.filter(i => i.severity === "critical").slice(0, 3).map(i => `${i.title} — ${i.reason}`)} />
-      )}
+      {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={visibleDocs} />}
     </div>
   );
 }
+
+export default ExecutiveBriefing;
