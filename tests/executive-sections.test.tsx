@@ -168,7 +168,8 @@ describe("ExecutiveBriefing", () => {
 
   it("shows a real all-clear when nothing needs attention", async () => {
     await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
-    expect(screen.getByTestId("exec-sections").textContent).toContain("Nothing needs your attention");
+    // Encouraging, not blank — the empty state is a designed surface.
+    expect(screen.getByTestId("exec-sections").textContent).toContain("You're all caught up");
     expect(screen.getByTestId("brief-stat-attention").textContent).toContain("Nothing is overdue");
   });
 

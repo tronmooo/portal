@@ -1,16 +1,37 @@
-// ── The Executive tab's ten sections ─────────────────────────────────────────
+// ── The Executive tab's ten sections, as bubbles ─────────────────────────────
 // Presentation only. Which section a record belongs to — and the guarantee that
 // it belongs to exactly one — lives in shared/executive-sections.ts.
 //
-// Each section is collapsible, hides itself when empty, and caps its list with
-// an honest "+N more". Rows are the same card the attention feed used: title,
-// why it's here, one action, and the whole card links to the source record.
+// The visual system, and why:
+//
+//  * Every section is a rounded "bubble" (see .bubble in index.css): layered
+//    shadow plus a gradient wash tinted by the section's accent. Depth comes
+//    from shadow and gradient rather than backdrop-filter, because the app
+//    ships inside an iOS WKWebView and blurring a dozen scrolling surfaces
+//    janks badly there. Frosted glass stays on pinned surfaces only.
+//
+//  * Density is TIERED, not uniform. "Immediate Attention" is the hero — large
+//    type, big medallion, an amount headline. The day's working sections come
+//    next. Reference sections (birthdays, activity, insights) render compact
+//    and start collapsed. Making all ten equally large would push the tab back
+//    into a long scroll and defeat the point of the page.
+//
+//  * Colour is semantic and consistent with the rest of the app: red overdue,
+//    orange due-soon, yellow needs-attention, green healthy, blue info, purple
+//    AI. Hierarchy is carried by SIZE and WEIGHT rather than by fading text,
+//    because --muted-foreground is already tuned to sit exactly at the WCAG AA
+//    threshold and dimming further would drop it under.
 
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { ChevronDown, ChevronRight, Check, CreditCard, ArrowRight, X, Clock } from "lucide-react";
+import {
+  ChevronDown, ChevronRight, Check, CreditCard, ArrowRight, X, Clock,
+  TriangleAlert, CalendarDays, Flame, DollarSign, CalendarClock, Cake,
+  FolderOpen, Heart, History, Sparkles, PartyPopper, type LucideIcon,
+} from "lucide-react";
 import type { AttentionItem } from "@shared/attention";
-import type { ExecSection } from "@shared/executive-sections";
+import type { ExecSection, ExecSectionId } from "@shared/executive-sections";
+import { Medallion, ProgressRing, CountUp, Pill, toneForDays, tonePalette, type PillTone } from "./visuals";
 
 const ACTION_ICON = {
   complete: Check,
@@ -21,10 +42,33 @@ const ACTION_ICON = {
   open: ArrowRight,
 } as const;
 
-const TIER_DOT: Record<string, string> = {
-  immediate: "0 72% 58%",
-  soon: "25 95% 58%",
-  upcoming: "48 96% 53%",
+/** A section should be recognisable before its title is read. */
+const SECTION_ICON: Record<ExecSectionId, LucideIcon> = {
+  immediate: TriangleAlert,
+  today: CalendarDays,
+  habits: Flame,
+  bills: DollarSign,
+  upcoming: CalendarClock,
+  birthdays: Cake,
+  documents: FolderOpen,
+  health: Heart,
+  activity: History,
+  insights: Sparkles,
+};
+
+/** hero = dominates the page · working = normal · reference = compact, folded. */
+type Emphasis = "hero" | "working" | "reference";
+const EMPHASIS: Record<ExecSectionId, Emphasis> = {
+  immediate: "hero",
+  today: "working",
+  habits: "working",
+  bills: "working",
+  upcoming: "working",
+  documents: "working",
+  health: "working",
+  birthdays: "reference",
+  activity: "reference",
+  insights: "reference",
 };
 
 export interface ExecutiveSectionsProps {
@@ -32,12 +76,14 @@ export interface ExecutiveSectionsProps {
   loading?: boolean;
   onAction: (item: AttentionItem) => void;
   busyKeys?: Set<string>;
-  /** Money-moving rows arm on the first tap and commit on the second. */
   armedKey?: string | null;
+  /** Rows mid-exit after being completed, so they leave rather than vanish. */
+  leavingKeys?: Set<string>;
 }
 
-function ActionButton({ item, busy, armed, onAction }: {
-  item: AttentionItem; busy: boolean; armed: boolean; onAction: (i: AttentionItem) => void;
+function ActionButton({ item, busy, armed, hero, onAction }: {
+  item: AttentionItem; busy: boolean; armed: boolean; hero: boolean;
+  onAction: (i: AttentionItem) => void;
 }) {
   if (!item.action) return null;
   const Icon = ACTION_ICON[item.action.kind] || ArrowRight;
@@ -48,52 +94,84 @@ function ActionButton({ item, busy, armed, onAction }: {
       disabled={busy}
       data-testid={`exec-action-${item.key}`}
       aria-label={`${label} — ${item.title}`}
-      className={`shrink-0 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+      className={`touch-hit shrink-0 inline-flex items-center gap-1.5 rounded-full border font-semibold transition-all disabled:opacity-50 active:scale-95 ${
+        hero ? "px-3.5 py-2 text-xs" : "px-3 py-1.5 text-[11px]"
+      } ${
         armed
-          ? "border-red-500/50 bg-red-500/10 text-red-500"
-          : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+          ? "border-red-500/50 bg-red-500/15 text-red-500"
+          : "border-border/70 bg-background/60 text-muted-foreground hover:bg-muted hover:text-foreground"
       }`}
     >
-      <Icon className="h-3 w-3" />
+      <Icon className={hero ? "h-4 w-4" : "h-3.5 w-3.5"} />
       {busy ? "…" : label}
     </button>
   );
 }
 
-function Row({ item, accent, depth = 0, busyKeys, armedKey, onAction }: {
-  item: AttentionItem; accent: string; depth?: number;
-  busyKeys?: Set<string>; armedKey?: string | null;
+function Row({ item, hero, depth = 0, busyKeys, armedKey, leavingKeys, onAction }: {
+  item: AttentionItem; hero: boolean; depth?: number;
+  busyKeys?: Set<string>; armedKey?: string | null; leavingKeys?: Set<string>;
   onAction: (i: AttentionItem) => void;
 }) {
   const [, navigate] = useLocation();
   const [expanded, setExpanded] = useState(false);
   const hasChildren = !!item.children?.length && (item.count ?? 0) > 1;
-  const dot = TIER_DOT[item.tier] || accent;
+  // One tone drives the dot, the pill and the row's accent, so they can never
+  // disagree. An alert has no date, so `toneForDays` alone would paint a
+  // critical conflict informational-blue inside Immediate Attention.
+  const tone: PillTone =
+    item.kind === "alert"
+      ? (item.tier === "immediate" ? "critical" : "ai")
+      : toneForDays(item.daysUntil);
+  const hsl = tonePalette(tone);
   const open = () => (hasChildren ? setExpanded((x) => !x) : navigate(item.href));
+  const leaving = leavingKeys?.has(item.key);
+  // Expired / overdue rows breathe so the eye lands on them first.
+  const urgent = (item.daysUntil ?? 0) < 0;
 
   return (
-    <div data-testid={`exec-item-${item.key}`}>
+    <div data-testid={`exec-item-${item.key}`} className={leaving ? "row-leaving" : ""}>
       <div
         role="button"
         tabIndex={0}
         onClick={open}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
-        className={`w-full flex items-center gap-2 rounded-md border border-border/40 border-l-2 bg-card/50 px-2.5 py-2 text-left transition-colors hover:bg-muted/40 cursor-pointer ${depth ? "ml-4" : ""}`}
-        style={{ borderLeftColor: `hsl(${dot})` }}
+        className={`bubble-row w-full flex items-center gap-3 text-left cursor-pointer ${
+          hero ? "px-3.5 py-3" : "px-3 py-2.5"
+        } ${depth ? "ml-4" : ""} ${urgent && hero ? "pulse-attention" : ""}`}
+        style={{ ["--accent-hsl" as any]: hsl }}
       >
         {hasChildren && (
-          <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
+          <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
         )}
+        <span
+          className="w-1.5 h-1.5 rounded-full shrink-0"
+          style={{ background: `hsl(${hsl})`, boxShadow: `0 0 6px hsl(${hsl} / 0.8)` }}
+          aria-hidden="true"
+        />
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium truncate">{item.title}</p>
-          <p className="text-[11px] truncate" style={{ color: `hsl(${dot})` }}>{item.reason}</p>
+          <p className={`font-semibold truncate ${hero ? "text-[15px] leading-tight" : "text-[13px] leading-tight"}`}>
+            {item.title}
+          </p>
+          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+            <Pill tone={tone}>{item.reason}</Pill>
+            {item.count && item.count > 1 && (
+              <span className="text-[11px] text-muted-foreground">{item.count} items</span>
+            )}
+          </div>
         </div>
-        <ActionButton item={item} busy={!!busyKeys?.has(item.key)} armed={armedKey === item.key} onAction={onAction} />
+        <ActionButton
+          item={item} hero={hero}
+          busy={!!busyKeys?.has(item.key)}
+          armed={armedKey === item.key}
+          onAction={onAction}
+        />
       </div>
       {hasChildren && expanded && (
-        <div className="mt-1 space-y-1">
+        <div className="mt-1.5 space-y-1.5">
           {item.children!.map((c) => (
-            <Row key={c.key} item={c} accent={accent} depth={depth + 1} busyKeys={busyKeys} armedKey={armedKey} onAction={onAction} />
+            <Row key={c.key} item={c} hero={false} depth={depth + 1}
+              busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys} onAction={onAction} />
           ))}
         </div>
       )}
@@ -101,52 +179,77 @@ function Row({ item, accent, depth = 0, busyKeys, armedKey, onAction }: {
   );
 }
 
-function Section({ section, busyKeys, armedKey, onAction }: {
-  section: ExecSection;
-  busyKeys?: Set<string>; armedKey?: string | null;
+function SectionBubble({ section, index, busyKeys, armedKey, leavingKeys, onAction }: {
+  section: ExecSection; index: number;
+  busyKeys?: Set<string>; armedKey?: string | null; leavingKeys?: Set<string>;
   onAction: (i: AttentionItem) => void;
 }) {
-  // Everything above the fold on arrival except the two reference sections —
-  // recent activity and insights are context, not a call to action.
-  const [open, setOpen] = useState(section.id !== "activity" && section.id !== "insights");
+  const emphasis = EMPHASIS[section.id];
+  const hero = emphasis === "hero";
+  const [open, setOpen] = useState(emphasis !== "reference");
   const [showAll, setShowAll] = useState(false);
   const hidden = section.total - section.items.length;
+  const Icon = SECTION_ICON[section.id];
 
   return (
-    <div
-      className="mb-2 rounded-lg border bg-card/40 px-2 pt-0.5 pb-1.5"
-      style={{ borderColor: `hsl(${section.accent} / 0.25)` }}
+    <section
+      className={`bubble bubble-enter mb-3 ${hero ? "p-4 sm:p-5" : "p-3.5 sm:p-4"}`}
+      style={{ ["--accent-hsl" as any]: section.accent, ["--i" as any]: index }}
       data-testid={`exec-section-${section.id}`}
+      aria-label={section.title}
     >
       <button
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-1.5 py-1.5 text-left group"
+        className="w-full flex items-center gap-3 text-left group touch-hit"
         aria-expanded={open}
       >
-        <span
-          className="w-1.5 h-1.5 rounded-full shrink-0"
-          style={{ background: `hsl(${section.accent})`, boxShadow: `0 0 5px hsl(${section.accent} / 0.7)` }}
-        />
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-foreground transition-colors">
-          {section.title}
-        </span>
-        <span className="text-[10px] px-1.5 rounded-full" style={{ background: `hsl(${section.accent} / 0.15)`, color: `hsl(${section.accent})` }}>
-          {section.total}
-        </span>
-        {section.subtitle && (
-          <span className="ml-auto mr-1 text-[10px] text-muted-foreground truncate max-w-[55%]">{section.subtitle}</span>
+        <Medallion icon={Icon} accent={section.accent} size={hero ? "lg" : "sm"} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className={`font-bold tracking-tight truncate ${hero ? "text-base" : "text-sm"}`}>
+              {section.title}
+            </h3>
+            <span
+              className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold tabular-nums"
+              style={{ background: `hsl(${section.accent} / 0.16)`, color: `hsl(${section.accent})` }}
+            >
+              {section.total}
+            </span>
+          </div>
+          {section.subtitle && (
+            <p className="text-[11px] text-muted-foreground truncate mt-0.5">{section.subtitle}</p>
+          )}
+          {section.amount ? (
+            <p className={`metric-value mt-1 ${hero ? "text-2xl" : "text-xl"}`} style={{ color: `hsl(${section.accent})` }}>
+              $<CountUp value={Math.round(section.amount)} />
+            </p>
+          ) : null}
+        </div>
+        {section.progress && (
+          <ProgressRing
+            value={section.progress.done}
+            total={section.progress.total}
+            accent={section.accent}
+            size={hero ? 60 : 48}
+            stroke={hero ? 6 : 5}
+          />
         )}
-        <ChevronDown className={`h-3 w-3 ${section.subtitle ? "" : "ml-auto"} text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`}
+          aria-hidden="true"
+        />
       </button>
+
       {open && (
-        <div className="space-y-1 pb-0.5">
+        <div className={`space-y-2 ${hero ? "mt-3.5" : "mt-3"}`}>
           {section.items.map((i) => (
-            <Row key={i.key} item={i} accent={section.accent} busyKeys={busyKeys} armedKey={armedKey} onAction={onAction} />
+            <Row key={i.key} item={i} hero={hero}
+              busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys} onAction={onAction} />
           ))}
           {hidden > 0 && !showAll && (
             <button
               onClick={() => setShowAll(true)}
-              className="w-full text-[11px] text-muted-foreground hover:text-foreground py-1 rounded-md hover:bg-muted/40 transition-colors"
+              className="w-full rounded-full py-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
               data-testid={`exec-more-${section.id}`}
             >
               +{hidden} more
@@ -154,16 +257,18 @@ function Section({ section, busyKeys, armedKey, onAction }: {
           )}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
-export function ExecutiveSections({ sections, loading, onAction, busyKeys, armedKey }: ExecutiveSectionsProps) {
+export function ExecutiveSections({
+  sections, loading, onAction, busyKeys, armedKey, leavingKeys,
+}: ExecutiveSectionsProps) {
   if (loading) {
     return (
-      <div className="space-y-2" data-testid="exec-sections" aria-label="Loading what needs attention">
+      <div className="space-y-3" data-testid="exec-sections" aria-label="Loading what needs attention">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="h-16 rounded-lg border border-border/40 bg-card/40 animate-pulse" />
+          <div key={i} className="bubble h-24 skeleton-shimmer" style={{ ["--i" as any]: i }} />
         ))}
       </div>
     );
@@ -172,12 +277,17 @@ export function ExecutiveSections({ sections, loading, onAction, busyKeys, armed
   if (sections.length === 0) {
     return (
       <div
-        className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-4 py-8 text-center"
+        className="bubble bubble-enter px-6 py-10 text-center"
+        style={{ ["--accent-hsl" as any]: "155 60% 45%" }}
         data-testid="exec-sections"
       >
-        <p className="text-sm font-medium text-emerald-500">Nothing needs your attention.</p>
-        <p className="text-[11px] text-muted-foreground mt-1">
-          No overdue work, nothing scheduled, nothing expiring soon.
+        <span className="medallion mx-auto mb-3 !w-14 !h-14" style={{ ["--accent-hsl" as any]: "155 60% 45%" }} aria-hidden="true">
+          <PartyPopper className="h-7 w-7" strokeWidth={2} />
+        </span>
+        <p className="text-base font-bold">You're all caught up</p>
+        <p className="text-[13px] text-muted-foreground mt-1.5 max-w-xs mx-auto leading-relaxed">
+          Nothing is overdue, nothing is due today, and nothing expires soon.
+          Anything new will show up here first.
         </p>
       </div>
     );
@@ -185,8 +295,12 @@ export function ExecutiveSections({ sections, loading, onAction, busyKeys, armed
 
   return (
     <div data-testid="exec-sections">
-      {sections.map((s) => (
-        <Section key={s.id} section={s} busyKeys={busyKeys} armedKey={armedKey} onAction={onAction} />
+      {sections.map((s, i) => (
+        <SectionBubble
+          key={s.id} section={s} index={i}
+          busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
+          onAction={onAction}
+        />
       ))}
     </div>
   );

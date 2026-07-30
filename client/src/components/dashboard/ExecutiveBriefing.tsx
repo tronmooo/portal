@@ -26,10 +26,14 @@ import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from 
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
-import { ChevronDown, SlidersHorizontal } from "lucide-react";
+import {
+  ChevronDown, SlidersHorizontal, TriangleAlert, CheckCircle2, CalendarDays,
+  DollarSign, FolderOpen, Flame, Sparkles, type LucideIcon,
+} from "lucide-react";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import { BillsPopup, EventsPopup, DocsPopup } from "@/components/dashboard/BriefingPopups";
 import { ExecutiveSections } from "@/components/dashboard/ExecutiveSections";
+import { Medallion, CountUp } from "@/components/dashboard/visuals";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
 import type { DashboardStats } from "@shared/schema";
 // One relative-due formatter for the whole app. Interpolating a raw `daysUntil`
@@ -52,58 +56,66 @@ const ACCENTS: Record<string, string> = {
   alerts:   "280 75% 62%",  // purple
 };
 
-function Section({ id, title, children, testId }: {
-  id: string; title: string; children: React.ReactNode; testId: string;
-}) {
+// The AI brief lives in its own bubble. Purple, per the colour system: purple
+// is what the app uses for AI everywhere else.
+function BriefBubble({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(true);
-  const accent = ACCENTS[id] || "240 10% 60%";
+  const accent = ACCENTS.alerts;
   return (
-    <div
-      className="mb-2 rounded-lg border bg-card/40 px-2 pt-0.5 pb-1.5"
-      style={{ borderColor: `hsl(${accent} / 0.25)` }}
-      data-testid={testId}
+    <section
+      className="bubble bubble-enter mb-3 p-3.5 sm:p-4"
+      style={{ ["--accent-hsl" as any]: accent, ["--i" as any]: 6 }}
+      data-testid="brief-ai"
     >
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-1.5 py-1.5 text-left group"
+        className="w-full flex items-center gap-3 text-left touch-hit"
         aria-expanded={open}
       >
-        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-foreground transition-colors">{title}</span>
-        <ChevronDown className={`h-3 w-3 ml-auto text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
+        <Medallion icon={Sparkles} accent={accent} size="sm" />
+        <h3 className="flex-1 text-sm font-bold tracking-tight">Executive Brief</h3>
+        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
       </button>
       {open && children}
-    </div>
+    </section>
   );
 }
 
-// Top stat tile — big count plus a small unit next to it ("3 due today"), a
-// decision-oriented sub-line, clickable. `prominent` gives the Attention tile
-// the strongest visual weight on the board.
-function StatTile({ label, value, unit, sub, accent, onClick, testId, prominent }: {
+// Top stat tile — a bubble with a large icon medallion, a counting number and
+// a decision-oriented sub-line. `prominent` gives the Attention tile the
+// strongest weight on the page. Values arrive as strings because a tile may be
+// showing "…" while its query is still in flight (BUG-20260715-everyone-zeros:
+// a wall of hard zeros reads as "aggregation is broken"), so the counting
+// animation only applies when the value is genuinely numeric.
+function StatTile({ label, value, unit, sub, accent, icon, onClick, testId, prominent }: {
   label: string; value: string; unit?: string; sub?: string; accent: string;
-  onClick: () => void; testId: string; prominent?: boolean;
+  icon: LucideIcon; onClick: () => void; testId: string; prominent?: boolean;
 }) {
+  const numeric = /^\$?[\d,]+$/.test(value);
+  const isMoney = value.startsWith("$");
+  const numberValue = numeric ? Number(value.replace(/[$,]/g, "")) : 0;
   return (
     <button
       onClick={onClick}
       data-testid={testId}
-      className="rounded-xl border px-2.5 py-2 text-left card-lift transition-all"
-      style={{
-        borderColor: `hsl(${accent} / ${prominent ? 0.55 : 0.30})`,
-        background: `linear-gradient(135deg, hsl(${accent} / ${prominent ? 0.20 : 0.12}) 0%, hsl(var(--card)) 75%)`,
-        ...(prominent ? { boxShadow: `0 0 16px hsl(${accent} / 0.18)` } : {}),
-      }}
+      className={`bubble bubble-interactive bubble-enter text-left touch-hit ${prominent ? "p-3.5 col-span-2 sm:col-span-1" : "p-3"}`}
+      style={{ ["--accent-hsl" as any]: accent }}
     >
-      <div className="flex items-center gap-1.5">
-        <span className="w-1.5 h-1.5 rounded-full" style={{ background: `hsl(${accent})`, boxShadow: `0 0 5px hsl(${accent} / 0.7)` }} />
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
+      <div className="flex items-start gap-2.5">
+        <Medallion icon={icon} accent={accent} size={prominent ? "lg" : "sm"} />
+        <div className="min-w-0 flex-1">
+          <span className="block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground truncate">
+            {label}
+          </span>
+          <div className="flex items-baseline gap-1 mt-0.5 min-w-0">
+            <span className={`metric-value ${prominent ? "text-3xl" : "text-2xl"}`} style={{ color: `hsl(${accent})` }}>
+              {numeric ? <>{isMoney && "$"}<CountUp value={numberValue} /></> : value}
+            </span>
+            {unit && <span className="text-[11px] font-semibold truncate" style={{ color: `hsl(${accent} / 0.85)` }}>{unit}</span>}
+          </div>
+        </div>
       </div>
-      <div className="flex items-baseline gap-1 mt-0.5 min-w-0">
-        <span className={`metric-value ${prominent ? "text-2xl" : "text-xl"}`} style={{ color: `hsl(${accent})` }}>{value}</span>
-        {unit && <span className="text-[11px] font-medium truncate" style={{ color: `hsl(${accent})` }}>{unit}</span>}
-      </div>
-      {sub && <div className="text-[10px] text-muted-foreground truncate">{sub}</div>}
+      {sub && <div className="text-[11px] text-muted-foreground truncate mt-1.5">{sub}</div>}
     </button>
   );
 }
@@ -145,6 +157,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // Which item's money-moving button is armed for the confirming second tap.
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
+  // Rows the user just completed, held for the exit animation so they slide
+  // out instead of blinking away when the refetch lands.
+  const [leavingKeys, setLeavingKeys] = useState<Set<string>>(new Set());
   const [filtersOpen, setFiltersOpen] = useState(false);
   const mode = filterMode;
   const ids = filterIds;
@@ -365,6 +380,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // ── Actions ────────────────────────────────────────────────────────────────
   const markBusy = (key: string, on: boolean) =>
     setBusyKeys(prev => { const next = new Set(prev); on ? next.add(key) : next.delete(key); return next; });
+  /** Play the row out, then let the refetch remove it for real. */
+  const markLeaving = (key: string) => {
+    setLeavingKeys(prev => new Set(prev).add(key));
+    setTimeout(() => setLeavingKeys(prev => { const n = new Set(prev); n.delete(key); return n; }), 400);
+  };
 
   const payBill = useMutation({
     mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
@@ -414,7 +434,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     const kind = item.action?.kind;
     if (!kind || kind === "open") { navigate(item.href); return; }
     const key = item.key;
-    const run = (p: Promise<any>) => { markBusy(key, true); p.finally(() => markBusy(key, false)); };
+    const run = (p: Promise<any>) => {
+      markBusy(key, true);
+      p.then(() => markLeaving(key)).catch(() => {}).finally(() => markBusy(key, false));
+    };
     switch (kind) {
       case "pay":
         // Money moves once. First tap arms, second commits; the arm lapses so a
@@ -466,26 +489,26 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           Loading-vs-empty (BUG-20260715-everyone-zeros): while a tile's query
           is still pending (cold Everyone switch, cold reload) it shows "…",
           never a hard 0 — a wall of zeros reads as "aggregation is broken". */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2" data-testid="brief-stat-row">
-        <StatTile prominent label="Attention"
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 mb-4" data-testid="brief-stat-row">
+        <StatTile prominent label="Attention" icon={TriangleAlert}
           value={tasksPending || enhanced === undefined ? "…" : String(attnCount)}
           unit={tasksPending || enhanced === undefined ? undefined : attnCount > 0 ? (attnCount === 1 ? "item needs action" : "items need action") : undefined}
           sub={tasksPending || enhanced === undefined ? "loading" : attnCount === 0 ? "Nothing is overdue" : attnSub}
           accent={attnCount === 0 ? "155 65% 45%" : "0 72% 58%"}
           onClick={() => document.querySelector('[data-testid="exec-section-immediate"]')?.scrollIntoView({ behavior: "smooth", block: "start" })}
           testId="brief-stat-attention" />
-        <StatTile label="Tasks"
+        <StatTile label="Tasks" icon={CheckCircle2}
           value={tasksPending ? "…" : String(agendaTasks.length)} unit={tasksPending ? undefined : "due today"}
           sub={tasksPending ? "loading"
             : overdueTasks.length || highCount ? `${overdueTasks.length} overdue · ${highCount} high priority`
             : doneToday > 0 ? `${plural(doneToday, "task")} completed today`
             : `${plural(pending.length, "open task")}`}
           accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
-        <StatTile label="Events"
+        <StatTile label="Events" icon={CalendarDays}
           value={timelinePending ? "…" : String(eventsToday.length)} unit={timelinePending ? undefined : "today"}
           sub={timelinePending ? "loading" : nextEventLabel}
           accent={ACCENTS.calendar} onClick={() => setPopup("events")} testId="brief-stat-events" />
-        <StatTile label="Bills"
+        <StatTile label="Bills" icon={DollarSign}
           value={enhanced === undefined ? "…" : `$${Math.round(billsUpcomingTotal).toLocaleString()}`}
           unit={enhanced === undefined ? undefined : "due soon"}
           sub={enhanced === undefined ? "loading"
@@ -493,29 +516,31 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             : nextBillDate ? `next due ${nextBillDate}`
             : "nothing due in 3 weeks"}
           accent={ACCENTS.bills} onClick={() => setPopup("bills")} testId="brief-stat-bills" />
-        <StatTile label="Documents"
+        <StatTile label="Documents" icon={FolderOpen}
           value={enhanced === undefined ? "…" : String(docsSoonCount)}
           unit={enhanced === undefined ? undefined : docsSoonCount === 1 ? "needs attention" : "need attention"}
           sub={enhanced === undefined ? "loading" : nextDoc ? `${nextDoc.documentName || nextDoc.name || "Document"} ${docExpiryPhrase(nextDoc.daysUntil)}` : "all good"}
           accent={ACCENTS.docs} onClick={() => setPopup("docs")} testId="brief-stat-documents" />
         {/* Zero habits ≠ "all done" — it means nothing is scheduled. */}
-        <StatTile label="Habits"
+        <StatTile label="Habits" icon={Flame}
           value={habitsPending ? "…" : habitsDueToday.length === 0 ? "—" : `${habitsDoneCount} of ${habitsDueToday.length}`}
           unit={habitsPending || habitsDueToday.length === 0 ? undefined : "completed"}
           sub={habitsPending ? "loading" : habitsDueToday.length === 0 ? "No habits scheduled today" : missedCount > 0 ? `${missedCount} remaining today` : "all done today"}
           accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
       </div>
 
-      <Section id="alerts" title="AI Executive Brief" testId="brief-ai">
-        <div className="space-y-0.5 pb-0.5">
+      <BriefBubble>
+        <div className="mt-3 space-y-1.5">
           {aiBrief.map((b, i) => (
-            <button key={i} onClick={b.go} className="w-full flex items-start gap-1.5 py-[3px] px-1 text-left text-xs hover:bg-muted/40 rounded-sm">
-              <span className="mt-[3px]" style={{ color: "hsl(280 75% 66%)" }}>✦</span>
-              <span className={`flex-1 ${b.tone === "neg" ? "text-red-500" : b.tone === "warn" ? "text-amber-500" : b.tone === "pos" ? "text-emerald-500" : ""}`}>{b.text}</span>
+            <button key={i} onClick={b.go}
+              className="bubble-row w-full flex items-start gap-2.5 px-3 py-2.5 text-left"
+              style={{ ["--accent-hsl" as any]: ACCENTS.alerts }}>
+              <span className="mt-[3px] shrink-0" style={{ color: "hsl(280 75% 66%)" }} aria-hidden="true">✦</span>
+              <span className={`flex-1 text-[13px] leading-snug font-medium ${b.tone === "neg" ? "text-red-500" : b.tone === "warn" ? "text-amber-500" : b.tone === "pos" ? "text-emerald-500" : ""}`}>{b.text}</span>
             </button>
           ))}
         </div>
-      </Section>
+      </BriefBubble>
 
       {/* ── The feed ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-2 mb-1.5 mt-3">
@@ -540,6 +565,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         onAction={onAction}
         busyKeys={busyKeys}
         armedKey={armedKey}
+        leavingKeys={leavingKeys}
       />
 
       {/* The SAME popups the dashboard KPI tiles use — statically imported here

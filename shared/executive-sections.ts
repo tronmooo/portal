@@ -40,6 +40,10 @@ export interface ExecSection {
   items: AttentionItem[];
   /** Items before the display cap, so "+N more" can be honest. */
   total: number;
+  /** Completion for the day, when the section has one (habits). Drawn as a ring. */
+  progress?: { done: number; total: number };
+  /** Money at stake in this section (bills). Drawn as a headline figure. */
+  amount?: number;
 }
 
 /** The order the user reads them in. */
@@ -419,6 +423,7 @@ export function buildExecutiveSections(
     if (all.length === 0) continue;  // empty sections do not render
     // Soonest first inside a section; undated last.
     all.sort((a, b) => (a.daysUntil ?? 9e9) - (b.daysUntil ?? 9e9));
+    const amount = all.reduce((sum, i) => sum + (i.amount || 0), 0);
     out.push({
       id,
       title: TITLES[id],
@@ -426,6 +431,14 @@ export function buildExecutiveSections(
       items: all.slice(0, DISPLAY_CAP),
       total: all.length,
       subtitle: subtitleFor(id, { habitsDue, habitsDone, overdueBills, immediate: owned.immediate }),
+      // Numbers the UI draws instead of writing out: a completion ring for the
+      // day's habits, the money at stake for bills.
+      //
+      // Deliberately NOT set for Immediate Attention: that section mixes bills
+      // with tasks, documents and alerts, so a headline figure summed from the
+      // bills alone reads as the total for everything under it.
+      progress: id === "habits" && habitsDue > 0 ? { done: habitsDone, total: habitsDue } : undefined,
+      amount: id === "bills" && amount > 0 ? amount : undefined,
     });
   }
   return out;

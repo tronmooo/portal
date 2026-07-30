@@ -175,11 +175,16 @@ function money(n: number): string {
  * parenthetical puts them back together.
  */
 export function normalizeReminderTitle(raw: string): string {
+  return stripDoseQualifier(raw).toLowerCase().replace(/\s+/g, " ");
+}
+
+/** The same strip, but keeping the author's capitalisation — for display.
+ *  Grouping needs a lowercased key; the row still has to read "Take
+ *  Amoxicillin 500mg", not "Take amoxicillin 500mg". */
+export function stripDoseQualifier(raw: string): string {
   return String(raw || "")
     .replace(/\s*\((?:[^)]*\b(?:dose|dosage|morning|afternoon|evening|night|bedtime|am|pm)\b[^)]*)\)\s*$/i, "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
+    .trim();
 }
 
 function tierOf(daysUntil: number | null): AttentionTier {
@@ -229,7 +234,7 @@ export function computeAttention(
         sourceKey: `task:${t.id}`,
         kind: "task",
         title: t.title || "Task",
-        reason: du < 0 ? `Overdue — ${dayLabel(du)}` : du === 0 ? "Due today" : `Due ${dayLabel(du)}`,
+        reason: du < 0 ? dayLabel(du) : du === 0 ? "Due today" : `Due ${dayLabel(du)}`,
         tier: tierOf(du),
         daysUntil: du,
         score: urgencyScore(du) + impact,
@@ -386,7 +391,6 @@ export function computeAttention(
     }
     for (const { rows, fireMs } of groups.values()) {
       const lead = rows[0];
-      const title = normalizeReminderTitle(lead.title || lead.message || lead.content || "Reminder");
       const display = lead.title || lead.message || lead.content || "Reminder";
       const overdue = fireMs < nowMs;
       const children = rows.length > 1
@@ -408,7 +412,7 @@ export function computeAttention(
         key: `reminder:${lead.id}`,
         sourceKey: `reminder:${lead.id}`,
         kind: "reminder",
-        title: rows.length > 1 ? title.replace(/^\w/, (c) => c.toUpperCase()) : display,
+        title: rows.length > 1 ? stripDoseQualifier(display) : display,
         reason: rows.length > 1
           ? `${rows.length} doses today`
           : overdue ? "Was due — not dismissed" : "Due today",
