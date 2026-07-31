@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarClock, CheckCircle2, SkipForward, Pause, Play, Pencil, Clock, ChevronDown, ChevronRight, ChevronLeft, Bell } from "lucide-react";
 import { BILL_STATUS_META, type BillStatus } from "@shared/liability-status";
+import { formatFullDate, formatMoneyCents, parseLocalDate } from "@/lib/format";
 
 type OccStatus = BillStatus | "skipped";
 interface Occ {
@@ -27,8 +28,11 @@ interface Schedule {
   payments: { id: string; amount: number; date: string }[];
 }
 
-const usd = (n: number) => `$${(Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const dt = (iso?: string | null) => iso ? new Date(iso + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
+const usd = formatMoneyCents;
+// Was a local `new Date(iso + "T00:00:00")`. Correct, but the liability hero
+// had its own copy WITHOUT the time suffix, so the same due date rendered as
+// Aug 30 here and Aug 29 there. formatFullDate is now the only one.
+const dt = (iso?: string | null) => formatFullDate(iso);
 const FREQS = ["weekly", "biweekly", "monthly", "quarterly", "yearly"];
 const toneClass: Record<string, string> = {
   red: "text-red-600 border-red-600", amber: "text-amber-600 border-amber-600",
@@ -44,9 +48,9 @@ function StatusBadge({ status }: { status: OccStatus }) {
 
 function Fact({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-lg bg-muted/40 px-3 py-2">
+    <div className="bubble-row px-3 py-2">
       <p className="micro-label text-muted-foreground">{label}</p>
-      <p className="text-sm font-medium tabular-nums">{value}</p>
+      <p className="metric-value text-[17px] leading-tight mt-0.5">{value}</p>
     </div>
   );
 }
@@ -100,6 +104,21 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
     skipped: occ.filter((o) => o.status === "skipped").length,
   };
 
+  // Only facts that are actually set, and only facts no other surface owns.
+  // `null` values are dropped rather than rendered as an em-dash: a tile that
+  // says "—" costs a full tile of screen to communicate nothing.
+  const paidCount = data.payments?.length ?? 0;
+  const facts = ([
+    { label: "Payments made", value: paidCount > 0 ? String(paidCount) : null },
+    { label: "Last paid", value: data.lastPaid ? dt(data.lastPaid) : null },
+    { label: "First payment", value: data.firstPayment ? dt(data.firstPayment) : null },
+    { label: "Paid per year", value: data.annualTotal ? usd(data.annualTotal) : null },
+    { label: "Grace period", value: data.gracePeriodDays != null ? `${data.gracePeriodDays} days` : null },
+    { label: "Late fee", value: data.lateFee != null ? usd(data.lateFee) : null },
+    { label: "Reminder", value: data.reminderLeadDays != null ? `${data.reminderLeadDays}d before` : null },
+  ] as { label: string; value: string | null }[])
+    .filter((f): f is { label: string; value: string } => f.value != null);
+
   return (
     <Card data-testid="bill-schedule-section">
       <CardHeader className="pb-3">
@@ -132,24 +151,19 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
           </div>
         )}
 
-        {/* Facts grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          <Fact label="Next due" value={data.nextDue ? dt(data.nextDue.effectiveDate) : "—"} />
-          <Fact label="Amount due" value={usd(data.nextDue?.amount ?? data.amount)} />
-          <Fact label="Frequency" value={<span className="capitalize">{data.frequency}</span>} />
-          <Fact label="Remaining" value={data.remainingPayments != null
-            ? `${data.remainingPayments} of ${data.totalPayments} payment${data.totalPayments === 1 ? "" : "s"}`
-            : "Ongoing"} />
-          <Fact label="Annual total" value={usd(data.annualTotal)} />
-          <Fact label="First payment" value={dt(data.firstPayment)} />
-          <Fact label="Last paid" value={dt(data.lastPaid)} />
-          <Fact label="Autopay" value={data.autopay ? "On" : "Off"} />
-          <Fact label="Calendar" value={data.calendarSynced ? "Synced" : "—"} />
-          <Fact label="Grace period" value={data.gracePeriodDays != null ? `${data.gracePeriodDays} days` : "—"} />
-          <Fact label="Late fee" value={data.lateFee != null ? usd(data.lateFee) : "—"} />
-          <Fact label="Reminder" value={data.reminderLeadDays != null ? `${data.reminderLeadDays} days before` : "—"} />
-          <Fact label="Payments made" value={String(data.payments?.length ?? 0)} />
-        </div>
+        {/* Facts grid — one home per fact.
+            This was thirteen tiles, six of which read "—" and four of which
+            (next due, amount due, frequency, remaining) were already sitting in
+            the hero directly above, in bigger type. Those four now live only in
+            the hero; autopay lives only in Details; and a tile with nothing set
+            doesn't render at all. What's left is what this card alone knows:
+            the money already spent on it, and the settings that change when it
+            fires. Typically three tiles, never more than six. */}
+        {facts.length > 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {facts.map((f) => <Fact key={f.label} label={f.label} value={f.value} />)}
+          </div>
+        )}
 
         {/* Change recurrence — bills only (a loan's cadence is fixed). */}
         {data.isRecurring && (
@@ -226,10 +240,10 @@ function OccurrenceRow({
         <Clock className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium tabular-nums">{dt(occ.effectiveDate)}</span>
+            <span className="text-[14px] font-semibold tabular-nums">{dt(occ.effectiveDate)}</span>
             <StatusBadge status={occ.status} />
           </div>
-          <span className="text-xs text-muted-foreground tabular-nums">{usd(occ.amount)}{occ.notes ? ` · ${occ.notes}` : ""}</span>
+          <span className="text-[13px] text-muted-foreground tabular-nums">{usd(occ.amount)}{occ.notes ? ` · ${occ.notes}` : ""}</span>
         </div>
       </div>
       <div className="flex items-center gap-1 shrink-0">
@@ -283,7 +297,9 @@ const statusDot: Record<string, string> = {
   upcoming: "bg-muted-foreground/60", skipped: "bg-muted-foreground/30",
 };
 const isoAdd = (iso: string, days: number) => {
-  const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() - days);
+  const d = parseLocalDate(iso);
+  if (!d) return iso;
+  d.setDate(d.getDate() - days);
   return d.toLocaleDateString("en-CA");
 };
 

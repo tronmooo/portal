@@ -56,6 +56,22 @@ export interface MetricCardProps extends Omit<React.HTMLAttributes<HTMLDivElemen
    * page content off the top of the phone.
    */
   density?: "default" | "dense";
+  /**
+   * Colour of the value itself. Defaults to the accent, which is right when the
+   * tiles in a grid each carry a *different* accent.
+   *
+   * Pass "foreground" when a whole grid shares ONE accent: four 26px numbers in
+   * the same saturated colour is a wall, and it drowns the one tile that has
+   * gone red because something is actually overdue. The medallion and border
+   * still carry the accent, so the tile is still identifiably the page's.
+   */
+  valueTone?: "accent" | "foreground";
+  /**
+   * Value text size in px. Defaults to 26 (`density="default"`). Drop it for
+   * tiles whose value is a WORD or a DATE rather than a number — "Aug 30, 2026"
+   * at 26px does not fit a half-width tile on a phone, and truncates.
+   */
+  valueSize?: number;
   onClick?: () => void;
   testId?: string;
 }
@@ -70,9 +86,10 @@ const TREND_TONE: Record<NonNullable<MetricCardProps["trendTone"]>, string> = {
 export function MetricCard({
   label, value, countTo, valuePrefix, unit, accent, icon, headerRight,
   sub, trend, trendTone = "neutral", aside, chart, progress, footer,
-  density = "default", onClick, testId, className, style, ...rest
+  density = "default", valueTone = "accent", valueSize, onClick, testId,
+  className, style, ...rest
 }: MetricCardProps) {
-  const color = `hsl(${accent})`;
+  const color = valueTone === "foreground" ? undefined : `hsl(${accent})`;
 
   if (density === "dense") {
     return (
@@ -134,7 +151,10 @@ export function MetricCard({
 
       <div className="mt-2 flex items-end justify-between gap-2">
         <div className="min-w-0">
-          <div className="metric-value text-[26px] leading-none truncate" style={{ color }}>
+          <div
+            className="metric-value leading-none truncate"
+            style={{ color, fontSize: valueSize ? `${valueSize}px` : "26px" }}
+          >
             {countTo != null
               ? <>{valuePrefix}<CountUp value={countTo} /></>
               : value}

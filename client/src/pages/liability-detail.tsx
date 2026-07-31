@@ -56,6 +56,14 @@ import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { BillScheduleSection } from "@/components/liability/BillScheduleSection";
+import { DetailHero, type HeroStat } from "@/components/profile/DetailHero";
+import { Pill } from "@/components/dashboard/visuals";
+import { MetricCard } from "@/components/ui/metric-card";
+import type { LucideIcon } from "lucide-react";
+import { profileVisual } from "@/lib/profile-visuals";
+import { formatFullDate, formatListDate, parseLocalDate } from "@/lib/format";
+import { dayLabel } from "@shared/now-rank";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -171,12 +179,11 @@ const fmtPct = (decimal: number) => {
   return `${pct.toFixed(digits)}%`;
 };
 
-const fmtDate = (iso?: string | null) => {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-};
+// A due date is a calendar day, not an instant. This used to be a local
+// `new Date(iso)`, which reads a bare "2026-08-30" as UTC midnight — so the hero
+// said "Aug 29" while the Schedule card directly beneath it said "Aug 30".
+// formatFullDate parses length-10 strings at LOCAL midnight; both agree now.
+const fmtDate = (iso?: string | null) => formatFullDate(iso);
 
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
@@ -699,6 +706,16 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     : recurringBill
       ? liabilityBillStatus(billNextDueEff, todayISO, false)
       : billStatus;
+  // Whole days from today to the next due date, for the hero's countdown
+  // caption. Both sides parse at LOCAL midnight so the difference is a count of
+  // calendar days rather than a fraction that rounds unpredictably.
+  const billDaysUntil: number | null = (() => {
+    const due = parseLocalDate(billNextDueEff);
+    if (!due) return null;
+    const today = parseLocalDate(todayISO);
+    if (!today) return null;
+    return Math.round((due.getTime() - today.getTime()) / 86400000);
+  })();
   const billTotalTerm: number | null = schedule?.totalPayments ?? null;
   const billPaidCount: number = schedule?.paidCount ?? payments.length;
   const billRemainingTerm: number | null = schedule?.remainingPayments ?? null;
@@ -844,29 +861,138 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
   // ─── Render ──────────────────────────────────────────────────────────────
 
+  // The hero's stat tiles. Type-aware, exactly as the old KPI strip was —
+  // amortizing/revolving loans show payoff math, recurring bills show
+  // amount + due + status, one-time debt shows the balance owed. A recurring
+  // bill NEVER shows APR/payoff (the $0.17 bug).
+  //
+  // These four are the liability's LIVE facts, and after this change they are
+  // the only place those four appear: the Schedule card below no longer repeats
+  // next due / amount / frequency / autopay, and Details no longer repeats the
+  // term three different ways.
+  const heroStats: HeroStat[] = recurringBill
+    ? [
+        {
+          // "Monthly amount" truncated to "MONTHLY AMO…" in a half-width tile.
+          // The cadence is a caption, not part of the label.
+          label: "Amount",
+          value: fmtUSDShort(schedule?.amount ?? billMonthly),
+          sub: billFrequencyLabel,
+          icon: DollarSign,
+          testId: "kpi-bill-monthly",
+        },
+        {
+          label: seriesComplete ? "Ended" : "Next due",
+          // Relative inside a week ("Tomorrow", "in 3d"), then "Aug 30" — the
+          // year moves to the caption. A full "Aug 30, 2026" does not fit this
+          // tile, and the countdown is the thing you actually want anyway.
+          value: seriesComplete ? "Complete" : (billNextDueEff ? formatListDate(billNextDueEff) || "—" : "—"),
+          // The countdown, not the same date spelled out again — "Aug 30" over
+          // "Aug 30, 2026" is the duplicate-information problem this whole pass
+          // is about, just at tile scale. Details carries the full date.
+          sub: seriesComplete ? undefined : dayLabel(billDaysUntil),
+          // An overdue bill goes red regardless of the page accent; a due-today
+          // one goes amber. Nothing else on the page carries that signal.
+          accent: billStatusEff === "overdue" ? "0 72% 55%" : billStatusEff === "due_today" ? "43 96% 53%" : undefined,
+          icon: CalendarIcon,
+          testId: "kpi-bill-due",
+        },
+        {
+          label: "Remaining",
+          value: billRemainingTerm != null ? `${billRemainingTerm} of ${billTotalTerm}` : "Ongoing",
+          sub: billRemainingTerm != null ? "payments" : "no end date",
+          icon: TrendingDown,
+          testId: "kpi-bill-remaining",
+        },
+        {
+          label: "Status",
+          value: seriesComplete ? "Complete" : BILL_STATUS_META[billStatusEff].label,
+          sub: `${payments.length} paid`,
+          icon: ActivityIcon,
+          testId: "kpi-bill-status",
+        },
+      ]
+    : family === "revolving"
+    ? [
+        { label: "Balance", value: fmtUSDShort(summary.currentBalance), icon: DollarSign, testId: "kpi-balance" },
+        { label: "Available", value: creditLimit > 0 ? fmtUSDShort(Math.max(0, creditLimit - summary.currentBalance)) : "—", icon: CalendarIcon, testId: "kpi-available" },
+        { label: "Utilization", value: creditLimit > 0 ? `${utilizationPct}%` : "—", icon: Percent, testId: "kpi-utilization" },
+        { label: "Min payment", value: fmtUSDShort(terms.minimumPayment || summary.monthlyPayment), icon: TrendingDown, testId: "kpi-min-payment" },
+      ]
+    : [
+        {
+          label: family === "one_time" ? "Amount owed" : "Current balance",
+          value: fmtUSDShort(summary.currentBalance),
+          icon: DollarSign,
+          testId: "kpi-balance",
+        },
+        {
+          label: "Monthly payment",
+          value: amortize && summary.monthlyPayment > 0 ? fmtUSDShort(summary.monthlyPayment) : "—",
+          icon: CalendarIcon,
+          testId: "kpi-monthly",
+        },
+        { label: "APR", value: summary.annualRate > 0 ? fmtPct(summary.annualRate) : "—", icon: Percent, testId: "kpi-apr" },
+        {
+          label: "Payoff",
+          value: amortize && summary.remainingMonths > 0 ? `${summary.remainingMonths} mo` : "—",
+          sub: amortize && summary.remainingMonths > 0 ? fmtDate(summary.payoffDate) : undefined,
+          icon: TrendingDown,
+          testId: "kpi-payoff",
+        },
+      ];
+
+  const heroProgress = !recurringBill && summary.originalBalance > 0 ? (
+    <div data-testid="liability-progress">
+      <div className="flex justify-between text-[13px] text-muted-foreground mb-1">
+        <span>Paid down</span>
+        <span className="font-semibold tabular-nums">{summary.payoffProgressPct.toFixed(1)}%</span>
+      </div>
+      <Progress value={summary.payoffProgressPct} className="h-2" />
+    </div>
+  ) : recurringBill && billTotalTerm != null && billTotalTerm > 0 ? (
+    // A finite-term bill shows progress toward completion (paid of total),
+    // never amortizing payoff. Open-ended bills omit it entirely.
+    <div data-testid="bill-term-progress">
+      <div className="flex justify-between text-[13px] text-muted-foreground mb-1">
+        <span>{billPaidCount} of {billTotalTerm} payments{missedCount > 0 ? ` · ${missedCount} missed` : ""}</span>
+        <span className="font-semibold tabular-nums">{billProgressPct}%</span>
+      </div>
+      <Progress value={billProgressPct} className="h-2" />
+    </div>
+  ) : null;
+
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="liability-profile-page">
-      {/* Hero — matches asset profile header layout */}
-      <div className="px-4 md:px-6 pt-4 pb-6" style={{ background: "linear-gradient(135deg, hsl(0 72% 28%), hsl(25 75% 28%))" }}>
-        {/* Top bar: back arrow left, owner picker + edit/delete right */}
-        <div className="flex items-center justify-between mb-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="-ml-2 text-muted-foreground"
-            onClick={() => navigate("/profiles")}
-            data-testid="liability-back"
-          >
-            <ArrowLeft className="w-4 h-4 mr-1" />
-            Back
-          </Button>
-          <div className="flex items-center gap-1.5">
-            {/* Owner picker removed from header — the single source of truth
-                for owners is the Linked People / Linked Profiles section. */}
+      <div className="px-4 md:px-6 pt-4">
+        <DetailHero
+          testId="liability-hero"
+          accent={profileVisual("liability").accent}
+          icon={profileVisual("liability").icon}
+          title={<span data-testid="liability-title">{profile.name || subtypeLabel}</span>}
+          typeLabel="Liability"
+          badges={subtypeLabel !== "Liability"
+            ? <Pill accent="240 20% 60%">{subtypeLabel}</Pill>
+            : undefined}
+          subtitle={terms.lender
+            ? `${terms.lender}${terms.accountNumberLast4 ? ` · ····${terms.accountNumberLast4}` : ""}`
+            : undefined}
+          avatar={{
+            src: (profile as any).avatar,
+            onPick: () => avatarInputRef.current?.click(),
+            busy: avatarMutation.isPending,
+            inputRef: avatarInputRef,
+            onChange: handleAvatarChange,
+          }}
+          onBack={() => navigate("/profiles")}
+          backLabel="Back"
+          actions={<>
+            {/* Owner picker deliberately absent — the single source of truth for
+                owners is the Linked People / Linked Profiles section. */}
             <Button
               variant="outline"
               size="sm"
-              className="h-7 text-xs gap-1 bg-background/60 backdrop-blur-sm"
+              className="h-8 text-[13px] gap-1"
               onClick={() => {
                 setEditName(profile.name || "");
                 setEditNotes((profile as any).notes || "");
@@ -874,171 +1000,29 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               }}
               data-testid="button-header-edit-profile"
             >
-              <Edit className="h-3 w-3" /> Edit
+              <Edit className="h-3.5 w-3.5" /> Edit
             </Button>
             <Button
               variant="outline"
               size="sm"
-              className="h-7 text-xs gap-1 text-destructive hover:text-destructive bg-background/60 backdrop-blur-sm"
+              className="h-8 text-[13px] gap-1 text-destructive hover:text-destructive"
               onClick={() => setShowDeleteProfileDialog(true)}
               data-testid="button-delete-profile"
             >
-              <Trash2 className="h-3 w-3" /> Delete
+              <Trash2 className="h-3.5 w-3.5" /> Delete
             </Button>
             <Button
-              variant="outline"
               size="sm"
-              className="h-7 text-xs gap-1 bg-background/60 backdrop-blur-sm"
+              className="h-8 text-[13px] gap-1"
               onClick={() => openPaymentDialog("minimum")}
               data-testid="quick-pay-min"
             >
-              <Plus className="w-3 h-3" /> Pay
+              <Plus className="h-3.5 w-3.5" /> Pay
             </Button>
-          </div>
-        </div>
-
-        {/* Icon + name + badge row */}
-        <div className="flex items-start gap-4">
-          <input
-            ref={avatarInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleAvatarChange}
-            data-testid="input-avatar-upload"
-          />
-          <button
-            className="relative rounded-2xl bg-rose-500/10 text-rose-600 flex items-center justify-center overflow-hidden group cursor-pointer shrink-0 pressable"
-            style={{ width: 56, height: 56 }}
-            onClick={() => avatarInputRef.current?.click()}
-            disabled={avatarMutation.isPending}
-            title="Change profile picture"
-            data-testid="button-avatar-upload"
-          >
-            {(profile as any).avatar ? (
-              <img src={(profile as any).avatar} alt={profile.name} className="w-full h-full object-cover" />
-            ) : (
-              <Wallet className="w-7 h-7" />
-            )}
-            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <Camera className="h-4 w-4 text-white" />
-            </div>
-            {avatarMutation.isPending && (
-              <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                <RefreshCw className="h-4 w-4 text-white animate-spin" />
-              </div>
-            )}
-          </button>
-          <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-semibold" data-testid="liability-title">
-              {profile.name || subtypeLabel}
-            </h1>
-            <div className="flex flex-wrap items-center gap-2 mt-1.5">
-              <Badge variant="secondary" className="text-xs" data-testid="liability-subtype-badge">
-                Liability
-              </Badge>
-              {subtypeLabel !== "Liability" && (
-                <Badge variant="outline" className="text-xs">{subtypeLabel}</Badge>
-              )}
-            </div>
-            {terms.lender ? (
-              <div className="text-sm text-muted-foreground mt-0.5">
-                {terms.lender}
-                {terms.accountNumberLast4 ? ` · ····${terms.accountNumberLast4}` : ""}
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Quick stats — Docs + Payments count, matching asset stat cards */}
-        <div className="grid grid-cols-2 gap-2 mt-4">
-          <div className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
-            <p className="text-lg font-semibold tabular-nums">{payments.length}</p>
-            <p className="text-xs text-muted-foreground">Payments</p>
-          </div>
-          <div className="text-center py-2 rounded-lg bg-background/60 backdrop-blur-sm">
-            <p className="text-lg font-semibold tabular-nums">
-              {recurringBill
-                ? (seriesComplete ? "Complete" : BILL_STATUS_META[billStatusEff].label)
-                : summary.remainingMonths > 0 ? `${summary.remainingMonths} mo` : "Paid"}
-            </p>
-            <p className="text-xs text-muted-foreground">{recurringBill ? "Status" : "Remaining"}</p>
-          </div>
-        </div>
-
-        {/* KPI strip — type-aware. Amortizing/revolving loans show payoff math;
-            recurring bills show monthly + due + status; one-time debt shows the
-            balance owed. Recurring bills NEVER show APR/payoff (the $0.17 bug). */}
-        {recurringBill ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
-            <KpiTile label={`${cap(billFrequencyLabel)} amount`} value={fmtUSDShort(schedule?.amount ?? billMonthly)} icon={<DollarSign className="w-4 h-4" />} testid="kpi-bill-monthly" />
-            <KpiTile
-              label={seriesComplete ? "Ended" : "Next due"}
-              value={seriesComplete ? "Complete" : (billNextDueEff ? fmtDate(billNextDueEff) : "—")}
-              sub={billStatusEff === "due_today" ? "today" : undefined}
-              icon={<CalendarIcon className="w-4 h-4" />}
-              testid="kpi-bill-due"
-            />
-            <KpiTile
-              label="Remaining"
-              value={billRemainingTerm != null ? `${billRemainingTerm} of ${billTotalTerm}` : "Ongoing"}
-              sub={billRemainingTerm != null ? "payments" : "no end date"}
-              icon={<TrendingDown className="w-4 h-4" />}
-              testid="kpi-bill-remaining"
-            />
-            <KpiTile label="Autopay" value={(f2.autopay || f2.autoRenew) ? "On" : "Off"} icon={<Percent className="w-4 h-4" />} testid="kpi-bill-autopay" />
-          </div>
-        ) : family === "revolving" ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
-            <KpiTile label="Balance" value={fmtUSDShort(summary.currentBalance)} icon={<DollarSign className="w-4 h-4" />} testid="kpi-balance" />
-            <KpiTile label="Available" value={creditLimit > 0 ? fmtUSDShort(Math.max(0, creditLimit - summary.currentBalance)) : "—"} icon={<CalendarIcon className="w-4 h-4" />} testid="kpi-available" />
-            <KpiTile label="Utilization" value={creditLimit > 0 ? `${utilizationPct}%` : "—"} icon={<Percent className="w-4 h-4" />} testid="kpi-utilization" />
-            <KpiTile label="Min payment" value={fmtUSDShort(terms.minimumPayment || summary.monthlyPayment)} icon={<TrendingDown className="w-4 h-4" />} testid="kpi-min-payment" />
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
-            <KpiTile
-              label={family === "one_time" ? "Amount owed" : "Current balance"}
-              value={fmtUSDShort(summary.currentBalance)}
-              icon={<DollarSign className="w-4 h-4" />}
-              testid="kpi-balance"
-            />
-            <KpiTile
-              label="Monthly payment"
-              value={amortize && summary.monthlyPayment > 0 ? fmtUSDShort(summary.monthlyPayment) : "—"}
-              icon={<CalendarIcon className="w-4 h-4" />}
-              testid="kpi-monthly"
-            />
-            <KpiTile label="APR" value={summary.annualRate > 0 ? fmtPct(summary.annualRate) : "—"} icon={<Percent className="w-4 h-4" />} testid="kpi-apr" />
-            <KpiTile
-              label="Payoff"
-              value={amortize && summary.remainingMonths > 0 ? `${summary.remainingMonths} mo` : "—"}
-              sub={amortize && summary.remainingMonths > 0 ? fmtDate(summary.payoffDate) : undefined}
-              icon={<TrendingDown className="w-4 h-4" />}
-              testid="kpi-payoff"
-            />
-          </div>
-        )}
-        {!recurringBill && summary.originalBalance > 0 && (
-          <div className="mt-3" data-testid="liability-progress">
-            <div className="flex justify-between text-xs text-muted-foreground mb-1">
-              <span>Paid down</span>
-              <span>{summary.payoffProgressPct.toFixed(1)}%</span>
-            </div>
-            <Progress value={summary.payoffProgressPct} className="h-2" />
-          </div>
-        )}
-        {/* Recurring bill with a finite term — show progress toward completion
-            (paid of total), never amortizing payoff. Open-ended bills omit it. */}
-        {recurringBill && billTotalTerm != null && billTotalTerm > 0 && (
-          <div className="mt-3" data-testid="bill-term-progress">
-            <div className="flex justify-between text-xs text-muted-foreground mb-1">
-              <span>{billPaidCount} of {billTotalTerm} payments{missedCount > 0 ? ` · ${missedCount} missed` : ""}</span>
-              <span>{billProgressPct}%</span>
-            </div>
-            <Progress value={billProgressPct} className="h-2" />
-          </div>
-        )}
+          </>}
+          stats={heroStats}
+          progress={heroProgress}
+        />
       </div>
 
       {/* Tabs */}
@@ -1046,12 +1030,12 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} data-testid="liability-tabs">
           <div className="overflow-x-auto pb-1 border-b border-border/50 -mx-1 px-1" style={{ WebkitOverflowScrolling: "touch" as any }}>
             <TabsList className="inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50">
-              <TabsTrigger value="overview" className="text-xs px-3 whitespace-nowrap" data-testid="tab-overview">Overview</TabsTrigger>
-              <TabsTrigger value="details" className="text-xs px-3 whitespace-nowrap" data-testid="tab-details">Details</TabsTrigger>
-              <TabsTrigger value="payments" className="text-xs px-3 whitespace-nowrap" data-testid="tab-payments">Payments</TabsTrigger>
-              <TabsTrigger value="documents" className="text-xs px-3 whitespace-nowrap" data-testid="tab-documents">Docs</TabsTrigger>
-              <TabsTrigger value="activity" className="text-xs px-3 whitespace-nowrap" data-testid="tab-activity">Activity</TabsTrigger>
-              <TabsTrigger value="history" className="text-xs px-3 whitespace-nowrap" data-testid="tab-history">History</TabsTrigger>
+              <TabsTrigger value="overview" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-overview">Overview</TabsTrigger>
+              <TabsTrigger value="details" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-details">Details</TabsTrigger>
+              <TabsTrigger value="payments" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-payments">Payments</TabsTrigger>
+              <TabsTrigger value="documents" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-documents">Docs</TabsTrigger>
+              <TabsTrigger value="activity" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-activity">Activity</TabsTrigger>
+              <TabsTrigger value="history" className="text-[13px] px-3 whitespace-nowrap" data-testid="tab-history">History</TabsTrigger>
             </TabsList>
           </div>
 
@@ -1208,7 +1192,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             </>)}
 
             {/* Nested sections — mirroring asset Overview layout (Linked Assets is now surfaced near the top) */}
-            <section className="mt-6">
+            <section>
               <p className="micro-label text-muted-foreground mb-2 px-0.5">Nested Liabilities</p>
               <NestedLiabilitiesCard liabilityId={profile.id} />
             </section>
@@ -1233,16 +1217,23 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   <Row label="Next scheduled due" value={seriesComplete ? "Complete" : fmtDate(billNextDueEff)} />
                   <Row label="Payment status" value={seriesComplete ? "Complete" : BILL_STATUS_META[billStatusEff].label} />
                   <Row label="First payment" value={fmtDate(schedule?.firstPayment ?? terms.firstPaymentDate)} />
-                  {/* Total obligation term + remaining, so the duration is always
-                      explicit and consistent with the header + schedule. Recurring
-                      bills NEVER show amortizing months / projected payoff. */}
-                  <Row label="Total term" value={billTotalTerm != null ? `${billTotalTerm} payment${billTotalTerm === 1 ? "" : "s"}` : "Ongoing (no end date)"} />
-                  <Row label="Remaining" value={billRemainingTerm != null ? `${billRemainingTerm} of ${billTotalTerm} payments` : "Ongoing"} />
+                  {/* ONE term row. This used to be three — "Total term: Ongoing
+                      (no end date)", "Remaining: Ongoing" and "Ends: No end
+                      date" — which on an open-ended bill is the same sentence
+                      written out three times in the same card. Recurring bills
+                      never show amortizing months / projected payoff. */}
+                  <Row
+                    label="Term"
+                    value={billTotalTerm != null
+                      ? `${billRemainingTerm ?? billTotalTerm} of ${billTotalTerm} payment${billTotalTerm === 1 ? "" : "s"} left`
+                      : schedule?.recurrenceEnd
+                        ? `Ongoing until ${fmtDate(schedule.recurrenceEnd)}`
+                        : "Ongoing — no end date"}
+                  />
                   <Row label="Payments made" value={String(billPaidCount)} />
                   {missedCount > 0 && <Row label="Missed" value={`${missedCount}`} />}
                   <Row label="Annual total" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : "—"} />
                   <Row label="Reminder" value={billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : "None"} />
-                  <Row label="Ends" value={schedule?.recurrenceEnd ? fmtDate(schedule.recurrenceEnd) : "No end date"} />
                   <Row label="Autopay" value={(f2.autopay || f2.autoRenew) ? "On" : "Off"} />
                 </CardContent>
               </Card>
@@ -1621,36 +1612,44 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
 // ─── Subcomponents ───────────────────────────────────────────────────────────
 
+/**
+ * A stat tile inside a subtype overview card.
+ *
+ * Now a thin pass-through to MetricCard — the app's one stat tile — rather than
+ * a fourth local recipe. The old className read `"bubble -card- p-3 card-lift"`;
+ * `-card-` matches no rule in index.css, so it was a dead token riding along on
+ * every tile.
+ */
 function KpiTile({
   label,
   value,
   sub,
   icon,
+  accent = "0 72% 55%",
   testid,
 }: {
   label: string;
   value: string;
   sub?: string;
-  icon?: React.ReactNode;
+  icon?: LucideIcon;
+  accent?: string;
   testid?: string;
 }) {
-  return (
-    <div className="bubble -card- p-3 card-lift transition-all" data-testid={testid}>
-      <div className="flex items-center gap-1.5 micro-label text-muted-foreground">
-        {icon}
-        <span>{label}</span>
-      </div>
-      <div className="metric-value text-lg mt-1 leading-tight">{value}</div>
-      {sub ? <div className="text-xs text-muted-foreground mt-0.5">{sub}</div> : null}
-    </div>
-  );
+  return <MetricCard label={label} value={value} sub={sub} icon={icon} accent={accent} testId={testid} />;
 }
 
+/**
+ * A label/value line in a detail card.
+ *
+ * The value is deliberately a size AND a weight above its label: these cards are
+ * read by scanning down the right-hand column for a number, and at the old
+ * uniform 12px there was nothing to scan for.
+ */
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 py-1">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium text-right">{value}</span>
+    <div className="flex items-baseline justify-between gap-3 py-1.5">
+      <span className="text-[13px] text-muted-foreground">{label}</span>
+      <span className="text-[14px] font-semibold text-right tabular-nums">{value}</span>
     </div>
   );
 }
@@ -2719,9 +2718,16 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
       {graphQuery.isLoading ? (
         <Skeleton className="h-40 w-full" />
       ) : nestedLiabilities.length === 0 ? (
-        <div className="text-sm text-muted-foreground py-4 text-center" data-testid="nested-liabilities-empty">
-          No nested liabilities yet.
-        </div>
+        // Stated as the outcome, not as a hole. Nothing nested under a bill is
+        // the normal, healthy case — it was reading as missing content because
+        // it rendered as bare grey text with no container around it.
+        <EmptyState
+          icon={TrendingDown}
+          label="Nothing nested under this"
+          hint="Add a fee or add-on that bills alongside it."
+          tone="good"
+          testId="nested-liabilities-empty"
+        />
       ) : (
         <div className="flex flex-wrap gap-3" data-testid="nested-liabilities-list">
           {nestedLiabilities.map((node) => {

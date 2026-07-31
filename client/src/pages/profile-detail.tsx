@@ -19,6 +19,9 @@ import {
   ChildActionsMenu as RebuildChildActions,
   PathPreviewLine as RebuildPathPreview,
 } from "@/components/asset/asset-overview";
+import { DetailHero, type HeroStat } from "@/components/profile/DetailHero";
+import { profileVisual } from "@/lib/profile-visuals";
+import { Pill } from "@/components/dashboard/visuals";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { isPast, parseDate, relativeDayLabel, daysFromToday } from "@/lib/dates";
@@ -298,22 +301,12 @@ const onEnterOrSpace = (fn: () => void) => (e: React.KeyboardEvent) => {
   }
 };
 
-function getProfileBanner(type: string): string {
-  const banners: Record<string, string> = {
-    self:         'linear-gradient(135deg, hsl(188 55% 30%), hsl(262 65% 35%))',
-    person:       'linear-gradient(135deg, hsl(215 70% 30%), hsl(262 55% 35%))',
-    pet:          'linear-gradient(135deg, hsl(43 85% 35%), hsl(25 80% 35%))',
-    vehicle:      'linear-gradient(135deg, hsl(220 20% 20%), hsl(220 15% 28%))',
-    asset:        'linear-gradient(135deg, hsl(43 75% 30%), hsl(155 55% 25%))',
-    investment:   'linear-gradient(135deg, hsl(155 60% 25%), hsl(188 65% 25%))',
-    subscription: 'linear-gradient(135deg, hsl(310 45% 25%), hsl(262 55% 28%))',
-    medical:      'linear-gradient(135deg, hsl(0 70% 30%), hsl(25 75% 30%))',
-    account:      'linear-gradient(135deg, hsl(188 65% 25%), hsl(155 55% 25%))',
-    property:     'linear-gradient(135deg, hsl(262 55% 28%), hsl(215 65% 30%))',
-    loan:         'linear-gradient(135deg, hsl(0 72% 28%), hsl(25 75% 28%))',
-  };
-  return banners[type] || 'linear-gradient(135deg, hsl(40 5% 20%), hsl(40 5% 28%))';
-}
+// getProfileBanner() lived here: a per-type `linear-gradient(135deg, …)` used
+// for the full-bleed band behind the page title. The header is now a tinted
+// `.bubble` like every other card in the app (components/profile/DetailHero),
+// and the type's colour identity comes from lib/profile-visuals.ts. Deleted
+// rather than left unused — an unimported gradient map is exactly how the app
+// grew five card recipes.
 
 function profileIcon(type: string) {
   const icons: Record<string, any> = {
@@ -350,22 +343,10 @@ function profileGradient(type: string) {
   return gradients[type] || "from-muted to-background";
 }
 
-function profileAccent(type: string) {
-  const accents: Record<string, string> = {
-    person: "text-blue-600 dark:text-blue-400 bg-blue-500/10",
-    self: "text-blue-600 dark:text-blue-400 bg-blue-500/10",
-    pet: "text-amber-600 dark:text-amber-400 bg-amber-500/10",
-    vehicle: "text-slate-600 dark:text-slate-400 bg-slate-500/10",
-    account: "text-emerald-600 dark:text-emerald-400 bg-emerald-500/10",
-    property: "text-purple-600 dark:text-purple-400 bg-purple-500/10",
-    subscription: "text-pink-600 dark:text-pink-400 bg-pink-500/10",
-    medical: "text-red-600 dark:text-red-400 bg-red-500/10",
-    loan: "text-orange-600 dark:text-orange-400 bg-orange-500/10",
-    investment: "text-green-600 dark:text-green-400 bg-green-500/10",
-    asset: "text-cyan-600 dark:text-cyan-400 bg-cyan-500/10",
-  };
-  return accents[type] || "text-muted-foreground bg-muted";
-}
+// profileAccent() lived here: type → Tailwind text/bg colour pair, used only by
+// the deleted hero's avatar chip. Its replacement is profileVisual() in
+// lib/profile-visuals.ts, which returns the same identity as an HSL triple the
+// whole design system can consume via --accent-hsl.
 
 function timelineIcon(type: string) {
   const icons: Record<string, any> = {
@@ -773,8 +754,8 @@ function LocationEditor({
 
   return (
     <div className="space-y-1" data-testid="location-editor">
-      <div className="flex items-center gap-2">
-        <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      <div className="flex items-center gap-2.5">
+        <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
         {editing ? (
           <div className="flex items-center gap-1 flex-1">
             <Input
@@ -810,9 +791,14 @@ function LocationEditor({
             </Button>
           </div>
         ) : (
-          <div className="flex items-center gap-2 flex-1">
-            <span className="text-xs flex-1">
-              {currentLocation || <span className="text-muted-foreground italic">No location set</span>}
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            {/* Labelled, so an unset location reads as a field you haven't
+                filled rather than a stray italic sentence with no container. */}
+            <span className="flex-1 min-w-0">
+              <span className="micro-label text-muted-foreground block">Location</span>
+              <span className="text-[14px] font-semibold block truncate mt-0.5">
+                {currentLocation || <span className="font-normal text-muted-foreground/60">Not set</span>}
+              </span>
             </span>
             <button
               className="h-[44px] w-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted active:bg-muted/80 shrink-0"
@@ -2586,13 +2572,13 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
         onClick={() => { setDraft(displayValue); setEditing(true); }}
         onKeyDown={onEnterOrSpace(() => { setDraft(displayValue); setEditing(true); })}
       >
-        <span className="text-xs text-muted-foreground">{label}</span>
-        <div className="flex items-center gap-1.5">
+        <span className="text-[13px] text-muted-foreground shrink-0">{label}</span>
+        <div className="flex items-center gap-1.5 min-w-0">
           {isValueField && (
             <button
               onClick={stopProp(findValue)}
               disabled={finding}
-              className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-all flex items-center gap-1 shrink-0"
+              className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 text-[11px] px-2 py-0.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-all flex items-center gap-1 shrink-0"
               title="Find current market value using AI"
             >
               {finding ? (
@@ -2602,18 +2588,25 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
               )}
             </button>
           )}
-          <span className="text-xs font-medium max-w-[180px] truncate text-right tabular-nums">
+          {/* The value is a size AND a weight above its label — these lists are
+              read by scanning the right-hand column, and at a uniform 12px there
+              was nothing to scan for. */}
+          <span className="text-[14px] font-semibold max-w-[190px] truncate text-right tabular-nums">
             {displayValue !== ""
               ? formatFieldDisplayValue(fieldKey, displayValue)
-              : <span className="text-muted-foreground/40 italic">tap to add</span>}
+              : <span className="text-[13px] font-normal text-muted-foreground/50">tap to add</span>}
           </span>
-          {/* Delete button — always visible on mobile */}
+          {/* Delete stays VISIBLE on mobile — there is no hover on a phone, and
+              hiding this behind `sm:group-hover` once made a field unreadable
+              AND undeletable. Muted rather than red: every row carrying a
+              saturated destructive glyph made the list read as a warning. */}
           {value != null && value !== "" && (
             <button
               onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(true); }}
-              className="w-9 h-9 flex items-center justify-center rounded-md opacity-50 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-500 hover:bg-red-500/10 active:bg-red-500/20"
+              aria-label={`Delete ${label}`}
+              className="w-9 h-9 flex items-center justify-center rounded-md transition-colors shrink-0 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 active:bg-destructive/20"
             >
-              <Trash2 className="h-3 w-3" />
+              <Trash2 className="h-3.5 w-3.5" />
             </button>
           )}
         </div>
@@ -2650,9 +2643,9 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
         </div>
       )}
       <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground shrink-0 w-24">{label}</span>
+        <span className="text-[13px] text-muted-foreground shrink-0 w-24">{label}</span>
         <Input
-          className="h-7 text-xs flex-1"
+          className="h-9 text-[14px] flex-1"
           value={draft}
           onChange={e => setDraft(e.target.value)}
           onKeyDown={e => {
@@ -3053,7 +3046,12 @@ function InfoTab({
       if (f.brand) parts.push(String(f.brand));
       if (f.model) parts.push(String(f.model));
     }
-    return parts.slice(0, 3);
+    // Drop anything that just restates the profile's own name. On an asset
+    // called "iPhone 17 Pro Max" whose `model` is "iPhone 17 Pro Max", this
+    // strip was printing the title back at you for the third time on the page —
+    // once as the heading, once here, once as the Model row a few inches down.
+    const own = String(profile.name || "").trim().toLowerCase();
+    return parts.filter(p => p.trim().toLowerCase() !== own).slice(0, 3);
   })();
 
   // ── Stats from related data ──
@@ -3114,12 +3112,12 @@ function InfoTab({
       {/* ── Header summary row (no name repetition — hero already shows that) ── */}
       {/* Show subtitle details + key value if relevant */}
       {(subtitleParts.length > 0 || keyValueEntry) && (
-        <div className="flex items-center justify-between px-1 pb-1 border-b border-border/30">
-          <p className="text-xs text-muted-foreground">{subtitleParts.join(" · ")}</p>
+        <div className="flex items-center justify-between gap-3 px-1 pb-1 border-b border-border/30">
+          <p className="text-[13px] text-muted-foreground min-w-0 truncate">{subtitleParts.join(" · ")}</p>
           {keyValueEntry && (
-            <div className="text-right">
-              <p className="text-[11px] text-muted-foreground">{keyValueEntry.label}</p>
-              <p className="text-sm font-bold tabular-nums">{keyValueEntry.value}</p>
+            <div className="text-right shrink-0">
+              <p className="micro-label text-muted-foreground">{keyValueEntry.label}</p>
+              <p className="metric-value text-[17px] leading-tight">{keyValueEntry.value}</p>
             </div>
           )}
         </div>
@@ -13111,118 +13109,95 @@ export default function ProfileDetailPage() {
   const backHref = isLinkedType ? "/trackers" : "/profiles";
   const backLabel = isLinkedType ? "Back to Linked" : "Back to Profiles";
 
+  const visual = profileVisual(profile.type);
+
+  // Type-aware header stats. Counts only — DetailHero drops any tile whose
+  // count is 0, because "0 DOCS / 0 TASKS" was a quarter of a phone screen
+  // spent telling the user nothing.
+  const heroStats: HeroStat[] = (() => {
+    const ptype = profile.type;
+    const out: HeroStat[] = [];
+    const tabSet = new Set(getTabsForType(ptype, profile).map(t => t.value));
+    if (tabSet.has("health")) out.push({
+      label: "Health",
+      countTo: ownTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c))).length,
+      icon: HeartPulse, testId: "hero-stat-health",
+    });
+    if (tabSet.has("all-trackers")) out.push({ label: "Trackers", countTo: ownTrackers.length, icon: Activity, testId: "hero-stat-trackers" });
+    if (tabSet.has("trackers")) out.push({ label: "Docs", countTo: profile.relatedDocuments.length, icon: FileText, testId: "hero-stat-docs" });
+    if (tabSet.has("finances")) out.push({
+      label: ptype === 'subscription' ? "Billing" : "Expenses",
+      countTo: (profile.relatedExpenses || []).filter((e: any) => Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profile.id).length,
+      icon: DollarSign, testId: "hero-stat-expenses",
+    });
+    if (tabSet.has("tasks")) out.push({ label: "Tasks", countTo: profile.relatedTasks.length, icon: ListTodo, testId: "hero-stat-tasks" });
+    return out;
+  })();
+
   return (
     <div className="overflow-y-auto h-full pb-24" data-testid="page-profile-detail">
-      {/* Hero Header */}
-      <div className="px-4 md:px-6 pt-4 pb-6" style={{ background: getProfileBanner(profile?.type || '') }}>
-        <div className="flex items-center justify-between mb-3">
-          <Link href={backHref} className="inline-flex items-center gap-1 text-sm text-white/80 hover:text-white transition-colors" data-testid="button-back">
-            <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
-          </Link>
-          <div className="flex items-center gap-1.5">
-            {/* Owner picker removed from header — the single source of truth
-                for owners is the Linked People section in the Overview. */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs gap-1 bg-white/15 hover:bg-white/25 text-white border-white/30 backdrop-blur-sm"
-              onClick={() => setShowEditDialog(true)}
-              data-testid="button-header-edit-profile"
-            >
-              <Edit className="h-3 w-3" /> Edit
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs gap-1 bg-white/15 hover:bg-red-500/30 text-white border-white/30 backdrop-blur-sm"
-              onClick={() => setShowDeleteDialog(true)}
-              data-testid="button-delete-profile"
-            >
-              <Trash2 className="h-3 w-3" /> Delete
-            </Button>
-          </div>
-        </div>
-
-        <div className="flex items-start gap-4">
-          <input
-            ref={avatarInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleAvatarChange}
-            data-testid="input-avatar-upload"
-          />
-          <button
-            className={`relative w-20 h-20 rounded-2xl flex items-center justify-center overflow-hidden group cursor-pointer ring-2 ring-white/40 shadow-lg ${profileAccent(profile.type)} pressable`}
-            onClick={() => avatarInputRef.current?.click()}
-            disabled={avatarMutation.isPending}
-            title="Change profile picture"
-            data-testid="button-avatar-upload"
-          >
-            {profile.avatar ? (
-              <img src={profile.avatar} alt={profile.name} className="w-full h-full object-cover" />
-            ) : (
-              <span className="scale-150">{profileIcon(profile.type)}</span>
-            )}
-            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-              <Camera className="h-5 w-5 text-white" />
-            </div>
-            {avatarMutation.isPending && (
-              <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                <RefreshCw className="h-5 w-5 text-white animate-spin" />
-              </div>
-            )}
-          </button>
-          <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-bold text-white drop-shadow-sm" data-testid="text-profile-detail-name">{profile.name}</h1>
-            {/* Phase 2 breadcrumb — only renders when this profile has a parent chain. */}
-            {(NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType) ||
+      <div className="px-4 md:px-6 pt-4">
+        <DetailHero
+          testId="profile-hero"
+          accent={visual.accent}
+          icon={visual.icon}
+          title={<span data-testid="text-profile-detail-name">{profile.name}</span>}
+          typeLabel={profile.type}
+          badges={(profile.tags ?? []).slice().sort((a, b) => a.localeCompare(b)).map(tag => (
+            <Pill key={tag} accent="240 20% 60%">
+              <Tag className="h-2.5 w-2.5" />{tag}
+            </Pill>
+          ))}
+          breadcrumb={
+            /* Only renders when this profile has a parent chain. `omitCurrent`
+               because the hero title directly above IS the current node — it was
+               printing the profile's own name twice, a line apart. */
+            (NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType) ||
               ((profile.type as string) === "liability") ||
               ((profile.type as string) === "loan") ||
-              ((profile.type as string) === "subscription")) && (
+              ((profile.type as string) === "subscription")) ? (
               <RebuildBreadcrumb
                 profile={profile as any}
                 allProfiles={allProfilesPage as any}
                 className="mt-1"
+                omitCurrent
               />
-            )}
-            <div className="flex flex-wrap items-center gap-2 mt-1.5">
-              <Badge variant="secondary" className="text-xs capitalize bg-white/20 text-white border-white/30 backdrop-blur-sm hover:bg-white/30">{profile.type}</Badge>
-              {(profile.tags ?? []).slice().sort((a, b) => a.localeCompare(b)).map(tag => (
-                <Badge key={tag} variant="outline" className="text-xs bg-white/10 text-white/90 border-white/25">
-                  <Tag className="h-2.5 w-2.5 mr-0.5" />{tag}
-                </Badge>
-              ))}
-              {/* owner is now shown in the top-right dropdown button — no badge needed here */}
-            </div>
-            {profile.notes && (
-              <p className="text-xs text-white/75 mt-2 line-clamp-2">{profile.notes}</p>
-            )}
-          </div>
-        </div>
-
-        {/* Quick stats — type-aware */}
-        {(() => {
-          const ptype = profile.type;
-          const stats: { label: string; value: number }[] = [];
-          const tabSet = new Set(getTabsForType(ptype, profile).map(t => t.value));
-          if (tabSet.has("health"))    stats.push({ label: "Health",  value: ownTrackers.filter((t: any) => ['health','fitness','weight','sleep','wellness','nutrition'].some(c => (t.category || '').toLowerCase().includes(c) || (t.name || '').toLowerCase().includes(c))).length });
-          if (tabSet.has("all-trackers")) stats.push({ label: "Trackers", value: ownTrackers.length });
-          if (tabSet.has("trackers"))  stats.push({ label: "Docs", value: profile.relatedDocuments.length });
-          if (tabSet.has("finances"))  stats.push({ label: ptype === 'subscription' ? "Billing" : "Expenses", value: (profile.relatedExpenses || []).filter((e: any) => Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profile.id).length });
-          if (tabSet.has("tasks"))     stats.push({ label: "Tasks",    value: profile.relatedTasks.length });
-          const gridCls = stats.length <= 3 ? "grid-cols-3" : stats.length <= 4 ? "grid-cols-4" : "grid-cols-5";
-          return (
-            <div className={`grid ${gridCls} gap-2 mt-4`}>
-              {stats.map(stat => (
-                <div key={stat.label} className="text-center py-2.5 rounded-lg bg-white/15 backdrop-blur-md border border-white/20 shadow-sm">
-                  <p className="text-lg font-bold tabular-nums text-white">{stat.value}</p>
-                  <p className="micro-label text-white/80 font-medium">{stat.label}</p>
-                </div>
-              ))}
-            </div>
-          );
-        })()}
+            ) : undefined
+          }
+          notes={profile.notes}
+          avatar={{
+            src: profile.avatar,
+            onPick: () => avatarInputRef.current?.click(),
+            busy: avatarMutation.isPending,
+            inputRef: avatarInputRef,
+            onChange: handleAvatarChange,
+          }}
+          backHref={backHref}
+          backLabel={backLabel}
+          actions={<>
+            {/* Owner picker deliberately absent — the single source of truth for
+                owners is the Linked People section in the Overview. */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-[13px] gap-1"
+              onClick={() => setShowEditDialog(true)}
+              data-testid="button-header-edit-profile"
+            >
+              <Edit className="h-3.5 w-3.5" /> Edit
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-[13px] gap-1 text-destructive hover:text-destructive"
+              onClick={() => setShowDeleteDialog(true)}
+              data-testid="button-delete-profile"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Delete
+            </Button>
+          </>}
+          stats={heroStats}
+        />
       </div>
 
       {/* AI Summary Card — isolated so a malformed summary payload (e.g. a
@@ -13252,7 +13227,7 @@ export default function ProfileDetailPage() {
                     <TabsTrigger
                       key={tab.value}
                       value={tab.value}
-                      className="text-xs px-3 whitespace-nowrap"
+                      className="text-[13px] px-3 whitespace-nowrap"
                       data-testid={tab.testId}
                     >
                       {tab.label}

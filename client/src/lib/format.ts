@@ -52,15 +52,45 @@ export function formatMoneyCompact(n: number | null | undefined): string {
 }
 
 /**
+ * Parse a date the way the app stores them.
+ *
+ * A bare "YYYY-MM-DD" is a CALENDAR day, not an instant. `new Date("2026-08-30")`
+ * reads it as UTC midnight, which is Aug 29 everywhere west of Greenwich — so a
+ * bill due Aug 30 rendered "Aug 29" in the liability hero while the schedule
+ * card right below it (which appended T00:00:00) said "Aug 30". Appending the
+ * time forces local midnight and the two agree.
+ */
+export function parseLocalDate(input: string | Date | null | undefined): Date | null {
+  if (!input) return null;
+  const d = typeof input === "string"
+    ? new Date(input.length === 10 ? input + "T00:00:00" : input)
+    : input;
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Absolute date for detail rows and fact tiles: "Aug 30, 2026". Always spells
+ * out the day — a row labelled "Next scheduled due" wants a date, not
+ * "Tomorrow". Use `formatListDate` where relative reads better.
+ */
+export function formatFullDate(
+  input: string | Date | null | undefined,
+  empty = "—",
+): string {
+  const d = parseLocalDate(input);
+  if (!d) return empty;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+/**
  * Human date for list rows: relative for the last week ("Today", "Yesterday",
  * "3d ago"), then "MMM D", with the year only when it isn't the current year.
  * Accepts a Date, ISO string, or "YYYY-MM-DD".
  */
 export function formatListDate(input: string | Date | null | undefined): string {
   if (!input) return "";
-  const d = typeof input === "string"
-    ? new Date((input.length === 10 ? input + "T00:00:00" : input))
-    : input;
+  const d = parseLocalDate(input);
+  if (!d) return "";
   if (isNaN(d.getTime())) return "";
   const now = new Date();
   const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();

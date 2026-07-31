@@ -162,14 +162,22 @@ export function ProfileBreadcrumb({
   profile,
   allProfiles,
   className,
+  omitCurrent = false,
 }: {
   profile: AnyProfile;
   allProfiles: AnyProfile[];
   className?: string;
+  /**
+   * Drop the trailing node — the profile you're already on. Set this wherever
+   * the page title above the trail is that same name, which is where it read as
+   * "iPhone 17 Pro Max" followed a line later by "… › iPhone 17 Pro Max".
+   */
+  omitCurrent?: boolean;
 }) {
   const [, setLocation] = useLocation();
-  const chain = walkAncestry(profile, allProfiles);
-  if (chain.length <= 1) return null;
+  const full = walkAncestry(profile, allProfiles);
+  const chain = omitCurrent ? full.slice(0, -1) : full;
+  if (full.length <= 1 || chain.length === 0) return null;
 
   return (
     <nav
@@ -178,7 +186,9 @@ export function ProfileBreadcrumb({
       data-testid="profile-breadcrumb"
     >
       {chain.map((node, i) => {
-        const isLast = i === chain.length - 1;
+        // With `omitCurrent` the trail is all ancestors, so nothing in it is
+        // "self" — every crumb stays a link you can walk back up.
+        const isLast = !omitCurrent && i === chain.length - 1;
         return (
           <span key={node.id} className="flex items-center gap-1">
             {i > 0 && <ChevronRight className="h-3 w-3 opacity-60" />}
