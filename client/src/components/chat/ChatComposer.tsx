@@ -195,12 +195,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             on screen; the placeholder is now only an example. */}
         <label
           htmlFor="chat-message-input"
-          className="block px-1 pb-1 text-xs font-medium text-muted-foreground"
+          className="block px-1 pb-1.5 micro-label text-muted-foreground"
         >
           Message
         </label>
         {/* Large prominent input box */}
-        <div className="bubble relative focus-within:-primary/40 focus-within:shadow-md transition-all duration-200">
+        <div className="bubble relative focus-within:border-primary/50 focus-within:shadow-md transition-all duration-200">
           <Textarea
             id="chat-message-input"
             ref={textareaRef}
@@ -209,7 +209,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             onKeyDown={handleKeyDown}
             placeholder="Ask me anything..."
             maxLength={10000}
-            className="min-h-[96px] max-h-[280px] resize-none border-0 bg-transparent px-4 pt-3.5 pb-14 text-sm leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0 rounded-2xl"
+            className="min-h-[76px] max-h-[280px] resize-none border-0 bg-transparent px-4 pt-3.5 pb-14 text-sm leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0 rounded-2xl"
             rows={3}
             data-testid="input-chat"
           />

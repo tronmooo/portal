@@ -26,13 +26,22 @@ function walk(dir: string, acc: string[] = []): string[] {
 const FILES = walk(ROOT);
 const rel = (f: string) => path.relative(path.resolve(__dirname, ".."), f);
 
+/**
+ * Is this line a comment?
+ *
+ * Note the optional `{`: a JSX comment opens with `{/*`, and a filter written
+ * only for plain JS comments walks straight past it — so a guard would fire on
+ * the comment explaining why the pattern was removed.
+ */
+const isComment = (line: string) => /^\s*(\{?\/\*|\/\/|\*)/.test(line);
+
 /** Lines matching `re`, ignoring comments, as "path:line — snippet". */
 function offenders(re: RegExp, skip?: (f: string) => boolean): string[] {
   const out: string[] = [];
   for (const f of FILES) {
     if (skip?.(f)) continue;
     fs.readFileSync(f, "utf8").split("\n").forEach((line, i) => {
-      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+      if (isComment(line)) return;
       if (re.test(line)) out.push(`${rel(f)}:${i + 1} — ${line.trim().slice(0, 110)}`);
     });
   }
@@ -179,7 +188,7 @@ describe("one money formatter", () => {
     for (const f of FILES) {
       if (f.endsWith(path.join("lib", "format.ts"))) continue;
       fs.readFileSync(f, "utf8").split("\n").forEach((line, i) => {
-        if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+        if (isComment(line)) return;
         if (!LOCAL.test(line)) return;
         // Aliasing or wrapping a shared formatter is the point, not a violation.
         if (/format(Money|MoneyRound|MoneyCents|MoneyCompact)\b/.test(line)) return;

@@ -160,6 +160,9 @@ export default defineConfig({
       'tests/no-unbounded-anthropic.test.ts',
       // Popup actions survived the one-shell migration (2026-07-30).
       'tests/popup-wiring.dom.test.tsx',
+      // Chat suggestions built from the user's own records (2026-07-31).
+      'tests/chat-suggestions.test.ts',
+      'tests/chat-empty-state.dom.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

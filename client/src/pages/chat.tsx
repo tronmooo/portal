@@ -308,16 +308,11 @@ function ChatReport({ spec }: { spec: ReportSpec2 }) {
   );
 }
 
-const SUGGESTIONS = [
-  "I ate a chicken sandwich and ran 2 miles",
-  "Track my blood pressure",
-  "Spent $50 on groceries",
-  "Add my cat Luna",
-  "Remind me to call the dentist by Friday",
-  "What's my weight trend?",
-  "Open my drivers license",
-  "Log sleep: 7.5 hours",
-];
+// The hardcoded SUGGESTIONS list lived here: eight demo strings ("I ate a
+// chicken sandwich and ran 2 miles", "Add my cat Luna") shown to every user on
+// every visit. They are computed from the user's own records now — see
+// shared/chat-suggestions.ts. The generic starters survive only as the
+// empty-account fallback inside that engine.
 
 const PROFILE_TYPE_COLORS: Record<string, string> = {
   person: "bg-primary/10 text-primary",
@@ -1761,6 +1756,9 @@ function SlowResponseHint() {
 // the whole chat chunk into the entry bundle. Re-exported for compatibility.
 export { clearChatCache } from "@/lib/chat-cache";
 import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCache } from "@/lib/chat-cache";
+import { ChatSuggestions, ChatFollowUps, CHAT_ACCENT } from "@/components/chat/ChatSuggestions";
+import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
+import { scopedKey } from "@shared/query-keys";
 
 // ─────────────────────────────────────────────
 // Confirmation card with inline Edit + Undo
@@ -3009,6 +3007,50 @@ export default function ChatPage() {
   // read the scope reactively and stash it in a ref so the mutation closure
   // always sends the CURRENT selection without re-creating the mutation.
   const chatScope = useProfileScope();
+
+  // ── Suggestions, computed from records already in the cache ──────────────
+  // /api/dashboard-bootstrap seeds trackers/habits/obligations/documents/
+  // expenses under these exact keys, so this reads memory and fires ZERO
+  // requests — the chips paint with the page rather than after it.
+  // getQueryData (not useQuery) on purpose: a miss must mean "no signal", not
+  // "go fetch". A cold cache falls through to the explore starters.
+  const chatSuggestions = useMemo(() => {
+    const mode = chatScope.mode === "selected" ? "selected" : "everyone";
+    const idsForKey = chatScope.mode === "selected" ? chatScope.selectedIds : [];
+    const read = <T,>(endpoint: string): T[] => {
+      const v = queryClient.getQueryData([...scopedKey(endpoint, mode as any, [...idsForKey])]);
+      return Array.isArray(v) ? (v as T[]) : [];
+    };
+    const scopeProfiles = chatScope.mode === "selected"
+      ? (profiles || []).filter((p: any) => chatScope.selectedIds.includes(p.id))
+      : [];
+    return buildChatSuggestions({
+      now: new Date(),
+      scopeProfiles: scopeProfiles as any,
+      trackers: read("/api/trackers"),
+      habits: read("/api/habits"),
+      obligations: read("/api/obligations"),
+      documents: read("/api/documents"),
+      expenses: read("/api/expenses"),
+    }, 6);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatScope.mode, chatScope.selectedIds.join(","), profiles, queryClient]);
+
+  // After a reply, what to offer next — read from the actions the assistant
+  // reported, so the chips are about what just happened.
+  const chatFollowUps = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== "assistant") continue;
+      return buildFollowUps((m as any).actions, 3);
+    }
+    return [];
+  }, [messages]);
+
+  // First name of whoever we're chatting as, for the greeting.
+  const chatScopeFirstName = chatScope.mode === "selected"
+    ? (chatScope.selectedNames[0] || "").split(/\s+/)[0] || null
+    : null;
   const chatScopeRef = useRef<string[]>([]);
   chatScopeRef.current = chatScope.mode === "selected" ? chatScope.selectedIds : [];
 
@@ -3900,8 +3942,10 @@ export default function ChatPage() {
           doesn't show you which profile you're in" — records were silently
           attributed out of view). Read from the same global scope store the
           dashboard uses, so the two can never disagree. */}
-      <div className="shrink-0 border-b border-border/40 bg-background/95 px-4 py-1.5" data-testid="chat-scope-banner">
-        <div className="max-w-2xl mx-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      <div className="shrink-0 bg-background/95 px-4 pt-2 pb-1" data-testid="chat-scope-banner">
+        <div className="max-w-2xl mx-auto">
+          <span className="bubble-row inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] text-muted-foreground"
+            style={{ ["--accent-hsl" as any]: CHAT_ACCENT }}>
           <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
           <span>
             Chatting as{" "}
@@ -3912,28 +3956,28 @@ export default function ChatPage() {
             </span>
             {chatScope.mode !== "everyone" && " — new records will be linked here"}
           </span>
+          </span>
         </div>
       </div>
 
       {/* Messages area */}
       <div ref={scrollRef} onScroll={handleTranscriptScroll} className="flex-1 overflow-y-auto px-4 py-3">
-        <div className={`max-w-2xl mx-auto space-y-4 ${messages.length <= 1 ? 'min-h-[72vh] flex flex-col justify-end' : ''}`}>
+        {/* The empty state used to be `min-h-[72vh] flex flex-col justify-end`
+            wrapping a `flex-1` hero. On a phone that container is taller than
+            the scroll viewport and bottom-aligned, so the TOP of the stack —
+            the logo — was pushed above the visible area, with a screen of dead
+            space below it. Normal top-aligned flow instead. */}
+        <div className="max-w-2xl mx-auto space-y-4">
 
-          {/* Empty-state brand hero — fills the space above the welcome bubble
-              with the Portol logo centred in the middle of the chat page. */}
+          {/* Greeting + suggestions, INSIDE the scroll container. The chips
+              used to render outside it, which is what sliced the welcome
+              bubble mid-sentence. */}
           {messages.length <= 1 && !searchOpen && (
-            <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 py-6" data-testid="chat-brand-hero">
-              <img
-                src="/portol-logo-clean.png"
-                alt="Portol"
-                className="w-24 h-24 sm:w-28 sm:h-28 object-contain"
-                style={{ filter: 'drop-shadow(0 0 24px rgba(0,200,220,0.45))' }}
-              />
-              <div>
-                <p className="text-xl font-bold tracking-tight text-foreground">Portol</p>
-                <p className="text-sm text-muted-foreground">Your AI-powered life command center</p>
-              </div>
-            </div>
+            <ChatSuggestions
+              suggestions={chatSuggestions}
+              name={chatScopeFirstName}
+              onPick={handleSuggestion}
+            />
           )}
 
           {/* Search bar */}
@@ -3965,7 +4009,15 @@ export default function ChatPage() {
               </button>
             </div>
           )}
-          {filteredMessages.map((msg) => {
+          {filteredMessages
+            // The welcome bubble said "Hi! I'm your Portol AI. Ask me to log
+            // health data…" directly under a hero reading "Your AI-powered life
+            // command center" — the same sentence twice. The greeting above now
+            // carries it (and knows your name), so the bubble is suppressed
+            // while it is the ONLY message. It stays in state: several branches
+            // key off `messages.length <= 1`, and the reset path re-seeds it.
+            .filter((msg) => !(msg.id === "welcome" && messages.length <= 1))
+            .map((msg) => {
             // Only the row that owns the entry being edited receives live edit
             // state; every other row gets stable sentinels so React.memo holds.
             const rowIsEditing = !!editingEntryId
@@ -4052,23 +4104,15 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Suggestions — first-load empty state only. They used to persist as a
-          "Starter prompts" toggle for the whole session, which duplicated the
-          welcome state's chips and sat above the composer forever. Once you've
-          sent a message you know how to type one. */}
-      {!hasAttachments && composerEmpty && messages.length <= 1 && (
+      {/* Follow-ups — after a reply, offer what makes sense NEXT given what the
+          assistant just did (logged an entry → its trend; created a bill → when
+          it's due). The first-load chips moved inside the scroll container as
+          part of ChatSuggestions; this row is deliberately compact because
+          you're mid-task by the time you see it. */}
+      {!hasAttachments && composerEmpty && messages.length > 1 && chatFollowUps.length > 0 && (
         <div className="px-3 pb-2">
-          <div className="max-w-2xl mx-auto flex flex-wrap gap-1.5">
-            {SUGGESTIONS.slice(0, 6).map((s) => (
-              <button
-                key={s}
-                onClick={() => handleSuggestion(s)}
-                className="text-xs px-3 py-1.5 rounded-full border border-border/50 bg-card/60 hover:bg-muted/60 active:scale-95 transition-all text-muted-foreground hover:text-foreground"
-                data-testid={`button-suggestion-${s.slice(0, 20)}`}
-              >
-                {s}
-              </button>
-            ))}
+          <div className="max-w-2xl mx-auto">
+            <ChatFollowUps suggestions={chatFollowUps} onPick={handleSuggestion} />
           </div>
         </div>
       )}

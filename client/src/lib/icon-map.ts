@@ -9,7 +9,7 @@
 import {
   HeartPulse, Wallet, CalendarDays, FileText, Bell, CheckCircle2, Flame,
   Car, TrendingDown, Users, Activity, BookOpen, Sparkles, Target, Moon,
-  Footprints, Pill, type LucideIcon,
+  Footprints, Pill, Brain, type LucideIcon,
 } from "lucide-react";
 import {
   ICON_VOCABULARY, CONCEPT_ACCENT, type ConceptIcon,
@@ -18,7 +18,7 @@ import {
 const BY_NAME: Record<string, LucideIcon> = {
   HeartPulse, Wallet, CalendarDays, FileText, Bell, CheckCircle2, Flame,
   Car, TrendingDown, Users, Activity, BookOpen, Sparkles, Target, Moon,
-  Footprints, Pill,
+  Footprints, Pill, Brain,
 };
 
 export function conceptIcon(concept: ConceptIcon): LucideIcon {

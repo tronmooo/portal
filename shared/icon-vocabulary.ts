@@ -18,7 +18,7 @@
 export type ConceptIcon =
   | "health" | "finance" | "dates" | "documents" | "alerts" | "tasks" | "habits"
   | "assets" | "liabilities" | "people" | "trackers" | "journal" | "insights"
-  | "goals" | "sleep" | "nutrition" | "activity" | "medication";
+  | "goals" | "sleep" | "nutrition" | "activity" | "medication" | "mental";
 
 /** Concept → the lucide icon name that always represents it. */
 export const ICON_VOCABULARY: Record<ConceptIcon, string> = {
@@ -43,6 +43,7 @@ export const ICON_VOCABULARY: Record<ConceptIcon, string> = {
   nutrition:   "Flame",
   activity:    "Footprints",
   medication:  "Pill",
+  mental:      "Brain",
 };
 
 /** The accent each concept wears, so colour and icon never disagree. */
@@ -65,6 +66,7 @@ export const CONCEPT_ACCENT: Record<ConceptIcon, string> = {
   nutrition:   "25 90% 58%",
   activity:    "213 90% 62%",
   medication:  "330 75% 62%",
+  mental:      "262 70% 62%",
 };
 
 export function iconFor(concept: ConceptIcon): string {
