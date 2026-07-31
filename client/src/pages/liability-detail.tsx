@@ -716,6 +716,14 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     if (!today) return null;
     return Math.round((due.getTime() - today.getTime()) / 86400000);
   })();
+  // The complement of whatever formatListDate chose for the "Next due" tile.
+  // Inside a week it shows a relative label, so the useful extra is the date;
+  // outside a week it shows a date, so the useful extra is the countdown.
+  const nextDueCaption: string | undefined = (() => {
+    if (!billNextDueEff) return undefined;
+    if (billDaysUntil == null) return undefined;
+    return Math.abs(billDaysUntil) < 7 ? formatFullDate(billNextDueEff) : dayLabel(billDaysUntil);
+  })();
   const billTotalTerm: number | null = schedule?.totalPayments ?? null;
   const billPaidCount: number = schedule?.paidCount ?? payments.length;
   const billRemainingTerm: number | null = schedule?.remainingPayments ?? null;
@@ -887,10 +895,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           // year moves to the caption. A full "Aug 30, 2026" does not fit this
           // tile, and the countdown is the thing you actually want anyway.
           value: seriesComplete ? "Complete" : (billNextDueEff ? formatListDate(billNextDueEff) || "—" : "—"),
-          // The countdown, not the same date spelled out again — "Aug 30" over
-          // "Aug 30, 2026" is the duplicate-information problem this whole pass
-          // is about, just at tile scale. Details carries the full date.
-          sub: seriesComplete ? undefined : dayLabel(billDaysUntil),
+          // The caption must say the thing the value ISN'T, or the tile prints
+          // the same fact twice — the duplicate-information problem this pass is
+          // about, at tile scale.
+          //
+          // formatListDate is relative inside a week ("Tomorrow", "in 3d") and
+          // absolute outside it ("Aug 30"), so the complement flips at the same
+          // boundary. Pairing it with dayLabel unconditionally produced
+          // "Tomorrow" over "tomorrow".
+          sub: seriesComplete ? undefined : nextDueCaption,
           // An overdue bill goes red regardless of the page accent; a due-today
           // one goes amber. Nothing else on the page carries that signal.
           accent: billStatusEff === "overdue" ? "0 72% 55%" : billStatusEff === "due_today" ? "43 96% 53%" : undefined,

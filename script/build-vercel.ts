@@ -121,6 +121,8 @@ export default async function(req, res) {
   // Includes buildCommand + outputDirectory so Vercel auto-builds correctly when this file is
   // already committed (i.e., on the next git push, Vercel won't rely on a previous prebuilt run).
   const vercelConfig = {
+    $schema: "https://openapi.vercel.sh/vercel.json",
+    framework: "vite",
     buildCommand: "npm run build",
     installCommand: "npm install",
     outputDirectory: "public",
@@ -166,6 +168,19 @@ export default async function(req, res) {
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" }
         ]
       }
+    ],
+    // Scheduled jobs. These MUST be generated here, not hand-added to
+    // vercel.json: this script rewrites that file wholesale on every build, so
+    // anything only present in the committed copy is silently deleted the next
+    // time someone runs `npm run build` and commits. That is exactly how the
+    // security headers above were lost once, and how the reminder cron was lost
+    // again on 2026-07-31 — the build ran between the test pass and `git add`,
+    // so nothing caught it. tests/reminder-cron.test.ts asserts this block.
+    //
+    // Hobby plan limits: at most 2 jobs, at most once per day each, and a
+    // faster schedule makes the whole DEPLOY fail rather than just the cron.
+    crons: [
+      { path: "/api/cron/fire-due-reminders", schedule: "0 9 * * *" },
     ],
     functions: {
       // Fast read/write API: 60s is generous once AI traffic is out of this

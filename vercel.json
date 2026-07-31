@@ -1,4 +1,6 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "outputDirectory": "public",
@@ -81,6 +83,12 @@
           "value": "same-origin"
         }
       ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/fire-due-reminders",
+      "schedule": "0 9 * * *"
     }
   ],
   "functions": {

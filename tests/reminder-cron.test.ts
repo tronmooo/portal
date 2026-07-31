@@ -94,3 +94,44 @@ describe(`GET ${ROUTE} auth`, () => {
     expect(r.status).not.toBe(401);
   });
 });
+
+describe("the build generator cannot silently drop the cron again", () => {
+  // How this broke: script/build-vercel.ts rewrites vercel.json WHOLESALE on
+  // every build. The crons block existed only in the committed file, so the
+  // first `npm run build` after it was added deleted it — and because the build
+  // ran after the test pass and before `git add -A`, nothing caught it. The
+  // deploy then shipped with no scheduled reminder firer.
+  //
+  // The same generator had already eaten the CSP headers once for the same
+  // reason. Asserting the committed file alone is not enough: the generator is
+  // the source of truth, so the generator is what has to be asserted.
+  const gen = fs.readFileSync(path.resolve(__dirname, "..", "script/build-vercel.ts"), "utf8");
+  // Read it here rather than reaching for the `cfg` in the describe above —
+  // that one is scoped to its own callback.
+  const committedCfg = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "vercel.json"), "utf8"));
+
+  it("emits a crons block", () => {
+    expect(gen, "build-vercel.ts must generate `crons`, not rely on the committed file")
+      .toMatch(/crons:\s*\[/);
+  });
+
+  it("emits the reminder route with a schedule", () => {
+    expect(gen).toContain(ROUTE);
+    const block = gen.slice(gen.indexOf("crons:"), gen.indexOf("crons:") + 400);
+    expect(block, "the generated cron needs a schedule").toMatch(/schedule:\s*"[\d*/,\- ]+"/);
+  });
+
+  it("agrees with the committed vercel.json, so a build is a no-op here", () => {
+    // If these ever diverge, the next build silently rewrites production config.
+    const committed = (committedCfg.crons || []).map((c: any) => `${c.path}|${c.schedule}`).sort();
+    const generated = [...gen.matchAll(/\{\s*path:\s*"([^"]+)",\s*schedule:\s*"([^"]+)"\s*\}/g)]
+      .map((m) => `${m[1]}|${m[2]}`).sort();
+    expect(generated, "generator and committed vercel.json disagree").toEqual(committed);
+  });
+
+  it("keeps the other keys the generator owns but a hand-edit would lose", () => {
+    for (const key of ["$schema", "framework"]) {
+      expect(gen, `build-vercel.ts drops "${key}" on rebuild`).toContain(key);
+    }
+  });
+});

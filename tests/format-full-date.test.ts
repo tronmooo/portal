@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { formatFullDate, formatListDate, parseLocalDate } from "../client/src/lib/format";
+import { dayLabel } from "../shared/now-rank";
 
 // The failure only reproduces west of Greenwich, which is why it survived: it
 // is invisible in UTC. Vitest is configured with TZ unset, so set it here.
@@ -72,5 +73,49 @@ describe("formatListDate still routes through the same parse", () => {
   it("returns empty string — not an em-dash — for nothing", () => {
     expect(formatListDate(null)).toBe("");
     expect(formatListDate("nonsense")).toBe("");
+  });
+});
+
+describe("a date tile never prints the same fact twice", () => {
+  // The liability hero's "Next due" tile shows formatListDate as its value and a
+  // complementary caption beneath. Both live in liability-detail, but the RULE
+  // is a property of formatListDate: it is relative inside a week and absolute
+  // outside it, so the complement has to flip at that same boundary.
+  //
+  // Pairing it with an unconditional countdown shipped "Tomorrow" over
+  // "tomorrow" — caught in a browser against real data, not by a unit test.
+  const iso = (offsetDays: number) => {
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() + offsetDays);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+
+  it("is relative within a week — so the caption must be the absolute date", () => {
+    for (const d of [-3, -1, 0, 1, 3, 6]) {
+      const v = formatListDate(iso(d));
+      expect(v, `${d}d out should read relatively, got "${v}"`)
+        .toMatch(/^(Today|Yesterday|Tomorrow|\d+d ago|in \d+d)$/);
+    }
+  });
+
+  it("is absolute beyond a week — so the caption must be the countdown", () => {
+    for (const d of [8, 30, 90]) {
+      const v = formatListDate(iso(d));
+      expect(v, `${d}d out should read as a date, got "${v}"`)
+        .not.toMatch(/^(Today|Yesterday|Tomorrow|\d+d ago|in \d+d)$/);
+    }
+  });
+
+  it("the two representations never collide at the boundary", () => {
+    // The actual defect, stated directly: for every offset, the value and its
+    // complement must differ. `< 7` is the rule liability-detail applies.
+    for (let d = -10; d <= 40; d++) {
+      const value = formatListDate(iso(d));
+      const caption = Math.abs(d) < 7 ? formatFullDate(iso(d)) : dayLabel(d);
+      expect(caption.toLowerCase(), `offset ${d}: "${value}" over "${caption}"`)
+        .not.toBe(value.toLowerCase());
+    }
   });
 });
