@@ -77,6 +77,7 @@ export default defineConfig({
       'tests/recurring-dates.test.ts',
       'tests/date-math.test.ts',
       'tests/calendar-window.test.ts',
+      'tests/local-jwt.test.ts',
       'tests/net-worth-ownership.test.ts',
       'tests/tracker-taxonomy.test.ts',
       'tests/category-canon.test.ts',

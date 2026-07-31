@@ -163,16 +163,63 @@ export function resetAuthTokenStats(): void {
   authTokenStats.hits = 0; authTokenStats.misses = 0; authTokenStats.coalesced = 0;
 }
 
+// ── Local JWT verification (PERF 2026-07-31) ────────────────────────────────
+// supabase.auth.getUser(token) is a NETWORK call to GoTrue — measured p95
+// 5,247ms under parallel cold lookups (see the single-flight comment above).
+// Supabase access tokens are ordinary HS256 JWTs signed with the project's
+// JWT secret, so when SUPABASE_JWT_SECRET is configured (Supabase dashboard →
+// Settings → API → JWT secret) we verify them locally in ~0ms and skip GoTrue
+// entirely. Trade-off: a revoked session stays valid until the token's `exp`
+// (~1h) instead of ≤60s — the same trade-off Supabase documents for JWT-based
+// auth, and this codebase already accepted a 60s window via the token cache.
+// Unset, misconfigured, or any verification failure → the GoTrue path runs
+// exactly as before.
+let jwtSecretKey: Uint8Array | null | undefined; // undefined = not yet derived
+function getJwtSecretKey(): Uint8Array | null {
+  if (jwtSecretKey === undefined) {
+    const raw = process.env.SUPABASE_JWT_SECRET?.trim();
+    jwtSecretKey = raw && raw.length >= 32 ? new TextEncoder().encode(raw) : null;
+  }
+  return jwtSecretKey;
+}
+export async function verifyTokenLocally(token: string): Promise<ResolvedUser | null> {
+  const key = getJwtSecretKey();
+  if (!key) return null;
+  try {
+    const { jwtVerify } = await import("jose");
+    const { payload } = await jwtVerify(token, key, { algorithms: ["HS256"] });
+    // SECURITY: the project's anon and service-role API keys are JWTs signed
+    // with this SAME secret. Only a real user session has role
+    // "authenticated" and a UUID subject — anything else must fall through to
+    // GoTrue (which will reject it) rather than be treated as a user.
+    const sub = typeof payload.sub === "string" ? payload.sub : "";
+    const role = (payload as any).role;
+    if (role !== "authenticated" || !/^[0-9a-f-]{36}$/i.test(sub)) return null;
+    const email = typeof (payload as any).email === "string" ? (payload as any).email : undefined;
+    return { userId: sub, email };
+  } catch {
+    return null; // bad signature / expired / malformed — let GoTrue decide
+  }
+}
+
 /**
- * Resolve a token to a user via (1) the 60s cache, (2) a shared in-flight
- * lookup, or (3) a fresh getUser() round-trip — in that order. This is the ONE
- * place that calls supabase.auth.getUser for request auth, so a cold fan-out of
- * parallel requests carrying the same JWT collapses to a single GoTrue call.
+ * Resolve a token to a user via (1) the 60s cache, (2) local JWT verification
+ * when SUPABASE_JWT_SECRET is set, (3) a shared in-flight lookup, or (4) a
+ * fresh getUser() round-trip — in that order. This is the ONE place that calls
+ * supabase.auth.getUser for request auth, so a cold fan-out of parallel
+ * requests carrying the same JWT collapses to a single GoTrue call.
  * Returns null on any verification failure (caller decides 401 vs anonymous).
  */
 async function resolveTokenToUser(token: string): Promise<ResolvedUser | null> {
   const cached = getCachedUser(token);
   if (cached) { authTokenStats.hits++; return { userId: cached.userId, email: cached.email }; }
+
+  const local = await verifyTokenLocally(token);
+  if (local) {
+    authTokenStats.hits++;
+    cacheUser(token, local.userId, local.email);
+    return local;
+  }
 
   const existing = inFlightLookups.get(token);
   if (existing) { authTokenStats.coalesced++; return existing; }
