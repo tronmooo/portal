@@ -94,11 +94,13 @@
   "functions": {
     "api/index.js": {
       "maxDuration": 60,
-      "memory": 1024
+      "memory": 1024,
+      "includeFiles": "api/chunks/**"
     },
     "api/ai.js": {
       "maxDuration": 300,
-      "memory": 1024
+      "memory": 1024,
+      "includeFiles": "api/chunks/**"
     }
   }
 }

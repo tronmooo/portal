@@ -8,6 +8,10 @@ async function buildForVercel() {
   // Clean
   await rm("dist", { recursive: true, force: true });
   await rm(".vercel-output", { recursive: true, force: true });
+  // Stale code-split outputs from a previous build (content-hashed names would
+  // otherwise accumulate and ship via the includeFiles glob).
+  await rm("api/chunks", { recursive: true, force: true });
+  await rm("api/_bundle.mjs", { force: true });
 
   // 1. Build the React frontend
   console.log("Building client...");
@@ -20,11 +24,20 @@ async function buildForVercel() {
   // and the Anthropic SDK (it's large but needs to be available)
   // Bundle the server into a single file
   await esbuild({
-    entryPoints: ["server/vercel-entry.ts"],
+    entryPoints: { _bundle: "server/vercel-entry.ts" },
     platform: "node",
     bundle: true,
     format: "esm",
-    outfile: "api/_bundle.mjs",
+    // [PERF 2026-07-31 cold-start] Code splitting: routes.ts now imports the
+    // AI stack (ai-engine / smart-fill / ai-decide / weekly-review /
+    // anthropic-client → @anthropic-ai/sdk) via dynamic import() only, so
+    // esbuild carves it into api/chunks/* that are loaded on first AI use.
+    // api/index.js cold starts stop parsing/evaluating the whole AI graph —
+    // this is what makes the Phase-5.2 function split actually cut cold cost.
+    outdir: "api",
+    outExtension: { ".js": ".mjs" },
+    splitting: true,
+    chunkNames: "chunks/[name]-[hash]",
     banner: { js: "import { createRequire as __cr } from 'module'; const require = __cr(import.meta.url);" },
     define: {
       "process.env.NODE_ENV": '"production"',
@@ -187,15 +200,20 @@ export default async function(req, res) {
       // function. (Committed vercel.json previously said 300 while this
       // generator said 60 — the split makes both true on purpose: fast lane
       // bounded, AI lane long.)
+      // includeFiles: belt-and-braces so the code-split chunks (loaded via
+      // dynamic import from _bundle.mjs) always ship with the function even
+      // if Vercel's file tracer misses a specifier.
       "api/index.js": {
         maxDuration: 60,
-        memory: 1024
+        memory: 1024,
+        includeFiles: "api/chunks/**"
       },
       // Chat / upload / smart-fill: multi-round AI turns, client waits up to
       // 170s (queryClient CHAT_TIMEOUT_MS) — server budget stays above that.
       "api/ai.js": {
         maxDuration: 300,
-        memory: 1024
+        memory: 1024,
+        includeFiles: "api/chunks/**"
       }
     }
   };

@@ -186,9 +186,57 @@ async function syncLiabilityObligation(profileId: string): Promise<void> {
     console.warn("[syncLiabilityObligation] hook error:", err?.message || err);
   }
 }
-import { processMessage, processFileUpload, getActionLog, transformText, type TextTransformCommand, extractReceipt, estimateAssetValue, classifyCapture, reextractDocument } from "./ai-engine";
-import { analyzeSmartFill, renderFilledPdf, type SmartFillSource, type FillFieldInput } from "./smart-fill";
-import { aiDecide, aiPickIndex } from "./ai-decide";
+import type { TextTransformCommand } from "./ai-engine";
+import type { SmartFillSource, FillFieldInput } from "./smart-fill";
+
+// ── [PERF 2026-07-31 cold-start] Lazy AI module graph ───────────────────────
+// ai-engine (923KB of TS) + smart-fill + ai-decide + weekly-review +
+// anthropic-client all transitively pull @anthropic-ai/sdk. Importing them
+// statically put the ENTIRE AI stack in the read function's cold-start parse/
+// evaluate path — api/index.js (which serves /api/dashboard-bootstrap,
+// /api/stats, the calendar…) booted the same bytes as the AI function, so the
+// Phase-5.2 function split never reduced cold cost. These proxies keep the
+// exact names and call signatures of the static imports they replace (so call
+// sites are untouched) but load the module graph on FIRST AI USE only —
+// esbuild code-splitting (script/build-vercel.ts `splitting: true`) then
+// carves the AI stack into chunks the read path never evaluates.
+// Sync-return exceptions (getActionLog, getAnthropicClient) become async and
+// their few call sites await them.
+type AiEngineMod = typeof import("./ai-engine");
+const aiEngineMod = (): Promise<AiEngineMod> => import("./ai-engine");
+const processMessage: AiEngineMod["processMessage"] =
+  ((...a: any[]) => aiEngineMod().then((m: any) => m.processMessage(...a))) as any;
+const processFileUpload: AiEngineMod["processFileUpload"] =
+  ((...a: any[]) => aiEngineMod().then((m: any) => m.processFileUpload(...a))) as any;
+const transformText: AiEngineMod["transformText"] =
+  ((...a: any[]) => aiEngineMod().then((m: any) => m.transformText(...a))) as any;
+const extractReceipt: AiEngineMod["extractReceipt"] =
+  ((...a: any[]) => aiEngineMod().then((m: any) => m.extractReceipt(...a))) as any;
+const estimateAssetValue: AiEngineMod["estimateAssetValue"] =
+  ((...a: any[]) => aiEngineMod().then((m: any) => m.estimateAssetValue(...a))) as any;
+const classifyCapture: AiEngineMod["classifyCapture"] =
+  ((...a: any[]) => aiEngineMod().then((m: any) => m.classifyCapture(...a))) as any;
+const reextractDocument: AiEngineMod["reextractDocument"] =
+  ((...a: any[]) => aiEngineMod().then((m: any) => m.reextractDocument(...a))) as any;
+// getActionLog is synchronous in ai-engine; the lazy proxy is necessarily
+// async — its single call site awaits it.
+const getActionLog = (async (...a: any[]) =>
+  (aiEngineMod().then((m: any) => m.getActionLog(...a)))) as
+  (...a: Parameters<AiEngineMod["getActionLog"]>) => Promise<ReturnType<AiEngineMod["getActionLog"]>>;
+
+type SmartFillMod = typeof import("./smart-fill");
+const smartFillMod = (): Promise<SmartFillMod> => import("./smart-fill");
+const analyzeSmartFill: SmartFillMod["analyzeSmartFill"] =
+  ((...a: any[]) => smartFillMod().then((m: any) => m.analyzeSmartFill(...a))) as any;
+const renderFilledPdf: SmartFillMod["renderFilledPdf"] =
+  ((...a: any[]) => smartFillMod().then((m: any) => m.renderFilledPdf(...a))) as any;
+
+type AiDecideMod = typeof import("./ai-decide");
+const aiDecideMod = (): Promise<AiDecideMod> => import("./ai-decide");
+const aiDecide: AiDecideMod["aiDecide"] =
+  ((...a: any[]) => aiDecideMod().then((m: any) => m.aiDecide(...a))) as any;
+const aiPickIndex: AiDecideMod["aiPickIndex"] =
+  ((...a: any[]) => aiDecideMod().then((m: any) => m.aiPickIndex(...a))) as any;
 
 // ── Wave 2 #6: AI-suggested obligation auto-sync for subscriptions/insurance ──
 // Mirrors syncLiabilityObligation but for non-liability recurring-bill profiles.
@@ -262,9 +310,20 @@ Rules:
   }
 }
 import { normalizeTrackerEntry } from "./tracker-normalize";
-import { generateWeeklyReview, detectAnomalies } from "./weekly-review";
-import Anthropic from "@anthropic-ai/sdk";
-import { getAnthropicClient } from "./anthropic-client";
+// weekly-review + anthropic-client pull @anthropic-ai/sdk — lazy, same-name
+// proxies as the ai-engine block above. (The bare `Anthropic` default import
+// that used to sit here was entirely unused.) getAnthropicClient is sync in
+// its module; the proxy is async and its call sites await it.
+type WeeklyReviewMod = typeof import("./weekly-review");
+const weeklyReviewMod = (): Promise<WeeklyReviewMod> => import("./weekly-review");
+const generateWeeklyReview: WeeklyReviewMod["generateWeeklyReview"] =
+  ((...a: any[]) => weeklyReviewMod().then((m: any) => m.generateWeeklyReview(...a))) as any;
+const detectAnomalies: WeeklyReviewMod["detectAnomalies"] =
+  ((...a: any[]) => weeklyReviewMod().then((m: any) => m.detectAnomalies(...a))) as any;
+type AnthropicClientMod = typeof import("./anthropic-client");
+const getAnthropicClient = (async () =>
+  (await import("./anthropic-client")).getAnthropicClient()) as
+  () => Promise<ReturnType<AnthropicClientMod["getAnthropicClient"]>>;
 import {
   insertProfileSchema,
   insertTrackerSchema,
@@ -865,8 +924,6 @@ export async function registerRoutes(
   // Keep-alive / pre-warm endpoint — called by client every 90s to prevent cold starts
   // Also fired immediately after login to pre-populate cache in the background
   app.get("/api/warmup", asyncHandler(async (req, res) => {
-    res.json({ ok: true, ts: Date.now() });
-
     // /api/warmup is PUBLIC (auth is skipped for it) so the client can pay the
     // serverless cold-start before the user has a session. The old handler
     // unconditionally called storage.getStats()/getDashboardEnhanced()/
@@ -884,8 +941,16 @@ export async function registerRoutes(
     //     the per-user response cache for the SAVED profile scope the client
     //     sends via ?profileIds= (falling back to the aggregate). This warms
     //     exactly the keys the dashboard will read on first paint.
+    // [PERF 2026-07-31] The warm work used to run AFTER res.json() — on Vercel
+    // that races the instance freeze and silently loses the work. The client
+    // fires warmup fire-and-forget and never reads the body, so the response's
+    // latency is irrelevant — AWAIT the work instead so it is guaranteed to
+    // land. With the shared response cache (Phase 3), the stats/enhanced
+    // entries written here are then readable by WHICHEVER instance serves the
+    // real bootstrap seconds later — the user's own pre-mount ping becomes the
+    // cross-instance warmer. Warm repeats hit getCached and return instantly.
     const authed = await resolveUserFromRequest(req);
-    if (!authed) return; // anonymous → no DB work, no uuid error
+    if (!authed) return res.json({ ok: true, ts: Date.now() }); // anonymous → no DB work, no uuid error
 
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
@@ -896,7 +961,7 @@ export async function registerRoutes(
 
     const { createScopedStorage, requestStorageContext } = await import("./storage");
     const scoped = createScopedStorage(authed.userId);
-    requestStorageContext.run(scoped, async () => {
+    await requestStorageContext.run(scoped, async () => {
       try {
         // Version-stamp the cache keys exactly like cacheUserKey() does for a
         // GET, so a warmed entry is addressable by the real request that follows
@@ -907,10 +972,12 @@ export async function registerRoutes(
         const ckEnh = `enhanced:${uid}:${filterKey}`;
         const ckProf = `profiles:${uid}`;
         try { (scoped as any).enableRequestMemo?.(); } catch {}
-        if (!getCached(ckStats)) {
+        // getCachedShared: skip the recompute when ANY instance already holds
+        // a live entry, not just this one.
+        if (!(await getCachedShared(ckStats))) {
           try { setCache(ckStats, await scoped.getStats(undefined, filterIds), 60 * 1000); } catch {}
         }
-        if (!getCached(ckEnh)) {
+        if (!(await getCachedShared(ckEnh))) {
           try { setCache(ckEnh, await scoped.getDashboardEnhanced(undefined, filterIds), 60 * 1000); } catch {}
         }
         if (!getCached(ckProf)) {
@@ -919,6 +986,7 @@ export async function registerRoutes(
         try { (scoped as any).disableRequestMemo?.(); } catch {}
       } catch { /* best-effort warm */ }
     });
+    res.json({ ok: true, ts: Date.now() });
   }));
 
   // Resolve the per-user data version for GET requests (memoized 2s per
@@ -1652,7 +1720,7 @@ export async function registerRoutes(
         })));
       }
     } catch { /* fall through to legacy map */ }
-    res.json(getActionLog(count, actUserId));
+    res.json(await getActionLog(count, actUserId));
   }));
 
   // ---- File Upload + AI Extraction ----
@@ -1985,7 +2053,7 @@ Never fabricate data not provided. End with one concrete suggestion.
 CONTEXT JSON:
 ${JSON.stringify(ctx, null, 2)}`;
 
-      const anthropicClient = getAnthropicClient();
+      const anthropicClient = await getAnthropicClient();
       const resp = await anthropicClient.messages.create({
         model: "claude-sonnet-4-6",
         max_tokens: 400,
@@ -3896,7 +3964,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     try {
       // Use Claude to do a web-search-backed valuation
       const Anthropic = (await import("@anthropic-ai/sdk")).default;
-      const client = getAnthropicClient();
+      const client = await getAnthropicClient();
 
       // Try web search first (Brave)
       let webContext = "";
@@ -4108,7 +4176,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
 
       const userPrompt = `${typePrompt}\n\nProfile data:\n${JSON.stringify(profileData, null, 1)}`;
 
-      const client = getAnthropicClient();
+      const client = await getAnthropicClient();
       const response = await client.messages.create({
         model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
         max_tokens: 1024,
@@ -7347,7 +7415,7 @@ Generate 3-6 sections covering different life areas. Generate 1-3 correlations i
 
       const userPrompt = `Here is my Portol data snapshot for the week of ${weekAgoStr} to ${todayStr}:\n\n${JSON.stringify(dataSnapshot, null, 1)}\n\nGenerate my Weekly Digest JSON.`;
 
-      const client = getAnthropicClient();
+      const client = await getAnthropicClient();
       const response = await client.messages.create({
         model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
         max_tokens: 2048,
