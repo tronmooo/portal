@@ -16,6 +16,25 @@ export function formatFieldKey(key: string): string {
     .trim();
 }
 
+/**
+ * A short, readable preview of a value `stringifyField` cannot render — an
+ * empty object, an array of objects, a blob whose leaves are all nested.
+ *
+ * This exists so such a field stays VISIBLE. Hiding it looks tidier and is
+ * worse: the row is also where the delete button lives, so a hidden field is
+ * one the user can neither read nor remove, and it sits in the database
+ * forever. Showing "{ geo: … }" is honest and keeps the X reachable.
+ */
+export function previewUnrenderable(value: any): string {
+  try {
+    const json = JSON.stringify(value);
+    if (!json || json === "{}" || json === "[]") return "(empty)";
+    return json.length > 44 ? json.slice(0, 43) + "…" : json;
+  } catch {
+    return "(unreadable)";
+  }
+}
+
 /** Render any profile field value as text. Never returns "[object Object]". */
 export function stringifyField(value: any): string {
   if (value === null || value === undefined) return "";

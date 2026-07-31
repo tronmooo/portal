@@ -32,7 +32,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag } from "lucide-react";
 import { deleteProfileFields } from "@shared/profile-field-identity";
-import { stringifyField } from "@/lib/field-display";
+import { stringifyField, previewUnrenderable } from "@/lib/field-display";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 
@@ -243,8 +243,12 @@ function SingleProfileInfo({ id }: { id: string }) {
     if (v === undefined || v === null || v === "") continue;
     // String(v) on a composite field renders the literal "[object Object]" —
     // which is what ADDRESS showed on this screen.
-    const text = stringifyField(v);
-    if (!text) continue;
+    //
+    // Do NOT skip a field stringifyField can't render. This row carries the
+    // delete button, so skipping it leaves a field the user can neither read
+    // nor remove — the same "why won't it let me delete them" dead end that
+    // the always-visible X was added to fix. Show a preview instead.
+    const text = stringifyField(v) || previewUnrenderable(v);
     rows.push({ key: d.key, label: d.label, value: text });
   }
   // Custom scalar fields the user (or chat) added that aren't in the identity

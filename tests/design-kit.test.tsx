@@ -40,6 +40,20 @@ describe("design kit", () => {
     expect(onClick).toHaveBeenCalled();
   });
 
+  it("MetricCard activates by keyboard, not only by click", () => {
+    // The dashboard's tracker card used to carry its own
+    // onKeyDown={onEnterOrSpace(...)}; converting it to MetricCard dropped that
+    // call-site handler because the component supplies one. If it ever stops,
+    // every stat tile in the app becomes mouse-only.
+    const onClick = vi.fn();
+    render(<MetricCard label="Weight" value="183" accent="0 72% 58%" onClick={onClick} testId="mck" />);
+    const el = screen.getByTestId("mck");
+    expect(el.getAttribute("tabindex")).toBe("0");
+    fireEvent.keyDown(el, { key: "Enter" });
+    fireEvent.keyDown(el, { key: " " });
+    expect(onClick).toHaveBeenCalledTimes(2);
+  });
+
   it("MetricCard is inert — and not press-styled — without onClick", () => {
     render(<MetricCard label="Streak" value="12" accent="25 90% 58%" testId="mc2" />);
     const el = screen.getByTestId("mc2");
