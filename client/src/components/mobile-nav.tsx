@@ -4,6 +4,7 @@ import { isHubLocationForNav } from "@/components/hub/hub-routes";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { prefetchScopeBootstrap } from "@/lib/scope-prefetch";
+import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 
 // Hub consolidation (2026-07): Linked merged into the Dashboard hub (4 tabs).
 const TABS = [
@@ -24,20 +25,25 @@ function prefetchTabData(href: string): void {
   try {
     const { mode, selectedIds } = getProfileFilter();
     const ids = mode === "selected" ? (selectedIds || []).filter(Boolean) : [];
-    const scopeParam = ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
     switch (href) {
       case "/dashboard":
         // Single aggregate round-trip; seeds stats/enhanced/profiles caches
         // via seedDashboardCaches (has its own freshness/in-flight dedupe).
         prefetchScopeBootstrap(ids.length > 0 ? "selected" : "everyone", ids);
         break;
-      case "/calendar":
-        // Same key + fetcher as calendar-page.tsx's primary events query.
+      case "/calendar": {
+        // [PERF 2026-07-31] The calendar reads /api/calendar/timeline (the
+        // merged stream), NOT /api/events — the old prefetch warmed a key the
+        // page never touched. Use the canonical shared window so this hits the
+        // exact slot calendar-page.tsx + CalendarView read.
+        const win = canonicalTimelineWindow(new Date().toLocaleDateString("en-CA"));
+        const tlMode = ids.length > 0 ? "selected" : "everyone";
         void queryClient.prefetchQuery({
-          queryKey: ["/api/events", mode, ...ids],
-          queryFn: () => apiRequest("GET", `/api/events${scopeParam}`).then((r) => r.json()).catch(() => []),
+          queryKey: timelineQueryKey(win, tlMode, ids),
+          queryFn: () => apiRequest("GET", timelineUrl(win, tlMode, ids)).then((r) => r.json()),
         });
         break;
+      }
       case "/artifacts":
         // Default fetcher (queryKey[0] is the URL) — matches artifacts.tsx.
         void queryClient.prefetchQuery({ queryKey: ["/api/artifacts"] });

@@ -56,6 +56,7 @@ import { EVENT_CATEGORY_COLORS } from "@shared/schema";
 import { isInScope, selfIdsFrom } from "@shared/scope";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { addDaysISO } from "@shared/date-math";
+import { canonicalTimelineWindow } from "@shared/calendar-window";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1196,18 +1197,29 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     }
   };
 
-  // Calculate date range for the visible month (with padding)
+  // Calculate date range for the visible month (with padding).
+  // [PERF 2026-07-31] For the CURRENT month, use the canonical shared window
+  // (shared/calendar-window.ts) instead of a bespoke month±padding range: the
+  // canonical window is a superset of the padded month (monthStart−7 →
+  // today+45 always covers monthEnd+14 while `today` is in the month) AND is
+  // the exact key the dashboard bootstrap seeds + persists — so the grid
+  // paints from cache on app open instead of cold-fetching every time.
+  // Navigating to other months keeps the bespoke window (rare path).
+  const isCurrentMonth = viewYear === today.getFullYear() && viewMonth === today.getMonth();
+  const canonicalWindow = useMemo(() => canonicalTimelineWindow(todayStr), [todayStr]);
   const startDate = useMemo(() => {
+    if (isCurrentMonth) return canonicalWindow.start;
     const d = new Date(viewYear, viewMonth, 1);
     d.setDate(d.getDate() - 7);
     return toLocalDateStr(d);
-  }, [viewYear, viewMonth]);
+  }, [viewYear, viewMonth, isCurrentMonth, canonicalWindow]);
 
   const endDate = useMemo(() => {
+    if (isCurrentMonth) return canonicalWindow.end;
     const d = new Date(viewYear, viewMonth + 1, 0);
     d.setDate(d.getDate() + 14);
     return toLocalDateStr(d);
-  }, [viewYear, viewMonth]);
+  }, [viewYear, viewMonth, isCurrentMonth, canonicalWindow]);
 
   // Determine effective filter: external props take precedence over internal filter
   const effectiveFilterMode = externalFilterMode ?? (resolvedProfileId ? "selected" : "everyone");
@@ -1223,7 +1235,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     }
     return url;
   })();
-  const { data: timelineItems = [], isLoading: timelineLoading } = useQuery<CalendarTimelineItem[]>({
+  const { data: timelineItems = [], isLoading: timelineLoading, refetch: refetchTimeline } = useQuery<CalendarTimelineItem[]>({
     queryKey: ["/api/calendar/timeline", startDate, endDate, effectiveFilterMode, ...effectiveFilterIds],
     queryFn: () =>
       apiRequest("GET", timelineUrl).then(r => r.json()),
@@ -1475,8 +1487,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       </div>
 
       {/* Calendar Grid — conditional on viewMode */}
+      {/* onRetry actually refetches THIS query — previously the Retry button
+          only ran the generic wedged-query recovery, which cancels/invalidates
+          but never re-fired the timeline fetch the user was staring at. */}
       {timelineLoading && timelineItems.length === 0 && (
-        <StuckLoadingGuard active>
+        <StuckLoadingGuard active onRetry={() => { void refetchTimeline(); }}>
         <div className="rounded-lg border border-border/40 overflow-hidden" data-testid="calendar-loading">
           {/* Weekday header skeleton */}
           <div className="grid grid-cols-7 border-b border-border">

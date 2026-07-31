@@ -9,6 +9,7 @@ import { RecurringDatesPage } from "@/components/recurring/RecurringDatesPage";
 import { SeriesDialogHost } from "@/components/recurring/RecurringDatesManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 import { ArrowLeft, CalendarDays, Repeat } from "lucide-react";
 import { Link } from "wouter";
 
@@ -37,7 +38,6 @@ export default function CalendarPage() {
   // The third tile used to read "Total" — the row count of /api/events, a number
   // with no window and no relationship to what was on screen. It is now the
   // 30-day horizon, which is answerable and comes from the same fetch.
-  const profileParam = filterMode === "selected" && filterIds.length > 0 ? `&profileIds=${filterIds.join(",")}` : "";
   const todayStr = new Date().toLocaleDateString("en-CA");
   const addDays = (n: number) => {
     const d = new Date(`${todayStr}T12:00:00`);
@@ -46,25 +46,31 @@ export default function CalendarPage() {
   };
   const weekEndStr = useMemo(() => addDays(7), [todayStr]);
   const horizonEndStr = useMemo(() => addDays(30), [todayStr]);
+  // [PERF 2026-07-31] Fetch the CANONICAL window (shared/calendar-window.ts) —
+  // the same key the dashboard bootstrap seeds and the month grid reads, so
+  // this query is a cache hit on app open instead of a guaranteed cold fetch.
+  // The tiles then count within their narrower ranges client-side.
+  // NOTE: no `.catch(() => [])` — a swallowed failure used to cache an empty
+  // success and render "0 / 0 / 0" as if the calendar were truly empty.
+  const timelineWindow = useMemo(() => canonicalTimelineWindow(todayStr), [todayStr]);
   const { data: timeline = [] } = useQuery<any[]>({
-    queryKey: ["/api/calendar/timeline", todayStr, horizonEndStr, filterMode, ...filterIds],
+    queryKey: timelineQueryKey(timelineWindow, filterMode, filterIds),
     queryFn: () =>
-      apiRequest("GET", `/api/calendar/timeline?start=${todayStr}&end=${horizonEndStr}${profileParam}`)
-        .then(r => r.json())
-        .catch(() => []),
+      apiRequest("GET", timelineUrl(timelineWindow, filterMode, filterIds)).then(r => r.json()),
     staleTime: 60_000,
   });
   const evSummary = useMemo(() => {
     const list = Array.isArray(timeline) ? timeline : [];
-    let today = 0, week = 0;
+    let today = 0, week = 0, horizon = 0;
     for (const item of list) {
       const d = String(item?.date || "").slice(0, 10);
       if (!d) continue;
       if (d === todayStr) today++;
       if (d >= todayStr && d <= weekEndStr) week++; // YYYY-MM-DD sorts lexically
+      if (d >= todayStr && d <= horizonEndStr) horizon++;
     }
-    return { today, week, horizon: list.length };
-  }, [timeline, todayStr, weekEndStr]);
+    return { today, week, horizon };
+  }, [timeline, todayStr, weekEndStr, horizonEndStr]);
 
   // Legacy cleanup: strip old ?tab=obligations links (that tab is retired).
   // ?tab=recurring is the Recurring Dates manager and is kept.

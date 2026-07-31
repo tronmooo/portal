@@ -44,6 +44,7 @@ import { buildExecutiveSections } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
+import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 
 type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | null;
 
@@ -164,9 +165,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const mode = filterMode;
   const ids = filterIds;
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
-  const amp = param ? "&" : "?";
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
-  const in45 = new Date(Date.now() + 45 * 86400000).toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
 
   // NOTE (BUG-20260715-everyone-zeros): none of these query functions may
   // swallow errors into a cached-as-success empty value (`.catch(() => [])`).
@@ -186,12 +185,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryFn: () => apiRequest("GET", `/api/habits${param}`).then(r => r.json()),
     staleTime: 30_000,
   });
-  // 45-day window: the feed only uses today's timed events, but the tiles show
-  // "next up" beyond today. One fetch serves both.
+  // [PERF 2026-07-31] Canonical shared window (shared/calendar-window.ts): the
+  // same key the bootstrap seeds, the calendar page counts from and the month
+  // grid renders — one cache slot instead of three cold fetches. The window
+  // reaches back to monthStart−7 for the grid's sake; this tab only wants
+  // today-onward, so past-dated rows are filtered out below.
+  const timelineWindow = useMemo(() => canonicalTimelineWindow(todayStr), [todayStr]);
   const { data: timelineRaw = [], isPending: timelinePending } = useQuery<any[]>({
-    queryKey: ["/api/calendar/timeline", todayStr, in45, mode, ...ids],
+    queryKey: timelineQueryKey(timelineWindow, mode, ids),
     enabled: ready,
-    queryFn: () => apiRequest("GET", `/api/calendar/timeline${param}${amp}start=${todayStr}&end=${in45}`).then(r => r.json()),
+    queryFn: () => apiRequest("GET", timelineUrl(timelineWindow, mode, ids)).then(r => r.json()),
     staleTime: 60_000,
   });
   // Reminders are profile-scoped like every other briefing query — pass the
@@ -260,7 +263,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const hideTest = <T,>(rows: T[]): T[] => (showTestData ? rows : (rows || []).filter(r => !isTestRow(r)));
   const tasks = hideTest(tasksRaw || []);
   const habits = hideTest(habitsRaw || []);
-  const timeline = hideTest(timelineRaw || []);
+  // Canonical window includes pre-today rows for the calendar grid; this tab's
+  // feed and tiles are today-onward only (preserves the previous behavior of
+  // the old today→+45 fetch exactly).
+  const timeline = hideTest((timelineRaw || []).filter((it: any) => String(it?.date || "").slice(0, 10) >= todayStr));
   const reminders = hideTest(Array.isArray(remindersRaw) ? remindersRaw : []);
   const notifications = hideTest(Array.isArray(notificationsRaw) ? notificationsRaw : []);
   const goals = hideTest(goalsRaw || []);

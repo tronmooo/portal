@@ -7,6 +7,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { canonicalTimelineWindow } from "@shared/calendar-window";
 import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { detectMoodFromText } from "@shared/mood-detect";
@@ -2761,9 +2762,15 @@ ${JSON.stringify(ctx, null, 2)}`;
       // added storage reads free (getCalendarTimeline reuses events/tasks/
       // obligations already fetched above; buildNotifications reuses docs/
       // tasks/obligations/habits).
+      // [PERF 2026-07-31] Window comes from the shared canonical helper so the
+      // seeded client cache key is bit-identical to what the calendar page,
+      // month grid and Executive briefing actually query — previously each
+      // used a different window and NONE ever hit this seed (calendar
+      // cold-fetched on every open).
       const bootstrapTz = getTimezone(req);
-      const bootstrapStart = getUserToday(bootstrapTz);
-      const bootstrapEnd = toLocalDateStr(new Date(Date.now() + 45 * 86400000), bootstrapTz);
+      const bootstrapWindow = canonicalTimelineWindow(getUserToday(bootstrapTz));
+      const bootstrapStart = bootstrapWindow.start;
+      const bootstrapEnd = bootstrapWindow.end;
       const [stats, profiles, incomes, expensesForBudget, budgets, obligationsAll, assetPartyLinks, liabilityProfileLinks,
         tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll, remindersAll,
         calendarTimelineAll, notificationsAll] = await Promise.all([

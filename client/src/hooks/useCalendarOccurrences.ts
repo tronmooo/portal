@@ -12,6 +12,7 @@ import { useMemo, useState, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { seriesFromAll, filterSeriesByProfiles } from "@shared/calendar-adapters";
+import { scopedKey } from "@shared/query-keys";
 import { onlyRecurringRules } from "@shared/calendar-occurrences";
 import {
   buildCalendarOccurrences,
@@ -68,30 +69,41 @@ export function useCalendarOccurrences(
   const { filterIds = [], filterMode = "everyone", lookbackDays = 62, recurringOnly = false } = opts;
   const scoped = filterMode === "selected" && filterIds.length > 0;
   const profileParam = scoped ? `?profileIds=${filterIds.join(",")}` : "";
-  const scopeKey = scoped ? filterIds.join(",") : "all";
+  // [PERF 2026-07-31] Keys use the canonical scopedKey shape ([endpoint, mode,
+  // ...ids] — shared/query-keys.ts) instead of the old ad-hoc [endpoint,
+  // "id1,id2"|"all"] shape. The old shape matched NOTHING the dashboard
+  // bootstrap seeds, so opening the Recurring tab always cold-fetched all six
+  // datasets; the canonical slots are seeded on app open and this tab now
+  // paints from cache.
+  const mode: "everyone" | "selected" = scoped ? "selected" : "everyone";
+  const kIds = scoped ? filterIds : [];
 
   const get = (url: string) =>
     apiRequest("GET", url).then((r) => r.json()).catch(() => []);
 
+  // Events stay an UNSCOPED fetch: the series builder applies the client-side
+  // soft-orphan scope rule itself (filterSeriesByProfiles below), which is not
+  // identical to the server's per-profile isolation. Keyed under the canonical
+  // unscoped slot so the common "everyone" scope hits the bootstrap seed.
   const events = useQuery<any[]>({
-    queryKey: ["/api/events"],
+    queryKey: [...scopedKey("/api/events", "everyone", [])],
     queryFn: () => get("/api/events"),
   });
   const profiles = useQuery<any>({ queryKey: ["/api/profiles"] });
   const obligations = useQuery<any[]>({
-    queryKey: ["/api/obligations", scopeKey],
+    queryKey: [...scopedKey("/api/obligations", mode, kIds)],
     queryFn: () => get(`/api/obligations${profileParam}`),
   });
   const tasks = useQuery<any[]>({
-    queryKey: ["/api/tasks", scopeKey],
+    queryKey: [...scopedKey("/api/tasks", mode, kIds)],
     queryFn: () => get(`/api/tasks${profileParam}`),
   });
   const reminders = useQuery<any[]>({
-    queryKey: ["/api/reminders", scopeKey],
+    queryKey: [...scopedKey("/api/reminders", mode, kIds)],
     queryFn: () => get(`/api/reminders${profileParam}`),
   });
   const documents = useQuery<any[]>({
-    queryKey: ["/api/documents", scopeKey],
+    queryKey: [...scopedKey("/api/documents", mode, kIds)],
     queryFn: () => get(`/api/documents${profileParam}`),
   });
 

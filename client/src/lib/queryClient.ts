@@ -346,6 +346,11 @@ const ESSENTIAL_PERSIST_PREFIXES = [
   "/api/stats",
   "/api/dashboard-enhanced",
   "/api/profiles",
+  // [PERF 2026-07-31] The calendar timeline is the ONE dataset the calendar
+  // tab paints from; excluding it made every calendar open a cold network
+  // fetch behind a 12s "taking too long" guard. The payload is a bounded
+  // ~52-day window (shared/calendar-window.ts), so it fits the entry budget.
+  "/api/calendar/timeline",
 ];
 export function isEssentialToPersist(queryKey: any): boolean {
   const first = String(queryKey?.[0] || "");
@@ -515,13 +520,24 @@ export function hydrateQueryCache(): void {
       return;
     }
 
+    // [PERF 2026-07-31 "one refresh, not twenty"] Restored entries used to be
+    // seeded with their persisted timestamp, so refetchOnMount saw every one
+    // of them as stale and re-fired ~20 background requests on EVERY launch —
+    // a fan-out that regularly landed on a cold serverless instance and kept
+    // skeletons/"loading" tiles up past the 12s guard. Now only the bootstrap
+    // entry keeps its old timestamp (making it the ONE query that refetches);
+    // everything else is seeded fresh. When that single bootstrap refetch
+    // lands, seedDashboardCaches overwrites all dependent keys with fresh
+    // rows — so staleness is bounded by one round trip, not by the blob age.
+    const seededAt = Date.now();
     let bootstrapEntry: { k: any; d: any; t: number } | null = null;
     for (const entry of entries) {
       // Only seed if no fresh data exists
       const existing = queryClient.getQueryData(entry.k as any);
       if (existing !== undefined) continue;
-      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: entry.t });
-      if (Array.isArray(entry.k) && entry.k[0] === "/api/dashboard-bootstrap") {
+      const isBootstrap = Array.isArray(entry.k) && entry.k[0] === "/api/dashboard-bootstrap";
+      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: isBootstrap ? entry.t : seededAt });
+      if (isBootstrap) {
         bootstrapEntry = entry as { k: any; d: any; t: number };
       }
     }
@@ -539,14 +555,14 @@ export function hydrateQueryCache(): void {
       const mode = String(k[1] ?? "everyone");
       const month = k.length > 2 ? String(k[k.length - 1]) : "";
       const ids = k.slice(2, Math.max(2, k.length - 1)).map(String);
-      // Seed with the persisted blob's OWN timestamp (not now) so staleTime
-      // still treats the rows as stale and refetchOnMount fires exactly one
-      // quiet background refresh per tab — cached rows paint first, fresh data
-      // swaps in without a skeleton. Only fill empty slots (never clobber a
-      // fresher restore).
+      // Seeded FRESH (see the block above): the stale bootstrap query is the
+      // single designated refresher; its landing re-seeds every one of these
+      // keys via seedDashboardCaches. Seeding them stale here re-created the
+      // ~20-request launch fan-out this pass exists to remove. Only fill empty
+      // slots (never clobber a fresher restore).
       for (const { key, data } of bootstrapSeedEntries(bootstrapEntry.d, mode, ids, month)) {
         if (queryClient.getQueryData(key as any) !== undefined) continue;
-        queryClient.setQueryData(key as any, data, { updatedAt: bootstrapEntry.t });
+        queryClient.setQueryData(key as any, data, { updatedAt: seededAt });
       }
     }
   } catch {
