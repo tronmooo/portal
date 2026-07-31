@@ -2223,6 +2223,48 @@ export class SupabaseStorage implements IStorage {
     return Number(data || 0);
   }
 
+  // ── Shared response cache (migration 20260731_response_cache) ─────────────
+  // Cross-INSTANCE warm cache for the handful of expensive aggregations
+  // (bootstrap/stats/enhanced/calendar-timeline). The in-memory response cache
+  // in routes.ts is per serverless instance, so under Vercel's instance
+  // fan-out a user "warmed" on instance A still paid the full ~15-query
+  // recompute the moment a request landed on instance B — a large share of
+  // the residual cold-open slowness. Correctness rides on the existing
+  // version-stamped keys (`<uid>@v<N>`): any write bumps the version, making
+  // every stale row unaddressable — no cross-instance bust protocol needed.
+  async getResponseCache(key: string): Promise<any | null> {
+    const { data, error } = await this.supabase
+      .from("response_cache").select("payload,expires_at")
+      .eq("key", key).maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    if (new Date(data.expires_at).getTime() <= Date.now()) return null;
+    return data.payload;
+  }
+
+  async setResponseCache(key: string, payload: any, ttlMs: number): Promise<void> {
+    const { error } = await this.supabase.from("response_cache").upsert({
+      key,
+      user_id: this.userId,
+      payload,
+      expires_at: new Date(Date.now() + ttlMs).toISOString(),
+    });
+    if (error) throw error;
+  }
+
+  /** Delete this user's expired rows (piggybacked on write busts). */
+  async cleanupResponseCache(): Promise<void> {
+    await this.supabase.from("response_cache").delete()
+      .eq("user_id", this.userId)
+      .lt("expires_at", new Date().toISOString());
+  }
+
+  /** Delete ALL expired rows (any user) — called from the daily cron. */
+  async sweepResponseCache(): Promise<void> {
+    await this.supabase.from("response_cache").delete()
+      .lt("expires_at", new Date().toISOString());
+  }
+
   async repairOwnershipConsistency(): Promise<{ scanned: number; repaired: number; details: string[] }> {
     // Same table list + soft-delete visibility as getOwnershipConsistency.
     const entityTables: { et: OwnedEntityType; table: string; softDelete: boolean }[] = [

@@ -392,9 +392,69 @@ function getCached(key: string): any | null {
   responseCache.delete(key);
   return null;
 }
+
+// ── Shared (cross-instance) response cache — Postgres-backed ───────────────
+// The Map above is per serverless instance: N warm instances = N cold caches,
+// and Vercel sprays one app-open's requests across instances, so the KeepAlive
+// warmth of instance A never helped the request that landed on instance B.
+// For the handful of EXPENSIVE aggregation keys below, misses fall through to
+// one indexed read of the `response_cache` table (~10-50ms) instead of a
+// ~15-query recompute (1-5s cold). Writes are fire-and-forget upserts.
+//
+// Correctness: only version-stamped keys (containing "@v") are eligible — a
+// write bumps the user's data version, so every stale row simply stops being
+// addressable (same scheme the in-memory cache already relies on across
+// instances). Rows are best-effort garbage: expired entries are deleted on the
+// user's next write and swept by the daily cron.
+//
+// Rollout: on by default, SHARED_RESPONSE_CACHE=0 disables; degrades to
+// memory-only automatically when the table doesn't exist yet (first deploy
+// before the migration runs).
+const SHARED_CACHE_PREFIXES = ["bootstrap:", "stats:", "enhanced:", "caltimeline:"];
+let sharedCacheBroken = false; // latched when the table is missing/unreachable
+const SHARED_CACHE_ENABLED = () =>
+  CACHE_ENABLED && !sharedCacheBroken &&
+  process.env.SHARED_RESPONSE_CACHE !== "0" && process.env.SHARED_RESPONSE_CACHE !== "false";
+function sharedCacheEligible(key: string): boolean {
+  return SHARED_CACHE_ENABLED() && key.includes("@v") &&
+    SHARED_CACHE_PREFIXES.some((p) => key.startsWith(p));
+}
+function latchSharedCacheError(err: any): void {
+  // 42P01 = undefined_table. Anything else is transient — keep trying.
+  const code = err?.code || err?.details?.code;
+  if (code === "42P01" || /response_cache.*does not exist/i.test(String(err?.message || ""))) {
+    sharedCacheBroken = true;
+    console.warn("[shared-cache] response_cache table missing — falling back to per-instance cache. Run migrations/20260731_response_cache.sql.");
+  }
+}
+/** In-memory hit, else one Postgres read for the whitelisted expensive keys. */
+async function getCachedShared(key: string): Promise<any | null> {
+  const mem = getCached(key);
+  if (mem !== null) return mem;
+  if (!sharedCacheEligible(key)) return null;
+  try {
+    const hit = await (storage as any).getResponseCache?.(key);
+    if (hit !== null && hit !== undefined) {
+      // Hydrate this instance briefly so repeat hits skip even the one read.
+      responseCache.set(key, { data: hit, expiresAt: Date.now() + 15_000 });
+      return hit;
+    }
+  } catch (err) {
+    latchSharedCacheError(err);
+  }
+  return null;
+}
 function setCache(key: string, data: any, ttlMs: number = 10000): void {
   if (!CACHE_ENABLED) return;
   responseCache.set(key, { data, expiresAt: Date.now() + ttlMs });
+  if (sharedCacheEligible(key)) {
+    // Fire-and-forget: never block the response on the cache write. If the
+    // instance freezes before it lands, the next instance just recomputes.
+    try {
+      Promise.resolve((storage as any).setResponseCache?.(key, data, ttlMs))
+        .catch((err: any) => latchSharedCacheError(err));
+    } catch { /* ignore */ }
+  }
 }
 // Clear ALL cached responses — call after any data mutation
 function clearAllCache(): void {
@@ -419,8 +479,22 @@ const USER_CACHE_PREFIXES = [
 // latter, so one write cold-started the 60s stats/enhanced/bootstrap caches for
 // everyone). Per-user only — all cached data is per-user, so there is nothing
 // shared to invalidate across users.
+const sharedCacheCleanupAt = new Map<string, number>();
 function bustUserCaches(uid: string): void {
   for (const prefix of USER_CACHE_PREFIXES) bustCache(`${prefix}${uid}`);
+  // Piggyback shared-cache hygiene on writes: version-stamped rows go stale by
+  // key, so this only needs to DELETE EXPIRED rows, throttled to once/min per
+  // user per instance. Fire-and-forget — a write must never wait on cleanup.
+  if (SHARED_CACHE_ENABLED()) {
+    const last = sharedCacheCleanupAt.get(uid) || 0;
+    if (Date.now() - last > 60_000) {
+      sharedCacheCleanupAt.set(uid, Date.now());
+      if (sharedCacheCleanupAt.size > 5000) sharedCacheCleanupAt.clear();
+      try {
+        Promise.resolve((storage as any).cleanupResponseCache?.()).catch(() => {});
+      } catch { /* ignore */ }
+    }
+  }
 }
 // Let AI tools (refresh_dashboard) bust this module-private cache without a
 // circular routes↔ai-engine import — see server/cache-bus.ts.
@@ -1411,6 +1485,10 @@ export async function registerRoutes(
           });
         } catch { /* skip user */ }
       }
+      // Piggyback the daily shared-response-cache sweep on the one scheduled
+      // cron (Hobby plan allows only daily jobs): expired rows are already
+      // unreadable — this just keeps the table from growing without bound.
+      try { await (storage as any).sweepResponseCache?.(); } catch { /* best-effort */ }
       res.json({ fired });
     } catch (err: any) {
       log.error("[Cron Fire Reminders]", err?.message || err);
@@ -2648,7 +2726,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = cacheUserKey(req as AuthenticatedRequest);
     const cacheKey = `stats:${userId}:${filterIds?.join(",") || "all"}`;
-    const cached = getCached(cacheKey);
+    const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
     // PERF 2026-05-30: enable per-request memo so getStats's internal ~10
     // Supabase fanouts share fetched tables (profiles/expenses/trackers/...).
@@ -2672,7 +2750,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = cacheUserKey(req as AuthenticatedRequest);
     const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}`;
-    const cached = getCached(cacheKey);
+    const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
     // PERF 2026-05-30: same memo treatment as /api/stats so getDashboardEnhanced's
     // internal fanouts share fetched tables.
@@ -2727,7 +2805,11 @@ ${JSON.stringify(ctx, null, 2)}`;
     const userId = cacheUserKey(req as AuthenticatedRequest);
     const filterKey = filterIds?.join(",") || "all";
     const cacheKey = `bootstrap:${userId}:${filterKey}:${month}`;
-    const cached = getCached(cacheKey);
+    // Shared cache: an instance that never computed this bootstrap can still
+    // serve it in one indexed read if ANY instance (or the warmup ping)
+    // computed it in the last 30s — the cold-open killer was every instance
+    // recomputing the same aggregation.
+    const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
 
     const data = await dedupe(cacheKey, async () => {
@@ -2750,8 +2832,8 @@ ${JSON.stringify(ctx, null, 2)}`;
       // SLOWER than calling them separately. Instead: fetch the lightweight
       // pieces (profiles/incomes/expenses/budgets) in parallel with stats,
       // then enhanced serially. Total wall = max(stats, lightweight) + enhanced.
-      const cachedStats = getCached(statsCacheKey);
-      const cachedEnhanced = getCached(enhancedCacheKey);
+      const cachedStats = await getCachedShared(statsCacheKey);
+      const cachedEnhanced = await getCachedShared(enhancedCacheKey);
 
       // [PERF 2026-07-17, user report "every tile shows loading on scope switch"]
       // The Events tile is gated on /api/calendar/timeline and the AI Executive
@@ -5284,7 +5366,7 @@ Rules:
       // the next mutation, not the TTL.
       const calUserId = cacheUserKey(req as AuthenticatedRequest);
       const calCacheKey = `caltimeline:${calUserId}:${start}:${end}:${profileIds?.join(",") || "all"}:${tz}`;
-      const cached = getCached(calCacheKey);
+      const cached = await getCachedShared(calCacheKey);
       if (cached) return res.json(cached);
       try { (storage as any).enableRequestMemo?.(); } catch {}
       const items = await dedupe(calCacheKey, () => storage.getCalendarTimeline(start, end, profileIds));
