@@ -3503,43 +3503,74 @@ export class SupabaseStorage implements IStorage {
       }
       if (ev.recurrence !== "none") {
         // [P4.3] Expand occurrences all the way to the requested window's end
-        // date instead of a hardcoded 45 iterations (which made daily/weekly
-        // events silently fall off the calendar ~6 weeks out while
-        // obligations materialize 730 days). The `nextStr > endDate` break
-        // below still bounds the loop by the request window; the 500-
-        // occurrence cap mirrors the obligation-engine safety cap and only
-        // bites on pathological windows (e.g. a daily event over 2+ years).
+        // date instead of a hardcoded 45 iterations. The `nextStr > endDate`
+        // break bounds the loop by the request window; the 500-occurrence cap
+        // mirrors the obligation-engine safety cap.
+        //
+        // [PERF 2026-07-31 window clamp] The walk used to start at i=1 (the
+        // series base). For an old series that meant (a) hundreds of wasted
+        // iterations before the window — the weekdays variant re-walked from
+        // base for EVERY i, up to ~125k date mutations per event — and (b) a
+        // daily series older than 500 days exhausted the cap before reaching
+        // the window and silently vanished from the calendar. Fast-forward
+        // arithmetically to just before the window (one stride early to
+        // absorb rounding), so both the work and the cap now apply to the
+        // window, not to the series' age.
         const MAX_EVENT_OCCURRENCES = 500;
         const base = parseLocalDate(ev.date.slice(0, 10));
-        for (let i = 1; i <= MAX_EVENT_OCCURRENCES; i++) {
-          const next = new Date(base);
-          switch (ev.recurrence) {
-            case "daily": next.setDate(next.getDate() + i); break;
-            // weekdays/weekends: walk to the i-th matching day (skip the rest).
-            case "weekdays":
-            case "weekends": {
-              let count = 0;
-              while (count < i) {
-                next.setDate(next.getDate() + 1);
-                const dow = next.getDay();
-                const matches = ev.recurrence === "weekdays" ? (dow !== 0 && dow !== 6) : (dow === 0 || dow === 6);
-                if (matches) count++;
-              }
-              break;
-            }
-            case "weekly": next.setDate(next.getDate() + i * 7); break;
-            case "biweekly": next.setDate(next.getDate() + i * 14); break;
-            // Clamped + base-anchored (shared/date-math): setMonth overflows a
-            // short month ("June 31" → July 1) and permanently drags the series
-            // off its day-of-month.
-            case "monthly": next.setTime(addMonthsClamped(base, i).getTime()); break;
-            case "yearly": next.setTime(addYearsClamped(base, i).getTime()); break;
-          }
-          const nextStr = next.toLocaleDateString('en-CA');
-          if (nextStr > endDate) break;
-          if (ev.recurrenceEnd && nextStr > ev.recurrenceEnd) break;
+        const gapDays = Math.floor((parseLocalDate(startDate).getTime() - base.getTime()) / 86400000);
+        const pushOccurrence = (nextStr: string) => {
           if (nextStr >= startDate && rdShow(nextStr)) {
             items.push({ id: `event-${ev.id}-${nextStr}`, type: "event", title: ev.title, date: nextStr, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, completed: rdMeta.completedDates.includes(nextStr), meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
+          }
+        };
+        if (ev.recurrence === "weekdays" || ev.recurrence === "weekends") {
+          // One INCREMENTAL walk (the old code restarted from base for every
+          // occurrence index — O(n²)). Skip whole weeks up to ~a week before
+          // the window; every 7-day hop preserves the day-of-week pattern.
+          const cur = new Date(base);
+          if (gapDays > 14) cur.setDate(cur.getDate() + Math.floor((gapDays - 7) / 7) * 7);
+          for (let emitted = 0; emitted < MAX_EVENT_OCCURRENCES; ) {
+            cur.setDate(cur.getDate() + 1);
+            const dow = cur.getDay();
+            const matches = ev.recurrence === "weekdays" ? (dow !== 0 && dow !== 6) : (dow === 0 || dow === 6);
+            if (!matches) continue;
+            emitted++;
+            const nextStr = cur.toLocaleDateString('en-CA');
+            if (nextStr > endDate) break;
+            if (ev.recurrenceEnd && nextStr > ev.recurrenceEnd) break;
+            pushOccurrence(nextStr);
+          }
+        } else {
+          // Stride-based recurrences: first index at-or-before the window
+          // start (floor − 1, clamped to 1) so no pre-window date is skipped.
+          let i0 = 1;
+          if (gapDays > 2) {
+            switch (ev.recurrence) {
+              case "daily": i0 = gapDays - 1; break;
+              case "weekly": i0 = Math.floor(gapDays / 7) - 1; break;
+              case "biweekly": i0 = Math.floor(gapDays / 14) - 1; break;
+              case "monthly": i0 = Math.floor(gapDays / 31) - 1; break;
+              case "yearly": i0 = Math.floor(gapDays / 366) - 1; break;
+            }
+            i0 = Math.max(1, i0);
+          }
+          for (let i = i0; i < i0 + MAX_EVENT_OCCURRENCES; i++) {
+            const next = new Date(base);
+            switch (ev.recurrence) {
+              case "daily": next.setDate(next.getDate() + i); break;
+              case "weekly": next.setDate(next.getDate() + i * 7); break;
+              case "biweekly": next.setDate(next.getDate() + i * 14); break;
+              // Clamped + base-anchored (shared/date-math): setMonth overflows a
+              // short month ("June 31" → July 1) and permanently drags the series
+              // off its day-of-month.
+              case "monthly": next.setTime(addMonthsClamped(base, i).getTime()); break;
+              case "yearly": next.setTime(addYearsClamped(base, i).getTime()); break;
+            }
+            const nextStr = next.toLocaleDateString('en-CA');
+            if (nextStr > endDate) break;
+            if (ev.recurrenceEnd && nextStr > ev.recurrenceEnd) break;
+            pushOccurrence(nextStr);
           }
         }
       }
@@ -3700,7 +3731,12 @@ export class SupabaseStorage implements IStorage {
       const { data: loanRows } = await this.supabase
         .from('loan_amortization')
         .select('*')
-        .eq('user_id', this.userId);
+        .eq('user_id', this.userId)
+        // Only unpaid rows are ever rendered (the JS `row.paid` check below
+        // stays as the authority); paid rows accumulate forever, so push the
+        // filter down. `.or` keeps rows where paid is false OR null — `.eq`
+        // would silently drop the null-paid legacy rows.
+        .or('paid.is.null,paid.eq.false');
       if (Array.isArray(loanRows)) {
         // Map loan_id → profile linked profiles (so per-profile filtering works).
         const loanProfileMap = new Map<string, string[]>();
@@ -4299,10 +4335,16 @@ export class SupabaseStorage implements IStorage {
       // PERF (durable-fix-phase1): DB pushdown via idx_habits_linked_profiles.
       let habitsQuery = this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null);
       habitsQuery = this._applyProfileFilter(habitsQuery, profileIds);
-      // Fetch habits and ALL checkins in 2 parallel queries (not N+1)
+      // Fetch habits and checkins in 2 parallel queries (not N+1).
+      // [PERF 2026-07-31] Checkins are windowed to the last 400 days — the
+      // table grows forever and was fetched IN FULL on every dashboard
+      // bootstrap. 400 days comfortably covers every consumer: streak math
+      // walks back ≤30 days (rowToHabit / getStats), completion rates use
+      // today/this week, and the habit heatmaps show ≤ a year.
+      const checkinCutoff = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
       const [habitsResult, checkinsResult] = await Promise.all([
         habitsQuery,
-        this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).order("date", { ascending: true }),
+        this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).gte("date", checkinCutoff).order("date", { ascending: true }),
       ]);
       if (habitsResult.error) throw habitsResult.error;
       const checkinsByHabit = new Map<string, any[]>();
@@ -5290,16 +5332,36 @@ export class SupabaseStorage implements IStorage {
   // GOALS
   // ============================================================
   async getGoals(profileIds?: string[]): Promise<Goal[]> {
+    // Memoized like the other list reads: the dashboard bootstrap and any
+    // sibling reads in the same request share one fetch + progress pass.
+    return this.memo(`getGoals${this._fk(profileIds)}`, () => this._getGoalsImpl(profileIds));
+  }
+  private async _getGoalsImpl(profileIds?: string[]): Promise<Goal[]> {
     // PERF (durable-fix-phase1): DB pushdown via idx_goals_linked_profiles.
     let q = this.supabase.from("goals").select("*").eq("user_id", this.userId);
     q = this._applyProfileFilter(q, profileIds);
     const { data, error } = await q.order("created_at", { ascending: false });
     if (error) throw error;
     const goals = (data || []).map(r => this.rowToGoal(r));
-    for (const goal of goals) {
-      if (goal.status === "active") {
-        goal.current = await this.computeGoalProgress(goal);
-      }
+    // [PERF 2026-07-31, N+1 fix] Progress used to be computed with a SERIAL
+    // await per active goal, each doing its own getTracker/getHabit (2 queries
+    // apiece) — 5 goals ≈ 10 sequential round trips inside every dashboard
+    // bootstrap. Resolve trackers/habits ONCE via the request-memoized list
+    // reads (free when the same request already fetched them, which the
+    // bootstrap always does) and compute all goals in parallel.
+    const active = goals.filter(g => g.status === "active");
+    if (active.length > 0) {
+      const [trackerList, habitList] = await Promise.all([
+        active.some(g => g.trackerId) ? this.getTrackers() : Promise.resolve([] as Tracker[]),
+        active.some(g => g.habitId) ? this.getHabits() : Promise.resolve([] as Habit[]),
+      ]);
+      const lookup = {
+        trackerById: new Map(trackerList.map(t => [t.id, t])),
+        habitById: new Map(habitList.map(h => [h.id, h])),
+      };
+      await Promise.all(active.map(async goal => {
+        goal.current = await this.computeGoalProgress(goal, lookup);
+      }));
     }
     return goals;
   }
@@ -5398,29 +5460,49 @@ export class SupabaseStorage implements IStorage {
     return !error;
   }
 
-  private async computeGoalProgress(goal: Goal): Promise<number> {
+  /**
+   * `lookup` (optional, N+1 fix): pre-resolved tracker/habit maps from the
+   * request-memoized list reads. A tracker found there with entries is used
+   * directly; a tracker that is MISSING or has an empty 120-day entry window
+   * falls back to the direct getTracker(id) fetch, because the list read
+   * windows entries to 120 days while goal progress ("latest weight") must
+   * see the full history of a stale tracker. Without `lookup` behavior is
+   * exactly the pre-fix per-goal fetch.
+   */
+  private async computeGoalProgress(
+    goal: Goal,
+    lookup?: { trackerById: Map<string, Tracker>; habitById: Map<string, Habit> },
+  ): Promise<number> {
     const now = new Date();
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
+    const resolveTracker = async (id: string): Promise<Tracker | undefined> => {
+      const fromList = lookup?.trackerById.get(id);
+      if (fromList && fromList.entries.length > 0) return fromList;
+      return this.getTracker(id);
+    };
+    const resolveHabit = async (id: string): Promise<Habit | undefined> => {
+      return lookup?.habitById.get(id) ?? this.getHabit(id);
+    };
 
     switch (goal.type) {
       case "weight_loss":
       case "weight_gain": {
         if (!goal.trackerId) return goal.current;
-        const tracker = await this.getTracker(goal.trackerId);
+        const tracker = await resolveTracker(goal.trackerId);
         if (!tracker || tracker.entries.length === 0) return goal.current;
         const latest = tracker.entries[tracker.entries.length - 1];
         return parseFloat(latest.values.weight || latest.values.value || "0") || goal.current;
       }
       case "habit_streak": {
         if (!goal.habitId) return goal.current;
-        const habit = await this.getHabit(goal.habitId);
+        const habit = await resolveHabit(goal.habitId);
         if (!habit) return goal.current;
         return habit.currentStreak;
       }
       case "fitness_distance": {
         if (!goal.trackerId) return goal.current;
-        const tracker = await this.getTracker(goal.trackerId);
+        const tracker = await resolveTracker(goal.trackerId);
         if (!tracker) return goal.current;
         const entries = tracker.entries.filter(e => {
           const d = new Date(e.timestamp);
@@ -5430,7 +5512,7 @@ export class SupabaseStorage implements IStorage {
       }
       case "fitness_frequency": {
         if (!goal.trackerId) return goal.current;
-        const tracker = await this.getTracker(goal.trackerId);
+        const tracker = await resolveTracker(goal.trackerId);
         if (!tracker) return goal.current;
         return tracker.entries.filter(e => {
           const d = new Date(e.timestamp);
@@ -5448,7 +5530,7 @@ export class SupabaseStorage implements IStorage {
       }
       case "tracker_target": {
         if (!goal.trackerId) return goal.current;
-        const tracker = await this.getTracker(goal.trackerId);
+        const tracker = await resolveTracker(goal.trackerId);
         if (!tracker || tracker.entries.length === 0) return goal.current;
         const latest = tracker.entries[tracker.entries.length - 1];
         if (!tracker.fields?.length) return goal.current;
@@ -5622,7 +5704,7 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // DASHBOARD
   // ============================================================
-  async getStats(filterProfileId?: string, filterProfileIds?: string[]): Promise<DashboardStats> {
+  async getStats(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<DashboardStats> {
     // PERF (2026-05-28): single Promise.all wave — was two serial waves
     // (one before computing streaks/habits, then another for
     // profiles/events/artifacts/memories). The streak/habit math is pure JS
@@ -5650,14 +5732,28 @@ export class SupabaseStorage implements IStorage {
     const allProfiles = await profilesPromise;
     const _selfIds = selfIdsFrom(allProfiles);
     const _selfInFilter = !!fpIds && fpIds.some(id => _selfIds.has(id));
-    const _dbFilterIds = fpIds && !_selfInFilter ? fpIds : undefined;
+    // [PERF 2026-07-31 sharedFetches] Inside the dashboard bootstrap, the same
+    // request ALSO reads every one of these tables unfiltered (seed payloads +
+    // buildNotifications). Pushing the filter down there means each table is
+    // fetched twice under two different memo keys ("getTasks" and
+    // "getTasks:<ids>") — ~2× the Supabase round trips per bootstrap. With
+    // sharedFetches the wave fetches unfiltered and memo-collapses with the
+    // sibling reads; the matchesProfile() JS pass below (always the
+    // correctness authority) produces identical results either way.
+    const _pushdownIds = fpIds && !_selfInFilter ? fpIds : undefined;
+    const _dbFilterIds = opts?.sharedFetches ? undefined : _pushdownIds;
     const [
       allTasks, allExpenses, allTrackers, allHabits, allObligations,
       journalEntries, allEvents, artifacts, memories,
     ] = await Promise.all([
       this.getTasks(_dbFilterIds), this.getExpenses(_dbFilterIds), this.getTrackers(undefined, _dbFilterIds),
       this.getHabits(_dbFilterIds), this.getObligations(_dbFilterIds), this.getJournalEntries(_dbFilterIds),
-      this.getEvents(_dbFilterIds), this.getArtifacts(_dbFilterIds), this.getMemories(),
+      // Artifacts keep the per-scope pushdown even under sharedFetches:
+      // totalArtifacts is NOT re-filtered in JS below (it counts what the
+      // fetch returned), and no sibling read in the bootstrap fetches
+      // artifacts — so scoping it costs nothing and changing it would
+      // change the number.
+      this.getEvents(_dbFilterIds), this.getArtifacts(_pushdownIds), this.getMemories(),
     ]);
 
     // Use the unified rule (shared/profile-filter.ts) so server stats agree
@@ -5684,7 +5780,11 @@ export class SupabaseStorage implements IStorage {
     // the WIDENED set via the same GIN pushdown + request-memo instead of the
     // whole expense table — bounded to the relevant rows, and shared with the
     // getDashboardEnhanced call in the same request.
-    const expenseSource = (fpIds && ownedAssetSet.size > 0) ? await this.getExpenses(expenseScopeIds) : allExpenses;
+    // Under sharedFetches, allExpenses is already the FULL table — a superset
+    // of any widened scope — so the extra widened fetch would be a wasted
+    // round trip; the JS filter below applies the widened ctx either way.
+    const expenseSource = (fpIds && ownedAssetSet.size > 0 && !opts?.sharedFetches)
+      ? await this.getExpenses(expenseScopeIds) : allExpenses;
     const expenses = expenseSource.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpense));
     const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
     const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
@@ -5876,7 +5976,7 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // ENHANCED DASHBOARD
   // ============================================================
-  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[]): Promise<any> {
+  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<any> {
     const now = new Date();
     // Use user's timezone for 'today' — toISOString() is UTC and causes
     // events to disappear after ~5pm PST when UTC rolls to the next day
@@ -5905,7 +6005,10 @@ export class SupabaseStorage implements IStorage {
     const allProfiles = await this.getProfiles();
     const _selfIdsEnh = selfIdsFrom(allProfiles);
     const _selfInFilterEnh = !!fpIds && fpIds.some(id => _selfIdsEnh.has(id));
-    const _dbFilterIdsEnh = fpIds && !_selfInFilterEnh ? fpIds : undefined;
+    // sharedFetches: fetch unfiltered so the request memo collapses these with
+    // the bootstrap's sibling unfiltered reads — see getStats for rationale.
+    // The passesProfileFilter pass below stays the correctness authority.
+    const _dbFilterIdsEnh = (fpIds && !_selfInFilterEnh && !opts?.sharedFetches) ? fpIds : undefined;
     const [documents, rawTrackers, rawExpenses, rawObligations, rawTasks, rawEvents, allAssetLinks, allLiabLinks] = await Promise.all([
       this.getDocuments(_dbFilterIdsEnh), this.getTrackers(undefined, _dbFilterIdsEnh),
       this.getExpenses(_dbFilterIdsEnh), this.getObligations(_dbFilterIdsEnh),
@@ -5955,7 +6058,10 @@ export class SupabaseStorage implements IStorage {
     const filterCtxExpenseEnh = { selectedIds: expenseScopeIdsEnh || [], allProfiles };
     // PERF (2026-07): fetch the WIDENED scope via GIN pushdown + memo, not the
     // full expense table (see the matching comment in getStats).
-    const expenseSourceEnh = (fpIds && ownedAssetSetEnh.size > 0) ? await this.getExpenses(expenseScopeIdsEnh) : rawExpenses;
+    // Same as getStats: under sharedFetches rawExpenses is already the full
+    // table (superset of the widened scope) — skip the extra fetch.
+    const expenseSourceEnh = (fpIds && ownedAssetSetEnh.size > 0 && !opts?.sharedFetches)
+      ? await this.getExpenses(expenseScopeIdsEnh) : rawExpenses;
     const allExpenses = expenseSourceEnh.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpenseEnh));
     const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
     const allTasks = rawTasks.filter(t => matchesProfileEnhanced(t.linkedProfiles));

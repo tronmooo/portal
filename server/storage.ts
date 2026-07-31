@@ -182,8 +182,14 @@ export interface IStorage {
   getRelatedEntities(entityType: string, entityId: string): Promise<any[]>;
 
   // Dashboard
-  getStats(filterProfileId?: string, filterProfileIds?: string[]): Promise<DashboardStats>;
-  getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[]): Promise<Record<string, unknown>>;
+  // opts.sharedFetches (PERF 2026-07-31): when true, skip the per-scope SQL
+  // pushdown and fetch the tables UNFILTERED so the request-memo shares one
+  // fetch per table with sibling reads in the same request (the dashboard
+  // bootstrap's seed reads + buildNotifications all read unfiltered). The
+  // JS passesProfileFilter pass — always the correctness authority — still
+  // runs, so results are identical; only the number of round trips changes.
+  getStats(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<DashboardStats>;
+  getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<Record<string, unknown>>;
 
   // Net-worth snapshots (W4-5)
   takeNetWorthSnapshot(profileIds?: string[]): Promise<Array<{ profileId: string | null; assetsTotal: number; liabilitiesTotal: number; netWorth: number; snapshotDate: string }>>;

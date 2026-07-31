@@ -2775,7 +2775,11 @@ ${JSON.stringify(ctx, null, 2)}`;
         tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll, remindersAll,
         calendarTimelineAll, notificationsAll] = await Promise.all([
         cachedStats ?? dedupe(statsCacheKey, async () => {
-          const s = await storage.getStats(undefined, filterIds);
+          // sharedFetches: this same request fetches every table unfiltered
+          // for the seed payloads + buildNotifications below — let getStats
+          // share those memoized fetches instead of re-fetching each table
+          // with a scoped memo key (was ~2× the round trips per bootstrap).
+          const s = await storage.getStats(undefined, filterIds, { sharedFetches: true });
           setCache(statsCacheKey, s, 60 * 1000);
           return s;
         }),
@@ -2813,7 +2817,8 @@ ${JSON.stringify(ctx, null, 2)}`;
       ]);
 
       const enhanced = cachedEnhanced ?? await dedupe(enhancedCacheKey, async () => {
-        const e = await storage.getDashboardEnhanced(undefined, filterIds);
+        // sharedFetches — same memo-collapse as the getStats call above.
+        const e = await storage.getDashboardEnhanced(undefined, filterIds, { sharedFetches: true });
         setCache(enhancedCacheKey, e, 60 * 1000);
         return e;
       });
