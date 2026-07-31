@@ -1062,7 +1062,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
             {/* Linked assets — surfaced near the top for parity with asset profiles */}
             <section data-testid="overview-linked-assets">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked assets</p>
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked assets</p>
               <LinkedAssetsCard liabilityId={profile.id} />
             </section>
 
@@ -1090,7 +1090,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 liability (and on a fresh liability, it's how you add the
                 first owner since the dialog also surfaces the role). */}
             <section data-testid="overview-linked-people">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked people</p>
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked people</p>
               <LinkedPeopleTab
                 profileId={profile.id}
                 profileType={profile.type}
@@ -1209,7 +1209,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
             {/* Nested sections — mirroring asset Overview layout (Linked Assets is now surfaced near the top) */}
             <section className="mt-6">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Nested Liabilities</p>
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Nested Liabilities</p>
               <NestedLiabilitiesCard liabilityId={profile.id} />
             </section>
 
@@ -1344,7 +1344,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           <TabsContent value="payments" className="mt-4 space-y-6">
             {/* Section 1: Payment history */}
             <div className="space-y-3">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-0.5">Payment History</p>
+              <p className="micro-label text-muted-foreground px-0.5">Payment History</p>
               <div className="flex items-center justify-between">
                 <div className="text-sm text-muted-foreground">
                   {payments.length} payment{payments.length === 1 ? "" : "s"} on record
@@ -1388,7 +1388,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 schedule; showing one produced the $0.17/360-month nonsense. */}
             {amortize && (
             <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Payoff Calculator</p>
+              <p className="micro-label text-muted-foreground mb-3 px-0.5">Payoff Calculator</p>
               <PayoffCalculator terms={terms} baseSummary={summary} />
             </div>
             )}
@@ -1396,7 +1396,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             {/* Section 3: Amortization Schedule (amortizing debt only) */}
             {amortize && (
             <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Amortization Schedule</p>
+              <p className="micro-label text-muted-foreground mb-3 px-0.5">Amortization Schedule</p>
               <Card>
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Amortization schedule</CardTitle>
@@ -2439,7 +2439,7 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
           {(linksQuery.data || []).length > 1 && (
             <Badge
               variant={Math.abs(totalOwnership - 100) < 0.5 ? "secondary" : "destructive"}
-              className="ml-2 text-[10px]"
+              className="ml-2 text-[11px]"
               data-testid="ownership-total-badge"
             >
               Total {totalOwnership.toFixed(0)}%
@@ -2740,7 +2740,7 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
                 </div>
                 <div className="mt-2 min-w-0">
                   <div className="font-medium text-sm truncate">{node.name}</div>
-                  <Badge variant="secondary" className="text-[10px] mt-1">{typeLabel}</Badge>
+                  <Badge variant="secondary" className="text-[11px] mt-1">{typeLabel}</Badge>
                 </div>
               </div>
             );
@@ -3506,7 +3506,7 @@ function ActivityTimelineCard({
         {groups.map((g) =>
           g.items.length === 0 ? null : (
             <div key={g.label} data-testid={`activity-group-${g.label.toLowerCase().replace(/\s+/g, "-")}`}>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+              <p className="micro-label text-muted-foreground mb-2">
                 {g.label}
               </p>
               <div className="divide-y">

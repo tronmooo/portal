@@ -244,7 +244,7 @@ function QuickAddSection({ onCreated }: { onCreated: () => void }) {
         {preview && (
           <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-0.5">
             <div className="flex items-center gap-1.5">
-              <Badge variant="outline" className="h-4 text-[10px]">
+              <Badge variant="outline" className="h-4 text-[11px]">
                 {preview.kind === "obligation" ? "Recurring" : preview.kind === "task" ? "Task" : "Event"}
               </Badge>
               <span className="font-medium">{preview.payload.name || preview.payload.title}</span>

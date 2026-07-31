@@ -116,7 +116,7 @@ export default function ProfilesListPage() {
                         : (p.name?.charAt(0).toUpperCase() || "?")}
                     </div>
                     <span className="text-sm font-medium truncate flex-1">{p.name}</span>
-                    <Badge variant="secondary" className="text-[10px] h-5 capitalize shrink-0">{p.type}</Badge>
+                    <Badge variant="secondary" className="text-[11px] h-5 capitalize shrink-0">{p.type}</Badge>
                   </Card>
                 </Link>
               ))}

@@ -236,7 +236,7 @@ function OccurrenceRow({ occ }: { occ: any }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p className={`text-sm font-medium truncate ${isDone ? "line-through" : ""}`}>{occ.obligation?.name || "Untitled"}</p>
-          <Badge variant="outline" className="text-[10px] py-0 px-1.5 h-4" style={{ borderColor: meta.color, color: meta.color }}>{meta.label}</Badge>
+          <Badge variant="outline" className="text-[11px] py-0 px-1.5 h-4" style={{ borderColor: meta.color, color: meta.color }}>{meta.label}</Badge>
         </div>
         <p className="text-xs text-muted-foreground">
           {occ.obligation?.amount > 0 && <>${Number(occ.obligation.amount).toFixed(2)} · </>}
@@ -447,18 +447,18 @@ function ObligationCard({ ob, onOpen, ownerLabel }: { ob: Obligation; onOpen?: (
                     }}
                   />
                 </h3>
-                <Badge variant="outline" className="text-[10px] h-5" style={{ borderColor: kindMeta.color, color: kindMeta.color }}>
+                <Badge variant="outline" className="text-[11px] h-5" style={{ borderColor: kindMeta.color, color: kindMeta.color }}>
                   {kindMeta.label}
                 </Badge>
                 {isRecurring && (
-                  <Badge variant="outline" className="text-[10px] h-5 capitalize" style={{ borderColor: "#7C76D955", color: "#8b86e0" }}>
+                  <Badge variant="outline" className="text-[11px] h-5 capitalize" style={{ borderColor: "#7C76D955", color: "#8b86e0" }}>
                     <Repeat className="h-2.5 w-2.5 mr-0.5" />{ob.frequency}
                   </Badge>
                 )}
-                {isOverdue && <Badge variant="destructive" className="text-[10px] h-5">{Math.abs(daysUntilDue)}d overdue</Badge>}
-                {isDueToday && <Badge className="text-[10px] h-5 bg-amber-500/20 text-amber-600 border-amber-500/30">Due today</Badge>}
-                {isDueSoon && !isDueToday && <Badge className="text-[10px] h-5 bg-amber-500/15 text-amber-600 border-amber-500/30">Due in {daysUntilDue}d</Badge>}
-                {!isOverdue && !isDueSoon && <Badge variant="outline" className="text-[10px] h-5 text-muted-foreground">Upcoming</Badge>}
+                {isOverdue && <Badge variant="destructive" className="text-[11px] h-5">{Math.abs(daysUntilDue)}d overdue</Badge>}
+                {isDueToday && <Badge className="text-[11px] h-5 bg-amber-500/20 text-amber-600 border-amber-500/30">Due today</Badge>}
+                {isDueSoon && !isDueToday && <Badge className="text-[11px] h-5 bg-amber-500/15 text-amber-600 border-amber-500/30">Due in {daysUntilDue}d</Badge>}
+                {!isOverdue && !isDueSoon && <Badge variant="outline" className="text-[11px] h-5 text-muted-foreground">Upcoming</Badge>}
               </div>
 
               {/* ── Main details: amount · due date · owner · autopay · source ── */}
@@ -887,7 +887,7 @@ function ObligationDrawerInner({ ob, onClose }: { ob: Obligation; onClose: () =>
               <Icon className="h-4 w-4" />
             </span>
             <span className="flex-1 min-w-0 truncate">{ob.name}</span>
-            {isPaused && <Badge variant="outline" className="text-[10px]">Paused</Badge>}
+            {isPaused && <Badge variant="outline" className="text-[11px]">Paused</Badge>}
           </DialogTitle>
           <DialogDescription className="text-xs">{meta.label} · {ob.frequency}</DialogDescription>
         </DialogHeader>
@@ -902,7 +902,7 @@ function ObligationDrawerInner({ ob, onClose }: { ob: Obligation; onClose: () =>
             <p className="micro-label text-muted-foreground mb-0.5">Next due</p>
             <p className={`text-base font-semibold tabular-nums ${isOverdue ? "text-red-500" : ""}`}>
               {dueDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-              {isOverdue && <span className="ml-1 text-[10px] text-red-500">({Math.abs(daysOff)}d overdue)</span>}
+              {isOverdue && <span className="ml-1 text-[11px] text-red-500">({Math.abs(daysOff)}d overdue)</span>}
             </p>
           </div>
           <div>
@@ -968,7 +968,7 @@ function ObligationDrawerInner({ ob, onClose }: { ob: Obligation; onClose: () =>
             ) : nextThree.length > 0 ? (
               <div className="flex gap-1.5 flex-wrap">
                 {nextThree.map((d, i) => (
-                  <Badge key={i} variant="outline" className="text-[10px] h-5">
+                  <Badge key={i} variant="outline" className="text-[11px] h-5">
                     <CalIcon className="h-2.5 w-2.5 mr-1" /> {d}
                   </Badge>
                 ))}
@@ -1641,15 +1641,15 @@ export default function ObligationsManager({ showHeader = true, compact = false,
       {!compact && (
         <div className="grid grid-cols-3 gap-3">
           <Card className="p-3">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">Monthly Total</p>
+            <p className="micro-label text-muted-foreground">Monthly Total</p>
             <p className="text-lg font-bold">${monthlyTotal.toFixed(0)}</p>
           </Card>
           <Card className="p-3">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">Active</p>
+            <p className="micro-label text-muted-foreground">Active</p>
             <p className="text-lg font-bold">{obligations.length}</p>
           </Card>
           <Card className="p-3">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">Due This Week</p>
+            <p className="micro-label text-muted-foreground">Due This Week</p>
             <p className={`text-lg font-bold ${upcomingCount > 0 ? "text-yellow-500" : ""}`}>{upcomingCount}</p>
           </Card>
         </div>
@@ -1781,7 +1781,7 @@ export default function ObligationsManager({ showHeader = true, compact = false,
                   <span className="inline-flex items-center justify-center rounded-md" style={{ width: 22, height: 22, background: `${g.meta.color}22`, color: g.meta.color }}>
                     <Icon className="h-3 w-3" />
                   </span>
-                  <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: g.meta.color }}>
+                  <h3 className="micro-label" style={{ color: g.meta.color }}>
                     {g.meta.label}
                   </h3>
                   <span className="text-xs text-muted-foreground tabular-nums">{g.items.length}</span>
@@ -1812,7 +1812,7 @@ export default function ObligationsManager({ showHeader = true, compact = false,
                 >
                   {collapsed ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
                   <span className="inline-block w-2 h-2 rounded-full" style={{ background: section.color }} />
-                  <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: section.color }}>{section.label}</h3>
+                  <h3 className="micro-label" style={{ color: section.color }}>{section.label}</h3>
                   <span className="text-xs text-muted-foreground tabular-nums">{section.items.length}</span>
                 </button>
                 {!collapsed && (

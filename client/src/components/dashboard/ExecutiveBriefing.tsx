@@ -569,7 +569,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         </h2>
         <button
           onClick={() => setFiltersOpen(o => !o)}
-          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
           data-testid="attention-filters-toggle"
           aria-expanded={filtersOpen}
         >

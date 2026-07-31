@@ -114,7 +114,7 @@ export const EntityCard = React.forwardRef<HTMLDivElement, EntityCardProps>(func
       <div className="mt-2 flex-1 min-h-0 overflow-hidden space-y-1">
         {meta.map((m) => (
           <div key={m.label} className="flex items-baseline justify-between gap-2">
-            <span className="micro-label text-[10px] text-muted-foreground shrink-0">{m.label}</span>
+            <span className="micro-label text-muted-foreground shrink-0">{m.label}</span>
             <span className="text-[11px] font-medium text-foreground text-right truncate min-w-0">
               {m.value}
             </span>
@@ -139,7 +139,7 @@ export const EntityCard = React.forwardRef<HTMLDivElement, EntityCardProps>(func
             />
           </div>
           {(progress.left || progress.right) && (
-            <div className="mt-1 flex justify-between text-[10px] text-muted-foreground tabular-nums">
+            <div className="mt-1 flex justify-between text-[11px] text-muted-foreground tabular-nums">
               <span>{progress.left}</span>
               <span>{progress.right}</span>
             </div>

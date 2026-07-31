@@ -394,7 +394,7 @@ function SingleProfileInfo({ id }: { id: string }) {
             <div className="space-y-2">
               {timeline.map((t: any) => (
                 <div key={t.id} className="flex items-baseline gap-3 text-sm">
-                  <span className="text-[10px] font-mono text-muted-foreground w-8 shrink-0">{timeAgo(t.timestamp)}</span>
+                  <span className="text-[11px] font-mono text-muted-foreground w-8 shrink-0">{timeAgo(t.timestamp)}</span>
                   <span className="truncate">{t.title}</span>
                 </div>
               ))}
@@ -455,7 +455,7 @@ function DocumentsSection({ documents }: { documents: any[] }) {
             <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
             <span className="min-w-0">
               <span className="block text-sm font-medium truncate">{d.name}</span>
-              <span className="block text-[10px] text-muted-foreground truncate">{d.type || d.mimeType}</span>
+              <span className="block text-[11px] text-muted-foreground truncate">{d.type || d.mimeType}</span>
             </span>
           </button>
         ))}

@@ -301,7 +301,7 @@ export default function DynamicProfileForm({
         <section key={group}>
           {/* Group header — only show if not the single default "General" group, or if multiple groups exist */}
           {(grouped.size > 1 || group !== "General") && (
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 pb-1 border-b">
+            <h3 className="micro-label text-muted-foreground mb-3 pb-1 border-b">
               {group}
             </h3>
           )}

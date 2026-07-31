@@ -257,7 +257,7 @@ export function MoneyOverview(props: {
         <Card className="p-4" data-testid="money-cashflow-trend">
           <SectionHeading title="Cash Flow Trend" icon={BarChart3} accent="199 89% 60%"
             meta={
-            <span className="flex items-center gap-3 text-[10px] text-muted-foreground">
+            <span className="flex items-center gap-3 text-[11px] text-muted-foreground">
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500" />In</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-red-500" />Out</span>
               <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-sky-400" />Net</span>
@@ -311,7 +311,7 @@ export function MoneyOverview(props: {
                     <div className="mt-1 h-1.5 rounded-full bg-muted overflow-hidden">
                       <div className={`h-full ${tone.bar}`} style={{ width: `${Math.min(100, pct)}%` }} />
                     </div>
-                    <div className="text-[10px] text-muted-foreground tabular-nums mt-0.5">{money2(b.spent)} / {money2(b.limit)}</div>
+                    <div className="text-[11px] text-muted-foreground tabular-nums mt-0.5">{money2(b.spent)} / {money2(b.limit)}</div>
                   </div>
                 </div>
               );
@@ -330,7 +330,7 @@ export function MoneyOverview(props: {
             <div className="space-y-1.5">
               {bills.map(b => (
                 <div key={b.id} className="flex items-center gap-3 py-1.5" data-testid={`money-bill-${b.id}`}>
-                  <span className="text-[10px] font-semibold uppercase w-14 shrink-0 text-muted-foreground">
+                  <span className="text-[11px] font-semibold uppercase w-14 shrink-0 text-muted-foreground">
                     {b.status === "overdue" ? <span className="text-red-500">overdue</span>
                       : b.daysUntil === 0 ? <span className="text-amber-500">today</span>
                       : dayLabel(b.daysUntil)}
@@ -382,7 +382,7 @@ export function MoneyOverview(props: {
                 {assetBreakdown.slice(0, 8).map(a => (
                   <Link key={a.id} href={`/profiles/${a.id}`}>
                     <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-asset-${a.id}`}>
-                      <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 shrink-0">{a.type}</span>
+                      <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 shrink-0">{a.type}</span>
                       <span className="flex-1 text-sm truncate">{a.name}</span>
                       <span className="text-sm font-semibold tabular-nums">{money(a.value)}</span>
                     </div>
@@ -398,7 +398,7 @@ export function MoneyOverview(props: {
                 {liabilityBreakdown.slice(0, 8).map(l => (
                   <Link key={l.id} href={`/profiles/${l.id}`}>
                     <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-liability-${l.id}`}>
-                      <span className="text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 shrink-0">{l.type}</span>
+                      <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 shrink-0">{l.type}</span>
                       <span className="flex-1 text-sm truncate">{l.name}</span>
                       <span className="text-sm font-semibold tabular-nums text-red-500">{money(l.value)}</span>
                     </div>

@@ -157,7 +157,7 @@ export function WeekdayBars({
               }}
             />
           </div>
-          <span className="text-[8px] leading-none text-muted-foreground">{d.label}</span>
+          <span className="text-[11px] leading-none text-muted-foreground">{d.label}</span>
         </div>
       ))}
     </div>
@@ -306,7 +306,7 @@ export function LinearZoneGauge({
       </div>
       {active && (
         <div className="flex items-center justify-between mt-1">
-          <span className="text-[10px] font-semibold" style={{ color: active.color }}>{active.label}</span>
+          <span className="text-[11px] font-semibold" style={{ color: active.color }}>{active.label}</span>
         </div>
       )}
     </div>
@@ -361,8 +361,8 @@ export function MultiMetricBars({ metrics }: { metrics: PanelMetric[] }) {
         return (
           <div key={i}>
             <div className="flex items-center justify-between leading-none mb-0.5">
-              <span className="text-[9px] uppercase tracking-wide text-muted-foreground truncate">{m.label}</span>
-              <span className="text-[10px] font-bold tabular-nums" style={{ color: active?.color }}>{Number.isInteger(m.value) ? m.value : m.value.toFixed(1)}</span>
+              <span className="micro-label text-muted-foreground truncate">{m.label}</span>
+              <span className="text-[11px] font-bold tabular-nums" style={{ color: active?.color }}>{Number.isInteger(m.value) ? m.value : m.value.toFixed(1)}</span>
             </div>
             <div className="relative h-1.5 rounded-full overflow-hidden bg-muted/30">
               <div className="absolute inset-y-0 rounded-full" style={{ width: `${pct}%`, background: active?.color, opacity: 0.9 }} />

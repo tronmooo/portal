@@ -187,7 +187,7 @@ export function PopupHero({ value, valueTone, caption, stats, accent }: {
         <div className="mt-3 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(stats.length, 3)}, minmax(0, 1fr))` }}>
           {stats.map((s) => (
             <div key={s.label} className="bubble-row px-2.5 py-1.5">
-              <p className="micro-label text-[10px] text-muted-foreground truncate">{s.label}</p>
+              <p className="micro-label text-muted-foreground truncate">{s.label}</p>
               <p className="text-[13px] font-bold tabular-nums truncate">{s.value}</p>
             </div>
           ))}

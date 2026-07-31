@@ -1567,7 +1567,7 @@ export default function EditorPage() {
             <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 relative" onClick={() => setLinksOpen(true)} aria-label="Linked entities" title="Show linked entities" data-testid="button-doc-links">
               <Link2 className="h-5 w-5" />
               {mentionTokens.length > 0 && (
-                <span className="absolute text-[9px] font-semibold bg-primary text-primary-foreground rounded-full" style={{ minWidth: 14, height: 14, lineHeight: "14px", textAlign: "center", top: 4, right: 4, paddingLeft: 3, paddingRight: 3 }}>
+                <span className="absolute text-[11px] font-semibold bg-primary text-primary-foreground rounded-full" style={{ minWidth: 14, height: 14, lineHeight: "14px", textAlign: "center", top: 4, right: 4, paddingLeft: 3, paddingRight: 3 }}>
                   {mentionTokens.length}
                 </span>
               )}

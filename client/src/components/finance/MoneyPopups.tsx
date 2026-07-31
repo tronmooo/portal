@@ -237,7 +237,7 @@ export function SpendPopup({
           <p className="micro-label text-muted-foreground mb-2">Spending heatmap</p>
           <div className="grid grid-cols-7 gap-1 text-center">
             {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
-              <span key={`${d}${i}`} className="text-[9px] text-muted-foreground font-medium">{d}</span>
+              <span key={`${d}${i}`} className="text-[11px] text-muted-foreground font-medium">{d}</span>
             ))}
             {Array.from({ length: firstWeekday }).map((_, i) => <span key={`pad-${i}`} />)}
             {Array.from({ length: daysInMonth }).map((_, i) => {
@@ -248,7 +248,7 @@ export function SpendPopup({
               const future = day > today;
               return (
                 <div key={day} title={amt > 0 ? `$${fmt(amt)} on day ${day}` : `No spend on day ${day}`}
-                  className={`aspect-square rounded-md flex items-center justify-center text-[10px] tabular-nums ${isToday ? "ring-2 ring-offset-1 ring-offset-background" : ""} ${future ? "opacity-35" : ""}`}
+                  className={`aspect-square rounded-md flex items-center justify-center text-[11px] tabular-nums ${isToday ? "ring-2 ring-offset-1 ring-offset-background" : ""} ${future ? "opacity-35" : ""}`}
                   style={{
                     background: amt > 0 ? `hsl(38 96% 54% / ${0.15 + 0.75 * t})` : "hsl(var(--muted) / 0.5)",
                     color: t > 0.55 ? "hsl(24 30% 12%)" : "hsl(var(--foreground))",
@@ -259,7 +259,7 @@ export function SpendPopup({
               );
             })}
           </div>
-          <div className="mt-2 flex items-center justify-end gap-1 text-[9px] text-muted-foreground">
+          <div className="mt-2 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
             less
             {[0.15, 0.4, 0.65, 0.9].map((a) => (
               <span key={a} className="h-2.5 w-2.5 rounded-sm" style={{ background: `hsl(38 96% 54% / ${a})` }} />
@@ -309,7 +309,7 @@ export function SpendPopup({
                 <li key={e.id} className="flex items-baseline justify-between gap-2 py-1.5 text-xs">
                   <div className="min-w-0">
                     <p className="truncate font-medium">{e.description || e.vendor || e.category || "Expense"}</p>
-                    <p className="text-[10px] text-muted-foreground capitalize">{[e.category, e.date ? new Date(e.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null].filter(Boolean).join(" · ")}</p>
+                    <p className="text-[11px] text-muted-foreground capitalize">{[e.category, e.date ? new Date(e.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null].filter(Boolean).join(" · ")}</p>
                   </div>
                   <span className="tabular-nums font-semibold shrink-0">−${fmt(Number(e.amount) || 0)}</span>
                 </li>
@@ -364,7 +364,7 @@ export function IncomePopup({
             </div>
             <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
               {sources.slice(0, 4).map((s, i) => (
-                <span key={s.id} className="flex items-center gap-1 text-[9px] text-muted-foreground">
+                <span key={s.id} className="flex items-center gap-1 text-[11px] text-muted-foreground">
                   <span className="h-1.5 w-1.5 rounded-full" style={{ background: `hsl(${STREAM_COLORS[i % STREAM_COLORS.length]})` }} />
                   {s.label}
                 </span>
@@ -381,7 +381,7 @@ export function IncomePopup({
             ["Avg / source", sources.length ? `$${fmt(total / sources.length)}` : "—"],
           ].map(([l, v]) => (
             <div key={l} className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-2 py-2 text-center">
-              <p className="text-[9px] uppercase tracking-wider text-muted-foreground">{l}</p>
+              <p className="micro-label text-muted-foreground">{l}</p>
               <p className="text-sm font-bold tabular-nums" style={{ color: emerald }}>{v}</p>
             </div>
           ))}
@@ -400,13 +400,13 @@ export function IncomePopup({
                     <span className="h-8 w-1 rounded-full shrink-0" style={{ background: `hsl(${color})` }} />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-semibold truncate">{s.label}</p>
-                      <p className="text-[10px] text-muted-foreground capitalize">
+                      <p className="text-[11px] text-muted-foreground capitalize">
                         {s.freq}{s.freq !== "monthly" ? ` · $${fmt(s.raw)} each` : ""}
                       </p>
                     </div>
                     <div className="text-right shrink-0">
                       <p className="text-xs font-bold tabular-nums" style={{ color: `hsl(${color})` }}>${fmt(s.monthly)}<span className="text-muted-foreground font-normal">/mo</span></p>
-                      <p className="text-[10px] text-muted-foreground tabular-nums">{share}% of income</p>
+                      <p className="text-[11px] text-muted-foreground tabular-nums">{share}% of income</p>
                     </div>
                   </div>
                   <div className="mt-1.5 ml-3.5 h-1 rounded-full bg-muted overflow-hidden">
@@ -431,7 +431,7 @@ function DueChip({ dueDate }: { dueDate?: string }) {
   const ok = d && !isNaN(d.getTime());
   return (
     <div className="w-10 shrink-0 rounded-lg border border-border overflow-hidden text-center">
-      <div className="bg-red-500/80 text-[8px] font-bold uppercase tracking-wider text-white py-0.5">
+      <div className="micro-label bg-red-500/80 text-[11px] text-white py-0.5">
         {ok ? d!.toLocaleDateString("en-US", { month: "short" }) : "—"}
       </div>
       <div className="py-0.5 text-sm font-bold tabular-nums bg-card">{ok ? d!.getDate() : "?"}</div>
@@ -506,7 +506,7 @@ export function BillsDuePopup({
                         <button type="button" onClick={() => goBill(b)} disabled={!b.linkedLiabilityId}
                           className={`flex-1 min-w-0 text-left ${b.linkedLiabilityId ? "cursor-pointer" : "cursor-default"}`}>
                           <p className="text-xs font-semibold truncate">{b.name}</p>
-                          <p className="text-[10px] text-muted-foreground capitalize truncate">
+                          <p className="text-[11px] text-muted-foreground capitalize truncate">
                             {[b.category, (b as any).autopay ? "autopay" : null, dayLabel(Number(b.daysUntil))].filter(Boolean).join(" · ")}
                           </p>
                         </button>
@@ -598,17 +598,17 @@ export function SavingsRatePopup({
         {/* Equation */}
         <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-1">
           <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-2.5 text-center">
-            <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Income</p>
+            <p className="micro-label text-muted-foreground">Income</p>
             <p className="text-sm font-bold tabular-nums text-emerald-500">${fmt(incomeMtd)}</p>
           </div>
           <span className="text-lg font-bold text-muted-foreground text-center">−</span>
           <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-2.5 text-center">
-            <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Spend</p>
+            <p className="micro-label text-muted-foreground">Spend</p>
             <p className="text-sm font-bold tabular-nums text-amber-500">${fmt(spendMtd)}</p>
           </div>
           <span className="text-lg font-bold text-muted-foreground text-center">=</span>
           <div className="rounded-xl border p-2.5 text-center" style={{ borderColor: "hsl(262 80% 66% / 0.4)", background: "hsl(262 80% 66% / 0.08)" }}>
-            <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Kept</p>
+            <p className="micro-label text-muted-foreground">Kept</p>
             <p className="text-sm font-bold tabular-nums" style={{ color: violet }}>{signed(saved)}</p>
           </div>
         </div>
@@ -644,7 +644,7 @@ export function SavingsRatePopup({
             </p>
           </div>
         )}
-        <p className="text-[10px] text-muted-foreground text-center pb-1">
+        <p className="text-[11px] text-muted-foreground text-center pb-1">
           Savings rate = (income − spend) ÷ income, using this month&apos;s logged spending.
         </p>
       </div>
@@ -734,7 +734,7 @@ export function CashFlowOverviewPopup({
 
         {cashTrend.length > 0 && (
           <div className="bubble overflow-hidden">
-            <div className="grid grid-cols-4 px-3 py-1.5 border-b border-border bg-muted/30 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+            <div className="micro-label grid grid-cols-4 px-3 py-1.5 border-b border-border bg-muted/30 text-muted-foreground">
               <span>Month</span><span className="text-right">In</span><span className="text-right">Out</span><span className="text-right">Net</span>
             </div>
             {[...cashTrend].reverse().map((m) => (

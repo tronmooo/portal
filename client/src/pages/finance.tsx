@@ -1453,7 +1453,7 @@ export default function FinancePage() {
       {/* ── Paychecks Section ── */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+          <h2 className="micro-label text-muted-foreground flex items-center gap-1.5">
             <Wallet className="h-3.5 w-3.5" /> Expected Paychecks ({paychecks.length})
           </h2>
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddPaycheckOpen(true)} data-testid="button-add-paycheck">
@@ -1484,17 +1484,17 @@ export default function FinancePage() {
                   <>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{pc.source}</p>
-                      <p className="text-[10px] text-muted-foreground">
+                      <p className="text-[11px] text-muted-foreground">
                         Expected {new Date(pc.expected_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                       </p>
                     </div>
                     <span className="text-xs font-bold tabular-nums">{formatMoney(pc.actual_amount || pc.amount)}</span>
                     {pc.confirmed ? (
-                      <span className="text-[10px] font-semibold text-green-500 flex items-center gap-0.5 shrink-0"><Check className="h-3 w-3" /> Received</span>
+                      <span className="text-[11px] font-semibold text-green-500 flex items-center gap-0.5 shrink-0"><Check className="h-3 w-3" /> Received</span>
                     ) : isFuture ? (
-                      <span className="text-[10px] font-medium text-muted-foreground shrink-0">Upcoming</span>
+                      <span className="text-[11px] font-medium text-muted-foreground shrink-0">Upcoming</span>
                     ) : (
-                      <span className="text-[10px] font-semibold text-red-500 shrink-0">Overdue</span>
+                      <span className="text-[11px] font-semibold text-red-500 shrink-0">Overdue</span>
                     )}
                   </>
                 }
@@ -1563,7 +1563,7 @@ export default function FinancePage() {
       {/* ── Income Section ── */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+          <h2 className="micro-label text-muted-foreground flex items-center gap-1.5">
             <TrendingUp className="h-3.5 w-3.5" /> Income ({incomes.length})
           </h2>
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddIncomeOpen(true)} data-testid="button-add-income">
@@ -1585,7 +1585,7 @@ export default function FinancePage() {
                   <>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{inc.description}</p>
-                      <p className="text-[10px] text-muted-foreground capitalize">
+                      <p className="text-[11px] text-muted-foreground capitalize">
                         {inc.frequency || 'monthly'}
                         {inc.date ? ` · ${new Date(inc.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
                       </p>
@@ -1825,7 +1825,7 @@ export default function FinancePage() {
 
       {/* ── Loan Amortization Section ── */}
       <div className="space-y-2">
-        <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+        <h2 className="micro-label text-muted-foreground flex items-center gap-1.5">
           <Landmark className="h-3.5 w-3.5" /> Loan Schedules ({Object.keys(loanGroups).length})
         </h2>
         {Object.keys(loanGroups).length === 0 ? (
@@ -1839,10 +1839,10 @@ export default function FinancePage() {
               <div key={loanName} className="rounded-xl border border-border/40 overflow-hidden">
                 <div className="px-3 py-2 bg-muted/30 border-b border-border/30">
                   <p className="text-xs font-semibold">{loanName}</p>
-                  <p className="text-[10px] text-muted-foreground">{payments.filter((p: any) => p.paid).length}/{payments.length} payments made</p>
+                  <p className="text-[11px] text-muted-foreground">{payments.filter((p: any) => p.paid).length}/{payments.length} payments made</p>
                 </div>
                 <div className="max-h-48 overflow-y-auto">
-                  <table className="w-full text-[10px]">
+                  <table className="w-full text-[11px]">
                     <thead className="sticky top-0 bg-background">
                       <tr className="text-muted-foreground">
                         <th className="text-left px-2 py-1 font-medium">#</th>
@@ -1870,7 +1870,7 @@ export default function FinancePage() {
                               {p.paid ? (
                                 <Check className="h-3 w-3 text-green-500 inline" />
                               ) : isCurrent ? (
-                                <Button variant="ghost" size="sm" className="h-5 px-1 text-[10px]"
+                                <Button variant="ghost" size="sm" className="h-5 px-1 text-[11px]"
                                   disabled={markLoanPaymentMut.isPending}
                                   onClick={stopProp(() => markLoanPaymentMut.mutate(p.id))}>
                                   Mark Paid
@@ -1892,7 +1892,7 @@ export default function FinancePage() {
       {/* ── Cash Flow Section ── */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+          <h2 className="micro-label text-muted-foreground flex items-center gap-1.5">
             <BarChart3 className="h-3.5 w-3.5" /> Cash Flow — {new Date(cfMonth + '-01').toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
           </h2>
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddCashflowOpen(true)} data-testid="button-add-cashflow">
@@ -1913,17 +1913,17 @@ export default function FinancePage() {
                   : null;
                 return (
                   <div key={wk.week} className="px-2 py-2 space-y-1">
-                    <p className="text-[10px] font-semibold text-muted-foreground">Week {wk.week}</p>
+                    <p className="text-[11px] font-semibold text-muted-foreground">Week {wk.week}</p>
                     <div className="space-y-0.5">
-                      <div className="flex justify-between text-[9px]">
+                      <div className="flex justify-between text-[11px]">
                         <span className="text-green-500">In</span>
                         <span className="tabular-nums font-medium text-green-500">${(wk.projected_income || 0).toLocaleString()}</span>
                       </div>
-                      <div className="flex justify-between text-[9px]">
+                      <div className="flex justify-between text-[11px]">
                         <span className="text-red-400">Out</span>
                         <span className="tabular-nums font-medium text-red-400">${(wk.projected_expenses || 0).toLocaleString()}</span>
                       </div>
-                      <div className="flex justify-between text-[9px] border-t border-border/30 pt-0.5">
+                      <div className="flex justify-between text-[11px] border-t border-border/30 pt-0.5">
                         <span className="font-medium">Net</span>
                         <span className={`tabular-nums font-bold ${projNet >= 0 ? 'text-green-500' : 'text-red-400'}`}>
                           {projNet >= 0 ? '+' : ''}${projNet.toLocaleString()}
@@ -1932,16 +1932,16 @@ export default function FinancePage() {
                     </div>
                     {actNet != null && (
                       <div className="mt-1 pt-1 border-t border-dashed border-border/30 space-y-0.5">
-                        <p className="text-[8px] font-medium text-muted-foreground uppercase">Actual</p>
-                        <div className="flex justify-between text-[9px]">
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase">Actual</p>
+                        <div className="flex justify-between text-[11px]">
                           <span className="text-green-500">In</span>
                           <span className="tabular-nums text-green-500">${(wk.actual_income || 0).toLocaleString()}</span>
                         </div>
-                        <div className="flex justify-between text-[9px]">
+                        <div className="flex justify-between text-[11px]">
                           <span className="text-red-400">Out</span>
                           <span className="tabular-nums text-red-400">${(wk.actual_expenses || 0).toLocaleString()}</span>
                         </div>
-                        <div className="flex justify-between text-[9px]">
+                        <div className="flex justify-between text-[11px]">
                           <span className="font-medium">Net</span>
                           <span className={`tabular-nums font-bold ${actNet >= 0 ? 'text-green-500' : 'text-red-400'}`}>
                             {actNet >= 0 ? '+' : ''}${actNet.toLocaleString()}
@@ -2008,7 +2008,7 @@ export default function FinancePage() {
                   data-testid="input-cashflow-actual-expenses" />
               </div>
             </div>
-            <p className="text-[10px] text-muted-foreground">Upserts on (month, week). Leave any number blank to keep its current value.</p>
+            <p className="text-[11px] text-muted-foreground">Upserts on (month, week). Leave any number blank to keep its current value.</p>
             <Button
               className="w-full"
               onClick={() => {

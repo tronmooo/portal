@@ -508,8 +508,8 @@ export default function JournalPage() {
               <Card className="overflow-hidden">
                 <div className="px-4 pt-4 pb-4">
                   <div className="flex items-center justify-between mb-3">
-                    <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase flex items-center gap-1.5"><PenLine className="h-3 w-3" /> Write freely</p>
-                    <span className="text-[10px] text-muted-foreground" data-testid="journal-autosave-stamp">
+                    <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase flex items-center gap-1.5"><PenLine className="h-3 w-3" /> Write freely</p>
+                    <span className="text-[11px] text-muted-foreground" data-testid="journal-autosave-stamp">
                       {freeSavingRef.current ? "Saving…" : lastSavedAt ? `Saved ${lastSavedAt}` : "Autosaves as you write"}
                     </span>
                   </div>
@@ -545,7 +545,7 @@ export default function JournalPage() {
               </Card>
               <Card className="overflow-hidden">
                 <div className="px-4 pt-4 pb-4">
-                  <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-2">Tags <span className="text-muted-foreground font-normal normal-case tracking-normal">(comma separated, optional)</span></p>
+                  <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-2">Tags <span className="text-muted-foreground font-normal normal-case tracking-normal">(comma separated, optional)</span></p>
                   <input
                     type="text"
                     value={freeTags}
@@ -559,7 +559,7 @@ export default function JournalPage() {
               {/* Profile + save */}
               <Card className="overflow-hidden">
                 <div className="px-4 pt-4 pb-4">
-                  <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">Profile</p>
+                  <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">Profile</p>
                   <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
                     <SelectTrigger className="w-full h-9 text-sm" data-testid="select-journal-free-profile">
                       <SelectValue placeholder="Select profile" />
@@ -586,7 +586,7 @@ export default function JournalPage() {
           {/* Mood selector */}
           <Card className="overflow-hidden">
             <div className="px-4 pt-4 pb-4">
-              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">How Are You Feeling?</p>
+              <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">How Are You Feeling?</p>
               <div className="flex gap-1.5 flex-wrap justify-center">
                 {(Object.entries(MOOD_CONFIG) as [MoodLevel, typeof MOOD_CONFIG.amazing][]).map(([key, cfg]) => {
                   const MIcon = cfg.icon;
@@ -604,7 +604,7 @@ export default function JournalPage() {
                       <div className={`p-2 rounded-full ${cfg.bg}`}>
                         <MIcon className="h-4 w-4" style={{ color: cfg.color }} />
                       </div>
-                      <span className="text-[10px] font-medium">{cfg.label}</span>
+                      <span className="text-[11px] font-medium">{cfg.label}</span>
                     </button>
                   );
                 })}
@@ -615,7 +615,7 @@ export default function JournalPage() {
           {/* Gratitude */}
           <Card className="overflow-hidden">
             <div className="px-4 pt-4 pb-5">
-              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-4">I Am Grateful For...</p>
+              <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-4">I Am Grateful For...</p>
               <div className="space-y-4">
                 {[
                   { value: grateful1, onChange: setGrateful1, num: 1 },
@@ -641,7 +641,7 @@ export default function JournalPage() {
           {/* How to make today amazing */}
           <Card className="overflow-hidden">
             <div className="px-4 pt-4 pb-5">
-              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-4">How Can I Make Today Amazing?</p>
+              <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-4">How Can I Make Today Amazing?</p>
               <textarea
                 value={makeAmazing}
                 onChange={e => setMakeAmazing(e.target.value)}
@@ -656,7 +656,7 @@ export default function JournalPage() {
           {/* Daily affirmation */}
           <Card className="overflow-hidden">
             <div className="px-4 pt-4 pb-5">
-              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-4">Daily Affirmation</p>
+              <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-4">Daily Affirmation</p>
               <input
                 type="text"
                 value={affirmation}
@@ -671,7 +671,7 @@ export default function JournalPage() {
           {/* Energy level */}
           <Card className="overflow-hidden">
             <div className="px-4 pt-4 pb-4">
-              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">Energy Level</p>
+              <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">Energy Level</p>
               <div className="flex gap-1 items-center">
                 {[1, 2, 3, 4, 5].map(n => (
                   <button key={n} type="button" onClick={() => setEnergy(n)} aria-label={`Set energy level to ${n} (${ENERGY_LABELS[n]})`} aria-pressed={energy >= n} className={`p-1 transition-colors ${energy >= n ? "text-yellow-500" : "text-muted-foreground/25 hover:text-muted-foreground/50"}`}>
@@ -686,7 +686,7 @@ export default function JournalPage() {
           {/* Profile selector */}
           <Card className="overflow-hidden">
             <div className="px-4 pt-4 pb-4">
-              <p className="text-[10px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">Profile</p>
+              <p className="text-[11px] font-bold tracking-[0.18em] text-blue-500 uppercase mb-3">Profile</p>
               <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
                 <SelectTrigger className="w-full h-9 text-sm" data-testid="select-journal-profile">
                   <SelectValue placeholder="Select profile" />

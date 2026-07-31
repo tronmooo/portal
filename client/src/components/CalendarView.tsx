@@ -1480,7 +1480,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           {/* Weekday header skeleton */}
           <div className="grid grid-cols-7 border-b border-border">
             {WEEKDAYS.map(d => (
-              <div key={d} className="text-[10px] font-medium text-muted-foreground py-1.5 text-center">{d}</div>
+              <div key={d} className="text-[11px] font-medium text-muted-foreground py-1.5 text-center">{d}</div>
             ))}
           </div>
           {/* 5 rows of 7 day cells */}
@@ -1507,7 +1507,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             {WEEKDAYS.map(d => (
               <div
                 key={d}
-                className="text-center text-xs-tight font-medium text-muted-foreground py-1 uppercase tracking-wider"
+                className="micro-label text-center text-muted-foreground py-1"
               >
                 {d}
               </div>
@@ -1693,12 +1693,12 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             {/* All-day row */}
             {hasAnyAllDay && (
               <div className="grid border-b border-border bg-muted/20" style={{ gridTemplateColumns: '40px repeat(7, 1fr)' }}>
-                <div className="text-[9px] text-muted-foreground/50 text-right pr-1.5 py-1 border-r border-border/40">all day</div>
+                <div className="text-[11px] text-muted-foreground/50 text-right pr-1.5 py-1 border-r border-border/40">all day</div>
                 {weekDays.map(wd => (
                   <div key={wd.date} className="px-0.5 py-0.5 border-r border-border/40 space-y-0.5">
                     {allDayByDate[wd.date]?.map(item => (
                       <button key={item.id} onClick={() => { setSelectedDate(wd.date); setDetailItem(item); }}
-                        className="w-full text-left px-1 py-0.5 rounded text-[10px] truncate hover:opacity-80 transition-opacity text-white font-medium"
+                        className="w-full text-left px-1 py-0.5 rounded text-[11px] truncate hover:opacity-80 transition-opacity text-white font-medium"
                         style={{ backgroundColor: TYPE_COLORS[item.type] || '#888' }}>
                         {item.title}
                       </button>
@@ -1714,7 +1714,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                 {/* Hour rows */}
                 {HOURS.map(h => (
                   <div key={h} className="contents">
-                    <div className="text-[9px] text-muted-foreground/50 text-right pr-1.5 border-r border-border/40 -mt-1.5" style={{ height: `${hourHeight}px` }}>
+                    <div className="text-[11px] text-muted-foreground/50 text-right pr-1.5 border-r border-border/40 -mt-1.5" style={{ height: `${hourHeight}px` }}>
                       {h === 0 ? '12am' : h === 12 ? '12pm' : h > 12 ? `${h - 12}pm` : `${h}am`}
                     </div>
                     {weekDays.map(wd => {
@@ -1746,7 +1746,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                       <button
                         key={item.id}
                         onClick={() => { setSelectedDate(wd.date); setDetailItem(item); }}
-                        className="absolute rounded px-1 py-0.5 text-[10px] leading-tight truncate text-left hover:opacity-90 transition-opacity overflow-hidden cursor-pointer border border-white/10"
+                        className="absolute rounded px-1 py-0.5 text-[11px] leading-tight truncate text-left hover:opacity-90 transition-opacity overflow-hidden cursor-pointer border border-white/10"
                         style={{
                           top: `${top}px`,
                           height: `${height}px`,
@@ -1758,7 +1758,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                         }}
                       >
                         <span className="font-medium">{item.title}</span>
-                        {height >= 30 && <div className="text-[9px] opacity-80">{fmt12(item.time)}{item.endTime ? ` – ${fmt12(item.endTime)}` : ''}</div>}
+                        {height >= 30 && <div className="text-[11px] opacity-80">{fmt12(item.time)}{item.endTime ? ` – ${fmt12(item.endTime)}` : ''}</div>}
                       </button>
                     );
                   });
@@ -1856,7 +1856,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             {Object.entries(grouped).map(([dateStr, events]) => (
               <div key={dateStr}>
                 <div className="sticky top-0 bg-background/95 backdrop-blur-sm py-1.5 px-1 z-10">
-                  <span className="text-xs font-bold uppercase tracking-wider text-primary/70">{dateStr}</span>
+                  <span className="micro-label text-primary/70">{dateStr}</span>
                 </div>
                 <div className="space-y-1">
                   {events.map((ev: any, i: number) => {

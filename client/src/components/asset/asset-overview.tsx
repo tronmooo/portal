@@ -286,8 +286,8 @@ export function OwnershipTree({
                   data-testid={`tree-owner-${row.owner!.id}`}
                 >
                   <span className="truncate">{row.owner!.name}</span>
-                  <span className="text-[10px] opacity-60 capitalize">· {row.owner!.type}</span>
-                  <span className="ml-auto text-[10px] opacity-80 font-semibold pr-1">{row.pct}%</span>
+                  <span className="text-[11px] opacity-60 capitalize">· {row.owner!.type}</span>
+                  <span className="ml-auto text-[11px] opacity-80 font-semibold pr-1">{row.pct}%</span>
                 </button>
               ))}
               {/* The asset itself — one level deeper than the owners. */}
@@ -298,7 +298,7 @@ export function OwnershipTree({
               >
                 <span className="opacity-50">└─</span>
                 <span className="truncate">{profile.name}</span>
-                <span className="text-[10px] opacity-60 capitalize">· {profile.type}</span>
+                <span className="text-[11px] opacity-60 capitalize">· {profile.type}</span>
               </div>
             </>
           ) : (
@@ -320,7 +320,7 @@ export function OwnershipTree({
                 >
                   {i > 0 && <span className="opacity-50">└─</span>}
                   <span className="truncate">{node.name}</span>
-                  <span className="text-[10px] opacity-60 capitalize">· {node.type}</span>
+                  <span className="text-[11px] opacity-60 capitalize">· {node.type}</span>
                 </button>
               );
             })
@@ -340,7 +340,7 @@ export function OwnershipTree({
               >
                 <span className="opacity-50">└─</span>
                 <span className="truncate">{child.name}</span>
-                <span className="text-[10px] opacity-60 capitalize">· {child.type}</span>
+                <span className="text-[11px] opacity-60 capitalize">· {child.type}</span>
               </button>
             );
           })}
@@ -463,7 +463,7 @@ export function AssetSummaryCard({
             <p className="text-base font-bold tabular-nums text-green-600 dark:text-green-400" data-testid="summary-own-value">
               {formatCurrency(ownRollup.totalValue)}
             </p>
-            <p className="text-[10px] text-muted-foreground">Value</p>
+            <p className="text-[11px] text-muted-foreground">Value</p>
           </div>
           <div className="text-center">
             <p className="text-base font-bold tabular-nums text-red-500" data-testid="summary-own-liabilities">
@@ -471,7 +471,7 @@ export function AssetSummaryCard({
                 ? `-${formatCurrency(ownRollup.totalLoans)}`
                 : "—"}
             </p>
-            <p className="text-[10px] text-muted-foreground">Liabilities</p>
+            <p className="text-[11px] text-muted-foreground">Liabilities</p>
           </div>
           <div className="text-center">
             <p
@@ -484,10 +484,10 @@ export function AssetSummaryCard({
             >
               {formatCurrency(ownRollup.netValue)}
             </p>
-            <p className="text-[10px] text-muted-foreground">Net</p>
+            <p className="text-[11px] text-muted-foreground">Net</p>
           </div>
         </div>
-        <p className="text-[10px] text-muted-foreground text-center -mt-1">
+        <p className="text-[11px] text-muted-foreground text-center -mt-1">
           This asset only. See Financials tab for the full rollup including children.
         </p>
 
@@ -693,7 +693,7 @@ export function FinancialsBreakdown({
                         <span className="opacity-40">└</span>
                       )}
                       <span className="truncate">{row.name}</span>
-                      <span className="text-[10px] text-muted-foreground capitalize">
+                      <span className="text-[11px] text-muted-foreground capitalize">
                         ({row.type})
                       </span>
                     </button>
@@ -727,7 +727,7 @@ export function FinancialsBreakdown({
                     >
                       <span className="opacity-40">⛓</span>
                       <span className="truncate">{r.name}</span>
-                      <span className="text-[10px] text-muted-foreground">(loan)</span>
+                      <span className="text-[11px] text-muted-foreground">(loan)</span>
                     </button>
                   </td>
                   <td className="py-2 text-right tabular-nums">—</td>
@@ -953,7 +953,7 @@ export function AdoptAsChildDialog({
                       data-testid={`option-adopt-${p.id}`}
                     >
                       <p className="font-medium truncate">{p.name}</p>
-                      <p className="text-[10px] text-muted-foreground capitalize mt-0.5">
+                      <p className="text-[11px] text-muted-foreground capitalize mt-0.5">
                         {p.type}
                         {parentRef ? ` · currently under ${parentRef.name}` : " · top-level"}
                       </p>
@@ -1340,7 +1340,7 @@ function MoveChildDialog({
                     data-testid={`option-move-${p.id}`}
                   >
                     <p className="font-medium truncate">{p.name}</p>
-                    <p className="text-[10px] text-muted-foreground capitalize">
+                    <p className="text-[11px] text-muted-foreground capitalize">
                       {p.type}
                     </p>
                   </button>

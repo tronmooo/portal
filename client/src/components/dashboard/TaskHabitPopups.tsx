@@ -466,14 +466,14 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           </div>
           {!dimmed && (
             <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-              {ep === 'critical' && <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-violet-500/15 text-violet-500 font-semibold">Critical</span>}
-              {overdue && <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 font-semibold">Overdue</span>}
-              {isReminder && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400"><Bell className="h-2.5 w-2.5" />Reminder</span>}
-              {recurring && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-500/12 text-emerald-600 dark:text-emerald-400"><Repeat className="h-2.5 w-2.5" />{rule.paused ? 'Paused' : humanSummary(rule, t.dueDate)}</span>}
-              {t.dueDate && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><Calendar className="h-2.5 w-2.5" />{fmtDate(t.dueDate)}{dTime ? ` · ${dTime}` : ''}</span>}
-              {cat && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-sky-500/12 text-sky-600 dark:text-sky-400 capitalize"><TagIcon className="h-2.5 w-2.5" />{cat}</span>}
+              {ep === 'critical' && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-violet-500/15 text-violet-500 font-semibold">Critical</span>}
+              {overdue && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 font-semibold">Overdue</span>}
+              {isReminder && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400"><Bell className="h-2.5 w-2.5" />Reminder</span>}
+              {recurring && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-emerald-500/12 text-emerald-600 dark:text-emerald-400"><Repeat className="h-2.5 w-2.5" />{rule.paused ? 'Paused' : humanSummary(rule, t.dueDate)}</span>}
+              {t.dueDate && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><Calendar className="h-2.5 w-2.5" />{fmtDate(t.dueDate)}{dTime ? ` · ${dTime}` : ''}</span>}
+              {cat && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-sky-500/12 text-sky-600 dark:text-sky-400 capitalize"><TagIcon className="h-2.5 w-2.5" />{cat}</span>}
               {metaOf(t, "remind:") && <Bell className="h-3 w-3 text-amber-500" />}
-              {subs.length > 0 && <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><ListChecks className="h-2.5 w-2.5" />{subDone}/{subs.length}</span>}
+              {subs.length > 0 && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><ListChecks className="h-2.5 w-2.5" />{subDone}/{subs.length}</span>}
               {t.description && <FileText className="h-3 w-3 text-muted-foreground/50" />}
             </div>
           )}
@@ -1305,7 +1305,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="text-sm font-bold tabular-nums leading-none">{overallPct}%</span>
-                <span className="text-[8px] uppercase tracking-wider text-muted-foreground mt-0.5">Overall</span>
+                <span className="micro-label text-muted-foreground mt-0.5">Overall</span>
               </div>
             </div>
             <div className="grid flex-1 grid-cols-2 gap-x-2 gap-y-2.5">
@@ -1314,7 +1314,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                   <Icon className="h-4 w-4 shrink-0" style={{ color: `hsl(${color})` }} />
                   <div className="leading-none min-w-0">
                     <div className="text-sm font-bold tabular-nums">{value}</div>
-                    <div className="text-[9px] text-muted-foreground truncate">{label}</div>
+                    <div className="text-[11px] text-muted-foreground truncate">{label}</div>
                   </div>
                 </div>
               ))}
@@ -1385,7 +1385,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                           style={{ color: streak > 0 ? 'hsl(28 90% 55%)' : 'hsl(var(--muted-foreground))' }}>
                           {streak} {streak > 0 ? '🔥' : ''}
                         </span>
-                        <span className="text-[8px] uppercase tracking-wide text-muted-foreground/70 leading-none">day streak</span>
+                        <span className="micro-label text-muted-foreground/70 leading-none">day streak</span>
                         <button onClick={() => toggleToday(h)} disabled={togglePending}
                           aria-label={done ? 'Mark not done today' : 'Mark done today'}
                           className="touch-manipulation active:scale-90 transition-transform mt-0.5"

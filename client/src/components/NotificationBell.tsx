@@ -373,7 +373,7 @@ function NotificationGroup({
   return (
     <div className="mb-1">
       <div className="px-4 py-1.5">
-        <span className="text-xs-loose font-medium uppercase tracking-wider text-muted-foreground">
+        <span className="micro-label text-muted-foreground">
           {label}
         </span>
       </div>

@@ -67,7 +67,7 @@ function Toggle({ label, on, onChange, testId }: {
       aria-checked={on}
       onClick={() => onChange(!on)}
       data-testid={testId}
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-medium transition-colors ${
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium transition-colors ${
         on ? "border-primary/50 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted"
       }`}
     >
@@ -82,7 +82,7 @@ function DayPicker({ label, value, options, onChange, testId }: {
 }) {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-[10px] text-muted-foreground w-20 shrink-0">{label}</span>
+      <span className="text-[11px] text-muted-foreground w-20 shrink-0">{label}</span>
       <div className="flex items-center gap-1 flex-wrap">
         {options.map(o => (
           <button
@@ -90,7 +90,7 @@ function DayPicker({ label, value, options, onChange, testId }: {
             onClick={() => onChange(o)}
             data-testid={`${testId}-${o}`}
             aria-pressed={value === o}
-            className={`rounded-md border px-1.5 py-0.5 text-[10px] tabular-nums transition-colors ${
+            className={`rounded-md border px-1.5 py-0.5 text-[11px] tabular-nums transition-colors ${
               value === o ? "border-primary/50 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted"
             }`}
           >
@@ -149,7 +149,7 @@ export function AttentionFilters({ prefs, onChange }: {
               onClick={() => set({ minTier: t.key })}
               data-testid={`attention-tier-${t.key}`}
               aria-pressed={draft.minTier === t.key}
-              className={`rounded-full border px-2 py-1 text-[10px] font-medium transition-colors ${
+              className={`rounded-full border px-2 py-1 text-[11px] font-medium transition-colors ${
                 draft.minTier === t.key ? "border-primary/50 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted"
               }`}
             >
@@ -161,7 +161,7 @@ export function AttentionFilters({ prefs, onChange }: {
 
       <button
         onClick={() => set({ ...DEFAULT_ATTENTION_CONFIG })}
-        className="text-[10px] text-muted-foreground hover:text-foreground underline"
+        className="text-[11px] text-muted-foreground hover:text-foreground underline"
         data-testid="attention-filters-reset"
       >
         Reset to defaults

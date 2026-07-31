@@ -480,7 +480,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
                   </button>
                   <span className="flex-1 truncate">{m.name}{m.dose ? ` ${m.dose}` : ""}</span>
                   {m.time && <span className="text-[11px] text-muted-foreground">{m.time}</span>}
-                  <span className={`text-[10px] ${m.taken ? "text-emerald-500" : "text-red-500"}`}>{m.taken ? "Taken" : "Due"}</span>
+                  <span className={`text-[11px] ${m.taken ? "text-emerald-500" : "text-red-500"}`}>{m.taken ? "Taken" : "Due"}</span>
                 </li>
               ))}
             </ul>
@@ -524,8 +524,8 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             {labs.slice(0, 5).map((l) => (
               <li key={l.id} className="flex items-center gap-2" data-testid={`wellness-lab-${l.id}`}>
                 <span className="truncate flex-1">{l.name}</span>
-                {l.date && <span className="text-[10px] text-muted-foreground">{l.date}</span>}
-                {l.status && <span className="text-[10px]" style={{ color: `hsl(${T.green})` }}>{l.status}</span>}
+                {l.date && <span className="text-[11px] text-muted-foreground">{l.date}</span>}
+                {l.status && <span className="text-[11px]" style={{ color: `hsl(${T.green})` }}>{l.status}</span>}
               </li>
             ))}
           </ul>
@@ -540,7 +540,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
               <li key={s.id} className="flex items-center gap-2" data-testid={`wellness-supp-${s.id}`}>
                 <Leaf className="w-3 h-3 shrink-0" style={{ color: `hsl(${T.green})` }} />
                 <span className="flex-1 truncate">{s.name}{s.dose ? ` ${s.dose}` : ""}</span>
-                {s.schedule && <span className="text-[10px] text-muted-foreground">{s.schedule}</span>}
+                {s.schedule && <span className="text-[11px] text-muted-foreground">{s.schedule}</span>}
               </li>
             ))}
           </ul>
@@ -555,7 +555,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
               <li key={d.id} className="flex items-center gap-2" data-testid={`wellness-doc-${d.id}`}>
                 <FileText className="w-3 h-3 shrink-0 text-muted-foreground" />
                 <span className="flex-1 truncate">{d.name}</span>
-                {d.date && <span className="text-[10px] text-muted-foreground">{d.date}</span>}
+                {d.date && <span className="text-[11px] text-muted-foreground">{d.date}</span>}
               </li>
             ))}
           </ul>
@@ -597,7 +597,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
               <li key={r.id} className="flex items-center gap-2" data-testid={`wellness-activity-${r.id}`}>
                 <CheckCircle2 className="w-3 h-3 shrink-0" style={{ color: `hsl(${T.teal})` }} />
                 <span className="flex-1 truncate">{r.text}</span>
-                {r.when && <span className="text-[10px] text-muted-foreground shrink-0">{r.when}</span>}
+                {r.when && <span className="text-[11px] text-muted-foreground shrink-0">{r.when}</span>}
               </li>
             ))}
           </ul>

@@ -335,7 +335,7 @@ export function HistoryTab({ profileId }: { profileId: string }) {
     <div className="space-y-4">
       {Array.from(grouped.entries()).map(([day, dayEntries]) => (
         <div key={day}>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+          <p className="micro-label text-muted-foreground mb-2">
             {day}
           </p>
           <div className="space-y-2">

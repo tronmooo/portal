@@ -132,7 +132,7 @@ function GroupSection({
   return (
     <div className="mb-1">
       <div className="flex items-center gap-1.5 px-2 pt-3 pb-1">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <span className="micro-label text-muted-foreground">
           {label} ({profiles.length})
         </span>
       </div>
@@ -209,7 +209,7 @@ function ProfileRow({
       <span className="text-xs flex-1 truncate">{profile.name}</span>
       <Badge
         className={cn(
-          "text-[10px] px-1 py-0 capitalize border shrink-0",
+          "text-[11px] px-1 py-0 capitalize border shrink-0",
           getTypeBadgeColor(profile.type)
         )}
       >

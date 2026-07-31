@@ -380,7 +380,7 @@ function CrossGroupPanel({ fromGroup, allTrackers, onSelectTracker }: {
           <div className="flex items-center gap-1.5 mb-2">
             {gDef && <gDef.icon className="h-3 w-3" style={{ color: `hsl(${gDef.accent})` }} />}
             <span className="text-xs font-semibold" style={{ color: `hsl(${gDef?.accent})` }}>{groupName}</span>
-            <span className="text-[9px] text-muted-foreground/50 ml-1">{gDef?.description}</span>
+            <span className="text-[11px] text-muted-foreground/50 ml-1">{gDef?.description}</span>
           </div>
           <div className="grid grid-cols-2 gap-1.5">
             {gTrackers.map(t => {
@@ -401,7 +401,7 @@ function CrossGroupPanel({ fromGroup, allTrackers, onSelectTracker }: {
                 >
                   <div className="absolute left-0 top-0 bottom-0 w-0.5" style={{ background: `hsl(${tAccent})` }} />
                   <div className="pl-1.5">
-                    <p className="text-[10px] font-semibold truncate text-foreground/80">{t.name}</p>
+                    <p className="text-[11px] font-semibold truncate text-foreground/80">{t.name}</p>
                     {latest != null && (
                       <p className="text-xs font-bold tabular-nums" style={{ color: `hsl(${tAccent})` }}>
                         {typeof latest === 'number' ? (latest % 1 === 0 ? latest : latest.toFixed(1)) : latest}
@@ -704,7 +704,7 @@ function WeightDetailChart({
     <div className="space-y-3">
       {/* Weight line chart */}
       <div>
-        <p className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wide">Weight Trend</p>
+        <p className="micro-label text-muted-foreground mb-1">Weight Trend</p>
         <ResponsiveContainer width="100%" height={180}>
           <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -719,7 +719,7 @@ function WeightDetailChart({
       {/* BMI trend with normal range shading */}
       {chartData.some((d) => d.bmi !== null) && (
         <div>
-          <p className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wide">BMI Trend</p>
+          <p className="micro-label text-muted-foreground mb-1">BMI Trend</p>
           <ResponsiveContainer width="100%" height={160}>
             <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -875,7 +875,7 @@ function RunningDetailChart({ entries, primaryField }: { entries: TrackerEntry[]
       {/* Pace trend */}
       {chartData.some((d) => d.pace !== null) && (
         <div>
-          <p className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wide">Pace Trend (lower = faster)</p>
+          <p className="micro-label text-muted-foreground mb-1">Pace Trend (lower = faster)</p>
           <ResponsiveContainer width="100%" height={150}>
             <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -891,7 +891,7 @@ function RunningDetailChart({ entries, primaryField }: { entries: TrackerEntry[]
       {/* Cumulative distance */}
       {chartData.some((d) => d.cumulativeDistance !== null) && (
         <div>
-          <p className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wide">Cumulative Distance (mi)</p>
+          <p className="micro-label text-muted-foreground mb-1">Cumulative Distance (mi)</p>
           <ResponsiveContainer width="100%" height={130}>
             <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -913,7 +913,7 @@ function RunningDetailChart({ entries, primaryField }: { entries: TrackerEntry[]
       {/* Calories burned */}
       {chartData.some((d) => d.calories !== null) && (
         <div>
-          <p className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wide">Calories Burned</p>
+          <p className="micro-label text-muted-foreground mb-1">Calories Burned</p>
           <ResponsiveContainer width="100%" height={120}>
             <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -1097,12 +1097,12 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
       {/* Weekly Adherence */}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-muted/50 rounded-lg p-3 text-center">
-          <p className="text-xs text-muted-foreground uppercase tracking-wider">Adherence</p>
+          <p className="micro-label text-muted-foreground">Adherence</p>
           <p className="text-2xl font-bold tabular-nums">{adherencePct}%</p>
           <p className="text-xs text-muted-foreground">this week</p>
         </div>
         <div className="bg-muted/50 rounded-lg p-3 text-center">
-          <p className="text-xs text-muted-foreground uppercase tracking-wider">Doses Logged</p>
+          <p className="micro-label text-muted-foreground">Doses Logged</p>
           <p className="text-2xl font-bold tabular-nums">{tracker.entries.length}</p>
           <p className="text-xs text-muted-foreground">total</p>
         </div>
@@ -1126,7 +1126,7 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
                 }`}>
                   {taken ? '✓' : dateStr === today ? '•' : '–'}
                 </div>
-                <p className="text-[10px] text-muted-foreground mt-0.5">{dayLabel}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">{dayLabel}</p>
               </div>
             );
           })}
@@ -1472,7 +1472,7 @@ function AddEntryDialog({
                   </button>
                 ))}
               </div>
-              <p className="text-[10px] text-muted-foreground mt-1">One tap to log · or fill the form below for details.</p>
+              <p className="text-[11px] text-muted-foreground mt-1">One tap to log · or fill the form below for details.</p>
             </div>
           )}
           {tracker.fields.map((f) => (
@@ -1801,7 +1801,7 @@ function Donut({ pct, color, size = 32, label }: { pct: number; color: string; s
         <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="hsl(var(--muted-foreground) / 0.08)" strokeWidth="3" />
         <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeDasharray={`${Math.min(1, pct) * circ} ${circ}`} transform={`rotate(-90 ${size/2} ${size/2})`} />
       </svg>
-      {label && <span className="absolute inset-0 flex items-center justify-center text-[7px] font-bold" style={{ color }}>{label}</span>}
+      {label && <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold" style={{ color }}>{label}</span>}
     </div>
   );
 }
@@ -1819,8 +1819,8 @@ function ProgressBar({ pct, color }: { pct: number; color: string }) {
 function KpiLine({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
   return (
     <div className="flex items-center justify-between gap-1">
-      <span className="text-[9px] text-muted-foreground truncate">{label}</span>
-      <span className="text-[9px] font-bold tabular-nums text-foreground shrink-0" style={accent ? { color: accent } : undefined}>{value}</span>
+      <span className="text-[11px] text-muted-foreground truncate">{label}</span>
+      <span className="text-[11px] font-bold tabular-nums text-foreground shrink-0" style={accent ? { color: accent } : undefined}>{value}</span>
     </div>
   );
 }
@@ -2617,8 +2617,8 @@ function NoDataPile({ trackers, onOpenDetail }: { trackers: any[]; onOpenDetail:
       >
         <span className="flex items-center gap-1.5">
           <span className="inline-block w-2 h-2 rounded-full bg-muted-foreground/40" />
-          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">No Data</span>
-          <span className="text-[10px] text-muted-foreground font-normal normal-case tracking-normal">
+          <span className="micro-label text-muted-foreground">No Data</span>
+          <span className="text-[11px] text-muted-foreground font-normal normal-case tracking-normal">
             ({trackers.length} {trackers.length === 1 ? 'tracker' : 'trackers'} without entries)
           </span>
         </span>
@@ -2644,7 +2644,7 @@ function NoDataPile({ trackers, onOpenDetail }: { trackers: any[]; onOpenDetail:
                   <Icon className="h-2.5 w-2.5" />
                 </span>
                 <span className="text-[11px] font-medium text-foreground truncate flex-1">{t.name}</span>
-                <span className="text-[9px] text-muted-foreground shrink-0">log</span>
+                <span className="text-[11px] text-muted-foreground shrink-0">log</span>
               </button>
             );
           })}
@@ -2912,7 +2912,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
               : tracker.name}
           </p>
           {insight.subline && (
-            <p className="text-[10px] text-muted-foreground truncate leading-tight mt-0.5">
+            <p className="text-[11px] text-muted-foreground truncate leading-tight mt-0.5">
               {insight.subline}
             </p>
           )}
@@ -2929,8 +2929,8 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
                 {subMetrics.map((m) => (
                   <div key={m.label}>
                     <div className="flex items-center justify-between leading-none mb-0.5">
-                      <span className="text-[9px] capitalize text-muted-foreground truncate">{m.label}</span>
-                      <span className="text-[9px] font-bold tabular-nums" style={{ color: ac }}>{Math.round(m.pct)}%</span>
+                      <span className="text-[11px] capitalize text-muted-foreground truncate">{m.label}</span>
+                      <span className="text-[11px] font-bold tabular-nums" style={{ color: ac }}>{Math.round(m.pct)}%</span>
                     </div>
                     <div className="h-1 rounded-full bg-muted/30 overflow-hidden">
                       <div className="h-full rounded-full" style={{ width: `${Math.min(100, m.pct)}%`, backgroundColor: ac }} />
@@ -2941,13 +2941,13 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
             ) : (
               <>
                 {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
-                  <span className="text-[10px] font-semibold flex items-center gap-0.5" style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}>
+                  <span className="text-[11px] font-semibold flex items-center gap-0.5" style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}>
                     {insight.trendDir === "up" ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
                     {Math.abs(Math.round(insight.trendPct))}%
                   </span>
                 )}
                 {insight.hasData && (
-                  <p className="text-[10px] text-muted-foreground leading-snug line-clamp-3 mt-0.5">{insight.insight}</p>
+                  <p className="text-[11px] text-muted-foreground leading-snug line-clamp-3 mt-0.5">{insight.insight}</p>
                 )}
               </>
             )}
@@ -2958,7 +2958,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
         <div className="flex-1 px-3 pt-1 min-h-0 flex flex-col justify-center gap-2">
           {medChecklist && <ChecklistMini items={medChecklist} color={ac} />}
           {importance !== "compact" && insight.hasData && (
-            <p className="text-[10px] text-muted-foreground leading-snug line-clamp-2">{insight.insight}</p>
+            <p className="text-[11px] text-muted-foreground leading-snug line-clamp-2">{insight.insight}</p>
           )}
         </div>
       ) : visual.type === "panel" ? (
@@ -2981,13 +2981,13 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
             {activityChips.length > 0 && (
               <div className="px-3 flex items-center gap-1.5 flex-nowrap overflow-hidden mb-1.5">
                 {activityChips.map((c, i) => (
-                  <span key={i} className="inline-flex items-center gap-1 text-[10px] rounded-full px-1.5 py-0.5 shrink-0 whitespace-nowrap" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>
+                  <span key={i} className="inline-flex items-center gap-1 text-[11px] rounded-full px-1.5 py-0.5 shrink-0 whitespace-nowrap" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>
                     <span aria-hidden>{c.emoji}</span><span className="font-medium tabular-nums">{c.label}</span>
                   </span>
                 ))}
               </div>
             )}
-            <p className="px-3 text-[10px] text-muted-foreground mb-1.5 truncate">
+            <p className="px-3 text-[11px] text-muted-foreground mb-1.5 truncate">
               This week: <span className="font-semibold text-foreground">{activityData.total} {activityData.unit}</span>
               {" · "}{activityData.sessions} session{activityData.sessions === 1 ? "" : "s"}
               {activityData.sessions > 0 ? ` · ~${activityData.avg}/session` : ""}
@@ -3011,7 +3011,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
               )}
               {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
                 <span
-                  className="ml-1 text-[10px] font-semibold flex items-center gap-0.5"
+                  className="ml-1 text-[11px] font-semibold flex items-center gap-0.5"
                   style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}
                 >
                   {insight.trendDir === "up" ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
@@ -3027,7 +3027,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
           {/* Body: insight sentence + a lush full-bleed chart (or padded gauge) */}
           <div className="flex-1 min-h-0 flex flex-col justify-end overflow-hidden">
             {importance !== "compact" && insight.hasData && (
-              <p className="px-3 text-[10px] text-muted-foreground leading-snug line-clamp-1 mb-1">
+              <p className="px-3 text-[11px] text-muted-foreground leading-snug line-clamp-1 mb-1">
                 {insight.insight}
               </p>
             )}
@@ -3052,20 +3052,20 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
       <div className="px-3 pb-2.5 pt-1 flex items-center justify-between">
         {insight.statusBadge ? (
           <span
-            className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+            className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
             style={{ backgroundColor: insight.statusBadge.bg, color: insight.statusBadge.fg }}
           >
             {insight.statusBadge.label}
           </span>
         ) : (
           <span
-            className="text-[10px] font-semibold capitalize px-2 py-0.5 rounded-full"
+            className="text-[11px] font-semibold capitalize px-2 py-0.5 rounded-full"
             style={{ backgroundColor: `hsl(${catAccent} / 0.15)`, color: ac }}
           >
             {tracker.category || 'custom'}
           </span>
         )}
-        <span className="text-[10px] text-muted-foreground tabular-nums">{timeAgo || `${entries.length} entries`}</span>
+        <span className="text-[11px] text-muted-foreground tabular-nums">{timeAgo || `${entries.length} entries`}</span>
       </div>
     </div>
   );
@@ -3455,12 +3455,12 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
       {visual.type === "radial" ? (
         <div className="flex-1 px-3 pt-1 min-h-0 flex items-center gap-3">
           <RadialGauge value={visual.value} max={visual.max} color={ac} size={70} unit={unit || `/ ${visual.max}`} />
-          <p className="text-[10px] text-muted-foreground leading-snug">Looking good — this is how your score will read.</p>
+          <p className="text-[11px] text-muted-foreground leading-snug">Looking good — this is how your score will read.</p>
         </div>
       ) : visual.type === "checklist" ? (
         <div className="flex-1 px-3 pt-1 min-h-0 flex flex-col justify-center gap-2">
           <ChecklistMini items={[{ label: unit ? `Daily dose (${unit})` : "Daily dose", done: true }]} color={ac} />
-          <p className="text-[10px] text-muted-foreground leading-snug">Check off each dose as you take it.</p>
+          <p className="text-[11px] text-muted-foreground leading-snug">Check off each dose as you take it.</p>
         </div>
       ) : visual.type === "panel" ? (
         <div className="flex-1 px-3 pt-1.5 min-h-0 flex flex-col justify-center">
@@ -3474,10 +3474,10 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
           </div>
           <div className="flex-1 min-h-0 flex flex-col justify-end">
             <div className="px-3 flex items-center gap-1.5 mb-1.5">
-              <span className="inline-flex items-center gap-1 text-[10px] rounded-full px-1.5 py-0.5" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>⚡ <span className="font-medium">Moderate</span></span>
-              <span className="inline-flex items-center gap-1 text-[10px] rounded-full px-1.5 py-0.5" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>❤️ <span className="font-medium">—</span></span>
+              <span className="inline-flex items-center gap-1 text-[11px] rounded-full px-1.5 py-0.5" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>⚡ <span className="font-medium">Moderate</span></span>
+              <span className="inline-flex items-center gap-1 text-[11px] rounded-full px-1.5 py-0.5" style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}>❤️ <span className="font-medium">—</span></span>
             </div>
-            <p className="px-3 text-[10px] text-muted-foreground mb-1.5">This week: <span className="font-semibold text-foreground">{sample} {unit || "min"}</span> · 1 session</p>
+            <p className="px-3 text-[11px] text-muted-foreground mb-1.5">This week: <span className="font-semibold text-foreground">{sample} {unit || "min"}</span> · 1 session</p>
             <div className="px-3 pb-2"><WeekdayBars data={[0, sample * 0.5, 0, sample * 0.8, sample * 0.4, 0, sample].map((v, i) => ({ label: ["S", "M", "T", "W", "T", "F", "S"][i], value: Math.round(v), today: i === 6 }))} color={ac} height={44} /></div>
           </div>
         </>
@@ -3502,8 +3502,8 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
         </>
       )}
       <div className="px-3 pb-2.5 pt-1 flex items-center justify-between">
-        <span className="text-[10px] font-semibold capitalize px-2 py-0.5 rounded-full" style={{ backgroundColor: `hsl(${catAccent} / 0.15)`, color: ac }}>{category || "custom"}</span>
-        <span className="text-[10px] text-muted-foreground">Preview</span>
+        <span className="text-[11px] font-semibold capitalize px-2 py-0.5 rounded-full" style={{ backgroundColor: `hsl(${catAccent} / 0.15)`, color: ac }}>{category || "custom"}</span>
+        <span className="text-[11px] text-muted-foreground">Preview</span>
       </div>
     </div>
   );
@@ -3705,7 +3705,7 @@ function CreateTrackerDialog({
                     <span className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: `hsl(${tAccent} / 0.2)`, color: `hsl(${tAccent})` }}>
                       <TIcon className="h-4 w-4" />
                     </span>
-                    <span className="text-[10px] font-medium text-center leading-tight">{t.label}</span>
+                    <span className="text-[11px] font-medium text-center leading-tight">{t.label}</span>
                   </button>
                 );
               })}
@@ -3718,7 +3718,7 @@ function CreateTrackerDialog({
                 <span className="w-7 h-7 rounded-lg flex items-center justify-center bg-muted/50 text-muted-foreground">
                   <Plus className="h-4 w-4" />
                 </span>
-                <span className="text-[10px] font-medium">Custom</span>
+                <span className="text-[11px] font-medium">Custom</span>
               </button>
             </div>
           </div>
@@ -4364,7 +4364,7 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
         {dynamicKpis.length > 0 ? (
           dynamicKpis.map((k, i) => (
             <div key={i} className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider truncate">{k.label}</p>
+              <p className="micro-label text-muted-foreground truncate">{k.label}</p>
               <p className={`text-lg font-bold tabular-nums truncate ${i === 0 ? (KIND_ACCENT[pres.metricKind] || "text-foreground") : ""}`} title={k.value}>{k.value}</p>
               <p className="text-xs text-muted-foreground truncate">{k.sub}</p>
             </div>
@@ -4391,7 +4391,7 @@ function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; prima
       {goalProgress && (
         <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Goal · {goalProgress.scope}</span>
+            <span className="micro-label text-muted-foreground">Goal · {goalProgress.scope}</span>
             <span className={`text-xs font-bold ${goalProgress.met ? "text-emerald-500" : "text-primary"}`}>
               {goalProgress.met ? "✓ Goal met" : `${goalProgress.pct}%`}
             </span>
@@ -6644,14 +6644,14 @@ export default function TrackersPage() {
                     <p className="text-sm font-bold text-foreground truncate" style={{ color: `hsl(${group.accent})` }}>{group.ownerName}</p>
                   </div>
                   <span
-                    className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0"
+                    className="text-[11px] font-bold px-2 py-0.5 rounded-full shrink-0"
                     style={{ backgroundColor: `hsl(${group.accent} / 0.18)`, color: `hsl(${group.accent})` }}
                   >
                     {group.rows.length} {group.rows.length === 1 ? "item" : "items"}
                   </span>
                 </div>
                 {/* Column headers — compact, spreadsheet-style. */}
-                <div className="grid grid-cols-[20px_1fr_auto_72px] items-center gap-2 px-2.5 py-1 border-b border-border/40 bg-muted/20 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                <div className="micro-label grid grid-cols-[20px_1fr_auto_72px] items-center gap-2 px-2.5 py-1 border-b border-border/40 bg-muted/20 text-muted-foreground">
                   <span />
                   <span>Name</span>
                   <span className="text-right">{trackerCols ? "Last" : "Type"}</span>
@@ -6678,7 +6678,7 @@ export default function TrackersPage() {
                       {trackerCols && r.kind === "tracker" ? (
                         <span className="text-[11px] tabular-nums text-muted-foreground text-right whitespace-nowrap">{r.lastLogged || "—"}</span>
                       ) : (
-                        <span className="text-[9px] uppercase tracking-wide font-bold px-1.5 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: `hsl(${ac} / 0.14)`, color: `hsl(${ac})` }}>{typeLabel}</span>
+                        <span className="micro-label px-1.5 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: `hsl(${ac} / 0.14)`, color: `hsl(${ac})` }}>{typeLabel}</span>
                       )}
                       <span className="text-[13px] font-semibold tabular-nums text-foreground text-right truncate">{r.meta}</span>
                     </div>
@@ -6816,7 +6816,7 @@ export default function TrackersPage() {
             </button>
             )}
             {(!collapsedSections.has("profiles") || (hubEmbedded && sectionFilter !== "all")) && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch" style={{ gridAutoRows: 178 }}>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch" style={{ gridAutoRows: 202 }}>
                 {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
                   const Icon = typeIcons[child.type] || Star;
                   const fields = child.fields || {};
@@ -7027,8 +7027,8 @@ export default function TrackersPage() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-bold tracking-tight" style={{ color: ac }}>Liabilities</span>
                   <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: `hsl(${accentHsl} / 0.15)`, color: ac }}>{liabs.length}</span>
-                  {totalBalance > 0 && <span className="text-[10px] text-muted-foreground tabular-nums">${Math.round(totalBalance).toLocaleString()} total</span>}
-                  {totalMonthly > 0 && <span className="text-[10px] text-muted-foreground tabular-nums">· ${Math.round(totalMonthly).toLocaleString()}/mo</span>}
+                  {totalBalance > 0 && <span className="text-[11px] text-muted-foreground tabular-nums">${Math.round(totalBalance).toLocaleString()} total</span>}
+                  {totalMonthly > 0 && <span className="text-[11px] text-muted-foreground tabular-nums">· ${Math.round(totalMonthly).toLocaleString()}/mo</span>}
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">Mortgages, loans, credit cards, subscriptions, and recurring bills</p>
               </div>
@@ -7128,7 +7128,7 @@ export default function TrackersPage() {
               const Group = ({ title, items }: { title: string; items: any[] }) => items.length === 0 ? null : (
                 <div>
                   <SectionHeading title={title} icon={TrendingDown} accent={accentHsl} count={items.length} />
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch" style={{ gridAutoRows: 178 }}>{items.map(renderCard)}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch" style={{ gridAutoRows: 202 }}>{items.map(renderCard)}</div>
                 </div>
               );
               return (
@@ -7386,7 +7386,7 @@ export default function TrackersPage() {
                 <div className="flex items-center gap-2 px-2 py-1.5 sticky top-0 z-10 backdrop-blur-sm"
                      style={{ background: `hsl(${gAccent} / 0.08)` }}>
                   <GIcon className="h-3 w-3" style={{ color: `hsl(${gAccent})` }} />
-                  <span className="text-xs font-bold uppercase tracking-wider" style={{ color: `hsl(${gAccent})` }}>
+                  <span className="micro-label" style={{ color: `hsl(${gAccent})` }}>
                     {groupName}
                   </span>
                   <span className="text-xs text-muted-foreground">({grouped[groupName].length})</span>
@@ -7703,13 +7703,13 @@ export default function TrackersPage() {
                     <div className="flex items-center gap-2 mb-2 px-0.5">
                       <span className="text-sm">{icon}</span>
                       <span className="text-xs font-bold text-foreground">{g.type === 'self' ? 'Me' : g.name}</span>
-                      <span className="text-[10px] text-muted-foreground">({g.trackers.length})</span>
+                      <span className="text-[11px] text-muted-foreground">({g.trackers.length})</span>
                     </div>
                     {visibleBuckets.map(b => {
                       const bt = buckets[b.key];
                       return (
                         <div key={b.key} className="mb-3">
-                          <h4 className="text-xs font-semibold uppercase tracking-wider mt-3 mb-1.5 flex items-center gap-1.5">
+                          <h4 className="micro-label mt-3 mb-1.5 flex items-center gap-1.5">
                             <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: b.dot }} />
                             <span style={{ color: b.dot }}>{b.label}</span>
                             <span className="text-muted-foreground font-normal">({bt.length})</span>

@@ -307,7 +307,8 @@ describe("Active-profile header (PROP-005 wire contract)", () => {
 
   beforeEach(() => {
     vi.resetModules();
-    vi.doUnmock("@/lib/queryClient");
+    // No doUnmock here: the tests below reach the real module through
+    // vi.importActual, which bypasses the mock registry outright.
     const mem = new Map<string, string>();
     vi.stubGlobal("localStorage", {
       getItem: (k: string) => mem.get(k) ?? null,
@@ -335,7 +336,7 @@ describe("Active-profile header (PROP-005 wire contract)", () => {
 
   it("sends the selected profile on every write", async () => {
     const filter = await import("@/lib/profileFilter");
-    const { apiRequest: realApiRequest } = await import("@/lib/queryClient");
+    const { apiRequest: realApiRequest } = await vi.importActual<typeof import("@/lib/queryClient")>("@/lib/queryClient");
     filter.setFilterSelected(["mike-1"], ["Mike"]);
     await realApiRequest("POST", "/api/expenses", { description: "Gas", amount: 40 });
     expect(headersOf(callTo("/api/expenses"))["x-active-profile-ids"]).toBe("mike-1");
@@ -343,7 +344,7 @@ describe("Active-profile header (PROP-005 wire contract)", () => {
 
   it("sends nothing when the scope is Everyone", async () => {
     const filter = await import("@/lib/profileFilter");
-    const { apiRequest: realApiRequest } = await import("@/lib/queryClient");
+    const { apiRequest: realApiRequest } = await vi.importActual<typeof import("@/lib/queryClient")>("@/lib/queryClient");
     filter.setFilterEveryone();
     await realApiRequest("POST", "/api/expenses", { description: "Gas", amount: 40 });
     expect(headersOf(callTo("/api/expenses"))["x-active-profile-ids"]).toBeUndefined();
@@ -351,14 +352,14 @@ describe("Active-profile header (PROP-005 wire contract)", () => {
 
   it("sends both ids for a multi-selection, so the server can decline to guess", async () => {
     const filter = await import("@/lib/profileFilter");
-    const { apiRequest: realApiRequest } = await import("@/lib/queryClient");
+    const { apiRequest: realApiRequest } = await vi.importActual<typeof import("@/lib/queryClient")>("@/lib/queryClient");
     filter.setFilterSelected(["mike-1", "jane-1"], ["Mike", "Jane"]);
     await realApiRequest("POST", "/api/expenses", {});
     expect(headersOf(callTo("/api/expenses"))["x-active-profile-ids"]).toBe("mike-1,jane-1");
   });
 
   it("keeps the timezone header the reminder fix depends on", async () => {
-    const { apiRequest: realApiRequest } = await import("@/lib/queryClient");
+    const { apiRequest: realApiRequest } = await vi.importActual<typeof import("@/lib/queryClient")>("@/lib/queryClient");
     await realApiRequest("POST", "/api/reminders", { title: "x" });
     expect(headersOf(callTo("/api/reminders"))["X-Timezone"]).toBeTruthy();
   });

@@ -327,7 +327,7 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
                   <p className="micro-label text-muted-foreground">
                     {fmtDayHeading(g.date)}
                   </p>
-                  <p className="text-[10px] text-muted-foreground">
+                  <p className="text-[11px] text-muted-foreground">
                     {relativeDayLabel(g.date, today)}
                   </p>
                 </div>

@@ -111,12 +111,12 @@ export function ImproveEstimatePanel({ profileId, fields, missingInfo, onSaved, 
       <div className="flex items-center gap-1.5">
         <Sparkles className="h-3.5 w-3.5 text-amber-500 shrink-0" />
         <p className="text-xs font-semibold">Tighten this estimate</p>
-        <p className="text-[10px] text-muted-foreground ml-auto">fills real profile fields</p>
+        <p className="text-[11px] text-muted-foreground ml-auto">fills real profile fields</p>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {specs.map(s => (
           <div key={s.key} className="space-y-0.5">
-            <label className="text-[10px] font-medium text-muted-foreground" title={s.original}>{s.label}</label>
+            <label className="text-[11px] font-medium text-muted-foreground" title={s.original}>{s.label}</label>
             <Input
               className="h-7 text-xs"
               type={s.type === "number" ? "text" : "text"}

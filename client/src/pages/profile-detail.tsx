@@ -118,7 +118,7 @@ function PastActivityList({
       >
         <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
         <p className="micro-label text-muted-foreground">Past</p>
-        <span className="text-[10px] text-muted-foreground">({items.length})</span>
+        <span className="text-[11px] text-muted-foreground">({items.length})</span>
         <ChevronDown
           className={`h-3 w-3 ml-auto text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
         />
@@ -674,7 +674,7 @@ function BelongsToEditor({
           <div className="flex-1 overflow-hidden flex flex-col gap-2 min-h-0">
             {/* Current path preview — shows where this asset currently lives */}
             <div className="px-2 py-2 rounded-md bg-muted/40 border" data-testid="belongs-to-current-path">
-              <p className="text-[10px] text-muted-foreground mb-0.5">Currently:</p>
+              <p className="text-[11px] text-muted-foreground mb-0.5">Currently:</p>
               <RebuildPathPreview
                 parent={currentParent || null}
                 allProfiles={allProfiles}
@@ -963,14 +963,14 @@ function ChildAssetsCard({
           <CardTitle className="text-sm font-semibold flex items-center gap-2 flex-wrap">
             <Package className="h-4 w-4 text-muted-foreground" /> Child Assets
             {hasDeepDescendants && (
-              <span className="text-[10px] font-normal text-muted-foreground ml-1" data-testid="child-assets-counts">
+              <span className="text-[11px] font-normal text-muted-foreground ml-1" data-testid="child-assets-counts">
                 {directChildren.length} direct · {subtreeRows.length} total
               </span>
             )}
           </CardTitle>
           <div className="flex items-center gap-1.5 flex-wrap">
             {hasDeepDescendants && assetView === "list" && (
-              <div className="inline-flex rounded-md border bg-card text-[10px] font-medium" data-testid="tree-mode-toggle">
+              <div className="inline-flex rounded-md border bg-card text-[11px] font-medium" data-testid="tree-mode-toggle">
                 <button
                   className={`px-2 py-1 ${treeMode === "direct" ? "bg-primary text-primary-foreground rounded-l-md" : "text-muted-foreground"}`}
                   onClick={() => setTreeMode("direct")}
@@ -1089,7 +1089,7 @@ function ChildAssetsCard({
                       </p>
                     </div>
                     {isShared && (
-                      <span className="text-[10px] font-semibold tabular-nums shrink-0 px-1.5 py-0.5 rounded-full bg-primary/10 text-primary" data-testid={`child-asset-ownership-${child.id}`}>
+                      <span className="text-[11px] font-semibold tabular-nums shrink-0 px-1.5 py-0.5 rounded-full bg-primary/10 text-primary" data-testid={`child-asset-ownership-${child.id}`}>
                         {ownPct}%
                       </span>
                     )}
@@ -1269,7 +1269,7 @@ function ValueRollupCard({ profile }: { profile: ProfileDetail }) {
           {rollup.monthlyExpense > 0 && (
             <div className="rounded-lg bg-orange-500/8 border border-orange-500/20 p-2.5 text-center" data-testid="rollup-monthly-expense">
               <p className="text-base font-bold tabular-nums text-orange-600 dark:text-orange-400">
-                {formatCurrency(rollup.monthlyExpense)}<span className="text-[10px] font-normal text-muted-foreground">/mo</span>
+                {formatCurrency(rollup.monthlyExpense)}<span className="text-[11px] font-normal text-muted-foreground">/mo</span>
               </p>
               <p className="text-[11px] text-muted-foreground">Total Monthly</p>
             </div>
@@ -1573,7 +1573,7 @@ function MaintenanceCard({
       <CardContent className="pt-0 space-y-3">
         {/* ── Section A: Warranty Status ── */}
         <div data-testid="warranty-status" className="space-y-1.5">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Warranty</p>
+          <p className="micro-label text-muted-foreground">Warranty</p>
           {!rawWarranty && !warrantyEditing && (
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">No warranty on file.</span>
@@ -1628,7 +1628,7 @@ function MaintenanceCard({
         {/* ── Section B: Upcoming reminders (next 90 days) ── */}
         {bodyVisible && (
           <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Upcoming (90 days)</p>
+            <p className="micro-label text-muted-foreground">Upcoming (90 days)</p>
             {upcomingEvents.length === 0 ? (
               <p className="text-sm text-muted-foreground" data-testid="no-upcoming-maintenance">
                 No upcoming maintenance scheduled.
@@ -1667,7 +1667,7 @@ function MaintenanceCard({
         {/* ── Section C: Repair history (last 90 days) ── */}
         {bodyVisible && (
           <div className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Repair History (90 days)</p>
+            <p className="micro-label text-muted-foreground">Repair History (90 days)</p>
             {allRepairs.length === 0 ? (
               <p className="text-sm text-muted-foreground">No repair expenses recorded.</p>
             ) : (
@@ -3119,7 +3119,7 @@ function InfoTab({
           <p className="text-xs text-muted-foreground">{subtitleParts.join(" · ")}</p>
           {keyValueEntry && (
             <div className="text-right">
-              <p className="text-[10px] text-muted-foreground">{keyValueEntry.label}</p>
+              <p className="text-[11px] text-muted-foreground">{keyValueEntry.label}</p>
               <p className="text-sm font-bold tabular-nums">{keyValueEntry.value}</p>
             </div>
           )}
@@ -3256,7 +3256,7 @@ function InfoTab({
                 <span className="inline-flex items-center justify-center w-5 h-5 rounded-md" style={{ background: `hsl(${accentHsl} / 0.20)`, color: accent }}>
                   <Sparkles className="h-3 w-3" />
                 </span>
-                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: accent }}>
+                <p className="micro-label" style={{ color: accent }}>
                   {profile.type === "pet" ? "Pet Highlights" : "Personal Highlights"}
                 </p>
               </div>
@@ -3407,7 +3407,7 @@ function InfoTab({
                   <GroupIcon className={`h-3.5 w-3.5 shrink-0 ${meta.cls}`} />
                   <span className="text-xs font-semibold truncate">{group.title}</span>
                   {filledCount > 0 && (
-                    <span className="text-[10px] px-1.5 py-0 rounded-full bg-muted text-muted-foreground tabular-nums shrink-0">{filledCount}</span>
+                    <span className="text-[11px] px-1.5 py-0 rounded-full bg-muted text-muted-foreground tabular-nums shrink-0">{filledCount}</span>
                   )}
                 </span>
                 {isCollapsed ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
@@ -3475,7 +3475,7 @@ function InfoTab({
             <span className="flex items-center gap-2">
               <FileText className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="text-xs font-semibold text-muted-foreground">Other</span>
-              <span className="text-[10px] px-1.5 py-0 rounded-full bg-muted text-muted-foreground tabular-nums">{extraFields.length}</span>
+              <span className="text-[11px] px-1.5 py-0 rounded-full bg-muted text-muted-foreground tabular-nums">{extraFields.length}</span>
             </span>
             {collapsedSections.has("__other__")
               ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
@@ -3579,7 +3579,7 @@ function InfoTab({
                         </p>
                       </div>
                       {isShared && (
-                        <span className="text-[10px] font-semibold tabular-nums shrink-0 px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-600 dark:text-orange-400">{pct}%</span>
+                        <span className="text-[11px] font-semibold tabular-nums shrink-0 px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-600 dark:text-orange-400">{pct}%</span>
                       )}
                       {bal > 0 && (
                         <span className="text-xs font-bold tabular-nums text-red-500 shrink-0" title={isShared ? `${fmt(grossBal)} total · your ${pct}% share` : undefined}>{fmt(bal)}</span>
@@ -3761,7 +3761,7 @@ function ProductivityHubTab({
         <span className={`flex items-center justify-center h-6 w-6 rounded-full ${color.bg}`}>
           <Icon className={`h-3.5 w-3.5 ${color.text}`} />
         </span>
-        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+        <span className="micro-label text-muted-foreground">
           {label}{typeof count === "number" ? <span className="font-normal normal-case text-muted-foreground/70"> ({count})</span> : null}
         </span>
       </button>
@@ -3797,8 +3797,8 @@ function ProductivityHubTab({
             <span className={`flex items-center justify-center h-6 w-6 rounded-full ${C.today.bg}`}>
               <Calendar className={`h-3.5 w-3.5 ${C.today.text}`} />
             </span>
-            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Today</p>
-            <span className="text-[10px] text-muted-foreground/70 ml-auto">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
+            <p className="micro-label text-muted-foreground">Today</p>
+            <span className="text-[11px] text-muted-foreground/70 ml-auto">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
           </div>
           <div className="grid grid-cols-4 gap-2">
             <div className="text-center py-2 rounded-lg bg-muted/40">
@@ -3824,7 +3824,7 @@ function ProductivityHubTab({
       {/* ── Habits ── */}
       <section data-testid="hub-section-habits">
         <SectionHeader id="habits" icon={Flame} color={C.habits} label="Habits" count={habits.length}
-          action={<Link href="/habits" className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="link-hub-habits"><ExternalLink className="h-3 w-3 inline" /></Link>}
+          action={<Link href="/habits" className="text-[11px] text-muted-foreground hover:text-foreground" data-testid="link-hub-habits"><ExternalLink className="h-3 w-3 inline" /></Link>}
         />
         {open.habits && (
           habits.length === 0 ? (
@@ -3844,7 +3844,7 @@ function ProductivityHubTab({
                         </div>
                         <div className="min-w-0">
                           <p className="text-sm font-semibold truncate">{h.name}</p>
-                          <p className="text-[10px] text-muted-foreground capitalize">
+                          <p className="text-[11px] text-muted-foreground capitalize">
                             {(h.frequency || "daily")}{Number(h.targetPerDay) > 1 ? ` · ${h.targetPerDay}×/day` : ""}{doneToday ? " · done today" : ""}
                           </p>
                         </div>
@@ -3867,7 +3867,7 @@ function ProductivityHubTab({
       {/* ── Tasks ── */}
       <section data-testid="hub-section-tasks">
         <SectionHeader id="tasks" icon={CheckCircle2} color={C.tasks} label="Tasks" count={openTasks.length}
-          action={<Link href="/tasks" className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="link-hub-tasks"><ExternalLink className="h-3 w-3 inline" /></Link>}
+          action={<Link href="/tasks" className="text-[11px] text-muted-foreground hover:text-foreground" data-testid="link-hub-tasks"><ExternalLink className="h-3 w-3 inline" /></Link>}
         />
         {open.tasks && (
           openTasks.length === 0 ? (
@@ -3884,7 +3884,7 @@ function ProductivityHubTab({
                         <p className="text-xs font-medium truncate">{t.title || t.name || "Untitled task"}</p>
                       </div>
                       {due && (
-                        <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">
+                        <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
                           {new Date(due).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                         </span>
                       )}
@@ -3900,7 +3900,7 @@ function ProductivityHubTab({
       {/* ── Schedule (upcoming events only — PR F preview) ── */}
       <section data-testid="hub-section-schedule">
         <SectionHeader id="schedule" icon={Calendar} color={C.schedule} label="Schedule" count={upcomingEvents.length}
-          action={<Link href="/" className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="link-hub-schedule"><ExternalLink className="h-3 w-3 inline" /></Link>}
+          action={<Link href="/" className="text-[11px] text-muted-foreground hover:text-foreground" data-testid="link-hub-schedule"><ExternalLink className="h-3 w-3 inline" /></Link>}
         />
         {open.schedule && (
           upcomingEvents.length === 0 ? (
@@ -3914,7 +3914,7 @@ function ProductivityHubTab({
                       <Calendar className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
                       <p className="text-xs font-medium truncate">{e.title || e.name || "Untitled event"}</p>
                     </div>
-                    <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">{formatEventTime(e)}</span>
+                    <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">{formatEventTime(e)}</span>
                   </CardContent>
                 </Card>
               ))}
@@ -3941,7 +3941,7 @@ function ProductivityHubTab({
                         <AlertCircle className={`h-3.5 w-3.5 shrink-0 ${overdue ? "text-red-500" : "text-yellow-500"}`} />
                         <p className="text-xs font-medium truncate">{t.title || t.name || "Untitled"}</p>
                       </div>
-                      <span className={`text-[10px] shrink-0 tabular-nums ${overdue ? "text-red-500 font-semibold" : "text-muted-foreground"}`}>
+                      <span className={`text-[11px] shrink-0 tabular-nums ${overdue ? "text-red-500 font-semibold" : "text-muted-foreground"}`}>
                         {new Date(due).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                       </span>
                     </CardContent>
@@ -3961,7 +3961,7 @@ function ProductivityHubTab({
             <CardContent className="py-6 text-center">
               <RefreshCw className="h-6 w-6 text-muted-foreground/30 mx-auto mb-2" />
               <p className="text-xs text-muted-foreground">Multi-step routines tied to this profile will appear here.</p>
-              <p className="text-[10px] text-muted-foreground/70 mt-1">Ask Portol in chat to create one.</p>
+              <p className="text-[11px] text-muted-foreground/70 mt-1">Ask Portol in chat to create one.</p>
             </CardContent>
           </Card>
         )}
@@ -3978,7 +3978,7 @@ function ProductivityHubTab({
       {/* ── Journal ── */}
       <section data-testid="hub-section-journal">
         <SectionHeader id="journal" icon={BookOpen} color={C.journal} label="Journal" count={profileJournals.length}
-          action={<Link href="/journal" className="text-[10px] text-muted-foreground hover:text-foreground" data-testid="link-hub-journal"><ExternalLink className="h-3 w-3 inline" /></Link>}
+          action={<Link href="/journal" className="text-[11px] text-muted-foreground hover:text-foreground" data-testid="link-hub-journal"><ExternalLink className="h-3 w-3 inline" /></Link>}
         />
         {open.journal && (
           profileJournals.length === 0 ? (
@@ -3993,7 +3993,7 @@ function ProductivityHubTab({
                         <BookOpen className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
                         <p className="text-xs font-medium capitalize">{j.mood || "entry"}</p>
                       </div>
-                      <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">
+                      <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
                         {new Date(j.date || j.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                       </span>
                     </div>
@@ -4048,7 +4048,7 @@ const ProfileHabitsTab = memo(function ProfileHabitsTab({ habits, profileName }:
                   <Flame className={`h-3.5 w-3.5 ${streak > 0 ? "text-orange-500" : "text-muted-foreground/40"}`} />
                   {streak}
                 </div>
-                <p className="text-[10px] text-muted-foreground">day streak</p>
+                <p className="text-[11px] text-muted-foreground">day streak</p>
               </div>
             </CardContent>
           </Card>
@@ -5037,25 +5037,25 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       <div className="grid grid-cols-2 gap-3">
         <Card>
           <CardContent className="p-4">
-            <p className="text-xs-loose text-muted-foreground uppercase tracking-wide mb-1">Total Spent</p>
+            <p className="micro-label text-muted-foreground mb-1">Total Spent</p>
             <p className="text-xl font-bold tabular-nums text-foreground">{formatCurrency(totalSpent)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-xs-loose text-muted-foreground uppercase tracking-wide mb-1">This Month</p>
+            <p className="micro-label text-muted-foreground mb-1">This Month</p>
             <p className="text-xl font-bold tabular-nums text-foreground">{formatCurrency(thisMonth)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-xs-loose text-muted-foreground uppercase tracking-wide mb-1">Monthly Burn</p>
+            <p className="micro-label text-muted-foreground mb-1">Monthly Burn</p>
             <p className="text-xl font-bold tabular-nums text-amber-600 dark:text-amber-400">{formatCurrency(monthlyBurn)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-xs-loose text-muted-foreground uppercase tracking-wide mb-1">Outstanding</p>
+            <p className="micro-label text-muted-foreground mb-1">Outstanding</p>
             <p className="text-xl font-bold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(outstanding)}</p>
           </CardContent>
         </Card>
@@ -5091,9 +5091,9 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                   <span className="flex items-center gap-2 min-w-0">
                     <span className="text-xs font-semibold truncate">{g.asset.name}</span>
                     {typeof g.items[0]?._ownershipPercentage === "number" && g.items[0]._ownershipPercentage < 100 && (
-                      <span className="text-[10px] text-muted-foreground shrink-0">owns {Math.round(g.items[0]._ownershipPercentage)}%</span>
+                      <span className="text-[11px] text-muted-foreground shrink-0">owns {Math.round(g.items[0]._ownershipPercentage)}%</span>
                     )}
-                    <span className="text-[10px] text-muted-foreground shrink-0">({g.items.length})</span>
+                    <span className="text-[11px] text-muted-foreground shrink-0">({g.items.length})</span>
                   </span>
                   <span className="flex items-center gap-1 shrink-0">
                     <span className="text-xs font-bold tabular-nums">{formatCurrency(g.subtotal)}</span>
@@ -5105,7 +5105,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                     <div key={e.id} className="flex items-center justify-between gap-2 px-3 py-1.5" data-testid={`coo-expense-${e.id}`}>
                       <span className="text-xs text-muted-foreground truncate">
                         {e.description}
-                        <span className="text-[10px] ml-1.5 opacity-70">{e.date}</span>
+                        <span className="text-[11px] ml-1.5 opacity-70">{e.date}</span>
                       </span>
                       <span className="text-xs tabular-nums shrink-0">{formatCurrency(Number(e.amount) || 0)}</span>
                     </div>
@@ -5145,7 +5145,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <span className="text-xs font-medium truncate">{cat.category}</span>
-                      <span className="text-[10px] text-muted-foreground shrink-0">({cat.count})</span>
+                      <span className="text-[11px] text-muted-foreground shrink-0">({cat.count})</span>
                     </div>
                     <span className="text-xs font-bold tabular-nums shrink-0 ml-2">{formatCurrency(cat.total)}</span>
                   </div>
@@ -5363,7 +5363,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                     </div>
                     {ob.payments && ob.payments.length > 0 && (
                       <div className="mt-2 space-y-1">
-                        <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Recent payments</p>
+                        <p className="micro-label text-muted-foreground">Recent payments</p>
                         {ob.payments.slice(-3).reverse().map(p => (
                           <div key={p.id} className="flex items-center justify-between text-xs">
                             <span className="text-muted-foreground">{p.date}</span>
@@ -5987,7 +5987,7 @@ function TrackerCard_Profile({
               <p className="text-sm font-semibold truncate">{tracker.name}</p>
               <div className="flex items-center gap-1.5 mt-0.5">
                 {tracker.category && (
-                  <Badge variant="outline" className={`text-[10px] h-4 px-1.5 ${trackerStyle.text} border-current/20`}>{trackerStyle.label}</Badge>
+                  <Badge variant="outline" className={`text-[11px] h-4 px-1.5 ${trackerStyle.text} border-current/20`}>{trackerStyle.label}</Badge>
                 )}
                 <span className="text-xs text-muted-foreground">{allEntries.length} entries</span>
               </div>
@@ -5997,7 +5997,7 @@ function TrackerCard_Profile({
             {metricStale && (
               <Badge
                 variant="outline"
-                className="h-4 px-1 text-[9px] bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30"
+                className="h-4 px-1 text-[11px] bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30"
                 title={`No recent entry — expected cadence: ${metricDef.cadence}`}
                 data-testid={`badge-tracker-stale-${tracker.id}`}
               >
@@ -6462,7 +6462,7 @@ function TrackersTab({
                   <span className={`flex items-center justify-center h-6 w-6 rounded-full ${style.bg}`}>
                     <Icon className={`h-3.5 w-3.5 ${style.text}`} />
                   </span>
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  <span className="micro-label text-muted-foreground">
                     {style.label} <span className="font-normal normal-case text-muted-foreground/70">({group.items.length})</span>
                   </span>
                 </div>
@@ -6536,7 +6536,7 @@ function TrackersTab({
             <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5 text-[11px] space-y-1" data-testid="metric-definition-preview">
               <div className="flex items-center justify-between">
                 <span className="micro-label text-muted-foreground">Metric Definition</span>
-                <Badge variant="outline" className="h-4 px-1 text-[9px] capitalize">{previewMetricDefinition.dataType}</Badge>
+                <Badge variant="outline" className="h-4 px-1 text-[11px] capitalize">{previewMetricDefinition.dataType}</Badge>
               </div>
               <p className="text-muted-foreground leading-snug">{previewMetricDefinition.definition}</p>
               <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-1">
@@ -7083,7 +7083,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
       {/* ── Section 1: Vitals Dashboard ── */}
       {vitalCards.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1.5">
+          <p className="micro-label text-muted-foreground mb-2 px-0.5 flex items-center gap-1.5">
             <span className="inline-flex w-4 h-4 items-center justify-center rounded-md bg-emerald-500/15 text-emerald-500">
               <Sparkles className="h-2.5 w-2.5" />
             </span>
@@ -7124,9 +7124,9 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                       <span className="text-2xl font-bold tabular-nums leading-none" style={{ color: lineColor }}>
                         {typeof latest === "number" ? Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 }) : latest}
                       </span>
-                      {tracker.unit && <span className="text-[10px] text-muted-foreground font-medium">{tracker.unit}</span>}
+                      {tracker.unit && <span className="text-[11px] text-muted-foreground font-medium">{tracker.unit}</span>}
                     </div>
-                    <div className={`flex items-center gap-0.5 text-[10px] font-bold ${trendColor}`}>
+                    <div className={`flex items-center gap-0.5 text-[11px] font-bold ${trendColor}`}>
                       {trend === "up" && <ArrowUp className="h-3 w-3" />}
                       {trend === "down" && <ArrowDown className="h-3 w-3" />}
                       {trend === "flat" && <Minus className="h-3 w-3" />}
@@ -7151,7 +7151,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                       <div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/30 to-transparent" />
                     </div>
                   )}
-                  <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                     <span className="font-medium">{avg7 != null ? `7d avg ${avg7.toFixed(1)}` : ""}</span>
                     {lastLogRel && <span>{lastLogRel}</span>}
                   </div>
@@ -7165,7 +7165,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
       {/* ── Section 2: Trend Charts ── */}
       {topChartTrackers.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1.5">
+          <p className="micro-label text-muted-foreground mb-2 px-0.5 flex items-center gap-1.5">
             <span className="inline-flex w-4 h-4 items-center justify-center rounded-md bg-violet-500/15 text-violet-500">
               <BarChart2 className="h-2.5 w-2.5" />
             </span>
@@ -7214,7 +7214,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                       </div>
                       {latest != null && !isNaN(latest) && (
                         <span className="text-sm font-bold tabular-nums" style={{ color: lineColor }}>
-                          {latest.toLocaleString(undefined, { maximumFractionDigits: 1 })}{t.unit ? <span className="text-[10px] text-muted-foreground ml-0.5 font-medium">{t.unit}</span> : null}
+                          {latest.toLocaleString(undefined, { maximumFractionDigits: 1 })}{t.unit ? <span className="text-[11px] text-muted-foreground ml-0.5 font-medium">{t.unit}</span> : null}
                         </span>
                       )}
                     </div>
@@ -7260,12 +7260,12 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
 
       {/* ── Section 3: All Trackers ── */}
       <div>
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1.5">
+        <p className="micro-label text-muted-foreground mb-2 px-0.5 flex items-center gap-1.5">
           <span className="inline-flex w-4 h-4 items-center justify-center rounded-md bg-sky-500/15 text-sky-500">
             <Activity className="h-2.5 w-2.5" />
           </span>
           All Trackers
-          <span className="text-[10px] font-medium text-muted-foreground normal-case tracking-normal">({healthTrackers.length})</span>
+          <span className="text-[11px] font-medium text-muted-foreground normal-case tracking-normal">({healthTrackers.length})</span>
         </p>
         {(() => {
           // ── Partition trackers ────────────────────────────────────────
@@ -7528,7 +7528,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
             {/* ── Section 5: Insights ── */}
       {insights.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5 flex items-center gap-1.5">
+          <p className="micro-label text-muted-foreground mb-2 px-0.5 flex items-center gap-1.5">
             <span className="inline-flex w-4 h-4 items-center justify-center rounded-md bg-amber-500/15 text-amber-500">
               <Sparkles className="h-2.5 w-2.5" />
             </span>
@@ -7625,7 +7625,7 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
       {/* Grouped entries */}
       {groups.filter(g => g.items.length > 0).map(g => (
         <div key={g.label}>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 px-1">{g.label}</p>
+          <p className="micro-label text-muted-foreground mb-1.5 px-1">{g.label}</p>
           <Card>
             <CardContent className="pt-3 pb-1">
               <div className="divide-y divide-border">
@@ -8818,13 +8818,13 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
         <Card className="p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-semibold">Paid to Date</h3>
-            <span className="text-[10px] text-muted-foreground">{monthsElapsed} of {schedule.length} months</span>
+            <span className="text-[11px] text-muted-foreground">{monthsElapsed} of {schedule.length} months</span>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl border border-border/50 p-3">
-              <p className="text-[10px] text-muted-foreground">Total paid</p>
+              <p className="text-[11px] text-muted-foreground">Total paid</p>
               <p className="text-base font-bold tabular-nums">{formatCurrency(totalPaid)}</p>
-              <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
                 <div>
                   <span className="text-green-500">● Principal</span>
                   <p className="font-semibold tabular-nums">{formatCurrency(principalPaid)}</p>
@@ -8836,9 +8836,9 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
               </div>
             </div>
             <div className="rounded-xl border border-border/50 p-3">
-              <p className="text-[10px] text-muted-foreground">Remaining</p>
+              <p className="text-[11px] text-muted-foreground">Remaining</p>
               <p className="text-base font-bold tabular-nums">{formatCurrency(principalRemaining + interestRemaining)}</p>
-              <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
                 <div>
                   <span className="text-green-500">● Principal</span>
                   <p className="font-semibold tabular-nums">{formatCurrency(principalRemaining)}</p>
@@ -8863,7 +8863,7 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
           <div className="flex items-center justify-between gap-3">
             <div>
               <h3 className="text-xs font-semibold mb-1">Track this loan in Bills</h3>
-              <p className="text-[10px] text-muted-foreground">Creates a recurring monthly obligation of {formatCurrency(monthlyPayment)} so it shows up on your dashboard and calendar.</p>
+              <p className="text-[11px] text-muted-foreground">Creates a recurring monthly obligation of {formatCurrency(monthlyPayment)} so it shows up on your dashboard and calendar.</p>
             </div>
             <Button
               size="sm"
@@ -8884,11 +8884,11 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
           <div className="flex items-center justify-between mb-3">
             <div>
               <h3 className="text-xs font-semibold mb-0.5">Payment Tracker</h3>
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-[11px] text-muted-foreground">
                 Next due {linkedMonthlyBill.nextDueDate?.slice(0, 10)} · {formatCurrency(linkedMonthlyBill.amount || monthlyPayment)}
               </p>
             </div>
-            <Badge variant="outline" className="text-[10px]">{Math.round(percentPaid)}% paid</Badge>
+            <Badge variant="outline" className="text-[11px]">{Math.round(percentPaid)}% paid</Badge>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <Button
@@ -8913,7 +8913,7 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
           </div>
           {earlyPayoffOpen && (
             <div className="mt-3 pt-3 border-t border-border">
-              <label className="text-[10px] text-muted-foreground mb-1 block">
+              <label className="text-[11px] text-muted-foreground mb-1 block">
                 Amount to pay (current balance: {formatCurrency(loanBalance)})
               </label>
               <div className="flex items-center gap-2">
@@ -8930,7 +8930,7 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8 text-[10px] shrink-0"
+                  className="h-8 text-[11px] shrink-0"
                   onClick={() => setEarlyPayoffAmount(String(loanBalance.toFixed(2)))}
                   data-testid="button-fill-payoff"
                   type="button"
@@ -8939,7 +8939,7 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
                 </Button>
                 <Button
                   size="sm"
-                  className="h-8 text-[10px] shrink-0"
+                  className="h-8 text-[11px] shrink-0"
                   onClick={() => {
                     const v = parseFloat(earlyPayoffAmount);
                     if (!v || v <= 0) {
@@ -8954,7 +8954,7 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
                   {markPaidMutation.isPending ? "…" : "Submit"}
                 </Button>
               </div>
-              <p className="text-[10px] text-muted-foreground mt-1.5">
+              <p className="text-[11px] text-muted-foreground mt-1.5">
                 Extra above this month’s interest goes straight to principal, shortening your payoff date.
               </p>
             </div>
@@ -9007,7 +9007,7 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
             {/* Principal vs Interest per payment stacked bar */}
             <Card className="p-4">
               <h3 className="text-xs font-semibold mb-1">Principal vs Interest Per Payment</h3>
-              <p className="text-[10px] text-muted-foreground mb-3">Green = principal paid · Red = interest charged</p>
+              <p className="text-[11px] text-muted-foreground mb-3">Green = principal paid · Red = interest charged</p>
               <ResponsiveContainer width="100%" height={120}>
                 <BarChart data={chartData} margin={{ top: 2, right: 4, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -9085,14 +9085,14 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
                     />
                     <div className="grid grid-cols-2 gap-3 pt-1">
                       <div className="rounded-xl bg-green-500/8 border border-green-500/20 p-3 text-center">
-                        <p className="text-[10px] text-muted-foreground mb-1">Months saved</p>
+                        <p className="text-[11px] text-muted-foreground mb-1">Months saved</p>
                         <p className="text-xl font-bold text-green-500">{saved}</p>
-                        <p className="text-[9px] text-muted-foreground">Pay off {extra.months > 0 ? (() => { const d = new Date(new Date(startDate || new Date()).getTime()); d.setMonth(d.getMonth() + extra.months); return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); })() : '—'}</p>
+                        <p className="text-[11px] text-muted-foreground">Pay off {extra.months > 0 ? (() => { const d = new Date(new Date(startDate || new Date()).getTime()); d.setMonth(d.getMonth() + extra.months); return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); })() : '—'}</p>
                       </div>
                       <div className="rounded-xl bg-red-500/8 border border-red-500/20 p-3 text-center">
-                        <p className="text-[10px] text-muted-foreground mb-1">Interest saved</p>
+                        <p className="text-[11px] text-muted-foreground mb-1">Interest saved</p>
                         <p className="text-lg font-bold text-red-400">{formatCurrency(intSaved)}</p>
-                        <p className="text-[9px] text-muted-foreground">Total left: {formatCurrency(extra.totInt)}</p>
+                        <p className="text-[11px] text-muted-foreground">Total left: {formatCurrency(extra.totInt)}</p>
                       </div>
                     </div>
                   </div>
@@ -9236,7 +9236,7 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
       <Card>
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Warranty Status</span>
+            <span className="micro-label text-muted-foreground">Warranty Status</span>
             <Badge variant={isActive ? "default" : "destructive"} className="text-xs">
               {isActive ? "Active" : endDate ? "Expired" : "Unknown"}
             </Badge>
@@ -9249,7 +9249,7 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
       <Card>
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Warranty Claims ({claims.length})</p>
+            <p className="micro-label text-muted-foreground">Warranty Claims ({claims.length})</p>
             {!showAdd && <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-claim"><Plus className="h-3 w-3" />Add Claim</Button>}
           </div>
           {showAdd && (
@@ -9317,7 +9317,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
     <div className="space-y-3" data-testid="rewards-tab">
       <Card>
         <CardContent className="pt-4 pb-3">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Rewards Program</p>
+          <p className="micro-label text-muted-foreground mb-3">Rewards Program</p>
           {rewardsFields.map(({ key, label }) => (
             <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
           ))}
@@ -9332,7 +9332,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
       <Card>
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Redemptions ({redemptions.length})</p>
+            <p className="micro-label text-muted-foreground">Redemptions ({redemptions.length})</p>
             {!showAdd && <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-redemption"><Plus className="h-3 w-3" />Record Redemption</Button>}
           </div>
           {showAdd && (
@@ -9376,7 +9376,7 @@ function AccessTab({ profile, profileId, onChanged }: { profile: any; profileId:
     <div className="space-y-3" data-testid="access-tab">
       <Card>
         <CardContent className="pt-4 pb-3">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Access & Credentials</p>
+          <p className="micro-label text-muted-foreground mb-3">Access & Credentials</p>
           {f.loginUrl && (
             <div className="flex items-center justify-between py-2 border-b border-border/30">
               <span className="text-xs text-muted-foreground">Login URL</span>
@@ -9429,7 +9429,7 @@ function CredentialsList({ profileId, fields, onChanged }: { profileId: string; 
     <Card>
       <CardContent className="pt-4 pb-3">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Saved Credentials ({credentials.length})</p>
+          <p className="micro-label text-muted-foreground">Saved Credentials ({credentials.length})</p>
           {!showAdd && <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-credential"><Plus className="h-3 w-3" />Add Credential</Button>}
         </div>
         {showAdd && (
@@ -9476,7 +9476,7 @@ function InsightsTab({ profile }: { profile: any }) {
     <div className="space-y-3" data-testid="insights-tab">
       <Card>
         <CardContent className="pt-4 pb-3">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+          <p className="micro-label text-muted-foreground mb-3">
             {isBank ? "Spending Breakdown" : "Revenue & Expenses"}
           </p>
           {sorted.length > 0 ? (
@@ -9552,7 +9552,7 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
               </div>
               <div className="text-right shrink-0 space-y-1">
                 {f.valuationConfidence && (
-                  <Badge variant="secondary" className="text-[10px] capitalize">{f.valuationConfidence} confidence</Badge>
+                  <Badge variant="secondary" className="text-[11px] capitalize">{f.valuationConfidence} confidence</Badge>
                 )}
                 <div>
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={rerunEstimate} disabled={reestimating} data-testid="valuation-rerun">
@@ -9566,7 +9566,7 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
               <p className="text-[11px] text-muted-foreground"><span className="font-medium text-foreground/80">Based on:</span> {factors.join(" · ")}</p>
             )}
             {f.valuationDate && (
-              <p className="text-[10px] text-muted-foreground">Valued {new Date(f.valuationDate).toLocaleDateString()}{f.valuationMethod ? ` · ${f.valuationMethod}` : ""}</p>
+              <p className="text-[11px] text-muted-foreground">Valued {new Date(f.valuationDate).toLocaleDateString()}{f.valuationMethod ? ` · ${f.valuationMethod}` : ""}</p>
             )}
           </CardContent>
         </Card>
@@ -9603,7 +9603,7 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
       )}
       <Card>
         <CardContent className="pt-4 pb-3">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Valuation Details</p>
+          <p className="micro-label text-muted-foreground mb-3">Valuation Details</p>
           {valuationFields.map(({ key, label }) => (
             <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
           ))}
@@ -9632,7 +9632,7 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
     <Card>
       <CardContent className="pt-4 pb-3">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Appraisals ({appraisals.length})</p>
+          <p className="micro-label text-muted-foreground">Appraisals ({appraisals.length})</p>
           {!showAdd && <Button variant="outline" size="sm" className="h-6 text-xs gap-1" onClick={() => setShowAdd(true)} data-testid="button-add-appraisal"><Plus className="h-3 w-3" />Add Appraisal</Button>}
         </div>
         {showAdd && (
@@ -9681,7 +9681,7 @@ function LinkedSubsTab({ profile }: { profile: any }) {
       <Card>
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Linked Subscriptions</span>
+            <span className="micro-label text-muted-foreground">Linked Subscriptions</span>
             <div className="flex items-center gap-2">
               {totalMonthly > 0 && <Badge variant="outline" className="text-xs">{formatCurrency(totalMonthly)}/mo</Badge>}
               {sortedChildren.length > 0 && <LinkedViewToggle view={view} onChange={setView} />}
@@ -9841,7 +9841,7 @@ function LinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile: any;
         <Card>
           <CardContent className="pt-4 pb-3">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Liabilities</span>
+              <span className="micro-label text-muted-foreground">Liabilities</span>
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setLinkDialogOpen(true)} data-testid="button-link-liability-empty">
                 <Plus className="h-3 w-3 mr-1" /> Link Liability
               </Button>
@@ -9874,7 +9874,7 @@ function LinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile: any;
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Liabilities</span>
+              <span className="micro-label text-muted-foreground">Liabilities</span>
               <Badge variant="outline" className="text-xs" data-testid="badge-liabilities-count">{liabilities.length}</Badge>
               {userBalanceShare > 0 && (
                 <Badge variant="outline" className="text-xs text-red-500 border-red-500/30" data-testid="badge-liabilities-share">
@@ -9972,7 +9972,7 @@ function LiabilityRow({ link, liability, allProfiles, refetchAll, onUnlink, onOp
                 const viaAsset = (allProfiles || []).find((p: any) => p.id === link.viaAssetId);
                 const viaName = viaAsset?.name || "asset";
                 return (
-                  <Badge variant="outline" className="text-[10px] h-4 px-1.5 shrink-0" data-testid={`badge-via-asset-${liability.id}`}>
+                  <Badge variant="outline" className="text-[11px] h-4 px-1.5 shrink-0" data-testid={`badge-via-asset-${liability.id}`}>
                     via {viaName}
                   </Badge>
                 );
@@ -10154,7 +10154,7 @@ function AssetLinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile:
         <Card>
           <CardContent className="pt-4 pb-3">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Liabilities</span>
+              <span className="micro-label text-muted-foreground">Liabilities</span>
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setLinkDialogOpen(true)} data-testid="button-link-asset-liability-empty">
                 <Plus className="h-3 w-3 mr-1" /> Link Liability
               </Button>
@@ -10187,7 +10187,7 @@ function AssetLinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile:
         <CardContent className="pt-4 pb-3">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Liabilities</span>
+              <span className="micro-label text-muted-foreground">Liabilities</span>
               <Badge variant="outline" className="text-xs" data-testid="badge-asset-liabilities-count">{liabilities.length}</Badge>
               {totalSecuredBalance > 0 && (
                 <Badge variant="outline" className="text-xs text-red-500 border-red-500/30" data-testid="badge-asset-liabilities-balance">
@@ -10388,11 +10388,11 @@ function CoOwnersEditor({ liabilityId, coOwners, allProfiles, onChanged }: {
       <div className="flex items-center justify-between mb-1">
         <span className="micro-label text-muted-foreground">Co-owners</span>
         <div className="flex items-center gap-1">
-          <Badge variant="outline" className={`text-[10px] h-5 px-1.5 ${totalPct === 100 ? "" : "text-yellow-600 border-yellow-500/30"}`} data-testid="badge-total-ownership">
+          <Badge variant="outline" className={`text-[11px] h-5 px-1.5 ${totalPct === 100 ? "" : "text-yellow-600 border-yellow-500/30"}`} data-testid="badge-total-ownership">
             Total: {totalPct}%
           </Badge>
           {!adding && (
-            <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => setAdding(true)} data-testid="button-add-coowner">
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={() => setAdding(true)} data-testid="button-add-coowner">
               <Plus className="h-3 w-3" /> Add
             </Button>
           )}
@@ -10500,7 +10500,7 @@ function CollateralEditor({ liabilityId, collateral, allProfiles, onChanged }: {
       <div className="flex items-center justify-between mb-1">
         <span className="micro-label text-muted-foreground">Collateral / Linked Assets</span>
         {!adding && (
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => setAdding(true)} data-testid="button-add-collateral">
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={() => setAdding(true)} data-testid="button-add-collateral">
             <Plus className="h-3 w-3" /> Add
           </Button>
         )}
@@ -10514,7 +10514,7 @@ function CollateralEditor({ liabilityId, collateral, allProfiles, onChanged }: {
             return (
               <div key={l.id} className="flex items-center gap-2 py-1" data-testid={`collateral-${l.id}`}>
                 <span className="text-xs flex-1 truncate">{asset?.name || "Unknown asset"}</span>
-                <Badge variant="outline" className="text-[10px] h-5 px-1.5">{l.role || "collateral"}</Badge>
+                <Badge variant="outline" className="text-[11px] h-5 px-1.5">{l.role || "collateral"}</Badge>
                 <button onClick={() => removeMutation.mutate(l.id)} className="text-muted-foreground hover:text-red-500" data-testid={`button-remove-collateral-${l.id}`}>
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -10585,7 +10585,7 @@ function LinkLiabilityDialog({ open, onOpenChange, search, setSearch, candidates
               >
                 <div className="flex-1 min-w-0">
                   <p className="truncate font-medium">{p.name}</p>
-                  <p className="text-muted-foreground text-[10px]">
+                  <p className="text-muted-foreground text-[11px]">
                     {p.fields?.lender || p.fields?.subtype || "liability"}
                     {p.fields?.currentBalance ? ` · ${formatCurrency(Number(p.fields.currentBalance))}` : ""}
                   </p>
@@ -10662,7 +10662,7 @@ function LinkAssetDialog({ open, onOpenChange, search, setSearch, candidates, pe
                 >
                   <div className="flex-1 min-w-0">
                     <p className="truncate font-medium">{p.name}</p>
-                    <p className="text-muted-foreground text-[10px]">
+                    <p className="text-muted-foreground text-[11px]">
                       {p.type || p.fields?.assetSubtype || "asset"}
                       {value != null && !isNaN(Number(value)) ? ` · ${formatCurrency(Number(value))}` : ""}
                     </p>
@@ -10752,7 +10752,7 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
     <div className="space-y-3" data-testid="payments-tab">
       <Card>
         <CardContent className="pt-4 pb-3">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Payment Info</p>
+          <p className="micro-label text-muted-foreground mb-3">Payment Info</p>
           {paymentFields.map(({ key, label }) => (
             <GroupedInlineField key={key} profileId={profileId} fieldKey={key} label={label} value={f[key]} onSaved={onChanged} />
           ))}
@@ -10777,7 +10777,7 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
       {paymentHistory.length > 0 && (
         <Card>
           <CardContent className="pt-4 pb-3">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Payment History</p>
+            <p className="micro-label text-muted-foreground mb-2">Payment History</p>
             <div className="divide-y divide-border/30">
               {paymentHistory.slice(0, 10).map((p: any) => (
                 <div key={p.id} className="group flex justify-between items-center py-1.5">
@@ -10896,7 +10896,7 @@ function RelAssetCard({ id, name, typeKey, sharePct, currentValue }: { id: strin
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-xs text-muted-foreground capitalize">{typeKey}</span>
               {pct != null && pct < 100 && (
-                <Badge variant="outline" className="text-[10px] h-4 px-1.5" data-testid={`badge-asset-share-${id}`}>
+                <Badge variant="outline" className="text-[11px] h-4 px-1.5" data-testid={`badge-asset-share-${id}`}>
                   {pct.toFixed(pct % 1 === 0 ? 0 : 1)}% owner
                 </Badge>
               )}
@@ -11129,13 +11129,13 @@ export function LinkedPeopleTab({ profileId, profileType, onChanged }: { profile
                     <div className="flex items-center gap-1.5 mt-0.5">
                       {relationship ? (
                         <span
-                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full capitalize"
+                          className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full capitalize"
                           style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}
                         >
                           {relationship}
                         </span>
                       ) : (
-                        <span className="text-[10px] text-muted-foreground capitalize">{typeKey}</span>
+                        <span className="text-[11px] text-muted-foreground capitalize">{typeKey}</span>
                       )}
                     </div>
                   </div>
@@ -11464,17 +11464,17 @@ function CostOfOwnershipCard({ profile }: { profile: any }) {
           <div className="text-center p-2 rounded-lg bg-muted/30">
             <p className="micro-label text-muted-foreground">Trailing 12mo</p>
             <p className="text-sm font-bold tabular-nums">{formatCurrency(trailing12Total)}</p>
-            <p className="text-[10px] text-muted-foreground/70">{trailing12.length} expenses</p>
+            <p className="text-[11px] text-muted-foreground/70">{trailing12.length} expenses</p>
           </div>
           <div className="text-center p-2 rounded-lg bg-muted/30">
             <p className="micro-label text-muted-foreground">Avg / month</p>
             <p className="text-sm font-bold tabular-nums">{formatCurrency(expensesMonthlyAvg)}</p>
-            <p className="text-[10px] text-muted-foreground/70">from expenses</p>
+            <p className="text-[11px] text-muted-foreground/70">from expenses</p>
           </div>
           <div className="text-center p-2 rounded-lg bg-muted/30">
             <p className="micro-label text-muted-foreground">Recurring</p>
             <p className="text-sm font-bold tabular-nums">{formatCurrency(recurringMonthly)}/mo</p>
-            <p className="text-[10px] text-muted-foreground/70">{obligations.length} bill{obligations.length !== 1 ? "s" : ""}</p>
+            <p className="text-[11px] text-muted-foreground/70">{obligations.length} bill{obligations.length !== 1 ? "s" : ""}</p>
           </div>
         </div>
       </CardContent>
@@ -11511,7 +11511,7 @@ function RelLiabilityCard({
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-xs text-muted-foreground capitalize">{typeKey || "loan"}</span>
               {pct != null && pct < 100 && (
-                <Badge variant="outline" className="text-[10px] h-4 px-1.5" data-testid={`badge-liability-share-${id}`}>
+                <Badge variant="outline" className="text-[11px] h-4 px-1.5" data-testid={`badge-liability-share-${id}`}>
                   {pct.toFixed(pct % 1 === 0 ? 0 : 1)}% owes
                 </Badge>
               )}
@@ -11522,7 +11522,7 @@ function RelLiabilityCard({
               </p>
             )}
             {(aprStr || monthlyPayment != null) && (
-              <p className="text-[10px] text-muted-foreground/80 mt-0.5 truncate">
+              <p className="text-[11px] text-muted-foreground/80 mt-0.5 truncate">
                 {aprStr}{aprStr && monthlyPayment != null ? " · " : ""}{monthlyPayment != null ? `${formatCurrency(Number(monthlyPayment))}/mo` : ""}
               </p>
             )}
@@ -11607,7 +11607,7 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
           >
             <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${assetsOpen ? "rotate-180" : "-rotate-90"}`} />
             <Package className="h-3.5 w-3.5 text-emerald-500" />
-            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+            <span className="micro-label text-muted-foreground">
               Assets <span className="font-normal normal-case">({assetCount})</span>
             </span>
           </button>
@@ -11631,7 +11631,7 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
           >
             <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${liabsOpen ? "rotate-180" : "-rotate-90"}`} />
             <Wallet className="h-3.5 w-3.5 text-orange-500" />
-            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+            <span className="micro-label text-muted-foreground">
               Liabilities <span className="font-normal normal-case">({liabilities.length})</span>
             </span>
           </button>
@@ -13297,7 +13297,7 @@ export default function ProfileDetailPage() {
                       {ownTrackers.length > 0 && (
                         <Card>
                           <CardContent className="p-3">
-                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Trackers ({ownTrackers.length})</p>
+                            <p className="micro-label text-muted-foreground mb-2">Trackers ({ownTrackers.length})</p>
                             <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
                               {ownTrackers.map((t: any) => {
                                 const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
@@ -13327,7 +13327,7 @@ export default function ProfileDetailPage() {
                     <>
                       {ownTrackers.length > 0 && (
                         <div className="mt-4">
-                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Trackers ({ownTrackers.length})</p>
+                          <p className="micro-label text-muted-foreground mb-2 px-0.5">Trackers ({ownTrackers.length})</p>
                           <div className="rounded-lg border border-border/40 divide-y divide-border/30 overflow-hidden">
                             {ownTrackers.map((t: any) => {
                               const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
@@ -13404,7 +13404,7 @@ export default function ProfileDetailPage() {
                       user can link/unlink from either tab. */}
                   {["asset","vehicle","property","investment","account"].includes(profile.type) && (
                     <section>
-                      <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Linked Liabilities</p>
+                      <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked Liabilities</p>
                       <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                     </section>
                   )}
@@ -13414,7 +13414,7 @@ export default function ProfileDetailPage() {
                       visible right where the user looks. Same expenses UI as a
                       person's Finance tab, scoped to this asset's own expenses. */}
                   <section data-testid="asset-expenses">
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Expenses</p>
+                    <p className="micro-label text-muted-foreground mb-2 px-0.5">Expenses</p>
                     <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                   </section>
                 </TabsContent>
@@ -13464,7 +13464,7 @@ export default function ProfileDetailPage() {
                     onUploaded={handleSaved}
                   />
                   <section className="mt-6">
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Notes</p>
+                    <p className="micro-label text-muted-foreground mb-2 px-0.5">Notes</p>
                     <NotesTab profileId={id} currentNotes={profile.notes || ""} updatedAt={profile.updatedAt} onChanged={handleSaved} />
                   </section>
                 </TabsContent>
@@ -13477,7 +13477,7 @@ export default function ProfileDetailPage() {
               {tabValues.has("person-history") && (
                 <TabsContent value="person-history" className="mt-4 px-1 sm:px-0 space-y-6">
                   <section>
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Tasks &amp; Goals</p>
+                    <p className="micro-label text-muted-foreground mb-2 px-0.5">Tasks &amp; Goals</p>
                     <TasksTab
                       tasks={profile.relatedTasks}
                       profileId={profile.id}
@@ -13485,7 +13485,7 @@ export default function ProfileDetailPage() {
                     />
                   </section>
                   <section>
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Schedule &amp; Activity</p>
+                    <p className="micro-label text-muted-foreground mb-2 px-0.5">Schedule &amp; Activity</p>
                     {(() => {
                       type FeedItem = { date: string; type: string; title: string; subtitle?: string; color: string };
                       const feed: FeedItem[] = [];
@@ -13536,9 +13536,9 @@ export default function ProfileDetailPage() {
                             <div className="flex-1 min-w-0">
                               <p className={`text-xs font-medium truncate ${isMuted ? 'text-muted-foreground' : ''}`}>{item.title}</p>
                               <div className="flex items-center gap-1.5 mt-0.5">
-                                <Badge variant="outline" className="h-4 px-1 text-[10px] capitalize">{item.type}</Badge>
+                                <Badge variant="outline" className="h-4 px-1 text-[11px] capitalize">{item.type}</Badge>
                                 {item.subtitle && (
-                                  <span className="text-[10px] text-muted-foreground truncate">{item.subtitle}</span>
+                                  <span className="text-[11px] text-muted-foreground truncate">{item.subtitle}</span>
                                 )}
                               </div>
                             </div>
@@ -13547,7 +13547,7 @@ export default function ProfileDetailPage() {
                                 isMuted ? 'text-muted-foreground' : 'text-foreground'
                               }`}>{rel || '\u2014'}</p>
                               {labelDate && (
-                                <p className="text-[9px] text-muted-foreground/70 tabular-nums">
+                                <p className="text-[11px] text-muted-foreground/70 tabular-nums">
                                   {labelDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                                 </p>
                               )}
@@ -13561,7 +13561,7 @@ export default function ProfileDetailPage() {
                             <div className="flex items-center gap-2 mb-1.5 px-0.5">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                               <p className="micro-label text-emerald-700 dark:text-emerald-400">Upcoming</p>
-                              <span className="text-[10px] text-muted-foreground">({upcoming.length})</span>
+                              <span className="text-[11px] text-muted-foreground">({upcoming.length})</span>
                             </div>
                             {upcoming.length === 0 ? (
                               <p className="text-xs text-muted-foreground italic px-2.5 py-3 rounded-lg bg-muted/10 border border-dashed border-border/40">No upcoming items scheduled</p>
@@ -13579,7 +13579,7 @@ export default function ProfileDetailPage() {
                     })()}
                   </section>
                   <section>
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Changes</p>
+                    <p className="micro-label text-muted-foreground mb-2 px-0.5">Changes</p>
                     <HistoryTab profileId={profile.id} />
                   </section>
                 </TabsContent>
@@ -13638,7 +13638,7 @@ export default function ProfileDetailPage() {
                       look for it. */}
                   {["person", "self"].includes(profile.type) && (
                     <section className="mt-6">
-                      <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 px-0.5">Notes</p>
+                      <p className="micro-label text-muted-foreground mb-2 px-0.5">Notes</p>
                       <NotesTab profileId={id} currentNotes={profile.notes || ""} updatedAt={profile.updatedAt} onChanged={handleSaved} />
                     </section>
                   )}
@@ -13678,11 +13678,11 @@ export default function ProfileDetailPage() {
                   {profile.type === "subscription" ? (
                     <>
                       <section>
-                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Billing</h3>
+                        <h3 className="micro-label text-muted-foreground mb-3 px-0.5">Billing</h3>
                         <SubscriptionBillingTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                       </section>
                       <section>
-                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Plan details</h3>
+                        <h3 className="micro-label text-muted-foreground mb-3 px-0.5">Plan details</h3>
                         <SubscriptionDetailsTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                       </section>
                     </>
@@ -13690,12 +13690,12 @@ export default function ProfileDetailPage() {
                     <>
                       {["asset","vehicle","property"].includes(profile.type) && (
                         <section>
-                          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Linked liabilities</h3>
+                          <h3 className="micro-label text-muted-foreground mb-3 px-0.5">Linked liabilities</h3>
                           <AssetLinkedLiabilitiesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                         </section>
                       )}
                       <section>
-                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Loan</h3>
+                        <h3 className="micro-label text-muted-foreground mb-3 px-0.5">Loan</h3>
                         <LoanTab
                           profile={profile}
                           obligations={profile.relatedObligations || []}
@@ -13703,7 +13703,7 @@ export default function ProfileDetailPage() {
                         />
                       </section>
                       <section>
-                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 px-0.5">Bills &amp; expenses</h3>
+                        <h3 className="micro-label text-muted-foreground mb-3 px-0.5">Bills &amp; expenses</h3>
                         <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
                       </section>
                     </>

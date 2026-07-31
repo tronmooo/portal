@@ -354,7 +354,7 @@ export function NetWorthPopup({
                 <p className="text-[11px] font-semibold tabular-nums" style={{ color: nwTrend.up ? "hsl(155 60% 44%)" : "hsl(0 80% 60%)" }}>
                   {nwTrend.up ? "▲" : "▼"} {nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : `$${fmt(Math.abs(nwTrend.delta))}`}
                 </p>
-                <p className="text-[9px] text-muted-foreground">{nwTrend.delta >= 0 ? "+" : "−"}${fmt(Math.abs(nwTrend.delta))} this period</p>
+                <p className="text-[11px] text-muted-foreground">{nwTrend.delta >= 0 ? "+" : "−"}${fmt(Math.abs(nwTrend.delta))} this period</p>
               </div>
             )}
           </div>
@@ -369,7 +369,7 @@ export function NetWorthPopup({
               <div style={{ width: `${100 - ratio}%`, background: "hsl(155 60% 44%)" }} />
               <div style={{ width: `${ratio}%`, background: "hsl(270 80% 65%)" }} />
             </div>
-            <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+            <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
               <span><span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(155 60% 44%)" }} /> Assets ${fmt(displayTotalA)}</span>
               <span>Liab ${fmt(displayTotalL)} <span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(270 80% 65%)" }} /></span>
             </div>
@@ -458,11 +458,11 @@ function EntityList({
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium truncate">{p.name}</p>
-              <p className="text-[10px] text-muted-foreground capitalize">{p.type}</p>
+              <p className="text-[11px] text-muted-foreground capitalize">{p.type}</p>
             </div>
             <div className="text-right shrink-0">
               <p className="text-xs font-semibold tabular-nums">${fmt(rowValue)}</p>
-              <p className="text-[10px] text-muted-foreground tabular-nums">{sharePct < 100 ? `${sharePct}% owned` : ""}</p>
+              <p className="text-[11px] text-muted-foreground tabular-nums">{sharePct < 100 ? `${sharePct}% owned` : ""}</p>
             </div>
             <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
           </button>
@@ -591,7 +591,7 @@ export function CashFlowPopup({
                 <div style={{ width: `${(monthlyIncome / (monthlyIncome + monthlyOut)) * 100}%`, background: "hsl(155 60% 44%)" }} />
                 <div style={{ width: `${(monthlyOut / (monthlyIncome + monthlyOut)) * 100}%`, background: "hsl(0 72% 52%)" }} />
               </div>
-              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+              <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
                 <span><span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(155 60% 44%)" }} /> In ${fmt(monthlyIncome)}</span>
                 <span>Out ${fmt(monthlyOut)} <span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(0 72% 52%)" }} /></span>
               </div>
@@ -599,11 +599,11 @@ export function CashFlowPopup({
           )}
           <div className="mt-2 grid grid-cols-2 gap-2">
             <div className="rounded-lg bg-muted/30 px-2 py-1.5">
-              <p className="text-[9px] uppercase tracking-wide text-muted-foreground">Recurring out</p>
+              <p className="micro-label text-muted-foreground">Recurring out</p>
               <p className="text-sm font-bold tabular-nums">${fmt(recurringTotal)}/mo</p>
             </div>
             <div className="rounded-lg bg-muted/30 px-2 py-1.5">
-              <p className="text-[9px] uppercase tracking-wide text-muted-foreground">One-time out</p>
+              <p className="micro-label text-muted-foreground">One-time out</p>
               <p className="text-sm font-bold tabular-nums">${fmt(oneTimeTotal)}</p>
             </div>
           </div>
@@ -643,7 +643,7 @@ export function CashFlowPopup({
                     </li>
                   ))}
                   {items.length > 5 && (
-                    <li className="text-[10px] text-muted-foreground">+{items.length - 5} more</li>
+                    <li className="text-[11px] text-muted-foreground">+{items.length - 5} more</li>
                   )}
                 </ul>
               </div>
@@ -748,12 +748,12 @@ function SectionCard({
               <li key={it.id} className="flex items-center justify-between text-xs">
                 <div className="min-w-0 flex-1">
                   <p className="truncate">{it.label}</p>
-                  {it.sub && <p className="text-[10px] text-muted-foreground">{it.sub}</p>}
+                  {it.sub && <p className="text-[11px] text-muted-foreground">{it.sub}</p>}
                 </div>
                 <span className="tabular-nums shrink-0 ml-2">{it.amount >= 0 ? "+" : "−"}${fmt(Math.abs(it.amount))}</span>
               </li>
             ))}
-            {extraNote && <li className="text-[10px] text-muted-foreground">{extraNote}</li>}
+            {extraNote && <li className="text-[11px] text-muted-foreground">{extraNote}</li>}
           </ul>
           <div className="px-3 py-1.5 border-t border-border bg-muted/20">
             <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={onOpen}>
@@ -839,22 +839,22 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
       {/* Summary stat cards */}
       <div className="grid grid-cols-3 gap-2">
         <div className="bubble p-2.5">
-          <p className="text-[10px] text-muted-foreground">Total Spent</p>
+          <p className="text-[11px] text-muted-foreground">Total Spent</p>
           <p className="text-base font-bold tabular-nums leading-tight">${fmt(view.total)}</p>
           {view.trendPct != null && (
-            <p className={`text-[10px] font-medium tabular-nums ${view.trendPct > 0 ? "text-red-500" : "text-green-500"}`}>
+            <p className={`text-[11px] font-medium tabular-nums ${view.trendPct > 0 ? "text-red-500" : "text-green-500"}`}>
               {view.trendPct > 0 ? "▲" : "▼"} {Math.abs(view.trendPct)}% vs last
             </p>
           )}
         </div>
         <div className="bubble p-2.5">
-          <p className="text-[10px] text-muted-foreground">Daily Average</p>
+          <p className="text-[11px] text-muted-foreground">Daily Average</p>
           <p className="text-base font-bold tabular-nums leading-tight">${fmt(view.dailyAvg)}</p>
         </div>
         <div className="bubble p-2.5">
-          <p className="text-[10px] text-muted-foreground">Transactions</p>
+          <p className="text-[11px] text-muted-foreground">Transactions</p>
           <p className="text-base font-bold tabular-nums leading-tight">{view.txns}</p>
-          <p className="text-[10px] text-muted-foreground">~{view.perDay.toFixed(1)}/day</p>
+          <p className="text-[11px] text-muted-foreground">~{view.perDay.toFixed(1)}/day</p>
         </div>
       </div>
 
@@ -873,7 +873,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <span className="text-[13px] font-bold tabular-nums leading-none">${fmt(view.total)}</span>
-                <span className="text-[8px] uppercase tracking-wider text-muted-foreground mt-0.5">{periodSub}</span>
+                <span className="micro-label text-muted-foreground mt-0.5">{periodSub}</span>
               </div>
             </div>
             <div className="flex-1 min-w-0 space-y-1">
@@ -913,7 +913,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
                       <p className="text-xs font-medium capitalize truncate">{cat}</p>
                       <p className="text-xs font-semibold tabular-nums shrink-0">${fmt(amt)}</p>
                     </div>
-                    <p className="text-[10px] text-muted-foreground">{pct}% of total</p>
+                    <p className="text-[11px] text-muted-foreground">{pct}% of total</p>
                     <div className="mt-1 h-1 rounded-full bg-muted/60 overflow-hidden">
                       <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
                     </div>
@@ -1127,7 +1127,7 @@ export function BudgetPopup({
       <SpendingBreakdown filterMode={filterMode} filterIds={filterIds} />
 
       <div className="p-3 space-y-2">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Budget</p>
+        <p className="micro-label text-muted-foreground">Budget</p>
         {/* Overall progress — only when a budget exists */}
         {hasBudget && (
           <div className="rounded-lg border border-border bg-muted/20 px-3 py-2">
@@ -1169,7 +1169,7 @@ export function BudgetPopup({
                     <p className="text-xs font-medium capitalize flex-1 truncate">{b.category}</p>
                     {!editing && (
                       <>
-                        <Badge variant="outline" className="text-[10px] px-1 py-0 tabular-nums">{incomePct}% inc</Badge>
+                        <Badge variant="outline" className="text-[11px] px-1 py-0 tabular-nums">{incomePct}% inc</Badge>
                         <button
                           type="button"
                           onClick={() => startEdit(b)}
@@ -1194,7 +1194,7 @@ export function BudgetPopup({
 
                   {editing ? (
                     <div className="flex items-center gap-1.5 mb-1.5">
-                      <div className="inline-flex rounded-md border border-border overflow-hidden text-[10px]">
+                      <div className="inline-flex rounded-md border border-border overflow-hidden text-[11px]">
                         <button
                           type="button"
                           onClick={() => setEditMode("dollar")}
@@ -1232,10 +1232,10 @@ export function BudgetPopup({
                     />
                   </div>
                   <div className="flex items-center justify-between mt-0.5">
-                    <p className="text-[10px] text-muted-foreground tabular-nums">
+                    <p className="text-[11px] text-muted-foreground tabular-nums">
                       ${fmt(spent)} / ${fmt(b.amount)}
                     </p>
-                    <p className={`text-[10px] tabular-nums ${over ? "text-red-500 font-semibold" : "text-muted-foreground"}`}>{pct}%</p>
+                    <p className={`text-[11px] tabular-nums ${over ? "text-red-500 font-semibold" : "text-muted-foreground"}`}>{pct}%</p>
                   </div>
                 </div>
               );
@@ -1267,7 +1267,7 @@ export function BudgetPopup({
               aria-invalid={!catOk && newCategory.length > 0}
             />
             <div className="flex items-center gap-1.5">
-              <div className="inline-flex rounded-md border border-border overflow-hidden text-[10px]">
+              <div className="inline-flex rounded-md border border-border overflow-hidden text-[11px]">
                 <button
                   type="button"
                   onClick={() => setNewMode("dollar")}
@@ -1297,7 +1297,7 @@ export function BudgetPopup({
               </Button>
             </div>
             {newMode === "percent" && monthlyIncome > 0 && newAmount && (
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-[11px] text-muted-foreground">
                 ≈ ${fmt((Number(newAmount) / 100) * monthlyIncome)} of your ${fmt(monthlyIncome)} monthly income
               </p>
             )}

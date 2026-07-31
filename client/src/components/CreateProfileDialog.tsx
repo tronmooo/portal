@@ -256,7 +256,7 @@ export function CreateProfileDialog({
               {/* Dynamic fields from schema */}
               {selectedTypeDef && selectedTypeDef.field_schema && selectedTypeDef.field_schema.length > 0 && (
                 <div className="border-t pt-3">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                  <p className="micro-label text-muted-foreground mb-3">
                     {selectedTypeDef.label} Details
                   </p>
                   <DynamicProfileForm

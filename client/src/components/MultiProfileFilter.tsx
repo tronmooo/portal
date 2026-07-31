@@ -297,7 +297,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
           </PopoverTrigger>
           <PopoverContent align="start" className="w-60 p-2 max-h-[400px] overflow-y-auto z-50">
             <div className="flex items-center justify-between mb-2 px-1">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Filter by Person</span>
+              <span className="micro-label text-muted-foreground">Filter by Person</span>
               <div className="flex items-center gap-1">
                 {!isEveryone && !hideEveryone && (
                   <Button variant="ghost" size="sm" className="h-6 text-xs px-1.5 gap-1" onClick={() => { handleEveryone(); setDesktopOpen(false); }}>

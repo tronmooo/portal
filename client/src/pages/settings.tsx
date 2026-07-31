@@ -957,7 +957,7 @@ export default function SettingsPage() {
             </Button>
             <Separator />
             <div className="space-y-2">
-              <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Import history</Label>
+              <Label className="micro-label text-muted-foreground">Import history</Label>
               <ChatGPTImportHistory />
             </div>
           </CardContent>

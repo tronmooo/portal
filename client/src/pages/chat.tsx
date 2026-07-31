@@ -591,7 +591,7 @@ function LazyDocumentPreview({
           <div className="grid grid-cols-2 gap-x-3 gap-y-2 px-3 py-2.5">
             {fields.map(([k, v]) => (
               <div key={k} className="min-w-0">
-                <p className="text-[10px] text-muted-foreground">{formatKey(k)}</p>
+                <p className="text-[11px] text-muted-foreground">{formatKey(k)}</p>
                 <p className="text-xs font-medium truncate" title={formatVal(v)}>{formatVal(v)}</p>
               </div>
             ))}
@@ -1004,7 +1004,7 @@ function ExtractionConfirmation({
                       />
                     )}
                     {field.isDate && field.suggestedEvent && field.selected && (
-                      <div className="text-[10px] text-blue-600 dark:text-blue-400 leading-tight">
+                      <div className="text-[11px] text-blue-600 dark:text-blue-400 leading-tight">
                         → {field.suggestedEvent}
                       </div>
                     )}
@@ -1021,7 +1021,7 @@ function ExtractionConfirmation({
                           className="h-3 w-3"
                           data-testid={`also-track-${field.key}`}
                         />
-                        <span className="text-[10px] text-muted-foreground">Also track over time</span>
+                        <span className="text-[11px] text-muted-foreground">Also track over time</span>
                       </label>
                     )}
                   </td>
@@ -1655,7 +1655,7 @@ function BatchAttachmentPanel({
                           type="button"
                           onClick={() => onSmartFill(idx)}
                           disabled={isSending}
-                          className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-center gap-1 text-[10px] font-medium px-1.5 py-1 rounded-md bg-primary/10 hover:bg-primary/20 text-primary disabled:opacity-50 transition-colors"
+                          className="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-center gap-1 text-[11px] font-medium px-1.5 py-1 rounded-md bg-primary/10 hover:bg-primary/20 text-primary disabled:opacity-50 transition-colors"
                           data-testid={`batch-smart-fill-${idx}`}
                         >
                           <Sparkles className="h-3 w-3" />
@@ -2530,18 +2530,18 @@ const MessageRow = memo(function MessageRow({
                           {entityTitle || actionLabel(action.type).toUpperCase()}
                         </p>
                         {/* WHO badge — always show */}
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                        <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
                           whoFor === 'You' ? 'bg-primary/15 text-primary' : 'bg-amber-500/15 text-amber-600'
                         }`}>
                           {whoFor.toUpperCase()}
                         </span>
                         {isTrackerEntry && trackerName && (
-                          <span className="text-[9px] text-muted-foreground/60 font-medium">
+                          <span className="text-[11px] text-muted-foreground/60 font-medium">
                             via {trackerName}
                           </span>
                         )}
                       </div>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
                         {entityDetails || actionLabel(action.type)}
                         {isUndone && ' · DELETED'}
                       </p>
@@ -2664,7 +2664,7 @@ const MessageRow = memo(function MessageRow({
                     <div className="mt-1 rounded-xl border border-primary/30 bg-primary/5 p-2.5 space-y-1.5" data-testid={`entry-editor-${i}`}>
                       {Object.keys(entryEditVals).filter((k) => k !== "_notes").map((k) => (
                         <div key={k} className="flex items-center gap-1.5">
-                          <label className="text-[10px] text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
+                          <label className="text-[11px] text-muted-foreground w-24 shrink-0 truncate" title={k}>{k}</label>
                           <input
                             className="flex-1 h-7 px-2 text-xs rounded bg-background border border-border focus:outline-none focus:ring-1 focus:ring-primary"
                             value={entryEditVals[k] ?? ""}
@@ -2749,7 +2749,7 @@ const MessageRow = memo(function MessageRow({
                         >
                           Open artifact →
                         </button>
-                        <span className="text-[10px] text-muted-foreground">click anywhere to open</span>
+                        <span className="text-[11px] text-muted-foreground">click anywhere to open</span>
                       </div>
                     </div>
                     );

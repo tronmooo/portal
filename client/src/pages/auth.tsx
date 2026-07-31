@@ -419,7 +419,7 @@ export default function AuthPage() {
                       <span className="w-full border-t border-border/80" />
                     </div>
                     <div className="relative flex justify-center text-xs uppercase">
-                      <span className="bg-card px-3 text-xs font-medium text-muted-foreground/80 uppercase tracking-wider">or continue with email</span>
+                      <span className="micro-label bg-card px-3 text-muted-foreground/80">or continue with email</span>
                     </div>
                   </div>
                 </>

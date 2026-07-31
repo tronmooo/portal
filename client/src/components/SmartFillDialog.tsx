@@ -346,7 +346,7 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
               {/* Detected fields */}
               {analyze.detectedFields.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Detected</p>
+                  <p className="micro-label text-muted-foreground">Detected</p>
                   <div className="rounded-md border border-border divide-y divide-border/60">
                     {analyze.detectedFields.map((f) => {
                       const st = fieldStates[f.id] || { value: "", included: false };
@@ -356,16 +356,16 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
                           <div className="col-span-5">
                             <p className="text-xs font-medium truncate" title={f.pdfLabel}>{f.pdfLabel}</p>
                             <div className="flex flex-wrap items-center gap-1 mt-0.5">
-                              <Badge variant="outline" className="text-[10px] px-1 py-0 capitalize">{f.fieldKind}</Badge>
+                              <Badge variant="outline" className="text-[11px] px-1 py-0 capitalize">{f.fieldKind}</Badge>
                               {f.source && f.source !== "missing" && (
-                                <span className="text-[10px] text-muted-foreground truncate" title={f.source}>{f.source}</span>
+                                <span className="text-[11px] text-muted-foreground truncate" title={f.source}>{f.source}</span>
                               )}
                               {f.fieldKind === "signature" && (
-                                <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-500/50 text-amber-700 dark:text-amber-400">sign manually</Badge>
+                                <Badge variant="outline" className="text-[11px] px-1 py-0 border-amber-500/50 text-amber-700 dark:text-amber-400">sign manually</Badge>
                               )}
                             </div>
                             {f.warning && (
-                              <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 flex items-start gap-1">
+                              <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5 flex items-start gap-1">
                                 <AlertTriangle className="h-2.5 w-2.5 mt-0.5 shrink-0" />
                                 <span>{f.warning}</span>
                               </p>
@@ -384,7 +384,7 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
                           </div>
                           <div className="col-span-2 flex items-center justify-end gap-1.5">
                             {!lowConf && f.fieldKind !== "signature" && (
-                              <span className="text-[10px] text-muted-foreground tabular-nums">{Math.round(f.confidence * 100)}%</span>
+                              <span className="text-[11px] text-muted-foreground tabular-nums">{Math.round(f.confidence * 100)}%</span>
                             )}
                             <input
                               type="checkbox"
@@ -406,7 +406,7 @@ export function SmartFillDialog({ open, onOpenChange, file, preselectedSources =
               {/* Missing fields */}
               {analyze.missingFields.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                  <p className="micro-label text-muted-foreground flex items-center gap-1.5">
                     <AlertTriangle className="h-3 w-3" /> Missing — type if you want them filled
                   </p>
                   <div className="rounded-md border border-border divide-y divide-border/60">

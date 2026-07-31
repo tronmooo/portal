@@ -335,7 +335,7 @@ export default function ProfileTypeSelector({
         return (
           <section key={cat}>
             <div className="flex items-center gap-2 mb-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <h3 className="micro-label text-muted-foreground">
                 {label}
               </h3>
               <Badge variant="secondary" className="text-xs px-1.5 py-0">

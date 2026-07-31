@@ -123,7 +123,7 @@ function Chip({ children, tone }: { children: React.ReactNode; tone?: "neg" | "w
     : tone === "warn" ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
     : tone === "pos" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
     : "bg-muted text-muted-foreground";
-  return <span className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 py-px rounded-full font-medium ${cls}`}>{children}</span>;
+  return <span className={`inline-flex items-center gap-0.5 text-[11px] px-1.5 py-px rounded-full font-medium ${cls}`}>{children}</span>;
 }
 
 /** Small bordered action button used in expanded cards. */
@@ -458,7 +458,7 @@ export function EventsPopup({ open, onClose, items, todayStr, title = "Calendar 
         <div key={d.day}>
           <div className="flex items-baseline px-1 pt-2 pb-0.5">
             <span className="micro-label text-muted-foreground">{d.day}</span>
-            <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">{daysAway(d.date) === 0 ? "" : `in ${daysAway(d.date)}d`}</span>
+            <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">{daysAway(d.date) === 0 ? "" : `in ${daysAway(d.date)}d`}</span>
           </div>
           {d.items.map((i: any) => {
             const ownerNames = owners.names(i.linkedProfiles, false);
@@ -466,7 +466,7 @@ export function EventsPopup({ open, onClose, items, todayStr, title = "Calendar 
             return (
               <div key={i.id} className="mb-1 rounded-md border border-border/40 bg-card/50 px-2.5 py-1.5">
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[10px] uppercase text-muted-foreground w-14 shrink-0 truncate">{i.time || (i.allDay ? "all day" : "")}</span>
+                  <span className="text-[11px] uppercase text-muted-foreground w-14 shrink-0 truncate">{i.time || (i.allDay ? "all day" : "")}</span>
                   <span className={`text-xs truncate ${urgent ? "text-red-500 font-medium" : ""}`}>{i.title}</span>
                 </div>
                 <div className="flex items-center flex-wrap gap-1 mt-0.5 pl-16">

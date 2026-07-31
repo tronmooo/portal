@@ -118,7 +118,7 @@ export default function ChartCard({ spec, defaultOpen = true }: { spec: ChartSpe
               {typeof spec.confidence === "number" && (
                 <div className="flex items-center gap-1.5 mb-1.5">
                   <span className="micro-label text-muted-foreground">Confidence</span>
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${confClass}`}>{Math.round((conf as number) * 100)}%</span>
+                  <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded ${confClass}`}>{Math.round((conf as number) * 100)}%</span>
                 </div>
               )}
               {spec.notes?.map((n, i) => (

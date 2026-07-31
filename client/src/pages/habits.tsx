@@ -355,7 +355,7 @@ function HabitCard({ habit }: { habit: Habit }) {
                 }}
               />
             ))}
-            <span className="text-[9px] text-white/50 ml-0.5">
+            <span className="text-[11px] text-white/50 ml-0.5">
               {last14.slice(7).filter(d => d.done).length}/7
             </span>
           </div>

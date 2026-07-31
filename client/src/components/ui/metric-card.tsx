@@ -94,12 +94,12 @@ export function MetricCard({
       >
         {icon && <Medallion icon={icon} accent={accent} size="sm" />}
         <span className="min-w-0">
-          <span className="micro-label text-[10px] text-muted-foreground block leading-none whitespace-nowrap">
+          <span className="micro-label text-muted-foreground block leading-none whitespace-nowrap">
             {label}
           </span>
           <span className="metric-value text-[17px] leading-none block mt-1 whitespace-nowrap" style={{ color }}>
             {countTo != null ? <>{valuePrefix}<CountUp value={countTo} /></> : value}
-            {unit && <span className="text-[10px] text-muted-foreground ml-1 font-normal">{unit}</span>}
+            {unit && <span className="text-[11px] text-muted-foreground ml-1 font-normal">{unit}</span>}
           </span>
         </span>
         {headerRight && <span className="shrink-0 self-start">{headerRight}</span>}

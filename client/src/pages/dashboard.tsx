@@ -274,7 +274,7 @@ function CollapsibleSection({
         <div className="icon-badge" style={iconBg ? { background: iconBg } : { background: 'hsl(var(--muted))' }}>
           <Icon className="h-3.5 w-3.5" style={iconColor ? { color: iconColor } : { color: 'hsl(var(--primary))' }} />
         </div>
-        <h2 className="text-xs font-semibold tracking-wide uppercase" style={iconColor ? { color: iconColor } : {}}>{label}</h2>
+        <h2 className="micro-label" style={iconColor ? { color: iconColor } : {}}>{label}</h2>
         {count !== undefined && (
           <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums">{count}</span>
         )}
@@ -343,7 +343,7 @@ function MiniStat({
         <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
       </div>
       <p className="micro-label text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
-      {sub && <p className="text-[9px] text-muted-foreground/60 leading-tight mt-0.5 truncate w-full relative z-10">{sub}</p>}
+      {sub && <p className="text-[11px] text-muted-foreground/60 leading-tight mt-0.5 truncate w-full relative z-10">{sub}</p>}
       {/* Bottom accent dashes (matches the mockup's tile footer) */}
       {accent && !sparkData && (
         <div className="mt-auto flex gap-1 pt-1.5 relative z-10">
@@ -425,7 +425,7 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
         <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
           <div className="h-full rounded-full transition-all duration-700" style={{ width: `${fillPct}%`, background: 'hsl(262 65% 62%)' }} />
         </div>
-        <p className="text-[9px] text-muted-foreground/60 mt-0.5">{count} active</p>
+        <p className="text-[11px] text-muted-foreground/60 mt-0.5">{count} active</p>
       </div>
     </div>
   );
@@ -446,7 +446,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
         <div className="icon-badge" style={{ background: 'hsl(43 85% 52% / 0.15)' }}>
           <DollarSign className="h-3.5 w-3.5" style={{ color: 'hsl(43 85% 52%)' }} />
         </div>
-        <span className={`text-[10px] font-semibold ${trend === 'up' ? 'text-red-400' : trend === 'down' ? 'text-green-500' : 'text-muted-foreground'}`}>
+        <span className={`text-[11px] font-semibold ${trend === 'up' ? 'text-red-400' : trend === 'down' ? 'text-green-500' : 'text-muted-foreground'}`}>
           {trend === 'up' ? '↑' : trend === 'down' ? '↓' : '—'}
         </span>
       </div>
@@ -456,7 +456,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
             report on July 1). Show the recurring commitment so the number has
             context: expenses logged so far + bills/mo still coming. */}
         {(finSnap?.monthlyObligationTotal ?? 0) > 0 && (
-          <span className="ml-1 text-[9px] text-muted-foreground tabular-nums">+${Math.round(finSnap.monthlyObligationTotal).toLocaleString()}/mo bills</span>
+          <span className="ml-1 text-[11px] text-muted-foreground tabular-nums">+${Math.round(finSnap.monthlyObligationTotal).toLocaleString()}/mo bills</span>
         )}
       </div>
       <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
@@ -485,7 +485,7 @@ function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct:
         <div>
           <div className="text-sm font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
           <p className="micro-label text-muted-foreground/70 mt-0.5">Habits Today</p>
-          <p className="text-[9px] text-muted-foreground/60">{totalHabits} tracked</p>
+          <p className="text-[11px] text-muted-foreground/60">{totalHabits} tracked</p>
         </div>
         {/* Donut ring */}
         <svg width="36" height="36" className="shrink-0 -rotate-90 mt-0.5">
@@ -518,7 +518,7 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
         <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
       </div>
       <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
-      <p className="text-[9px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{streak > 0 ? `${streak}-day streak!` : "Keep it going!"}</p>
+      <p className="text-[11px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{streak > 0 ? `${streak}-day streak!` : "Keep it going!"}</p>
       {/* 7-day dots */}
       <div className="flex gap-0.5 mt-1.5 relative z-10">
         {dots.map((filled, i) => (
@@ -547,22 +547,22 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
         <div className="icon-badge" style={{ background: `hsl(${accent} / 0.15)` }}>
           <FileWarning className="h-3.5 w-3.5" style={{ color: `hsl(${accent})` }} />
         </div>
-        {isUrgent && <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1 py-0.5 rounded">{expiredCount} EXPIRED</span>}
+        {isUrgent && <span className="text-[11px] font-bold text-red-500 bg-red-500/10 px-1 py-0.5 rounded">{expiredCount} EXPIRED</span>}
       </div>
       <div className="mt-1 relative z-10">
         <span className="text-sm font-bold metric-value tracking-tight leading-none tabular-nums" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
       </div>
       <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
       {count === 0 ? (
-        <p className="text-[9px] mt-0.5 relative z-10 truncate flex items-center gap-1" style={{ color: `hsl(${accent})` }}>
+        <p className="text-[11px] mt-0.5 relative z-10 truncate flex items-center gap-1" style={{ color: `hsl(${accent})` }}>
           <CheckCircle2 className="h-2.5 w-2.5" /> You're all set!
         </p>
       ) : mostOverdue ? (
-        <p className="text-[9px] text-red-500 mt-0.5 relative z-10 truncate tabular-nums">
+        <p className="text-[11px] text-red-500 mt-0.5 relative z-10 truncate tabular-nums">
           Tap to snooze · {Math.abs(mostOverdue.daysUntil)}d overdue
         </p>
       ) : (
-        <p className="text-[9px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{count} expiring soon</p>
+        <p className="text-[11px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{count} expiring soon</p>
       )}
       {isUrgent && (
         <div className="mt-1.5 relative z-10">
@@ -861,7 +861,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
           updating during a filter switch instead of staring at stale numbers. */}
       {showRefetch && (
         <div
-          className="absolute top-1 right-1 z-10 flex items-center gap-1.5 rounded-full bg-background/90 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm border border-border/50 animate-pulse"
+          className="absolute top-1 right-1 z-10 flex items-center gap-1.5 rounded-full bg-background/90 px-2 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm border border-border/50 animate-pulse"
           data-testid="hero-kpi-refetching"
         >
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/70" />
@@ -976,7 +976,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
                 <div className="flex w-full items-end justify-center" style={{ height: 32 }}>
                   <div className="w-full rounded-md transition-all duration-500" style={{ height: `${Math.max(8, (Math.abs(b.net) / weekMax) * 100)}%`, background: b.net >= 0 ? 'hsl(155 60% 48%)' : 'hsl(0 78% 60%)' }} />
                 </div>
-                <span className="text-[9px] text-muted-foreground/50">{b.label}</span>
+                <span className="text-[11px] text-muted-foreground/50">{b.label}</span>
               </div>
             ))}
           </div>
@@ -1016,7 +1016,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
               <Target className="h-4 w-4" style={{ color: budgetBreached ? 'hsl(0 72% 55%)' : 'hsl(155 65% 50%)' }} />
             </div>
             <span className="micro-label text-muted-foreground/70">Budget</span>
-            {budgetBreached && <span className="ml-auto rounded bg-red-500/10 px-1.5 py-0.5 text-[9px] font-bold text-red-500">OVER</span>}
+            {budgetBreached && <span className="ml-auto rounded bg-red-500/10 px-1.5 py-0.5 text-[11px] font-bold text-red-500">OVER</span>}
           </div>
           <div className="mt-2 flex items-center gap-3">
             <div className="min-w-0">
@@ -1218,7 +1218,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                       </PieChart>
                     </ResponsiveContainer>
                     <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                      <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Spent</p>
+                      <p className="micro-label text-muted-foreground">Spent</p>
                       <p className="text-sm font-bold tabular-nums">{formatMoney(total)}</p>
                     </div>
                   </div>
@@ -1314,18 +1314,18 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                     <div>
                       <p className="micro-label text-muted-foreground">Manual</p>
                       <p className="text-sm font-bold tabular-nums">{formatMoney(manualTotal)}</p>
-                      <p className="text-[9px] text-muted-foreground">{manualBills.length} bill{manualBills.length !== 1 ? 's' : ''}</p>
+                      <p className="text-[11px] text-muted-foreground">{manualBills.length} bill{manualBills.length !== 1 ? 's' : ''}</p>
                     </div>
                     <div>
                       <p className="micro-label text-muted-foreground">Autopay</p>
                       <p className="text-sm font-bold tabular-nums text-green-500">{formatMoney(autopayTotal)}</p>
-                      <p className="text-[9px] text-muted-foreground">{autopayBills.length} bill{autopayBills.length !== 1 ? 's' : ''}</p>
+                      <p className="text-[11px] text-muted-foreground">{autopayBills.length} bill{autopayBills.length !== 1 ? 's' : ''}</p>
                     </div>
                   </div>
                 )}
                 {within7.length > 0 && bills.length > 0 && (
                   <div className="flex gap-2 mt-1">
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">
+                    <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">
                       {within7.length} due this week
                     </span>
                   </div>
@@ -1342,10 +1342,10 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                       const accent = overdue ? "border-red-500/40 bg-red-500/5" : (dueToday || soon) ? "border-amber-500/30 bg-amber-500/5" : "border-border/50";
                       const textAccent = overdue ? "text-red-500" : (dueToday || soon) ? "text-amber-500" : "text-muted-foreground";
                       const statusChip = overdue
-                        ? <span className="text-[9px] font-semibold uppercase tracking-wider text-red-500 shrink-0">Overdue</span>
+                        ? <span className="micro-label text-red-500 shrink-0">Overdue</span>
                         : dueToday
-                          ? <span className="text-[9px] font-semibold uppercase tracking-wider text-amber-500 shrink-0">Due today</span>
-                          : <span className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground/60 shrink-0">Upcoming</span>;
+                          ? <span className="micro-label text-amber-500 shrink-0">Due today</span>
+                          : <span className="micro-label text-muted-foreground/60 shrink-0">Upcoming</span>;
                       const openLiability = () => {
                         if (bill.linkedLiabilityId) { setPopup(null); navigate(`/profiles/${bill.linkedLiabilityId}`); }
                       };
@@ -1362,7 +1362,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                               <p className="text-xs font-medium truncate">{bill.name}</p>
                               {statusChip}
                               {bill.category && (
-                                <span className="text-[9px] uppercase tracking-wider text-muted-foreground/60 shrink-0">
+                                <span className="micro-label text-muted-foreground/60 shrink-0">
                                   {bill.category}
                                 </span>
                               )}
@@ -1455,7 +1455,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                       type="button"
                       onClick={(e) => { e.stopPropagation(); snoozeDoc(doc.documentId); }}
                       title="Hide for 30 days"
-                      className="h-6 px-1.5 rounded text-[10px] font-semibold flex items-center gap-0.5 bg-muted/60 hover:bg-muted text-muted-foreground shrink-0"
+                      className="h-6 px-1.5 rounded text-[11px] font-semibold flex items-center gap-0.5 bg-muted/60 hover:bg-muted text-muted-foreground shrink-0"
                       data-testid={`btn-snooze-doc-${doc.documentId}`}
                     >
                       <BellOff className="h-3 w-3" />
@@ -1669,7 +1669,7 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
     pool.push({
       key: "habit-momentum", title: "Habit consistency", accent: flat ? TEAL : up ? GOOD : BAD,
       headline: `${flat ? "→" : up ? "↑" : "↓"} ${Math.abs(delta)}%`,
-      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>This wk {thisH.rate}%</span><span>·</span><span>Last {lastH.rate}%</span></div>,
+      body: <div className="mt-1 flex gap-2 text-[11px] text-muted-foreground"><span>This wk {thisH.rate}%</span><span>·</span><span>Last {lastH.rate}%</span></div>,
       caption: up ? "More consistent than last week — keep it climbing." : flat ? "Holding steady with last week's consistency." : "Consistency slipped vs last week — recommit to one habit today.",
       href: "/dashboard/health",
       score: 70 + Math.min(24, Math.abs(delta)),
@@ -1687,7 +1687,7 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
     pool.push({
       key: `health-move-${h.trackerId}`, title: h.name, accent: TEAL,
       headline: `${up ? "↑" : "↓"} ${fmtVal(Number(h.trendValue))}${h.unit ? ` ${h.unit}` : ""}`,
-      body: <div className="mt-1 text-[10px] text-muted-foreground">over the last week</div>,
+      body: <div className="mt-1 text-[11px] text-muted-foreground">over the last week</div>,
       caption: `${h.name} ${up ? "rose" : "fell"} ${fmtVal(Number(h.trendValue))}${h.unit ? ` ${h.unit}` : ""} across ${h.entryCount} recent log${h.entryCount === 1 ? "" : "s"} — mind the direction.`,
       href: "/dashboard/health",
       score: (idx === 0 ? 60 : 42) + Math.min(12, Number(h.entryCount) || 0),
@@ -1705,7 +1705,7 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
     pool.push({
       key: "logging-momentum", title: "Logging momentum", accent: flat ? TEAL : up ? GOOD : WARN,
       headline: `${flat ? "→" : up ? "↑" : "↓"} ${Math.abs(delta)}`,
-      body: <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground"><span>This wk {thisLogs}</span><span>·</span><span>Last {lastLogs}</span></div>,
+      body: <div className="mt-1 flex gap-2 text-[11px] text-muted-foreground"><span>This wk {thisLogs}</span><span>·</span><span>Last {lastLogs}</span></div>,
       caption: up ? `${delta} more log${delta === 1 ? "" : "s"} than last week — momentum is building.` : flat ? "Same logging pace as last week — steady tracking." : `${Math.abs(delta)} fewer log${Math.abs(delta) === 1 ? "" : "s"} than last week — a quick entry keeps the trend alive.`,
       href: "/dashboard/health",
       score: 40 + Math.min(20, Math.abs(delta)),
@@ -1734,7 +1734,7 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
               <p className="micro-label text-muted-foreground/70">{c.title}</p>
               <p className="mt-0.5 text-lg font-bold tabular-nums" style={{ color: `hsl(${c.accent})` }}>{c.headline}</p>
               {c.body}
-              <p className="mt-2 text-[10px] leading-snug text-muted-foreground">{c.caption}</p>
+              <p className="mt-2 text-[11px] leading-snug text-muted-foreground">{c.caption}</p>
             </button>
           ))}
         </div>
@@ -1782,7 +1782,7 @@ function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filte
             </div>
             <div className="min-w-0">
               <p className="text-xs font-semibold truncate">{label}</p>
-              <p className="text-[10px] text-muted-foreground truncate">{value}</p>
+              <p className="text-[11px] text-muted-foreground truncate">{value}</p>
             </div>
           </button>
         ))}
@@ -1939,8 +1939,8 @@ function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyo
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-medium">{it.title}</p>
-                    <p className="truncate text-[10px]" style={{ color: overdue ? "hsl(0 72% 56%)" : "hsl(var(--muted-foreground))" }}>
-                      <span className="uppercase tracking-wide text-muted-foreground/60">{it.kind}</span>
+                    <p className="truncate text-[11px]" style={{ color: overdue ? "hsl(0 72% 56%)" : "hsl(var(--muted-foreground))" }}>
+                      <span className="micro-label text-muted-foreground/60">{it.kind}</span>
                       {it.detail ? ` · ${it.detail}` : ""}
                     </p>
                   </div>
@@ -2162,7 +2162,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
               <button
                 onClick={() => handleBillPay(id)}
                 title="Mark paid"
-                className="h-5 px-1.5 rounded flex items-center gap-0.5 hover:bg-green-500/20 text-green-600 text-[10px] font-semibold"
+                className="h-5 px-1.5 rounded flex items-center gap-0.5 hover:bg-green-500/20 text-green-600 text-[11px] font-semibold"
                 data-testid={`btn-pay-bill-${id}`}
               >
                 <DollarSign className="h-2.5 w-2.5" />
@@ -2250,13 +2250,13 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
                 return (
                   <>
                     {overdueCt > 0 && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-red-500/40 bg-red-500/10 text-red-500">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded border border-red-500/40 bg-red-500/10 text-red-500">
                         <AlertTriangle className="h-2.5 w-2.5" />
                         {overdueCt} overdue
                       </span>
                     )}
                     {soonCt > 0 && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-500">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-500">
                         <Clock className="h-2.5 w-2.5" />
                         {soonCt} due soon
                       </span>
@@ -2315,7 +2315,7 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
                 <div className="relative h-5 bg-muted/30 rounded-full overflow-hidden">
                   {events.filter(ev => ev.time).map((ev: any, i: number) => (
                     <div key={ev.id}
-                      className="absolute top-1 h-3 rounded-full text-[8px] font-bold flex items-center justify-center overflow-hidden"
+                      className="absolute top-1 h-3 rounded-full text-[11px] font-bold flex items-center justify-center overflow-hidden"
                       style={{ left: `${toPos(ev.time)}%`, minWidth: '8px', maxWidth: '60px', transform: 'translateX(-50%)',
                         background: ev.category === 'health' ? 'hsl(173 60% 44%)' : ev.category === 'finance' ? 'hsl(43 85% 52%)' : 'hsl(215 70% 58%)',
                         color: 'white', padding: '0 3px' }}>
@@ -2325,7 +2325,7 @@ function TodaySection({ enhanced, stats }: { enhanced: any; stats: DashboardStat
                   {/* Now indicator */}
                   {(() => { const now = new Date(); const nowPos = ((now.getHours() + now.getMinutes()/60 - START) / (END-START)) * 100; return nowPos >= 0 && nowPos <= 100 ? <div className="absolute top-0 bottom-0 w-px bg-red-400/70" style={{ left: `${nowPos}%` }} /> : null; })()}
                 </div>
-                <div className="flex justify-between text-[8px] text-muted-foreground/50 mt-0.5 px-0.5">
+                <div className="flex justify-between text-[11px] text-muted-foreground/50 mt-0.5 px-0.5">
                   <span>8am</span><span>12pm</span><span>4pm</span><span>10pm</span>
                 </div>
               </div>
@@ -2411,12 +2411,12 @@ function KeyFindingRow({ finding }: { finding: KeyFinding }) {
       </div>
       <div className="flex items-center gap-1 shrink-0 self-center">
         <span
-          className="inline-flex items-center gap-1 text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded"
+          className="inline-flex items-center gap-1 text-[11px] font-semibold tabular-nums px-1.5 py-0.5 rounded"
           style={{ background: `hsl(${colors.bg})`, color: `hsl(${colors.fg})`, border: `1px solid hsl(${colors.border} / 0.4)` }}
           title={FINDING_DIRECTION_LABEL[finding.direction]}
         >
           <DirectionGlyph direction={finding.direction} />
-          <span className="uppercase tracking-wide">{FINDING_DIRECTION_LABEL[finding.direction]}</span>
+          <span className="micro-label">{FINDING_DIRECTION_LABEL[finding.direction]}</span>
         </span>
       </div>
     </div>
@@ -2493,7 +2493,7 @@ function KeyFindingsSection({
       <div className="space-y-0.5">
         {top.map(f => <KeyFindingRow key={f.id} finding={f} />)}
         {moreCount > 0 && (
-          <p className="text-[10px] text-muted-foreground/60 text-center pt-1.5">
+          <p className="text-[11px] text-muted-foreground/60 text-center pt-1.5">
             {moreCount} more finding{moreCount === 1 ? "" : "s"} — drill into a tracker to explore
           </p>
         )}
@@ -2753,8 +2753,8 @@ function ObligationsSection({ data }: { data: any[] }) {
                   {mn > 0 && <div style={{width:`${(mn/total)*100}%`,background:'hsl(var(--muted-foreground) / 0.35)'}} className="rounded-r-full transition-all" />}
                 </div>
                 <div className="flex gap-3 mt-1">
-                  {wk > 0 && <span className="text-[9px] text-amber-500 font-medium">● Week ${wk.toFixed(0)}</span>}
-                  {mn > 0 && <span className="text-[9px] text-muted-foreground">● Month ${mn.toFixed(0)}</span>}
+                  {wk > 0 && <span className="text-[11px] text-amber-500 font-medium">● Week ${wk.toFixed(0)}</span>}
+                  {mn > 0 && <span className="text-[11px] text-muted-foreground">● Month ${mn.toFixed(0)}</span>}
                 </div>
               </div>
             );
@@ -2794,7 +2794,7 @@ function ObligationsSection({ data }: { data: any[] }) {
                   <p className="micro-label text-muted-foreground">Amount due</p>
                   <p className="text-xl font-bold tabular-nums">{formatMoney(bill.amount || 0)}</p>
                   {typeof days === 'number' && (
-                    <span className={`inline-flex items-center gap-1 mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${chipColor}`}>
+                    <span className={`inline-flex items-center gap-1 mt-1 text-[11px] font-semibold px-1.5 py-0.5 rounded border ${chipColor}`}>
                       <Clock className="h-2.5 w-2.5" />
                       {billDueLabel(bill)}
                     </span>
@@ -2839,7 +2839,7 @@ function ObligationsSection({ data }: { data: any[] }) {
                   )}
                 </div>
                 {bill.autopay && (
-                  <p className="text-[10px] text-muted-foreground/70 italic px-1">
+                  <p className="text-[11px] text-muted-foreground/70 italic px-1">
                     This bill is on autopay. Marking as paid manually only updates Portol's record.
                   </p>
                 )}
@@ -3083,9 +3083,9 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                     <div className="flex items-center justify-between">
                       <span className="text-xs-loose font-medium truncate">{g.title}</span>
                       <div className="flex items-center gap-1 ml-2 shrink-0">
-                        {isOverdue && <span className="text-[9px] font-bold text-red-500">OVERDUE</span>}
-                        {!isOverdue && isAtRisk && <span className="text-[9px] font-bold text-amber-500">AT RISK</span>}
-                        {isReadyToComplete && <span className="text-[9px] font-bold text-emerald-500">DONE — MARK COMPLETE</span>}
+                        {isOverdue && <span className="text-[11px] font-bold text-red-500">OVERDUE</span>}
+                        {!isOverdue && isAtRisk && <span className="text-[11px] font-bold text-amber-500">AT RISK</span>}
+                        {isReadyToComplete && <span className="text-[11px] font-bold text-emerald-500">DONE — MARK COMPLETE</span>}
                         <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
                       </div>
                     </div>
@@ -3207,7 +3207,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                   {(actionGoal.deadline || pace) && (
                     <div className="flex flex-wrap items-center gap-1.5 mt-2">
                       {actionGoal.deadline && (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted/60 border">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded bg-muted/60 border">
                           <Clock className="h-2.5 w-2.5" />
                           {daysLeft !== null && daysLeft > 0
                             ? `${daysLeft}d left · due ${new Date(actionGoal.deadline).toLocaleDateString()}`
@@ -3219,7 +3219,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                         </span>
                       )}
                       {pace && (
-                        <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${paceTone}`}>
+                        <span className={`inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded border ${paceTone}`}>
                           {pace.tone === 'good' ? <TrendingUp className="h-2.5 w-2.5" /> : pace.tone === 'bad' ? <TrendingDown className="h-2.5 w-2.5" /> : <Minus className="h-2.5 w-2.5" />}
                           {pace.label}
                         </span>
@@ -3227,7 +3227,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                     </div>
                   )}
                   {pace && pace.detail && (
-                    <p className="text-[10px] text-muted-foreground/80 mt-1 italic">{pace.detail}</p>
+                    <p className="text-[11px] text-muted-foreground/80 mt-1 italic">{pace.detail}</p>
                   )}
                 </div>
 
@@ -3327,7 +3327,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
             <div className="rounded-lg border bg-muted/30 p-2.5 mt-1 space-y-1">
               <p className="micro-label text-muted-foreground">Preview</p>
               <p className="text-xs font-semibold truncate">{formTitle.trim() || "Untitled goal"}</p>
-              <div className="flex items-center gap-2 flex-wrap text-[10px]">
+              <div className="flex items-center gap-2 flex-wrap text-[11px]">
                 {formTarget && Number(formTarget) > 0 && (
                   <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium tabular-nums">
                     Target: {Number(formTarget).toLocaleString()} {formUnit || "units"}
@@ -3349,7 +3349,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                 if (daysToDeadline <= 0) return null;
                 const perDay = Number(formTarget) / daysToDeadline;
                 return (
-                  <p className="text-[10px] text-muted-foreground/80 italic">
+                  <p className="text-[11px] text-muted-foreground/80 italic">
                     Roughly {perDay >= 1 ? perDay.toFixed(1) : perDay.toFixed(2)} {formUnit || "units"} per day for {daysToDeadline} days
                   </p>
                 );
@@ -3821,7 +3821,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
               <p className="text-xs font-semibold text-red-500 leading-tight">
                 Budget exceeded by ${overAmt.toLocaleString()} · <span className="tabular-nums">{usedPct}% of ${budgetData.totalBudget.toLocaleString()}</span>
               </p>
-              <p className="text-[10px] text-red-500/80 leading-tight mt-0.5">Tap to review categories and adjust</p>
+              <p className="text-[11px] text-red-500/80 leading-tight mt-0.5">Tap to review categories and adjust</p>
             </div>
             <ChevronRight className="h-4 w-4 text-red-500/70 shrink-0" />
           </button>
@@ -3910,8 +3910,8 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
                   return (
                     <div key={c.name} className="flex items-center gap-1.5 min-w-0">
                       <span className="h-2 w-2 rounded-full shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
-                      <span className="text-[10px] capitalize truncate flex-1">{c.name}</span>
-                      <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{pct}%</span>
+                      <span className="text-[11px] capitalize truncate flex-1">{c.name}</span>
+                      <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">{pct}%</span>
                     </div>
                   );
                 })}
@@ -4179,7 +4179,7 @@ function ExpiringWarrantiesCard({
         <div className="icon-badge" style={{ background: "hsl(25 90% 55% / 0.15)" }}>
           <ShieldCheck className="h-3.5 w-3.5" style={{ color: "hsl(25 90% 55%)" }} />
         </div>
-        <h2 className="text-xs font-semibold tracking-wide uppercase" style={{ color: "hsl(25 90% 55%)" }}>
+        <h2 className="micro-label" style={{ color: "hsl(25 90% 55%)" }}>
           🛡️ Expiring Warranties
         </h2>
         <span className="text-xs text-muted-foreground bg-muted rounded-full px-1.5 py-0.5 tabular-nums ml-1">
@@ -4208,11 +4208,11 @@ function ExpiringWarrantiesCard({
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium truncate leading-tight">{item.name}</p>
               </div>
-              <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${pillClass}`}>
+              <span className={`shrink-0 text-[11px] font-semibold px-1.5 py-0.5 rounded-full ${pillClass}`}>
                 {item.type}
               </span>
               <span
-                className={`shrink-0 text-[10px] font-semibold tabular-nums ${
+                className={`shrink-0 text-[11px] font-semibold tabular-nums ${
                   isExpired ? "text-red-500" : isUrgent ? "text-amber-600" : "text-muted-foreground"
                 }`}
               >
@@ -4369,7 +4369,7 @@ function AISummaryWidget({
           <p className="text-xs text-muted-foreground py-1">Preparing your daily briefing…</p>
         )}
         <div className="flex items-center justify-between pt-1">
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-[11px] text-muted-foreground">
             {loading ? "Generating…" : lastGenerated ? `Generated at ${lastGenerated}` : ""}
           </span>
           <Button
@@ -4432,7 +4432,7 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
                 <Icon className="h-3.5 w-3.5" />
               </div>
               <span className="text-xs truncate flex-1 text-foreground/90">{item.description}</span>
-              <span className="text-[10px] text-muted-foreground/70 shrink-0 tabular-nums">{timeAgo(item.timestamp)}</span>
+              <span className="text-[11px] text-muted-foreground/70 shrink-0 tabular-nums">{timeAgo(item.timestamp)}</span>
             </div>
           );
         })}
@@ -4509,11 +4509,11 @@ function UpcomingDateRow({
           <span className="text-xs font-medium truncate text-foreground/90">{item.title}</span>
           {pinned && <Pin className="h-3 w-3 shrink-0" style={{ color: "hsl(38 92% 50%)" }} aria-label="Pinned" />}
           {item.recurring && (
-            <span className="text-[9px] uppercase tracking-wide text-muted-foreground/70 shrink-0">recurs</span>
+            <span className="micro-label text-muted-foreground/70 shrink-0">recurs</span>
           )}
           {item.needsActionSoon && (
             <span
-              className="text-[9px] font-semibold uppercase tracking-wide shrink-0 px-1 py-px rounded"
+              className="micro-label shrink-0 px-1 py-px rounded"
               style={{ background: `hsl(25 92% 55% / 0.15)`, color: `hsl(25 92% 38%)` }}
               title="AI: this item may need action soon"
             >
@@ -4521,19 +4521,19 @@ function UpcomingDateRow({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/80 mt-0.5">
+        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80 mt-0.5">
           <span className="truncate">{UPCOMING_CATEGORY_LABELS[item.category]}</span>
           {item.subtitle && (<><span className="opacity-50">·</span><span className="truncate">{item.subtitle}</span></>)}
         </div>
       </div>
       <div className="flex flex-col items-end gap-0.5 shrink-0">
         <span
-          className="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded"
+          className="text-[11px] font-semibold tabular-nums px-1.5 py-0.5 rounded"
           style={{ background: `hsl(${urgency.bg})`, color: `hsl(${urgency.fg})`, border: `1px solid hsl(${urgency.border} / 0.4)` }}
         >
           {daysUntilLabel(item.daysUntil)}
         </span>
-        <span className="text-[9px] text-muted-foreground/60 tabular-nums">{item.nextDate}</span>
+        <span className="text-[11px] text-muted-foreground/60 tabular-nums">{item.nextDate}</span>
       </div>
       <button
         onClick={(e) => { e.stopPropagation(); onTogglePin(item.id); }}
@@ -4641,7 +4641,7 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
     <div className="flex items-center gap-1.5">
       {actionSoonCount > 0 && (
         <span
-          className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded"
+          className="micro-label px-1.5 py-0.5 rounded"
           style={{ background: "hsl(25 92% 55% / 0.15)", color: "hsl(25 92% 38%)" }}
           title="Items the AI flagged as needing action soon"
         >
@@ -4651,7 +4651,7 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
       <DropdownMenu>
         <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
           <button
-            className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded border border-border/40"
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded border border-border/40"
             data-testid="upcoming-filter-trigger"
             aria-label="Filter by entity"
           >
@@ -4708,7 +4708,7 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
               <span className="micro-label text-muted-foreground/70">
                 {UPCOMING_TIMEFRAME_LABELS[group.timeframe]}
               </span>
-              <span className="text-[10px] text-muted-foreground/50 tabular-nums">{group.items.length}</span>
+              <span className="text-[11px] text-muted-foreground/50 tabular-nums">{group.items.length}</span>
               <div className="flex-1 h-px bg-border/40" />
             </div>
             <div className="space-y-0.5">
@@ -5261,7 +5261,7 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
               </div>
               <div className="text-right shrink-0">
                 <p className={`text-sm font-bold tabular-nums ${c.netWorth >= 0 ? "text-foreground" : "text-rose-500"}`}>{fmtUSD0(c.netWorth)}</p>
-                <p className="text-[10px] text-muted-foreground">{share >= 1 ? `${share.toFixed(0)}% of household` : "net worth"}</p>
+                <p className="text-[11px] text-muted-foreground">{share >= 1 ? `${share.toFixed(0)}% of household` : "net worth"}</p>
               </div>
             </div>
             {/* share-of-household bar */}

@@ -42,7 +42,7 @@ export function LinkedSheetView<T extends { id: string }>({
           <thead className="bg-muted/50 sticky top-0">
             <tr>
               {/* Row number column (Google Sheets-style) */}
-              <th className="w-8 px-1.5 py-1 text-center font-normal text-[10px] text-muted-foreground border-r border-b">
+              <th className="w-8 px-1.5 py-1 text-center font-normal text-[11px] text-muted-foreground border-r border-b">
                 #
               </th>
               {columns.map((c) => (
@@ -67,7 +67,7 @@ export function LinkedSheetView<T extends { id: string }>({
                 onClick={() => onRowClick?.(row)}
                 data-testid={`${testId}-row-${idx}`}
               >
-                <td className="w-8 px-1.5 py-1 text-center text-[10px] text-muted-foreground bg-muted/30 border-r border-b">
+                <td className="w-8 px-1.5 py-1 text-center text-[11px] text-muted-foreground bg-muted/30 border-r border-b">
                   {idx + 1}
                 </td>
                 {columns.map((c) => (

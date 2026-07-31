@@ -496,7 +496,7 @@ function DataPanel({
 
           {/* Extracted fields */}
           <section>
-            <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">
+            <h3 className="micro-label text-muted-foreground mb-2">
               Extracted Fields
             </h3>
             <div className="space-y-1" data-testid="extracted-data-list">
@@ -520,7 +520,7 @@ function DataPanel({
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
-                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        <span className="micro-label text-muted-foreground">
                           {formatFieldLabel(key)}
                         </span>
                         {expStatus && <ExpirationBadge status={expStatus} />}
@@ -620,7 +620,7 @@ function DataPanel({
 
           {/* Linked profiles */}
           <section>
-            <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">
+            <h3 className="micro-label text-muted-foreground mb-2">
               Linked Profiles
             </h3>
             <DocumentLinkPicker
@@ -635,7 +635,7 @@ function DataPanel({
           {/* Tags */}
           {doc.tags && doc.tags.some((t) => !t.startsWith("sha256:")) && (
             <section>
-              <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">Tags</h3>
+              <h3 className="micro-label text-muted-foreground mb-2">Tags</h3>
               <div className="flex flex-wrap gap-1" data-testid="tags-list">
                 {/* sha256: tags are the upload-dedupe content hash — internal, never shown */}
                 {doc.tags.filter((tag) => !tag.startsWith("sha256:")).map((tag) => (

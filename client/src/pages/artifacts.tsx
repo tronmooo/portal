@@ -628,10 +628,10 @@ function ArtifactCard({ item, onSelect, onTogglePin, onDelete }: { item: Unified
           {item.tags && item.tags.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1.5">
               {item.tags.slice(0, 3).map(t => (
-                <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground">#{t}</span>
+                <span key={t} className="text-[11px] px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground">#{t}</span>
               ))}
               {item.tags.length > 3 && (
-                <span className="text-[10px] text-muted-foreground">+{item.tags.length - 3}</span>
+                <span className="text-[11px] text-muted-foreground">+{item.tags.length - 3}</span>
               )}
             </div>
           )}
@@ -687,7 +687,7 @@ function DocumentGroup({ label, icon: Icon, items, onSelect, onTogglePin, onDele
     <div className="space-y-2">
       <div className="flex items-center gap-2 px-1">
         <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{label}</span>
+        <span className="micro-label text-muted-foreground">{label}</span>
         <span className="text-xs text-muted-foreground">({items.length})</span>
       </div>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">

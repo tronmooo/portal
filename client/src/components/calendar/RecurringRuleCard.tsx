@@ -155,12 +155,12 @@ export function RecurringRuleCard({
                     : "No upcoming date"}
           </span>
           {/* End condition + how many dates are generated, per spec. */}
-          <span className="block text-[10px] text-muted-foreground truncate leading-tight">
+          <span className="block text-[11px] text-muted-foreground truncate leading-tight">
             {series.recurrenceEnd ? `Ends ${fmtDate(series.recurrenceEnd)}` : "No end date"}
             {upcomingCount > 0 ? ` · ${upcomingCount} upcoming` : ""}
           </span>
           {linkedNote && (
-            <span className="block text-[10px] text-muted-foreground/80 truncate leading-tight">
+            <span className="block text-[11px] text-muted-foreground/80 truncate leading-tight">
               {linkedNote}
             </span>
           )}

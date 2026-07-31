@@ -109,7 +109,7 @@ export function HubProfileSwitcher() {
             onTouchStart={() => prefetchScopeBootstrap("selected", [p.id])}
             data-testid={`hub-switch-${p.id}`}
           >
-            <span className="w-5 h-5 mr-2 rounded-full bg-muted flex items-center justify-center text-[10px] font-bold overflow-hidden">
+            <span className="w-5 h-5 mr-2 rounded-full bg-muted flex items-center justify-center text-[11px] font-bold overflow-hidden">
               {p.avatar
                 ? <img src={p.avatar} alt="" className="w-full h-full object-cover" />
                 : (p.name || "?").charAt(0).toUpperCase()}

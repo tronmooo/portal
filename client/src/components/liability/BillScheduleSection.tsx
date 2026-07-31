@@ -325,7 +325,7 @@ function MiniMonthCalendar({
         <button type="button" onClick={() => shift(1)} className="p-1 rounded hover:bg-muted" aria-label="Next month"><ChevronRight className="w-4 h-4" /></button>
       </div>
       <div className="grid grid-cols-7 gap-1 text-center">
-        {DOW.map((d, i) => <div key={i} className="text-[10px] uppercase text-muted-foreground py-1">{d}</div>)}
+        {DOW.map((d, i) => <div key={i} className="text-[11px] uppercase text-muted-foreground py-1">{d}</div>)}
         {cells.map((iso, i) => {
           if (!iso) return <div key={i} />;
           const occ = byDay.get(iso);
@@ -348,7 +348,7 @@ function MiniMonthCalendar({
           );
         })}
       </div>
-      <div className="flex items-center gap-3 mt-2 flex-wrap text-[10px] text-muted-foreground">
+      <div className="flex items-center gap-3 mt-2 flex-wrap text-[11px] text-muted-foreground">
         <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60" />Upcoming</span>
         <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-600" />Paid</span>
         <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-600" />Overdue</span>

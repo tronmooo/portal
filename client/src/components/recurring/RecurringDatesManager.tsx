@@ -246,7 +246,7 @@ function SeriesDialog({ mode, event, profiles, onClose }: {
                 const active = form.kind === k.kind;
                 return (
                   <button key={k.kind} type="button" onClick={() => set("kind", k.kind)}
-                    className={`rounded-lg border px-1 py-1.5 flex flex-col items-center gap-0.5 text-[10px] transition-colors ${active ? "font-semibold" : "text-muted-foreground hover:text-foreground"}`}
+                    className={`rounded-lg border px-1 py-1.5 flex flex-col items-center gap-0.5 text-[11px] transition-colors ${active ? "font-semibold" : "text-muted-foreground hover:text-foreground"}`}
                     style={active ? { borderColor: `hsl(${k.hsl} / 0.6)`, background: `hsl(${k.hsl} / 0.12)`, color: `hsl(${k.hsl})` } : {}}
                     data-testid={`rd-kind-${k.kind}`}>
                     <Icon className="h-3.5 w-3.5" />
@@ -324,7 +324,7 @@ function SeriesDialog({ mode, event, profiles, onClose }: {
           <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
             <div>
               <p className="text-xs font-medium">Requires check-off</p>
-              <p className="text-[10px] text-muted-foreground">Missed occurrences show as overdue until done or skipped</p>
+              <p className="text-[11px] text-muted-foreground">Missed occurrences show as overdue until done or skipped</p>
             </div>
             <Switch checked={form.requireComplete} onCheckedChange={v => set("requireComplete", v)} data-testid="switch-rd-require" />
           </div>
@@ -508,7 +508,7 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
               <p className="text-sm font-semibold truncate">{ev.title}</p>
-              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-0" style={{ background: `hsl(${sm.hsl} / 0.14)`, color: `hsl(${sm.hsl})` }}>{sm.label}</Badge>
+              <Badge variant="outline" className="text-[11px] px-1.5 py-0 h-4 border-0" style={{ background: `hsl(${sm.hsl} / 0.14)`, color: `hsl(${sm.hsl})` }}>{sm.label}</Badge>
             </div>
             <p className="text-[11px] text-muted-foreground truncate">
               {humanRecurrenceLabel(ev.recurrence, ev.date)}
@@ -580,13 +580,13 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
                   {st === "past" ? "" : st}
                 </span>
                 {(st === "done" || st === "skipped") ? (
-                  <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2" onClick={() => mark(d, "clear")} data-testid={`rd-occ-undo-${d}`}>Undo</Button>
+                  <Button size="sm" variant="ghost" className="h-6 text-[11px] px-2" onClick={() => mark(d, "clear")} data-testid={`rd-occ-undo-${d}`}>Undo</Button>
                 ) : (
                   <>
-                    <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2 text-emerald-500" onClick={() => mark(d, "done")} data-testid={`rd-occ-done-${d}`}>
+                    <Button size="sm" variant="ghost" className="h-6 text-[11px] px-2 text-emerald-500" onClick={() => mark(d, "done")} data-testid={`rd-occ-done-${d}`}>
                       <Check className="h-3 w-3 mr-0.5" />Done
                     </Button>
-                    <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2 text-muted-foreground" onClick={() => mark(d, "skip")} data-testid={`rd-occ-skip-${d}`}>Skip</Button>
+                    <Button size="sm" variant="ghost" className="h-6 text-[11px] px-2 text-muted-foreground" onClick={() => mark(d, "skip")} data-testid={`rd-occ-skip-${d}`}>Skip</Button>
                   </>
                 )}
               </div>
@@ -649,7 +649,7 @@ function OccurrenceRow({ occ, todayISO, profileName, onOpen }: {
         <p className={`text-xs font-semibold truncate ${done ? "line-through text-muted-foreground" : ""}`}>
           {occ.title}
         </p>
-        <p className="text-[10px] text-muted-foreground truncate">
+        <p className="text-[11px] text-muted-foreground truncate">
           {KIND_LABELS[occ.kind]}
           {owner ? ` · ${owner}` : ""}
           {occ.amount != null ? ` · $${occ.amount.toFixed(2)}` : ""}
@@ -657,7 +657,7 @@ function OccurrenceRow({ occ, todayISO, profileName, onOpen }: {
       </div>
       <div className="text-right shrink-0">
         <p className="text-[11px] font-semibold tabular-nums">{fmtShort(occ.effectiveDate)}</p>
-        <p className="text-[9px] text-muted-foreground">{relativeDayLabel(occ.effectiveDate, todayISO)}</p>
+        <p className="text-[11px] text-muted-foreground">{relativeDayLabel(occ.effectiveDate, todayISO)}</p>
       </div>
       <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
     </button>
@@ -795,7 +795,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
             <p className="micro-label text-muted-foreground">
               Upcoming · {streamOccurrences.length}
             </p>
-            <p className="text-[10px] text-muted-foreground">birthdays · bills · subscriptions · reminders</p>
+            <p className="text-[11px] text-muted-foreground">birthdays · bills · subscriptions · reminders</p>
           </div>
           <div className="bubble divide-y divide-/50 overflow-hidden">
             {streamOccurrences.slice(0, 60).map(occ => (
@@ -803,7 +803,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
                 profileName={cal.profileName} onOpen={setDetail} />
             ))}
           </div>
-          <p className="px-1 pt-1 text-[10px] text-muted-foreground">
+          <p className="px-1 pt-1 text-[11px] text-muted-foreground">
             Tap any date to see its full schedule, edit it, move it, or remove one occurrence — every
             type opens the same panel, and Edit goes straight to the record it came from.
           </p>

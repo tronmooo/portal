@@ -180,7 +180,7 @@ export function ChatGPTImportDialog({ open, onOpenChange }: { open: boolean; onO
                       <SignalDot severity={sig.severity} />
                       <div className="min-w-0 flex-1">
                         <p className="text-[11px] font-medium">{sig.title}</p>
-                        <p className="text-[10px] text-muted-foreground">{sig.detail}</p>
+                        <p className="text-[11px] text-muted-foreground">{sig.detail}</p>
                       </div>
                     </div>
                   ))}
@@ -193,9 +193,9 @@ export function ChatGPTImportDialog({ open, onOpenChange }: { open: boolean; onO
                   <ActionBadge action={op.action} />
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] truncate">{op.label}</p>
-                    {op.reason && <p className="text-[10px] text-muted-foreground truncate">{op.reason}</p>}
+                    {op.reason && <p className="text-[11px] text-muted-foreground truncate">{op.reason}</p>}
                   </div>
-                  <span className="text-[10px] text-muted-foreground/60 shrink-0">{op.section}</span>
+                  <span className="text-[11px] text-muted-foreground/60 shrink-0">{op.section}</span>
                 </div>
               ))}
             </div>
@@ -246,7 +246,7 @@ function ActionBadge({ action }: { action: string }) {
     skip: { label: "Skip", cls: "bg-muted text-muted-foreground" },
   };
   const m = map[action] || map.skip;
-  return <Badge variant="outline" className={`text-[9px] px-1.5 py-0 shrink-0 ${m.cls}`}>{m.label}</Badge>;
+  return <Badge variant="outline" className={`text-[11px] px-1.5 py-0 shrink-0 ${m.cls}`}>{m.label}</Badge>;
 }
 
 /** Import history + undo — embeddable in Settings. */
@@ -278,9 +278,9 @@ export function ChatGPTImportHistory() {
               {new Date(it.createdAt).toLocaleString()} · {it.summary?.created ?? 0} added{it.summary?.updated ? `, ${it.summary.updated} updated` : ""}
             </p>
             {Array.isArray(it.summary?.signals) && it.summary.signals.length > 0 && (
-              <p className="text-[10px] text-muted-foreground flex items-center gap-1"><Sparkles className="h-2.5 w-2.5 text-primary" /> {it.summary.signals.length} insight{it.summary.signals.length === 1 ? "" : "s"}</p>
+              <p className="text-[11px] text-muted-foreground flex items-center gap-1"><Sparkles className="h-2.5 w-2.5 text-primary" /> {it.summary.signals.length} insight{it.summary.signals.length === 1 ? "" : "s"}</p>
             )}
-            {it.status === "undone" && <p className="text-[10px] text-muted-foreground">Undone</p>}
+            {it.status === "undone" && <p className="text-[11px] text-muted-foreground">Undone</p>}
           </div>
           <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" disabled={it.status === "undone" || undoMut.isPending} onClick={() => undoMut.mutate(it.id)}>
             <Undo2 className="h-3 w-3" /> Undo

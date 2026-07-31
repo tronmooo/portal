@@ -119,7 +119,7 @@ export function ProgressRing({
         <span className="metric-value text-[13px]" style={{ color: `hsl(${accent})` }}>
           {label ?? `${value}/${total}`}
         </span>
-        {sublabel && <span className="text-[9px] text-muted-foreground mt-0.5">{sublabel}</span>}
+        {sublabel && <span className="text-[11px] text-muted-foreground mt-0.5">{sublabel}</span>}
       </div>
     </div>
   );

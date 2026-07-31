@@ -243,7 +243,7 @@ export function CalendarItemDetail({
                   {occurrence.moved && <span className="text-muted-foreground"> · moved from {fmtShort(occurrence.date)}</span>}
                 </SheetDescription>
               </div>
-              <Badge variant="outline" className="text-[10px] border-0 shrink-0"
+              <Badge variant="outline" className="text-[11px] border-0 shrink-0"
                 style={{ background: `hsl(${hsl} / 0.14)`, color: `hsl(${hsl})` }}
                 data-testid="cal-detail-type">
                 {KIND_LABELS[series.kind]}
@@ -265,7 +265,7 @@ export function CalendarItemDetail({
             <Field label="Repeats" testId="cal-detail-recurrence">
               {isRecurring ? humanRecurrenceLabel(series.recurrence, series.baseDate) : "Does not repeat"}
               {series.recurrenceEnd && (
-                <span className="block text-[10px] text-muted-foreground font-normal">
+                <span className="block text-[11px] text-muted-foreground font-normal">
                   until {fmtShort(series.recurrenceEnd)}
                 </span>
               )}
@@ -274,7 +274,7 @@ export function CalendarItemDetail({
               {next ? (
                 <>
                   {fmtDate(next.effectiveDate)}
-                  <span className="block text-[10px] text-muted-foreground font-normal">
+                  <span className="block text-[11px] text-muted-foreground font-normal">
                     {relativeDayLabel(next.effectiveDate, todayISO)}
                   </span>
                 </>
@@ -284,7 +284,7 @@ export function CalendarItemDetail({
             </Field>
             {series.amount != null && <Field label="Amount">{fmtMoney(series.amount)}</Field>}
             {duplicateNote && (
-              <p className="pt-2 text-[10px] text-muted-foreground" data-testid="cal-detail-duplicate-note">
+              <p className="pt-2 text-[11px] text-muted-foreground" data-testid="cal-detail-duplicate-note">
                 {duplicateNote}
               </p>
             )}
@@ -314,7 +314,7 @@ export function CalendarItemDetail({
               <p className="micro-label text-muted-foreground">
                 Upcoming occurrences
               </p>
-              <span className="text-[10px] text-muted-foreground tabular-nums">{future.length}</span>
+              <span className="text-[11px] text-muted-foreground tabular-nums">{future.length}</span>
             </div>
             {future.length === 0 ? (
               <p className="text-xs text-muted-foreground py-3 text-center">
@@ -337,9 +337,9 @@ export function CalendarItemDetail({
                       <div className="flex-1 min-w-0">
                         <p className={`text-xs tabular-nums ${done ? "line-through text-muted-foreground" : ""}`}>
                           {fmtShort(o.effectiveDate)}
-                          {o.moved && <span className="text-[10px] text-muted-foreground"> (moved)</span>}
+                          {o.moved && <span className="text-[11px] text-muted-foreground"> (moved)</span>}
                         </p>
-                        <p className="text-[10px] text-muted-foreground">
+                        <p className="text-[11px] text-muted-foreground">
                           {relativeDayLabel(o.effectiveDate, todayISO)}
                           {o.status === "done" ? " · done" : o.status === "skipped" ? " · skipped" : ""}
                         </p>
