@@ -1,4 +1,5 @@
 import { BubbleModal } from "@/components/ui/bubble-modal";
+import { formatMoneyRound } from "@/lib/format";
 
 // Generic drill-down: informational blue, the app's "here are the records
 // behind that number" colour.
@@ -65,9 +66,7 @@ function fmtDate(dateStr: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function fmtMoney(n: number): string {
-  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
+const fmtMoney = formatMoneyRound;
 
 const PRIORITY_CLR: Record<string, string> = {
   low: "bg-slate-500/10 text-slate-600",

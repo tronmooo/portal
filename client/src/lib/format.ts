@@ -23,6 +23,35 @@ export function formatMoneyRound(n: number | null | undefined): string {
 }
 
 /**
+ * Always two decimals — for ledger-ish surfaces where "$155" and "$155.00"
+ * sitting in the same column would look like different precisions.
+ */
+export function formatMoneyCents(n: number | null | undefined): string {
+  const v = Number(n) || 0;
+  const body = Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${v < 0 ? "-$" : "$"}${body}`;
+}
+
+/**
+ * Abbreviated only where the digits stop being readable: 1_250_000 → "$1.25M".
+ * Below a million it stays grouped and exact, and drops cents past ten thousand
+ * where they're noise.
+ *
+ * These thresholds are lifted verbatim from asset-overview's local
+ * formatCurrency rather than chosen fresh, so consolidating onto this changed
+ * nothing on screen — an asset worth 48,200 still reads "$48,200", not "$48.2K".
+ */
+export function formatMoneyCompact(n: number | null | undefined): string {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "$0";
+  const abs = Math.abs(v);
+  const sign = v < 0 ? "-" : "";
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`;
+  if (abs >= 10_000) return `${sign}$${Math.round(abs).toLocaleString("en-US")}`;
+  return `${sign}$${abs.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
+
+/**
  * Human date for list rows: relative for the last week ("Today", "Yesterday",
  * "3d ago"), then "MMM D", with the year only when it isn't the current year.
  * Accepts a Date, ISO string, or "YYYY-MM-DD".

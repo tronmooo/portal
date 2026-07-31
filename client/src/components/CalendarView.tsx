@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
@@ -1488,8 +1489,8 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             <div key={ri} className="grid grid-cols-7 border-b border-border last:border-b-0">
               {Array.from({ length: 7 }, (_, ci) => (
                 <div key={ci} className="min-h-[64px] p-1 border-r border-border last:border-r-0">
-                  <div className="h-3 w-4 rounded skeleton-shimmer mb-1" />
-                  {(ri + ci) % 3 === 0 && <div className="h-2 w-12 rounded skeleton-shimmer" />}
+                  <Skeleton className="h-3 w-4 mb-1" />
+                  {(ri + ci) % 3 === 0 && <Skeleton className="h-2 w-12" />}
                 </div>
               ))}
             </div>

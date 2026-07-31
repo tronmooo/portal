@@ -151,6 +151,62 @@ describe("one card surface", () => {
   });
 });
 
+describe("one type scale", () => {
+  it("has no text below 11px anywhere", () => {
+    // 74 sites at 9px and 289 at 10px — below comfortable reading on a phone,
+    // and the single loudest signal that a screen was built separately. The
+    // Executive tab's floor is 11px (.micro-label); everything meets it.
+    const bad = offenders(/text-\[(?:[1-9]|10)px\]/);
+    expect(bad, `Nothing below 11px — use text-[11px] or .micro-label:\n${bad.join("\n")}`)
+      .toEqual([]);
+  });
+
+  it("does not pair micro-label with a redundant size", () => {
+    // .micro-label is already 11px; the sweep that created it left the old
+    // size class alongside on every line it touched.
+    const bad = offenders(/micro-label[^"'`]*text-\[\d+px\]|text-\[\d+px\][^"'`]*micro-label/);
+    expect(bad, `Drop the size — .micro-label sets it:\n${bad.join("\n")}`).toEqual([]);
+  });
+});
+
+describe("one money formatter", () => {
+  it("formats money only through lib/format.ts", () => {
+    // Eight local helpers existed: some rounded, some forced two decimals, one
+    // abbreviated at a million, one was actually a privacy mask. The same
+    // amount rendered differently depending on which screen you were on.
+    const LOCAL = /\b(?:const|function)\s+(?:money2?|fmtMoney|formatCurrency|fmtCurrency)\s*[=(]/;
+    const bad: string[] = [];
+    for (const f of FILES) {
+      if (f.endsWith(path.join("lib", "format.ts"))) continue;
+      fs.readFileSync(f, "utf8").split("\n").forEach((line, i) => {
+        if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+        if (!LOCAL.test(line)) return;
+        // Aliasing or wrapping a shared formatter is the point, not a violation.
+        if (/format(Money|MoneyRound|MoneyCents|MoneyCompact)\b/.test(line)) return;
+        bad.push(`${rel(f)}:${i + 1} — ${line.trim().slice(0, 110)}`);
+      });
+    }
+    expect(bad, `Use formatMoney / formatMoneyRound / formatMoneyCents / formatMoneyCompact:\n${bad.join("\n")}`)
+      .toEqual([]);
+  });
+});
+
+describe("one loading treatment", () => {
+  it("keeps the shimmer class inside ui/skeleton.tsx", () => {
+    // Three treatments were live at once — <Skeleton>, bare animate-pulse, and
+    // hand-written skeleton-shimmer divs — so the same wait looked different on
+    // three screens. <Skeleton> and <BubbleSkeleton> are the only two shapes.
+    //
+    // Scoped to `skeleton-shimmer`, which unambiguously means "placeholder for
+    // content". `animate-pulse` is deliberately NOT covered: it has honest
+    // non-skeleton uses (a pulsing notification badge, "Loading chart data…"
+    // text), and a guard that flags those would just get suppressed.
+    const bad = offenders(/\bskeleton-shimmer\b/, (f) => f.endsWith(path.join("ui", "skeleton.tsx")));
+    expect(bad, `Use <Skeleton> or <BubbleSkeleton>/<BubbleSkeletonGrid>:\n${bad.join("\n")}`)
+      .toEqual([]);
+  });
+});
+
 describe("interaction states are shared", () => {
   it("defines .pressable once, with a focus-VISIBLE ring", () => {
     const css = fs.readFileSync(path.resolve(ROOT, "index.css"), "utf8");

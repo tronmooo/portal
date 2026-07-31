@@ -6,6 +6,7 @@
 // This is intentionally self-contained — drop it anywhere there's a page shell.
 
 import { formatApiError } from "@/lib/formatError";
+import { Skeleton, BubbleSkeletonGrid } from "@/components/ui/skeleton";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
@@ -686,7 +687,7 @@ function ObligationOccurrencePanel() {
   }, [occurrences, today]);
 
   if (isLoading) {
-    return <div className="h-24 rounded skeleton-shimmer" />;
+    return <Skeleton className="h-24" />;
   }
   if (overdue.length === 0 && todayOcc.length === 0 && upcoming.length === 0) {
     return null;
@@ -1745,9 +1746,8 @@ export default function ObligationsManager({ showHeader = true, compact = false,
 
       {isLoading ? (
         <div className="p-4 space-y-3">
-          <div className="h-8 w-48 rounded skeleton-shimmer" />
-          <div className="h-20 rounded skeleton-shimmer" />
-          <div className="h-20 rounded skeleton-shimmer" />
+          <Skeleton className="h-8 w-48 rounded-full" />
+          <BubbleSkeletonGrid count={4} rows={2} height={140} className="grid-cols-1 sm:grid-cols-2" />
         </div>
       ) : error ? (
         <div className="p-4 text-center">

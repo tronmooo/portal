@@ -22,6 +22,7 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { computeHealthScore } from "@/lib/tracker-health";
 import type { DashboardStats, Tracker } from "@shared/schema";
 import { MetricCard } from "@/components/ui/metric-card";
+import { formatMoneyRound } from "@/lib/format";
 import { HUB_TABS } from "./hub-routes";
 import { Wallet, ArrowLeftRight, HeartPulse, Flame, CheckCircle2, FileText } from "lucide-react";
 
@@ -44,9 +45,8 @@ const CashFlowPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopu
 const TasksPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.TasksPopup, "/tasks");
 const HabitsPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.HabitsPopup, "/habits");
 
-function fmtMoney(n: number): string {
-  return Math.round(Math.abs(n)).toLocaleString("en-US");
-}
+// The strip shows whole dollars; the shared formatter does the grouping.
+const fmtMoney = (n: number) => formatMoneyRound(n).replace(/^-?\$/, "");
 
 // One KPI chip. This was a bare label + number in a pill — the first thing you
 // see on every screen and the least informative element on it. It is now a

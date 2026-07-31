@@ -1,6 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { formatFieldKey, stringifyField } from "@/lib/field-display";
+import { formatMoney } from "@/lib/format";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
 // profile-detail stays under control. The legacy ChildAssetsCard /
 // ValueRollupCard / MaintenanceCard below still exist and are still used for
@@ -387,9 +388,7 @@ function timelineIcon(type: string) {
 // for any composite field (the user's ADDRESS).
 const formatKey = formatFieldKey;
 
-function formatCurrency(val: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(val);
-}
+const formatCurrency = formatMoney;
 
 // ============================================================
 // NESTED ASSETS — ASSET ROLLUP HELPER

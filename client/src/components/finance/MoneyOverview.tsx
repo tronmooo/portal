@@ -5,6 +5,7 @@
 // Pure presentation over data finance.tsx already fetches — all values come in
 // as props so this stays testable and finance.tsx owns the queries/mutations.
 import { Link } from "wouter";
+import { formatMoneyRound } from "@/lib/format";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,8 +26,9 @@ export interface MoneyBill {
 }
 export interface Breakdown { id: string; name: string; type: string; value: number; }
 
-const money = (n: number) => `${n < 0 ? "-" : ""}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
-const money2 = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+// Both of these were whole-dollar formatters spelled two different ways.
+const money = formatMoneyRound;
+const money2 = formatMoneyRound;
 
 function Sparkline({ series }: { series: number[] }) {
   if (!series || series.length < 2) return null;

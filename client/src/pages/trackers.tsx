@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { Skeleton } from "@/components/ui/skeleton";
 import { warmProfileDetail } from "@/lib/scope-prefetch";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp } from "@/lib/event-utils";
@@ -31,6 +32,7 @@ import { EntityCard } from "@/components/ui/entity-card";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { Medallion, Pill as StatusPill, toneForDays } from "@/components/dashboard/visuals";
 import { dayLabel } from "@shared/now-rank";
+import { formatMoneyCents } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -6066,12 +6068,12 @@ export default function TrackersPage() {
     return (
       <StuckLoadingGuard active>
         <div className="p-3 md:p-5 space-y-3">
-          <div className="h-7 w-32 rounded skeleton-shimmer" />
+          <Skeleton className="h-7 w-32" />
           <div className="flex gap-2 overflow-x-hidden">
-            {[...Array(4)].map((_, i) => <div key={i} className="h-7 w-20 rounded-full skeleton-shimmer shrink-0" />)}
+            {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-7 w-20 rounded-full shrink-0" />)}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-            {[...Array(8)].map((_, i) => <div key={i} className="h-16 rounded-lg skeleton-shimmer" />)}
+            {[...Array(8)].map((_, i) => <Skeleton key={i} className="h-16" />)}
           </div>
         </div>
       </StuckLoadingGuard>
@@ -7044,7 +7046,7 @@ export default function TrackersPage() {
               const sortByName = (a: any, b: any) => (a.name || '').localeCompare(b.name || '');
               const fixed = liabs.filter(l => liabilityFamily(l.type_key) === 'amortizing').sort(sortByName);
               const variable = liabs.filter(l => liabilityFamily(l.type_key) !== 'amortizing').sort(sortByName);
-              const fmtMoney = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+              const fmtMoney = formatMoneyCents;
               const parseDue = (raw: any): Date | null => {
                 if (!raw) return null;
                 const d = new Date(String(raw).slice(0, 10) + "T00:00:00");

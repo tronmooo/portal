@@ -431,7 +431,7 @@ function DueChip({ dueDate }: { dueDate?: string }) {
   const ok = d && !isNaN(d.getTime());
   return (
     <div className="w-10 shrink-0 rounded-lg border border-border overflow-hidden text-center">
-      <div className="micro-label bg-red-500/80 text-[11px] text-white py-0.5">
+      <div className="micro-label bg-red-500/80 text-white py-0.5">
         {ok ? d!.toLocaleDateString("en-US", { month: "short" }) : "—"}
       </div>
       <div className="py-0.5 text-sm font-bold tabular-nums bg-card">{ok ? d!.getDate() : "?"}</div>

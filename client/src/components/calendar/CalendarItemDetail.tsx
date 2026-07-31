@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Medallion } from "@/components/dashboard/visuals";
+import { formatMoney } from "@/lib/format";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -102,8 +103,7 @@ const fmtDate = (iso: string) =>
   });
 const fmtShort = (iso: string) =>
   new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-const fmtMoney = (n?: number) =>
-  n == null ? null : n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+const fmtMoney = (n?: number) => (n == null ? null : formatMoney(n));
 
 /** One labelled row in the summary block. */
 function Field({ label, children, testId }: { label: string; children: React.ReactNode; testId?: string }) {

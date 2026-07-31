@@ -15,6 +15,7 @@
 // detail page uses (["/api/profiles", id, "detail"]), so it's instant when
 // you've already visited the profile and edits here reflect there too.
 import { useState, useRef, useEffect } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRoute, useLocation, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -103,7 +104,7 @@ function InfoSelfRedirect() {
   if (isLoading || self?.id) {
     return (
       <div className="p-6 flex items-center justify-center h-full" data-testid="page-profile-info">
-        <div className="h-16 w-48 rounded skeleton-shimmer" />
+        <Skeleton className="h-16 w-48" />
       </div>
     );
   }
@@ -215,7 +216,7 @@ function SingleProfileInfo({ id }: { id: string }) {
   if (isLoading) {
     return (
       <div className="p-4 md:p-6 space-y-4" data-testid="page-profile-info">
-        <div className="skeleton-shimmer h-11 w-48 rounded-full" />
+        <Skeleton className="h-11 w-48 rounded-full" />
         <BubbleSkeletonGrid count={6} rows={1} height={72}
           className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-6" />
       </div>

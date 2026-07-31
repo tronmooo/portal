@@ -8,6 +8,7 @@ import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { parseMoney } from "@/lib/utils";
 import { categoryTheme } from "@/lib/category-theme";
 import { MetricCard } from "@/components/ui/metric-card";
+import { formatMoneyRound } from "@/lib/format";
 import { resolveAssetValue, resolveLiabilityBalance, isNetWorthLiabilityProfile } from "@shared/asset-value";
 import { goalsQueryKey } from "@shared/query-keys";
 import {
@@ -791,7 +792,9 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // ── Hero redesign data ──────────────────────────────────────────────────
   // Privacy toggle (eye icon) masks every money figure in the hero.
   const [hideAmounts, setHideAmounts] = useState(false);
-  const money = (n: number) => hideAmounts ? "••••" : `$${fmt(Math.round(n))}`;
+  // Not a formatter — a privacy wrapper. The eye toggle masks every hero
+  // figure, so this stays a function; only the formatting delegates out.
+  const money = (n: number) => (hideAmounts ? "••••" : formatMoneyRound(n));
   // Net-worth snapshot history powers the hero trend line + the month-over-month %.
   const histUrl = leading
     ? `/api/net-worth/history${leading}&lookbackDays=120`

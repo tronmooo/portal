@@ -23,6 +23,7 @@
 //    threshold and dimming further would drop it under.
 
 import { useState } from "react";
+import { BubbleSkeleton } from "@/components/ui/skeleton";
 import { useLocation } from "wouter";
 import {
   ChevronDown, ChevronRight, Check, CreditCard, ArrowRight, X, Clock,
@@ -268,7 +269,7 @@ export function ExecutiveSections({
     return (
       <div className="space-y-3" data-testid="exec-sections" aria-label="Loading what needs attention">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="bubble h-24 skeleton-shimmer" style={{ ["--i" as any]: i }} />
+          <BubbleSkeleton key={i} rows={1} height={96} index={i} />
         ))}
       </div>
     );

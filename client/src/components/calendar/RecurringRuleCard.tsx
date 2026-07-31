@@ -32,6 +32,7 @@ import {
   capabilitiesFor, actionLabelFor, hasPrimaryAction, type CalendarAction,
 } from "@shared/calendar-capabilities";
 import { humanRecurrenceLabel } from "@shared/recurring-dates";
+import { formatMoney } from "@/lib/format";
 
 export const RULE_ICONS: Record<OccurrenceKind, any> = {
   birthday: Cake, anniversary: CalendarHeart, subscription: CreditCard,
@@ -60,12 +61,8 @@ const fmtDate = (iso: string) =>
     month: "long", day: "numeric", year: "numeric",
   });
 
-export const fmtMoney = (n: number) =>
-  n.toLocaleString("en-US", {
-    style: "currency", currency: "USD",
-    minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
-    maximumFractionDigits: 2,
-  });
+// Same semantics as the shared formatter — 0dp on whole dollars, 2 otherwise.
+export const fmtMoney = formatMoney;
 
 /** "Subscription · $20/month" / "Joe · Birthday" / "Bill · Honda CR-V · $155/month" */
 function metaLine(series: CalendarSeries, ownerName?: string): string {

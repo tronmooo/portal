@@ -20,6 +20,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { formatMoneyCompact } from "@/lib/format";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -97,14 +98,8 @@ type TreeNodeLite = {
 const NESTED_ASSET_TYPES = ["vehicle", "property", "investment", "asset", "account"];
 const PERSON_TYPES = new Set(["person", "self", "pet"]);
 
-function formatCurrency(n: number): string {
-  if (!Number.isFinite(n)) return "$0";
-  const abs = Math.abs(n);
-  const sign = n < 0 ? "-" : "";
-  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`;
-  if (abs >= 10_000) return `${sign}$${Math.round(abs).toLocaleString()}`;
-  return `${sign}$${abs.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
-}
+// Was a local copy; formatMoneyCompact carries the identical thresholds.
+const formatCurrency = formatMoneyCompact;
 
 function flattenTree(node: TreeNodeLite | undefined | null): AnyProfile[] {
   if (!node) return [];
