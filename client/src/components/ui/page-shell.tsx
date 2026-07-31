@@ -8,6 +8,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, type LucideIcon } from "lucide-react";
+import { Medallion } from "@/components/dashboard/visuals";
 import { hashNavigate } from "@/lib/hashNavigate";
 
 type Width = "2xl" | "3xl" | "4xl" | "5xl" | "6xl" | "full";
@@ -31,9 +32,11 @@ export function PageContainer({
   );
 }
 
-// The one page header: optional back button, icon in a tinted chip, title,
-// subtitle, and a right-aligned actions slot. Matches the SectionHeader visual
-// language (sans, tinted icon) at page scale.
+// The one page header: optional back button, icon medallion, title, subtitle,
+// and a right-aligned actions slot. This is SectionHeading at page scale — same
+// medallion, same bold tracking — so a standalone page and a hub tab read as
+// the same product. (It used to draw its own rounded-square tinted chip, which
+// is the treatment the rest of the app moved off.)
 export function PageHeader({
   title, subtitle, icon: Icon, accent = "213 90% 62%", backHref, onBack, actions, testId,
 }: {
@@ -56,15 +59,10 @@ export function PageHeader({
           <ArrowLeft className="h-4 w-4" />
         </Button>
       )}
-      {Icon && (
-        <span className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-          style={{ background: `hsl(${accent} / 0.15)` }}>
-          <Icon className="h-4 w-4" style={{ color: `hsl(${accent})` }} />
-        </span>
-      )}
+      {Icon && <Medallion icon={Icon} accent={accent} />}
       <div className="flex-1 min-w-0">
-        <h1 className="text-lg font-semibold leading-tight truncate">{title}</h1>
-        {subtitle && <p className="text-xs text-muted-foreground truncate">{subtitle}</p>}
+        <h1 className="text-lg font-bold tracking-tight leading-tight truncate">{title}</h1>
+        {subtitle && <p className="text-[11px] text-muted-foreground truncate mt-0.5">{subtitle}</p>}
       </div>
       {actions && <div className="shrink-0 flex items-center gap-2">{actions}</div>}
     </div>

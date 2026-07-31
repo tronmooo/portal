@@ -16,7 +16,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import { showUndoToast } from "@/lib/undo-delete";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, ArrowLeft, Trash2, AlertCircle } from "lucide-react";
+import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, Trash2, AlertCircle } from "lucide-react";
+import { PageContainer, PageHeader } from "@/components/ui/page-shell";
+import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
+
+// Habits are green across the app — the Executive tab's habits section, the
+// wellness tab's card, and now this page.
+const HABITS_ACCENT = "155 65% 45%";
 import { Link } from "wouter";
 import type { Habit, Profile } from "@shared/schema";
 import { getUserToday, addDays, parseLocalDate } from "@shared/timezone";
@@ -460,33 +466,30 @@ export default function HabitsPage() {
   const totalActive = habits.length;
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4 pb-24">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
-            <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" aria-label="Back to Dashboard" data-testid="button-back">
-              <ArrowLeft className="w-4 h-4" />
-            </Link>
-{filterMode === "selected" && filterLabel && (
-            <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-full">{filterLabel}</span>
-          )}
-          </div>
-          <p className="text-xs text-muted-foreground">{completedToday}/{totalActive} completed today</p>
-        </div>
-        <Button size="sm" onClick={() => setShowCreate(!showCreate)} data-testid="button-create-habit">
-          <Plus className="h-3.5 w-3.5 mr-1" /> New Habit
-        </Button>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="Habits"
+        subtitle={filterMode === "selected" && filterLabel
+          ? `${completedToday}/${totalActive} completed today · ${filterLabel}`
+          : `${completedToday}/${totalActive} completed today`}
+        icon={Flame}
+        accent={HABITS_ACCENT}
+        backHref="/dashboard"
+        actions={
+          <Button size="sm" onClick={() => setShowCreate(!showCreate)} data-testid="button-create-habit">
+            <Plus className="h-3.5 w-3.5 mr-1" /> New Habit
+          </Button>
+        }
+      />
 
-      {/* Progress bar */}
-      <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
+      {/* Today's progress — the accent is the tab's, not the generic primary,
+          so this page agrees with the habit rows below it. */}
+      <div className="w-full h-2 rounded-full overflow-hidden" style={{ background: `hsl(${HABITS_ACCENT} / 0.15)` }}>
         <div
           className="h-full rounded-full transition-all duration-500"
           style={{
             width: totalActive > 0 ? `${(completedToday / totalActive) * 100}%` : "0%",
-            /* Theme-aware: follows the user's chosen primary color instead of
-               a hardcoded teal pair. */
-            background: "linear-gradient(90deg, hsl(var(--primary)), hsl(var(--primary) / 0.65))",
+            background: `linear-gradient(90deg, hsl(${HABITS_ACCENT}), hsl(${HABITS_ACCENT} / 0.65))`,
           }}
         />
       </div>
@@ -531,9 +534,8 @@ export default function HabitsPage() {
 
       {isLoading ? (
         <div className="p-4 space-y-3">
-          <div className="h-8 w-48 rounded skeleton-shimmer" />
-          <div className="h-20 rounded skeleton-shimmer" />
-          <div className="h-20 rounded skeleton-shimmer" />
+          <div className="skeleton-shimmer h-8 w-48 rounded-full" />
+          <BubbleSkeletonGrid count={4} rows={2} height={140} className="grid-cols-1 sm:grid-cols-2" />
         </div>
       ) : error ? (
         <div className="p-4 text-center">
@@ -575,6 +577,6 @@ export default function HabitsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

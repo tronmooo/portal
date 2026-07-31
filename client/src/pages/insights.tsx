@@ -13,6 +13,11 @@ import {
   ArrowLeft, AlertTriangle, TrendingUp, Activity,
   FileText, Camera, Sparkles, Loader2, RefreshCw, Wallet,
 } from "lucide-react";
+import { PageContainer, PageHeader } from "@/components/ui/page-shell";
+
+// AI-derived content is purple across the app (Executive insights, the wellness
+// AI card, the finance alerts panel).
+const INSIGHTS_ACCENT = "280 75% 62%";
 
 type Anomaly = {
   id: string;
@@ -153,26 +158,22 @@ export default function InsightsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="border-b sticky top-0 bg-background/95 backdrop-blur z-10">
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => setLocation("/dashboard")} aria-label="Back to Dashboard" data-testid="button-back">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div className="flex-1">
-            <h1 className="text-lg font-semibold flex items-center gap-2">
-              <Sparkles className="h-4 w-4" /> Insights
-            </h1>
-            <p className="text-xs text-muted-foreground">Anomalies, weekly reviews, and receipt scanning</p>
-          </div>
+    <PageContainer width="4xl">
+      <PageHeader
+        title="Insights"
+        subtitle="Anomalies, weekly reviews, and receipt scanning"
+        icon={Sparkles}
+        accent={INSIGHTS_ACCENT}
+        onBack={() => setLocation("/dashboard")}
+        actions={
           <Button variant="ghost" size="sm" onClick={() => refetchAnom()} disabled={anomLoading}>
             <RefreshCw className={`h-3.5 w-3.5 mr-1 ${anomLoading ? "animate-spin" : ""}`} />
             Refresh
           </Button>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+      <div className="space-y-6">
         {/* Quick actions row */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card>
@@ -348,6 +349,6 @@ export default function InsightsPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </PageContainer>
   );
 }

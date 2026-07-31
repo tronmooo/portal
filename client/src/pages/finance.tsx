@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
@@ -866,9 +867,8 @@ export default function FinancePage() {
     return (
       <StuckLoadingGuard active onRetry={() => refetch()}>
         <div className="p-4 space-y-3">
-          <div className="h-8 w-48 rounded skeleton-shimmer" />
-          <div className="h-20 rounded skeleton-shimmer" />
-          <div className="h-20 rounded skeleton-shimmer" />
+          <div className="skeleton-shimmer h-8 w-48 rounded-full" />
+          <BubbleSkeletonGrid count={4} rows={2} height={140} className="grid-cols-1 sm:grid-cols-2" />
         </div>
       </StuckLoadingGuard>
     );

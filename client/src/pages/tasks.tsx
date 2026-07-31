@@ -1,6 +1,13 @@
 import { formatApiError } from "@/lib/formatError";
 import { stopProp } from "@/lib/event-utils";
 import { EmptyState } from "@/components/ui/empty-state";
+import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
+import { PageContainer, PageHeader } from "@/components/ui/page-shell";
+import { MetricCard } from "@/components/ui/metric-card";
+
+// Tasks live on the Executive tab; the page takes its accent so opening the
+// full list doesn't feel like leaving the app.
+const TASKS_ACCENT = "262 70% 62%";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -42,7 +49,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { showUndoToast } from "@/lib/undo-delete";
-import { ListTodo, Calendar, AlertCircle, ArrowLeft, Plus, Trash2, CheckCircle2 } from "lucide-react";
+import { ListTodo, Calendar, CalendarDays, AlertCircle, AlertTriangle, Flame, Plus, Trash2, CheckCircle2 } from "lucide-react";
 import { Link } from "wouter";
 import type { Task, Profile } from "@shared/schema";
 import { useState, useEffect, useRef, useMemo } from "react";
@@ -616,9 +623,8 @@ export default function TasksPage() {
   if (isLoading) {
     return (
       <div className="p-4 space-y-3">
-        <div className="h-8 w-48 rounded skeleton-shimmer" />
-        <div className="h-20 rounded skeleton-shimmer" />
-        <div className="h-20 rounded skeleton-shimmer" />
+        <div className="skeleton-shimmer h-8 w-48 rounded-full" />
+        <BubbleSkeletonGrid count={4} rows={2} height={140} className="grid-cols-1 sm:grid-cols-2" />
       </div>
     );
   }
@@ -634,42 +640,37 @@ export default function TasksPage() {
   // profileFilteredTasks, activeTasks, completedTasks are memoized above (before early returns)
 
   return (
-    <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-tasks">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
-            <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" aria-label="Back" data-testid="button-back">
-              <ArrowLeft className="w-4 h-4" />
-            </Link>
+    <PageContainer testId="page-tasks">
+      {/* The page had no title at all — a bare back arrow and a filter chip.
+          PageHeader is the same medallion + bold title every hub tab uses. */}
+      <PageHeader
+        title="Tasks"
+        subtitle={`${activeTasks.length} active · ${completedTasks.length} completed`}
+        icon={CheckCircle2}
+        accent={TASKS_ACCENT}
+        backHref="/dashboard"
+        actions={
+          <>
+            <MultiProfileFilter onChange={() => {}} compact />
+            <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="button-new-task">
+              <Plus className="h-3.5 w-3.5 mr-1" /> New Task
+            </Button>
+          </>
+        }
+      />
 
-            <MultiProfileFilter
-              // The chip writes straight to the global scope store; useProfileScope
-              // above re-renders this page reactively, so no local wiring is needed.
-              onChange={() => {}}
-              compact
-            />
-          </div>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {activeTasks.length} active, {completedTasks.length} completed
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="button-new-task">
-          <Plus className="h-3.5 w-3.5 mr-1" /> New Task
-        </Button>
-      </div>
-
-      {/* v2 summary band */}
-      <div className="grid grid-cols-4 gap-2" data-testid="tasks-summary">
+      {/* Summary band — the app's one stat tile, and each one now opens the
+          filter it describes instead of being a number you can't act on. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="tasks-summary">
         {[
-          { label: "Overdue", value: taskSummary.overdue, color: "0 72% 55%" },
-          { label: "Today", value: taskSummary.dueToday, color: "43 85% 52%" },
-          { label: "Upcoming", value: taskSummary.upcoming, color: "200 80% 55%" },
-          { label: "Done", value: taskSummary.done, color: "155 60% 48%" },
-        ].map(s => (
-          <div key={s.label} className="bubble p-2.5 text-center">
-            <p className="text-lg font-bold tabular-nums leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
-            <p className="mt-1 micro-label text-muted-foreground">{s.label}</p>
-          </div>
+          { label: "Overdue", value: taskSummary.overdue, accent: "0 72% 55%", icon: AlertTriangle },
+          { label: "Today", value: taskSummary.dueToday, accent: "43 85% 52%", icon: Flame },
+          { label: "Upcoming", value: taskSummary.upcoming, accent: "200 80% 55%", icon: CalendarDays },
+          { label: "Done", value: taskSummary.done, accent: "155 60% 48%", icon: CheckCircle2 },
+        ].map((s, i) => (
+          <MetricCard key={s.label} label={s.label} countTo={s.value} accent={s.accent}
+            icon={s.icon} testId={`tasks-summary-${s.label.toLowerCase()}`}
+            className="bubble-enter" style={{ ["--i" as any]: i }} />
         ))}
       </div>
 
@@ -805,6 +806,6 @@ export default function TasksPage() {
       {editTask && (
         <TaskDialog open={!!editTask} onClose={() => setEditTask(null)} task={editTask} />
       )}
-    </div>
+    </PageContainer>
   );
 }

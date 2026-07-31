@@ -11,7 +11,9 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Search } from "lucide-react";
+import { Search, Users } from "lucide-react";
+import { PageContainer, PageHeader } from "@/components/ui/page-shell";
+import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 
 interface LiteProfile {
   id: string;
@@ -66,15 +68,14 @@ export default function ProfilesListPage() {
   const total = profiles?.length ?? 0;
 
   return (
-    <div className="p-4 md:p-6 overflow-y-auto h-full" data-testid="page-profiles-list">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">Profiles</h1>
-          <p className="text-xs text-muted-foreground">
-            {total} {total === 1 ? "profile" : "profiles"}
-          </p>
-        </div>
-        <div className="relative sm:w-64">
+    <PageContainer testId="page-profiles-list">
+      <PageHeader
+        title="Profiles"
+        subtitle={`${total} ${total === 1 ? "profile" : "profiles"}`}
+        icon={Users}
+        accent="213 90% 62%"
+        actions={
+        <div className="relative sm:w-56">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             value={search}
@@ -85,9 +86,10 @@ export default function ProfilesListPage() {
             data-testid="input-profiles-search"
           />
         </div>
-      </div>
+        }
+      />
 
-      {isLoading && <div className="h-24 rounded skeleton-shimmer" />}
+      {isLoading && <BubbleSkeletonGrid count={4} rows={1} height={92} />}
 
       {!isLoading && groups.length === 0 && (
         <p className="text-sm text-muted-foreground py-8 text-center">
@@ -122,6 +124,6 @@ export default function ProfilesListPage() {
           </section>
         ))}
       </div>
-    </div>
+    </PageContainer>
   );
 }

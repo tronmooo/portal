@@ -14,7 +14,13 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BookHeart, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, ArrowLeft, Trash2, AlertCircle, MessageCircle, Pencil, Search, PenLine } from "lucide-react";
+import { BookHeart, BookOpen, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, Trash2, AlertCircle, MessageCircle, Pencil, Search, PenLine } from "lucide-react";
+import { PageContainer, PageHeader } from "@/components/ui/page-shell";
+import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
+
+// Journal is purple everywhere else in the app (the Info tab's Journal card,
+// the Executive tab's entry row).
+const JOURNAL_ACCENT = "262 70% 62%";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel, Profile } from "@shared/schema";
 import { detectMoodFromText } from "@shared/mood-detect";
@@ -436,23 +442,21 @@ export default function JournalPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4 pb-24 max-w-2xl mx-auto">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
-            <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md w-8 h-8 hover:bg-muted transition-colors" aria-label="Back" data-testid="button-back">
-              <ArrowLeft className="w-4 h-4" />
-            </Link>
-{filterMode === "selected" && filterLabel && (
-            <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-full">{filterLabel}</span>
-          )}
-          </div>
-          <p className="text-xs text-muted-foreground">{entries.length} entries</p>
-        </div>
-        <Button size="sm" onClick={() => { if (showCreate) { resetForm(); } setShowCreate(!showCreate); }} data-testid="button-new-journal">
-          {showCreate ? <><X className="h-3.5 w-3.5 mr-1" /> Cancel</> : <><Plus className="h-3.5 w-3.5 mr-1" /> New Entry</>}
-        </Button>
-      </div>
+    <PageContainer width="2xl">
+      <PageHeader
+        title="Journal"
+        subtitle={filterMode === "selected" && filterLabel
+          ? `${entries.length} entries · ${filterLabel}`
+          : `${entries.length} entries`}
+        icon={BookOpen}
+        accent={JOURNAL_ACCENT}
+        backHref="/dashboard"
+        actions={
+          <Button size="sm" onClick={() => { if (showCreate) { resetForm(); } setShowCreate(!showCreate); }} data-testid="button-new-journal">
+            {showCreate ? <><X className="h-3.5 w-3.5 mr-1" /> Cancel</> : <><Plus className="h-3.5 w-3.5 mr-1" /> New Entry</>}
+          </Button>
+        }
+      />
 
       {/* 7-day mood strip */}
       <div className="flex gap-2 justify-center">
@@ -714,9 +718,8 @@ export default function JournalPage() {
 
       {isLoading ? (
         <div className="p-4 space-y-3">
-          <div className="h-8 w-48 rounded skeleton-shimmer" />
-          <div className="h-20 rounded skeleton-shimmer" />
-          <div className="h-20 rounded skeleton-shimmer" />
+          <div className="skeleton-shimmer h-8 w-48 rounded-full" />
+          <BubbleSkeletonGrid count={4} rows={2} height={140} className="grid-cols-1 sm:grid-cols-2" />
         </div>
       ) : error ? (
         <div className="p-4 text-center">
@@ -781,6 +784,6 @@ export default function JournalPage() {
           })()}
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

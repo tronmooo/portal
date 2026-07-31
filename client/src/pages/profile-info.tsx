@@ -33,6 +33,7 @@ import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, B
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { stringifyField } from "@/lib/field-display";
 import { SectionHeading } from "@/components/ui/section-heading";
+import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 
 function timeAgo(ts: string | undefined): string {
   if (!ts) return "";
@@ -214,10 +215,9 @@ function SingleProfileInfo({ id }: { id: string }) {
   if (isLoading) {
     return (
       <div className="p-4 md:p-6 space-y-4" data-testid="page-profile-info">
-        <div className="h-16 w-48 rounded skeleton-shimmer" />
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-          {[...Array(6)].map((_, i) => <div key={i} className="h-16 rounded-lg skeleton-shimmer" />)}
-        </div>
+        <div className="skeleton-shimmer h-11 w-48 rounded-full" />
+        <BubbleSkeletonGrid count={6} rows={1} height={72}
+          className="grid-cols-2 sm:grid-cols-3 lg:grid-cols-6" />
       </div>
     );
   }

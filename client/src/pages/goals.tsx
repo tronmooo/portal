@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Target, AlertTriangle, Flame, CheckCircle2 } from "lucide-react";
 import { PageContainer, PageHeader } from "@/components/ui/page-shell";
+import { MetricCard } from "@/components/ui/metric-card";
 import { useQuery } from "@tanstack/react-query";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -61,13 +62,11 @@ export default function GoalsPage() {
         <div className="mb-3 h-2 overflow-hidden rounded-full bg-muted/60">
           <div className="h-full rounded-full transition-all duration-500" style={{ width: `${summary.avg}%`, background: "hsl(262 70% 62%)" }} />
         </div>
-        <div className="grid grid-cols-4 gap-2">
-          {chips.map(({ label, value, color, Icon }) => (
-            <div key={label} className="flex flex-col items-center rounded-xl border border-border/40 py-2">
-              <Icon className="mb-1 h-4 w-4" style={{ color: `hsl(${color})` }} />
-              <span className="text-base font-bold tabular-nums leading-none">{value}</span>
-              <span className="mt-0.5 text-[9px] text-muted-foreground">{label}</span>
-            </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {chips.map(({ label, value, color, Icon }, i) => (
+            <MetricCard key={label} label={label} countTo={value} accent={color} icon={Icon}
+              density="dense" className="bubble-enter" style={{ ["--i" as any]: i }}
+              testId={`goals-chip-${label.toLowerCase().replace(/\s+/g, "-")}`} />
           ))}
         </div>
       </div>
