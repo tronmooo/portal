@@ -696,13 +696,14 @@ export default function TasksPage() {
       </div>
 
       {profileFilteredTasks.length === 0 ? (
-        <div className="text-center py-16">
-          <ListTodo className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
-          <p className="text-sm text-muted-foreground">No tasks yet.</p>
-          <Button variant="outline" size="sm" className="mt-3" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-3.5 w-3.5 mr-1" /> Create your first task
-          </Button>
-        </div>
+        <EmptyState
+          icon={ListTodo}
+          accent={TASKS_ACCENT}
+          label="Nothing on your list"
+          hint="Add a task here, or just tell Portol in chat — “remind me to renew the registration”."
+          ctaLabel="Create your first task"
+          onCta={() => setCreateOpen(true)}
+        />
       ) : (
         <>
           {(tabFilter === "all" || tabFilter === "open") && (

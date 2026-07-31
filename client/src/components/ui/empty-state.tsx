@@ -19,7 +19,7 @@ import { Medallion, tonePalette, type PillTone } from "@/components/dashboard/vi
 import { cn } from "@/lib/utils";
 
 export function EmptyState({
-  icon, label, hint, ctaLabel, onCta, tone = "neutral", className = "", testId,
+  icon, label, hint, ctaLabel, onCta, tone = "neutral", accent, className = "", testId,
 }: {
   icon?: LucideIcon;
   /** State the outcome, not the absence. "You're clear for 14 days". */
@@ -29,6 +29,9 @@ export function EmptyState({
   onCta?: () => void;
   /** "good" when empty is the *desired* state — nothing overdue, all caught up. */
   tone?: PillTone;
+  /** Raw HSL triple overriding `tone` — use the section's own accent so the
+   *  empty medallion doesn't sit grey directly under a coloured heading. */
+  accent?: string;
   className?: string;
   testId?: string;
 }) {
@@ -38,7 +41,7 @@ export function EmptyState({
       role="status"
       data-testid={testId ?? "empty-state"}
     >
-      <Medallion icon={icon ?? Inbox} accent={tonePalette(tone)} />
+      <Medallion icon={icon ?? Inbox} accent={accent ?? tonePalette(tone)} />
       <p className="text-[13px] font-semibold text-foreground" data-testid="empty-state-title">{label}</p>
       {hint && (
         <p className="text-[11px] text-muted-foreground max-w-[34ch]" data-testid="empty-state-description">

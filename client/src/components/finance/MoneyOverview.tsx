@@ -5,6 +5,7 @@
 // Pure presentation over data finance.tsx already fetches — all values come in
 // as props so this stays testable and finance.tsx owns the queries/mutations.
 import { Link } from "wouter";
+import { EmptyState } from "@/components/ui/empty-state";
 import { formatMoneyRound } from "@/lib/format";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -233,7 +234,10 @@ export function MoneyOverview(props: {
 
         <Card className="p-4" data-testid="money-categories">
           <SectionHeading title="Spending by Category · MTD" icon={PieChart} accent="262 80% 66%" count={categories.length} />
-          {categories.length === 0 ? <p className="text-xs text-muted-foreground">No spending this month.</p> : (
+          {categories.length === 0 ? (
+            <EmptyState tone="good" icon={PieChart} label="Nothing spent yet this month"
+              hint="Categories appear here as expenses come in." />
+          ) : (
             <div className="space-y-1.5">
               {categories.map((c, i) => (
                 <button key={c.name} onClick={() => onCategoryClick?.(c.name)}
@@ -327,7 +331,8 @@ export function MoneyOverview(props: {
         <Card className="p-4" data-testid="money-bills">
           <SectionHeading title="Bills · next 14d" icon={Receipt} accent="25 90% 58%" count={bills.length} />
           {bills.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No bills due in the next 14 days.</p>
+            <EmptyState tone="good" icon={Receipt} label="You're clear for 14 days"
+              hint="Nothing due between now and then." />
           ) : (
             <div className="space-y-1.5">
               {bills.map(b => (

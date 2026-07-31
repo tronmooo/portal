@@ -1,4 +1,5 @@
 import { formatApiError } from "@/lib/formatError";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { stopProp } from "@/lib/event-utils";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -545,14 +546,14 @@ export default function HabitsPage() {
           <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
         </div>
       ) : habits.length === 0 ? (
-        <div className="text-center py-12">
-          <Flame className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-          <h3 className="text-sm font-medium mb-1">No habits yet</h3>
-          <p className="text-xs text-muted-foreground mb-4">Start building positive routines by creating your first habit.</p>
-          <Button size="sm" onClick={() => setShowCreate(true)} data-testid="button-create-habit-empty">
-            <Plus className="h-3.5 w-3.5 mr-1" /> Create Your First Habit
-          </Button>
-        </div>
+        <EmptyState
+          icon={Flame}
+          accent={HABITS_ACCENT}
+          label="No streaks going yet"
+          hint="Pick one small thing you want to do daily. The streak does the rest."
+          ctaLabel="Create your first habit"
+          onCta={() => setShowCreate(true)}
+        />
       ) : (
         <div className="grid gap-3">
           {habits.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(habit => (

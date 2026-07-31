@@ -245,3 +245,38 @@ describe("motion stays accessible", () => {
     expect(block).not.toMatch(/\b(width|height|top|left|margin):/);
   });
 });
+
+describe("one icon per concept", () => {
+  it("names every concept's icon in shared/icon-vocabulary.ts", () => {
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "..", "shared/icon-vocabulary.ts"), "utf8");
+    // The seven from the brief: heart = health, dollar = finance,
+    // calendar = dates, folder = documents, bell = alerts, check = tasks,
+    // flame = habits.
+    for (const [concept, icon] of [
+      ["health", "HeartPulse"], ["finance", "Wallet"], ["dates", "CalendarDays"],
+      ["documents", "FileText"], ["alerts", "Bell"], ["tasks", "CheckCircle2"],
+      ["habits", "Flame"],
+    ]) {
+      expect(src, `${concept} must be ${icon}`).toMatch(
+        new RegExp(`${concept}:\\s*"${icon}"`));
+    }
+  });
+
+  it("resolves every named icon to a real component", async () => {
+    // A name in the vocabulary with no entry in the client map would silently
+    // fall back to a generic glyph — the drift this file exists to prevent,
+    // just one indirection further away.
+    const { ICON_VOCABULARY, CONCEPT_ACCENT } = await import("@shared/icon-vocabulary");
+    const map = fs.readFileSync(path.resolve(ROOT, "lib/icon-map.ts"), "utf8");
+    for (const name of new Set(Object.values(ICON_VOCABULARY))) {
+      expect(map, `${name} is missing from BY_NAME in icon-map.ts`)
+        .toMatch(new RegExp(`\\b${name}\\b[,\\s]`));
+    }
+    // Every concept carries an accent, so colour and icon can't disagree.
+    for (const concept of Object.keys(ICON_VOCABULARY)) {
+      expect(CONCEPT_ACCENT[concept as keyof typeof CONCEPT_ACCENT],
+        `${concept} has no accent`).toBeTruthy();
+    }
+  });
+});

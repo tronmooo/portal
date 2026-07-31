@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { groupWellnessCards, type WellnessCard } from "@/lib/wellness-dynamic";
 import { Medallion } from "@/components/dashboard/visuals";
+import { conceptIcon } from "@/lib/icon-map";
 import { SectionHeading } from "@/components/ui/section-heading";
 
 // ── shared bits ──────────────────────────────────────────────────────────────
@@ -335,7 +336,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             value={fmt(steps)} unit="steps" series={stepsSeries} />
         )}
         {restingHr != null && (
-          <KpiTile onClick={open("hr")} testId="wellness-kpi-hr" label="Resting HR" tone={T.green} icon={Heart}
+          <KpiTile onClick={open("hr")} testId="wellness-kpi-hr" label="Resting HR" tone={T.green} icon={conceptIcon("health")}
             value={String(restingHr)} unit="bpm" series={restingHrSeries} />
         )}
         {hydrationOz != null && (
@@ -408,7 +409,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
       {/* ── Aggregate / list cards — each rendered ONLY when it has data ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         {has.habits && (
-        <SectionCard onOpen={open("habits")} testId="wellness-habits" title="Today's Habits" icon={CheckCircle2} tone={T.green}
+        <SectionCard onOpen={open("habits")} testId="wellness-habits" title="Today's Habits" icon={conceptIcon("habits")} tone={T.green}
           badge={`${habitsCompleted} / ${habits.length} done`} viewAllHref="/habits">
           {habits.length === 0 ? <Empty text="No habits yet — add one from chat." /> : (
             <ul className="space-y-1.5">
@@ -451,7 +452,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
 
         {has.schedule && (
         <SectionCard onOpen={open("schedule")} testId="wellness-schedule" title="Today's Schedule" icon={CalendarClock} tone={T.blue} viewAllHref="/calendar">
-          {schedule.length === 0 ? <Empty text="Nothing scheduled today." /> : (
+          {schedule.length === 0 ? <Empty text="Your day is clear." /> : (
             <ul className="space-y-2">
               {schedule.slice(0, 6).map((e) => (
                 <li key={e.id} className="flex items-center gap-3 text-sm" data-testid={`wellness-event-${e.id}`}>
@@ -467,7 +468,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
         {has.meds && (
         <SectionCard onOpen={open("meds")} testId="wellness-medications" title="Medications" icon={Pill} tone={T.pink}
           badge={dueMeds > 0 ? `${dueMeds} due` : "all taken"} viewAllHref="/obligations">
-          {medications.length === 0 ? <Empty text="No medications tracked." /> : (
+          {medications.length === 0 ? <Empty text="No medications to track." /> : (
             <ul className="space-y-1.5">
               {medications.slice(0, 6).map((m) => (
                 <li key={m.id} className="flex items-center gap-2 text-sm" data-testid={`wellness-med-${m.id}`}>
