@@ -12,6 +12,7 @@
 // the UI can't display side-by-side. This module makes them match.
 
 import type { Tracker, TrackerField } from "../shared/schema";
+import { expandStrengthSetLists } from "../shared/strength-entry";
 
 // ── Aliases that map AI/document-supplied field names → tracker fields ──
 // LHS = source key (lowercased), RHS = canonical field name we'll try
@@ -27,9 +28,17 @@ const FIELD_ALIASES: Record<string, string> = {
   // distance
   miles: "distance", km: "distance", kilometers: "distance",
   meters: "distance", mi: "distance",
-  // weight
+  // weight — the same lift logged as "weightLbs" one day and "weight" the next
+  // used to create TWO fields on one tracker (2026-08-02: Shoulder Press had
+  // both, each holding half the history), so every spelling maps to "weight"
+  // when the tracker has that field.
   lbs: "weight", lb: "weight", pounds: "weight",
   kg: "weight", kilograms: "weight", mass: "weight",
+  weightlbs: "weight", weight_lbs: "weight", weightlb: "weight",
+  weightkg: "weight", weight_kg: "weight", load: "weight",
+  // reps / sets
+  repcount: "reps", rep_count: "reps", repetitions: "reps",
+  setcount: "sets", set_count: "sets",
   // temperature
   temp: "temperature", temperature: "temperature",
   // blood pressure
@@ -238,6 +247,19 @@ export function normalizeTrackerEntry(
   const out: Record<string, any> = {};
   const warnings: string[] = [];
   const trackerUnit = (tracker as any).unit as string | undefined;
+
+  // ── Per-set lists → numbers ────────────────────────────────────────
+  // A lift is logged per set, so the model writes weight:"70/80/80",
+  // reps:"10/8/6". Left as strings they make the weight field non-numeric,
+  // which is what turned a Shoulder Press card into "2 lbs" (the SET COUNT
+  // borrowed as the headline, stamped with a hardcoded unit). Convert to the
+  // top set's numbers here — before any field/unit work — and keep the full
+  // list in a companion field so nothing the user logged is lost. This runs
+  // for EVERY writer (chat, document extraction, future ingestors), so a
+  // model that emits a slash list can no longer corrupt a numeric field.
+  const expanded = expandStrengthSetLists(rawValues);
+  rawValues = expanded.values;
+  warnings.push(...expanded.warnings);
 
   // Field names claimed by an EXACT key match in this entry. A remap/fallback
   // (e.g. an unknown "distance" mapped onto a Steps tracker's lone "steps"

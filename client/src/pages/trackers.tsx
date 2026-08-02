@@ -19,6 +19,8 @@ import {
 } from "@shared/tracker-metric-definition";
 import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
 import { resolveTrackerUnit } from "@shared/tracker-units";
+import { isWeightFieldName } from "@shared/strength-entry";
+import { summarizeLiftEntry } from "@/lib/lift-summary";
 import { inferTrackerShapeId } from "@shared/tracker-shapes";
 import { trackerFieldLabel, humanizeFieldName } from "@shared/field-label";
 import EditableTitle from "@/components/EditableTitle";
@@ -2212,7 +2214,12 @@ function buildTrackerInsight(tracker: Tracker, goals: Goal[] = []): TrackerInsig
   }
 
   if (kind === "weight") {
-    const w = pickNum(last.values, primaryField, "weight", "value") ?? (findAnyNumericValue(last.values)?.num ?? null);
+    // Same rule as the lift card: only a weight-shaped field may be printed
+    // with a weight unit. The old any-numeric fallback would headline a body-
+    // fat % or a rep count as pounds.
+    const anyWeightish = findAnyNumericValue(last.values);
+    const w = pickNum(last.values, primaryField, "weight", "value")
+      ?? (anyWeightish && isWeightFieldName(anyWeightish.key) ? anyWeightish.num : null);
     if (w == null) {
       return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: primaryUnit || "lbs",
         subline: "", insight: "No weight logged.", progressPct: null, statusBadge: null,
@@ -2459,28 +2466,22 @@ function buildTrackerInsight(tracker: Tracker, goals: Goal[] = []): TrackerInsig
   }
 
   if (kind === "bench") {
-    const w = pickNum(last.values, "weight", "lbs", primaryField, "value") ?? (findAnyNumericValue(last.values)?.num ?? null);
-    const reps = pickNum(last.values, "reps", "rep_count");
-    const sets = pickNum(last.values, "sets", "set_count");
-    if (w == null && reps == null && sets == null) {
-      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "lbs",
-        subline: "", insight: "Log a set to start tracking.",
+    // A number and the unit printed next to it MUST come from the same field.
+    // This branch used to fall back to primaryField / any-numeric for the
+    // weight and then stamp a hardcoded "lbs" on whatever it found — so a
+    // Shoulder Press whose weight was stored as the unreadable string "60/70"
+    // headlined its SET COUNT as "2 lbs" (2026-08-02 bug report). The rule now
+    // lives in lib/lift-summary (pinned by tests/lift-summary.test.ts).
+    const lift = summarizeLiftEntry(tracker as any, last.values);
+    if (!lift.hasData) {
+      return { hasData: false, kind, importance, iconKind, bigPrimary: lift.value, bigUnit: lift.unit,
+        subline: "", insight: lift.insight,
         progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
     }
-    const subParts: string[] = [];
-    if (reps != null) subParts.push(`${reps} reps`);
-    if (sets != null) subParts.push(`${sets} sets`);
-    const subline = subParts.join(" · ");
-    const unit = (tracker.fields.find(f => f.name === "weight")?.unit) || tracker.unit || "lbs";
-    const big = w != null ? fmtNum(w, 0) : (reps != null ? `${reps}` : "—");
-    const bigUnit = w != null ? unit : (reps != null ? "reps" : "");
-    const insight = w != null
-      ? `Lifted ${fmtNum(w, 0)} ${unit}${reps != null ? ` × ${reps}` : ""}${sets != null ? ` × ${sets} sets` : ""}.`
-      : (reps != null ? `${reps} reps logged.` : "Session logged.");
     return {
       hasData: true, kind, importance, iconKind,
-      bigPrimary: big, bigUnit, subline,
-      insight, progressPct: null, statusBadge: freshness,
+      bigPrimary: lift.value, bigUnit: lift.unit, subline: lift.subline,
+      insight: lift.insight, progressPct: null, statusBadge: freshness,
       sparkValues, trendPct, trendDir,
     };
   }

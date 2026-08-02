@@ -20,6 +20,8 @@ export default defineConfig({
       'tests/reextract-merge.test.ts',
       'tests/chart-data.test.ts',
       'tests/tracker-normalize.test.ts',
+      'tests/strength-entry.test.ts',
+      'tests/lift-summary.test.ts',
       'tests/tracker-entry-update.test.ts',
       'tests/tracker-read-no-write.test.ts',
       'tests/create-tracker-universal.test.ts',

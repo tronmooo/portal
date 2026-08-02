@@ -10,6 +10,8 @@
 //
 // Pinned by tests/estimation-engine.test.ts.
 
+import { readStrengthEntry } from "./strength-entry";
+
 // ─── Provenance ──────────────────────────────────────────────────────────────
 
 export type ValueSource =
@@ -468,17 +470,24 @@ export function enrichSleepEntry(explicit: Record<string, any>): Enrichment {
  * tracker's name (Bench Press, Squats, Deadlift stay separate trackers). */
 export function enrichStrengthEntry(explicit: Record<string, any>): Enrichment {
   const out = emptyEnrichment("strength");
-  const weight = numeric(explicit.weight ?? explicit.weightLbs ?? explicit.lbs);
-  const reps = numeric(explicit.reps ?? explicit.repetitions);
-  const sets = numeric(explicit.sets) ?? 1;
-  if (weight != null && weight > 0 && reps != null && reps > 0 && explicit.totalVolume == null && explicit.volume == null) {
-    out.calculated.totalVolume = {
-      value: round(weight * reps * sets),
-      source: "calculated",
-      confidence: 1,
-      method: `${weight} × ${reps} reps × ${sets} set${sets === 1 ? "" : "s"}`,
-    };
-  }
+  if (explicit.totalVolume != null || explicit.volume != null) return out;
+
+  // readStrengthEntry understands BOTH shapes: scalars (185 × 5 × 3) and the
+  // per-set lists the chat emits for a real workout (weight "70/80/80", reps
+  // "10/8/6"), where volume is Σ(weightᵢ × repsᵢ) — exact, not an estimate.
+  const r = readStrengthEntry(explicit);
+  if (r.totalVolume == null || r.totalVolume <= 0) return out;
+
+  const method = (r.weightPerSet && r.repsPerSet && r.weightPerSet.length === r.repsPerSet.length)
+    ? r.weightPerSet.map((w, i) => `${w}×${r.repsPerSet![i]}`).join(" + ")
+    : `${r.weight} × ${r.reps} reps × ${r.sets ?? 1} set${(r.sets ?? 1) === 1 ? "" : "s"}`;
+
+  out.calculated.totalVolume = {
+    value: round(r.totalVolume),
+    source: "calculated",
+    confidence: 1,
+    method,
+  };
   return out;
 }
 

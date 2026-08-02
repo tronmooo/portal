@@ -150,3 +150,63 @@ describe("normalizeTrackerEntry — single-numeric mapping is value-aware", () =
     expect(values.mood).toBe("happy");
   });
 });
+
+// ── Per-set lift values (the 2026-08-02 "3 pounds / 2 pounds" report) ────────
+// The chat logged a lift's load per set as a STRING ("weight":"70/80/80"), so
+// the weight field was never numeric. The card then borrowed the only number it
+// could find — the SET COUNT — and printed it as pounds. The normalizer is the
+// chokepoint every writer goes through, so it is where a numeric field is
+// guaranteed to end up holding a number.
+describe("normalizeTrackerEntry — per-set lift values", () => {
+  const lift = {
+    name: "Incline Dumbbell Press", category: "fitness", unit: null,
+    fields: [
+      { name: "weight", type: "number", unit: "lbs", isPrimary: true },
+      { name: "reps", type: "number", unit: "reps" },
+      { name: "sets", type: "number", unit: "sets" },
+    ],
+  } as any;
+
+  it("stores the top set as a number and keeps the per-set detail", () => {
+    const { values } = normalizeTrackerEntry(lift, {
+      reps: "10/8/6", sets: 3, weight: "70/80/80", intensity: "high", totalVolume: 2100,
+    });
+    expect(values.weight).toBe(80);            // heaviest set — never a string
+    expect(typeof values.weight).toBe("number");
+    expect(values.weightPerSet).toBe("70/80/80");
+    expect(values.reps).toBe(8);               // the reps done at 80 lbs
+    expect(values.repsPerSet).toBe("10/8/6");
+    expect(values.sets).toBe(3);
+    expect(values.totalVolume).toBe(1820);     // 70×10 + 80×8 + 80×6, corrected
+    expect(values.intensity).toBe("high");
+  });
+
+  it("lands every spelling of the load on the same field", () => {
+    // Jul 26 logged "weightLbs", Jul 27 logged "weight" — one tracker ended up
+    // with two half-filled fields. Both must resolve to `weight` now.
+    const a = normalizeTrackerEntry(lift, { weightLbs: 50, reps: 10, sets: 3 }).values;
+    expect(a.weight).toBe(50);
+    expect(a.weightLbs).toBeUndefined();
+    const b = normalizeTrackerEntry(lift, { weight: 50, reps: 10, sets: 3 }).values;
+    expect(b.weight).toBe(50);
+  });
+
+  it("derives the set count from the list when the model omitted it", () => {
+    const { values } = normalizeTrackerEntry(lift, { weight: "70/80/80", reps: "10/8/6" });
+    expect(values.sets).toBe(3);
+  });
+
+  it("leaves a blood-pressure reading alone (120/80 is not two sets)", () => {
+    const bp = {
+      name: "Blood Pressure", category: "health", unit: "mmHg",
+      fields: [
+        { name: "systolic", type: "number", unit: "mmHg", isPrimary: true },
+        { name: "diastolic", type: "number", unit: "mmHg" },
+      ],
+    } as any;
+    const { values } = normalizeTrackerEntry(bp, { systolic: 120, diastolic: 80 });
+    expect(values.systolic).toBe(120);
+    expect(values.diastolic).toBe(80);
+    expect(values.sets).toBeUndefined();
+  });
+});
