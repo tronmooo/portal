@@ -116,6 +116,8 @@ export default defineConfig({
       'tests/ai-button-parity.test.ts',
       'tests/action-split.test.ts',
       'tests/bulk-extraction-normalize.test.ts',
+      'tests/mega-plan.test.ts',
+      'tests/mega-reply.test.ts',
       'tests/upcoming-reminders.test.ts',
       'tests/estimation-engine.test.ts',
       'tests/canonical-activity.test.ts',

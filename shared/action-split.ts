@@ -80,3 +80,66 @@ export function shouldUseBulkPath(message: string): boolean {
   if (MIXED_COMMAND_SIGNAL.test(m)) return false;
   return countActionClauses(m) >= BULK_ACTION_THRESHOLD;
 }
+
+// ---------------------------------------------------------------------------
+// Mega-plan router: one giant mixed-CRUD "set up my whole dashboard" message.
+//
+// The bulk path above is for homogeneous activity recaps and is suppressed by
+// any CRUD verb. The mega path is the opposite: it exists FOR mixed
+// create/update commands at a scale (dozens of operations) the agentic loop
+// cannot survive inside its wall-clock budget. Routing is deterministic:
+// sheer length plus clause count, never suppressed by CRUD verbs or a
+// trailing question ("...confirm everything worked?").
+
+/** Below this many characters a message is never a mega-command; the agentic
+ * loop handles it fine. The clause-count gate below is the real signal —
+ * this floor just keeps ordinary chat out cheaply. */
+export const MEGA_CHAR_THRESHOLD = 1500;
+
+/** Total clauses (action recaps + CRUD imperatives) required to route mega. */
+export const MEGA_CLAUSE_THRESHOLD = 10;
+
+/** Imperative CRUD verbs that open a command clause ("Create a task…",
+ * "Add a doctor's appointment…", "Log that I ran…", "Schedule a habit…"). */
+const COMMAND_VERBS =
+  "create|add|make|set|schedule|log|record|track|save|register|start|open|build|generate|link|attach|assign|update|rename|move|pay|refresh|verify|review";
+
+const COMMAND_CLAUSE_SIGNAL = new RegExp(`^(?:(?:please|also|then|and|now)\\s+)*(?:${COMMAND_VERBS})\\b`, "i");
+
+/** Section-label prefix ("Tasks: Create…", "Attention: create…") — stripped
+ * before testing for a leading command verb. Letters only before the colon,
+ * so clock times ("9:00 AM") are untouched. */
+const SECTION_LABEL_PREFIX = /^[A-Za-z][A-Za-z\s'-]{0,30}:\s+/;
+
+/** Separators between commands inside one sentence: semicolons always; commas
+ * only when a command verb follows ("…due tomorrow, create a phone bill…"). */
+const COMMAND_SPLIT = new RegExp(`;\\s*|,\\s*(?=(?:and\\s+|then\\s+)?(?:${COMMAND_VERBS})\\b)`, "i");
+
+/** Count imperative CRUD command clauses ("Create X", "Add Y", "Log Z").
+ * Complements countActionClauses, which only sees first-person recaps. */
+export function countCommandClauses(message: string): number {
+  const raw = String(message || "");
+  if (!raw.trim()) return 0;
+  const sentences = raw
+    .split(/\n+/)
+    .flatMap((line) => line.split(/(?<=[.!?])\s+/))
+    .map((s) => s.trim())
+    .filter(Boolean);
+  let count = 0;
+  for (const sentence of sentences) {
+    for (const part of sentence.split(COMMAND_SPLIT)) {
+      const clause = (part || "").trim().replace(SECTION_LABEL_PREFIX, "");
+      if (clause && COMMAND_CLAUSE_SIGNAL.test(clause)) count++;
+    }
+  }
+  return count;
+}
+
+/** True when a message is a mega-command: long AND dense with operations.
+ * Deliberately NOT suppressed by MIXED_COMMAND_SIGNAL — mixed CRUD is the
+ * mega path's whole job — and a "?" anywhere must not veto it. */
+export function shouldUseMegaPlanPath(message: string): boolean {
+  const m = String(message || "");
+  if (m.length < MEGA_CHAR_THRESHOLD) return false;
+  return countActionClauses(m) + countCommandClauses(m) >= MEGA_CLAUSE_THRESHOLD;
+}

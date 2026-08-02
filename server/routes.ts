@@ -1114,8 +1114,8 @@ export async function registerRoutes(
       const profileFilterIds: string[] | undefined = Array.isArray(req.body?.profileFilterIds)
         ? (req.body.profileFilterIds as any[]).filter((x) => typeof x === "string" && x.length > 0)
         : undefined;
-      if (message.length > 5000) {
-        return res.status(400).json({ error: "Message too long (max 5000 characters)" });
+      if (message.length > 20000) {
+        return res.status(400).json({ error: "Message too long (max 20000 characters)" });
       }
 
       /* A3: honor Idempotency-Key. Valid keys are 8-128 chars of

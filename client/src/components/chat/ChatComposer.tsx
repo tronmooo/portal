@@ -208,7 +208,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Ask me anything..."
-            maxLength={10000}
+            maxLength={20000}
             className="min-h-[76px] max-h-[280px] resize-none border-0 bg-transparent px-4 pt-3.5 pb-14 text-sm leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0 rounded-2xl"
             rows={3}
             data-testid="input-chat"

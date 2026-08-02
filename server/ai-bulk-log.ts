@@ -36,6 +36,13 @@ export interface OperationOutcome {
   createdTracker?: { id: string; name: string };
   /** Compact human-readable summary of what was recorded ("duration 60, method blunt, at 8:15 AM"). */
   detail?: string;
+  /** Dashboard section this op was requested under (mega-plan path only) —
+   * drives the sectioned reply grouping. */
+  section?: string;
+  /** Post-run recurrence check (mega-plan path only): true = a future
+   * occurrence was derived from the saved record; false = it wasn't;
+   * undefined = not applicable/not checked. */
+  recurrenceVerified?: boolean;
 }
 
 /** Compact "duration 60, method blunt, at 8:15 AM" summary of an operation's
