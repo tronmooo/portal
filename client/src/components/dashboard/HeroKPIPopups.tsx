@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
 import { isTestEntity } from "@shared/test-data";
+import { isTransferExpense } from "@shared/category-canon";
 import { useShowTestData } from "@/lib/showTestData";
 import { netWorthView } from "@/lib/net-worth-view";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -552,7 +553,9 @@ export function CashFlowPopup({
   }, [visibleObligations]);
 
   const recurringTotal = Object.values(recurringGroups).flat().reduce((s, o) => s + o._monthly, 0);
-  const oneTimeTotal = monthlyExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  // Account-to-account transfers are money movement, not outflow (matches the
+  // server's spend math — isTransferExpense, shared/category-canon).
+  const oneTimeTotal = monthlyExpenses.reduce((s, e) => s + (isTransferExpense(e) ? 0 : Number(e.amount) || 0), 0);
   // Subtract recurring (which gets logged as expenses by autoLogExpense) — best-effort
   // by recomputing the one-time portion as non-obligation expenses.
   const monthlyOut = recurringTotal + oneTimeTotal;

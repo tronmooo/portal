@@ -92,6 +92,7 @@ import {
 import { useShowTestData, toggleShowTestData } from "@/lib/showTestData";
 import { devToolsEnabled } from "@/lib/dev-affordances";
 import { isTestEntity } from "@shared/test-data";
+import { isTransferExpense } from "@shared/category-canon";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
@@ -632,7 +633,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
       ]);
       const budgets = budgetRes.budgets || [];
       const allExpenses = Array.isArray(expensesRes) ? expensesRes : (expensesRes.items || []);
-      const monthExpenses = allExpenses.filter((e: any) => e.date?.startsWith(currentMonth));
+      const monthExpenses = allExpenses.filter((e: any) => !isTransferExpense(e) && e.date?.startsWith(currentMonth));
       const totalBudget = budgets.reduce((s: number, b: any) => s + b.amount, 0);
       const totalSpent = monthExpenses.reduce((s: number, e: any) => s + e.amount, 0);
       return { totalBudget, totalSpent, remaining: totalBudget - totalSpent };
@@ -849,7 +850,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
     for (let i = 6; i >= 0; i--) {
       const d = new Date(today); d.setDate(today.getDate() - i);
       const key = d.toLocaleDateString("en-CA");
-      const spent = recs.filter((e) => String(e.date || "").slice(0, 10) === key)
+      const spent = recs.filter((e) => !isTransferExpense(e) && String(e.date || "").slice(0, 10) === key)
         .reduce((s, e) => s + (Number(e.amount) || 0), 0);
       out.push({ label: dow[d.getDay()], net: perDayIncome - spent });
     }
@@ -3459,7 +3460,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
 
   const budgets = budgetRes?.budgets || [];
   const allExpenses = useMemo(() => Array.isArray(expensesData) ? expensesData : (expensesData?.items || []), [expensesData]);
-  const monthExpenses = useMemo(() => allExpenses.filter((e: any) => e.date?.startsWith(month)), [allExpenses, month]);
+  const monthExpenses = useMemo(() => allExpenses.filter((e: any) => !isTransferExpense(e) && e.date?.startsWith(month)), [allExpenses, month]);
   const byCategory = useMemo(() => {
     const cats: Record<string, number> = {};
     monthExpenses.forEach((e: any) => { cats[e.category || "general"] = (cats[e.category || "general"] || 0) + e.amount; });
@@ -3714,7 +3715,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
       ]);
       const budgets = budgetRes.budgets || [];
       const allExpenses = Array.isArray(expensesRes) ? expensesRes : (expensesRes.items || []);
-      const monthExpenses = allExpenses.filter((e: any) => e.date?.startsWith(currentMonth));
+      const monthExpenses = allExpenses.filter((e: any) => !isTransferExpense(e) && e.date?.startsWith(currentMonth));
       const byCategory: Record<string, number> = {};
       monthExpenses.forEach((e: any) => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
       const totalBudget = budgets.reduce((s: number, b: any) => s + b.amount, 0);

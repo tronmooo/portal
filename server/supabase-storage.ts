@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
+import { isTransferExpense } from "@shared/category-canon";
 
 // ---- Shared Supabase client (PERF) ----
 // One client per (url, key) pair per warm container. The Supabase SDK keeps
@@ -433,7 +434,9 @@ function generateInsights(
   }
 
   const thisMonth = now.getMonth(); const thisYear = now.getFullYear();
-  const monthlyExpenses = expenses.filter(e => { const d = new Date(e.date); return d.getMonth() === thisMonth && d.getFullYear() === thisYear; });
+  // Transfers between the user's own accounts are money movement, not
+  // spending — keep them out of every spend total (shared/category-canon).
+  const monthlyExpenses = expenses.filter(e => !isTransferExpense(e) && (() => { const d = new Date(e.date); return d.getMonth() === thisMonth && d.getFullYear() === thisYear; })());
   const monthTotal = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
   if (monthTotal > 0) {
     const topCat = Object.entries(monthlyExpenses.reduce((acc: Record<string, number>, e) => { acc[e.category] = (acc[e.category] || 0) + e.amount; return acc; }, {})).sort((a, b) => b[1] - a[1])[0];
@@ -5846,7 +5849,9 @@ export class SupabaseStorage implements IStorage {
     // We compare YYYY-MM strings (which are timezone-stable for the stored
     // date strings, since expenses store local YYYY-MM-DD).
     const userYM = new Date().toLocaleDateString('en-CA', { timeZone: this._timezone }).slice(0, 7);
-    const monthlyExpenses = expenses.filter(e => (e.date || '').slice(0, 7) === userYM);
+    // Spend totals exclude account-to-account transfers (money movement, not
+    // spending) — see isTransferExpense in shared/category-canon.
+    const monthlyExpenses = expenses.filter(e => !isTransferExpense(e) && (e.date || '').slice(0, 7) === userYM);
     const weekAgo = new Date(now.getTime() - 7 * 86400000);
     let weeklyEntries = 0;
     for (const t of trackers) weeklyEntries += t.entries.filter(e => new Date(e.timestamp) > weekAgo).length;
@@ -5958,7 +5963,7 @@ export class SupabaseStorage implements IStorage {
       // Audit fix: case/whitespace-normalize so the KPI tile and the popup
       // (which uses normalizeFilter) agree on what counts as 'done'.
       activeTasks: tasks.filter(t => (t.status || "").trim().toLowerCase() !== "done").length,
-      totalExpenses: expenses.reduce((sum, e) => sum + e.amount, 0),
+      totalExpenses: expenses.reduce((sum, e) => sum + (isTransferExpense(e) ? 0 : e.amount), 0),
       totalEvents: events.length,
       monthlySpend: monthlyExpenses.reduce((sum, e) => sum + e.amount, 0),
       weeklyEntries,
@@ -6173,9 +6178,12 @@ export class SupabaseStorage implements IStorage {
     }
 
     const monthlyExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === userYearMonth);
+    // Spend math excludes account-to-account transfers (money movement, not
+    // spending); the record list below keeps them so the popup shows every row.
+    const monthlySpendExpenses = monthlyExpenses.filter(e => !isTransferExpense(e));
     const spendByCategory: Record<string, number> = {};
-    for (const e of monthlyExpenses) spendByCategory[e.category] = (spendByCategory[e.category] || 0) + e.amount;
-    const totalMonthlySpend = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
+    for (const e of monthlySpendExpenses) spendByCategory[e.category] = (spendByCategory[e.category] || 0) + e.amount;
+    const totalMonthlySpend = monthlySpendExpenses.reduce((s, e) => s + e.amount, 0);
 
     // Previous month YYYY-MM, computed in the user's timezone
     const [yStr, mStr] = userYearMonth.split('-');
@@ -6183,7 +6191,7 @@ export class SupabaseStorage implements IStorage {
     const prevYear = prevMonthIndex < 0 ? parseInt(yStr, 10) - 1 : parseInt(yStr, 10);
     const prevMonth = ((prevMonthIndex % 12) + 12) % 12;
     const lastMonthYM = `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}`;
-    const lastMonthExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === lastMonthYM);
+    const lastMonthExpenses = allExpenses.filter(e => !isTransferExpense(e) && (e.date || '').slice(0, 7) === lastMonthYM);
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
     const upcomingBills = allObligations.filter(o => { if (o.status === "paused" || o.status === "cancelled") return false; const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => {

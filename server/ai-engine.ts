@@ -29,7 +29,7 @@ import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, t
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { createHash } from "crypto";
-import { canonicalExpenseCategory } from "@shared/category-canon";
+import { canonicalExpenseCategory, isTransferExpense } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
@@ -5621,7 +5621,7 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
       }
       if (!normalized.date) normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: _userTz });
       // Category must be from allowed list
-      const validCategories = ["food", "transport", "health", "pet", "vehicle", "entertainment", "shopping", "utilities", "housing", "insurance", "subscription", "education", "personal", "general", "warranty", "rewards", "repair", "maintenance"];
+      const validCategories = ["food", "transport", "health", "pet", "vehicle", "entertainment", "shopping", "utilities", "housing", "insurance", "subscription", "education", "personal", "general", "warranty", "rewards", "repair", "maintenance", "transfer"];
       if (normalized.category && !validCategories.includes(normalized.category)) {
         warnings.push(`Category "${normalized.category}" is not standard — defaulting to "general"`);
         normalized.category = "general";
@@ -7925,7 +7925,8 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       const budgets = await storage.getBudgets(month, summaryProfileIds);
       const expenses = await storage.getExpenses(summaryProfileIds);
-      const monthExpenses = expenses.filter(e => e.date?.startsWith(month));
+      // Transfers are money movement, never budget consumption.
+      const monthExpenses = expenses.filter(e => !isTransferExpense(e) && e.date?.startsWith(month));
       const byCategory: Record<string, number> = {};
       monthExpenses.forEach(e => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
       const totalBudget = budgets.reduce((s, b) => s + b.amount, 0);
@@ -11102,7 +11103,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         prevStartDate = new Date(new Date(periodStartDate).getTime() - durationMs).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
       }
 
-      const allExpenses = await storage.getExpenses();
+      // Spend analytics exclude account-to-account transfers — money
+      // movement, not spending (shared/category-canon isTransferExpense).
+      const allExpenses = (await storage.getExpenses()).filter(e => !isTransferExpense(e));
       const currentExpenses = allExpenses.filter(e => {
         const d = e.date || e.createdAt || "";
         return d >= periodStartDate && d <= periodEndDate + "T23:59:59";
@@ -11417,7 +11420,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const trackers = await storage.getTrackers();
 
       // Build financial snapshot
-      const thisMonthExpenses = expenses.filter(e => (e.date || "").startsWith(budgetMonth));
+      const thisMonthExpenses = expenses.filter(e => !isTransferExpense(e) && (e.date || "").startsWith(budgetMonth));
       const totalSpent = thisMonthExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
       const totalBudgeted = budgets.reduce((sum, b) => sum + (b.amount || 0), 0);
 

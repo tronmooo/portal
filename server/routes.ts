@@ -1,5 +1,5 @@
 import express, { type Express, type Request } from "express";
-import { canonicalExpenseCategory, canonicalObligationCategory, EXPENSE_CATEGORIES } from "@shared/category-canon";
+import { canonicalExpenseCategory, canonicalObligationCategory, isTransferExpense, EXPENSE_CATEGORIES } from "@shared/category-canon";
 import { createServer, type Server } from "http";
 import { createHash } from "crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -2981,7 +2981,8 @@ ${JSON.stringify(ctx, null, 2)}`;
         : expensesForBudget.filter((e: any) =>
             passesProfileFilter(e.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles })
           );
-      const monthExpenses = filteredExpenses.filter((e: any) => (e.date || "").slice(0, 7) === month);
+      // Transfers between the user's own accounts never consume budget.
+      const monthExpenses = filteredExpenses.filter((e: any) => !isTransferExpense(e) && (e.date || "").slice(0, 7) === month);
       const totalSpent = monthExpenses.reduce((s: number, e: any) => s + (e.amount || 0), 0);
       // BUG (user report 2026-06-27 "Craig has no budget but it shows $2,150"):
       // budgets were fetched UNSCOPED here (getBudgets(month) without filterIds),

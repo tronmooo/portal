@@ -24,7 +24,7 @@
 export const EXPENSE_CATEGORIES = [
   "general", "food", "transport", "health", "pet", "vehicle", "entertainment",
   "shopping", "utilities", "housing", "insurance", "subscription", "education",
-  "personal", "automotive", "travel",
+  "personal", "automotive", "travel", "transfer",
 ] as const;
 export type CanonicalExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
@@ -113,6 +113,14 @@ const ALIASES: Record<string, string> = {
   loans: "loan",
   debt: "loan",
   credit: "loan",
+
+  // Transfers between the user's own accounts — money movement, not spending.
+  transfer: "transfer",
+  transfers: "transfer",
+  xfer: "transfer",
+  moneytransfer: "transfer",
+  accounttransfer: "transfer",
+  banktransfer: "transfer",
 };
 
 /** Lowercase and strip separators/punctuation so spelling drift folds away. */
@@ -146,6 +154,16 @@ export function canonicalObligationCategory(raw: unknown): CanonicalObligationCa
   return resolve(raw, OBLIGATION_CATEGORIES, "general") as CanonicalObligationCategory;
 }
 
+/**
+ * True when an expense row is a transfer between the user's own accounts —
+ * money MOVEMENT, not spending. Every spend total (monthly spend, category
+ * breakdowns, budget consumption, cash-flow "expenses") must exclude these;
+ * they are equally never income.
+ */
+export function isTransferExpense(e: { category?: string | null } | null | undefined): boolean {
+  return !!e && canonicalExpenseCategory(e.category) === "transfer";
+}
+
 /** True when `raw` is already canonical for expenses (no folding needed). */
 export function isCanonicalExpenseCategory(raw: unknown): boolean {
   return typeof raw === "string" && (EXPENSE_CATEGORIES as readonly string[]).includes(raw);
@@ -170,6 +188,7 @@ export function categoryLabel(canonical: string): string {
     pet: "Pet",
     vehicle: "Vehicle",
     communication: "Phone & Internet",
+    transfer: "Transfer",
   };
   const k = key(canonical);
   if (overrides[k]) return overrides[k];

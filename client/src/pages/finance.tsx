@@ -42,6 +42,7 @@ import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { useToast } from "@/hooks/use-toast";
 import type { Expense } from "@shared/schema";
+import { isTransferExpense } from "@shared/category-canon";
 import {
   BarChart,
   Bar,
@@ -832,10 +833,15 @@ export default function FinancePage() {
   // List ordering is user-selectable. Filters (above) drive totals/chart; sort
   // only reorders the rendered rows.
   const sortedExpenses = useMemo(() => sortExpenses(filtered, sortBy), [filtered, sortBy]);
-  const total = useMemo(() => filtered.reduce((s, e) => s + e.amount, 0), [filtered]);
+  // Spending totals and the category chart exclude account-to-account
+  // transfers (money movement, not spending) — matches the server's spend
+  // math (isTransferExpense, shared/category-canon). The list still shows
+  // transfer rows so nothing disappears.
+  const total = useMemo(() => filtered.reduce((s, e) => s + (isTransferExpense(e) ? 0 : e.amount), 0), [filtered]);
 
   // Group by category
   const byCategory = useMemo(() => filtered.reduce((acc: Record<string, number>, e) => {
+    if (isTransferExpense(e)) return acc;
     acc[e.category] = (acc[e.category] || 0) + e.amount;
     return acc;
   }, {}), [filtered]);

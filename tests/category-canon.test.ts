@@ -10,6 +10,7 @@ import {
   categoryLabel,
   isCanonicalExpenseCategory,
   isCanonicalObligationCategory,
+  isTransferExpense,
   EXPENSE_CATEGORIES,
   OBLIGATION_CATEGORIES,
 } from "../shared/category-canon";
@@ -95,5 +96,27 @@ describe("categoryLabel", () => {
     const a = categoryLabel(canonicalExpenseCategory("Utility"));
     const b = categoryLabel(canonicalExpenseCategory("utilities"));
     expect(a).toBe(b);
+  });
+});
+
+describe("transfers (money movement, not spending)", () => {
+  it("canonicalizes every transfer spelling to 'transfer'", () => {
+    for (const raw of ["transfer", "Transfers", "xfer", "money transfer", "account_transfer", "Bank Transfer"]) {
+      expect(canonicalExpenseCategory(raw), raw).toBe("transfer");
+    }
+    expect(isCanonicalExpenseCategory("transfer")).toBe(true);
+  });
+
+  it("isTransferExpense flags transfer rows and nothing else", () => {
+    expect(isTransferExpense({ category: "transfer" })).toBe(true);
+    expect(isTransferExpense({ category: "Transfers" })).toBe(true);
+    expect(isTransferExpense({ category: "food" })).toBe(false);
+    expect(isTransferExpense({ category: "" })).toBe(false);
+    expect(isTransferExpense({ category: undefined })).toBe(false);
+    expect(isTransferExpense(null)).toBe(false);
+  });
+
+  it("labels transfers distinctly", () => {
+    expect(categoryLabel("transfer")).toBe("Transfer");
   });
 });
