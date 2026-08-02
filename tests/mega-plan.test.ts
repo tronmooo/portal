@@ -213,4 +213,14 @@ describe("extraction contract", () => {
     expect(prompt).toContain("#opN");
     expect(prompt).toContain("Hydration");
   });
+
+  it("prompt teaches the executor's exact input shapes (found via offline harness: create_reminder needs fireAt)", () => {
+    const prompt = buildMegaExtractionPrompt({
+      nowISO: "now", trackerNames: [], profileNames: [], habitNames: [],
+    });
+    expect(prompt).toContain("INPUT SHAPES");
+    expect(prompt).toContain("fireAt");
+    expect(prompt).toContain("create_liability { name, amount");
+    expect(prompt).toContain("link_liability_asset { liabilityName, assetName");
+  });
 });

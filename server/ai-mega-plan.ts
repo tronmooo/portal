@@ -264,6 +264,18 @@ SECTION ROUTING DOCTRINE:
 
 DEPENDENCY REFS: when an operation needs an entity created EARLIER IN THIS PLAN (a loan linked to a car created here, an expense attached to that car), reference it via refs: { "<inputField>": "#opN" } where N is the 1-based operation number. Order operations so creations come before their links.
 
+INPUT SHAPES (the executor validates these exactly — use these field names):
+- create_task { title, dueDate?: "YYYY-MM-DD", priority?: "low"|"medium"|"high", tags? }
+- create_reminder { title, fireAt: "YYYY-MM-DDTHH:MM:SS" (user-local wall clock, REQUIRED) }
+- create_event { title, date: "YYYY-MM-DD", time?: "HH:MM", endTime?, allDay?, recurrence?: "none"|"daily"|"weekdays"|"weekends"|"weekly"|"biweekly"|"monthly"|"yearly", category? }
+- create_liability { name, amount (per-payment), frequency: "monthly"|"weekly"|"yearly"|"once", dueDay? (1-31) or dueDate? "YYYY-MM-DD", balance? (remaining principal), category?, forProfile? }
+- create_habit { name, frequency: "daily"|"weekly"|"custom", targetDays?: ["mon",...], time?: "HH:MM", targetPerDay? }
+- log_tracker_entry { trackerName, values: {...}, at?: "HH:MM AM/PM" }
+- create_expense { amount, description, category?, date?: "YYYY-MM-DD", vendor?, assetName? (maintenance work on an asset), forProfile? }
+- log_income { amount, source, date? }
+- create_profile { name, type: "vehicle"|"property"|"asset"|"person"|"pet"|..., fields?: { value?, mileage?, ... } }
+- link_liability_asset { liabilityName, assetName, role?: "collateral" }
+
 OTHER RULES:
 - NEVER drop a stated detail: every amount, date, time, recurrence, priority, unit, and quantity must land in the input ("due monthly on the 15th" → frequency monthly + due day 15; "$86.50" → 86.50; "high priority" → priority high).
 - Dates resolve against NOW ("tomorrow", "Friday", "August 6").
@@ -448,7 +460,8 @@ export function megaOpIdentity(op: MegaPlanOp): string | null {
 
 function dedupeExplanation(dropped: MegaPlanOp, survivor: MegaPlanOp): string {
   if (PAYMENT_TOOLS.has(dropped.tool) || PAYMENT_TOOLS.has(survivor.tool)) {
-    return `"${nameOf(dropped.input) || dropped.raw}" and "${nameOf(survivor.input) || survivor.raw}" are the same recurring payment — saved once as a single record.`;
+    const recurring = /monthly|weekly|yearly|annual|biweekly|quarterly/i.test(String(survivor.input?.frequency || dropped.input?.frequency || ""));
+    return `"${nameOf(dropped.input) || dropped.raw}" and "${nameOf(survivor.input) || survivor.raw}" are the same ${recurring ? "recurring payment" : "payment"} — saved once as a single record.`;
   }
   return `Duplicate of "${nameOf(survivor.input) || survivor.raw}" — saved once.`;
 }
