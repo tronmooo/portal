@@ -479,6 +479,13 @@ export default function WellnessPage() {
         hydrationGoal={HYDRATION_GOAL}
         calories={calories.value}
         caloriesGoal={CALORIE_GOAL}
+        asOf={{
+          sleep: sleep.loggedOn,
+          activity: steps.loggedOn,
+          hr: restingHr.loggedOn,
+          hydration: hydration.loggedOn,
+          calories: calories.loggedOn,
+        }}
         streak={streak}
         insights={insights}
         habits={habitCards}
@@ -526,6 +533,16 @@ export default function WellnessPage() {
             restingHr: restingHr.value, restingHrSeries: restingHr.series,
             hydrationOz: hydration.value, hydrationGoal: HYDRATION_GOAL,
             calories: calories.value, caloriesGoal: CALORIE_GOAL,
+            // The day each number is really from. Without this the popup
+            // captions every reading "today", which just after midnight means
+            // yesterday's water and calories are presented as today's.
+            asOf: {
+              sleep: sleep.loggedOn,
+              activity: steps.loggedOn,
+              hr: restingHr.loggedOn,
+              hydration: hydration.loggedOn,
+              calories: calories.loggedOn,
+            },
             streak,
             // Every check-in date across the user's habits — the heatmap needs
             // the history, not just the current run length.

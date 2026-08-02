@@ -20,6 +20,7 @@ import { groupWellnessCards, type WellnessCard } from "@/lib/wellness-dynamic";
 import { Medallion } from "@/components/dashboard/visuals";
 import { conceptIcon } from "@/lib/icon-map";
 import { SectionHeading } from "@/components/ui/section-heading";
+import { formatListDate } from "@/lib/format";
 
 // ── shared bits ──────────────────────────────────────────────────────────────
 const T = {
@@ -29,6 +30,22 @@ const T = {
 };
 const fmt = (n: number | null | undefined, dp = 0) =>
   n == null || !Number.isFinite(n) ? "—" : Number(n).toLocaleString("en-US", { maximumFractionDigits: dp });
+
+/**
+ * The caption under a KPI number: silent when the reading is from today,
+ * explicit about the day when it isn't.
+ *
+ * `todayText` is what the tile wants to say when the reading IS current (Sleep
+ * says "last night"); omit it and a current reading gets no caption at all,
+ * since "today" is the assumption a dashboard already makes. The point is
+ * that a NON-current reading can never again pass for a current one.
+ */
+function staleSub(day: string | null | undefined, todayText?: string): string | undefined {
+  if (!day) return todayText;
+  const rel = formatListDate(day);
+  if (!rel || rel === "Today") return todayText;
+  return rel.toLowerCase();
+}
 
 function Spark({ series, color }: { series: number[]; color: string }) {
   if (!series || series.length < 2) return <div className="h-6" />;
@@ -236,6 +253,16 @@ export interface WellnessOverviewProps {
   calories: number | null;
   caloriesGoal: number;
   streak: number | null;
+  /**
+   * The local day (YYYY-MM-DD) each KPI number is actually from.
+   *
+   * The tiles show the most recent reading when nothing has been logged today
+   * yet, which is the right call — a blank tile is worse than a stale one. But
+   * they used to caption it as if it were current ("last night", a progress
+   * ring against today's goal), so at 00:44 yesterday's 94 oz read as today's.
+   * Given the day, each tile can say so.
+   */
+  asOf?: Partial<Record<"sleep" | "activity" | "hr" | "hydration" | "calories", string | null>>;
 
   insights: string[];
   habits: WellnessHabit[];
@@ -287,7 +314,7 @@ export interface WellnessOverviewProps {
 export function WellnessOverview(props: WellnessOverviewProps) {
   const {
     wellnessScore, wellnessScoreLabel, sleepHours, sleepSeries, steps, stepsSeries,
-    restingHr, restingHrSeries, hydrationOz, hydrationGoal, calories, caloriesGoal, streak,
+    restingHr, restingHrSeries, hydrationOz, hydrationGoal, calories, caloriesGoal, streak, asOf,
     insights, habits, habitsCompleted, onToggleHabit, togglingHabitId,
     missedHabits = [], meditationMin, recoveryScore,
     schedule, medications, onToggleMed, togglingMedId, vitals, sleep, nutrition, mood, activity,
@@ -327,25 +354,31 @@ export function WellnessOverview(props: WellnessOverviewProps) {
             icon={Sparkles} value={String(wellnessScore)} unit={wellnessScoreLabel}
             ring={{ value: wellnessScore, max: 100 }} />
         )}
+        {/* The caption on each of these says WHEN the number is from. It used
+            to assert "last night" / imply today unconditionally, so a stale
+            reading — which is every reading just after midnight, before
+            anything has been logged — was presented as the current one. */}
         {sleepHours != null && (
           <KpiTile onClick={open("sleep")} testId="wellness-kpi-sleep" label="Sleep" tone={T.purple} icon={Moon}
-            value={`${fmt(sleepHours, 1)}h`} sub="last night" series={sleepSeries} />
+            value={`${fmt(sleepHours, 1)}h`} sub={staleSub(asOf?.sleep, "last night")} series={sleepSeries} />
         )}
         {steps != null && (
           <KpiTile onClick={open("activity")} testId="wellness-kpi-activity" label="Activity" tone={T.blue} icon={Footprints}
-            value={fmt(steps)} unit="steps" series={stepsSeries} />
+            value={fmt(steps)} unit="steps" sub={staleSub(asOf?.activity)} series={stepsSeries} />
         )}
         {restingHr != null && (
           <KpiTile onClick={open("hr")} testId="wellness-kpi-hr" label="Resting HR" tone={T.green} icon={conceptIcon("health")}
-            value={String(restingHr)} unit="bpm" series={restingHrSeries} />
+            value={String(restingHr)} unit="bpm" sub={staleSub(asOf?.hr)} series={restingHrSeries} />
         )}
         {hydrationOz != null && (
           <KpiTile onClick={open("hydration")} testId="wellness-kpi-hydration" label="Hydration" tone={T.cyan} icon={Droplet}
-            value={fmt(hydrationOz)} unit={`/ ${hydrationGoal} oz`} ring={{ value: hydrationOz || 0, max: hydrationGoal }} />
+            value={fmt(hydrationOz)} unit={`/ ${hydrationGoal} oz`} sub={staleSub(asOf?.hydration)}
+            ring={{ value: hydrationOz || 0, max: hydrationGoal }} />
         )}
         {calories != null && (
           <KpiTile onClick={open("calories")} testId="wellness-kpi-calories" label="Calories" tone={T.orange} icon={Flame}
-            value={fmt(calories)} unit={`/ ${caloriesGoal} kcal`} ring={{ value: calories || 0, max: caloriesGoal }} />
+            value={fmt(calories)} unit={`/ ${caloriesGoal} kcal`} sub={staleSub(asOf?.calories)}
+            ring={{ value: calories || 0, max: caloriesGoal }} />
         )}
         {streak != null && (
           <KpiTile onClick={open("streak")} testId="wellness-kpi-streak" label="Streak" tone={T.orange} icon={Flame}

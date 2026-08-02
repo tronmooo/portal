@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { deriveLoanTerms } from "../shared/loan-terms";
 import { buildAmortization } from "../shared/liability-calc";
-import { isDebtLiability } from "../shared/liability-types";
+import { isDebtLiability, isAmortizable, isRecurringBill, recoveredDebtSubtype } from "../shared/liability-types";
+import { isNetWorthLiabilityProfile } from "../shared/asset-value";
 import { deriveScheduleFields } from "../shared/liability-schedule";
 import { seriesFromLiabilityProfiles } from "../shared/calendar-adapters";
 
@@ -256,5 +257,91 @@ describe("the loan reaches the calendar without a second record", () => {
 
   it("ends the series at the payoff date instead of running forever", () => {
     expect(seriesFromLiabilityProfiles([profile])[0].recurrenceEnd).toBe("2031-02-28");
+  });
+});
+
+describe("recoveredDebtSubtype — reading a loan that is already stored as a bill", () => {
+  // The guard stops NEW demotions; it cannot repair rows the bug already
+  // rewrote. Those still render the bill layout — no principal, no original
+  // amount, no APR, no schedule — and stay out of net worth until something
+  // saves over them. The read path recovers them instead.
+  const DEMOTED = {
+    name: "Dodge Ram 2025 Auto Loan",
+    type: "liability",
+    type_key: "bill", // ← what the upsert wrote
+    fields: {
+      lender: "Capital Auto Finance",
+      currentBalance: 49275,
+      originalBalance: 54800,
+      annualInterestRate: 0.0649,
+      monthlyPayment: 912.4,
+      // The bill payload's leftovers, still on the row.
+      monthlyAmount: 912.4, amount: 912.4, source: "obligation",
+      frequency: "monthly", status: "upcoming",
+      firstPaymentDate: "2026-08-30", dueDate: "2026-08-30",
+    },
+  };
+
+  it("reads the row back as the auto loan it is", () => {
+    expect(recoveredDebtSubtype(DEMOTED)).toBe("auto_loan");
+  });
+
+  it("puts it back in the amortizing family, so the schedule renders", () => {
+    expect(isAmortizable(recoveredDebtSubtype(DEMOTED))).toBe(true);
+    expect(isRecurringBill(recoveredDebtSubtype(DEMOTED))).toBe(false);
+  });
+
+  it("counts the balance toward net worth again", () => {
+    // $49,275 of debt silently left the total when the row became a "bill".
+    expect(isNetWorthLiabilityProfile(DEMOTED)).toBe(true);
+  });
+
+  it("infers the subtype from the name for other debts", () => {
+    const as = (name: string) => recoveredDebtSubtype({ ...DEMOTED, name });
+    expect(as("123 Maple St Mortgage")).toBe("mortgage");
+    expect(as("Sallie Mae Student Loan")).toBe("student_loan");
+    expect(as("Chase Sapphire Visa")).toBe("credit_card");
+    expect(as("HELOC on the house")).toBe("heloc");
+  });
+
+  it("falls back to a plain loan when the name says nothing", () => {
+    expect(recoveredDebtSubtype({ ...DEMOTED, name: "Thing", fields: { ...DEMOTED.fields, lender: "" } }))
+      .toBe("loan");
+  });
+
+  it("prefers a subtype stashed in the fields blob", () => {
+    expect(recoveredDebtSubtype({ ...DEMOTED, fields: { ...DEMOTED.fields, subtype: "personal_loan" } }))
+      .toBe("personal_loan");
+  });
+});
+
+describe("recoveredDebtSubtype — genuine bills are left alone", () => {
+  const bill = (name: string, fields: Record<string, any>) =>
+    ({ name, type: "liability", type_key: "phone_plan", fields });
+
+  it("does not promote a recurring bill that merely has an amount and a due date", () => {
+    // Exactly the shape createObligation writes for a real bill.
+    expect(recoveredDebtSubtype(bill("Verizon Wireless", {
+      monthlyAmount: 90.5, amount: 90.5, frequency: "monthly",
+      dueDate: "2026-08-15", nextDueDate: "2026-08-15",
+      firstPaymentDate: "2026-08-15", autopay: false,
+      category: "utilities", status: "upcoming", source: "obligation",
+    }))).toBeNull();
+  });
+
+  it("does not promote a finite-term bill", () => {
+    expect(recoveredDebtSubtype(bill("Gym Membership", {
+      monthlyAmount: 45, count: 12, recurrenceEnd: "2027-07-01",
+    }))).toBeNull();
+  });
+
+  it("does not promote a bill whose name happens to mention a car", () => {
+    // Name hints only pick the subtype; they never trigger recovery on their own.
+    expect(recoveredDebtSubtype(bill("Car Wash Subscription", { monthlyAmount: 30 }))).toBeNull();
+  });
+
+  it("leaves rows that are already read correctly untouched", () => {
+    expect(recoveredDebtSubtype({ ...({} as any), name: "X", type: "liability", type_key: "auto_loan", fields: { annualInterestRate: 0.05 } })).toBeNull();
+    expect(recoveredDebtSubtype({ name: "X", type: "vehicle", fields: { annualInterestRate: 0.05 } })).toBeNull();
   });
 });

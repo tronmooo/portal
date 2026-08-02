@@ -23,6 +23,7 @@ import {
   Stethoscope, Activity, type LucideIcon,
 } from "lucide-react";
 import { BubbleModal, BubbleRow, BubbleEmpty } from "@/components/ui/bubble-modal";
+import { formatListDate } from "@/lib/format";
 import { MiniBars, ProgressRing, Pill as TonePill, CountUp } from "@/components/dashboard/visuals";
 import type {
   WellnessHabit, WellnessEvent, WellnessMed, WellnessAppt, WellnessLab,
@@ -48,6 +49,16 @@ export interface WellnessPopupData {
   restingHr: number | null; restingHrSeries?: number[];
   hydrationOz: number | null; hydrationGoal: number;
   calories: number | null; caloriesGoal: number;
+  /**
+   * The local day (YYYY-MM-DD) each metric's number is actually from.
+   *
+   * These popups used to caption every number "today". They don't own the
+   * reading — the tile does — so when the page falls back to the most recent
+   * value (nothing logged yet today, which is most of the time just after
+   * midnight) the popup was labelling yesterday's water and calories as
+   * today's. The caption now follows the reading.
+   */
+  asOf?: Partial<Record<"sleep" | "activity" | "hr" | "hydration" | "calories", string | null>>;
   streak: number | null;
   /** YYYY-MM-DD strings the user checked in on — powers the streak heatmap. */
   checkinDates?: string[];
@@ -100,10 +111,25 @@ function StatStrip({ series, unit, accent, lowerIsBetter }: {
   );
 }
 
+/**
+ * Caption for a reading: "today", "yesterday", "3d ago", "Aug 1".
+ *
+ * Lowercased because it sits mid-sentence ("of 100 oz yesterday"). Falls back
+ * to "today" only when the caller genuinely doesn't know the day, which is the
+ * old behaviour and no worse than it was.
+ */
+function asOfLabel(day: string | null | undefined): string {
+  if (!day) return "today";
+  const rel = formatListDate(day);
+  return rel ? rel.toLowerCase() : "today";
+}
+
 /** A metric popup: hero number, 7-day bars, latest/avg/best. */
-function MetricBody({ value, unit, series, accent, goal, lowerIsBetter, emptyText }: {
+function MetricBody({ value, unit, series, accent, goal, lowerIsBetter, emptyText, asOf }: {
   value: number | null; unit?: string; series?: number[]; accent: string;
   goal?: number; lowerIsBetter?: boolean; emptyText: string;
+  /** Local day (YYYY-MM-DD) the hero number is from. */
+  asOf?: string | null;
 }) {
   const s = (series || []).filter((n) => Number.isFinite(n));
   if (value == null && s.length === 0) {
@@ -122,7 +148,7 @@ function MetricBody({ value, unit, series, accent, goal, lowerIsBetter, emptyTex
             {unit && <span className="text-sm font-semibold ml-1">{unit}</span>}
           </p>
           <p className="text-[12px] text-muted-foreground mt-0.5">
-            {goal ? `of ${fmt(goal)}${unit ? ` ${unit}` : ""} today` : "today"}
+            {goal ? `of ${fmt(goal)}${unit ? ` ${unit}` : ""} ${asOfLabel(asOf)}` : asOfLabel(asOf)}
           </p>
         </div>
       </div>
@@ -282,15 +308,15 @@ function renderBody(kind: WellnessPopupKind, d: WellnessPopupData, a: string):
 
     // ── Metrics ──────────────────────────────────────────────────────────────
     case "sleep":
-      return { body: <MetricBody value={d.sleepHours} unit="h" series={d.sleepSeries} accent={a} emptyText="No sleep logged yet" /> };
+      return { body: <MetricBody value={d.sleepHours} unit="h" series={d.sleepSeries} accent={a} asOf={d.asOf?.sleep} emptyText="No sleep logged yet" /> };
     case "activity":
-      return { body: <MetricBody value={d.steps} unit="steps" series={d.stepsSeries} accent={a} emptyText="No activity logged yet" /> };
+      return { body: <MetricBody value={d.steps} unit="steps" series={d.stepsSeries} accent={a} asOf={d.asOf?.activity} emptyText="No activity logged yet" /> };
     case "hr":
-      return { body: <MetricBody value={d.restingHr} unit="bpm" series={d.restingHrSeries} accent={a} lowerIsBetter emptyText="No heart-rate readings yet" /> };
+      return { body: <MetricBody value={d.restingHr} unit="bpm" series={d.restingHrSeries} accent={a} asOf={d.asOf?.hr} lowerIsBetter emptyText="No heart-rate readings yet" /> };
     case "hydration":
-      return { body: <MetricBody value={d.hydrationOz} unit="oz" accent={a} goal={d.hydrationGoal} emptyText="No water logged today" /> };
+      return { body: <MetricBody value={d.hydrationOz} unit="oz" accent={a} goal={d.hydrationGoal} asOf={d.asOf?.hydration} emptyText="No water logged today" /> };
     case "calories":
-      return { body: <MetricBody value={d.calories} unit="kcal" accent={a} goal={d.caloriesGoal} emptyText="Nothing logged today" /> };
+      return { body: <MetricBody value={d.calories} unit="kcal" accent={a} goal={d.caloriesGoal} asOf={d.asOf?.calories} emptyText="Nothing logged today" /> };
 
     case "streak": {
       const dates = d.checkinDates || [];

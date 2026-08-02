@@ -113,3 +113,104 @@ export function isDebtLiability(profile: {
     num(f.creditLimit ?? f.credit_limit) > 0
   );
 }
+
+// ─── Recovering a loan that was already written as a bill ────────────────────
+//
+// The demotion above ran in production before it was guarded, so rows exist
+// whose `type_key` says "bill" while their fields plainly describe a loan. The
+// guard stops NEW damage; it can't repair what is already stored. Those rows
+// render the bill layout — no principal, no original amount, no APR, no term,
+// no amortization — and drop out of net worth, and they stay that way until
+// something rewrites them.
+//
+// So the read path recovers them. The evidence below is deliberately narrow:
+// an APR, an original loan amount, a contract term, or a payoff date. A phone
+// plan, a streaming subscription or a utility bill has none of these — it has a
+// monthly amount and a due date and nothing else. Requiring loan-only evidence
+// (rather than, say, a non-zero balance) is what keeps a genuine bill a bill.
+
+/** Loan-only evidence: things a recurring service bill never carries. */
+function hasLoanTerms(fields: Record<string, any> | null | undefined): boolean {
+  const f = fields || {};
+  const num = (v: any) => {
+    const n = typeof v === "string" ? parseFloat(v.replace(/[^0-9.\-]/g, "")) : Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  return (
+    num(f.annualInterestRate ?? f.annual_interest_rate ?? f.interestRate ?? f.apr) > 0 ||
+    num(f.originalBalance ?? f.original_balance ?? f.originalAmount ?? f.principal) > 0 ||
+    num(f.termMonths ?? f.term_months ?? f.loanTermMonths ?? f.remainingTermMonths) > 0 ||
+    num(f.creditLimit ?? f.credit_limit) > 0 ||
+    !!f.payoffDate || !!f.payoff_date || !!f.maturityDate || !!f.loanStartDate
+  );
+}
+
+/** Name/field patterns → the debt subtype they imply. Ordered: first match wins. */
+const SUBTYPE_HINTS: Array<[RegExp, string]> = [
+  [/\bheloc\b|home equity/, "heloc"],
+  [/\bmortgage\b|home loan|house loan/, "mortgage"],
+  [/\b(auto|car|truck|vehicle|motorcycle|boat|rv|camper)\s*loan\b|\bauto\s*financ/, "auto_loan"],
+  [/\bstudent\s*loan|sallie mae|nelnet|navient|mohela|fedloan/, "student_loan"],
+  [/credit card|\bvisa\b|mastercard|\bamex\b|american express|discover/, "credit_card"],
+  [/\bmedical\b|hospital|dental|surgery/, "medical_debt"],
+  [/\birs\b|tax debt|back taxes/, "tax_debt"],
+  [/affirm|klarna|afterpay|sezzle/, "bnpl"],
+  [/\bbusiness\s*loan|\bsba\b/, "business_loan"],
+  [/personal\s*loan/, "personal_loan"],
+];
+
+/**
+ * The debt subtype a demoted row should be read as, or null when the row is a
+ * genuine recurring bill and must be left alone.
+ *
+ * Read-only: this does NOT write. It lets the detail page draw the loan the
+ * user entered, and lets net worth count the balance again, while the stored
+ * `type_key` stays whatever it is until a real save corrects it.
+ */
+export function recoveredDebtSubtype(profile: {
+  name?: string | null;
+  type?: string | null;
+  type_key?: string | null;
+  typeKey?: string | null;
+  fields?: Record<string, any> | null;
+} | null | undefined): string | null {
+  if (!profile) return null;
+  const type = String(profile.type || "").toLowerCase();
+  if (type !== "liability" && type !== "loan") return null;
+  const key = String(profile.type_key ?? profile.typeKey ?? "").toLowerCase();
+  // Only rows currently classified as recurring are candidates — everything
+  // else is already being read correctly.
+  if (!RECURRING.has(key)) return null;
+  if (!hasLoanTerms(profile.fields)) return null;
+
+  const f = profile.fields || {};
+  // A subtype stashed in the fields blob is the most direct evidence.
+  const stashed = String(f.subtype ?? f.type_key ?? f.liabilityType ?? "").toLowerCase();
+  if (AMORTIZING.has(stashed) || REVOLVING.has(stashed) || ONE_TIME.has(stashed)) return stashed;
+
+  // The NAME is matched on its own first. Folding the lender in alongside it
+  // let "Capital Auto Finance" turn a row named "Sallie Mae Student Loan" into
+  // an auto loan — the lender is a weaker signal and only gets consulted when
+  // the name says nothing at all.
+  const name = String(profile.name || "").toLowerCase();
+  for (const [re, subtype] of SUBTYPE_HINTS) if (re.test(name)) return subtype;
+  const lender = String(f.lender || "").toLowerCase();
+  if (lender) for (const [re, subtype] of SUBTYPE_HINTS) if (re.test(lender)) return subtype;
+
+  // No name signal: a credit limit means revolving, otherwise treat it as a
+  // plain installment loan — both are honest, and both beat "bill".
+  const limit = Number(f.creditLimit ?? f.credit_limit);
+  return Number.isFinite(limit) && limit > 0 ? "credit_card" : "loan";
+}
+
+/** The subtype a liability should be READ as — recovering a demoted loan. */
+export function effectiveLiabilitySubtype(profile: {
+  name?: string | null;
+  type?: string | null;
+  type_key?: string | null;
+  typeKey?: string | null;
+  fields?: Record<string, any> | null;
+} | null | undefined): string {
+  return recoveredDebtSubtype(profile)
+    ?? String(profile?.type_key ?? profile?.typeKey ?? "");
+}

@@ -18,7 +18,7 @@
 // liability-types is pure + dependency-free (no import back into this module),
 // so there is no cycle. Used by isNetWorthLiabilityProfile below to exclude
 // recurring service bills from balance-sheet debt.
-import { isRecurringBill } from "./liability-types";
+import { isRecurringBill, recoveredDebtSubtype } from "./liability-types";
 
 // ---------- parseMoney ----------
 // Mirrors client/src/lib/utils.ts parseMoney and the inline server copy.
@@ -186,6 +186,11 @@ export function isLiabilityProfile(p: any): boolean {
  */
 export function isNetWorthLiabilityProfile(p: any): boolean {
   if (!isLiabilityProfile(p)) return false;
+  // A loan that a bill upsert rewrote as `type_key: "bill"` reads as recurring
+  // and so silently left the debt total — the balance was still stored, just
+  // no longer counted. Recover it here for the same reason the detail page
+  // does: the row's APR / original amount / term say what it is.
+  if (recoveredDebtSubtype(p)) return true;
   if (isRecurringBill(p?.type_key ?? p?.typeKey)) return false;
   return true;
 }

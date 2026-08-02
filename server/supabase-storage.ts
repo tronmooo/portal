@@ -62,7 +62,7 @@ import {
   LIABILITY_PROFILE_TYPES,
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
-import { isRecurringBill, isDebtLiability } from "../shared/liability-types";
+import { isRecurringBill, isDebtLiability, recoveredDebtSubtype } from "../shared/liability-types";
 import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-ownership";
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
@@ -4816,8 +4816,11 @@ export class SupabaseStorage implements IStorage {
    *  families derive a monthly payment series from their terms. */
   async getLiabilitySchedule(id: string, months = 12): Promise<any | null> {
     const p = await this.getProfile(id);
-    const typeKey = (p as any)?.type_key ?? (p as any)?.typeKey ?? null;
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
+    // Read a demoted loan as the loan it is, so its schedule is bounded by the
+    // contract term and ends at payoff instead of recurring forever.
+    const typeKey = recoveredDebtSubtype(p as any)
+      ?? ((p as any)?.type_key ?? (p as any)?.typeKey ?? null);
     const todayISO = getUserToday(this._timezone);
     // Normalize every family into schedule-ready fields (bills pass through).
     const f: any = deriveScheduleFields(p.fields || {}, typeKey, todayISO);

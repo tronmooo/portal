@@ -24,14 +24,33 @@ export interface WellnessMetric {
   series: number[];
   /** ISO timestamp of the latest entry, or null. */
   loggedAt: string | null;
+  /**
+   * The local calendar day (YYYY-MM-DD) `value` actually describes, or null.
+   *
+   * Every wellness card used to caption its number "today" unconditionally,
+   * and `readDailyTotal` quietly falls back to the most recent reading when
+   * nothing has been logged today yet. Just after midnight that combination
+   * presents yesterday's water and calories as today's — the number is real,
+   * the label is a lie. Carrying the day here lets the UI say when a reading
+   * is from instead of assuming.
+   */
+  loggedOn: string | null;
+  /** True when `value` describes the caller's today. */
+  isToday: boolean;
   /** % change latest-vs-previous entry, or null. */
   changePct: number | null;
 }
 
 const EMPTY: WellnessMetric = {
   value: null, unit: "", trackerId: null, trackerName: null,
-  primaryField: null, series: [], loggedAt: null, changePct: null,
+  primaryField: null, series: [], loggedAt: null, loggedOn: null,
+  isToday: false, changePct: null,
 };
+
+/** A Date's local calendar day as YYYY-MM-DD. */
+function localDay(d: Date): string {
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-CA");
+}
 
 /** The tracker's primary field — mirrors trackers.tsx: first isPrimary, else
  *  first number field, else first field, else "value". */
@@ -56,7 +75,7 @@ function entriesNewestFirst(t: Tracker): TrackerEntry[] {
 export function readMetric(
   trackers: Tracker[] | undefined | null,
   patterns: RegExp[],
-  opts: { field?: string; unit?: string } = {},
+  opts: { field?: string; unit?: string; now?: Date } = {},
 ): WellnessMetric {
   if (!Array.isArray(trackers) || trackers.length === 0) return { ...EMPTY };
   const match = trackers.find((t) => {
@@ -67,9 +86,10 @@ export function readMetric(
 
   const field = opts.field || primaryFieldOf(match);
   const ordered = entriesNewestFirst(match);
-  const nums = ordered
-    .map((e) => Number(e.values?.[field]))
-    .filter((n) => Number.isFinite(n));
+  // The entries that actually carry a number for this field — `loggedOn` has to
+  // describe the reading being shown, not whichever entry happens to be newest.
+  const numeric = ordered.filter((e) => Number.isFinite(Number(e.values?.[field])));
+  const nums = numeric.map((e) => Number(e.values?.[field]));
   const value = nums.length > 0 ? nums[0] : null;
   const prev = nums.length > 1 ? nums[1] : null;
   const changePct =
@@ -81,6 +101,9 @@ export function readMetric(
     opts.unit ??
     (match.fields?.find((f) => f.name === field)?.unit || match.unit || "");
 
+  const loggedAt = numeric[0]?.timestamp || null;
+  const loggedOn = loggedAt ? localDay(new Date(loggedAt)) || null : null;
+
   return {
     value,
     unit,
@@ -88,7 +111,9 @@ export function readMetric(
     trackerName: match.name,
     primaryField: field,
     series,
-    loggedAt: ordered[0]?.timestamp || null,
+    loggedAt,
+    loggedOn,
+    isToday: loggedOn != null && loggedOn === localDay(opts.now || new Date()),
     changePct,
   };
 }
@@ -106,17 +131,22 @@ export function readDailyTotal(
   const match = trackers.find((t) => t.id === base.trackerId)!;
   const field = base.primaryField || primaryFieldOf(match);
   const now = opts.now || new Date();
-  const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
-  const isToday = (ts: string) => {
-    const t = new Date(ts);
-    return t.getFullYear() === y && t.getMonth() === m && t.getDate() === d;
-  };
+  const today = localDay(now);
   const todays = (match.entries || [])
-    .filter((e) => isToday(e.timestamp))
+    .filter((e) => localDay(new Date(e.timestamp)) === today)
     .map((e) => Number(e.values?.[field]))
     .filter((n) => Number.isFinite(n));
+  // Nothing logged today: `base` still carries the most recent reading, and
+  // that is deliberately kept so the card isn't blank. What must NOT happen is
+  // captioning it "today" — readMetric already stamped it with the day it
+  // belongs to, so the UI can say "yesterday" and the number stays honest.
   if (todays.length === 0) return base;
-  return { ...base, value: todays.reduce((s, n) => s + n, 0) };
+  return {
+    ...base,
+    value: todays.reduce((s, n) => s + n, 0),
+    loggedOn: today,
+    isToday: true,
+  };
 }
 
 // ── Named vitals bundle ──────────────────────────────────────────────────────

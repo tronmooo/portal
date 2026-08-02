@@ -110,7 +110,7 @@ import {
   normalizeAnnualRate,
   type AmortizationRow,
 } from "@shared/liability-calc";
-import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
+import { liabilityFamily, isAmortizable, isRecurringBill, recoveredDebtSubtype } from "@shared/liability-types";
 import { deriveLoanTerms } from "@shared/loan-terms";
 import { liabilityBillStatus, BILL_STATUS_META } from "@shared/liability-status";
 
@@ -667,7 +667,13 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   // Subtype lookup: type_key is the canonical column on the profiles table
   // (e.g. 'auto_loan', 'mortgage'). We fall back to legacy fields for older
   // rows that might still carry the value inside the JSON blob.
-  const subtypeRaw = (
+  // RECOVERY: a loan that a bill upsert already rewrote as `type_key: "bill"`
+  // is still a loan — its APR, original amount and term are sitting in the row.
+  // Reading it as the debt it is puts the loan layout (and the amortization
+  // schedule) back without waiting for a save to correct the stored subtype.
+  // Returns null for a genuine recurring bill, so bills are untouched.
+  const recoveredSubtype = recoveredDebtSubtype(profile as any);
+  const subtypeRaw = recoveredSubtype || (
     profile.type_key ||
     profile.subtype ||
     profile.fields?.subtype ||
