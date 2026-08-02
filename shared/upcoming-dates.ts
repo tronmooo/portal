@@ -3,7 +3,7 @@
 // Upcoming Dates — cross-app reminder aggregator
 // =============================================================================
 import { parseRecurringMeta, nextOccurrence as rdNextOccurrence } from "./recurring-dates";
-import { addMonthsClamped, addYearsClamped } from "./date-math";
+import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "./date-math";
 // Pulls every time-sensitive item across the app into a single normalized stream
 // so the dashboard can render one definitive "what's next" view.
 //
@@ -323,14 +323,17 @@ function rollRecurrence(rawISO: string, pattern: string | undefined, todayStr: s
   // dragging every later occurrence with it (shared/date-math).
   const anchorDay = start.getDate();
   let step = 0;
+  // weekdays (Mon–Fri), weekends (Sat/Sun) and weekly:<days> all step forward
+  // to the next date whose day-of-week is in the set (shared/date-math).
+  const daySet = weekdaySetFor(pattern);
   const advance = () => {
     step++;
+    if (daySet) {
+      do { next.setDate(next.getDate() + 1); } while (!daySet.has(next.getDay()));
+      return;
+    }
     switch (pattern) {
       case "daily": next.setDate(next.getDate() + 1); break;
-      // weekdays (Mon–Fri): step forward until we land on a weekday.
-      case "weekdays": do { next.setDate(next.getDate() + 1); } while (next.getDay() === 0 || next.getDay() === 6); break;
-      // weekends (Sat/Sun): step forward until we land on a weekend day.
-      case "weekends": do { next.setDate(next.getDate() + 1); } while (next.getDay() !== 0 && next.getDay() !== 6); break;
       case "weekly": next.setDate(next.getDate() + 7); break;
       case "biweekly": next.setDate(next.getDate() + 14); break;
       case "monthly": next.setTime(addMonthsClamped(start, step, anchorDay).getTime()); break;

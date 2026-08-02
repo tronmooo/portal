@@ -34,6 +34,40 @@
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// ─── Day-of-week sets ────────────────────────────────────────────────────────
+//
+// `weekdays` (Mon–Fri) and `weekends` (Sat/Sun) were the only day-set
+// recurrences, so "gym every Monday, Wednesday and Friday" had no
+// representation and became three independent weekly events — three rows to
+// edit, three to cancel. Both are special cases of one idea: repeat on a SET
+// of weekdays. `weekly:1,3,5` (0 = Sunday) says it directly, and every
+// consumer that hard-coded the two literals now asks this helper for the set,
+// so the named patterns keep their exact behaviour and the general case comes
+// along for free.
+
+/** Matches the parametrized form, e.g. "weekly:1,3,5". */
+export const WEEKDAY_SET_RE = /^weekly:([0-6](?:,[0-6])*)$/;
+
+/**
+ * The days-of-week a recurrence repeats on (0 = Sunday), or null when the
+ * pattern is not a day-set pattern (daily, monthly, yearly, none, …).
+ */
+export function weekdaySetFor(recurrence: string | null | undefined): Set<number> | null {
+  const r = String(recurrence || "").trim().toLowerCase();
+  if (r === "weekdays") return new Set([1, 2, 3, 4, 5]);
+  if (r === "weekends") return new Set([0, 6]);
+  const m = r.match(WEEKDAY_SET_RE);
+  if (!m) return null;
+  const days = new Set(m[1].split(",").map(Number));
+  return days.size > 0 ? days : null;
+}
+
+/** Build the canonical token from a set of weekday numbers. */
+export function weekdaySetToRecurrence(days: readonly number[]): string {
+  const uniqSorted = Array.from(new Set(days.filter(d => d >= 0 && d <= 6))).sort((a, b) => a - b);
+  return uniqSorted.length > 0 ? `weekly:${uniqSorted.join(",")}` : "none";
+}
+
 /** Days in a given month. `month` is 0-indexed, matching Date#getMonth(). */
 export function daysInMonth(year: number, month: number): number {
   // Day 0 of month+1 is the last day of `month`. Date normalizes the year for
@@ -138,18 +172,18 @@ export function advanceISO(
   const freq = String(frequency ?? "").toLowerCase();
   const d = parseISODate(iso);
   if (!d) return String(iso ?? "");
+  // Day-of-week sets (weekdays, weekends, weekly:<days>) advance to the next
+  // date whose weekday is in the set.
+  const daySet = weekdaySetFor(freq);
+  if (daySet) {
+    do { d.setDate(d.getDate() + 1); } while (!daySet.has(d.getDay()));
+    return toISODate(d);
+  }
   switch (freq) {
     case "daily": return addDaysISO(iso, 1);
     case "weekly": return addDaysISO(iso, 7);
     case "biweekly": case "bi-weekly": case "every-2-weeks": return addDaysISO(iso, 14);
-    case "weekdays": {
-      do { d.setDate(d.getDate() + 1); } while (d.getDay() === 0 || d.getDay() === 6);
-      return toISODate(d);
-    }
-    case "weekends": {
-      do { d.setDate(d.getDate() + 1); } while (d.getDay() !== 0 && d.getDay() !== 6);
-      return toISODate(d);
-    }
+    // weekdays / weekends / weekly:<days> — see the day-set branch above.
     case "semimonthly": case "semi-monthly": return addDaysISO(iso, 15);
     case "monthly": return addMonthsISO(iso, 1, anchorDay);
     case "bimonthly": case "bi-monthly": return addMonthsISO(iso, 2, anchorDay);

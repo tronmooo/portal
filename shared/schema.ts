@@ -807,7 +807,39 @@ export type InsertExpense = z.input<typeof insertExpenseSchema>;
 // CALENDAR EVENTS (expanded with recurrence, categories, linking)
 // ============================================================
 
-export type RecurrencePattern = "none" | "daily" | "weekdays" | "weekends" | "weekly" | "biweekly" | "monthly" | "yearly";
+/**
+ * A named cadence, or `weekly:<days>` for a specific set of weekdays
+ * (0 = Sunday), e.g. "weekly:1,3,5" for Mon/Wed/Fri. The parametrized form is
+ * expanded by `weekdaySetFor` in shared/recurring-dates, which every consumer
+ * routes through — including `weekdays` (Mon–Fri) and `weekends` (Sat/Sun),
+ * which are just fixed day sets under the same rule.
+ */
+export type RecurrencePattern =
+  | "none" | "daily" | "weekdays" | "weekends" | "weekly" | "biweekly" | "monthly" | "yearly"
+  | `weekly:${string}`;
+
+export const NAMED_RECURRENCE_PATTERNS = [
+  "none", "daily", "weekdays", "weekends", "weekly", "biweekly", "monthly", "yearly",
+] as const;
+
+const WEEKDAY_SET_TOKEN_RE = /^weekly:[0-6](,[0-6])*$/;
+
+export function isRecurrencePattern(v: unknown): v is RecurrencePattern {
+  return typeof v === "string"
+    && ((NAMED_RECURRENCE_PATTERNS as readonly string[]).includes(v) || WEEKDAY_SET_TOKEN_RE.test(v));
+}
+
+/**
+ * Accepts a named pattern OR the `weekly:<days>` form.
+ *
+ * `z.custom` rather than a `z.union`: InsertEvent is derived from `z.input`,
+ * and a union with a `z.string()` branch widens its input type to plain
+ * `string` — which would quietly un-type every CalendarEvent.recurrence.
+ */
+export const recurrencePatternSchema = z.custom<RecurrencePattern>(
+  isRecurrencePattern,
+  { message: "Use a named cadence or weekly:<days>, e.g. weekly:1,3,5 for Mon/Wed/Fri" },
+);
 
 export type EventCategory = "personal" | "work" | "health" | "finance" | "family" | "social" | "travel" | "education" | "other";
 // ============================================================
@@ -886,7 +918,7 @@ export const insertEventSchema = z.object({
   location: z.string().optional(),
   category: z.enum(["personal", "work", "health", "finance", "family", "social", "travel", "education", "other"]).default("personal"),
   color: z.string().optional(),
-  recurrence: z.enum(["none", "daily", "weekdays", "weekends", "weekly", "biweekly", "monthly", "yearly"]).default("none"),
+  recurrence: recurrencePatternSchema.default("none"),
   recurrenceEnd: z.string().optional(),
   linkedProfiles: z.array(z.string()).optional().default([]),
   linkedDocuments: z.array(z.string()).optional().default([]),

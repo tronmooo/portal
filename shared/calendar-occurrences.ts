@@ -35,7 +35,7 @@
 // Pure, dependency-free, no I/O. Pinned by tests/calendar-occurrences.test.ts.
 
 import { expandRecurrenceDates, addDaysISO } from "./recurring-dates";
-import { addYearsISO } from "./date-math";
+import { addYearsISO, weekdaySetFor } from "./date-math";
 
 // ─── Kinds ───────────────────────────────────────────────────────────────────
 
@@ -224,7 +224,9 @@ const REPEATING = new Set([
  */
 export function isRecurringRule(series: CalendarSeries): boolean {
   if (!series) return false;
-  return REPEATING.has(String(series.recurrence || "").toLowerCase());
+  const token = String(series.recurrence || "").toLowerCase();
+  // A weekday set ("weekly:1,3,5") is a rule like any other named cadence.
+  return REPEATING.has(token) || weekdaySetFor(token) !== null;
 }
 
 /** Just the genuinely repeating series. */

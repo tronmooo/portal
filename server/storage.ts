@@ -248,6 +248,10 @@ export interface IStorage {
   // Reminders (real, fired by GET /api/cron/fire-due-reminders)
   createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder>;
   listReminders(filter?: { dueBefore?: Date }): Promise<Reminder[]>;
+  /** Authoritative by-id read-back (chat write verification). Unlike
+   *  listReminders it does NOT filter on fired_at, so a reminder the cron
+   *  stamps between the write and the read-back still verifies as written. */
+  getReminder(id: string): Promise<Reminder | undefined>;
   markReminderFired(id: string): Promise<boolean>;
   updateReminder(id: string, data: { title?: string; fireAt?: string; profileId?: string | null }): Promise<Reminder | undefined>;
   deleteReminder(id: string): Promise<boolean>;
@@ -2406,6 +2410,14 @@ export class MemStorage implements IStorage {
   // Reminder stubs
   private reminderStore: Reminder[] = [];
   async createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder> {
+    // Same dedup contract as SupabaseStorage: an unfired reminder with the same
+    // title and fire time is the same reminder, so a replayed or retried action
+    // returns the existing row instead of inserting a twin. Recurring series
+    // differ by fireAt, so a legitimate multi-occurrence schedule is untouched.
+    const dup = this.reminderStore.find(
+      r => !r.firedAt && r.title === data.title && r.fireAt === data.fireAt,
+    );
+    if (dup) return dup;
     const reminder: Reminder = {
       id: crypto.randomUUID(),
       title: data.title,
@@ -2424,6 +2436,9 @@ export class MemStorage implements IStorage {
       if (filter?.dueBefore && new Date(r.fireAt) > filter.dueBefore) return false;
       return true;
     });
+  }
+  async getReminder(id: string): Promise<Reminder | undefined> {
+    return this.reminderStore.find(x => x.id === id);
   }
   async markReminderFired(id: string): Promise<boolean> {
     const r = this.reminderStore.find(x => x.id === id);

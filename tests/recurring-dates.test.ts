@@ -46,6 +46,28 @@ describe("expandRecurrenceDates", () => {
   it("returns only the base for non-recurring", () => {
     expect(expandRecurrenceDates("2026-07-25", "none", { windowStart: TODAY, windowEnd: "2026-12-31" })).toEqual(["2026-07-25"]);
   });
+
+  // "Gym every Monday, Wednesday and Friday" — one series, not three weekly
+  // events. 2026-08-03 is a Monday.
+  it("expands a weekday set on exactly the requested days", () => {
+    const dates = expandRecurrenceDates("2026-08-03", "weekly:1,3,5", { windowStart: "2026-08-01", windowEnd: "2026-08-16" });
+    expect(dates).toEqual([
+      "2026-08-03", "2026-08-05", "2026-08-07",
+      "2026-08-10", "2026-08-12", "2026-08-14",
+    ]);
+  });
+
+  it("a weekday set with no recurrenceEnd keeps generating (no end date)", () => {
+    const dates = expandRecurrenceDates("2026-08-03", "weekly:1,3,5", { windowStart: "2028-01-03", windowEnd: "2028-01-09" });
+    expect(dates).toEqual(["2028-01-03", "2028-01-05", "2028-01-07"]); // Mon/Wed/Fri
+  });
+
+  it("weekdays and weekends still expand exactly as before", () => {
+    expect(expandRecurrenceDates("2026-08-03", "weekdays", { windowStart: "2026-08-03", windowEnd: "2026-08-09" }))
+      .toEqual(["2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07"]);
+    expect(expandRecurrenceDates("2026-08-08", "weekends", { windowStart: "2026-08-08", windowEnd: "2026-08-17" }))
+      .toEqual(["2026-08-08", "2026-08-09", "2026-08-15", "2026-08-16"]);
+  });
 });
 
 describe("per-occurrence check-off (the core contract)", () => {

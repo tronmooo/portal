@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { WeekdayPicker, isCustomDaySet, seedDaySet, CUSTOM_DAYS_VALUE } from "@/components/recurring/WeekdayPicker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -282,7 +283,10 @@ function SeriesDialog({ mode, event, profiles, onClose }: {
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Repeats</Label>
-              <Select value={form.recurrence} onValueChange={v => set("recurrence", v)}>
+              <Select
+                value={isCustomDaySet(form.recurrence) ? CUSTOM_DAYS_VALUE : form.recurrence}
+                onValueChange={v => set("recurrence", v === CUSTOM_DAYS_VALUE ? seedDaySet(form.date) : v)}
+              >
                 <SelectTrigger className="h-9 text-xs" data-testid="select-rd-recurrence"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="daily">Daily</SelectItem>
@@ -292,10 +296,19 @@ function SeriesDialog({ mode, event, profiles, onClose }: {
                   <SelectItem value="biweekly">Every 2 weeks</SelectItem>
                   <SelectItem value="monthly">Monthly</SelectItem>
                   <SelectItem value="yearly">Yearly</SelectItem>
+                  <SelectItem value={CUSTOM_DAYS_VALUE}>Specific days…</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
+
+          {isCustomDaySet(form.recurrence) && (
+            <WeekdayPicker
+              recurrence={form.recurrence}
+              onChange={r => set("recurrence", r)}
+              testId="rd-weekday-picker"
+            />
+          )}
 
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">

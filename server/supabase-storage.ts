@@ -46,7 +46,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
   return _sharedClient;
 }
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
-import { addMonthsClamped, addYearsClamped } from "../shared/date-math";
+import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromProfiles, seriesFromEvents } from "../shared/calendar-adapters";
 import { deleteProfileFields } from "../shared/profile-field-identity";
@@ -3566,17 +3566,17 @@ export class SupabaseStorage implements IStorage {
             items.push({ id: `event-${ev.id}-${nextStr}`, type: "event", title: ev.title, date: nextStr, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, completed: rdMeta.completedDates.includes(nextStr), meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
           }
         };
-        if (ev.recurrence === "weekdays" || ev.recurrence === "weekends") {
-          // One INCREMENTAL walk (the old code restarted from base for every
-          // occurrence index — O(n²)). Skip whole weeks up to ~a week before
-          // the window; every 7-day hop preserves the day-of-week pattern.
+        const evDaySet = weekdaySetFor(ev.recurrence);
+        if (evDaySet) {
+          // weekdays / weekends / weekly:<days> — one INCREMENTAL walk (the old
+          // code restarted from base for every occurrence index — O(n²)). Skip
+          // whole weeks up to ~a week before the window; every 7-day hop
+          // preserves the day-of-week pattern for ANY day set.
           const cur = new Date(base);
           if (gapDays > 14) cur.setDate(cur.getDate() + Math.floor((gapDays - 7) / 7) * 7);
           for (let emitted = 0; emitted < MAX_EVENT_OCCURRENCES; ) {
             cur.setDate(cur.getDate() + 1);
-            const dow = cur.getDay();
-            const matches = ev.recurrence === "weekdays" ? (dow !== 0 && dow !== 6) : (dow === 0 || dow === 6);
-            if (!matches) continue;
+            if (!evDaySet.has(cur.getDay())) continue;
             emitted++;
             const nextStr = cur.toLocaleDateString('en-CA');
             if (nextStr > endDate) break;
@@ -6707,6 +6707,19 @@ export class SupabaseStorage implements IStorage {
     const { data, error } = await q.order("fire_at", { ascending: true });
     if (error) throw error;
     return (data || []).map(r => this.mapReminder(r));
+  }
+
+  // Authoritative single-row read-back for chat write verification. Note the
+  // deliberate ABSENCE of a fired_at filter: listReminders serves only pending
+  // rows, so a reminder the cron fires between the write and the verification
+  // read would vanish from it and a good write would report as failed.
+  async getReminder(id: string): Promise<Reminder | undefined> {
+    const { data, error } = await this.supabase.from("reminders").select("*")
+      .eq("id", id).eq("user_id", this.userId)
+      .is("deleted_at", null)
+      .limit(1);
+    if (error) throw error;
+    return data && data.length > 0 ? this.mapReminder(data[0]) : undefined;
   }
 
   async markReminderFired(id: string): Promise<boolean> {

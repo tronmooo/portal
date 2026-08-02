@@ -58,7 +58,7 @@ import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime } from "@shared/timezone";
 import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
-import { addMonthsClamped, addYearsClamped, addMonthsISO } from "@shared/date-math";
+import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
@@ -2886,8 +2886,8 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         title: { type: "string", description: "What to be reminded about (e.g. 'call the dentist', 'take Amoxicillin 500mg')." },
         fireAt: { type: "string", description: "When the FIRST reminder should fire, as a full ISO 8601 datetime (e.g. '2026-06-05T15:00:00'). Resolve relative phrasing like 'tomorrow at 3pm' to an absolute datetime. For a recurring reminder this is the first occurrence." },
         forProfile: { type: "string", description: "OPTIONAL: name of an EXISTING person/pet profile this reminder is for (e.g. 'Bob', 'Mom'). Omit for the user themselves." },
-        recurrence: { type: "string", enum: ["daily", "twice_daily", "three_times_daily", "weekly", "monthly"], description: "OPTIONAL: set for a REPEATING reminder. 'twice daily for 10 days' → recurrence:'twice_daily'. Omit for a one-time reminder. When set, ALSO set count (total reminders to create)." },
-        count: { type: "number", description: "OPTIONAL (required when recurrence is set): total number of reminder occurrences to schedule. 'twice daily for 10 days' = 20. 'daily for a week' = 7. Capped at 90." },
+        recurrence: { type: "string", enum: ["daily", "twice_daily", "three_times_daily", "weekly", "monthly", "quarterly", "yearly"], description: "OPTIONAL: set for a REPEATING reminder. 'twice daily for 10 days' → 'twice_daily'. 'every three months' / 'quarterly' → 'quarterly'. Omit for a one-time reminder." },
+        count: { type: "number", description: "OPTIONAL: total occurrences when the user gives a FINITE duration ('twice daily for 10 days' = 20, 'daily for a week' = 7). Capped at 90. OMIT for an open-ended repeat ('every Thursday', 'quarterly', no end date) — a standing horizon is generated instead, and the tool tells you the through-date to report." },
       },
       required: ["title", "fireAt"],
     },
@@ -3543,7 +3543,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         endTime: { type: "string", description: "End time (HH:MM)" },
         location: { type: "string", description: "Location" },
         description: { type: "string", description: "Description" },
-        recurrence: { type: "string", enum: ["none", "daily", "weekdays", "weekends", "weekly", "biweekly", "monthly", "yearly"], description: "Recurrence pattern. Use 'weekdays' for Mon–Fri (e.g. a daily standup), 'weekends' for Sat/Sun. For 'every 6 months' use 'monthly' and note the interval in the title." },
+        recurrence: { type: "string", description: "Recurrence pattern: 'none', 'daily', 'weekdays' (Mon–Fri), 'weekends' (Sat/Sun), 'weekly', 'biweekly', 'monthly', 'yearly' — OR 'weekly:<days>' for a SPECIFIC set of weekdays, where 0=Sun…6=Sat. 'every Monday, Wednesday and Friday' → 'weekly:1,3,5' as ONE event; never create one event per day. For 'every 6 months' use 'monthly' and note the interval in the title." },
+        recurrenceEnd: { type: "string", description: "OPTIONAL end date for the recurrence (YYYY-MM-DD). OMIT when the user says 'no end date', 'indefinitely', or gives no end — the series then repeats forever. Only set it when they name a stopping point." },
         category: { type: "string", description: "Event category. Use 'maintenance' for asset/vehicle upkeep reminders (filter replacements, oil changes, HVAC service, etc.)." },
         forProfile: { type: "string", description: "Name of the profile this event belongs to (e.g. 'Max', 'Mom', 'Tesla', 'Samsung refrigerator'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
       },
@@ -5000,6 +5001,8 @@ NEVER substitute a create_task when the user explicitly asks for a journal entry
 - set a reminder: create_reminder(title, fireAt)
 - "move my X reminder to 4pm" / "push it to tomorrow" → update_reminder(title, newFireAt) — NEVER create a second reminder for a time change
 - "cancel/delete the X reminder(s)" → delete_reminder(title) — removes every pending occurrence + the calendar entry
+- REPEATING reminders: set recurrence and give count ONLY for a finite duration ("for 10 days" = 10). For an open-ended repeat ("every Thursday", "quarterly", "no end date") OMIT count — the tool generates a standing horizon and returns the date it runs through. Report that through-date; do NOT claim it repeats forever.
+- Completing a task automatically cancels reminders whose title contains the task's title. Don't call delete_reminder separately after complete_task — say the reminder was cancelled if the result reports it.
 - "bring back / restore the task I deleted" → restore_task(title?) — searches recently DELETED tasks (they are NOT in your data context; call the tool). "un-complete" is update_task(changes.status:'todo'), not restore.
 - "restore the X habit" → restore_habit(name?)
 - "dismiss my notifications" / "clear the bill alerts" → dismiss_notifications(which:'all' or matching text)
@@ -5030,6 +5033,13 @@ apply forProfile:"Joe" to ALL subsequent actions in the same message until profi
 MULTI-ACTION EXPENSE PRESERVATION (CRITICAL): When a message mixes an expense with other actions (e.g. "spent $40 at the vet for Max AND schedule a checkup next week"), you MUST emit a SEPARATE create_expense tool call for the money portion — never merge it into the event/task/note. The amount, vendor, and description from the expense clause must be preserved verbatim in create_expense; do not replace the expense with a generic task or summary. If you cannot tell which clause is the expense, emit create_expense with the most specific dollar amount + description from the message and ask a clarifying question only AFTER the expense is saved.
 
 EXPENSE-FOR-AN-ASSET (CRITICAL — save first, never invent a name): When the user logs a spend for a named asset/vehicle/person ("$50 gas for my Ford F150"), you MUST call create_expense and persist it. Set forProfile to what the user said; the server links to the closest existing profile automatically. NEVER refuse or defer the save to ask which asset they meant — always save it (linked to the closest match), and only THEN, if truly ambiguous, add one short clarifying sentence. NEVER invent or alter the asset's make/model/year: if their profile is "Ford F150 2025" do NOT say "Ford F250" or any name they didn't use. Only claim you logged an expense when you actually called create_expense and it succeeded — never describe a save you didn't perform.
+
+━━━ WHAT THIS APP CANNOT MODEL — SAY SO, DON'T SUBSTITUTE ━━━
+Some requests have no representation here. Do the part that IS representable, then state the gap in one plain sentence. Never quietly downgrade the request into something weaker and report it as done.
+- USAGE / MILEAGE TRIGGERS: "every 5,000 miles", "after 100 hours of use", "whichever comes first". There is NO odometer or usage tracking. Create the TIME-based half ("every 6 months") and say the mileage half isn't tracked, so they'll need to watch the odometer themselves. Do NOT silently turn "every 5,000 miles or 6 months" into a plain monthly task and call it done.
+- A DEADLINE DERIVED FROM A DATE YOU WEREN'T GIVEN: "renew my passport 45 days before it expires" needs the expiry date. If it isn't in the message or the data context, ASK for it. Never invent an expiry, and never create an undated task while implying the 45-day rule is now active.
+- CONDITIONAL / EVENT-DRIVEN AUTOMATION beyond task completion ("when X happens, do Y"): not supported. Say so rather than describing an automation that won't run.
+- Reminders deliver as IN-APP notifications only. Timed push and email are not connected. Say this the first time a reminder is created in a conversation, not every time.
 
 ━━━ AMBIGUITY RESOLUTION ━━━
 If "delete Joe's running thing" could match habit OR tracker OR event:
@@ -6604,8 +6614,26 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const firstAt = new Date(input.fireAt);
       const firstMs = firstAt.getTime();
       const recur = String((input as any).recurrence || "").toLowerCase();
-      const occCount = recur ? Math.max(1, Math.min(90, Math.floor(Number((input as any).count) || 1))) : 1;
+      // OPEN-ENDED SERIES. Reminders are materialized rows — there is no
+      // recurrence rule on the table — so "every Thursday, no end date" cannot
+      // be stored as a rule. An omitted count used to collapse to ONE reminder,
+      // which silently turned a standing weekly reminder into a single event.
+      // Generate a cadence-appropriate horizon instead, and say the
+      // through-date in the reply rather than implying an infinite series the
+      // rows do not back.
+      const REMINDER_HORIZON: Record<string, number> = {
+        daily: 90, twice_daily: 90, three_times_daily: 90,
+        weekly: 104, monthly: 24, quarterly: 8, yearly: 5,
+      };
+      const explicitCount = Math.floor(Number((input as any).count) || 0);
+      const occCount = !recur
+        ? 1
+        : explicitCount > 0
+          ? Math.max(1, Math.min(90, explicitCount))
+          : (REMINDER_HORIZON[recur] ?? 90);
       const occ: number[] = [];
+      // Month-stepped cadences share the clamped, zone-aware arithmetic below.
+      const MONTH_STEP: Record<string, number> = { monthly: 1, quarterly: 3, yearly: 12 };
       if (!recur) {
         occ.push(firstMs);
       } else if (recur === "twice_daily") {
@@ -6620,13 +6648,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       } else if (recur === "weekly") {
         for (let i = 0; i < occCount; i++) occ.push(addZonedDays(firstAt, i * 7, remSeriesTz).getTime());
-      } else if (recur === "monthly") {
+      } else if (MONTH_STEP[recur]) {
         // Calendar months in the user's zone: clamped to month end (so a day-31
         // series doesn't overflow) and re-composed at the same wall-clock time.
+        // Quarterly and yearly step the SAME way — never by a fixed day count,
+        // which would drift off the anchor day and across DST.
         const remParts = getZonedParts(firstAt, remSeriesTz);
         const anchorDay = Number(remParts.date.slice(8, 10));
         for (let i = 0; i < occCount; i++) {
-          const dateISO = addMonthsISO(remParts.date, i, anchorDay);
+          const dateISO = addMonthsISO(remParts.date, i * MONTH_STEP[recur], anchorDay);
           occ.push(zonedTimeToUTC(dateISO, remParts.hours, remParts.minutes, remSeriesTz).getTime());
         }
       } else { // "daily" or any other recurring token
@@ -6660,6 +6690,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         timeZone: _remTz,
         weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
       });
+      // The last occurrence actually written. A repeating reminder is a finite
+      // set of rows, so the reply names the date it runs through instead of
+      // implying it repeats forever.
+      const throughHuman = occ.length > 1
+        ? new Date(occ[occ.length - 1]).toLocaleDateString("en-US", { timeZone: _remTz, month: "short", year: "numeric" })
+        : "";
 
       // A timed reminder is also a calendar item — the user expects "remind me
       // to call the dentist Friday at 10am" to show up on the calendar/dashboard
@@ -6719,6 +6755,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Surface the calendar event id as the primary id so the chat action
         // card and its Undo button target the visible calendar entry.
         id: calendarEvent?.id || reminder.id,
+        // ...but tell the envelope to verify the REMINDER row, not the mirror
+        // event. Without this the post-write read-back looked the event id up
+        // in the reminders table, never found it, and reported genuinely-saved
+        // reminders as "could NOT be confirmed … Nothing was saved" — the
+        // "reminder system save failure" users hit while the rows sat in the
+        // database. Stripped from the envelope before it reaches the client.
+        _verify: { type: "reminder", id: reminder.id },
         reminderId: reminder.id,
         eventId: calendarEvent?.id,
         title: input.title,
@@ -6726,7 +6769,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         time: calendarEvent?.time,
         forProfile: input.forProfile,
         message: recur
-          ? `Set ${occ.length} ${recur.replace(/_/g, " ")} reminders starting ${human}.`
+          ? `Set ${occ.length} ${recur.replace(/_/g, " ")} reminders starting ${human}${throughHuman ? `, through ${throughHuman}` : ""}. Tell the user the through-date — this is a fixed set of occurrences, not an endless series; they can extend it any time.`
           : `Reminder set for ${human} and added to your calendar. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
         actions: [{ type: "create", category: "reminder", data: reminder }],
       };
@@ -7077,7 +7120,41 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (fallback.match && fallback.match.status === "done") return { alreadyDone: true, title: fallback.match.title };
         return { error: result.error || "Task not found", candidates: result.candidates };
       }
-      return storage.updateTask(result.match.id, { status: "done" });
+      const doneTask = await storage.updateTask(result.match.id, { status: "done" });
+      // A reminder set FOR a task ("remind me to renew my passport") outlives
+      // the task unless something clears it, so finishing the job left the
+      // notification firing forever. Completing the task retires its pending
+      // reminders and their mirrored calendar entries — the same cleanup
+      // delete_reminder does, so both doors leave the same state.
+      //
+      // Strictly best-effort: the completion is the user's actual request and
+      // must not fail because a reminder could not be tidied up.
+      let clearedReminders = 0;
+      try {
+        const doneNeedle = safeLC(result.match.title).trim();
+        if (doneNeedle.length >= 3) {
+          const pending = await storage.listReminders();
+          // One direction only: the REMINDER must name the task ("Renew
+          // passport — 45 days before" ← "Renew passport"). Matching the other
+          // way round would let a long task title sweep up unrelated
+          // short-titled reminders.
+          const orphaned = pending.filter(r => safeLC(r.title).includes(doneNeedle));
+          for (const r of orphaned) {
+            if (await storage.deleteReminder(r.id)) clearedReminders++;
+            await deleteReminderMirrors(storage as any, r, aiUserTimezone());
+          }
+        }
+      } catch (e: any) {
+        console.warn("[AI] Reminder cleanup after task completion failed:", e?.message || e);
+      }
+      if (clearedReminders > 0) {
+        return {
+          ...doneTask,
+          clearedReminders,
+          message: `Marked "${result.match.title}" done and cancelled ${clearedReminders} reminder${clearedReminders === 1 ? "" : "s"} for it. Tell the user the reminder was cancelled too.`,
+        };
+      }
+      return doneTask;
     }
 
     case "delete_task": {
@@ -9248,15 +9325,32 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const EVENT_CATEGORIES = ["personal", "work", "health", "finance", "family", "social", "travel", "education", "other"];
       let evtCategory = input.category === "medical" ? "health" : (input.category || "personal");
       if (!EVENT_CATEGORIES.includes(evtCategory)) evtCategory = "other";
+      // Weekday-set recurrence ("weekly:1,3,5"): canonicalize the token, and
+      // pull the START DATE onto the first day that is actually in the set.
+      // Expansion always emits the base date, so a Mon/Wed/Fri series started
+      // on a Sunday would show one stray Sunday occurrence forever.
+      let evtRecurrence = String(input.recurrence || "none").trim().toLowerCase();
+      let evtDate = input.date;
+      const evtDaySet = weekdaySetFor(evtRecurrence);
+      if (evtDaySet) {
+        evtRecurrence = weekdaySetToRecurrence(Array.from(evtDaySet));
+        const startD = new Date(`${String(evtDate).slice(0, 10)}T00:00:00`);
+        if (!isNaN(startD.getTime())) {
+          let guard = 7;
+          while (!evtDaySet.has(startD.getDay()) && guard-- > 0) startD.setDate(startD.getDate() + 1);
+          evtDate = startD.toLocaleDateString("en-CA");
+        }
+      }
       const eventPayload = validateAiPayload(insertEventSchema, {
         title: input.title.trim(),
-        date: input.date,
+        date: evtDate,
         time: input.time,
         endTime: input.endTime,
         allDay: input.allDay || false,
         location: input.location,
         description: input.description,
-        recurrence: input.recurrence || "none",
+        recurrence: evtRecurrence,
+        ...(input.recurrenceEnd ? { recurrenceEnd: String(input.recurrenceEnd).slice(0, 10) } : {}),
         category: evtCategory,
         source: "chat",
         linkedProfiles: eventLinkedProfiles,

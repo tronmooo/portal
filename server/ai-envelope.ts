@@ -82,7 +82,13 @@ const ENTITY_META: Record<string, EntityMeta> = {
   journal: { list: (s) => s.getJournalEntries(), name: (r) => String(r.content || "").slice(0, 40) },
   memory: { list: (s) => s.getMemories(), name: (r) => r.key },
   artifact: { list: (s) => s.getArtifacts(), name: (r) => r.title },
-  reminder: { list: (s) => s.listReminders(), name: (r) => r.title },
+  // Reminders verify by primary key: listReminders serves only PENDING rows
+  // (fired_at IS NULL), so a list scan can miss a reminder that really exists.
+  reminder: {
+    list: (s) => s.listReminders(),
+    name: (r) => r.title,
+    byId: (s, id) => (s as any).getReminder?.(id),
+  },
   document: { list: (s) => s.getDocuments(), name: (r) => r.name },
   paycheck: { list: (s) => s.getPaychecks(), name: (r) => r.source },
   // Tracker ENTRIES (the individual logged data points) verify by primary key.
@@ -144,6 +150,33 @@ function extractEntityId(result: any): string | undefined {
     || result?.obligation?.id || result?.income?.id || result?.artifact?.id
     || result?.reminder?.id || result?.memory?.id || result?.payment?.id
     || result?.entity?.id;
+}
+
+/**
+ * A tool whose top-level `id` is deliberately NOT the row it wrote can say so
+ * with `_verify: { type?, id }`, and verification (plus the undo ledger) will
+ * target the real row.
+ *
+ * `create_reminder` is exactly this case: it returns the mirrored CALENDAR
+ * EVENT's id as `id` so the chat action card's Undo targets the visible
+ * calendar entry. Without the hint, verification looked that event id up in
+ * the reminders table, never found it, and reported six genuinely-saved
+ * reminders as "could NOT be confirmed … Nothing was saved" — while the rows
+ * sat in the database. The hint is stripped before the envelope is returned.
+ */
+function verifyTarget(toolName: string, result: any): { type?: string; id?: string } {
+  const hint = result?._verify;
+  return {
+    type: (typeof hint?.type === "string" && hint.type) || TOOL_ENTITY[toolName],
+    id: (typeof hint?.id === "string" && hint.id) || extractEntityId(result),
+  };
+}
+
+/** Strip the internal hint so it never reaches the model or the chat client. */
+function stripInternal(result: any): any {
+  if (!result || typeof result !== "object" || !("_verify" in result)) return result;
+  const { _verify, ...rest } = result;
+  return rest;
 }
 
 const VERBS: Record<string, string> = { create: "Created", update: "Updated", delete: "Deleted" };
@@ -376,7 +409,20 @@ export async function executeReversePlan(
     case "delete": {
       const fn = DELETE_FN[type];
       if (!fn || !id) return { ok: false, description: `No delete path for ${type}.` };
+      // A reminder owns a mirrored calendar event (server/reminder-mirror).
+      // Read it BEFORE the delete — the mirror is matched on the reminder's
+      // title + fire date, which are gone once the row is soft-deleted — or
+      // undoing the create strands a ghost entry on the calendar
+      // (QA 2026-07-29, CRUD-T2-002).
+      let mirrorSource: { title: string; fireAt: string } | null = null;
+      if (type === "reminder") {
+        try { mirrorSource = (await s.getReminder?.(id)) ?? null; } catch { mirrorSource = null; }
+      }
       await fn(s, id);
+      if (mirrorSource) {
+        const { deleteReminderMirrors } = await import("./reminder-mirror");
+        await deleteReminderMirrors(s, mirrorSource, s._timezone);
+      }
       return { ok: true, description: `Removed ${name} (${plan.soft ? "recoverable" : "permanent"} delete).` };
     }
     case "restore": {
@@ -445,8 +491,7 @@ export async function finalizeToolResult(
 ): Promise<any> {
   try {
     const op = classifyOperation(toolName);
-    const entityType = TOOL_ENTITY[toolName];
-    const entityId = extractEntityId(result);
+    const { type: entityType, id: entityId } = verifyTarget(toolName, result);
     const verification: ToolVerification = {};
     let entityName: string | undefined =
       result?.title || result?.name || result?.entity?.name
@@ -525,7 +570,7 @@ export async function finalizeToolResult(
         : `The ${what} still exists after the delete — the delete did NOT take effect. Tell the user the deletion failed; do NOT report success.`;
       try { console.error(`[ai-envelope] write verification FAILED for ${toolName} (${entityType}/${entityId})`); } catch { /* noop */ }
       return {
-        ...result,
+        ...stripInternal(result),
         success: false,
         action: toolName,
         action_type: actionType,
@@ -547,11 +592,11 @@ export async function finalizeToolResult(
       message,
       ...(entityType && entityId ? { entity: { type: entityType, id: entityId, ...(entityName ? { name: String(entityName).slice(0, 80) } : {}) } } : {}),
       ...(Object.keys(verification).length > 0 ? { verification } : {}),
-      ...result,
+      ...stripInternal(result),
     };
   } catch (e: any) {
     // The envelope must never break a tool.
     try { console.warn(`[ai-envelope] finalize failed for ${toolName}:`, e?.message || e); } catch { /* noop */ }
-    return result;
+    return stripInternal(result);
   }
 }

@@ -49,6 +49,7 @@ import {
   CheckSquare, ChevronDown, RefreshCw, CheckCircle2, Settings2,
 } from "lucide-react";
 import CalendarManagerPanel from "@/components/CalendarManagerPanel";
+import { WeekdayPicker, isCustomDaySet, seedDaySet, CUSTOM_DAYS_VALUE } from "@/components/recurring/WeekdayPicker";
 import type {
   CalendarTimelineItem, CalendarEvent, EventCategory, Profile,
 } from "@shared/schema";
@@ -502,8 +503,11 @@ function EventFormDialog({
           <div className="space-y-1.5">
             <Label htmlFor="ev-recurrence">Repeat</Label>
             <Select
-              value={form.recurrence || "none"}
-              onValueChange={v => setForm(f => ({ ...f, recurrence: v }))}
+              value={isCustomDaySet(form.recurrence) ? CUSTOM_DAYS_VALUE : (form.recurrence || "none")}
+              onValueChange={v => setForm(f => ({
+                ...f,
+                recurrence: v === CUSTOM_DAYS_VALUE ? seedDaySet(f.date) : v,
+              }))}
             >
               <SelectTrigger id="ev-recurrence" data-testid="select-event-recurrence">
                 <SelectValue placeholder="Does not repeat" />
@@ -517,8 +521,18 @@ function EventFormDialog({
                 <SelectItem value="biweekly" data-testid="recurrence-option-biweekly">Bi-weekly</SelectItem>
                 <SelectItem value="monthly" data-testid="recurrence-option-monthly">Monthly</SelectItem>
                 <SelectItem value="yearly" data-testid="recurrence-option-yearly">Yearly</SelectItem>
+                <SelectItem value={CUSTOM_DAYS_VALUE} data-testid="recurrence-option-custom-days">Specific days…</SelectItem>
               </SelectContent>
             </Select>
+            {/* One event for "Mon, Wed and Fri" instead of three separate
+                weekly events that have to be edited and cancelled one by one. */}
+            {isCustomDaySet(form.recurrence) && (
+              <WeekdayPicker
+                recurrence={form.recurrence}
+                onChange={r => setForm(f => ({ ...f, recurrence: r }))}
+                testId="event-weekday-picker"
+              />
+            )}
           </div>
 
           {/* Series end date — recurring events used to have no way to stop. */}

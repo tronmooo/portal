@@ -26,6 +26,7 @@ function stubStorage(overrides: Record<string, any> = {}): any {
     getMemories: async () => [],
     getArtifacts: async () => [],
     listReminders: async () => [],
+    getReminder: async () => undefined,
     getDocuments: async () => [],
     getPaychecks: async () => [],
     getTrackerEntry: async () => undefined,
@@ -146,6 +147,68 @@ describe("finalizeToolResult", () => {
       );
       expect(env.success).toBe(true);
       expect(env.verification.database_record_exists).toBe(false);
+    });
+  });
+
+  // ── Regression: the "reminder system save failure" ────────────────────────
+  // create_reminder returns the mirrored CALENDAR EVENT's id as its top-level
+  // `id` so the chat card's Undo targets the visible calendar entry. Read-back
+  // then looked that event id up in the reminders table, never found it, and
+  // told users six genuinely-saved reminders "could NOT be confirmed …
+  // Nothing was saved" — permanently, since the (title, fire_at) dedup makes
+  // every retry return the same rows and fail identically.
+  describe("_verify hint: tools whose card id is not the row they wrote", () => {
+    const REM = { id: "rem-1", title: "Put out the trash", fireAt: "2026-08-06T19:00:00Z" };
+    const remStorage = () => stubStorage({
+      getReminder: async (id: string) => (id === REM.id ? REM : undefined),
+      listReminders: async () => { throw new Error("must not scan the pending list"); },
+    });
+    const remResult = {
+      id: "evt-9",                 // the mirrored calendar event
+      _verify: { type: "reminder", id: REM.id },
+      reminderId: REM.id,
+      eventId: "evt-9",
+      title: REM.title,
+    };
+
+    it("verifies the reminder row, not the mirrored event", async () => {
+      const env = await finalizeToolResult(
+        "create_reminder", "create_reminder", { title: REM.title }, remResult, buildTurnVerifyContext(remStorage()),
+      );
+      expect(env.success).toBe(true);
+      expect(env.verification.database_record_exists).toBe(true);
+      expect(env.entity).toMatchObject({ type: "reminder", id: REM.id });
+      // The card still deep-links to the calendar entry.
+      expect(env.id).toBe("evt-9");
+    });
+
+    it("strips the hint so it never reaches the model or the client", async () => {
+      const env = await finalizeToolResult(
+        "create_reminder", "create_reminder", { title: REM.title }, remResult, buildTurnVerifyContext(remStorage()),
+      );
+      expect(env._verify).toBeUndefined();
+      expect(env.reminderId).toBe(REM.id); // every other raw key survives
+    });
+
+    it("still fails a reminder that genuinely was not written", async () => {
+      const env = await finalizeToolResult(
+        "create_reminder", "create_reminder", { title: "Ghost" },
+        { id: "evt-9", _verify: { type: "reminder", id: "rem-ghost" } },
+        buildTurnVerifyContext(remStorage()),
+      );
+      expect(env.success).toBe(false);
+      expect(env.error).toMatch(/could NOT be confirmed/i);
+      expect(env._verify).toBeUndefined();
+    });
+
+    it("without a hint, falls back to the raw result id", async () => {
+      const env = await finalizeToolResult(
+        "create_reminder", "create_reminder", { title: REM.title },
+        { id: REM.id, title: REM.title },
+        buildTurnVerifyContext(remStorage()),
+      );
+      expect(env.success).toBe(true);
+      expect(env.entity).toMatchObject({ type: "reminder", id: REM.id });
     });
   });
 

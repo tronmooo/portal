@@ -151,6 +151,7 @@ export default defineConfig({
       'tests/wellness-popups.dom.test.tsx',
       'tests/design-system-drift.test.ts',
       'tests/reminder-cron.test.ts',
+      'tests/reminder-create-verification.test.ts',
       'tests/document-open-hook.dom.test.tsx',
       // Production audit 2026-07-29 regressions.
       'tests/anthropic-budget.test.ts',

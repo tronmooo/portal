@@ -30,7 +30,10 @@
 // Pinned by tests/recurring-dates.test.ts.
 
 import type { RecurrencePattern, EventCategory } from "./schema";
-import { addMonthsClamped, addYearsClamped } from "./date-math";
+import { addMonthsClamped, addYearsClamped, weekdaySetFor, WEEKDAY_SET_RE } from "./date-math";
+
+// Re-exported so callers can reach the day-set helpers from either module.
+export { weekdaySetFor, weekdaySetToRecurrence } from "./date-math";
 
 export type RecurringKind =
   | "anniversary" | "birthday" | "bill" | "renewal"
@@ -202,11 +205,15 @@ export function expandRecurrenceDates(
   // its day-of-month — the "Monthly on day 31, next occurrence Aug 1" bug.
   const anchorDay = seriesStart.getDate();
   const d = parseLocal(base);
+  // weekdays / weekends / weekly:<days> all walk forward to the next date whose
+  // day-of-week is in the set.
+  const daySet = weekdaySetFor(String(recurrence));
   for (let i = 1; i <= cap; i++) {
+    if (daySet) {
+      do { d.setDate(d.getDate() + 1); } while (!daySet.has(d.getDay()));
+    } else
     switch (recurrence) {
       case "daily": d.setDate(d.getDate() + 1); break;
-      case "weekdays": do { d.setDate(d.getDate() + 1); } while (d.getDay() === 0 || d.getDay() === 6); break;
-      case "weekends": do { d.setDate(d.getDate() + 1); } while (d.getDay() !== 0 && d.getDay() !== 6); break;
       case "weekly": d.setDate(d.getDate() + 7); break;
       case "biweekly": d.setDate(d.getDate() + 14); break;
       case "monthly": d.setTime(addMonthsClamped(seriesStart, i, anchorDay).getTime()); break;
@@ -317,6 +324,12 @@ const DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "
 
 export function humanRecurrenceLabel(recurrence: string, baseDate?: string): string {
   const d = baseDate && DATE_RE.test(baseDate.slice(0, 10)) ? parseLocal(baseDate) : null;
+  // "weekly:1,3,5" → "Weekly on Mon, Wed, Fri". Handled ahead of the switch so
+  // the named patterns keep their existing hand-written labels.
+  if (WEEKDAY_SET_RE.test(String(recurrence))) {
+    const days = Array.from(weekdaySetFor(recurrence)!).sort((a, b) => a - b);
+    return `Weekly on ${days.map(n => DOW[n].slice(0, 3)).join(", ")}`;
+  }
   switch (recurrence) {
     case "daily": return "Every day";
     case "weekdays": return "Every weekday (Mon–Fri)";
