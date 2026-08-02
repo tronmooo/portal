@@ -1,8 +1,12 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation";
-import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-keys";
+import { bootstrapSeedEntries, isTrimmedSeedEntry, projectBootstrapShell } from "./bootstrap-seed-keys";
 import { getProfileFilterSnapshot } from "./profileFilter";
 import { ACTIVE_PROFILE_HEADER } from "@shared/active-scope";
+import {
+  MIN_DATA_VERSION_HEADER,
+  MIN_DATA_VERSION_TTL_MS,
+} from "@shared/data-version";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -31,6 +35,38 @@ function activeProfileHeader(): Record<string, string> {
   } catch {
     return {}; // store not ready (SSR/tests) — server keeps its old defaulting
   }
+}
+
+/* ── Read-your-own-write floor (see @shared/data-version) ──────────────────
+   A write tells us the data version it produced; we present that as a floor on
+   every subsequent read so a server instance with a stale 2s version memo can't
+   serve us the pre-write list — which React Query would then cache as fresh for
+   its full staleTime, making the write invisible until a full app reload. */
+let minDataVersion: { v: number; at: number } | null = null;
+
+/** Record the data version a write produced. Called with `meta.dataVersion`. */
+export function noteDataVersion(version: unknown): void {
+  const v = typeof version === "number" ? version : Number.parseInt(String(version ?? ""), 10);
+  if (!Number.isFinite(v) || v <= 0) return;
+  // Monotonic within the TTL: a slower response from an earlier write must
+  // never lower a floor a later write already raised.
+  if (minDataVersion && minDataVersion.v >= v && Date.now() - minDataVersion.at < MIN_DATA_VERSION_TTL_MS) return;
+  minDataVersion = { v, at: Date.now() };
+}
+
+/** The floor header, while it is still worth presenting. */
+function minDataVersionHeader(): Record<string, string> {
+  if (!minDataVersion) return {};
+  if (Date.now() - minDataVersion.at >= MIN_DATA_VERSION_TTL_MS) {
+    minDataVersion = null;
+    return {};
+  }
+  return { [MIN_DATA_VERSION_HEADER]: String(minDataVersion.v) };
+}
+
+/** Test seam — drops the floor so suites don't leak state between cases. */
+export function resetDataVersionFloor(): void {
+  minDataVersion = null;
 }
 
 async function throwIfResNotOk(res: Response) {
@@ -74,7 +110,11 @@ export async function apiRequest(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const headers: Record<string, string> = { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader() };
+    const headers: Record<string, string> = {
+      "X-Timezone": BROWSER_TIMEZONE,
+      ...activeProfileHeader(),
+      ...minDataVersionHeader(),
+    };
     if (data) headers["Content-Type"] = "application/json";
     const res = await fetch(`${API_BASE}${url}`, {
       method,
@@ -113,7 +153,11 @@ export const getQueryFn: <T>(options: {
     let res: Response;
     try {
       res = await window.fetch(`${API_BASE}${url}`, {
-        headers: { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader() },
+        headers: {
+          "X-Timezone": BROWSER_TIMEZONE,
+          ...activeProfileHeader(),
+          ...minDataVersionHeader(),
+        },
         signal: ctrl.signal,
       });
     } finally {
@@ -560,9 +604,18 @@ export function hydrateQueryCache(): void {
       // keys via seedDashboardCaches. Seeding them stale here re-created the
       // ~20-request launch fan-out this pass exists to remove. Only fill empty
       // slots (never clobber a fresher restore).
-      for (const { key, data } of bootstrapSeedEntries(bootstrapEntry.d, mode, ids, month)) {
+      for (const entry of bootstrapSeedEntries(bootstrapEntry.d, mode, ids, month)) {
+        const { key, data } = entry;
         if (queryClient.getQueryData(key as any) !== undefined) continue;
-        queryClient.setQueryData(key as any, data, { updatedAt: seededAt });
+        // A list projectBootstrapShell truncated is NOT the whole list, so it
+        // must not be stamped fresh — otherwise a heavy-data user paints their
+        // first SHELL_MAX_ROWS rows and keeps them for the full staleTime.
+        // Stamping it with the persisted timestamp makes it stale on arrival:
+        // the rows still paint instantly, and refetchOnMount completes them in
+        // the background. Complete lists keep the fresh stamp, so this does not
+        // reintroduce the launch-time refetch fan-out.
+        const updatedAt = isTrimmedSeedEntry(entry, bootstrapEntry.d) ? bootstrapEntry.t : seededAt;
+        queryClient.setQueryData(key as any, data, { updatedAt });
       }
     }
   } catch {

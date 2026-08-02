@@ -22,6 +22,7 @@
 //  - Broken stream mid-flight: the promise rejects with a "network"-shaped
 //    error message so the existing failed/retry affordance in chat.tsx fires.
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
+import type { Domain } from "@shared/cache-domains";
 
 // Same build-time placeholder trick as lib/queryClient.ts — the iOS Capacitor
 // build rewrites the literal to the real API origin; web builds get "".
@@ -38,6 +39,25 @@ export interface ToolResultFrame {
   error?: string;
   action?: any;
   operation?: any;
+  /**
+   * Cache domains this tool's write touched (see @shared/cache-domains).
+   * The write is already committed when this frame arrives, so the client
+   * refreshes these immediately rather than waiting for the turn to end.
+   * Absent on responses from an older server — the end-of-turn invalidation
+   * still covers that case.
+   */
+  domains?: Domain[];
+  /**
+   * The data version this write produced — the floor the mid-stream refetch
+   * must present so it can't be served pre-write data. See @shared/data-version.
+   */
+  dataVersion?: number;
+  /**
+   * The document this tool resolved, when it resolved one. The client starts
+   * downloading the bytes on arrival so they land while the model is still
+   * writing — rather than starting only when the preview mounts after the turn.
+   */
+  document?: { id: string; mimeType: string };
 }
 
 export interface ChatStreamCallbacks {

@@ -347,6 +347,7 @@ import {
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { validateTransactionAmount } from "@shared/quick-add";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
+import { MIN_DATA_VERSION_HEADER, parseMinDataVersion } from "@shared/data-version";
 import { generateSmartInsights } from "./insights-engine";
 import { requireAdmin, resolveUserFromRequest } from "./auth";
 
@@ -429,13 +430,42 @@ const responseCache = new Map<string, { data: any; expiresAt: number }>();
 // simply stop being addressable. Old entries age out via their TTL.
 const VERSION_MEMO_MS = 2000;
 const versionMemo = new Map<string, { v: number; at: number }>();
-async function currentDataVersion(uid: string): Promise<number> {
+// Concurrent forced re-resolves share one DB read. A post-write refetch wave
+// fires ~5 queries at once, all carrying the same version floor; without this
+// they would each miss the memo and issue their own read.
+const versionInflight = new Map<string, Promise<number>>();
+
+/**
+ * The user's data version for cache-key stamping.
+ *
+ * @param minVersion a FLOOR the caller has already observed (from the
+ *   `x-min-data-version` request header — see @shared/data-version). When the
+ *   memoized value is below it, the memo is provably stale: the client is
+ *   telling us about a write this instance hasn't noticed yet, so we re-read
+ *   from Postgres instead of stamping cache keys with a pre-write version and
+ *   serving that user their own stale data.
+ */
+async function currentDataVersion(uid: string, minVersion = 0): Promise<number> {
   const hit = versionMemo.get(uid);
-  if (hit && Date.now() - hit.at < VERSION_MEMO_MS) return hit.v;
-  const v = await (storage as any).getDataVersion?.() ?? 0;
-  if (versionMemo.size > 5000) versionMemo.clear();
-  versionMemo.set(uid, { v: Number(v) || 0, at: Date.now() });
-  return Number(v) || 0;
+  if (hit && Date.now() - hit.at < VERSION_MEMO_MS && hit.v >= minVersion) return hit.v;
+  const pending = versionInflight.get(uid);
+  if (pending) return pending;
+  // Register the in-flight promise BEFORE awaiting it. Putting the cleanup in a
+  // `finally` inside the async body instead would be a trap: if the body ever
+  // completes without suspending, its delete runs before this set and leaves a
+  // resolved promise cached forever.
+  const read = (async () => {
+    const v = Number(await (storage as any).getDataVersion?.() ?? 0) || 0;
+    if (versionMemo.size > 5000) versionMemo.clear();
+    versionMemo.set(uid, { v, at: Date.now() });
+    return v;
+  })();
+  versionInflight.set(uid, read);
+  try {
+    return await read;
+  } finally {
+    versionInflight.delete(uid);
+  }
 }
 function cacheUserKey(req: { userId?: string }): string {
   if (!req.userId) return `nouser-${Math.random().toString(36).slice(2)}`;
@@ -518,6 +548,38 @@ function setCache(key: string, data: any, ttlMs: number = 10000): void {
 // Clear ALL cached responses — call after any data mutation
 function clearAllCache(): void {
   responseCache.clear();
+}
+
+/**
+ * Stamp a write response with the data version it produced — the client's
+ * read-your-own-write floor (see @shared/data-version).
+ *
+ * Why this is needed on top of the write middleware's version bump: /api/chat
+ * and friends run on a SEPARATE Vercel function from the read API
+ * (vercel.json routes them to api/ai.js), so the chat handler's `clearAllCache()`
+ * cannot touch the read instance's cache. The read instance only stops serving
+ * its pre-write entries once it notices a higher version — and it memoizes that
+ * version for VERSION_MEMO_MS. Handing the number back to the client lets the
+ * very next read force that instance to look again.
+ *
+ * Must be called AFTER the handler's writes have landed: the version has to be
+ * strictly greater than anything a concurrent GET could have cached mid-handler,
+ * which a pre-handler bump does not guarantee.
+ */
+async function stampDataVersion(req: AuthenticatedRequest, result: any): Promise<void> {
+  if (!result || typeof result !== "object") return;
+  try {
+    // bumpDataVersion() RETURNS the new version, so this is one counter write,
+    // not an extra read. The write middleware bumps on 'finish' too; an extra
+    // increment is harmless because only monotonicity matters.
+    const dataVersion = Number(await (storage as any).bumpDataVersion?.()) || 0;
+    if (dataVersion <= 0) return;
+    if (req.userId) versionMemo.set(req.userId, { v: dataVersion, at: Date.now() });
+    result.meta = { ...(result.meta || {}), dataVersion };
+  } catch {
+    // Best-effort. Without the floor the client still invalidates as before —
+    // it just loses the guarantee that the refetch beats the version memo.
+  }
 }
 
 // Every per-user TTL cache-key prefix (non-version-stamped). Version-stamped
@@ -735,35 +797,46 @@ function isValidDateStr(d: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(new Date(d).getTime());
 }
 
-// Pagination helper — applies ?limit= and ?offset= to any array and sets X-Total-Count header
-function paginate<T>(items: T[], req: any, res: any): T[] {
-  const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 100, 1), 500);
-  const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
-  res.set("X-Total-Count", String(items.length));
-  return items.slice(offset, offset + limit);
-}
+// Ceiling for an explicitly-paged request. Also the effective page size for the
+// /api/documents DB pushdown, which must pass a finite number to Postgres.
+const FULL_PAGE_LIMIT = 10000;
+
+/* THERE IS DELIBERATELY NO CAPPED `paginate()` HELPER.
+   ------------------------------------------------------------------
+   A generic paginate() used to default to 100 rows/page. No client ever sent
+   ?limit and nothing read X-Total-Count, so it silently truncated whatever it
+   was applied to. That produced the same bug over and over:
+     - the Finance page summed only the first 100 expenses  → paginateFull
+     - the net-worth rollup saw only the first 500 profiles → paginateProfiles
+     - trackers/tasks/events/documents/habits/obligations/artifacts/journal/
+       goals all capped at 100 while /api/dashboard-bootstrap seeded the SAME
+       react-query cache slot uncapped — so every list VISIBLY SHRANK the moment
+       its own fetch landed, and "refresh the whole app" was the only way to get
+       the complete list back (user report 2026-08-02, "I had to refresh the
+       entire app for all the trackers to show up, especially when there's a
+       lot").
+   Full-by-default is the only shape that agrees with the bootstrap seed. A
+   caller that genuinely wants a page opts in with ?limit=/?offset=.
+   Enforced by tests/smoke/contracts/no-capped-list-pagination.test.ts. */
 
 // Full-by-default pagination for lists whose CLIENT computes an aggregate
-// (sum/total) over the whole set. The generic paginate() above hard-caps at
-// 100/page, which silently truncated the Finance page total for any user with
-// more than 100 expenses — the page sums only the rows it received, so the
-// oldest expenses were never counted ("all the expenses are not being
-// calculated"). Like paginateProfiles, we return EVERY row by default and only
-// slice when the caller explicitly opts into ?limit=/?offset=. X-Total-Count is
-// still set so opt-in pagers know the full size.
+// (sum/total) over the whole set, or which the bootstrap seeds uncapped.
+// Returns EVERY row by default and only slices when the caller explicitly opts
+// into ?limit=/?offset=. X-Total-Count is still set so opt-in pagers know the
+// full size.
 function paginateFull<T>(items: T[], req: any, res: any): T[] {
   res.set("X-Total-Count", String(items.length));
   const hasPager = typeof req.query.limit === "string" || typeof req.query.offset === "string";
   if (!hasPager) return items;
-  const limit = Math.min(Math.max(parseInt(req.query.limit as string) || items.length, 1), 10000);
+  const limit = Math.min(Math.max(parseInt(req.query.limit as string) || items.length, 1), FULL_PAGE_LIMIT);
   const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
   return items.slice(offset, offset + limit);
 }
 
 // Specialised pagination for /api/profiles.
 //   - Profile lists are bounded (~thousands max), small per-row, and required
-//     in FULL for the recursive net-worth rollup. The generic paginate() above
-//     hard-caps at 500/page, which silently truncates the dashboard rollup
+//     in FULL for the recursive net-worth rollup. The removed generic helper
+//     hard-capped at 500/page, which silently truncated the dashboard rollup
 //     when a user crosses 500 profiles — we measured this against a 551-node
 //     seed and the rollup was wrong by 50%.
 //   - We still honour explicit ?limit= / ?offset= for UI pagers that opt in,
@@ -997,7 +1070,12 @@ export async function registerRoutes(
     if (req.method !== "GET") return next();
     const uid = (req as AuthenticatedRequest).userId;
     if (!uid) return next();
-    currentDataVersion(uid)
+    // Honour the caller's read-your-own-write floor: a client that just watched
+    // a write produce version N must not be handed a response stamped with a
+    // version older than N (which would hit this instance's pre-write cache
+    // entry). See @shared/data-version for the full failure mode.
+    const minVersion = parseMinDataVersion(req.headers[MIN_DATA_VERSION_HEADER] as string | undefined);
+    currentDataVersion(uid, minVersion)
       .then((v) => { (req as any).__dataVersion = v; next(); })
       .catch(() => next());
   });
@@ -1315,6 +1393,7 @@ export async function registerRoutes(
         const scoped = rs.find((r) => r && typeof r === "object" && (r as any).scope);
         if (scoped) (result as any).scope = (scoped as any).scope;
       } catch { /* non-fatal */ }
+      await stampDataVersion(req as AuthenticatedRequest, result);
       if (sse) {
         // Streaming finalization: the `final` frame carries the EXACT object
         // the buffered path would have sent via res.json — the client's
@@ -1782,12 +1861,14 @@ export async function registerRoutes(
         }
       }
 
-      res.json({
+      const savePayload: any = {
         documentId: doc.id,
         documentName: doc.name,
         linkedProfiles: linkedProfilesResolved,
         savedAt: new Date().toISOString(),
-      });
+      };
+      await stampDataVersion(req as AuthenticatedRequest, savePayload);
+      res.json(savePayload);
     } catch (err: any) {
       log.error("[Upload.saveOnly]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to save file" });
@@ -1820,6 +1901,7 @@ export async function registerRoutes(
         return res.status(415).json({ error: `Unsupported file type: ${mimeType}. Allowed: images, PDF, plain text, Word.` });
       }
       const result = await processFileUpload(fileName, mimeType, fileData, message, profileId);
+      await stampDataVersion(req as AuthenticatedRequest, result);
       res.json(result);
     } catch (err: any) {
       log.error("[Upload]", err?.message || "unknown error");
@@ -1962,7 +2044,9 @@ export async function registerRoutes(
       if (unlinkedCount > 0) parts.push(`${unlinkedCount} unlinked`);
       const summary = `Processed ${results.length} document${results.length !== 1 ? "s" : ""}: ${parts.length > 0 ? parts.join(", ") : "all processed"}`;
 
-      res.json({ results, summary });
+      const batchPayload: any = { results, summary };
+      await stampDataVersion(req as AuthenticatedRequest, batchPayload);
+      res.json(batchPayload);
     } catch (err: any) {
       log.error("[BatchUpload]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to process batch upload" });
@@ -2739,7 +2823,7 @@ ${JSON.stringify(ctx, null, 2)}`;
 
       // Partial success: 207-style — return success but include failures so the
       // client can warn the user that some pieces didn't save.
-      res.json({
+      const confirmPayload: any = {
         success: failures.length === 0,
         message: saved.length > 0
           ? `Confirmed: ${saved.join("; ")}${failures.length > 0 ? ` — but ${failures.length} step(s) failed: ${failures.join("; ")}` : ""}`
@@ -2749,7 +2833,9 @@ ${JSON.stringify(ctx, null, 2)}`;
         // Fields deliberately kept on the document only (metadata/junk) —
         // named so a partial save is visible instead of silently claimed.
         skipped: skippedFields,
-      });
+      };
+      await stampDataVersion(req as AuthenticatedRequest, confirmPayload);
+      res.json(confirmPayload);
     } catch (err: any) {
       log.error("[ConfirmExtraction]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to confirm extraction" });
@@ -4427,7 +4513,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
       const ids = profileIdsParam.split(",").filter(Boolean);
       items = await filterByProfileScope(items, ids, uid);
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/trackers/:id", asyncHandler(async (req, res) => {
     const tracker = await storage.getTracker(req.params.id);
@@ -4821,7 +4907,7 @@ Rules:
         return lp.some(id => filterProfileIds.includes(id)) || (hasSelf && lp.length === 0);
       });
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/tasks/:id", asyncHandler(async (req, res) => {
     const tasks = await storage.getTasks();
@@ -5370,7 +5456,7 @@ Rules:
       const ids = profileIdsParam.split(",").filter(Boolean);
       items = await filterByProfileScope(items, ids, uid);
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/events/:id", asyncHandler(async (req, res) => {
     const event = await storage.getEvent(req.params.id);
@@ -5454,11 +5540,20 @@ Rules:
     const docFilterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (fp ? [fp] : []);
     const uid_doc = cacheUserKey(req as AuthenticatedRequest);
 
-    // Mirror paginate(): default 100/page, cap 500 — the documents route has no
-    // route-level cache, so historically EVERY request fetched the entire
-    // documents table (all rows + extracted_data) just to slice out a page.
-    // X-Total-Count still carries the true total for opt-in pagers.
-    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 100, 1), 500);
+    // Mirror paginateFull(): every row by default, slice only when the caller
+    // explicitly opts in with ?limit=/?offset=. The route has no route-level
+    // cache, so the DB pushdown below still does the slicing in Postgres rather
+    // than fetching the whole table — we just stop capping a caller who never
+    // asked to be capped. (The old default of 100/page silently truncated every
+    // unpaged consumer — CalendarManagerPanel, BriefingPopups, trackers.tsx,
+    // useCalendarOccurrences all fetch "/api/documents" with no limit and treat
+    // the result as the complete list, and /api/dashboard-bootstrap seeds that
+    // same cache slot UNCAPPED, so the list visibly shrank once this route's own
+    // response landed.) X-Total-Count still carries the true total.
+    const hasPager = typeof req.query.limit === "string" || typeof req.query.offset === "string";
+    const limit = hasPager
+      ? Math.min(Math.max(parseInt(req.query.limit as string) || FULL_PAGE_LIMIT, 1), FULL_PAGE_LIMIT)
+      : FULL_PAGE_LIMIT;
     const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
 
     // [PERF Phase 4] Decide whether the DB-pushdown path is correctness-safe.
@@ -5497,7 +5592,7 @@ Rules:
     // METADATA ONLY — never ship base64 blobs in a list (dev/MemStorage parity;
     // SupabaseStorage.getDocuments already excludes file_data).
     items = items.map((d: any) => (d && d.fileData ? { ...d, fileData: "" } : d));
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {
     // PERF: metadata-only read. This route never returns the binary (clients
@@ -5813,7 +5908,7 @@ Rules:
     if (habitFilterIds.length > 0) {
       items = await filterByProfileScope(items, habitFilterIds, uid);
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/habits/:id", asyncHandler(async (req, res) => {
     const habit = await storage.getHabit(req.params.id);
@@ -5905,7 +6000,7 @@ Rules:
     if (oblFilterIds.length > 0) {
       items = await filterByProfileScope(items, oblFilterIds, uid);
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/obligations/:id", asyncHandler(async (req, res) => {
     const ob = await storage.getObligation(req.params.id);
@@ -6374,7 +6469,7 @@ Rules:
       const uid_ar = cacheUserKey(req as AuthenticatedRequest);
       items = await filterByProfileScope(items, ids, uid_ar);
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const artifact = await storage.getArtifact(req.params.id);
@@ -6599,7 +6694,7 @@ Rules:
       // Journal entries are personal — only show for self profile
       if (!isSelf) { items = []; }
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.post("/api/journal", asyncHandler(async (req, res) => {
     if (!req.body.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
@@ -7748,7 +7843,7 @@ No emojis. No prose outside the JSON.`,
           return lp.some(id => ids.includes(id));
         });
       }
-      res.json(paginate(goals, req, res));
+      res.json(paginateFull(goals, req, res));
     } catch (err: any) {
       console.error("Goals error:", err);
       res.status(500).json({ error: "Failed to get goals" });

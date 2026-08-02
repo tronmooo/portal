@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useCallback, useDeferredValue, useMemo, lazy, memo, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, BROWSER_TIMEZONE, noteDataVersion } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
 import { EXPENSE_CATEGORIES, categoryLabel } from "@shared/category-canon";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { setFilterSelected, setFilterEveryone } from "@/lib/profileFilter";
-import { invalidateDomain } from "@/lib/cache-bus";
+import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
+import type { Domain } from "@shared/cache-domains";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stopProp } from "@/lib/event-utils";
 
@@ -2939,6 +2940,14 @@ export default function ChatPage() {
   // final reply (server-side contract), so the next delta resets the buffer.
   const liveResetPendingRef = useRef(false);
   const liveFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Domains the CURRENT turn already refreshed from its tool_result frames.
+  // At the end of the turn we invalidate this set instead of every /api/* key:
+  // the server told us exactly what changed, so refreshing the rest is pure
+  // waste (and the request storm was itself part of why chat felt slow).
+  // Empty at the end = no manifest arrived (older server, no writes, or a
+  // dropped stream) → fall back to the blanket sweep so we can never
+  // under-refresh.
+  const streamedDomainsRef = useRef<Set<Domain>>(new Set());
   const [liveStream, setLiveStream] = useState<LiveStreamState | null>(null);
   const scheduleLiveFlush = useCallback(() => {
     if (liveFlushTimerRef.current != null) return;
@@ -3089,6 +3098,9 @@ export default function ChatPage() {
       // untouched. On a mid-flight stream failure it rejects and the existing
       // failed/retry affordance in onError takes over.
       beginLiveStream();
+      // Fresh manifest per turn — a previous turn's domains must not decide
+      // this one's settle-up invalidation.
+      streamedDomainsRef.current = new Set();
       return await streamChat(
         {
           message,
@@ -3111,6 +3123,34 @@ export default function ChatPage() {
             scheduleLiveFlush();
           },
           onToolResult: (frame) => {
+            // REFRESH NOW, NOT AT THE END OF THE TURN.
+            // This frame means the write is already committed in Postgres —
+            // typically seconds before the model finishes writing its reply.
+            // Refreshing the touched domains here is what makes a tracker
+            // created in chat appear on the Trackers tab while the reply is
+            // still streaming, instead of after the turn (or, before this,
+            // after a manual full-app refresh). Routing through the cache bus
+            // also broadcasts to other tabs — chat used to be the ONE mutation
+            // path that skipped that.
+            //
+            // Outside the liveStreamRef guard below on purpose: the cache must
+            // be refreshed even if the live scratch bubble is already gone.
+            if (frame.ok && frame.domains && frame.domains.length > 0) {
+              // Record the version floor FIRST: the refetch invalidateDomains
+              // kicks off must carry it, or this early refresh would race the
+              // server's version memo and cache pre-write data as fresh.
+              noteDataVersion(frame.dataVersion);
+              for (const d of frame.domains) streamedDomainsRef.current.add(d);
+              void invalidateDomains(...frame.domains);
+            }
+            // Start the document download NOW, in parallel with the model still
+            // writing its reply, instead of when LazyDocumentPreview mounts
+            // after the turn ends. prefetchDocument dedupes with the preview's
+            // own fetch, so the preview either finds the blob already cached or
+            // joins the in-flight request.
+            if (frame.ok && frame.document?.id) {
+              prefetchDocument(frame.document.id, frame.document.mimeType || "");
+            }
             const cur = liveStreamRef.current;
             if (!cur) return;
             const idx = cur.runningTools.findIndex((t) => t.tool === frame.tool);
@@ -3151,13 +3191,19 @@ export default function ChatPage() {
           }
         } catch { /* filter store not ready — non-fatal */ }
       }
-      invalidateAll();
+      invalidateAll(data);
     },
     onError: (err: Error, { userMsgId }) => {
       // A dropped connection ("Load failed" / timeout) does NOT mean nothing
       // happened — the server keeps executing tool calls after the socket
       // dies. Be honest about that, and refresh all data so any writes that
       // DID land show up on the dashboard instead of looking lost.
+      // The domains streamed BEFORE the drop are not the full story — the
+      // server carries on running tools after the socket dies, and we'll never
+      // hear about those. Drop the partial manifest so invalidateAll falls back
+      // to the full sweep, which is the only safe answer when we don't know
+      // what else landed.
+      streamedDomainsRef.current = new Set();
       const dropped = /load failed|timed out|network|fetch|abort/i.test(err.message || "");
       const content = dropped
         ? "That took too long or the connection dropped. Some of the changes may still have been applied — I've refreshed your data, so check the dashboard, or ask me \"what did you just change?\""
@@ -3243,7 +3289,7 @@ export default function ChatPage() {
         return [];
       });
       setSelectedProfileId("none");
-      invalidateAll();
+      invalidateAll(data);
     },
     onError: (err: Error) => {
       const isConnectionDrop =
@@ -3291,7 +3337,7 @@ export default function ChatPage() {
         timestamp: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
-      invalidateAll();
+      invalidateAll(data);
     },
     onError: (err: Error) => {
       setMessages((prev) => [
@@ -3377,7 +3423,7 @@ export default function ChatPage() {
       }
 
       setBatchProcessedCount(0);
-      invalidateAll();
+      invalidateAll(data);
     },
     onError: (err: Error) => {
       const isConnectionDrop =
@@ -3413,7 +3459,12 @@ export default function ChatPage() {
     },
   });
 
-  const invalidateAll = useCallback(() => {
+  // `payload` is the server response, when the caller has one. Its
+  // `meta.dataVersion` is the read-your-own-write floor for every follow-up
+  // read — recorded BEFORE any invalidation so the refetches this call triggers
+  // already carry it.
+  const invalidateAll = useCallback((payload?: any) => {
+    noteDataVersion(payload?.meta?.dataVersion);
     // After a chat write the server has already busted its response cache, so
     // every data query must be marked stale — not a hand-maintained subset —
     // or a logged entry won't appear until the user manually refreshes.
@@ -3431,13 +3482,31 @@ export default function ChatPage() {
     // storm saturated the serverless backend (each request pays auth +
     // Supabase round-trips) and was the single biggest reason chat saves and
     // the pages right after them felt slow.
+    // NOTE: there is deliberately no second, delayed pass here any more. This
+    // used to schedule `setTimeout(..., 1200)` to re-invalidate, because an
+    // instant refetch could race the server's cross-instance data-version bump
+    // and read pre-write data. That guess was unsound in both directions: 1200ms
+    // is SHORTER than the 2000ms version memo it was racing (so it lost about as
+    // often as it won), and when it won it doubled every post-chat refetch.
+    // The race is now closed deterministically — the chat response carries the
+    // data version it produced, `noteDataVersion` records it, and every
+    // subsequent read presents it as a floor the server must meet before it
+    // stamps a cache key. See @shared/data-version.
+
+    // TARGETED when the server told us what it touched. Each tool_result frame
+    // already refreshed its own domains mid-stream; this is the settle-up pass
+    // that catches anything which mounted since. A blanket sweep here would
+    // re-fetch calendar/finance/documents/profiles/insights after a turn that
+    // only created a task.
+    const streamed = Array.from(streamedDomainsRef.current);
+    streamedDomainsRef.current = new Set();
+    if (streamed.length > 0) {
+      void invalidateDomains(...streamed);
+      return;
+    }
+    // No manifest — older server, a turn that wrote nothing, or a dropped
+    // stream. Sweep everything rather than risk missing a write.
     queryClient.invalidateQueries({ predicate: isData });
-    // Pass 2 — the chat handler finalizes its cross-instance cache-version bump
-    // right as the response is sent, so an instant refetch can race it and read
-    // pre-write data. A short, light follow-up over only the VISIBLE queries
-    // guarantees the current view settles on fresh data without a manual
-    // refresh — without firing a second full background storm.
-    setTimeout(() => queryClient.invalidateQueries({ predicate: isData, refetchType: "active" }), 1200);
   }, [queryClient]);
 
   // Stable (useCallback) so memoized MessageRows keep their shallow-equal props.
@@ -3460,7 +3529,7 @@ export default function ChatPage() {
       // knows something fell off.
       const savedSomething = Array.isArray(result.saved) && result.saved.length > 0;
       if (result.success || savedSomething) {
-        invalidateAll();
+        invalidateAll(result);
         if (result.success) {
           toast({ title: "Extraction confirmed", description: "Data has been saved." });
         } else {

@@ -168,6 +168,12 @@ export default defineConfig({
       'tests/format-full-date.test.ts',
       'tests/detail-hero.test.ts',
       'tests/detail-hero.dom.test.tsx',
+      // Chat writes land instantly, everywhere (2026-08-02): the tool→domain
+      // manifest, the read-your-own-write version floor, and the seeds that
+      // must not claim to be complete when they aren't.
+      'tests/chat-domain-map.test.ts',
+      'tests/data-version-floor.test.ts',
+      'tests/chat-stream-cache-sync.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

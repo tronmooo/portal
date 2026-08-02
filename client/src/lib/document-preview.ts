@@ -26,6 +26,7 @@
 // the bytes are usually already in hand by the time the dialog mounts.
 
 import { useEffect, useState } from "react";
+import { hasInlineDocumentData } from "@shared/document-lazy";
 import { apiRequest } from "./queryClient";
 
 /**
@@ -237,7 +238,7 @@ export interface DocumentBlobState {
  *
  * @param id        Document id (used for the authenticated /file fallback).
  * @param mimeType  MIME type for the resulting Blob.
- * @param data      Optional inline base64 ("" / "__LAZY_LOAD__" = not present).
+ * @param data      Optional inline base64 ("" / the lazy sentinel = not present).
  * @param enabled   Skip all work when false (e.g. dialog closed).
  */
 export function useDocumentBlobUrl(
@@ -283,7 +284,7 @@ export function useDocumentBlobUrl(
     if (hit) {
       hold(hit);
     } else {
-      const hasInline = !!data && data !== "__LAZY_LOAD__" && data.length > 0;
+      const hasInline = hasInlineDocumentData(data);
       if (hasInline) {
         // Decode the base64 we already have — no network round-trip. Cached
         // like a fetched blob so the (CPU-heavy on mobile) atob runs once.

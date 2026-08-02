@@ -26,26 +26,13 @@ import { queryClient } from "./queryClient";
 // A "domain" is a logical category of data. Mutations declare what
 // domain(s) they touch; the bus expands each to the full set of cache
 // keys that depend on it.
-export type Domain =
-  | "tasks"
-  | "habits"
-  | "trackers"
-  | "profiles"
-  | "assets"
-  | "liabilities"
-  | "people"
-  | "documents"
-  | "expenses"
-  | "incomes"
-  | "obligations"
-  | "budgets"
-  | "goals"
-  | "events"
-  | "journal"
-  | "notifications"
-  | "preferences"
-  | "dashboard"   // KPI tiles + dashboard-enhanced + stats
-  | "everything"; // nuclear — use for chat AI which can touch anything
+//
+// The union itself now lives in @shared/cache-domains, because the SERVER
+// also names domains: each `tool_result` SSE frame carries the domains that
+// tool touched, so the chat client can refresh them mid-stream instead of
+// blanket-invalidating at the end of the turn. One definition, both sides.
+export type { Domain } from "@shared/cache-domains";
+import type { Domain } from "@shared/cache-domains";
 
 // ─── Domain → keys map ───────────────────────────────────────────────
 // Top-level keys for each domain. The bus also runs nested-key
@@ -179,6 +166,23 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   notifications: [
     ["/api/notifications"],
   ],
+  // Reminders drive the bell feed and the dashboard's upcoming strip, so a
+  // reminder write has to bust both — not just its own list.
+  reminders: [
+    ["/api/reminders"],
+    ["/api/notifications"],
+    ["/api/dashboard-enhanced"],
+  ],
+  artifacts: [
+    ["/api/artifacts"],
+    ["/api/activity"],
+  ],
+  // Custom field schemas: they change how profiles render, so profile reads
+  // must re-run too.
+  domains: [
+    ["/api/domains"],
+    ["/api/profiles"],
+  ],
   preferences: [
     ["/api/preferences"],
   ],
@@ -192,6 +196,13 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   // /api/* key the app knows about
   everything: [],
 };
+
+/**
+ * Exposed for tests/chat-domain-map.test.ts, which checks that every domain the
+ * SERVER names on a tool_result frame is one this bus can actually expand — a
+ * domain with no keys here would invalidate nothing, silently.
+ */
+export const DOMAIN_KEYS_FOR_TEST = DOMAIN_KEYS;
 
 // ─── Nested key predicates ──────────────────────────────────────────
 // Some queries use composite keys like ["/api/profiles", id, "detail"]
@@ -307,6 +318,22 @@ function invalidateDomainsInternal(domains: Domain[], _remote: boolean): Promise
         queryClient.invalidateQueries({ predicate: pred, refetchType: "active" })
       );
     }
+  }
+
+  // 3. The bootstrap payload is a SNAPSHOT of most of these domains, and it is
+  // the thing hydrateQueryCache seeds every tab from on the next launch. It has
+  // no active observer (App.tsx fetches it once with prefetchQuery), so mark it
+  // stale rather than refetch: the next launch then re-fetches it instead of
+  // re-seeding tabs from a payload captured before this write. Without this a
+  // write made in one session could still be missing from the first paint of
+  // the next one.
+  if (domains.length > 0) {
+    promises.push(
+      queryClient.invalidateQueries({
+        queryKey: ["/api/dashboard-bootstrap"],
+        refetchType: "none",
+      })
+    );
   }
 
   return Promise.allSettled(promises).then(() => undefined);

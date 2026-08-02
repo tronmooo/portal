@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, lazy, Suspense } from "react";
 import EditableTitle from "@/components/EditableTitle";
 import { DocumentLinkPicker } from "@/components/DocumentLinkPicker";
+import { hasInlineDocumentData } from "@shared/document-lazy";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -171,7 +172,7 @@ function useDocumentShare() {
     try {
       let href: string;
       let revoke: string | null = null;
-      const hasInline = data && data !== "__LAZY_LOAD__" && data.length > 0;
+      const hasInline = hasInlineDocumentData(data);
       if (hasInline) {
         href = `data:${mimeType};base64,${data}`;
       } else if (id) {

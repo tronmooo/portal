@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   bootstrapSeedEntries,
+  isTrimmedSeedEntry,
   projectBootstrapShell,
 } from "../client/src/lib/bootstrap-seed-keys";
 import { scopedKey, goalsQueryKey } from "../shared/query-keys";
@@ -79,6 +80,76 @@ describe("bootstrapSeedEntries", () => {
     expect(bootstrapSeedEntries(null, "everyone", [], MONTH)).toEqual([]);
     expect(bootstrapSeedEntries(undefined, "everyone", [], MONTH)).toEqual([]);
     expect(bootstrapSeedEntries("nope" as any, "everyone", [], MONTH)).toEqual([]);
+  });
+
+  it("never seeds an EMPTY list (a stale snapshot can't assert 'you have none')", () => {
+    // The 2026-08-02 report: the Trackers tab said "0 trackers / No trackers
+    // yet" for a user who had trackers. A bootstrap snapshot captured before
+    // they existed re-installed `trackers: []` on every launch, and because
+    // hydrateQueryCache stamps seeds FRESH, refetchOnMount would not correct it
+    // for the full 3-minute staleTime. An absent slot just fetches; a `[]` slot
+    // is a confident, durable, wrong answer — so empty lists never seed.
+    const empty = { ...sampleBootstrap(), trackers: [], tasks: [] } as any;
+    const keys = bootstrapSeedEntries(empty, "everyone", [], MONTH).map((e) => JSON.stringify(e.key));
+    expect(keys).not.toContain(JSON.stringify([...scopedKey("/api/trackers", "everyone", [])]));
+    expect(keys).not.toContain(JSON.stringify([...scopedKey("/api/trackers", "everyone", [], "trends")]));
+    expect(keys).not.toContain(JSON.stringify([...scopedKey("/api/tasks", "everyone", [])]));
+    // Non-empty slots are unaffected.
+    expect(keys).toContain(JSON.stringify([...scopedKey("/api/expenses", "everyone", [])]));
+  });
+
+  it("tags list entries with their source field so truncation is detectable", () => {
+    const entries = bootstrapSeedEntries(sampleBootstrap(), "everyone", [], MONTH);
+    const trackers = entries.find(
+      (e) => JSON.stringify(e.key) === JSON.stringify([...scopedKey("/api/trackers", "everyone", [])]),
+    );
+    expect(trackers?.field).toBe("trackers");
+    // Aggregates aren't trimmable, so they carry no field.
+    const stats = entries.find(
+      (e) => JSON.stringify(e.key) === JSON.stringify([...scopedKey("/api/stats", "everyone", [])]),
+    );
+    expect(stats?.field).toBeUndefined();
+  });
+});
+
+describe("isTrimmedSeedEntry", () => {
+  // Why this matters: hydrateQueryCache stamps seeds fresh so a launch fires
+  // ONE refetch instead of twenty. That's right for a complete list and wrong
+  // for a truncated one — a heavy-data user would paint their first 100 rows
+  // and keep them for the whole staleTime ("not all my trackers show up").
+  // Truncated entries get the persisted timestamp instead, so they're stale on
+  // arrival and refetch behind the already-painted rows.
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `r${i}` }));
+
+  it("flags a list the shell projection truncated", () => {
+    const full = { ...sampleBootstrap(), trackers: rows(250) };
+    const shell = projectBootstrapShell(full, 100);
+    const entry = bootstrapSeedEntries(shell, "everyone", [], MONTH).find((e) => e.field === "trackers")!;
+    expect(entry.data).toHaveLength(100);
+    expect(isTrimmedSeedEntry(entry, shell)).toBe(true);
+  });
+
+  it("does not flag a list that fit", () => {
+    const full = { ...sampleBootstrap(), trackers: rows(3), expenses: rows(250) };
+    const shell = projectBootstrapShell(full, 100);
+    const entry = bootstrapSeedEntries(shell, "everyone", [], MONTH).find((e) => e.field === "trackers")!;
+    // expenses WAS trimmed, so the payload is marked trimmed — but trackers
+    // itself is complete and must keep the fast fresh stamp.
+    expect(shell.__shell.trimmed).toBe(true);
+    expect(isTrimmedSeedEntry(entry, shell)).toBe(false);
+  });
+
+  it("does not flag anything in an untrimmed payload", () => {
+    const payload = sampleBootstrap();
+    for (const entry of bootstrapSeedEntries(payload, "everyone", [], MONTH)) {
+      expect(isTrimmedSeedEntry(entry, payload)).toBe(false);
+    }
+  });
+
+  it("tolerates a payload with no shell marker (older persisted snapshot)", () => {
+    const payload = sampleBootstrap();
+    const entry = bootstrapSeedEntries(payload, "everyone", [], MONTH).find((e) => e.field === "trackers")!;
+    expect(isTrimmedSeedEntry(entry, { ...payload, __shell: undefined })).toBe(false);
   });
 });
 

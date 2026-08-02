@@ -28,6 +28,8 @@ import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderV
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { domainsForTool, type Domain } from "@shared/cache-domains";
+import { LAZY_DOCUMENT_SENTINEL } from "@shared/document-lazy";
 import { createHash } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
@@ -9777,7 +9779,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (score > bestScore) { bestScore = score; bestDoc = doc; }
       }
       if (!bestDoc || bestScore < 2) return null;
-      return storage.getDocument(bestDoc.id);
+      // LAZY, like every other document path (retrieve_document and the
+      // fast-path opens all return this sentinel).
+      //
+      // This used to be `storage.getDocument(bestDoc.id)`, which downloads the
+      // object from Supabase Storage and base64-encodes it (~1.33x file size) —
+      // and the caller then embedded that blob in the chat response. So asking
+      // about a document made the WHOLE REPLY wait on a multi-MB download +
+      // encode + transfer, which is exactly the "the whole reply is slow to
+      // arrive" report (2026-08-02). The model never saw the bytes anyway
+      // (summarizeResult strips fileData), and the client already fetches them
+      // itself the moment the preview mounts, from a cache that dedupes with
+      // the prefetch. `getDocuments()` excludes file_data, so bestDoc is
+      // already the metadata we want.
+      return { ...bestDoc, fileData: LAZY_DOCUMENT_SENTINEL };
     }
 
     case "create_document": {
@@ -10915,7 +10930,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           id: doc.id,
           name: doc.name,
           mimeType: doc.mimeType,
-          data: "__LAZY_LOAD__",
+          data: LAZY_DOCUMENT_SENTINEL,
         },
         totalMatches: candidates.length,
       };
@@ -12662,7 +12677,14 @@ async function runBulkLogPath(
  *  - tool_start       → a tool call is about to execute (name + display label).
  *  - tool_result      → a tool call finished; carries the same ParsedAction /
  *                       OperationOutcome objects the buffered response will
- *                       contain, so cards render identically live and final.
+ *                       contain, so cards render identically live and final,
+ *                       PLUS the cache domains the tool touched.
+ *
+ * The `domains` field is what makes chat writes appear without a refresh. The
+ * write is already committed when this frame is emitted — usually seconds
+ * before the model stops talking — so the client can refresh exactly those
+ * domains immediately instead of blanket-invalidating at the end of the turn.
+ * See @shared/cache-domains.
  *
  * Emission is best-effort: a throwing listener must never break the turn.
  */
@@ -12677,7 +12699,31 @@ export type ChatStreamEvent =
       error?: string;
       action?: ParsedAction;
       operation?: OperationOutcome;
+      domains?: Domain[];
+      dataVersion?: number;
+      /**
+       * Set when this tool resolved a document the client is about to preview.
+       * Lets the client start downloading the bytes NOW, in parallel with the
+       * model still writing its reply, instead of when the preview component
+       * mounts after the turn ends.
+       */
+      document?: { id: string; mimeType: string };
     };
+
+/**
+ * The cache domains a finished tool invalidates.
+ *
+ * Read-only tools invalidate nothing. A WRITE tool with no entry in the shared
+ * map falls back to "everything" — under-invalidating is the bug this whole
+ * mechanism exists to prevent, so an unmapped tool must over-refresh, never
+ * under-refresh. (tests/chat-domain-map.test.ts keeps the map complete so this
+ * fallback stays theoretical.)
+ */
+export function streamDomainsForTool(toolName: string): Domain[] {
+  if (READ_ONLY_TOOLS.has(toolName)) return [];
+  const mapped = domainsForTool(toolName);
+  return mapped ?? ["everything"];
+}
 
 export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: { profileFilterIds?: string[]; debug?: boolean; onEvent?: (ev: ChatStreamEvent) => void }): Promise<{
   reply: string;
@@ -12804,7 +12850,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                       results: [],
                       documentPreview: {
                         id: d.id, name: d.name, mimeType: d.mimeType,
-                        data: "__LAZY_LOAD__",
+                        data: LAZY_DOCUMENT_SENTINEL,
                         extractedData: fullDoc.extractedData || (fullDoc as any).extracted_data || undefined,
                         type: d.type,
                       } as any,
@@ -12819,7 +12865,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                     } catch { /* ignore */ }
                     return {
                       id: m.id, name: m.name, mimeType: m.mimeType,
-                      data: "__LAZY_LOAD__", extractedData: ed, type: m.type,
+                      data: LAZY_DOCUMENT_SENTINEL, extractedData: ed, type: m.type,
                     } as any;
                   }));
                   return {
@@ -13124,7 +13170,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             } catch { /* ignore */ }
             return {
               id: m.doc.id, name: m.doc.name, mimeType: m.doc.mimeType,
-              data: "__LAZY_LOAD__", extractedData: ed, type: m.doc.type,
+              data: LAZY_DOCUMENT_SENTINEL, extractedData: ed, type: m.doc.type,
             } as any;
           }));
           return {
@@ -13157,7 +13203,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             results: [],
             documentPreview: {
               id: chosen.id, name: chosen.name, mimeType: chosen.mimeType,
-              data: "__LAZY_LOAD__",
+              data: LAZY_DOCUMENT_SENTINEL,
               extractedData: fullDoc.extractedData || (fullDoc as any).extracted_data || undefined,
               type: chosen.type,
             } as any,
@@ -13173,7 +13219,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           } catch { /* ignore */ }
           return {
             id: m.id, name: m.name, mimeType: m.mimeType,
-            data: "__LAZY_LOAD__", extractedData: ed, type: m.type,
+            data: LAZY_DOCUMENT_SENTINEL, extractedData: ed, type: m.type,
           } as any;
         }));
         return {
@@ -13915,10 +13961,12 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           }
 
           // Handle document previews
+          let documentForStream: { id: string; mimeType: string } | undefined;
           if (toolUse.name === "open_document" && result?.fileData) {
             const preview = { id: result.id, name: result.name, mimeType: result.mimeType, data: result.fileData };
             if (!documentPreview) documentPreview = preview;
             documentPreviews.push(preview);
+            documentForStream = { id: String(result.id), mimeType: String(result.mimeType || "") };
           }
 
           // Collect visual output
@@ -13931,6 +13979,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             const preview = { id: result.documentPreview.id, name: result.documentPreview.name, mimeType: result.documentPreview.mimeType, data: result.documentPreview.data };
             documentPreviews.push(preview);
             if (!documentPreview) documentPreview = preview;
+            documentForStream = { id: String(preview.id), mimeType: String(preview.mimeType || "") };
           }
 
           // If result is null/undefined OR contains an error field, report failure to AI so it doesn't claim success
@@ -13955,6 +14004,18 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             };
             allOperations.push(operationForStream);
           }
+          // A committed write must advance the user's data version BEFORE the
+          // client is told to refresh, so the refetch it triggers cannot be
+          // served a cached pre-write response by an instance whose version
+          // memo hasn't caught up. bumpDataVersion() returns the new value, so
+          // this is one counter write per successful mutating tool.
+          const streamDomains = isSuccess ? streamDomainsForTool(toolUse.name) : [];
+          let streamDataVersion: number | undefined;
+          if (streamDomains.length > 0) {
+            try {
+              streamDataVersion = Number(await (storage as any).bumpDataVersion?.()) || undefined;
+            } catch { /* best-effort: the end-of-turn floor still applies */ }
+          }
           emitEvent({
             type: "tool_result",
             tool: toolUse.name,
@@ -13962,6 +14023,19 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             error: isSuccess ? undefined : (result?.error || "Action failed — data was not saved"),
             action: actionForStream,
             operation: operationForStream,
+            // The write is COMMITTED at this point. Telling the client which
+            // domains it touched lets the tab refresh now, mid-stream, instead
+            // of waiting for the turn to end (and then refetching everything).
+            // Only on success: a failed tool changed nothing to refresh.
+            domains: streamDomains,
+            // The version floor for the refetch those domains are about to
+            // trigger. Without it the mid-stream refresh would race the very
+            // 2s cache-version memo the end-of-turn floor exists to beat — and
+            // land a PRE-write list in the cache, stamped fresh for 3 minutes.
+            // Refreshing early has to mean refreshing correctly, or it just
+            // reintroduces the bug sooner. See @shared/data-version.
+            dataVersion: streamDataVersion,
+            document: documentForStream,
           });
         } catch (err: any) {
           console.error(`Tool ${toolUse.name} failed:`, err.message);
