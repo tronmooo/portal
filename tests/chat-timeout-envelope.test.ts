@@ -48,6 +48,9 @@ describe("chat timeout envelope", () => {
   });
   const serverBudgetMs = extractConst(read("server/ai-engine.ts"), "WALL_CLOCK_BUDGET_MS");
   const clientChatTimeoutMs = extractConst(read("client/src/lib/queryClient.ts"), "CHAT_TIMEOUT_MS");
+  const megaBudgetMs = extractConst(read("server/ai-engine.ts"), "MEGA_WALL_BUDGET_MS");
+  const megaBufferedBudgetMs = extractConst(read("server/ai-engine.ts"), "MEGA_WALL_BUDGET_BUFFERED_MS");
+  const streamHardTimeoutMs = extractConst(read("client/src/components/chat/chat-stream.ts"), "STREAM_HARD_TIMEOUT_MS");
 
   it("server wall-clock budget leaves room for a final round-trip before the client aborts", () => {
     // The budget only stops NEW rounds — the in-flight round (model call +
@@ -64,5 +67,20 @@ describe("chat timeout envelope", () => {
     // 15 round-trips × heavy system prompt makes 60s laughably small; the
     // envelope was designed around 300s. Anything lower is a regression.
     expect(maxDurationMs).toBeGreaterThanOrEqual(300_000);
+  });
+
+  it("mega-plan streaming budget fits under the stream hard cap and platform limit", () => {
+    // The mega path only uses its big budget on the SSE route, whose 15s
+    // server keepalives defeat the idle watchdog — so the ordering is
+    // mega budget < client stream hard cap < platform maxDuration, with
+    // enough headroom (≥30s) for the in-flight op + reply serialization.
+    expect(streamHardTimeoutMs - megaBudgetMs).toBeGreaterThanOrEqual(30_000);
+    expect(streamHardTimeoutMs).toBeLessThan(maxDurationMs);
+  });
+
+  it("mega-plan buffered budget stays under the buffered client timeout", () => {
+    // A non-SSE client aborts at CHAT_TIMEOUT_MS with nothing flowing — the
+    // buffered mega budget must leave ≥60s for the in-flight op to land.
+    expect(clientChatTimeoutMs - megaBufferedBudgetMs).toBeGreaterThanOrEqual(60_000);
   });
 });

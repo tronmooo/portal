@@ -66,4 +66,14 @@ describe("AI tool registry", () => {
     );
     expect(unclassified, `tools missing from both maps: ${unclassified.join(", ")}`).toEqual([]);
   });
+
+  it("every mega-plan whitelist tool is a real write tool with a typed action", async () => {
+    const { MEGA_ACTION_TOOLS } = await import("../server/ai-mega-plan");
+    for (const n of MEGA_ACTION_TOOLS) {
+      expect(toolNames.includes(n), `MEGA_ACTION_TOOLS entry "${n}" is not in TOOL_DEFINITIONS`).toBe(true);
+      expect(handlerCases.has(n), `MEGA_ACTION_TOOLS entry "${n}" has no executeTool handler`).toBe(true);
+      expect(TOOL_ACTION_MAP[n], `MEGA_ACTION_TOOLS entry "${n}" has no TOOL_ACTION_MAP type`).toBeTruthy();
+      expect(READ_ONLY_TOOLS.has(n), `MEGA_ACTION_TOOLS entry "${n}" is read-only`).toBe(false);
+    }
+  });
 });

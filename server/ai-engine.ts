@@ -60,7 +60,7 @@ import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { addMonthsClamped, addYearsClamped, addMonthsISO } from "@shared/date-math";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
-import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
+import { shouldUseBulkPath, shouldUseMegaPlanPath, countActionClauses, countCommandClauses } from "@shared/action-split";
 import { shouldUseFrontDoor, runFrontDoorDiag } from "./chat-frontdoor";
 import {
   EXTRACT_ACTIONS_TOOL,
@@ -72,6 +72,17 @@ import {
   type ExtractedOperation,
   type OperationOutcome,
 } from "./ai-bulk-log";
+import {
+  EXTRACT_PLAN_TOOL,
+  MAX_MEGA_OPERATIONS,
+  buildMegaExtractionPrompt,
+  parseExtractedPlan,
+  normalizeMegaPlan,
+  buildMegaReply,
+  type MegaValidationSummary,
+} from "./ai-mega-plan";
+import { nextDueOccurrence } from "@shared/liability-schedule";
+import { expandRecurrenceDates } from "@shared/recurring-dates";
 
 // ─── Sanitization & redaction helpers ──────────────────────────────────────────
 // Mirrors the sanitize() in routes.ts — strips HTML/JS injection vectors before
@@ -12554,7 +12565,9 @@ async function runBulkLogPath(
   userId: string | undefined,
   chatModel: string,
   ctx: { trackerNames: string[]; profileNames: string[]; habitNames: string[] },
+  onEvent?: (ev: ChatStreamEvent) => void,
 ): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[] } | null> {
+  const emit = (ev: ChatStreamEvent) => { try { onEvent?.(ev); } catch { /* never break the turn */ } };
   const heuristicCount = countActionClauses(userMessage);
   const tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
   const extractionSystem = buildExtractionSystemPrompt({
@@ -12625,10 +12638,12 @@ async function runBulkLogPath(
       outcome.error = "Ran out of time this message";
       continue;
     }
+    emit({ type: "tool_start", tool: op.tool, label: op.raw.slice(0, 100) });
     try {
       const validation = validateToolInput(op.tool, op.input);
       if (!validation.valid) {
         outcome.error = `Validation failed: ${validation.errors.join(". ")}`;
+        emit({ type: "tool_result", tool: op.tool, ok: false, error: outcome.error, operation: outcome });
         continue;
       }
       const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
@@ -12641,6 +12656,7 @@ async function runBulkLogPath(
         : rawResult;
       if (!result || result.error) {
         outcome.error = result?.error || "Action failed — data was not saved";
+        emit({ type: "tool_result", tool: op.tool, ok: false, error: outcome.error, operation: outcome });
         continue;
       }
       await recordActionLog(turnVerifyCtx, op.tool, actionType, inputWithCtx, result, beforeRows);
@@ -12651,6 +12667,7 @@ async function runBulkLogPath(
       if (entityId && seenEntityIds.has(entityId)) {
         outcome.status = "deduped";
         outcome.entityId = entityId;
+        emit({ type: "tool_result", tool: op.tool, ok: true, operation: outcome });
         continue;
       }
       if (entityId) seenEntityIds.add(entityId);
@@ -12660,16 +12677,277 @@ async function runBulkLogPath(
         outcome.createdTracker = { id: result.__createdTracker.id, name: result.__createdTracker.name };
         createdTrackers.push(outcome.createdTracker);
       }
-      actions.push({ type: actionType, category: "ai", data: { ...op.input, _entityId: entityId || undefined } });
+      const action: ParsedAction = { type: actionType, category: "ai", data: { ...op.input, _entityId: entityId || undefined } };
+      actions.push(action);
       results.push(result);
       logAction(op.tool, actionType, String((op.input as any)?.trackerName || (op.input as any)?.title || (op.input as any)?.description || op.tool), entityId, userId);
+      emit({ type: "tool_result", tool: op.tool, ok: true, action, operation: outcome });
     } catch (err: any) {
       outcome.error = err?.message || "Unexpected failure";
+      emit({ type: "tool_result", tool: op.tool, ok: false, error: outcome.error, operation: outcome });
     }
   }
 
   logger.info("ai", `Bulk path: ${operations.filter(o => o.status === "ok").length}/${operations.length} ops ok (${Date.now() - startedAt}ms, model ${chatModel})`);
   return { reply: buildBulkReply(operations, createdTrackers), actions, results, operations };
+}
+
+// ============================================================
+// MEGA-PLAN PATH — one extraction call, dependency-ordered execution
+// ============================================================
+// A giant mixed-CRUD command ("set up my whole dashboard: create these
+// tasks, bills, habits, assets, link the loan to the car, log today's
+// run…") is too big for the agentic loop (wall-clock budget) and too mixed
+// for the bulk path (9-tool whitelist, no ordering). Here: ONE forced-tool
+// extraction call produces a typed plan with dependency refs (#opN), the
+// pure normalize pass (server/ai-mega-plan.ts) dedupes across sections and
+// toposorts, then every operation runs through the same
+// validate → execute → verify → ledger pipeline the other paths use.
+// One failure never aborts the rest; dependents of a failed op are skipped
+// with the reason; the reply is grouped by dashboard section with a
+// deterministic post-run validation footer.
+
+/** Wall-clock budget for the whole mega path (extraction + execution) when
+ * the client is on the SSE stream: server keepalives reset the client's idle
+ * watchdog, so only its 290s hard cap and the platform's 300s maxDuration
+ * bound us. Ordering pinned by tests/chat-timeout-envelope.test.ts. */
+const MEGA_WALL_BUDGET_MS = 250_000;
+/** Buffered (non-SSE) clients abort at CHAT_TIMEOUT_MS = 170s — stay well
+ * under so the reply always reaches them. */
+const MEGA_WALL_BUDGET_BUFFERED_MS = 100_000;
+
+async function runMegaPlanPath(
+  userMessage: string,
+  userId: string | undefined,
+  chatModel: string,
+  ctx: { trackerNames: string[]; profileNames: string[]; habitNames: string[] },
+  onEvent?: (ev: ChatStreamEvent) => void,
+): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[] } | null> {
+  const startedAt = Date.now();
+  const emit = (ev: ChatStreamEvent) => { try { onEvent?.(ev); } catch { /* never break the turn */ } };
+  const wallBudgetMs = onEvent ? MEGA_WALL_BUDGET_MS : MEGA_WALL_BUDGET_BUFFERED_MS;
+  const tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
+  const heuristicCount = countActionClauses(userMessage) + countCommandClauses(userMessage);
+  const extractionSystem = buildMegaExtractionPrompt({
+    nowISO: new Date().toLocaleString("en-US", { timeZone: tz, dateStyle: "full", timeStyle: "short" }),
+    timezone: tz,
+    trackerNames: ctx.trackerNames,
+    profileNames: ctx.profileNames,
+    habitNames: ctx.habitNames,
+  });
+
+  // ── Phase A: extract the full plan in ONE model call ──
+  // Streamed so time-to-first-token (not total generation time) governs the
+  // SDK's per-attempt timeout — an 80-op plan can take minutes to generate.
+  emit({ type: "tool_start", tool: "extract_plan", label: `Planning your request (~${heuristicCount} operations)…` });
+  const extractOnce = async (messages: Anthropic.Messages.MessageParam[]): Promise<{ parsed: ReturnType<typeof parseExtractedPlan>; response: Anthropic.Messages.Message } | null> => {
+    const stream = getClient().messages.stream({
+      model: chatModel,
+      max_tokens: 16000,
+      system: extractionSystem,
+      tools: [EXTRACT_PLAN_TOOL],
+      tool_choice: { type: "tool", name: "extract_plan" },
+      messages,
+    });
+    const response = await stream.finalMessage();
+    const toolUse = response.content.find((b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use");
+    if (!toolUse) return null;
+    return { parsed: parseExtractedPlan(toolUse.input), response };
+  };
+
+  let parsed: ReturnType<typeof parseExtractedPlan>;
+  try {
+    const first = await extractOnce([{ role: "user", content: userMessage }]);
+    if (!first) return null;
+    parsed = first.parsed;
+    // Coverage check: the deterministic clause count is a floor estimate. If
+    // extraction came back clearly short, retry once with a corrective nudge.
+    if (parsed.ops.length < heuristicCount - 2 && parsed.ops.length < MAX_MEGA_OPERATIONS) {
+      logger.warn("ai", `Mega extraction returned ${parsed.ops.length} ops for ~${heuristicCount} clauses — retrying once`);
+      const retry = await extractOnce([
+        { role: "user", content: userMessage },
+        { role: "assistant", content: first.response.content },
+        { role: "user", content: [
+          { type: "tool_result", tool_use_id: (first.response.content.find((b) => b.type === "tool_use") as any)?.id || "retry", content: `You extracted only ${parsed.ops.length} operations but the message requests about ${heuristicCount} distinct records. Re-extract with EVERY requested item included — do not drop any.` },
+        ] as any },
+      ]);
+      if (retry && retry.parsed.ops.length > parsed.ops.length) parsed = retry.parsed;
+    }
+  } catch (err: any) {
+    logger.warn("ai", `Mega extraction failed (${err?.message}) — falling back`);
+    emit({ type: "tool_result", tool: "extract_plan", ok: false, error: "Planning failed" });
+    return null;
+  }
+  if (parsed.ops.length === 0) return null;
+  const { ops, preseededOutcomes, warnings } = normalizeMegaPlan(parsed.ops);
+  emit({ type: "tool_result", tool: "extract_plan", ok: true });
+
+  // ── Phase B: execute in dependency order ──
+  const turnVerifyCtx = buildTurnVerifyContext(storage);
+  const actions: ParsedAction[] = [];
+  const results: any[] = [];
+  const executed: OperationOutcome[] = [];
+  const outcomeByOriginal = new Map<number, OperationOutcome>();
+  const entityByOriginal = new Map<number, { id?: string; name?: string }>();
+  const verificationByOriginal = new Map<number, any>();
+  const seenEntityIds = new Set<string>();
+  let ranOutOfTime = false;
+
+  for (const op of ops) {
+    const outcome: OperationOutcome = {
+      index: op.originalIndex - 1,
+      raw: op.raw,
+      tool: op.tool,
+      status: "failed",
+      section: op.section,
+      trackerName: (op.input as any)?.trackerName,
+      detail: summarizeOpDetail(op.input) || undefined,
+    };
+    executed.push(outcome);
+    outcomeByOriginal.set(op.originalIndex, outcome);
+    if (Date.now() - startedAt > wallBudgetMs) {
+      ranOutOfTime = true;
+      outcome.status = "skipped";
+      outcome.error = "Ran out of time this message";
+      continue;
+    }
+
+    // Dependency gate + ref substitution: a ref'd op must have produced its
+    // entity; name-typed fields get the created entity's name (the link
+    // tools match by name), everything else gets the id.
+    const input: Record<string, any> = { ...op.input };
+    let blockedBy: number | null = null;
+    for (const [field, target] of Object.entries(op.refs)) {
+      const dep = outcomeByOriginal.get(target);
+      const entity = entityByOriginal.get(target);
+      if (!dep || (dep.status !== "ok" && dep.status !== "deduped") || !entity) { blockedBy = target; break; }
+      const sub = /name$/i.test(field) ? (entity.name ?? entity.id) : (entity.id ?? entity.name);
+      if (sub != null) input[field] = sub;
+    }
+    if (blockedBy == null) {
+      for (const target of op.dependsOn) {
+        const dep = outcomeByOriginal.get(target);
+        if (!dep || (dep.status !== "ok" && dep.status !== "deduped")) { blockedBy = target; break; }
+      }
+    }
+    if (blockedBy != null) {
+      const dep = outcomeByOriginal.get(blockedBy);
+      outcome.status = "skipped";
+      outcome.error = `Depends on "${dep?.raw || `operation #${blockedBy}`}", which ${dep?.status === "skipped" ? "was not run" : "failed"}`;
+      emit({ type: "tool_result", tool: op.tool, ok: false, error: outcome.error, operation: outcome });
+      continue;
+    }
+
+    emit({ type: "tool_start", tool: op.tool, label: op.raw.slice(0, 100) });
+    try {
+      const validation = validateToolInput(op.tool, input);
+      if (!validation.valid) {
+        outcome.error = `Validation failed: ${validation.errors.join(". ")}`;
+        emit({ type: "tool_result", tool: op.tool, ok: false, error: outcome.error, operation: outcome });
+        continue;
+      }
+      const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
+      const beforeRows = await captureBeforeRows(op.tool, turnVerifyCtx);
+      const rawResult = await executeTool(op.tool, inputWithCtx, userId);
+      invalidateContextCache(userId);
+      const actionType = mapToolToActionType(op.tool);
+      const result = (rawResult && !rawResult.error)
+        ? await finalizeToolResult(op.tool, actionType, inputWithCtx, rawResult, turnVerifyCtx)
+        : rawResult;
+      if (!result || result.error) {
+        outcome.error = result?.error || "Action failed — data was not saved";
+        emit({ type: "tool_result", tool: op.tool, ok: false, error: outcome.error, operation: outcome });
+        continue;
+      }
+      await recordActionLog(turnVerifyCtx, op.tool, actionType, inputWithCtx, result, beforeRows);
+      const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id || result?.profile?.id || result?.event?.id || result?.liability?.id;
+      const entityName = String((op.input as any)?.name || (op.input as any)?.title || (op.input as any)?.description || "").trim() || undefined;
+      entityByOriginal.set(op.originalIndex, { id: entityId || undefined, name: entityName });
+      verificationByOriginal.set(op.originalIndex, result?.verification);
+      if (entityId && seenEntityIds.has(entityId)) {
+        outcome.status = "deduped";
+        outcome.entityId = entityId;
+        outcome.detail = "already saved just now — kept the existing record";
+        emit({ type: "tool_result", tool: op.tool, ok: true, operation: outcome });
+        continue;
+      }
+      if (entityId) seenEntityIds.add(entityId);
+      outcome.status = "ok";
+      outcome.entityId = entityId || undefined;
+      if (result?.__createdTracker?.id) {
+        outcome.createdTracker = { id: result.__createdTracker.id, name: result.__createdTracker.name };
+      }
+      const action: ParsedAction = { type: actionType, category: "ai", data: { ...input, _entityId: entityId || undefined } };
+      actions.push(action);
+      results.push(result);
+      logAction(op.tool, actionType, String((op.input as any)?.trackerName || (op.input as any)?.title || (op.input as any)?.name || (op.input as any)?.description || op.tool), entityId, userId);
+      emit({ type: "tool_result", tool: op.tool, ok: true, action, operation: outcome });
+    } catch (err: any) {
+      outcome.error = err?.message || "Unexpected failure";
+      emit({ type: "tool_result", tool: op.tool, ok: false, error: outcome.error, operation: outcome });
+    }
+  }
+
+  // ── Phase C: deterministic post-run validation (no LLM) ──
+  // The write envelope already re-read every row (finalizeToolResult); here
+  // we tally that evidence and additionally prove recurring records derive a
+  // future occurrence — the user's "did recurrence actually generate?" check.
+  const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  let verifiedSaves = 0;
+  let recurrenceChecked = 0;
+  let recurrenceConfirmed = 0;
+  const duplicateWarnings: string[] = [];
+  for (const op of ops) {
+    const outcome = outcomeByOriginal.get(op.originalIndex);
+    if (!outcome || outcome.status !== "ok") continue;
+    const verification = verificationByOriginal.get(op.originalIndex);
+    // finalizeToolResult downgrades unconfirmed writes to errors, so an "ok"
+    // without contrary evidence counts as verified.
+    if (verification?.database_record_exists !== false) verifiedSaves++;
+    if (typeof verification?.duplicate_count === "number" && verification.duplicate_count > 0) {
+      duplicateWarnings.push(`"${outcome.raw}" may duplicate ${verification.duplicate_count} existing record${verification.duplicate_count === 1 ? "" : "s"} — worth a review.`);
+    }
+    try {
+      if ((op.tool === "create_liability" || op.tool === "create_obligation") && outcome.entityId) {
+        const freq = String((op.input as any)?.frequency || (op.input as any)?.recurrence || "").toLowerCase();
+        if (freq && freq !== "once" && freq !== "one_time" && freq !== "onetime" && freq !== "none") {
+          recurrenceChecked++;
+          const row = await storage.getProfile(outcome.entityId);
+          const next = row ? nextDueOccurrence(row as any, [], todayISO) : null;
+          outcome.recurrenceVerified = !!next;
+          if (next) recurrenceConfirmed++;
+        }
+      } else if (op.tool === "create_event" && outcome.entityId) {
+        const recur = String((op.input as any)?.recurrence || "none").toLowerCase();
+        if (recur !== "none") {
+          recurrenceChecked++;
+          const events = await storage.getEvents();
+          const row: any = (events || []).find((e: any) => e.id === outcome.entityId);
+          const dates = row
+            ? expandRecurrenceDates(row.date, row.recurrence, { recurrenceEnd: row.recurrenceEnd, windowStart: todayISO, windowEnd: addMonthsISO(todayISO, 13), cap: 12 })
+            : [];
+          outcome.recurrenceVerified = dates.length > 0;
+          if (dates.length > 0) recurrenceConfirmed++;
+        }
+      }
+    } catch {
+      // Best-effort: absence of proof is reported on the item line, never fatal.
+    }
+  }
+
+  const totalOk = executed.filter((o) => o.status === "ok").length;
+  const validation: MegaValidationSummary = {
+    verifiedSaves,
+    totalOk,
+    recurrenceChecked,
+    recurrenceConfirmed,
+    duplicateWarnings,
+    continueHint: ranOutOfTime,
+  };
+  const allOutcomes = [...preseededOutcomes, ...executed].sort((a, b) => a.index - b.index);
+  const reply = buildMegaReply(allOutcomes, validation, [...parsed.warnings, ...warnings]);
+  logger.info("ai", `Mega path: ${totalOk}/${allOutcomes.length} ops ok, ${recurrenceConfirmed}/${recurrenceChecked} recurrences confirmed (${Date.now() - startedAt}ms, model ${chatModel})`);
+  return { reply, actions, results, operations: allOutcomes };
 }
 
 // ============================================================
@@ -13580,6 +13858,25 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     }
   }
 
+  // ── MEGA-PLAN DISPATCH ──
+  // A giant mixed-CRUD command (dozens of operations across every dashboard
+  // section, with cross-references like "link the loan to the car") routes
+  // to the plan → dedupe → dependency-ordered execute path. Checked BEFORE
+  // the bulk path: mega messages are stuffed with the CRUD verbs that
+  // suppress bulk. Falls through to bulk/agentic on any failure.
+  if (shouldUseMegaPlanPath(userMessage)) {
+    try {
+      const mega = await runMegaPlanPath(userMessage, userId, chatModel, {
+        trackerNames: (trackers || []).map((t: any) => String(t.name)).filter(Boolean),
+        profileNames: (allProfiles || []).map((p: any) => String(p.name)).filter(Boolean),
+        habitNames: (habits || []).map((h: any) => String(h.name)).filter(Boolean),
+      }, options?.onEvent ? emitEvent : undefined);
+      if (mega) return mega;
+    } catch (err: any) {
+      logger.warn("ai", `Mega-plan path crashed (${err?.message}) — continuing with the agentic loop`);
+    }
+  }
+
   // ── BULK MULTI-ACTION DISPATCH ──
   // A long "here's my day" recap (8+ independent action clauses — soccer,
   // cannabis, shower, bathroom, chores, meds, …) routes to the two-phase
@@ -13591,7 +13888,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         trackerNames: (trackers || []).map((t: any) => String(t.name)).filter(Boolean),
         profileNames: (allProfiles || []).map((p: any) => String(p.name)).filter(Boolean),
         habitNames: (habits || []).map((h: any) => String(h.name)).filter(Boolean),
-      });
+      }, options?.onEvent ? emitEvent : undefined);
       if (bulk) return bulk;
     } catch (err: any) {
       logger.warn("ai", `Bulk path crashed (${err?.message}) — continuing with the agentic loop`);
