@@ -60,8 +60,11 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   // "Recurring" are the two kinds a task can be, and they get separate homes:
   // a to-do you do once and are finished with is not a schedule.
   const [tab, setTab] = useState<"today" | "onetime" | "recurring" | "upcoming">("today");
-  // Rich add-task composer.
-  const emptyComposer = { open: false, title: "", priority: "medium", recurrence: "", dueDate: "", dueTime: "", category: "" };
+  // Rich add-task composer. `kind` is the task's category — one-time (done once
+  // and finished) or recurring (a standing schedule). One-time is the default
+  // and the common case; picking it keeps `recurrence` empty, which is what
+  // keeps the task off the Recurring tab.
+  const emptyComposer = { open: false, title: "", kind: "onetime" as "onetime" | "recurring", priority: "medium", recurrence: "", dueDate: "", dueTime: "", category: "" };
   const [composer, setComposer] = useState(emptyComposer);
   // Reveal completed tasks (collapsed by default — no dedicated tab anymore).
   const [showCompleted, setShowCompleted] = useState(false);
@@ -422,7 +425,10 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     const title = composer.title.trim();
     if (!title) return;
     const tags: string[] = [];
-    if (composer.recurrence) tags.push(`recur:${composer.recurrence}`);
+    // A one-time task carries NO recur: tag, whatever is left sitting in the
+    // recurrence select — the kind toggle is the authority.
+    const recurrence = composer.kind === "recurring" ? composer.recurrence : "";
+    if (recurrence) tags.push(`recur:${recurrence}`);
     if (composer.priority === "critical") tags.push("prio:critical");
     if (composer.dueTime) tags.push(`time:${composer.dueTime}`);
     if (composer.category) tags.push(`cat:${composer.category}`);
@@ -430,7 +436,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       title,
       priority: composer.priority === "critical" ? "high" : composer.priority,
       tags,
-      ...(composer.dueDate ? { dueDate: composer.dueDate } : composer.recurrence ? { dueDate: todayStr } : {}),
+      ...(composer.dueDate ? { dueDate: composer.dueDate } : recurrence ? { dueDate: todayStr } : {}),
     });
     setComposer(emptyComposer);
   };
@@ -491,7 +497,13 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
               {ep === 'critical' && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-violet-500/15 text-violet-500 font-semibold">Critical</span>}
               {overdue && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 font-semibold">Overdue</span>}
               {isReminder && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400"><Bell className="h-2.5 w-2.5" />Reminder</span>}
-              {recurring && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-emerald-500/12 text-emerald-600 dark:text-emerald-400"><Repeat className="h-2.5 w-2.5" />{rule.paused ? 'Paused' : humanSummary(rule, t.dueDate)}</span>}
+              {/* The task's kind, always stated. A schedule says how often it
+                  comes back; a one-time task says it doesn't — silence used to
+                  be the only marker, which is how six one-offs sat under
+                  "Repeats daily" without looking wrong. */}
+              {recurring
+                ? <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-emerald-500/12 text-emerald-600 dark:text-emerald-400" data-testid={`task-kind-recurring-${t.id}`}><Repeat className="h-2.5 w-2.5" />{rule.paused ? 'Paused' : humanSummary(rule, t.dueDate)}</span>
+                : <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground" data-testid={`task-kind-onetime-${t.id}`}><ListTodo className="h-2.5 w-2.5" />One-time</span>}
               {t.dueDate && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><Calendar className="h-2.5 w-2.5" />{fmtDate(t.dueDate)}{dTime ? ` · ${dTime}` : ''}</span>}
               {cat && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-sky-500/12 text-sky-600 dark:text-sky-400 capitalize"><TagIcon className="h-2.5 w-2.5" />{cat}</span>}
               {metaOf(t, "remind:") && <Bell className="h-3 w-3 text-amber-500" />}
@@ -561,7 +573,37 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                 className="text-[11px] px-2 py-1 rounded-md bg-muted/50 text-muted-foreground hover:bg-muted" data-testid={`task-snooze-${q.label}`}>{q.label}</button>
             ))}
           </div>
+          {/* Task type — the same one-time/recurring choice the composer makes,
+              so a mis-filed task is two taps from the right tab. Switching to
+              One-time drops the whole rule (and its until/count bookkeeping). */}
+          <div>
+            <label className="micro-label font-semibold text-muted-foreground mb-1 block">Task type</label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {([
+                { key: "onetime", label: "One-time", icon: ListTodo },
+                { key: "recurring", label: "Recurring", icon: Repeat },
+              ] as const).map(({ key, label, icon: Icon }) => {
+                const on = key === "recurring" ? recurring : !recurring;
+                return (
+                  <button key={key} data-testid={`task-kind-${key}`}
+                    onClick={() => {
+                      if (on) return;
+                      if (key === "onetime") endSeries(t);
+                      else { const u = freqToUnit("weekly"); setRule(t, { ...rule, freq: "weekly", unit: u.unit, interval: u.interval }); }
+                    }}
+                    className={`inline-flex items-center justify-center gap-1.5 text-[11px] py-1.5 rounded-lg border transition-colors ${on ? 'bg-foreground text-background border-transparent font-semibold' : 'bg-muted/40 border-border text-muted-foreground hover:bg-muted'}`}
+                  ><Icon className="h-3 w-3" />{label}</button>
+                );
+              })}
+            </div>
+            {!recurring && (
+              <p className="text-[11px] text-muted-foreground/70 mt-1" data-testid="task-onetime-note">
+                Done once, then it's finished. It won't come back.
+              </p>
+            )}
+          </div>
           {/* Repeat preset + live preview */}
+          {recurring && (
           <div>
             <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Repeat className="h-3 w-3" />Repeat</label>
             <select value={RECUR_PRESETS.some(o => o.value === rule.freq) ? rule.freq : (rule.freq ? "__custom" : "")}
@@ -570,13 +612,12 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
               {RECUR_PRESETS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               {rule.freq && !RECUR_PRESETS.some(o => o.value === rule.freq) && <option value="__custom">Custom…</option>}
             </select>
-            {recurring && (
-              <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1.5 flex items-center gap-1" data-testid="task-recur-summary">
-                <Sparkles className="h-3 w-3" />{humanSummary(rule, t.dueDate)}
-                {nextRecurOccurrence(t.dueDate, rule) && !rule.paused && <span className="text-muted-foreground/70">· next {fmtDate(nextRecurOccurrence(t.dueDate, rule)!)}</span>}
-              </p>
-            )}
+            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1.5 flex items-center gap-1" data-testid="task-recur-summary">
+              <Sparkles className="h-3 w-3" />{humanSummary(rule, t.dueDate)}
+              {nextRecurOccurrence(t.dueDate, rule) && !rule.paused && <span className="text-muted-foreground/70">· next {fmtDate(nextRecurOccurrence(t.dueDate, rule)!)}</span>}
+            </p>
           </div>
+          )}
           {/* Recurring lifecycle controls */}
           {recurring && (
             <div className="flex flex-wrap items-center gap-1.5">
@@ -621,7 +662,10 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           </button>
           {adv && (
             <div className="space-y-3 rounded-lg bg-muted/20 p-2.5">
-              {/* Custom recurrence builder */}
+              {/* Custom recurrence builder — recurring tasks only. Touching the
+                  interval on a one-time task used to hand it a schedule from a
+                  panel that never mentions repeating. */}
+              {recurring && (
               <div>
                 <label className="micro-label font-semibold text-muted-foreground mb-1 block">Custom repeat</label>
                 <div className="flex items-center gap-1.5 text-xs">
@@ -640,7 +684,6 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                   </select>
                 </div>
                 {/* End condition */}
-                {recurring && (
                   <div className="flex items-center gap-1.5 text-xs mt-2">
                     <span className="text-muted-foreground">Ends</span>
                     <select value={rule.until ? 'until' : rule.count ? 'count' : 'never'}
@@ -653,8 +696,8 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                     {rule.until && <input type="date" value={rule.until} onChange={e => setRule(t, { ...rule, until: e.target.value })} className="flex-1 bg-background border border-border rounded-md px-2 py-1 focus:outline-none" data-testid="task-end-date" />}
                     {rule.count != null && <input type="number" min={1} value={rule.count} onChange={e => setRule(t, { ...rule, count: Math.max(1, parseInt(e.target.value) || 1) })} className="w-16 bg-background border border-border rounded-md px-2 py-1 focus:outline-none" data-testid="task-end-count" />}
                   </div>
-                )}
               </div>
+              )}
               {/* Category + Reminder */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -785,7 +828,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                 <span className="micro-label text-muted-foreground">
                   {tab === "today" ? "Today's priorities" : tab === "onetime" ? "One-time tasks" : tab === "recurring" ? "Recurring schedules" : "Upcoming"}
                 </span>
-                <button onClick={() => setComposer(c => ({ ...emptyComposer, open: !c.open, recurrence: tab === "recurring" ? "weekly" : "" }))} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors" data-testid="button-add-task"><Plus className="h-4 w-4 text-muted-foreground" /></button>
+                <button onClick={() => setComposer(c => ({ ...emptyComposer, open: !c.open, kind: tab === "recurring" ? "recurring" : "onetime", recurrence: tab === "recurring" ? "weekly" : "" }))} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors" data-testid="button-add-task"><Plus className="h-4 w-4 text-muted-foreground" /></button>
               </div>
               {/* Only tasks on a real schedule belong on the Recurring tab — say
                   where the exit is for anything that landed here by mistake. */}
@@ -810,12 +853,36 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                         style={composer.priority === p ? { backgroundColor: PLINE[p] } : undefined} data-testid={`composer-priority-${p}`}>{p}</button>
                     ))}
                   </div>
-                  {/* Repeat + Due date */}
+                  {/* Kind — the task's category. One-time is the default and
+                      leaves the recurrence select out of the way entirely, so
+                      a one-off can't pick up a schedule by accident. */}
+                  <div>
+                    <label className="micro-label font-semibold text-muted-foreground mb-1 block">Task type</label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {([
+                        { key: "onetime", label: "One-time", icon: ListTodo },
+                        { key: "recurring", label: "Recurring", icon: Repeat },
+                      ] as const).map(({ key, label, icon: Icon }) => (
+                        <button key={key} data-testid={`composer-kind-${key}`}
+                          onClick={() => setComposer(c => ({ ...c, kind: key, recurrence: key === "recurring" ? (c.recurrence || "weekly") : "" }))}
+                          className={`inline-flex items-center justify-center gap-1.5 text-[11px] py-1.5 rounded-lg border transition-colors ${composer.kind === key ? 'bg-foreground text-background border-transparent font-semibold' : 'bg-muted/40 border-border text-muted-foreground'}`}
+                        ><Icon className="h-3 w-3" />{label}</button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground/70 mt-1">
+                      {composer.kind === "onetime" ? "Do it once, then it's done — lands on the One-time tab." : "Comes back on a schedule — lands on the Recurring tab."}
+                    </p>
+                  </div>
+                  {/* Repeat (recurring only) + Due date */}
                   <div className="grid grid-cols-2 gap-2">
-                    <select value={composer.recurrence} onChange={e => setComposer(c => ({ ...c, recurrence: e.target.value }))}
-                      className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="composer-recurrence">
-                      {RECUR_PRESETS.map(o => <option key={o.value} value={o.value}>{o.value ? `🔁 ${o.label}` : 'No repeat'}</option>)}
-                    </select>
+                    {composer.kind === "recurring" ? (
+                      <select value={composer.recurrence} onChange={e => setComposer(c => ({ ...c, recurrence: e.target.value }))}
+                        className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="composer-recurrence">
+                        {RECUR_PRESETS.filter(o => o.value).map(o => <option key={o.value} value={o.value}>{`🔁 ${o.label}`}</option>)}
+                      </select>
+                    ) : (
+                      <div className="text-xs text-muted-foreground/60 border border-dashed border-border rounded-lg px-2 py-1.5" data-testid="composer-no-repeat">No repeat</div>
+                    )}
                     <input type="date" value={composer.dueDate} onChange={e => setComposer(c => ({ ...c, dueDate: e.target.value }))}
                       className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="composer-due" />
                   </div>
@@ -828,7 +895,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                       {CATEGORY_OPTS.map(c => <option key={c} value={c}>{c || 'No category'}</option>)}
                     </select>
                   </div>
-                  {composer.recurrence && (
+                  {composer.kind === "recurring" && composer.recurrence && (
                     <p className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                       <Sparkles className="h-3 w-3" />{humanSummary(parseRecurrence([`recur:${composer.recurrence}`]), composer.dueDate || todayStr)}
                     </p>

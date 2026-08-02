@@ -112,7 +112,8 @@ async function renderTasksPopup() {
       <TasksPopup open onClose={() => {}} />
     </QueryClientProvider>,
   );
-  await waitFor(() => expect(screen.getByTestId("task-tab-onetime")).toBeTruthy());
+  // Wait for the fetch to land — the tab strip paints before the list does.
+  await waitFor(() => expect(screen.getByTestId("task-tab-onetime").textContent).toContain("(5)"));
 }
 
 afterEach(() => { cleanup(); apiRequest.mockReset(); });
@@ -150,5 +151,58 @@ describe("TasksPopup — One-time vs Recurring", () => {
     }
     // …and the Recurring tab says how to move a mis-filed task out.
     expect(screen.getByTestId("recurring-tab-hint").textContent).toContain("End repeat");
+  });
+
+  it("labels every card with its kind, so a one-off never reads as a schedule", async () => {
+    await renderTasksPopup();
+    await waitFor(() => expect(screen.getByTestId("task-card-t3")).toBeTruthy());
+    // The one-off says so out loud instead of being marked by the absence of a chip.
+    expect(screen.getByTestId("task-kind-onetime-t3").textContent).toContain("One-time");
+    expect(screen.queryByTestId("task-kind-recurring-t3")).toBeNull();
+    // The real schedule keeps its cadence chip.
+    expect(screen.getByTestId("task-kind-recurring-t6").textContent).toContain("Repeats weekly");
+    expect(screen.queryByTestId("task-kind-onetime-t6")).toBeNull();
+  });
+
+  it("the composer asks for the task type and defaults to one-time", async () => {
+    await renderTasksPopup();
+    fireEvent.click(screen.getByTestId("button-add-task"));
+    await waitFor(() => expect(screen.getByTestId("task-composer")).toBeTruthy());
+
+    // One-time is preselected and the cadence picker is out of the way.
+    expect(screen.getByTestId("composer-kind-onetime").className).toContain("bg-foreground");
+    expect(screen.getByTestId("composer-no-repeat")).toBeTruthy();
+    expect(screen.queryByTestId("composer-recurrence")).toBeNull();
+
+    // Choosing Recurring reveals the cadence picker…
+    fireEvent.click(screen.getByTestId("composer-kind-recurring"));
+    await waitFor(() => expect(screen.getByTestId("composer-recurrence")).toBeTruthy());
+    // …and going back to One-time takes it away again.
+    fireEvent.click(screen.getByTestId("composer-kind-onetime"));
+    await waitFor(() => expect(screen.queryByTestId("composer-recurrence")).toBeNull());
+
+    fireEvent.change(screen.getByTestId("composer-title"), { target: { value: "Ship the return" } });
+    fireEvent.click(screen.getByTestId("composer-add"));
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith("POST", "/api/tasks", expect.anything()));
+    const [, , body] = apiRequest.mock.calls.find((c: any[]) => c[0] === "POST")!;
+    expect(body.title).toBe("Ship the return");
+    // No recur: tag — that is what keeps it off the Recurring tab.
+    expect(body.tags).toEqual([]);
+    expect(body.dueDate).toBeUndefined();
+  });
+
+  it("a task's type can be switched from its detail panel", async () => {
+    await renderTasksPopup();
+    fireEvent.click(screen.getByTestId("task-tab-recurring"));
+    await waitFor(() => expect(screen.getByTestId("task-card-t6")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("task-row-t6"));
+    await waitFor(() => expect(screen.getByTestId("task-detail-t6")).toBeTruthy());
+
+    // Recurring is the live state; the cadence controls are present.
+    expect(screen.getByTestId("task-recurrence")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("task-kind-onetime"));
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith("PATCH", "/api/tasks/t6", expect.anything()));
+    const [, , patch] = apiRequest.mock.calls.find((c: any[]) => c[0] === "PATCH")!;
+    expect(patch.tags).toEqual([]); // recur:weekly stripped — now a one-time task
   });
 });
