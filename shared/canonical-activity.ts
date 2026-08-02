@@ -9,6 +9,8 @@
 //
 // Pinned by tests/canonical-activity.test.ts.
 
+import { trackerIdentityKey } from "./tracker-identity";
+
 export interface CanonicalActivity {
   /** Machine type, e.g. "walking". */
   type: "walking" | "running" | "hydration" | "sleep" | "cycling" | "swimming";
@@ -33,6 +35,45 @@ const DOMAIN_BLOCKERS: Partial<Record<CanonicalActivity["type"], RegExp>> = {
   walking: /\b(dog|pet|puppy)\b/i, // "Dog Walking" is pet care, not the user's steps
   running: /\b(errand|errands|business)\b/i,
 };
+
+// ── Workout-vs-body-weight guard ─────────────────────────────────────────────
+// User report 2026-08-02: Weighted Pull-Ups sets were logged INTO the
+// body-weight "Weight" tracker (partial-word name matching, since fixed in
+// shared/tracker-identity). This guard is the belt to that suspender: a
+// workout-shaped entry (sets/reps/exercise/activityType) aimed at a
+// body-weight tracker is ALWAYS a misfile regardless of how the name matcher
+// behaves, so redirect it to the exercise's own tracker before resolution.
+
+const BODY_WEIGHT_KEYS = new Set(["weight", "bodyweight", "bodyweigh", "myweight"]);
+
+export type WorkoutRedirect =
+  | { kind: "redirect"; trackerName: string }
+  | { kind: "needs_exercise" };
+
+/**
+ * Detect a strength/workout-shaped entry aimed at a body-weight tracker.
+ * Returns the exercise's own tracker name to log to instead, a request for
+ * the exercise name when the entry names none, or null when the log is a
+ * genuine body-weight reading (or isn't aimed at a weight tracker at all).
+ */
+export function redirectWorkoutLog(
+  trackerName: string | null | undefined,
+  values: Record<string, unknown> | null | undefined,
+): WorkoutRedirect | null {
+  const key = trackerIdentityKey(trackerName);
+  if (!BODY_WEIGHT_KEYS.has(key)) return null;
+  const v = values || {};
+  const workoutShaped =
+    v.sets != null || v.reps != null ||
+    (typeof v.exercise === "string" && v.exercise.trim() !== "") ||
+    (typeof v.activityType === "string" && v.activityType.trim() !== "");
+  if (!workoutShaped) return null;
+  const subject = [v.exercise, v.activityType].find(
+    (s): s is string => typeof s === "string" && s.trim() !== "",
+  );
+  if (subject) return { kind: "redirect", trackerName: subject.trim() };
+  return { kind: "needs_exercise" };
+}
 
 /**
  * Resolve a tracker name / activity phrase to its canonical tracker.

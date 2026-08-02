@@ -36,7 +36,7 @@ import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
-import { resolveCanonicalActivity } from "@shared/canonical-activity";
+import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import {
@@ -3068,7 +3068,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
     input_schema: {
       type: "object" as const,
       properties: {
-        trackerName: { type: "string", description: "Name of the tracker — MUST be the specific activity: 'Basketball' for basketball, 'Tennis' for tennis, 'Running' for running, 'Soccer' for soccer, 'Swimming' for swimming, 'Yoga' for yoga. Never use 'Running' for a non-running sport." },
+        trackerName: { type: "string", description: "Name of the tracker — MUST be the specific activity: 'Basketball' for basketball, 'Tennis' for tennis, 'Running' for running, 'Soccer' for soccer, 'Swimming' for swimming, 'Yoga' for yoga. Never use 'Running' for a non-running sport. Strength/workout logs use the EXERCISE's exact name ('Weighted Pull-Ups', 'Bench Press', 'Face Pulls') — each exercise is its own tracker. NEVER 'Weight': that tracker holds body-weight weigh-ins ONLY, and a name merely CONTAINING 'weight' ('Weighted Pull-Ups') is an exercise, not a weigh-in." },
         values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. OTHER SPORTS/ACTIVITIES: ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
@@ -4966,6 +4966,7 @@ How to decide:
 
 WEIGHT / MEASURABLE READING RULE — CRITICAL:
 When the user states a numeric measurement about a person OR pet ("Rex weighs 51 pounds", "Bob's BP is 130/85", "Max slept 8 hours", "I weighed 184 today"), this is a TRACKER ENTRY, not a profile field.
+- THE "Weight" TRACKER IS BODY-WEIGHT WEIGH-INS ONLY ("I weighed 184.2"). A workout is NEVER a weight entry, even when its name contains the word "weight": "Weighted Pull-Ups", "weighted vest walk", "weight training" are EXERCISES — log them to a tracker named exactly after the exercise ("Weighted Pull-Ups"), which auto-creates if new. Every distinct exercise gets its OWN tracker (like medications do): "Weighted Pull-Ups", "Face Pulls", and "Bench Press" are three trackers, never bucketed into "Weight", "Workouts", or each other. If sets/reps/exercise values are heading at a "Weight" tracker, you've mis-picked the tracker — use the exercise's name. (Real incident: pull-up sets logged into the user's body-weight history.)
 - ALWAYS call log_tracker_entry(trackerName:"Weight" (or appropriate metric), values:{weight:51}, forProfile:"Rex").
 - NEVER write the value into profile.fields via update_profile — profile fields are static identity (breed, microchip, species). Weight and other measurements change over time and belong in trackers.
 - The Tracker context block lists all existing trackers per profile. Scan it FIRST. If a Weight tracker already exists for the named person/pet, log to it. If none exists, log_tracker_entry will auto-create one — do not bail to update_profile.
@@ -7149,6 +7150,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (!rawHasTracker || canonHasTracker) {
           logger.info("ai", `Canonical activity: "${input.trackerName}" → "${canonActivity.trackerName}"`);
           input.trackerName = canonActivity.trackerName;
+        }
+      }
+
+      // WORKOUT-VS-BODY-WEIGHT GUARD (2026-08-02 report: Weighted Pull-Ups
+      // sets filed into the body-weight tracker): a sets/reps/exercise-shaped
+      // entry aimed at "Weight" is ALWAYS a misfile — the Weight tracker holds
+      // body-weight readings only. Redirect to the exercise's own tracker
+      // (which then resolves or auto-creates normally); if the entry names no
+      // exercise, refuse with a question instead of corrupting the history.
+      {
+        const redirect = redirectWorkoutLog(input.trackerName, input.values);
+        if (redirect?.kind === "redirect") {
+          logger.info("ai", `Workout guard: "${input.trackerName}" + workout-shaped values → logging to "${redirect.trackerName}" instead (body-weight trackers hold weigh-ins only)`);
+          input.trackerName = redirect.trackerName;
+        } else if (redirect?.kind === "needs_exercise") {
+          return {
+            error: `This looks like a workout (sets/reps), but "${input.trackerName}" is the body-weight tracker and the entry doesn't name the exercise. Re-log with trackerName set to the exercise itself (e.g. "Weighted Pull-Ups", "Bench Press") — each exercise gets its own tracker.`,
+            code: "WORKOUT_IN_WEIGHT_TRACKER",
+          };
         }
       }
       const trackerName = (input.trackerName || "").toLowerCase();
