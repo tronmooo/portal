@@ -100,8 +100,15 @@ export function deriveScheduleFields(
   let count: number | null = null;
   if (fam === "one_time") count = 1;
   else if (fam === "amortizing") {
-    const rt = parseInt(String(f.remainingTermMonths ?? f.termMonths ?? ""), 10);
-    if (rt > 0) count = rt;
+    // generateSchedule counts occurrences from the ANCHOR, and the anchor is
+    // the loan's ORIGINAL first payment — so the bound is the contract term.
+    // Using remainingTermMonths here truncated the series by however many
+    // payments had already been made: a 72-month loan opened in Mar 2025 ended
+    // its schedule in 2029 instead of 2031.
+    const total = parseInt(String(f.termMonths ?? ""), 10);
+    const rt = parseInt(String(f.remainingTermMonths ?? ""), 10);
+    if (total > 0) count = total;
+    else if (rt > 0) count = rt;
     else {
       const bal = Number(f.currentBalance ?? f.originalBalance ?? 0);
       if (amount > 0 && bal > 0) count = Math.min(600, Math.ceil(bal / amount));

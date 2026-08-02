@@ -65,3 +65,51 @@ export function isAmortizable(typeKey?: string | null): boolean {
 export function isRecurringBill(typeKey?: string | null): boolean {
   return liabilityFamily(typeKey) === "recurring";
 }
+
+/**
+ * True when a profile row is REAL DEBT — an explicit debt subtype, or a
+ * liability carrying loan terms (a balance owed, an APR, an original amount).
+ *
+ * The guard that keeps a loan a loan. Creating a recurring bill upserts by
+ * normalized name, and that normalization drops a trailing "payment" — so the
+ * calendar entry for a loan ("… Auto Loan payment") resolves to the loan
+ * itself. Without this check that upsert rewrote the row's type_key to "bill",
+ * which moved it into the recurring family: the detail page swapped the loan
+ * layout for the bill layout (principal, original amount, APR, term and the
+ * amortization schedule all disappeared) and net worth stopped counting the
+ * balance. The terms were still in the row the whole time — nothing could read
+ * them. Callers use this to patch such a row's schedule WITHOUT touching its
+ * subtype or its terms.
+ *
+ * Fields are inspected as well as the subtype because a debt created before
+ * subtypes existed (or one the AI left as a generic "liability") is still debt.
+ */
+export function isDebtLiability(profile: {
+  type?: string | null;
+  type_key?: string | null;
+  typeKey?: string | null;
+  fields?: Record<string, any> | null;
+} | null | undefined): boolean {
+  if (!profile) return false;
+  const type = String(profile.type || "").toLowerCase();
+  if (type && type !== "liability" && type !== "loan") return false;
+  const key = String(profile.type_key ?? profile.typeKey ?? "").toLowerCase();
+  // An explicit recurring subtype is a bill, full stop — a $20 streaming plan
+  // with a stray "balance" must not be promoted into a loan.
+  if (RECURRING.has(key)) return false;
+  // Any other subtype the registry knows (mortgage, credit_card, medical_debt…)
+  // is debt by definition. Note liabilityFamily() answers "one_time" for keys
+  // it does NOT know, so an unknown key has to fall through to the fields.
+  if (AMORTIZING.has(key) || REVOLVING.has(key) || ONE_TIME.has(key)) return true;
+  const f = profile.fields || {};
+  const num = (v: any) => {
+    const n = typeof v === "string" ? parseFloat(v.replace(/[^0-9.\-]/g, "")) : Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  return (
+    num(f.currentBalance ?? f.current_balance) > 0 ||
+    num(f.originalBalance ?? f.original_balance ?? f.originalAmount ?? f.principal) > 0 ||
+    num(f.annualInterestRate ?? f.annual_interest_rate ?? f.interestRate ?? f.apr) > 0 ||
+    num(f.creditLimit ?? f.credit_limit) > 0
+  );
+}

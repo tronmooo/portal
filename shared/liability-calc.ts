@@ -5,6 +5,8 @@
  * Shared between client and server so both compute identical numbers.
  */
 
+import { addMonthsISO } from "./date-math";
+
 export interface LiabilityTerms {
   /** Remaining principal balance today. Required. */
   currentBalance: number;
@@ -18,6 +20,9 @@ export interface LiabilityTerms {
   extraPerPeriod?: number;
   /** Optional: ISO date string of the first scheduled payment. Defaults to today. */
   firstPaymentDate?: string;
+  /** Optional: day-of-month the series is pinned to. 31 = last day of month.
+   *  Defaults to the first payment date's own day. */
+  dueDay?: number;
 }
 
 export interface AmortizationRow {
@@ -78,10 +83,18 @@ export function computeAmortizedPayment(balance: number, annualRate: number, mon
   return (balance * r) / (1 - Math.pow(1 + r, -months));
 }
 
-function addMonthsIso(iso: string, n: number): string {
-  const d = new Date(iso + "T00:00:00Z");
-  d.setUTCMonth(d.getUTCMonth() + n);
-  return d.toISOString().slice(0, 10);
+/**
+ * Step the schedule `n` months off the first payment date.
+ *
+ * Delegates to the canonical clamping helper: `setUTCMonth` OVERFLOWS, so a
+ * loan whose payment falls on the last day of the month walked Mar 31 → May 1
+ * (April has no 31st) and every later row inherited the drift. Anchoring on the
+ * first payment's day-of-month keeps the series on the 31st and clamps only the
+ * short months — Mar 31, Apr 30, May 31 — which is what "due the last day of
+ * every month" means.
+ */
+function addMonthsIso(iso: string, n: number, anchorDay?: number): string {
+  return addMonthsISO(iso, n, anchorDay);
 }
 
 /** Build a complete amortization schedule for the given terms. */
@@ -94,6 +107,12 @@ export function buildAmortization(terms: LiabilityTerms): AmortizationResult {
     terms.firstPaymentDate && /^\d{4}-\d{2}-\d{2}$/.test(terms.firstPaymentDate)
       ? terms.firstPaymentDate
       : new Date().toISOString().slice(0, 10);
+  // The day-of-month the whole series is pinned to. Every row is indexed off
+  // firstDate with this anchor, so a clamped short month (Apr 30) does not drag
+  // the following months off the 31st.
+  const anchorDay = terms.dueDay && terms.dueDay >= 1 && terms.dueDay <= 31
+    ? Math.round(terms.dueDay)
+    : parseInt(firstDate.slice(8, 10), 10);
 
   let payment = Number(terms.monthlyPayment) || 0;
   if (!payment || payment <= 0) {
@@ -128,7 +147,7 @@ export function buildAmortization(terms: LiabilityTerms): AmortizationResult {
 
     rows.push({
       paymentNumber: i,
-      dueDate: addMonthsIso(firstDate, i - 1),
+      dueDate: addMonthsIso(firstDate, i - 1, anchorDay),
       payment: principal + interest + extraApplied,
       principal,
       interest,
@@ -212,6 +231,7 @@ export function summarizeLiability(params: {
   remainingTermMonths?: number;
   extraPerPeriod?: number;
   firstPaymentDate?: string;
+  dueDay?: number;
 }): LiabilitySummary {
   const amo = buildAmortization({
     currentBalance: params.currentBalance,
@@ -220,6 +240,7 @@ export function summarizeLiability(params: {
     remainingTermMonths: params.remainingTermMonths,
     extraPerPeriod: params.extraPerPeriod,
     firstPaymentDate: params.firstPaymentDate,
+    dueDay: params.dueDay,
   });
   const orig = Number(params.originalBalance) || 0;
   const progress = orig > 0 ? Math.max(0, Math.min(100, (1 - params.currentBalance / orig) * 100)) : 0;

@@ -62,7 +62,7 @@ import {
   LIABILITY_PROFILE_TYPES,
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
-import { isRecurringBill } from "../shared/liability-types";
+import { isRecurringBill, isDebtLiability } from "../shared/liability-types";
 import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-ownership";
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
@@ -4556,9 +4556,25 @@ export class SupabaseStorage implements IStorage {
     return "bill";
   }
 
+  /** The subset of a bill payload that describes WHEN a payment happens, with
+   *  nothing that describes WHAT the liability is. Applied to a real debt so
+   *  its calendar entry lands without overwriting its loan terms — notably
+   *  `amount`/`monthlyAmount`, which readTerms falls back to for the balance. */
+  private scheduleFieldsOnly(billFields: Record<string, any>): Record<string, any> {
+    const KEEP = [
+      "frequency", "billingFrequency", "dueDate", "nextDueDate",
+      "autopay", "count", "reminderLeadDays", "recurrenceEnd",
+    ];
+    const out: Record<string, any> = {};
+    for (const k of KEEP) if (billFields[k] !== undefined) out[k] = billFields[k];
+    return out;
+  }
+
   private liabilityToObligation(p: Profile, payments: ObligationPayment[] = []): Obligation {
     const f: any = p.fields || {};
-    const amount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? f.balance ?? 0) || 0;
+    // monthlyPayment sits ahead of cost/balance so a DEBT projected through
+    // here reports its installment, not the whole outstanding principal.
+    const amount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.monthlyPayment ?? f.cost ?? f.balance ?? 0) || 0;
     const frequency = String(f.frequency ?? f.billingFrequency ?? "monthly");
     const nextDueDate = String(
       f.dueDate ?? f.due_date ?? f.nextDueDate ?? f.next_due_date ?? f.renewalDate ?? "",
@@ -4682,16 +4698,31 @@ export class SupabaseStorage implements IStorage {
     // it instead of inserting a duplicate.
     const existing = await this.resolveExistingLiability(rawName, parent);
     if (existing) {
+      // …but NEVER demote real debt. normLiabilityName strips a trailing
+      // "payment", so the calendar entry for a loan ("Dodge Ram 2025 Auto Loan
+      // payment") resolves to the LOAN itself. Rewriting that row's type_key to
+      // "bill" flipped it into the recurring family, which hid every loan term
+      // behind the bill layout (no principal, no APR, no amortization) and
+      // dropped the balance out of net worth. The debt keeps its subtype and
+      // its terms; the bill payload only contributes the schedule fields.
+      const debt = isDebtLiability(existing);
+      const patch = debt ? this.scheduleFieldsOnly(billFields) : billFields;
       await this.updateProfile(existing.id, {
-        name: rawName,
+        name: debt ? existing.name : rawName,
         type: "liability",
-        type_key: typeKey,
-        fields: { ...(existing.fields || {}), ...billFields },
+        ...(debt ? {} : { type_key: typeKey }),
+        fields: { ...(existing.fields || {}), ...patch },
       } as any);
       // The upsert path skips createProfile, so ensure the owner link exists
       // (an existing shell may never have gotten one).
       await this.ensureAutoOwnerLink(existing.id, "liability", (existing as any).parentProfileId ?? parent ?? null);
-      this.logActivity("obligation", `Updated bill: ${rawName}`);
+      this.logActivity("obligation", debt ? `Scheduled payment: ${existing.name}` : `Updated bill: ${rawName}`);
+      // getObligation only speaks recurring-bill; a debt row is projected
+      // directly so callers still get the obligation view of its payment.
+      if (debt) {
+        const fresh = (await this.getProfile(existing.id)) || existing;
+        return this.liabilityToObligation(fresh, []);
+      }
       return (await this.getObligation(existing.id))!;
     }
 

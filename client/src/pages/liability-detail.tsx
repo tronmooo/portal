@@ -111,6 +111,7 @@ import {
   type AmortizationRow,
 } from "@shared/liability-calc";
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
+import { deriveLoanTerms } from "@shared/loan-terms";
 import { liabilityBillStatus, BILL_STATUS_META } from "@shared/liability-status";
 
 interface LiabilityProfileLike {
@@ -255,37 +256,55 @@ function readTerms(profile: LiabilityProfileLike) {
     const m = String(raw).match(/(\d+)/);
     return m ? parseInt(m[1], 10) : 0;
   };
-  const remainingTermMonthsRaw =
+  // TWO DIFFERENT NUMBERS, kept apart. `termMonths` is what the contract says
+  // (72 on a 72-month auto loan); `remainingTermMonths` is how many payments
+  // are left today. Reading them from one blended list printed the contract
+  // term under a "remaining" label and vice versa, depending on which key the
+  // record happened to carry.
+  const termMonthsRaw =
     pick(
-      f.remainingTermMonths, f.remaining_term_months,
-      f.loanTermMonths, f.loan_term_months,
       f.termMonths, f.term_months,
+      f.loanTermMonths, f.loan_term_months,
+      f.originalTermMonths, f.original_term_months,
       finance.termMonths, finance.term_months,
       loan.termMonths, loan.term_months,
     ) ||
     parseTermNumber(f.term) ||
     parseTermNumber(finance.term) ||
     parseTermNumber(loan.term);
+  const termMonths = termMonthsRaw > 0 ? termMonthsRaw : undefined;
+  const remainingTermMonthsRaw =
+    pick(f.remainingTermMonths, f.remaining_term_months) || termMonthsRaw;
   const remainingTermMonths = remainingTermMonthsRaw > 0 ? remainingTermMonthsRaw : undefined;
-  const rawDate =
-    f.firstPaymentDate ??
-    f.first_payment_date ??
-    f.loanStartDate ??
-    f.loan_start_date ??
-    f.startDate ??
-    f.start_date ??
-    finance.startDate ??
-    finance.start_date ??
-    loan.startDate ??
-    loan.start_date ??
-    undefined;
   // Reject obviously broken date strings (e.g. accidental year 12024 from a
   // browser date input fat-finger). Year must be 1900–2100.
-  let firstPaymentDate: string | undefined = undefined;
-  if (typeof rawDate === "string" && /^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
-    const yr = parseInt(rawDate.slice(0, 4), 10);
-    if (yr >= 1900 && yr <= 2100) firstPaymentDate = rawDate.slice(0, 10);
-  }
+  const readDate = (...vals: any[]): string | undefined => {
+    for (const v of vals) {
+      if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(v)) continue;
+      const yr = parseInt(v.slice(0, 4), 10);
+      if (yr >= 1900 && yr <= 2100) return v.slice(0, 10);
+    }
+    return undefined;
+  };
+  const loanStartDate = readDate(
+    f.loanStartDate, f.loan_start_date,
+    f.startDate, f.start_date,
+    f.originationDate, f.origination_date,
+    finance.startDate, finance.start_date,
+    loan.startDate, loan.start_date,
+  );
+  const firstPaymentDate = readDate(
+    f.firstPaymentDate, f.first_payment_date,
+  ) || loanStartDate;
+  const payoffDate = readDate(
+    f.payoffDate, f.payoff_date,
+    f.maturityDate, f.maturity_date,
+    f.endDate, f.end_date,
+    f.recurrenceEnd,
+  );
+  const nextDueDate = readDate(
+    f.nextDueDate, f.next_due_date, f.dueDate, f.due_date,
+  );
   const lender = (f.lender || f.creditor || f.servicer || "").toString();
   const accountNumberLast4 = (
     f.accountNumberLast4 ||
@@ -348,8 +367,16 @@ function readTerms(profile: LiabilityProfileLike) {
     originalBalance,
     annualRate,
     monthlyPayment,
+    termMonths,
     remainingTermMonths,
+    loanStartDate,
     firstPaymentDate,
+    payoffDate,
+    nextDueDate,
+    // Where the REMAINING schedule starts. currentBalance is today's balance,
+    // so projecting it from a first payment date years in the past would date
+    // every row in the past too. The next payment is the honest origin.
+    scheduleStartDate: nextDueDate || firstPaymentDate,
     lender,
     accountNumberLast4,
     dueDay,
@@ -460,7 +487,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const [tTerm, setTTerm] = useState("");
   const [tMonthly, setTMonthly] = useState("");
   const [tDueDay, setTDueDay] = useState("");
+  const [tStart, setTStart] = useState("");
   const [tFirstPayment, setTFirstPayment] = useState("");
+  const [tPayoff, setTPayoff] = useState("");
   const [tLender, setTLender] = useState("");
   const saveTermsMutation = useMutation({
     mutationFn: async () => {
@@ -474,14 +503,20 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         const r = num(tRate);
         if (r != null) fields.annualInterestRate = r > 1 ? r / 100 : r;
       }
-      if (tTerm !== "") fields.remainingTermMonths = num(tTerm);
       if (tMonthly !== "") fields.monthlyPayment = num(tMonthly);
-      if (tDueDay !== "") {
-        const d = num(tDueDay);
-        if (d != null && d >= 1 && d <= 31) fields.dueDay = d;
-      }
-      if (tFirstPayment !== "") fields.firstPaymentDate = tFirstPayment;
       if (tLender !== "") fields.lender = tLender;
+      // Term + dates go through the SAME derivation the AI path uses, so a loan
+      // edited by hand and a loan created from chat end up with an identical
+      // field set — payoff date, next due date and remaining term all agreeing
+      // with the term and start date that produced them.
+      const derived = deriveLoanTerms({
+        termMonths: tTerm === "" ? undefined : num(tTerm),
+        loanStartDate: tStart || undefined,
+        firstPaymentDate: tFirstPayment || undefined,
+        payoffDate: tPayoff || undefined,
+        dueDay: tDueDay === "" ? undefined : num(tDueDay),
+      }, new Date().toLocaleDateString("en-CA"));
+      Object.assign(fields, derived);
       await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
     },
     onSuccess: () => {
@@ -494,12 +529,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const openTermsEditor = () => {
     setTBalance(terms.currentBalance ? String(terms.currentBalance) : "");
     setTOriginal(terms.originalBalance ? String(terms.originalBalance) : "");
-    // annualRate from terms is a percent (e.g. 6 not 0.06) per liability page convention
-    setTRate(terms.annualRate ? String(terms.annualRate) : "");
-    setTTerm(terms.remainingTermMonths ? String(terms.remainingTermMonths) : "");
+    // terms.annualRate is a DECIMAL (0.0649); the input is labelled "%", so it
+    // shows 6.49. Saving accepts either form.
+    setTRate(terms.annualRate ? String(Math.round(terms.annualRate * 1e6) / 1e4) : "");
+    setTTerm(terms.termMonths ? String(terms.termMonths) : "");
     setTMonthly(terms.monthlyPayment ? String(terms.monthlyPayment) : "");
     setTDueDay(terms.dueDay ? String(terms.dueDay) : "");
+    setTStart(terms.loanStartDate || "");
     setTFirstPayment(terms.firstPaymentDate || "");
+    setTPayoff(terms.payoffDate || "");
     setTLender(terms.lender || "");
     setEditingTerms(true);
   };
@@ -743,7 +781,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         monthlyPayment: terms.monthlyPayment || undefined,
         annualRate: terms.annualRate,
         remainingTermMonths: terms.remainingTermMonths,
-        firstPaymentDate: terms.firstPaymentDate,
+        firstPaymentDate: terms.scheduleStartDate,
+        dueDay: terms.dueDay,
       }),
     [terms],
   );
@@ -755,7 +794,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         annualInterestRate: terms.annualRate,
         monthlyPayment: terms.monthlyPayment || undefined,
         remainingTermMonths: terms.remainingTermMonths,
-        firstPaymentDate: terms.firstPaymentDate,
+        firstPaymentDate: terms.scheduleStartDate,
+        dueDay: terms.dueDay,
       }),
     [terms],
   );
@@ -1281,20 +1321,29 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                       <Input type="number" inputMode="decimal" step="0.01" value={tMonthly} onChange={(e) => setTMonthly(e.target.value)} placeholder="e.g. 1000" data-testid="input-terms-monthly" />
                     </div>
                     <div>
-                      <Label className="text-xs">Remaining term (months)</Label>
-                      <Input type="number" inputMode="numeric" value={tTerm} onChange={(e) => setTTerm(e.target.value)} placeholder="e.g. 60" data-testid="input-terms-term" />
+                      <Label className="text-xs">Loan term (months)</Label>
+                      <Input type="number" inputMode="numeric" value={tTerm} onChange={(e) => setTTerm(e.target.value)} placeholder="e.g. 72" data-testid="input-terms-term" />
                     </div>
                     <div>
                       <Label className="text-xs">Due day of month (1–31)</Label>
-                      <Input type="number" inputMode="numeric" min={1} max={31} value={tDueDay} onChange={(e) => setTDueDay(e.target.value)} placeholder="e.g. 15" data-testid="input-terms-due-day" />
+                      <Input type="number" inputMode="numeric" min={1} max={31} value={tDueDay} onChange={(e) => setTDueDay(e.target.value)} placeholder="31 = last day" data-testid="input-terms-due-day" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Loan start date</Label>
+                      <Input type="date" value={tStart} onChange={(e) => setTStart(e.target.value)} data-testid="input-terms-start" />
                     </div>
                     <div>
                       <Label className="text-xs">First payment date</Label>
                       <Input type="date" value={tFirstPayment} onChange={(e) => setTFirstPayment(e.target.value)} data-testid="input-terms-first-payment" />
                     </div>
+                    <div>
+                      <Label className="text-xs">Payoff date</Label>
+                      <Input type="date" value={tPayoff} onChange={(e) => setTPayoff(e.target.value)} placeholder="derived from term" data-testid="input-terms-payoff" />
+                    </div>
                   </div>
                   <p className="text-[11px] text-muted-foreground">
-                    Setting a monthly payment and due day creates a recurring bill that lands on your calendar each month.
+                    Leave the payoff date blank to derive it from the term and start date. Due day 31 means the last day of
+                    each month — it clamps to the 30th or the 28th where the month is shorter.
                   </p>
                   <div className="flex items-center gap-2">
                     <Button
@@ -1323,9 +1372,13 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   <Row label="Subtype" value={subtypeLabel} />
                   <Row label="Lender / creditor" value={terms.lender || "—"} />
                   <Row label="Account ····" value={terms.accountNumberLast4 || "—"} />
-                  <Row label="Original balance" value={terms.originalBalance ? fmtUSD(terms.originalBalance) : "—"} />
+                  <Row label="Original loan amount" value={terms.originalBalance ? fmtUSD(terms.originalBalance) : "—"} />
                   <Row label="Current balance" value={fmtUSD(terms.currentBalance)} />
-                  <Row label="Annual interest rate" value={fmtPct(terms.annualRate)} />
+                  <Row label="Principal paid" value={
+                    terms.originalBalance > terms.currentBalance
+                      ? fmtUSD(terms.originalBalance - terms.currentBalance)
+                      : "—"} />
+                  <Row label="Annual interest rate (APR)" value={fmtPct(terms.annualRate)} />
                   <Row label="Monthly payment" value={fmtUSD(terms.monthlyPayment || summary.monthlyPayment)} />
                   {/* BUG-L01: split the single "Remaining term" row into two
                       labelled values so the user can tell which is the contract
@@ -1333,12 +1386,22 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                       old single row showed "50 mo" while the header KPI showed
                       "58 mo" with no explanation. */}
                   <Row label="Original term (contract)"
+                    value={terms.termMonths ? `${terms.termMonths} mo` : "—"} />
+                  <Row label="Term remaining"
                     value={terms.remainingTermMonths ? `${terms.remainingTermMonths} mo` : "—"} />
                   <Row label="Projected payoff (calculated)"
                     value={summary.remainingMonths ? `${summary.remainingMonths} mo` : "—"} />
+                  <Row label="Loan start date" value={fmtDate(terms.loanStartDate)} />
                   <Row label="First payment date" value={fmtDate(terms.firstPaymentDate)} />
+                  {/* The payoff date the user was quoted, alongside the one the
+                      balance and payment actually imply — they diverge as soon
+                      as a payment is early, late, or extra. */}
+                  <Row label="Payoff date (contract)" value={fmtDate(terms.payoffDate)} />
+                  <Row label="Payoff date (projected)"
+                    value={summary.remainingMonths > 0 ? fmtDate(summary.payoffDate) : "—"} />
+                  <Row label="Next payment due" value={fmtDate(terms.nextDueDate)} />
                   <Row label="Due day of month"
-                    value={terms.dueDay ? `Day ${terms.dueDay}` : "—"} />
+                    value={terms.dueDay ? (terms.dueDay === 31 ? "Last day of month" : `Day ${terms.dueDay}`) : "—"} />
                 </CardContent>
               </Card>
             )}

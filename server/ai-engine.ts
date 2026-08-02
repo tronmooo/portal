@@ -58,6 +58,8 @@ import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime } from "@shared/timezone";
 import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { addMonthsClamped, addYearsClamped, addMonthsISO } from "@shared/date-math";
+import { deriveLoanTerms } from "@shared/loan-terms";
+import { liabilityFamily, isRecurringBill } from "@shared/liability-types";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
@@ -3241,9 +3243,13 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         monthlyPayment: { type: "number", description: "Required monthly payment amount." },
         minimumPayment: { type: "number", description: "Minimum payment due (credit_card / bnpl). Often the floor before late fees kick in." },
         creditLimit: { type: "number", description: "Credit limit (credit_card / heloc only). Used to compute utilization on the Overview tab." },
-        remainingTermMonths: { type: "number", description: "Months remaining on a fixed-term loan. Omit for revolving (credit_card)." },
-        firstPaymentDate: { type: "string", description: "YYYY-MM-DD of the first scheduled payment." },
-        dueDay: { type: "number", description: "Day-of-month the payment is due (1-31). Drives auto-generated calendar reminders." },
+        termMonths: { type: "number", description: "TOTAL contract term in months, as written on the loan — 72 for a 72-month auto loan, 360 for a 30-year mortgage. This is the ORIGINAL term, not what is left; pass it whenever the user states a term ('72-month term', '5-year loan', '30-year fixed'). The server derives remainingTermMonths from it and the start date." },
+        remainingTermMonths: { type: "number", description: "Months REMAINING on a fixed-term loan, when the user states that specifically ('48 payments left'). If they gave the total contract term instead, use termMonths. Omit for revolving (credit_card)." },
+        loanStartDate: { type: "string", description: "YYYY-MM-DD the loan term BEGINS (origination / first day of the term). Pass this for phrases like 'a 72-month term beginning March 31, 2025' or 'originated in June 2023'." },
+        firstPaymentDate: { type: "string", description: "YYYY-MM-DD of the first scheduled payment. Defaults to loanStartDate when only that is known." },
+        payoffDate: { type: "string", description: "YYYY-MM-DD of the final/maturity payment — 'paid off by February 28, 2031', 'matures in 2054'. Ends the payment series on the calendar instead of running forever. The server derives it from the term + start when it isn't given." },
+        nextPaymentDate: { type: "string", description: "YYYY-MM-DD of the NEXT payment due, when the user says so explicitly. Otherwise the server computes it from dueDay." },
+        dueDay: { type: "number", description: "Day-of-month the payment is due (1-31). Drives the calendar entry. For 'due on the last day of every month' pass 31 — it is clamped per month (Feb → 28/29, Apr → 30), never rolled into the next month." },
         lender: { type: "string", description: "Lender / bank / servicer name. e.g. 'Chase', 'Sallie Mae', 'Wells Fargo', 'Affirm', 'IRS'." },
         accountNumberLast4: { type: "string", description: "Last 4 digits of the account/loan number (NEVER store the full number)." },
         // Mortgage-specific
@@ -3275,7 +3281,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Liability name to find (partial match)." },
-        changes: { type: "object", description: "Fields to update. Any of: currentBalance, originalBalance, annualRate, monthlyPayment, minimumPayment, creditLimit, remainingTermMonths, dueDay, lender, accountNumberLast4, propertyAddress, escrowMonthly, propertyTaxes, homeownersInsurance, vehicleVin, vehicleYear, vehicleMake, vehicleModel, pslfEligible, idrPlan, forgivenessDate, subtype." },
+        changes: { type: "object", description: "Fields to update. Any of: currentBalance, originalBalance, annualRate, monthlyPayment, minimumPayment, creditLimit, termMonths, remainingTermMonths, loanStartDate, firstPaymentDate, payoffDate, nextPaymentDate, dueDay, lender, accountNumberLast4, propertyAddress, escrowMonthly, propertyTaxes, homeownersInsurance, vehicleVin, vehicleYear, vehicleMake, vehicleModel, pslfEligible, idrPlan, forgivenessDate, subtype." },
         refinance: { type: "boolean", description: "Set true when the user is REFINANCING (new lender, new rate, fresh term). Resets originalBalance to currentBalance and clears stale amortization caches." },
       },
       required: ["name", "changes"],
@@ -5137,7 +5143,18 @@ CROSS-PROFILE LIABILITY ASSIGNMENT:
 - "The fridge financing is due on the 12th every month, $80/month, $960 total via Synchrony" → create_liability(name:"Fridge Financing", subtype:"bnpl" (or "other"), lender:"Synchrony", currentBalance:960, monthlyPayment:80, dueDay:12, linkAssetName:"Fridge"). The dueDay automatically generates a recurring obligation for the calendar.
 - "Jane and I both share this credit card debt" → after create_liability, call link_liability_owner(liability, "Me", 50, "owner") AND link_liability_owner(liability, "Jane", 50, "owner").
 
-DUE DAY → CALENDAR: Always pass dueDay (1-31) on create_liability when the user mentions "due on the Xth" or implies a monthly due date. The backend auto-creates a recurring obligation so the payment surfaces on the calendar.
+DUE DAY → CALENDAR: Always pass dueDay (1-31) on create_liability when the user mentions "due on the Xth" or implies a monthly due date. For "the last day of every month" pass dueDay:31 — the backend clamps it per month (Feb → 28/29), it never rolls into the next month. The payment then surfaces on the calendar.
+
+LOAN TERMS ARE NOT OPTIONAL: when the user states loan paperwork, pass EVERY number they gave — dropping one silently loses it from their profile. Map them like this:
+- "original loan amount of $54,800" → originalBalance:54800
+- "remaining balance of $49,275" → currentBalance:49275
+- "6.49% APR" → annualRate:6.49
+- "monthly payment of $912.40" → monthlyPayment:912.40
+- "72-month term" → termMonths:72 (the CONTRACT term; use remainingTermMonths ONLY when they say how many payments are LEFT)
+- "beginning March 31, 2025" → loanStartDate:"2025-03-31"
+- "payoff date of February 28, 2031" → payoffDate:"2031-02-28"
+- "financed through Capital Auto Finance" → lender:"Capital Auto Finance"
+Never park these in the notes field — a number in notes is invisible to the payoff math, the amortization schedule, and net worth. If the user gives a term and a start date but no payoff date (or the reverse), pass what they said and let the server derive the rest.
 
 REFINANCE / RESTRUCTURE:
 - "I refinanced my mortgage at 5.5%, new balance is $410k, 30 years" → update_liability(name:"mortgage", changes:{annualRate:5.5, currentBalance:410000, originalBalance:410000, termMonths:360}, refinance:true).
@@ -5974,6 +5991,17 @@ export function computeDocProfileLinks(
   if (action === "link") return Array.from(new Set([...cur, ...ids]));
   if (action === "move") return Array.from(new Set(ids));
   return cur.filter(id => !ids.includes(id)); // unlink
+}
+
+/** The user's timezone-local today (YYYY-MM-DD) — never the server's. */
+function getUserTodayISO(): string {
+  const tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
+  return new Date().toLocaleDateString("en-CA", { timeZone: tz });
+}
+
+/** Installment debt: fixed payment, APR, a term that ends on a payoff date. */
+function isAmortizingSubtype(subtype?: string | null): boolean {
+  return liabilityFamily(subtype) === "amortizing";
 }
 
 export async function executeTool(name: string, input: any, userId?: string): Promise<any> {
@@ -8098,9 +8126,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.monthlyPayment != null) fields.monthlyPayment = Number(input.monthlyPayment);
       if (input.minimumPayment != null) fields.minimumPayment = Number(input.minimumPayment);
       if (input.creditLimit != null) fields.creditLimit = Number(input.creditLimit);
-      if (input.remainingTermMonths != null) fields.remainingTermMonths = Number(input.remainingTermMonths);
-      if (input.firstPaymentDate) fields.firstPaymentDate = input.firstPaymentDate;
-      if (input.dueDay != null) fields.dueDay = Number(input.dueDay);
       if (input.lender) fields.lender = input.lender;
       if (input.accountNumberLast4) fields.accountNumberLast4 = String(input.accountNumberLast4);
       // Subtype-specific
@@ -8116,9 +8141,54 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.idrPlan) fields.idrPlan = input.idrPlan;
       if (input.forgivenessDate) fields.forgivenessDate = input.forgivenessDate;
 
+      // TERM + SCHEDULE — the block that used to lose half of what the user
+      // said. A stated term, start date and payoff date had nowhere to go, and
+      // the next due date was computed by building a Date in server-local time
+      // and formatting it in Pacific, which walked a payment due the 31st back
+      // to the 30th. deriveLoanTerms fills the whole set from whatever subset
+      // was given, in string space, with month-end clamping. Recurring bills
+      // and revolving cards keep their own cadence and are left alone.
+      if (isAmortizingSubtype(input.subtype)) {
+        const derived = deriveLoanTerms({
+          termMonths: input.termMonths,
+          remainingTermMonths: input.remainingTermMonths,
+          loanStartDate: input.loanStartDate,
+          firstPaymentDate: input.firstPaymentDate,
+          payoffDate: input.payoffDate,
+          nextPaymentDate: input.nextPaymentDate,
+          dueDay: input.dueDay,
+        }, getUserTodayISO());
+        Object.assign(fields, derived);
+      } else {
+        if (input.termMonths != null) fields.termMonths = Number(input.termMonths);
+        if (input.remainingTermMonths != null) fields.remainingTermMonths = Number(input.remainingTermMonths);
+        if (input.loanStartDate) fields.loanStartDate = String(input.loanStartDate).slice(0, 10);
+        if (input.firstPaymentDate) fields.firstPaymentDate = String(input.firstPaymentDate).slice(0, 10);
+        if (input.payoffDate) fields.payoffDate = String(input.payoffDate).slice(0, 10);
+        if (input.nextPaymentDate) {
+          const nd = String(input.nextPaymentDate).slice(0, 10);
+          fields.nextDueDate = nd;
+          fields.dueDate = nd;
+        }
+        if (input.dueDay != null) fields.dueDay = Math.max(1, Math.min(31, Number(input.dueDay)));
+      }
+
       let liability: any;
       if (existing) {
         const merged = { ...(existing.fields || {}), ...fields };
+        // REPAIR ON WRITE. A liability that was previously demoted into a
+        // recurring bill still carries that bill's leftovers — `source:
+        // "obligation"`, a bill `status`, a `monthlyAmount` that readTerms
+        // would take for a balance. Setting type_key back to a debt subtype
+        // makes the row a loan again; clearing these makes it a clean one, so
+        // re-issuing the request that broke a profile also fixes it.
+        if (isRecurringBill((existing as any).type_key ?? (existing as any).typeKey)
+            && !isRecurringBill(input.subtype)) {
+          for (const k of ["source", "status", "monthlyAmount", "monthly_amount", "amount", "billingFrequency", "category"]) {
+            delete merged[k];
+          }
+          logger.info("ai", `restored liability ${existing.id} from bill subtype "${(existing as any).type_key}" to "${input.subtype}"`);
+        }
         liability = await storage.updateProfile(existing.id, {
           fields: merged,
           notes: input.notes ?? existing.notes,
@@ -8376,20 +8446,33 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (suggestedAssetLink && liability) {
         (liability as any).suggestedAssetLink = suggestedAssetLink;
       }
-      // Auto-generate a recurring obligation so the liability appears on the calendar
-      // (mirrors how create_obligation drives subscription calendar entries).
-      // Only do this when we have BOTH a monthly payment and a due-day.
-      if (liability?.id && fields.monthlyPayment && fields.dueDay) {
+      // CALENDAR — an amortizing loan carries its own schedule, so it needs no
+      // second record. This used to create an obligation named "<loan> payment",
+      // and because obligations ARE liability profiles that upsert by a name
+      // with any trailing "payment" stripped, that obligation resolved back to
+      // the loan and rewrote it into a recurring bill: subtype "bill", the
+      // whole loan layout replaced by the bill layout, and the balance dropped
+      // from net worth. seriesFromLiabilityProfiles already puts a liability
+      // with nextDueDate on the calendar and ends the series at payoffDate, so
+      // the fields written above are the entire calendar integration.
+      //
+      // Revolving cards and one-time debts still get an obligation — they have
+      // no derived installment series of their own to show up on.
+      if (liability?.id && fields.monthlyPayment && fields.dueDay && !isAmortizingSubtype(input.subtype)) {
         try {
           const existingObs = await storage.getObligations();
           const obName = `${input.name} payment`;
           const dup = existingObs.find((o: any) => o.name.toLowerCase() === obName.toLowerCase());
           if (!dup) {
-            const today = new Date();
             const dueDay = Math.max(1, Math.min(31, Number(fields.dueDay)));
-            const next = new Date(today.getFullYear(), today.getMonth(), dueDay);
-            if (next.getTime() < today.getTime()) next.setTime(addMonthsClamped(next, 1, dueDay).getTime());
-            const nextDueDate = next.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+            // Built as a string against the USER's today. Constructing a Date
+            // and formatting it in another timezone shifted a payment due the
+            // 31st back to the 30th.
+            const todayISO = getUserTodayISO();
+            const thisMonth = addMonthsISO(`${todayISO.slice(0, 8)}01`, 0, dueDay);
+            const nextDueDate = thisMonth >= todayISO
+              ? thisMonth
+              : addMonthsISO(`${todayISO.slice(0, 8)}01`, 1, dueDay);
             const newOb = await storage.createObligation({
               name: obName,
               amount: Number(fields.monthlyPayment),
@@ -8445,6 +8528,27 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       for (const [k, v] of Object.entries(ch)) {
         if (k === "subtype") continue;
         newFields[k] = v;
+      }
+      // Re-derive the schedule whenever a term input moved, so changing the
+      // term or the due day updates the payoff date and the next due date
+      // together instead of leaving the profile self-contradictory.
+      const TERM_KEYS = ["termMonths", "remainingTermMonths", "loanStartDate", "firstPaymentDate", "payoffDate", "nextPaymentDate", "dueDay"];
+      const subtypeNow = ch.subtype || (target as any).type_key || (target as any).typeKey;
+      if (isAmortizingSubtype(subtypeNow) && (input.refinance || TERM_KEYS.some((k) => k in ch))) {
+        Object.assign(newFields, deriveLoanTerms({
+          termMonths: newFields.termMonths,
+          // A stated remaining term is only authoritative when it's what
+          // changed; otherwise let it be recomputed from the term and today.
+          remainingTermMonths: "remainingTermMonths" in ch ? ch.remainingTermMonths : undefined,
+          loanStartDate: newFields.loanStartDate,
+          firstPaymentDate: newFields.firstPaymentDate,
+          // A new term or start date supersedes the old payoff date.
+          payoffDate: ("termMonths" in ch || "loanStartDate" in ch || input.refinance) && !("payoffDate" in ch)
+            ? undefined
+            : newFields.payoffDate,
+          nextPaymentDate: ch.nextPaymentDate,
+          dueDay: newFields.dueDay,
+        }, getUserTodayISO()));
       }
       updates.fields = newFields;
       const updated = await storage.updateProfile(target.id, updates as any);
