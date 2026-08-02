@@ -31,7 +31,7 @@ import { passesProfileFilter } from "@shared/profile-filter";
 import { createHash } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
-import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
+import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
 import { detectMoodFromText } from "@shared/mood-detect";
@@ -1218,8 +1218,10 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     const weight = parseFloat(weightMatch[1]);
     if (weight > 80 && weight < 500) {
       const trackers = await storage.getTrackers();
-      // Bail to AI if multiple weight trackers exist (ambiguous)
-      const weightTrackers = trackers.filter(t => t.name.toLowerCase().includes("weight"));
+      // Bail to AI if multiple weight trackers exist (ambiguous). Whole-word
+      // match only: "Weighted Pull-Ups" is NOT a weight tracker, so its
+      // existence must neither absorb the log nor force a bail.
+      const weightTrackers = trackers.filter(t => trackerNameContains(t.name, "weight"));
       if (weightTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
       const weightTracker = weightTrackers[0] || trackers.find(t => t.name.toLowerCase() === "weight");
       if (weightTracker) {
@@ -7171,7 +7173,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const named = String(input.trackerName || "").toLowerCase();
         const anyMatch = trackers.some(t => {
           const tn = t.name.toLowerCase();
-          return tn === named || tn.includes(named) || named.includes(tn) || trackerNamesMatch(t.name, input.trackerName);
+          return tn === named
+            || trackerNameContains(t.name, named)
+            || trackerNameContains(named, t.name)
+            || trackerNamesMatch(t.name, input.trackerName);
         });
         if (!anyMatch) {
           const available = trackers.slice(0, 5).map(t => t.name).join(", ") || "none yet";
@@ -7256,8 +7261,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const isNutritionSearch = nutritionAliases.some(a => trackerName.includes(a));
       let nameMatches = trackers.filter(t => {
         const tn = t.name.toLowerCase();
-        // Exact or contains match
-        if (tn === trackerName || tn.includes(trackerName)) return true;
+        // Exact or whole-word contains match. NEVER raw-substring: char-level
+        // .includes() let a "Weighted Pull-Ups" tracker capture a "weight" log
+        // (and vice versa via trackerNamesMatch) — the 2026-08-02 report of
+        // workout sets landing in the body-weight tracker.
+        if (tn === trackerName || trackerNameContains(t.name, trackerName)) return true;
         // Canonical identity match: "Multivitamin" ≡ "Supplement Multivitamin"
         // ≡ "Daily Multivitamin" so a logged subject REUSES the existing tracker
         // instead of spawning a worded duplicate (the multivitamin-dupe bug).

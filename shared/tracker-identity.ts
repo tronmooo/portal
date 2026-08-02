@@ -43,36 +43,93 @@ const NOISE_WORDS = new Set([
  * "Vitamin D"               → "vitamind"   (distinct from "Vitamin C" → "vitaminc")
  * "Supplements"             → "supplements" (all-noise → de-noised fallback)
  */
-export function trackerIdentityKey(name: string | null | undefined): string {
-  const raw = String(name ?? "").toLowerCase();
-  const noNum = raw.replace(/\s*\(\d+\)\s*$/, " ");
-  const tokens = noNum
+function rawTokens(name: string | null | undefined): string[] {
+  return String(name ?? "")
+    .toLowerCase()
+    .replace(/\s*\(\d+\)\s*$/, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .split(/\s+/)
     .filter(Boolean);
-  const meaningful = tokens.filter((t) => !NOISE_WORDS.has(t));
-  const key = meaningful.join("");
-  // If every token was noise (e.g. literally "Supplements" or "My Meds"),
-  // fall back to the de-noised full string so the name still has a stable key.
-  return key || tokens.join("");
+}
+
+// Fold trivial plurals so "Pull-Ups" ≡ "Pull-Up". Whole-token only, and never
+// 1–2 letter results, so identity stays stable on both sides of a compare.
+function singularize(t: string): string {
+  if (t.length > 3 && t.endsWith("es")) return t.slice(0, -2);
+  if (t.length > 2 && t.endsWith("s")) return t.slice(0, -1);
+  return t;
+}
+
+/** Identity tokens: de-noised, plural-folded. Empty only for empty names —
+ * an all-noise name ("Supplements", "My Meds") falls back to its raw tokens. */
+function identityTokens(name: string | null | undefined): string[] {
+  const tokens = rawTokens(name);
+  const meaningful = tokens.filter((t) => !NOISE_WORDS.has(t)).map(singularize);
+  return meaningful.length ? meaningful : tokens.map(singularize);
+}
+
+export function trackerIdentityKey(name: string | null | undefined): string {
+  return identityTokens(name).join("");
+}
+
+/** True when `contained`'s tokens appear as a contiguous run of WHOLE tokens
+ * inside `container`'s tokens. Token-boundary aware by construction: "weight"
+ * is not the token "weighted", so "Weight" is NOT contained in "Weighted
+ * Pull-Ups" — but "Bench Press" IS contained in "Morning Bench Press". */
+function tokensContain(container: string[], contained: string[]): boolean {
+  if (!contained.length || contained.length > container.length) return false;
+  for (let i = 0; i <= container.length - contained.length; i++) {
+    let ok = true;
+    for (let j = 0; j < contained.length; j++) {
+      if (container[i + j] !== contained[j]) { ok = false; break; }
+    }
+    if (ok) return true;
+  }
+  return false;
 }
 
 /**
  * Do two tracker names refer to the same tracker? True when their identity
- * keys are equal, or (for compound names) one key fully contains the other and
- * both are long enough that the containment is meaningful (so "Bench Press" and
- * "Morning Bench Press" match, while "Leg Press" and "Bench Press" do not).
+ * keys are equal, or (for compound names) the shorter name's tokens appear as
+ * whole tokens inside the longer's — so "Bench Press" and "Morning Bench
+ * Press" match, while "Leg Press" and "Bench Press" do not.
+ *
+ * Containment is TOKEN-BOUNDARY aware, never raw-substring. The old key-level
+ * `long.includes(short)` matched partial words because keys are joined with no
+ * separator: "Weight" (key "weight") matched "Weighted Pull-Ups" (key
+ * "weightedpullups"), so workout logs were filed into the user's body-weight
+ * tracker instead of creating their own (user report 2026-08-02). "weighted"
+ * is a different word than "weight" — only whole-token runs match now.
  */
 export function trackerNamesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
-  const ka = trackerIdentityKey(a);
-  const kb = trackerIdentityKey(b);
-  if (!ka || !kb) return false;
+  const ta = identityTokens(a);
+  const tb = identityTokens(b);
+  if (!ta.length || !tb.length) return false;
+  const ka = ta.join("");
+  const kb = tb.join("");
   if (ka === kb) return true;
   // Conservative containment for compound names. Require the shorter key to be
   // at least 5 chars so short fragments ("oil", "run") can't swallow others.
-  const [short, long] = ka.length <= kb.length ? [ka, kb] : [kb, ka];
-  if (short.length >= 5 && long.includes(short)) return true;
+  const [shortT, longT] = ka.length <= kb.length ? [ta, tb] : [tb, ta];
+  if (shortT.join("").length >= 5 && tokensContain(longT, shortT)) return true;
   return false;
+}
+
+/**
+ * Loose one-directional containment for tracker lookup: does `containerName`
+ * contain `containedName` as whole words? Replaces raw
+ * `name.includes(query)` checks, which matched partial words (query "weight"
+ * hijacked by a "Weighted Pull-Ups" tracker). No length guard — the caller
+ * decides how much weight to give a match — but tokens only match whole.
+ */
+export function trackerNameContains(
+  containerName: string | null | undefined,
+  containedName: string | null | undefined,
+): boolean {
+  return tokensContain(
+    rawTokens(containerName).map(singularize),
+    rawTokens(containedName).map(singularize),
+  );
 }
 
 export interface TrackerIdentityLike {
