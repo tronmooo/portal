@@ -136,7 +136,7 @@ function PastActivityList({
   );
 }
 
-import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, memo, lazy, Suspense } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -285,7 +285,55 @@ import { prefetchDocument } from "@/lib/document-preview";
 import { Progress } from "@/components/ui/progress";
 import EditableTitle from "@/components/EditableTitle";
 import { LinkedSheetView, LinkedViewToggle, useLinkedView, type SheetColumn } from "@/components/LinkedSheetView";
-import { LiabilityProfilePage } from "@/pages/liability-detail";
+// PERF: the liability page is its own ~3.6k-line page with the amortization
+// engine, the payoff calculator and the schedule sections behind it. Imported
+// statically it was inlined into this chunk, so opening a VEHICLE — or a
+// property, or any other asset — downloaded and parsed the entire loan UI it
+// would never render. It is reached from exactly one early return below, which
+// makes it a clean split point.
+const LiabilityProfilePage = lazy(() =>
+  import("@/pages/liability-detail").then((m) => ({ default: m.LiabilityProfilePage })),
+);
+
+/**
+ * The page's loading state: hero, then content.
+ *
+ * Shared by the data fetch and by the lazy liability chunk, so a liability
+ * profile shows one continuous skeleton instead of a skeleton, then a spinner,
+ * then the page.
+ */
+function ProfileBodySkeleton() {
+  return (
+    <div className="overflow-y-auto h-full pb-24">
+      {/* Hero skeleton */}
+      <div className="px-4 md:px-6 pt-4 pb-6 bg-muted/20 animate-pulse">
+        <div className="flex items-center justify-between mb-3">
+          <div className="h-4 w-24 rounded bg-muted" />
+          <div className="flex gap-1.5">
+            <div className="h-7 w-12 rounded bg-muted" />
+            <div className="h-7 w-16 rounded bg-muted" />
+          </div>
+        </div>
+        <div className="flex items-start gap-4">
+          <div className="w-14 h-14 rounded-2xl bg-muted" />
+          <div className="flex-1 space-y-2 pt-1">
+            <div className="h-5 w-36 rounded bg-muted" />
+            <div className="h-4 w-16 rounded bg-muted" />
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-2 mt-4">
+          {[1, 2, 3].map((i) => <div key={i} className="h-14 rounded-lg bg-muted" />)}
+        </div>
+      </div>
+      {/* Content skeleton */}
+      <div className="px-4 md:px-6 pt-4 space-y-3">
+        <div className="h-8 rounded-lg bg-muted/50" />
+        <div className="h-32 rounded-xl bg-muted/30" />
+        <div className="h-20 rounded-xl bg-muted/30" />
+      </div>
+    </div>
+  );
+}
 // DynamicProfileDetail import removed — registry system not yet integrated (see registry/index.ts)
 
 // ============================================================
@@ -13051,38 +13099,7 @@ export default function ProfileDetailPage() {
     return `Shared · ${linked.length} people`;
   }, [currentPartyLinks, personOptions, profile]);
 
-  if (isLoading) {
-    return (
-      <div className="overflow-y-auto h-full pb-24">
-        {/* Hero skeleton */}
-        <div className="px-4 md:px-6 pt-4 pb-6 bg-muted/20 animate-pulse">
-          <div className="flex items-center justify-between mb-3">
-            <div className="h-4 w-24 rounded bg-muted" />
-            <div className="flex gap-1.5">
-              <div className="h-7 w-12 rounded bg-muted" />
-              <div className="h-7 w-16 rounded bg-muted" />
-            </div>
-          </div>
-          <div className="flex items-start gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-muted" />
-            <div className="flex-1 space-y-2 pt-1">
-              <div className="h-5 w-36 rounded bg-muted" />
-              <div className="h-4 w-16 rounded bg-muted" />
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-2 mt-4">
-            {[1,2,3].map(i => <div key={i} className="h-14 rounded-lg bg-muted" />)}
-          </div>
-        </div>
-        {/* Content skeleton */}
-        <div className="px-4 md:px-6 pt-4 space-y-3">
-          <div className="h-8 rounded-lg bg-muted/50" />
-          <div className="h-32 rounded-xl bg-muted/30" />
-          <div className="h-20 rounded-xl bg-muted/30" />
-        </div>
-      </div>
-    );
-  }
+  if (isLoading) return <ProfileBodySkeleton />;
 
   if (error || !profile) {
     return (
@@ -13101,7 +13118,11 @@ export default function ProfileDetailPage() {
   // overview, details, payments, amortization (Phase 2). Legacy 'loan' rows
   // that haven't been migrated yet still flow through here too.
   if (profile.type === "liability" || profile.type === "loan") {
-    return <LiabilityProfilePage profile={profile as any} />;
+    return (
+      <Suspense fallback={<ProfileBodySkeleton />}>
+        <LiabilityProfilePage profile={profile as any} />
+      </Suspense>
+    );
   }
 
   const linkedTypes = ["vehicle", "asset", "subscription", "loan", "investment", "property", "insurance"];

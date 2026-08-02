@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Search, Users } from "lucide-react";
 import { PageContainer, PageHeader } from "@/components/ui/page-shell";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
+import { warmProfileDetail, prefetchProfileDetailChunkWhenIdle } from "@/lib/scope-prefetch";
 
 interface LiteProfile {
   id: string;
@@ -41,6 +42,9 @@ export default function ProfilesListPage() {
   const [search, setSearch] = useState("");
 
   useEffect(() => { document.title = "Profiles — Portol"; }, []);
+  // Every card here opens the lazy detail chunk — warm it while idle so the
+  // tap only pays for the fetch. (Phones get no hover warmup.)
+  useEffect(() => { prefetchProfileDetailChunkWhenIdle(); }, []);
 
   const fullProfilesCache = queryClient.getQueryData<LiteProfile[]>(["/api/profiles"]);
   const { data: profiles, isLoading } = useQuery<LiteProfile[]>({
@@ -109,6 +113,8 @@ export default function ProfilesListPage() {
                   <Card
                     className="p-3 flex items-center gap-3 hover:bg-accent/50 transition-colors cursor-pointer"
                     data-testid={`profile-card-${p.id}`}
+                    onMouseEnter={() => warmProfileDetail(p.id)}
+                    onTouchStart={() => warmProfileDetail(p.id)}
                   >
                     <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-bold shrink-0 overflow-hidden">
                       {p.avatar

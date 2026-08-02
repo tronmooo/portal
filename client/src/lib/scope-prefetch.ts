@@ -26,12 +26,52 @@ import { perfMark, perfMeasure } from "./perf-marks";
 const detailWarmed = new Map<string, number>();
 export function warmProfileDetail(id: string): void {
   if (!id) return;
+  // The page is a lazy chunk, so the tap pays for JS as well as data. Warm both.
+  prefetchProfileDetailChunk();
   const last = detailWarmed.get(id) || 0;
   if (Date.now() - last < 25_000) return; // inside the server's 30s cache window
   detailWarmed.set(id, Date.now());
   apiRequest("GET", `/api/profile-bootstrap/${id}`).catch(() => {
     detailWarmed.delete(id); // let a later hover retry after a failure
   });
+}
+
+// ── Profile detail CODE warmup ───────────────────────────────────────────────
+// The data warmup above only covers half the wait. The detail page is a lazy
+// chunk (~97 kB gzipped, ~420 kB parsed), and none of it starts downloading
+// until the route mounts — so on a phone the body sits on a skeleton through a
+// cold request AND a cold download, on whatever signal the connection has.
+//
+// The row handlers fire this on hover and on touchstart, but hover does not
+// exist on a phone and touchstart lands maybe 100 ms before navigation, so on
+// mobile it barely counts. `prefetchProfileDetailChunk` is therefore also
+// called when a list of profile rows mounts, during idle time: by the time a
+// row is tapped the JS is already parsed and the tap costs only the fetch.
+//
+// Fire-and-forget and idempotent — the module cache makes repeat calls free,
+// and a failure just means the normal lazy import runs at mount as before.
+let detailChunkPromise: Promise<unknown> | null = null;
+export function prefetchProfileDetailChunk(): void {
+  if (detailChunkPromise) return;
+  detailChunkPromise = import("@/pages/profile-detail").catch(() => {
+    detailChunkPromise = null; // let a later attempt retry
+  });
+}
+
+/**
+ * Warm the detail chunk once the browser is idle.
+ *
+ * Deliberately idle-scheduled: this must never compete with the list the user
+ * is currently looking at. Falls back to a short timeout where
+ * requestIdleCallback is unavailable (Safari).
+ */
+export function prefetchProfileDetailChunkWhenIdle(): void {
+  if (detailChunkPromise || typeof window === "undefined") return;
+  const ric = (window as any).requestIdleCallback as
+    | ((cb: () => void, opts?: { timeout: number }) => number)
+    | undefined;
+  if (ric) ric(() => prefetchProfileDetailChunk(), { timeout: 4000 });
+  else window.setTimeout(prefetchProfileDetailChunk, 1500);
 }
 
 export function prefetchScopeBootstrap(mode: "everyone" | "selected", ids: string[]): void {

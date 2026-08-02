@@ -1,6 +1,6 @@
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
-import { warmProfileDetail } from "@/lib/scope-prefetch";
+import { warmProfileDetail, prefetchProfileDetailChunkWhenIdle } from "@/lib/scope-prefetch";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
@@ -5541,6 +5541,13 @@ export default function TrackersPage() {
     const isLinkedRoute = path.startsWith('/linked');
     document.title = isLinkedRoute ? "Linked — Portol" : "Trackers — Portol";
   }, [pageLoc]);
+  // Every asset / vehicle / liability row on this page navigates into the
+  // detail page, which is a lazy chunk. The row handlers warm it on hover and
+  // touchstart, but a phone has no hover and touchstart lands ~100 ms before
+  // the navigation — so the download stayed on the critical path on exactly
+  // the devices where it costs most. Warming it during idle makes the tap pay
+  // for the fetch only.
+  useEffect(() => { prefetchProfileDetailChunkWhenIdle(); }, []);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
   // Always keep page-local filter state in lockstep with the global filter store,
