@@ -3523,6 +3523,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         date: { type: "string", description: "Date of the expense in YYYY-MM-DD format. Use today's date if not specified. Use the actual date the expense occurred if the user says 'yesterday', 'last Tuesday', etc." },
         vendor: { type: "string", description: "Store or vendor name" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
+        assetName: { type: "string", description: "Set ONLY for maintenance/repair/service work done ON an asset the user owns ('oil change on the CR-V', 'new tires for the truck', 'water heater repair at the house'). The expense is then ALSO appended to that asset's maintenance history and linked to it — one record, two surfaces, never double-counted. Pass the asset's name as the user said it; the server matches the closest asset profile." },
         forProfile: { type: "string", description: "REQUIRED when expense is for a specific entity. Set to the profile name the user referenced. Examples: 'Mom', 'Rex', 'Honda CR-V 2021', 'iPhone 17 Pro Max', 'Tesla Model S'. ALWAYS set this for expenses tied to any person, pet, vehicle, asset, or subscription. If the user says 'bought X for my iPhone', forProfile MUST be 'iPhone 17 Pro Max' (the full profile name). MATCHING: the server links to the closest existing profile by name — pass what the user said (e.g. 'Ford F150') and it will match 'Ford F150 2025'. NEVER invent a make/model/year the user didn't say, and NEVER rename their asset in your reply (do not turn 'Ford F150' into 'Ford F250'). ALWAYS create the expense even if you're unsure which asset — link to the closest match and, only if genuinely ambiguous, add a brief note; NEVER withhold the expense to ask a question first." },
       },
       required: ["amount", "description"],
@@ -9121,6 +9122,55 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       } else {
         await autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`, input.forProfile);
+      }
+      // ── Maintenance ↔ asset link (one record, two surfaces) ──
+      // "Oil change on the CR-V for $78.40": the expense row is the ONLY money
+      // record (Finance shows it once); the asset additionally gets a
+      // maintenanceLog entry + maintenanceCost bump (an informational figure
+      // read by shared/asset-rollup that never feeds spend or net-worth
+      // totals) and an entity_links row so get_related can walk the graph.
+      if (input.assetName && String(input.assetName).trim()) {
+        try {
+          const profilesForAsset = await storage.getProfiles();
+          const assetSearch = safeLC(input.assetName).trim();
+          const assetWordRe = new RegExp(`(^|\\b)${assetSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\b|$)`);
+          const ASSETISH_TYPES = new Set(["vehicle", "property", "asset", "investment", "account", "equipment"]);
+          const isAssetish = (p: any) => ASSETISH_TYPES.has(String(p.type || "").toLowerCase());
+          const asset = profilesForAsset.find(p => isAssetish(p) && p.name.toLowerCase() === assetSearch)
+            || profilesForAsset.find(p => isAssetish(p) && assetWordRe.test(p.name.toLowerCase()))
+            || profilesForAsset.find(p => p.name.toLowerCase() === assetSearch)
+            || profilesForAsset.find(p => assetWordRe.test(p.name.toLowerCase()));
+          if (asset) {
+            const mergedLinks = Array.from(new Set([...(newExpense.linkedProfiles || []), asset.id]));
+            if (mergedLinks.length !== (newExpense.linkedProfiles || []).length) {
+              await storage.updateExpense(newExpense.id, { linkedProfiles: mergedLinks } as any);
+            }
+            await storage.linkProfileTo(asset.id, "expense", newExpense.id).catch(() => {});
+            await storage.createEntityLink({
+              sourceType: "expense",
+              sourceId: newExpense.id,
+              targetType: "profile",
+              targetId: asset.id,
+              relationship: "maintenance",
+              confidence: 1,
+            }).catch((e: any) => logger.warn("ai", `maintenance entity_link failed: ${e?.message}`));
+            // Idempotent per expenseId so a retried turn can't double-bump the cost.
+            const assetFields: Record<string, any> = { ...(asset.fields || {}) };
+            const maintLog: any[] = Array.isArray(assetFields.maintenanceLog) ? [...assetFields.maintenanceLog] : [];
+            if (!maintLog.some((r: any) => r?.expenseId === newExpense.id)) {
+              maintLog.push({ date: newExpense.date, description: newExpense.description, amount: newExpense.amount, expenseId: newExpense.id });
+              assetFields.maintenanceLog = maintLog;
+              assetFields.maintenanceCost = (parseFloat(String(assetFields.maintenanceCost ?? 0)) || 0) + newExpense.amount;
+              await storage.updateProfile(asset.id, { fields: assetFields } as any);
+            }
+            (newExpense as any).linkedAsset = { id: asset.id, name: asset.name };
+            (newExpense as any).message = `Logged $${newExpense.amount} ${newExpense.description} — recorded once in Finance and added to ${asset.name}'s maintenance history.`;
+          } else {
+            (newExpense as any).message = `Expense saved, but no asset matching "${input.assetName}" was found — maintenance history was not updated.`;
+          }
+        } catch (e: any) {
+          logger.warn("ai", `Maintenance asset link failed (${e?.message}) — expense still saved`);
+        }
       }
       return newExpense;
     }
