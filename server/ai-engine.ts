@@ -31,7 +31,7 @@ import { passesProfileFilter } from "@shared/profile-filter";
 import { createHash } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
-import { trackerNamesMatch, trackerIdentityKey } from "@shared/tracker-identity";
+import { trackerNamesMatch, trackerIdentityKey, trackerDomainsCompatible, bodyWeightWorkoutReroute, isBodyWeightName } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
 import { detectMoodFromText } from "@shared/mood-detect";
@@ -3068,7 +3068,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         trackerName: { type: "string", description: "Name of the tracker — MUST be the specific activity: 'Basketball' for basketball, 'Tennis' for tennis, 'Running' for running, 'Soccer' for soccer, 'Swimming' for swimming, 'Yoga' for yoga. Never use 'Running' for a non-running sport." },
-        values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. OTHER SPORTS/ACTIVITIES: ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. STRENGTH/LIFTING: { exercise, weight, reps, sets } — weight/reps/sets are NUMBERS, never lists or ranges. Always name the load field `weight` (never weightLbs/lbs/load). When sets differ, pass the TOP SET as the numbers and the per-set detail as strings in weightPerSet/repsPerSet: 'shoulder press 60s×12 then 70s×10' → { exercise:'Shoulder Press', weight:70, reps:10, sets:2, weightPerSet:'60/70', repsPerSet:'12/10' }. Never pass weight:'60/70' — a numeric field holding a string breaks the tracker's headline and unit. Do NOT compute totalVolume; the server derives it exactly. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
+        values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. OTHER SPORTS/ACTIVITIES: ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. STRENGTH/LIFTING: trackerName is the EXERCISE ('Bench Press', 'Incline Dumbbell Press', 'Shoulder Press') — each exercise is its own tracker, and a variant is its own exercise (incline ≠ flat, dumbbell ≠ barbell). NEVER log a workout to the 'Weight' tracker: that one holds body weight from the scale and nothing else. values: { exercise, weight, reps, sets } — weight/reps/sets are NUMBERS, never lists or ranges. Always name the load field `weight` (never weightLbs/lbs/load). When sets differ, pass the TOP SET as the numbers and the per-set detail as strings in weightPerSet/repsPerSet: 'shoulder press 60s×12 then 70s×10' → { exercise:'Shoulder Press', weight:70, reps:10, sets:2, weightPerSet:'60/70', repsPerSet:'12/10' }. Never pass weight:'60/70' — a numeric field holding a string breaks the tracker's headline and unit. Do NOT compute totalVolume; the server derives it exactly. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
         at: { type: "string", description: "Optional date/time the entry actually happened (ISO date, natural language like 'June 3 2025', or a bare clock time like '8:15 AM' which is treated as today at that time). ALWAYS set this when the user attaches a time to the action ('at 8:15 AM', 'this morning at 7', 'yesterday'). Omit for 'now'." },
@@ -4784,6 +4784,7 @@ BEHAVIOR:
   ALWAYS set the "item" field to a human-readable food name. Capitalize it. This is the most visible part of the entry.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
 - MULTI-EXERCISE WORKOUTS: A workout that lists several exercises is NOT one entry. Emit ONE log_tracker_entry PER exercise so none is silently dropped. "45-min chest workout: bench press 135 for 3x10, incline dumbbells 40lb, pushups to failure" → THREE log_tracker_entry calls: (1) trackerName:"Bench Press" values:{exercise:"Bench Press", weight:135, sets:3, reps:10}; (2) trackerName:"Incline Dumbbell Press" values:{exercise:"Incline Dumbbell Press", weight:40, sets:3}; (3) trackerName:"Pushups" values:{exercise:"Pushups", reps:0, notes:"to failure"}. Bodyweight/"to failure" moves (pushups, planks, pullups) STILL get their own entry even without a weight number — never omit an exercise just because it has no load. Pick the specific exercise name for each trackerName.
+- ONE TRACKER PER EXERCISE, AND NEVER THE WEIGHT TRACKER. "Bench Press", "Incline Dumbbell Press" and "Shoulder Press" are three separate trackers, each with its own history — a variant IS a different exercise (incline ≠ flat, dumbbell ≠ barbell, close-grip ≠ standard). The "Weight" tracker is body weight from the scale ONLY: "I lifted for 45 minutes" or "bench pressed 185" is NEVER a Weight entry, no matter that both mention weight. Body weight goes to "Weight" ({weight: 184}); a workout goes to the exercise's tracker.
 - NUMERIC FIELDS TAKE NUMBERS, NEVER LISTS OR RANGES. weight, reps, sets, duration, distance, calories are NUMBERS. NEVER write "70/80/80", "10/8/6", "60-70", or "3x10" into them — a numeric field holding a string breaks the tracker's headline, chart, and unit (a Shoulder Press once displayed its set count as "2 lbs" because of this). When the sets differ, put the TOP SET in the numeric fields and the per-set detail in the matching *PerSet* field: "shoulder press 60s×12 then 70s×10" → values:{exercise:"Shoulder Press", weight:70, reps:10, sets:2, weightPerSet:"60/70", repsPerSet:"12/10"}. Use the SAME field name every time for the same metric — always "weight" (never weightLbs/lbs/load), always "reps", always "sets" — so one exercise doesn't end up with two half-filled fields. Do NOT compute totalVolume yourself; the server derives it exactly from the per-set numbers.
 - RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
   In your response, mention that both a profile and a bill were created. Example: "Created Spotify subscription profile + $11/month bill — will show on Calendar every month."
@@ -7151,6 +7152,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           input.trackerName = canonActivity.trackerName;
         }
       }
+      // ── BODY-WEIGHT GUARD (user report 2026-08-02) ───────────────────────
+      // The body-weight tracker records ONE thing: what the scale said. A
+      // workout is not a scale reading. "45 min of weight lifting" was landing
+      // in it (trackerName "Weight" matches exactly, so no name rule catches
+      // it), which both polluted the weight history and permanently added
+      // sets/reps/duration/exercise fields to the tracker. Route the workout to
+      // its own exercise tracker instead — bench press, incline press and
+      // dumbbell press each keep their own.
+      const reroute = bodyWeightWorkoutReroute(input.trackerName, input.values);
+      if (reroute) {
+        logger.info("ai", `Body-weight guard: workout addressed to "${input.trackerName}" → logging to "${reroute}" instead`);
+        input.trackerName = reroute;
+      }
       const trackerName = (input.trackerName || "").toLowerCase();
 
       // Resolve forProfile FIRST so we can match the right tracker
@@ -7261,6 +7275,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const isNutritionSearch = nutritionAliases.some(a => trackerName.includes(a));
       let nameMatches = trackers.filter(t => {
         const tn = t.name.toLowerCase();
+        // Domain guard FIRST: no amount of shared text makes a workout the
+        // body-weight tracker, or "Incline Bench Press" the "Bench Press" one.
+        // Without this the substring test below is enough to merge them.
+        if (!trackerDomainsCompatible(t.name, input.trackerName)) return false;
         // Exact or contains match
         if (tn === trackerName || tn.includes(trackerName)) return true;
         // Canonical identity match: "Multivitamin" ≡ "Supplement Multivitamin"
@@ -7472,10 +7490,21 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // free-form text (notes) is left out — it already rides in _notes.
         let addedFieldNames: string[] = [];
         if (unknownFields.length > 0) {
+          // The body-weight tracker has exactly one metric. Even if a workout
+          // field reaches it (a manual log, an older client), it must never be
+          // written into the schema — that is how a Weight tracker ended up
+          // owning sets/reps/exercise/totalVolume and stopped being a weight
+          // tracker at all. Reject the fields; the reading itself still saves.
+          const bodyWeightTracker = isBodyWeightName(tracker.name);
+          const WORKOUT_FIELD = /^(sets?|reps?|exercise|activitytype|totalvolume|volume|intensity|caloriesburned|duration|pace|distance|weightlbs|weightperset|repsperset)$/;
           const newFieldDefs: any[] = [];
           for (const fname of unknownFields) {
             const v = (normalizedValues as any)[fname];
             const lc = fname.toLowerCase();
+            if (bodyWeightTracker && WORKOUT_FIELD.test(lc.replace(/[^a-z]/g, ""))) {
+              logger.info("ai", `Body-weight guard: refused to add workout field "${fname}" to the "${tracker.name}" tracker`);
+              continue;
+            }
             if (typeof v === "number" && isFinite(v)) {
               // Heuristic unit inference — pick the most common physical unit
               // for the field name. No match → leave unit empty.
