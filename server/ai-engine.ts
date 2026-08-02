@@ -35,6 +35,7 @@ import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@sha
 import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
 import { detectMoodFromText } from "@shared/mood-detect";
+import { detectRecurrenceFreq } from "@shared/recurrence";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
@@ -2870,7 +2871,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         priority: { type: "string", enum: ["low", "medium", "high"], description: "Priority level" },
         dueDate: { type: "string", description: "Due date (YYYY-MM-DD)" },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
-        recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"], description: "Set when the task repeats on a schedule (e.g. 'water plants weekly', 'check tire pressure every two weeks', 'take vitamins every morning'→daily, 'change batteries every year'→yearly). For odd intervals like 'every 3 days' put it in the title and the parser will encode it. Leave unset for one-off tasks." },
+        recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"], description: "Set ONLY when THIS task itself repeats forever on a schedule (e.g. 'water plants weekly', 'check tire pressure every two weeks', 'take vitamins every morning'→daily, 'change batteries every year'→yearly). For odd intervals like 'every 3 days' put it in the title and the parser will encode it. LEAVE UNSET for one-time tasks — the default. A task that is done once and finished ('call the dentist', 'renew passport', 'obtain quotes from contractors', every step of a project plan) is one-time even when the same message asks for some OTHER thing to repeat, and even when it has a due date. Never copy a cadence from a sibling task in the same request." },
         forProfile: { type: "string", description: "Name of an EXISTING profile to link this task to (e.g. 'Max', 'Mom', 'Tesla'). Only set this if the person/entity already exists as a profile. If the user just mentions someone by name in the task (e.g. 'return book to Sarah'), put the name in the title instead — do NOT create a profile for them." },
       },
       required: ["title"],
@@ -7021,20 +7022,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       // BUG-B: recurring tasks. We store cadence as a `recur:<freq>` tag (no
       // schema change needed). On completion the PATCH/complete_task path reads
-      // this tag and spawns the next dated instance. Detect cadence from the
-      // explicit `recurrence` arg, the title, or the user's message.
-      const recurText = `${input.recurrence || ""} ${input.title || ""} ${String((input as any).__userMessage || "")}`.toLowerCase();
-      let recurFreq: string | undefined;
-      const everyNDays = recurText.match(/every (\d+) days?/);
-      const everyNWeeks = recurText.match(/every (\d+) weeks?/);
-      if (/\bdaily\b|every day|each day/.test(recurText)) recurFreq = "daily";
-      else if (/\bweekdays?\b|every weekday|mon(day)?(\s*[-–to]+\s*)fri(day)?/.test(recurText)) recurFreq = "weekdays";
-      else if (/\bbiweekly\b|every (other|2|two) weeks/.test(recurText)) recurFreq = "biweekly";
-      else if (everyNWeeks && +everyNWeeks[1] > 1) recurFreq = `every-${everyNWeeks[1]}-weeks`;
-      else if (/\bweekly\b|every week|each week/.test(recurText)) recurFreq = "weekly";
-      else if (/\b(monthly|every month|each month)\b/.test(recurText)) recurFreq = "monthly";
-      else if (/\b(yearly|annually|annual|every year|each year)\b/.test(recurText)) recurFreq = "yearly";
-      else if (everyNDays) recurFreq = +everyNDays[1] === 1 ? "daily" : `every-${everyNDays[1]}-days`;
+      // this tag and spawns the next dated instance.
+      //
+      // FIX (2026-08): cadence used to be sniffed from the ENTIRE user message
+      // (`__userMessage`) too, so ONE cadence word anywhere in a multi-action
+      // message turned EVERY task in that batch into a repeating chore — "plan
+      // my kitchen remodel … and remind me daily to stretch" filed "Obtain
+      // quotes from contractors", "Purchase materials", "Renew passport" and
+      // "Call the dentist" as daily schedules. Those are one-time tasks. Scope
+      // detection to THIS task's own recurrence arg and title (the tool contract
+      // tells the model to put odd intervals like "every 3 days" in the title),
+      // mirroring the same fix in create_expense.
+      const recurFreq = detectRecurrenceFreq(`${input.recurrence || ""} ${input.title || ""}`);
       const taskTags = [...(input.tags || [])];
       if (recurFreq && !taskTags.some(t => String(t).startsWith("recur:"))) {
         taskTags.push(`recur:${recurFreq}`);

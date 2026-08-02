@@ -114,6 +114,31 @@ export function isRecurring(tags: string[] = []): boolean {
   return tags.some((t) => t.startsWith("recur:"));
 }
 
+/**
+ * Detect a cadence token in free text — an explicit `recurrence` argument or a
+ * task title. Returns undefined when the text names no schedule, which is the
+ * common case: most tasks are one-time only.
+ *
+ * Feed this the task's OWN words. Widening the input to a whole chat message
+ * makes one cadence word contaminate every task created in that turn (see the
+ * call site in create_task).
+ */
+export function detectRecurrenceFreq(text: string): string | undefined {
+  const s = String(text || "").toLowerCase();
+  if (!s.trim()) return undefined;
+  const everyNDays = s.match(/every (\d+) days?/);
+  const everyNWeeks = s.match(/every (\d+) weeks?/);
+  if (/\bdaily\b|every day|each day/.test(s)) return "daily";
+  if (/\bweekdays?\b|every weekday|mon(day)?(\s*[-–to]+\s*)fri(day)?/.test(s)) return "weekdays";
+  if (/\bbiweekly\b|every (other|2|two) weeks/.test(s)) return "biweekly";
+  if (everyNWeeks && +everyNWeeks[1] > 1) return `every-${everyNWeeks[1]}-weeks`;
+  if (/\bweekly\b|every week|each week/.test(s)) return "weekly";
+  if (/\b(monthly|every month|each month)\b/.test(s)) return "monthly";
+  if (/\b(yearly|annually|annual|every year|each year)\b/.test(s)) return "yearly";
+  if (everyNDays) return +everyNDays[1] === 1 ? "daily" : `every-${everyNDays[1]}-days`;
+  return undefined;
+}
+
 function toLocalISO(d: Date): string {
   return d.toLocaleDateString("en-CA");
 }

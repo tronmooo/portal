@@ -75,6 +75,7 @@ export default defineConfig({
       'tests/money-popups.test.tsx',
       'tests/entity-classify.test.ts',
       'tests/recurring-dates.test.ts',
+      'tests/task-one-time-vs-recurring.test.tsx',
       'tests/date-math.test.ts',
       'tests/calendar-window.test.ts',
       'tests/local-jwt.test.ts',

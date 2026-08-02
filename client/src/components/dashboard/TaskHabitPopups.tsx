@@ -56,8 +56,10 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   const [addingTo, setAddingTo] = useState<string | null>(null);
   // Which task is expanded into the detail/edit panel.
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  // Active tab — organizes tasks the way a task manager does.
-  const [tab, setTab] = useState<"today" | "recurring" | "upcoming">("today");
+  // Active tab — organizes tasks the way a task manager does. "One-time" and
+  // "Recurring" are the two kinds a task can be, and they get separate homes:
+  // a to-do you do once and are finished with is not a schedule.
+  const [tab, setTab] = useState<"today" | "onetime" | "recurring" | "upcoming">("today");
   // Rich add-task composer.
   const emptyComposer = { open: false, title: "", priority: "medium", recurrence: "", dueDate: "", dueTime: "", category: "" };
   const [composer, setComposer] = useState(emptyComposer);
@@ -357,6 +359,26 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   const todayTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => datedVisible(t) && (whenOf(t) === todayStr || (!t.dueDate && !isRecurringT(t))))), [pendingAll, todayStr, sortBy]);
   // Recurring tab = every series (incl. paused) for management.
   const recurringTasks = useMemo(() => sortTasks(pendingAll.filter(isRecurringT)), [pendingAll, sortBy]);
+  // One-time tab = every task that carries NO repeat schedule — the default
+  // shape of a task, and the counterpart to the Recurring tab. Grouped by when
+  // it is due so a long list stays scannable; undated one-offs get their own
+  // section instead of being findable only on Today.
+  const oneTimeTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => !isRecurringT(t))), [pendingAll, sortBy]);
+  const oneTimeSections = useMemo(() => {
+    const buckets: Record<string, any[]> = { overdue: [], today: [], later: [], undated: [] };
+    for (const t of oneTimeTasks) {
+      if (!t.dueDate) buckets.undated.push(t);
+      else if (t.dueDate < todayStr) buckets.overdue.push(t);
+      else if (t.dueDate === todayStr) buckets.today.push(t);
+      else buckets.later.push(t);
+    }
+    return [
+      { key: "onetime-overdue", label: "Overdue", items: buckets.overdue },
+      { key: "onetime-today", label: "Today", items: buckets.today },
+      { key: "onetime-later", label: "Upcoming", items: buckets.later },
+      { key: "onetime-undated", label: "No date", items: buckets.undated },
+    ].filter(s => s.items.length > 0);
+  }, [oneTimeTasks, todayStr]);
   // Upcoming tab = everything after today, grouped into smart sections.
   // Recurring series are managed on their own tab — listing their next
   // occurrence here too showed one task on two tabs at once.
@@ -378,7 +400,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     ].filter(s => s.items.length > 0);
   }, [upcomingPending, tomorrowStr, endThisWeek, endNextWeek]);
 
-  const tabCounts = { today: overdueTasks.length + todayTasks.length, recurring: recurringTasks.length, upcoming: upcomingPending.length };
+  const tabCounts = { today: overdueTasks.length + todayTasks.length, onetime: oneTimeTasks.length, recurring: recurringTasks.length, upcoming: upcomingPending.length };
   // Today progress (done today vs total touched today) for the summary bar.
   const doneToday = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).length, [tasks]);
   const todayTotal = overdueTasks.length + todayTasks.length + doneToday;
@@ -722,10 +744,11 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           <span className="text-[11px] text-muted-foreground tabular-nums">{doneToday}/{todayTotal} done today</span>
         </div>
 
-        {/* Tabs — Today / Recurring / Upcoming + sort */}
+        {/* Tabs — Today / One-time / Recurring / Upcoming + sort */}
         <div className="flex items-center gap-1 py-1 overflow-x-auto scrollbar-hide -mx-1 px-1">
           {([
             { key: "today", label: "Today", icon: Flame },
+            { key: "onetime", label: "One-time", icon: ListTodo },
             { key: "recurring", label: "Recurring", icon: Repeat },
             { key: "upcoming", label: "Upcoming", icon: CalendarDays },
           ] as const).map(({ key, label, icon: Icon }) => {
@@ -760,10 +783,17 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
               {/* Section header for the active tab */}
               <div className="flex items-center justify-between px-1 mb-2">
                 <span className="micro-label text-muted-foreground">
-                  {tab === "today" ? "Today's priorities" : tab === "recurring" ? "Recurring schedules" : "Upcoming"}
+                  {tab === "today" ? "Today's priorities" : tab === "onetime" ? "One-time tasks" : tab === "recurring" ? "Recurring schedules" : "Upcoming"}
                 </span>
                 <button onClick={() => setComposer(c => ({ ...emptyComposer, open: !c.open, recurrence: tab === "recurring" ? "weekly" : "" }))} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors" data-testid="button-add-task"><Plus className="h-4 w-4 text-muted-foreground" /></button>
               </div>
+              {/* Only tasks on a real schedule belong on the Recurring tab — say
+                  where the exit is for anything that landed here by mistake. */}
+              {tab === "recurring" && recurringTasks.length > 0 && (
+                <p className="px-1 mb-2 text-[11px] text-muted-foreground/70" data-testid="recurring-tab-hint">
+                  These repeat on a schedule. Done-once? Open it and tap <span className="font-medium">End repeat</span> to move it to One-time.
+                </p>
+              )}
 
               {/* ── Rich add-task composer ── */}
               {composer.open && (
@@ -829,6 +859,19 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                         <div className="space-y-2">{todayTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
                       </div>
                     )}
+                  </div>
+                )
+              ) : tab === "onetime" ? (
+                oneTimeSections.length === 0 && !composer.open ? (
+                  <div className="text-center py-10 text-sm text-muted-foreground">No one-time tasks — tap + to add one</div>
+                ) : (
+                  <div className="space-y-4">
+                    {oneTimeSections.map((s) => (
+                      <div key={s.key} data-testid={`section-${s.key}`}>
+                        <div className={`micro-label px-1 mb-1.5 ${s.key === "onetime-overdue" ? "text-red-500" : "text-muted-foreground"}`}>{s.label} ({s.items.length})</div>
+                        <div className="space-y-2">{s.items.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                      </div>
+                    ))}
                   </div>
                 )
               ) : tab === "recurring" ? (
