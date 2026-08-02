@@ -146,8 +146,18 @@ export function readStrengthEntry(values: Record<string, any> | null | undefined
   const repsKey = pickKey(values, isRepsFieldName, ["reps", "rep", "repetitions", "repcount"]);
   const setsKey = pickKey(values, isSetsFieldName, ["sets", "set", "setcount"]);
 
-  const weightPerSet = weightKey ? parseSetList(values[weightKey]) : null;
-  const repsPerSet = repsKey ? parseSetList(values[repsKey]) : null;
+  // Per-set values live in one of two shapes, and both must read the same:
+  //   raw from the model   → weight: "70/80/80"
+  //   normalized/stored    → weight: 80, weightPerSet: "70/80/80"
+  const perSetOf = (key: string | null): number[] | null => {
+    if (!key) return null;
+    const inField = parseSetList(values[key]);
+    if (inField) return inField;
+    const companion = Object.keys(values).find((k) => norm(k) === norm(`${key}PerSet`));
+    return companion ? parseSetList(values[companion]) : null;
+  };
+  const weightPerSet = perSetOf(weightKey);
+  const repsPerSet = perSetOf(repsKey);
 
   // Top set = the heaviest one. Reps pair by index when both lists align, so
   // "80 lbs × 8" reports the reps actually done at that load.
@@ -209,13 +219,19 @@ export function expandStrengthSetLists(
   const r = readStrengthEntry(values);
   if (!r.weightPerSet && !r.repsPerSet) return { values, warnings };
 
-  if (r.weightKey && r.weightPerSet && r.weight != null) {
+  // Idempotent: only a field still HOLDING a list needs rewriting. An entry
+  // already healed (weight 80 + weightPerSet "70/80/80") reads the same and is
+  // left byte-identical, so re-running the backfill is a no-op.
+  const holdsList = (key: string | null) => !!key && typeof values[key] === "string" && parseSetList(values[key]) != null;
+  if (!holdsList(r.weightKey) && !holdsList(r.repsKey)) return { values, warnings };
+
+  if (r.weightKey && holdsList(r.weightKey) && r.weightPerSet && r.weight != null) {
     const detailKey = `${r.weightKey}PerSet`;
     if (values[detailKey] == null || values[detailKey] === "") values[detailKey] = formatSetList(r.weightPerSet);
     values[r.weightKey] = r.weight;
     warnings.push(`Per-set ${r.weightKey} "${formatSetList(r.weightPerSet)}" → top set ${r.weight} (detail kept in ${detailKey})`);
   }
-  if (r.repsKey && r.repsPerSet && r.reps != null) {
+  if (r.repsKey && holdsList(r.repsKey) && r.repsPerSet && r.reps != null) {
     const detailKey = `${r.repsKey}PerSet`;
     if (values[detailKey] == null || values[detailKey] === "") values[detailKey] = formatSetList(r.repsPerSet);
     values[r.repsKey] = r.reps;

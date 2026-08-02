@@ -171,3 +171,28 @@ describe("expandStrengthSetLists", () => {
     expect(expandStrengthSetLists(scalars).values).toEqual(scalars);
   });
 });
+
+describe("per-set detail stored alongside the number", () => {
+  // After the normalizer runs (or the backfill heals a row), the entry holds
+  // BOTH the top set and the full list. Reading it must give the same answer as
+  // reading the raw shape, so the card can still show "70/80/80 lbs".
+  const HEALED = { weight: 80, weightPerSet: "70/80/80", reps: 8, repsPerSet: "10/8/6", sets: 3, totalVolume: 1820 };
+
+  it("reads a companion *PerSet field", () => {
+    const r = readStrengthEntry(HEALED);
+    expect(r.weight).toBe(80);
+    expect(r.weightPerSet).toEqual([70, 80, 80]);
+    expect(r.reps).toBe(8);
+    expect(r.repsPerSet).toEqual([10, 8, 6]);
+    expect(r.totalVolume).toBe(1820);
+  });
+
+  it("is idempotent — re-expanding a healed entry changes nothing", () => {
+    const { values, warnings } = expandStrengthSetLists(HEALED);
+    expect(values).toEqual(HEALED);
+    expect(warnings).toEqual([]);
+    // And expanding twice from the raw shape lands in the same place.
+    const once = expandStrengthSetLists(INCLINE_PRESS).values;
+    expect(expandStrengthSetLists(once).values).toEqual(once);
+  });
+});

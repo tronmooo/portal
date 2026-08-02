@@ -95,3 +95,14 @@ describe("summarizeLiftEntry — normal lifts", () => {
     expect(s.unit).toBe("lbs");
   });
 });
+
+describe("summarizeLiftEntry — healed entries keep their per-set detail", () => {
+  it("shows the sets the user actually did", () => {
+    const s = summarizeLiftEntry(LIFT_TRACKER, {
+      weight: 80, weightPerSet: "70/80/80", reps: 8, repsPerSet: "10/8/6", sets: 3, totalVolume: 1820,
+    });
+    expect(s.value).toBe("80");
+    expect(s.unit).toBe("lbs");
+    expect(s.subline).toBe("70/80/80 lbs · 10/8/6 reps · 3 sets");
+  });
+});
