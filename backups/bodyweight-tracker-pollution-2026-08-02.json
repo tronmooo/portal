@@ -1,0 +1,38 @@
+[
+  {
+    "note": "Body-weight trackers that a workout had polluted, before cleanup (2026-08-02).",
+    "id": "9f21a116-b688-4b51-8177-d45cdbcf4b65",
+    "name": "Weight",
+    "profile": "Test",
+    "fields": [
+      {"name":"weight","type":"number"},
+      {"name":"activityType","type":"text"},
+      {"name":"duration","type":"number","unit":"min"},
+      {"name":"caloriesBurned","type":"number","unit":"kcal"},
+      {"name":"intensity","type":"text"}
+    ],
+    "misfiled_entry": {
+      "timestamp": "2026-07-02T15:27:47.628+00:00",
+      "entry_values": {"duration":45,"intensity":"moderate","activityType":"weight lifting","caloriesBurned":270},
+      "action": "moved to its own 'Weight Lifting' tracker for the same profile"
+    }
+  },
+  {
+    "id": "f0a0887a-696e-4775-ae89-809aef2691eb",
+    "name": "Weight",
+    "profile": "robert sennabaum",
+    "fields": [
+      {"name":"weight","type":"number"},
+      {"name":"activityType","type":"text"},
+      {"name":"exercise","type":"text"},
+      {"name":"sets","type":"number","unit":"sets"},
+      {"name":"reps","type":"text"},
+      {"name":"weightLbs","type":"text"},
+      {"name":"notes","type":"text"},
+      {"name":"caloriesBurned","type":"number","unit":"kcal"},
+      {"name":"intensity","type":"text"},
+      {"name":"totalVolume","type":"number"}
+    ],
+    "misfiled_entry": null
+  }
+]
