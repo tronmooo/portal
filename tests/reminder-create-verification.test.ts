@@ -169,3 +169,96 @@ describe("complete_task retires the reminder it was set for", () => {
     expect(remaining.map(r => r.title)).toEqual(["Call the dentist"]);
   });
 });
+
+// ── Deleting a schedule written as several rows ──────────────────────────────
+//
+// Reported 2026-08-04: "This would be considered a recurring task and if I
+// delete it in the tasks, it should also be deleted in the calendar tab as
+// well, especially in the recurring tab."
+//
+// The monthly refill is six task rows with no recurrence tag. Deleting one left
+// the other five on the calendar and kept the schedule listed as recurring.
+describe("delete_task on a materialized schedule", () => {
+  // A distinct medication per test: the executor's in-memory dedup lock is
+  // module-level and would suppress a re-seed of the same titles.
+  const refillsFor = (med: string) => [
+    { title: `Refill ${med} prescription (100mg) - August`, dueDate: "2027-08-08" },
+    { title: `Refill ${med} prescription (100mg) - September`, dueDate: "2027-09-07" },
+    { title: `Refill ${med} prescription (100mg) - October`, dueDate: "2027-10-07" },
+  ];
+
+  async function seed(storage: MemStorage, med: string) {
+    return requestStorageContext.run(storage, async () => {
+      for (const r of refillsFor(med)) await executeTool("create_task", r, USER);
+    });
+  }
+
+  it("removes every occurrence, not just the one named", async () => {
+    const storage = new MemStorage();
+    await seed(storage, "Propranolol");
+    const out = await requestStorageContext.run(storage, async () => {
+      const res = await executeTool("delete_task", { title: "Refill Propranolol prescription (100mg) - September" }, USER);
+      const left = (await storage.getTasks()).filter((t: any) => !t.deletedAt && /Propranolol/.test(t.title));
+      return { res, left };
+    });
+
+    expect(out.res.seriesDeleted).toBe(true);
+    expect(out.res.count).toBe(3);
+    expect(out.res.recurrence).toBe("monthly");
+    // Gone from the tasks table, which is what the calendar and the recurring
+    // tab both read — one delete, every surface.
+    expect(out.left).toHaveLength(0);
+  });
+
+  it("tells the model to report it as a repeating task", async () => {
+    const storage = new MemStorage();
+    await seed(storage, "Metformin");
+    const res = await requestStorageContext.run(storage, () =>
+      executeTool("delete_task", { title: "Refill Metformin" }, USER));
+    expect(res.message).toMatch(/whole/i);
+    expect(res.message).toMatch(/monthly/i);
+    expect(res.message).toMatch(/calendar/i);
+  });
+
+  // Naming the SCHEDULE rather than one occurrence used to be refused:
+  // "Multiple matches for 'Refill Propranolol'. Please be more specific."
+  // Every one of those matches is the thing the user meant.
+  it("resolves 'which one?' into the series instead of refusing", async () => {
+    const storage = new MemStorage();
+    await seed(storage, "Lisinopril");
+    const out = await requestStorageContext.run(storage, async () => {
+      const res = await executeTool("delete_task", { title: "Refill Lisinopril" }, USER);
+      const left = (await storage.getTasks()).filter((t: any) => /Lisinopril/.test(t.title));
+      return { res, left };
+    });
+    expect(out.res.error).toBeUndefined();
+    expect(out.res.seriesDeleted).toBe(true);
+    expect(out.res.count).toBe(3);
+    expect(out.left).toHaveLength(0);
+  });
+
+  // ...but a genuinely ambiguous title across UNRELATED tasks must still ask.
+  it("still refuses when the matches are not one schedule", async () => {
+    const storage = new MemStorage();
+    const res = await requestStorageContext.run(storage, async () => {
+      await executeTool("create_task", { title: "Pay the water bill", dueDate: "2027-08-04" }, USER);
+      await executeTool("create_task", { title: "Pay the power bill", dueDate: "2027-08-05" }, USER);
+      return executeTool("delete_task", { title: "Pay the" }, USER);
+    });
+    expect(res.error).toMatch(/multiple|specific|not found/i);
+    expect(res.seriesDeleted).toBeUndefined();
+  });
+
+  it("leaves an ordinary one-off task deleting exactly one row", async () => {
+    const storage = new MemStorage();
+    const out = await requestStorageContext.run(storage, async () => {
+      await executeTool("create_task", { title: "Book the chimney sweep", dueDate: "2027-08-04" }, USER);
+      await executeTool("create_task", { title: "Order new tyres", dueDate: "2027-08-15" }, USER);
+      const res = await executeTool("delete_task", { title: "Book the chimney sweep" }, USER);
+      const left = (await storage.getTasks()).filter((t: any) => !t.deletedAt);
+      return { res, left };
+    });
+    expect(out.res.seriesDeleted).toBeUndefined();
+    expect(out.left.map((t: any) => t.title)).toEqual(["Order new tyres"]);
+  });
+});

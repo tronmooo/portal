@@ -59,6 +59,7 @@ import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime } from "@shared/timezone";
 import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
+import { groupMaterializedSeries } from "@shared/series-detect";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
@@ -4887,6 +4888,7 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 - update: update_task(title, changes)
 - delete: delete_task(title, forProfile?)
 - If complete_task returns not-found: say "Task not found" — do NOT create_task as a fallback
+- REPEATING TASKS WRITTEN AS SEVERAL ROWS: a schedule is sometimes stored as one task per occurrence ("Refill X - August", "Refill X - September", …) with no recurrence tag. Treat those as ONE repeating task, not several: describe it as "a monthly schedule with N occurrences", never as separate to-dos. delete_task removes the WHOLE series and reports seriesDeleted + count — say how many occurrences went and that it is gone from tasks, calendar and recurring dates. To drop a single occurrence the user must name its date ("delete the September refill").
 
 ━━━ HABIT CRUD ━━━
 - create: create_habit(name, forProfile?)
@@ -7165,8 +7167,61 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const prof = matchProfileByName(allProfs, input.forProfile);
         if (prof) taskPool = tasks.filter(t => (t.linkedProfiles || []).includes(prof.id));
       }
+      // A REPEATING task written as several rows ("Refill … - August",
+      // "… - September", …) is ONE thing to the user: "delete my Propranolol
+      // refill" means the schedule, not the August row. Two failures came out
+      // of not knowing that (reported 2026-08-04):
+      //
+      //   1. matching one row and deleting it left the rest on the calendar and
+      //      kept the schedule listed under recurring dates;
+      //   2. a title that named the schedule rather than one occurrence matched
+      //      all of them and the tool REFUSED — "Multiple matches for 'Refill
+      //      Propranolol'. Please be more specific." Asking someone to choose
+      //      between three rows of one schedule is not a disambiguation; every
+      //      one of them is the thing they meant.
+      //
+      // Detection is shared with the UI (shared/series-detect) so the chat and
+      // the delete dialog agree about what the series is.
+      const taskSeriesGroups = groupMaterializedSeries(
+        tasks.filter(t => t?.id && t.dueDate).map(t => ({
+          id: String(t.id),
+          title: t.title,
+          date: String(t.dueDate).slice(0, 10),
+          ownerId: Array.isArray(t.linkedProfiles) ? t.linkedProfiles[0] ?? null : null,
+          tags: Array.isArray(t.tags) ? t.tags.map(String) : [],
+        })),
+      );
+      const seriesContaining = (id: string) =>
+        taskSeriesGroups.find(g => g.rows.some(r => r.id === String(id)));
+
+      const deleteWholeSeries = async (g: (typeof taskSeriesGroups)[number]) => {
+        let removed = 0;
+        for (const r of g.rows) if (await storage.deleteTask(r.id)) removed++;
+        return {
+          deleted: true,
+          title: g.stem,
+          id: g.rows[0].id,
+          seriesDeleted: true,
+          count: removed,
+          recurrence: g.recurrence,
+          message: `Deleted the whole "${g.stem}" schedule — all ${removed} ${g.recurrence} occurrences, so it is gone from tasks, the calendar and recurring dates. Tell the user it was a repeating task and how many occurrences went.`,
+        };
+      };
+
       const result = safeMatchEntity(taskPool, input.title || "", t => t.title, { isDestructive: true });
-      if (!result.match) return { error: result.error || "Task not found", candidates: result.candidates };
+      if (!result.match) {
+        // Ambiguity that is really one schedule: resolve it instead of refusing.
+        const ids = (result.candidates || []).map((c: any) => String(c?.id)).filter(Boolean);
+        if (ids.length > 1) {
+          const g = seriesContaining(ids[0]);
+          if (g && ids.every(id => g.rows.some(r => r.id === id))) return deleteWholeSeries(g);
+        }
+        return { error: result.error || "Task not found", candidates: result.candidates };
+      }
+
+      const matchedSeries = seriesContaining(result.match.id);
+      if (matchedSeries && matchedSeries.rows.length > 1) return deleteWholeSeries(matchedSeries);
+
       await storage.deleteTask(result.match.id);
       return { deleted: true, title: result.match.title, id: result.match.id };
     }
