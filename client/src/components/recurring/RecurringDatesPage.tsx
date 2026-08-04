@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Plus, Bell } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
-  CALENDAR_CATEGORIES, countRules, filterSeriesByCategory, seriesInCategory,
+  CALENDAR_CATEGORIES, categoryChips, countRules, filterSeriesByCategory, seriesInCategory,
   type CalendarCategory,
 } from "@shared/calendar-categories";
 import {
@@ -145,6 +145,13 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
     () => filterSeriesByCategory(cal.series, category, nextDateFor, { todayISO: today }),
     [cal.series, category, nextDateFor, today],
   );
+  // Chips worth offering: non-empty, plus "All", plus whatever is selected.
+  const visibleChips = useMemo(() => {
+    const chips = categoryChips(counts, { hideEmpty: true });
+    return chips.some((c) => c.id === category)
+      ? chips
+      : [...chips, ...categoryChips(counts).filter((c) => c.id === category)];
+  }, [counts, category]);
 
   // Upcoming view: future dates in the active category, grouped by day.
   const grouped = useMemo(() => {
@@ -244,7 +251,14 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
       {/* ── Category chips: horizontally scrollable on mobile ─────────────── */}
       <div className="-mx-1 px-1 overflow-x-auto no-scrollbar" data-testid="category-chips">
         <div className="flex gap-1.5 w-max pb-0.5">
-          {CALENDAR_CATEGORIES.map((c) => {
+          {/* A chip reading "Liabilities 0" is a dead filter offering nothing.
+              Reported 2026-08-04: the row read `Liabilities 0 · Documents 0 ·
+              Tasks 0 · Reminders 0 · Events 0` above a list of five live rules.
+              `categoryChips` already drops empty categories (keeping "All"), so
+              a chip now appears exactly when it has something to show — and the
+              ACTIVE chip is kept even at zero, or selecting it would make the
+              filter you are looking at vanish mid-interaction. */}
+          {visibleChips.map((c) => {
             const active = category === c.id;
             return (
               <button

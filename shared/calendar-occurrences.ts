@@ -200,6 +200,14 @@ export interface CalendarSeries {
    * source. Adapters set this; `dedupeSeries` enforces it.
    */
   shadow?: boolean;
+  /**
+   * Set when the series was INFERRED from several materialized rows rather than
+   * read off a recurrence rule (shared/series-detect) — e.g. six monthly
+   * "Refill … - August/September/…" tasks that carry no `recur:` tag. Carries
+   * the member row ids so a later pass can edit or cancel the whole series;
+   * absent for rules that genuinely store their own recurrence.
+   */
+  materializedFrom?: { seriesKey: string; rowIds: string[] };
 }
 
 

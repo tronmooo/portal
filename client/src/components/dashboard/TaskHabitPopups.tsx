@@ -18,6 +18,7 @@ import {
   nextOccurrence as nextRecurOccurrence, seriesEnded, humanSummary, freqToUnit,
   type RecurrenceRule,
 } from "@shared/recurrence";
+import { groupMaterializedSeries } from "@shared/series-detect";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -42,8 +43,16 @@ import {
 } from "lucide-react";
 
 // Same short-date formatter the dashboard page uses (kept local — 2 lines).
+//
+// The `T00:00:00` is load-bearing. `new Date("2026-08-08")` is parsed as UTC
+// midnight, and rendering that in any timezone west of UTC lands on the
+// PREVIOUS day — so a task due Aug 8 read "Aug 7" here while the Calendar tab
+// correctly said August 8 (reported 2026-08-04, visible on every dated task,
+// not just the refills). Appending the time parses it as LOCAL midnight, which
+// is what a bare YYYY-MM-DD due date means.
 function fmtDate(d: string): string {
-  return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(`${String(d ?? "").slice(0, 10)}T00:00:00`)
+    .toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 // ─── Tasks Popup ──────────────────────────────────────────────────────────────
 
@@ -71,7 +80,10 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   // Sort within a tab.
   const [sortBy, setSortBy] = useState<"smart" | "priority" | "due">("smart");
   // U1 fix: track which task is pending confirmation before delete.
-  const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string } | null>(null);
+  // `seriesIds` is set when the task belongs to a detected schedule, so the
+  // dialog can offer "just this one" vs "the whole series" instead of silently
+  // deleting one row and leaving the other occurrences behind.
+  const [taskToDelete, setTaskToDelete] = useState<{ id: string; title: string; seriesIds?: string[] } | null>(null);
   // Profiles for the assigned-to chip (id → name).
   const { data: allProfiles = [] } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
@@ -203,6 +215,29 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     },
   });
 
+  // Deleting a whole detected schedule: every generated row goes, so the
+  // schedule disappears from Tasks, the Calendar grid and the Recurring Dates
+  // tab together (all three read the same task rows). Deleting one row only
+  // would shrink the series and leave it listed — reported 2026-08-04.
+  const deleteSeriesMutation = useMutation({
+    mutationFn: async ({ ids }: { ids: string[]; title: string }) => {
+      const real = ids.filter((id) => !isTempId(id));
+      if (real.length === 0) throw new Error(STILL_SAVING);
+      // Sequential, not parallel: a burst of deletes against the same user hits
+      // the write path harder than the saving is worth.
+      for (const id of real) await apiRequest("DELETE", `/api/tasks/${id}`);
+      return real.length;
+    },
+    onSuccess: (count: number, { title }) => {
+      toast({ title: `Deleted ${count} occurrence${count === 1 ? "" : "s"}`, description: `“${title}” was removed from your tasks, calendar and recurring dates.` });
+    },
+    onError: (e: any) => {
+      if (String(e?.message) === STILL_SAVING) { stillSavingToast(); return; }
+      toast({ title: "Couldn't delete the series", variant: "destructive" });
+    },
+    onSettled: () => { invalidateDomain("tasks"); },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: ({ id }: { id: string }) => {
       // Deleting a temp row would no-op on the server while the real task is
@@ -262,9 +297,59 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   // ── Recurrence + metadata helpers ──
   // Recurrence rules and rich task metadata live in the task's `tags` array (no
   // schema column), so everything persists through the normal tasks API.
-  const ruleOf = (t: any): RecurrenceRule => parseRecurrence(t.tags || []);
+  // ── Schedules written as several rows ──
+  //
+  // Not every repeating task carries a `recur:` tag. A monthly prescription
+  // refill was generated as six separate dated rows ("… - August", "… -
+  // September", …) with no rule between them, so this popup filed them under
+  // One-time and reported "Recurring (0)" — reported 2026-08-04, and the same
+  // gap the Recurring Dates screen had. `groupMaterializedSeries` recognises
+  // the shape at read time (shared/series-detect); nothing is migrated.
+  //
+  // Detection runs over ALL tasks, completed ones included: the finished May–
+  // July refills are the evidence that the remaining three are a monthly
+  // schedule and not three coincidences.
+  const detectedSeries = useMemo(() => {
+    const groups = groupMaterializedSeries(
+      (tasks || [])
+        .filter((t: any) => t?.id && t.dueDate)
+        .map((t: any) => ({
+          id: String(t.id),
+          title: t.title,
+          date: String(t.dueDate).slice(0, 10),
+          ownerId: Array.isArray(t.linkedProfiles) ? t.linkedProfiles[0] ?? null : null,
+          tags: Array.isArray(t.tags) ? t.tags.map(String) : [],
+          row: t,
+        })),
+    );
+    const byId = new Map<string, { recurrence: string; openIds: string[]; rowIds: string[] }>();
+    const anchors = new Set<string>();
+    for (const g of groups) {
+      const open = g.rows.filter((r: any) => normalizeFilter(r.row.status) !== normalizeFilter("done"));
+      if (open.length === 0) continue; // schedule already finished
+      anchors.add(open[0].id);
+      const meta = { recurrence: g.recurrence, openIds: open.map((r: any) => r.id), rowIds: g.rows.map((r: any) => r.id) };
+      for (const r of g.rows) byId.set(r.id, meta);
+    }
+    return { byId, anchors };
+  }, [tasks]);
+  /** Every member of a detected schedule, anchor or not. */
+  const inSeries = (t: any) => detectedSeries.byId.has(String(t?.id));
+  /** The one row that REPRESENTS the schedule — its earliest open occurrence. */
+  const isSeriesAnchor = (t: any) => detectedSeries.anchors.has(String(t?.id));
+  const seriesMetaOf = (t: any) => detectedSeries.byId.get(String(t?.id));
+
+  const ruleOf = (t: any): RecurrenceRule => {
+    const tagged = parseRecurrence(t.tags || []);
+    if (tagged.freq) return tagged;
+    // A detected schedule has a real cadence even with no rule in its tags, so
+    // the card can say "Monthly" instead of "Does not repeat".
+    const meta = seriesMetaOf(t);
+    if (!meta) return tagged;
+    return { ...tagged, freq: meta.recurrence, ...freqToUnit(meta.recurrence) };
+  };
   const isReminderT = (t: any) => (t.tags || []).includes("reminder") || t.source === "reminder";
-  const isRecurringT = (t: any) => isRecurringRule(t.tags || []);
+  const isRecurringT = (t: any) => isRecurringRule(t.tags || []) || inSeries(t);
   const setRule = (t: any, rule: RecurrenceRule) =>
     updateMutation.mutate({ id: t.id, patch: { tags: recurrenceToTags(rule, t.tags || []) } });
 
@@ -360,8 +445,14 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   // in here too, by their next occurrence date.
   const overdueTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => datedVisible(t) && t.dueDate && t.dueDate < todayStr)), [pendingAll, todayStr, sortBy]);
   const todayTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => datedVisible(t) && (whenOf(t) === todayStr || (!t.dueDate && !isRecurringT(t))))), [pendingAll, todayStr, sortBy]);
-  // Recurring tab = every series (incl. paused) for management.
-  const recurringTasks = useMemo(() => sortTasks(pendingAll.filter(isRecurringT)), [pendingAll, sortBy]);
+  // Recurring tab = every series (incl. paused) for management. A DETECTED
+  // schedule contributes ONE row — its earliest open occurrence — not one row
+  // per generated task, or "the monthly refill" would read as three separate
+  // recurring tasks.
+  const recurringTasks = useMemo(
+    () => sortTasks(pendingAll.filter((t: any) => isRecurringRule(t.tags || []) || isSeriesAnchor(t))),
+    [pendingAll, sortBy, detectedSeries],
+  );
   // One-time tab = every task that carries NO repeat schedule — the default
   // shape of a task, and the counterpart to the Recurring tab. Grouped by when
   // it is due so a long list stays scannable; undated one-offs get their own
@@ -515,7 +606,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
         {/* Right: delete (completed) / expand */}
         <div className="flex items-center gap-1.5 shrink-0">
           {dimmed ? (
-            <button onClick={() => setTaskToDelete({ id: t.id, title: t.title })} disabled={deleteMutation.isPending}
+            <button onClick={() => setTaskToDelete({ id: t.id, title: t.title, seriesIds: seriesMetaOf(t)?.rowIds })} disabled={deleteMutation.isPending}
               className="text-muted-foreground/40 hover:text-destructive min-w-[36px] min-h-[36px] flex items-center justify-center disabled:opacity-40" aria-label="Delete task" data-testid={`btn-delete-task-${t.id}`}><X className="h-3.5 w-3.5" /></button>
           ) : (
             <button onClick={() => setExpandedId(expanded ? null : t.id)} className="min-w-[36px] min-h-[36px] flex items-center justify-center text-muted-foreground/50" aria-label="Edit task" data-testid={`task-expand-${t.id}`}>
@@ -740,7 +831,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
             {onCalendar
               ? <span className="inline-flex items-center gap-1 text-[11px] text-sky-600 dark:text-sky-400"><CalendarDays className="h-3 w-3" />On calendar</span>
               : <span className="text-[11px] text-muted-foreground/50">Add a due date to put it on the calendar</span>}
-            <button onClick={() => setTaskToDelete({ id: t.id, title: t.title })} className="text-[11px] text-muted-foreground/60 hover:text-destructive inline-flex items-center gap-1" data-testid={`task-delete-${t.id}`}>
+            <button onClick={() => setTaskToDelete({ id: t.id, title: t.title, seriesIds: seriesMetaOf(t)?.rowIds })} className="text-[11px] text-muted-foreground/60 hover:text-destructive inline-flex items-center gap-1" data-testid={`task-delete-${t.id}`}>
               <Trash2 className="h-3 w-3" />Delete
             </button>
           </div>
@@ -982,21 +1073,39 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       <AlertDialog open={taskToDelete !== null} onOpenChange={(open) => { if (!open) setTaskToDelete(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this task?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {(taskToDelete?.seriesIds?.length ?? 0) > 1 ? "Delete this repeating task?" : "Delete this task?"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {taskToDelete ? `“${taskToDelete.title}” will be permanently removed.` : "This task will be permanently removed."}
+              {(taskToDelete?.seriesIds?.length ?? 0) > 1
+                ? `“${taskToDelete!.title}” repeats — there ${taskToDelete!.seriesIds!.length === 2 ? "is" : "are"} ${taskToDelete!.seriesIds!.length} occurrences in this schedule. Deleting the whole series also clears it from your calendar and recurring dates.`
+                : taskToDelete ? `“${taskToDelete.title}” will be permanently removed.` : "This task will be permanently removed."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
+            {/* A repeating task gets both scopes, the way a calendar app does —
+                never a single button that silently destroys the siblings. */}
+            {(taskToDelete?.seriesIds?.length ?? 0) > 1 && (
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => {
+                  if (taskToDelete) deleteSeriesMutation.mutate({ ids: taskToDelete.seriesIds!, title: taskToDelete.title });
+                  setTaskToDelete(null);
+                }}
+                data-testid="btn-confirm-delete-task-series"
+              >{`Delete all ${taskToDelete!.seriesIds!.length}`}</AlertDialogAction>
+            )}
             <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className={(taskToDelete?.seriesIds?.length ?? 0) > 1
+                ? "bg-muted text-foreground hover:bg-muted/80"
+                : "bg-destructive text-destructive-foreground hover:bg-destructive/90"}
               onClick={() => {
                 if (taskToDelete) deleteMutation.mutate({ id: taskToDelete.id });
                 setTaskToDelete(null);
               }}
               data-testid="btn-confirm-delete-task"
-            >Delete</AlertDialogAction>
+            >{(taskToDelete?.seriesIds?.length ?? 0) > 1 ? "Just this one" : "Delete"}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

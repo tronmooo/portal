@@ -10,6 +10,7 @@ import { categoryTheme } from "@/lib/category-theme";
 import { MetricCard } from "@/components/ui/metric-card";
 import { formatMoneyRound } from "@/lib/format";
 import { resolveAssetValue, resolveLiabilityBalance, isNetWorthLiabilityProfile } from "@shared/asset-value";
+import { parseISODate } from "@shared/date-math";
 import { goalsQueryKey } from "@shared/query-keys";
 import {
   RECUR_PRESETS, parseRecurrence, recurrenceToTags, isRecurring as isRecurringRule,
@@ -134,12 +135,18 @@ function timeAgo(ts: string): string {
   return `${days}d ago`;
 }
 
+// `parseISODate` (shared/date-math) reads YYYY-MM-DD at LOCAL midnight.
+// `new Date("2026-08-08")` is UTC midnight, which renders as Aug 7 anywhere
+// west of UTC — every dated task on this page showed a day early (reported
+// 2026-08-04, and why the Tasks popup disagreed with the Calendar tab).
 function fmtDate(d: string): string {
-  return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return (parseISODate(d) ?? new Date(d))
+    .toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function fmtDateWithYear(d: string): string {
-  return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return (parseISODate(d) ?? new Date(d))
+    .toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function journalStreakLabel(streak: number): string {
@@ -1991,7 +1998,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
   const soonTasks: any[] = useMemo(() => {
     const raw: any[] = (enhanced?.tasksDueSoon || []).filter((t: any) => {
       if (!t.dueDate) return false;
-      const d = new Date(t.dueDate);
+      const d = parseISODate(t.dueDate) ?? new Date(t.dueDate);
       d.setHours(0, 0, 0, 0);
       const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
       return diff >= 0 && diff <= 7;
@@ -1999,7 +2006,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     const allTasks: any[] = enhanced?.upcomingTasks || [];
     const combined = [...raw, ...allTasks.filter((t: any) => {
       if (!t.dueDate) return false;
-      const d = new Date(t.dueDate);
+      const d = parseISODate(t.dueDate) ?? new Date(t.dueDate);
       d.setHours(0, 0, 0, 0);
       const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
       return diff >= 0 && diff <= 7;
@@ -2094,7 +2101,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
 
     // Overdue tasks (most urgent first = oldest overdue first)
     for (const t of overdueTasks) {
-      const d = t.dueDate ? new Date(t.dueDate) : new Date(0);
+      const d = (t.dueDate ? parseISODate(t.dueDate) : null) ?? (t.dueDate ? new Date(t.dueDate) : new Date(0));
       d.setHours(0, 0, 0, 0);
       const days = Math.ceil((now.getTime() - d.getTime()) / 86400000);
       items.push({
@@ -2107,7 +2114,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     // Overdue bills intentionally omitted — bills have no overdue status.
     // Due soon tasks
     for (const t of soonTasks) {
-      const d = new Date(t.dueDate);
+      const d = parseISODate(t.dueDate) ?? new Date(t.dueDate);
       d.setHours(0, 0, 0, 0);
       const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
       const label = diff === 0 ? "Today" : diff === 1 ? "Tomorrow" : `in ${diff}d`;

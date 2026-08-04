@@ -145,16 +145,18 @@ describe("the reported bug: a future birthday is never 'done'", () => {
 });
 
 describe("every chip, in both views", () => {
-  it("renders without error for all 8 chips × 2 views", () => {
+  it("renders without error for every rendered chip × 2 views", () => {
     mount();
-    for (const chip of CALENDAR_CATEGORIES) {
-      fireEvent.click(screen.getByTestId(`chip-${chip.id}`));
+    const ids = renderedChipIds();
+    expect(ids.length).toBeGreaterThan(1); // the sweep must actually sweep
+    for (const id of ids) {
+      fireEvent.click(screen.getByTestId(`chip-${id}`));
       for (const view of ["rules", "upcoming"]) {
         fireEvent.click(screen.getByTestId(`view-${view}`));
         // Exactly one of list / empty-state is present — never both, never neither.
         const list = screen.queryByTestId(view === "rules" ? "rules-list" : "upcoming-list");
         const empty = screen.queryByTestId("recurring-empty");
-        expect(Boolean(list) !== Boolean(empty), `${chip.id}/${view}`).toBe(true);
+        expect(Boolean(list) !== Boolean(empty), `${id}/${view}`).toBe(true);
       }
     }
   });
@@ -170,9 +172,12 @@ describe("every chip, in both views", () => {
 
   it("never shows a negative or NaN count", () => {
     mount();
-    for (const chip of CALENDAR_CATEGORIES) {
-      const n = Number(screen.getByTestId(`chip-${chip.id}`).textContent!.replace(/\D/g, "") || "0");
-      expect(Number.isFinite(n) && n >= 0, chip.id).toBe(true);
+    for (const id of renderedChipIds()) {
+      const n = Number(screen.getByTestId(`chip-${id}`).textContent!.replace(/\D/g, "") || "0");
+      expect(Number.isFinite(n) && n >= 0, id).toBe(true);
+      // A rendered source chip always has something behind it; only "All" and
+      // the active chip may legitimately read zero.
+      if (id !== "all" && id !== "important") expect(n, id).toBeGreaterThan(0);
     }
   });
 });
@@ -254,6 +259,15 @@ describe("row overflow menus", () => {
   });
 });
 
+/**
+ * The chips actually on screen. Empty categories are no longer rendered
+ * (a "Liabilities 0" chip is a filter that can only show nothing), so a sweep
+ * must read the DOM instead of assuming every CALENDAR_CATEGORIES entry exists.
+ */
+const renderedChipIds = (): string[] =>
+  Array.from(screen.getByTestId("category-chips").querySelectorAll("[data-testid^='chip-']"))
+    .map((el) => el.getAttribute("data-testid")!.replace(/^chip-/, ""));
+
 describe("performance", () => {
   it("renders the whole page well inside a frame budget", () => {
     const start = performance.now();
@@ -265,11 +279,10 @@ describe("performance", () => {
   it("switching chips does not re-render unboundedly", () => {
     mount();
     const before = generateCalls;
-    for (const chip of CALENDAR_CATEGORIES) {
-      fireEvent.click(screen.getByTestId(`chip-${chip.id}`));
-    }
+    const ids = renderedChipIds();
+    for (const id of ids) fireEvent.click(screen.getByTestId(`chip-${id}`));
     // One render per interaction, not a cascade.
-    expect(generateCalls - before).toBeLessThanOrEqual(CALENDAR_CATEGORIES.length * 2);
+    expect(generateCalls - before).toBeLessThanOrEqual(ids.length * 2);
   });
 
   it("caps the Upcoming list so a five-year horizon cannot flood the DOM", () => {

@@ -102,11 +102,19 @@ const mount = () =>
   render(<RecurringDatesPage filterIds={[]} filterMode="everyone" />);
 
 describe("category chips count unique rules, not occurrences", () => {
-  it("shows one chip per category with a rule count", () => {
+  // A chip reading "Liabilities 0" is a dead filter: tapping it can only ever
+  // show an empty list. Reported 2026-08-04 — the row read
+  // "Liabilities 0 · Documents 0 · Tasks 0 · Reminders 0 · Events 0" above a
+  // list of five live rules. A chip now appears only when it has something.
+  it("shows a chip for every category that HAS rules, and none for those that don't", () => {
     mount();
     const chips = screen.getByTestId("category-chips");
-    for (const id of ["all", "birthdays", "important", "bills", "subscriptions", "liabilities", "tasks", "reminders"]) {
-      expect(within(chips).getByTestId(`chip-${id}`)).toBeTruthy();
+    for (const id of ["all", "birthdays", "subscriptions", "tasks"]) {
+      expect(within(chips).queryByTestId(`chip-${id}`), id).toBeTruthy();
+    }
+    // This fixture has no liability, document, reminder or plain-event rule.
+    for (const id of ["liabilities", "documents", "reminders", "events"]) {
+      expect(within(chips).queryByTestId(`chip-${id}`), id).toBeNull();
     }
   });
 
@@ -125,9 +133,14 @@ describe("category chips count unique rules, not occurrences", () => {
   it("never counts a merged payment under both of its labels", () => {
     mount();
     const chips = screen.getByTestId("category-chips");
-    const subs = Number(within(chips).getByTestId("chip-subscriptions").textContent!.replace(/\D/g, ""));
-    const liab = Number(within(chips).getByTestId("chip-liabilities").textContent!.replace(/\D/g, ""));
-    const bills = Number(within(chips).getByTestId("chip-bills").textContent!.replace(/\D/g, ""));
+    // An absent chip is a zero — empty categories are no longer rendered.
+    const countOf = (id: string) => {
+      const el = within(chips).queryByTestId(`chip-${id}`);
+      return el ? Number(el.textContent!.replace(/\D/g, "") || "0") : 0;
+    };
+    const subs = countOf("subscriptions");
+    const liab = countOf("liabilities");
+    const bills = countOf("bills");
     expect(subs + liab + bills).toBe(2); // ChatGPT Pro + Progressive, once each
   });
 });
@@ -179,10 +192,13 @@ describe("category filtering", () => {
     expect(within(list).queryByText("ChatGPT Pro")).toBeNull();
   });
 
-  it("shows an empty state for a category with no rules", () => {
+  // The old behaviour was to render "Reminders 0", let the user tap it, and
+  // show them an empty list. The dead end is now unreachable by construction:
+  // the chip for a category with no rules is never offered.
+  it("offers no chip for a category with no rules, so the dead end is unreachable", () => {
     mount();
-    fireEvent.click(screen.getByTestId("chip-reminders"));
-    expect(screen.getByTestId("recurring-empty")).toBeTruthy();
+    const chips = screen.getByTestId("category-chips");
+    expect(within(chips).queryByTestId("chip-reminders")).toBeNull();
   });
 });
 
