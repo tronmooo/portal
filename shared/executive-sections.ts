@@ -26,10 +26,13 @@
 import { computeAttention, BIRTHDAY_RE, type AttentionItem, type AttentionInputs, type AttentionConfig } from "./attention";
 import { dayLabel } from "./now-rank";
 import { isHabitDueOn, isHabitDoneOn } from "./habit-schedule";
+import { computeKeyFindings } from "./tracker-insights";
+import { isMedicationTracker, computeMissedDoses } from "./medication-doses";
 
 export type ExecSectionId =
   | "immediate" | "today" | "habits" | "bills" | "upcoming"
-  | "birthdays" | "documents" | "health" | "activity" | "insights";
+  | "birthdays" | "documents" | "health" | "activity" | "insights"
+  | "recommendations";
 
 export interface ExecSection {
   id: ExecSectionId;
@@ -44,18 +47,28 @@ export interface ExecSection {
   progress?: { done: number; total: number };
   /** Money at stake in this section (bills). Drawn as a headline figure. */
   amount?: number;
+  /**
+   * Overrides the renderer's static per-section emphasis when the section's
+   * own contents change how loudly it should speak — Birthdays folds itself
+   * away as reference material until something lands inside the week.
+   */
+  emphasis?: "hero" | "working" | "reference";
 }
 
 /** The order the user reads them in. */
 export const SECTION_DISPLAY_ORDER: ExecSectionId[] = [
   "immediate", "today", "habits", "bills", "upcoming",
   "birthdays", "documents", "health", "activity", "insights",
+  "recommendations",
 ];
 
 /** The order they get to claim a record. Most specific first. */
 const SECTION_CLAIM_ORDER: ExecSectionId[] = [
   "immediate", "health", "birthdays", "habits", "documents",
   "bills", "today", "upcoming", "activity", "insights",
+  // Last: AI recommendations are generated text about the rest of the tab,
+  // never a record another section wants.
+  "recommendations",
 ];
 
 const TITLES: Record<ExecSectionId, string> = {
@@ -69,6 +82,7 @@ const TITLES: Record<ExecSectionId, string> = {
   health: "Health",
   activity: "Recent Activity",
   insights: "Insights & Suggestions",
+  recommendations: "AI Recommendations",
 };
 
 const ACCENTS: Record<ExecSectionId, string> = {
@@ -82,6 +96,7 @@ const ACCENTS: Record<ExecSectionId, string> = {
   health:    "350 85% 62%",  // rose
   activity:  "173 60% 44%",  // teal
   insights:  "280 75% 62%",  // purple
+  recommendations: "262 70% 62%", // violet — the app's AI accent
 };
 
 /** Rows past this per section collapse behind "+N more". */
@@ -131,7 +146,24 @@ export interface ExecSectionInputs extends AttentionInputs {
   recentActivity?: any[];
   /** /api/insights rows (shared/schema Insight). */
   insights?: any[];
+  /**
+   * /api/obligations rows. Distinct from `bills` (which is the finance
+   * snapshot's flattened upcomingBills and carries no `kind`) — the Health
+   * section needs `kind` and `payments[]` to tell a medication from a bill.
+   */
+  obligations?: any[];
+  /** /api/trackers rows, entries inline (`.values` + server-computed `.computed`). */
+  trackers?: any[];
+  /** Rows from /api/dashboard/ai-suggestions, once the user has asked for them. */
+  recommendations?: any[];
 }
+
+/** How far back a vitals reading still counts as "current". */
+const VITALS_FRESH_DAYS = 14;
+/** Entries scanned per tracker when looking for the latest reading. */
+const VITALS_SCAN_DEPTH = 40;
+/** Unlogged doses in the last week before the tab mentions a gap. */
+const ADHERENCE_GAP_MIN = 2;
 
 // ── Small builders ───────────────────────────────────────────────────────────
 
@@ -185,6 +217,7 @@ export function buildExecutiveSections(
   const cand: Record<ExecSectionId, AttentionItem[]> = {
     immediate: [], today: [], habits: [], bills: [], upcoming: [],
     birthdays: [], documents: [], health: [], activity: [], insights: [],
+    recommendations: [],
   };
 
   // ── §1 Immediate Attention ─────────────────────────────────────────────────
@@ -198,12 +231,146 @@ export function buildExecutiveSections(
   }
 
   // ── §8 Health ──────────────────────────────────────────────────────────────
+  // The tab's medical surface, in descending order of "the user must act on
+  // this today". Every builder below keys on the CANONICAL sourceKey of the
+  // record it describes (`obligation:<id>`, `tracker:<id>`), which is what
+  // stops a medication also rendering as a bill and a blood-pressure reading
+  // also rendering as an insight — see the claim loop.
+  //
   // Medications and refills come off the reminder rows (already collapsed per
   // series+day by the attention model, so a three-times-daily course is one
   // row); medical appointments come off the calendar.
   for (const item of attention.items) {
     if (item.kind === "reminder" && isHealthText(item.title)) cand.health.push(item);
   }
+
+  // (a) Doses due — medication obligations with nothing logged against today.
+  // `upcomingBills` carries every obligation within 30 days regardless of kind,
+  // so before this existed a daily medication rendered under "Bills &
+  // Financial Obligations". Claiming it here (health precedes bills) is what
+  // moves it.
+  let medsDue = 0;
+  for (const o of input.obligations || []) {
+    if (!o?.id || o.status === "cancelled" || o.status === "paused") continue;
+    const kind = String(o.kind || "").toLowerCase();
+    if (kind === "medication") {
+      const takenToday = (o.payments || []).some(
+        (p: any) => String(p?.date || "").slice(0, 10) === today,
+      );
+      if (takenToday) continue;
+      const du = daysBetween(today, String(o.nextDueDate || "").slice(0, 10));
+      // Not yet due — a dose scheduled for Friday is not a Tuesday problem.
+      if (du != null && du > 0) continue;
+      medsDue++;
+      cand.health.push({
+        key: `med:${o.id}`, sourceKey: `obligation:${o.id}`, kind: "reminder",
+        title: o.name || "Medication",
+        reason: du != null && du < 0 ? `Not logged — ${Math.abs(du)}d behind` : "Due today · not logged",
+        tier: "immediate", daysUntil: du ?? 0, score: 0, href: "/wellness",
+        action: { kind: "taken", label: "Taken" },
+      });
+      continue;
+    }
+    // Appointments live on the obligations table too, and the calendar sweep
+    // below only sees them if the user ALSO created an event.
+    if (kind === "appointment") {
+      const du = daysBetween(today, String(o.nextDueDate || "").slice(0, 10));
+      if (du == null || du < 0 || du > 14) continue;
+      cand.health.push({
+        key: `appt:${o.id}`, sourceKey: `obligation:${o.id}`, kind: "event",
+        title: o.name || "Appointment",
+        reason: du === 0 ? "Today" : dayLabel(du),
+        tier: du === 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
+        daysUntil: du, score: 0, href: "/wellness",
+        action: { kind: "open", label: "Open" },
+      });
+    }
+  }
+
+  // (b) Readings the server already flagged as out of range. These bands are
+  // stamped onto the entry at write time (server/storage.ts), so this reads a
+  // verdict rather than re-deriving one — the tab and the tracker page can
+  // never disagree about what "high" means.
+  //
+  // Runs BEFORE the statistical sweep in (c) so that when a tracker trips
+  // both, the clinical band is the row that survives the claim.
+  let abnormalReadings = 0;
+  for (const t of input.trackers || []) {
+    if (!t?.id) continue;
+    const entries = (t.entries || []);
+    if (entries.length === 0) continue;
+    // Scan from the end: entries are stored oldest-first and a long history
+    // should not cost a full walk on every render.
+    let latest: any = null;
+    for (let i = entries.length - 1; i >= Math.max(0, entries.length - VITALS_SCAN_DEPTH); i--) {
+      const e = entries[i];
+      if (!e?.computed) continue;
+      latest = e;
+      break;
+    }
+    if (!latest) continue;
+    const ageDays = daysBetween(String(latest.timestamp || "").slice(0, 10), today);
+    if (ageDays == null || ageDays < 0 || ageDays > VITALS_FRESH_DAYS) continue;
+
+    const bp = String(latest.computed.bloodPressureCategory || "");
+    const sleep = String(latest.computed.sleepQuality || "");
+    let title = "", reason = "", critical = false;
+    if (bp === "crisis" || bp === "high_stage2" || bp === "high_stage1") {
+      critical = bp === "crisis";
+      const label = bp === "crisis" ? "hypertensive crisis"
+        : bp === "high_stage2" ? "stage 2 high" : "stage 1 high";
+      title = `${t.name || "Blood pressure"} reading is ${label}`;
+      const sys = latest.values?.systolic, dia = latest.values?.diastolic;
+      reason = [sys && dia ? `${sys}/${dia}` : "", ageDays === 0 ? "logged today" : `${ageDays}d ago`]
+        .filter(Boolean).join(" · ");
+    } else if (sleep === "poor") {
+      title = `${t.name || "Sleep"} logged as poor`;
+      reason = ageDays === 0 ? "Logged today" : `${ageDays}d ago`;
+    } else continue;
+
+    abnormalReadings++;
+    cand.health.push({
+      key: `vital:${t.id}`, sourceKey: `tracker:${t.id}`, kind: "alert",
+      title, reason,
+      tier: critical ? "immediate" : "soon",
+      daysUntil: 0, score: 0, href: `/trackers?open=${t.id}`,
+      action: { kind: "open", label: "Open" },
+    });
+  }
+
+  // (c) Statistical outliers, from the same engine the Key Findings section
+  // uses — a reading >2σ off its own baseline, or a run of short nights. Only
+  // the warnings: a positive anomaly is good news and does not belong on a
+  // section headed "Health" alongside a missed dose.
+  if ((input.trackers || []).length > 0) {
+    const findings = computeKeyFindings({ trackers: input.trackers as any } as any);
+    for (const f of findings) {
+      if (f.kind !== "tracker_anomaly" || f.severity !== "warning" || !f.trackerId) continue;
+      cand.health.push({
+        key: `anomaly:${f.trackerId}`, sourceKey: `tracker:${f.trackerId}`, kind: "alert",
+        title: f.title, reason: f.detail || "Unusual against its own baseline",
+        tier: "soon", daysUntil: 0, score: 0, href: f.href,
+        action: { kind: "open", label: "Open" },
+      });
+    }
+  }
+
+  // (d) Adherence gaps. `unlogged_gap` is expected-minus-logged, which is NOT
+  // the same claim as "you missed a dose" — the wording here has to stay on
+  // the honest side of that line (see shared/medication-doses.ts).
+  for (const t of input.trackers || []) {
+    if (!t?.id || !isMedicationTracker(t as any)) continue;
+    const dose = computeMissedDoses(t as any, { days: 7, now: now.getTime() });
+    if (dose.unlogged_gap < ADHERENCE_GAP_MIN) continue;
+    cand.health.push({
+      key: `adherence:${t.id}`, sourceKey: `tracker:${t.id}`, kind: "alert",
+      title: `${dose.medication}: ${dose.unlogged_gap} doses unlogged this week`,
+      reason: `${dose.taken} of ${dose.expected} expected doses logged — a gap, not a confirmed miss`,
+      tier: "soon", daysUntil: 0, score: 0, href: `/trackers?open=${t.id}`,
+      action: { kind: "open", label: "Review" },
+    });
+  }
+
   for (const e of input.events || []) {
     if (!e?.id || (e.type && e.type !== "event")) continue;
     const du = daysBetween(today, e.date);
@@ -220,15 +387,27 @@ export function buildExecutiveSections(
   }
 
   // ── §6 Birthdays & Anniversaries ───────────────────────────────────────────
+  // The dates the user is judged on remembering. A birthday two days out and
+  // one six weeks out are not the same news, so the section counts what falls
+  // inside the week and asks the renderer to unfold itself when any does.
   for (const e of input.events || []) {
     if (!e?.id || (e.type && e.type !== "event")) continue;
     const du = daysBetween(today, e.date);
     if (du == null || du < 0 || du > 45) continue;
-    if (!isBirthdayText(`${e.title || ""} ${e.category || ""}`)) continue;
+    // A profile's date-of-birth field is the authoritative source and arrives
+    // stamped with its own kind (calendar-adapters → getCalendarTimeline), so
+    // trust that before falling back to reading the title. "Nan's 90th" is a
+    // birthday the regex would miss entirely.
+    const stamped = String(e.meta?.kind || "").toLowerCase();
+    const kindLabel =
+      stamped === "birthday" ? "Birthday"
+      : stamped === "anniversary" ? "Anniversary"
+      : null;
+    if (!kindLabel && !isBirthdayText(`${e.title || ""} ${e.category || ""}`)) continue;
     cand.birthdays.push({
       key: `event:${e.id}`, sourceKey: `event:${e.sourceId || e.id}`, kind: "event",
       title: e.title || "Occasion",
-      reason: du === 0 ? "Today" : dayLabel(du),
+      reason: [kindLabel, du === 0 ? "Today" : dayLabel(du)].filter(Boolean).join(" · "),
       tier: du === 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
       daysUntil: du, score: 0, href: "/calendar",
       action: { kind: "open", label: "Open" },
@@ -392,8 +571,19 @@ export function buildExecutiveSections(
   // ── §10 Insights & Suggestions ─────────────────────────────────────────────
   for (const ins of input.insights || []) {
     if (!ins?.id || !ins.title) continue;
+    // Key on the SUBJECT, not the observation. The insights engine derives its
+    // own blood-pressure alert from the same latest entry the Health section
+    // reads, and a `insight:<uuid>` key made those two invisible to each other
+    // — the reading rendered twice, under two headings. Naming the tracker (or
+    // document) the insight is about lets the claim loop collapse them, and
+    // Health claims first.
+    const subject =
+      (ins.relatedEntityType === "tracker" || ins.relatedEntityType === "document")
+        && ins.relatedEntityId
+        ? `${ins.relatedEntityType}:${ins.relatedEntityId}`
+        : `insight:${ins.id}`;
     cand.insights.push({
-      key: `insight:${ins.id}`, sourceKey: `insight:${ins.id}`, kind: "alert",
+      key: `insight:${ins.id}`, sourceKey: subject, kind: "alert",
       title: ins.title, reason: ins.description || "",
       tier: ins.severity === "warning" || ins.severity === "negative" ? "soon" : "upcoming",
       daysUntil: null, score: 0,
@@ -402,11 +592,28 @@ export function buildExecutiveSections(
     });
   }
 
+  // ── §11 AI Recommendations ─────────────────────────────────────────────────
+  // Generated on demand, never on load. The rows are advice about the rest of
+  // the tab rather than records of their own, so they carry no action and an
+  // `airec:` key that nothing else can collide with.
+  (input.recommendations || []).forEach((r: any, i: number) => {
+    const title = String(r?.title || "").trim();
+    if (!title) return;
+    cand.recommendations.push({
+      key: `airec:${i}`, sourceKey: `airec:${i}`, kind: "alert",
+      title,
+      reason: String(r?.body || r?.action || "").trim(),
+      tier: r?.priority === "high" ? "soon" : "upcoming",
+      daysUntil: null, score: 0, href: "/insights",
+    });
+  });
+
   // ── Claim: one record, one section ─────────────────────────────────────────
   const claimed = new Set<string>();
   const owned: Record<ExecSectionId, AttentionItem[]> = {
     immediate: [], today: [], habits: [], bills: [], upcoming: [],
     birthdays: [], documents: [], health: [], activity: [], insights: [],
+    recommendations: [],
   };
   for (const id of SECTION_CLAIM_ORDER) {
     for (const item of cand[id]) {
@@ -430,7 +637,14 @@ export function buildExecutiveSections(
       accent: ACCENTS[id],
       items: all.slice(0, DISPLAY_CAP),
       total: all.length,
-      subtitle: subtitleFor(id, { habitsDue, habitsDone, overdueBills, immediate: owned.immediate }),
+      subtitle: subtitleFor(id, {
+        habitsDue, habitsDone, overdueBills, immediate: owned.immediate,
+        items: all, medsDue, abnormalReadings,
+      }),
+      // Birthdays is reference material right up until one lands inside the
+      // week, at which point folding it away is the wrong call.
+      emphasis: id === "birthdays" && all.some(i => (i.daysUntil ?? 99) <= 7)
+        ? "working" : undefined,
       // Numbers the UI draws instead of writing out: a completion ring for the
       // day's habits, the money at stake for bills.
       //
@@ -447,10 +661,34 @@ export function buildExecutiveSections(
 /** Context lines that explain a section rather than repeat its rows. */
 function subtitleFor(
   id: ExecSectionId,
-  ctx: { habitsDue: number; habitsDone: number; overdueBills: number; immediate: AttentionItem[] },
+  ctx: {
+    habitsDue: number; habitsDone: number; overdueBills: number;
+    immediate: AttentionItem[];
+    /** The section's own claimed rows, for counts drawn from what actually renders. */
+    items: AttentionItem[];
+    medsDue: number; abnormalReadings: number;
+  },
 ): string | undefined {
   if (id === "habits" && ctx.habitsDue > 0) {
     return `${ctx.habitsDone} of ${ctx.habitsDue} done today`;
+  }
+  // Birthdays keeps a long tail so nothing is a surprise, but the week is the
+  // part that needs acting on — say how the list splits rather than making the
+  // user read dates to find out.
+  if (id === "birthdays") {
+    const week = ctx.items.filter(i => (i.daysUntil ?? 99) <= 7).length;
+    const rest = ctx.items.length - week;
+    if (week > 0 && rest > 0) return `${week} this week · ${rest} more within 45 days`;
+    if (week > 0) return `${week} this week`;
+    if (rest > 0) return `${rest} within the next 45 days`;
+  }
+  if (id === "health") {
+    const parts: string[] = [];
+    if (ctx.medsDue > 0) parts.push(`${ctx.medsDue} dose${ctx.medsDue === 1 ? "" : "s"} due`);
+    if (ctx.abnormalReadings > 0) {
+      parts.push(`${ctx.abnormalReadings} reading${ctx.abnormalReadings === 1 ? "" : "s"} out of range`);
+    }
+    if (parts.length > 0) return parts.join(" · ");
   }
   // Overdue bills and expired documents are claimed by Immediate Attention, so
   // say where they went — a Bills section silently missing the overdue ones

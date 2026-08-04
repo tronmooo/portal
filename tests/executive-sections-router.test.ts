@@ -261,6 +261,213 @@ describe("health, activity and insights", () => {
     expect(titles(secs, "insights")).toEqual(["Grocery spend up 31%", "7-day journal streak"]);
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // Health: the tab reads the medical data the app already holds, and reads it
+  // once. The recurring failure mode here is a medication renting space in two
+  // sections at the same time.
+  describe("health", () => {
+    const med = (over: any = {}) => ({
+      id: "o1", name: "Lisinopril 10mg", kind: "medication", status: "active",
+      nextDueDate: TODAY, payments: [], ...over,
+    });
+
+    it("claims a medication for Health so it never renders as a bill", () => {
+      // upcomingBills carries every obligation within 30 days regardless of
+      // kind, so the same record arrives on both inputs. It must land once.
+      const secs = run({
+        obligations: [med()],
+        bills: [{ id: "o1", name: "Lisinopril 10mg", amount: 0, daysUntil: 0 }],
+      });
+      expect(titles(secs, "health")).toEqual(["Lisinopril 10mg"]);
+      expect(byId(secs).bills).toBeUndefined();
+      const keys = allKeys(secs);
+      expect(keys.length).toBe(new Set(keys).size);
+    });
+
+    it("drops a dose that is already logged today, and one not yet due", () => {
+      expect(byId(run({ obligations: [med({ payments: [{ date: TODAY }] })] })).health).toBeUndefined();
+      expect(byId(run({ obligations: [med({ nextDueDate: day(3) })] })).health).toBeUndefined();
+      // Yesterday's unlogged dose is still the user's problem.
+      expect(titles(run({ obligations: [med({ nextDueDate: day(-1) })] }), "health")).toEqual(["Lisinopril 10mg"]);
+    });
+
+    it("offers a Taken action, never the task-completing one", () => {
+      const [item] = byId(run({ obligations: [med()] })).health.items;
+      // `complete` routes to PATCH /api/tasks/:id — firing that against an
+      // obligation id would update an unrelated record.
+      expect(item.action).toEqual({ kind: "taken", label: "Taken" });
+      expect(item.sourceKey).toBe("obligation:o1");
+    });
+
+    it("surfaces a reading the server flagged out of range, but not a normal one", () => {
+      const tracker = (cat: string) => ({
+        id: "tr1", name: "Blood Pressure", category: "health",
+        entries: [{
+          id: "e1", timestamp: `${TODAY}T08:00:00`,
+          values: { systolic: 148, diastolic: 96 },
+          computed: { bloodPressureCategory: cat },
+        }],
+      });
+      expect(titles(run({ trackers: [tracker("high_stage2")] }), "health"))
+        .toEqual(["Blood Pressure reading is stage 2 high"]);
+      expect(byId(run({ trackers: [tracker("normal")] })).health).toBeUndefined();
+    });
+
+    it("ignores a flagged reading that has gone stale", () => {
+      const secs = run({
+        trackers: [{
+          id: "tr1", name: "Blood Pressure", category: "health",
+          entries: [{
+            id: "e1", timestamp: `${day(-40)}T08:00:00`,
+            values: { systolic: 148, diastolic: 96 },
+            computed: { bloodPressureCategory: "high_stage2" },
+          }],
+        }],
+      });
+      expect(byId(secs).health).toBeUndefined();
+    });
+
+    it("surfaces a statistical outlier on its own", () => {
+      // Guards the test below: if the anomaly engine never fired, the
+      // "clinical band wins" assertion would be passing for the wrong reason.
+      // A real baseline has spread — with a flat one the stdev is 0 and the
+      // >2σ gate correctly declines to call anything an outlier.
+      const entries = Array.from({ length: 15 }, (_, i) => ({
+        id: `e${i}`, timestamp: `${day(-20 + i)}T08:00:00`, values: { value: 60 + (i % 4) },
+      }));
+      entries.push({ id: "spike", timestamp: `${TODAY}T08:00:00`, values: { value: 121 } });
+      const secs = run({ trackers: [{ id: "tr1", name: "Resting Heart Rate", category: "health", unit: "bpm", entries }] });
+      expect(titles(secs, "health")[0]).toContain("unusually high");
+    });
+
+    it("shows the clinical band rather than the statistical outlier when both fire", () => {
+      // A settled baseline then a spike: >2σ anomaly AND a stamped crisis band.
+      const entries = Array.from({ length: 15 }, (_, i) => ({
+        id: `e${i}`, timestamp: `${day(-20 + i)}T08:00:00`,
+        values: { value: 118 + (i % 4) }, computed: { bloodPressureCategory: "normal" },
+      }));
+      entries.push({
+        id: "spike", timestamp: `${TODAY}T08:00:00`,
+        values: { value: 190 }, computed: { bloodPressureCategory: "crisis" },
+      } as any);
+      const secs = run({ trackers: [{ id: "tr1", name: "Blood Pressure", category: "health", unit: "mmHg", entries }] });
+      expect(secs.find(s => s.id === "health")!.items).toHaveLength(1);
+      expect(titles(secs, "health")[0]).toContain("hypertensive crisis");
+    });
+
+    it("calls an unlogged dose a gap, not a confirmed miss", () => {
+      const secs = run({
+        trackers: [{
+          id: "tr1", name: "Metformin", category: "medication", unit: "twice daily",
+          createdAt: `${day(-30)}T00:00:00Z`,
+          fields: [{ name: "adherence", type: "select" }],
+          entries: [],
+        }],
+      });
+      const [item] = byId(secs).health.items;
+      expect(item.title).toContain("unlogged this week");
+      expect(item.reason).toContain("not a confirmed miss");
+      expect(item.reason).not.toMatch(/\bmissed\b(?! doses)/);
+    });
+
+    it("renders nothing at all when no medical data is registered", () => {
+      const secs = run({
+        tasks: [{ id: "t1", title: "Due today", status: "todo", dueDate: TODAY }],
+      });
+      expect(byId(secs).health).toBeUndefined();
+    });
+
+    it("collapses the insights engine's tracker alert onto the Health row", () => {
+      // analyzeHealth derives its BP alert from the same latest entry the
+      // Health section reads. Keyed on the insight's own uuid these were
+      // invisible to each other and the reading rendered under both headings.
+      const secs = run({
+        trackers: [{
+          id: "tr1", name: "Blood Pressure", category: "health",
+          entries: [{
+            id: "e1", timestamp: `${TODAY}T08:00:00`,
+            values: { systolic: 148, diastolic: 96 },
+            computed: { bloodPressureCategory: "high_stage2" },
+          }],
+        }],
+        insights: [{
+          id: "i1", title: "Blood pressure elevated", description: "148/96",
+          severity: "warning", relatedEntityType: "tracker", relatedEntityId: "tr1",
+        }],
+      });
+      expect(byId(secs).insights).toBeUndefined();
+      expect(secs.find(s => s.id === "health")!.items).toHaveLength(1);
+      const keys = allKeys(secs);
+      expect(keys.length).toBe(new Set(keys).size);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  describe("birthdays & anniversaries", () => {
+    it("splits the week from the long tail in the subtitle and unfolds for it", () => {
+      const secs = run({
+        events: [
+          { id: "e1", type: "event", title: "Mom's Birthday", date: day(2) },
+          { id: "e2", type: "event", title: "Wedding Anniversary", date: day(30) },
+        ],
+      });
+      const s = byId(secs).birthdays;
+      expect(s.subtitle).toBe("1 this week · 1 more within 45 days");
+      expect(s.emphasis).toBe("working");
+      // Soonest first, so the week leads.
+      expect(s.items[0].title).toBe("Mom's Birthday");
+    });
+
+    it("stays folded away when nothing lands inside the week", () => {
+      const s = byId(run({
+        events: [{ id: "e1", type: "event", title: "Mom's Birthday", date: day(30) }],
+      })).birthdays;
+      expect(s.subtitle).toBe("1 within the next 45 days");
+      expect(s.emphasis).toBeUndefined();
+    });
+
+    it("trusts the profile's stamped kind over the title", () => {
+      // A profile date-of-birth arrives stamped; "Nan's 90th" says nothing the
+      // regex can see.
+      const secs = run({
+        events: [{ id: "e1", type: "event", title: "Nan's 90th", date: day(3), meta: { kind: "birthday" } }],
+      });
+      expect(titles(secs, "birthdays")).toEqual(["Nan's 90th"]);
+      expect(byId(secs).birthdays.items[0].reason).toContain("Birthday");
+    });
+
+    it("labels an anniversary as one", () => {
+      const secs = run({
+        events: [{ id: "e1", type: "event", title: "Dave & Sam", date: day(3), meta: { kind: "anniversary" } }],
+      });
+      expect(byId(secs).birthdays.items[0].reason).toContain("Anniversary");
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  describe("ai recommendations", () => {
+    it("renders nothing until recommendations are supplied", () => {
+      expect(byId(run({})).recommendations).toBeUndefined();
+      expect(byId(run({ recommendations: [] })).recommendations).toBeUndefined();
+    });
+
+    it("renders supplied rows in order, with no action to fire", () => {
+      const secs = run({
+        recommendations: [
+          { title: "Link 3 documents", body: "They have no profile.", action: "Link", priority: "high" },
+          { title: "Re-categorize 8 expenses", body: "Filed as other.", action: "Review", priority: "low" },
+        ],
+      });
+      expect(titles(secs, "recommendations")).toEqual(["Link 3 documents", "Re-categorize 8 expenses"]);
+      expect(byId(secs).recommendations.items.every((i: any) => !i.action)).toBe(true);
+    });
+
+    it("drops a row the model returned without a title", () => {
+      const secs = run({ recommendations: [{ body: "orphan" }, { title: "Real one" }] });
+      expect(titles(secs, "recommendations")).toEqual(["Real one"]);
+    });
+  });
+
   it("classifies health and occasion text", () => {
     expect(isHealthText("Take Amoxicillin 500mg")).toBe(true);
     expect(isHealthText("Dentist appointment")).toBe(true);

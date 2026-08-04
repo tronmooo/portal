@@ -7632,13 +7632,15 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
         }
       }
 
-      let [profiles, expenses, obligations, documents, trackers, goals] = await Promise.all([
+      let [profiles, expenses, obligations, documents, trackers, goals, tasks, habits] = await Promise.all([
         storage.getProfiles(),
         storage.getExpenses(),
         storage.getObligations(),
         storage.getDocuments(),
         storage.getTrackers(),
         storage.getGoals(),
+        storage.getTasks(),
+        storage.getHabits(),
       ]);
 
       // Scope the snapshot to the active profile filter so AI advice is relevant.
@@ -7653,6 +7655,8 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
         documents = documents.filter((d: any) => inProfile(d.linkedProfiles));
         trackers = trackers.filter((t: any) => inProfile(t.linkedProfiles));
         goals = goals.filter((g: any) => inProfile(g.linkedProfiles));
+        tasks = tasks.filter((t: any) => inProfile(t.linkedProfiles));
+        habits = habits.filter((h: any) => inProfile(h.linkedProfiles));
         profiles = profiles.filter((p: any) => filterIds.includes(p.id));
       }
 
@@ -7675,6 +7679,58 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
         trackerCount: trackers.length,
         emptyTrackerCount: trackers.filter((t: any) => !t.entries || t.entries.length === 0).length,
         goalCount: goals.length,
+        // ── Briefing + health signals (the Executive tab's own view) ─────────
+        // Counts and short labels only. The STRICT RULES below let the model
+        // state facts that are derivable from this object and nothing else, so
+        // anything it cannot count here it must not mention.
+        ...(() => {
+          const tz = getTimezone(req);
+          const todayISO = getUserToday(tz);
+          const dayDelta = (d: any) => {
+            const s = String(d || "").slice(0, 10);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+            return Math.round(
+              (new Date(`${s}T12:00:00`).getTime() - new Date(`${todayISO}T12:00:00`).getTime()) / 86400000,
+            );
+          };
+          const openTasks = tasks.filter((t: any) => t?.status !== "done");
+          const activeObs = obligations.filter((o: any) => o?.status !== "cancelled" && o?.status !== "paused");
+          const meds = activeObs.filter((o: any) => String(o.kind || "").toLowerCase() === "medication");
+          const takenToday = (o: any) =>
+            (o.payments || []).some((p: any) => String(p?.date || "").slice(0, 10) === todayISO);
+          // Abnormal = the band the server already stamped on the entry at write
+          // time, never a threshold re-invented here.
+          let abnormalReadingCount = 0;
+          const abnormalMetrics: string[] = [];
+          for (const t of trackers as any[]) {
+            const last = (t.entries || []).slice(-1)[0];
+            const c = last?.computed || {};
+            const bp = String(c.bloodPressureCategory || "");
+            if (bp === "crisis" || bp === "high_stage2" || bp === "high_stage1"
+                || String(c.sleepQuality || "") === "poor") {
+              abnormalReadingCount++;
+              if (t.name && abnormalMetrics.length < 5) abnormalMetrics.push(String(t.name).slice(0, 40));
+            }
+          }
+          return {
+            overdueTaskCount: openTasks.filter((t: any) => (dayDelta(t.dueDate) ?? 1) < 0).length,
+            tasksDueTodayCount: openTasks.filter((t: any) => dayDelta(t.dueDate) === 0).length,
+            overdueObligationCount: activeObs.filter((o: any) => (dayDelta(o.nextDueDate) ?? 1) < 0).length,
+            expiringDocCount: documents.filter((d: any) => {
+              const du = dayDelta(d.expirationDate);
+              return du != null && du >= 0 && du <= 30;
+            }).length,
+            habitCount: habits.length,
+            medicationCount: meds.length,
+            medicationsNotLoggedTodayCount: meds.filter((o: any) => !takenToday(o)).length,
+            appointmentCount: activeObs.filter((o: any) => {
+              const du = dayDelta(o.nextDueDate);
+              return String(o.kind || "").toLowerCase() === "appointment" && du != null && du >= 0 && du <= 14;
+            }).length,
+            abnormalReadingCount,
+            abnormalMetrics,
+          };
+        })(),
       };
 
       // BUG-007/008: cheap fingerprint of the snapshot. If it matches the
@@ -7693,20 +7749,35 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
         return res.json(cachedParsed);
       }
 
+      // Nothing registered, nothing to advise on. Short-circuits BEFORE the
+      // model call so a brand-new account never spends a request to be told it
+      // has no data.
+      const hasAnything = expenses.length || obligations.length || documents.length
+        || trackers.length || goals.length || tasks.length || habits.length;
+      if (!hasAnything) {
+        return res.json({ suggestions: [], generatedAt: new Date().toISOString(), source: "empty", fingerprint: snapshotFingerprint });
+      }
+
       const decision = await aiDecide<{ suggestions: Array<{ title: string; body: string; action: string; priority: "high" | "medium" | "low" }> }>({
         task: "dashboard-ai-suggestions",
-        system: `You are a personal-finance coach surfacing 3 to 5 actionable improvements based ONLY on the snapshot data provided.
+        system: `You are a household operations coach surfacing 3 to 5 actionable improvements based ONLY on the snapshot data provided. The snapshot covers money, admin, and health.
 Return ONLY JSON: {"suggestions":[{"title":"<8 words max>","body":"<one short sentence>","action":"<short verb phrase>","priority":"high"|"medium"|"low"}]}
 STRICT RULES (BUG-007/008 — factual accuracy):
 - Only state facts that are directly derivable from the snapshot counts/fields. Never invent counts, amounts, dates, vendors, or category names.
 - If a count is 0 (e.g. unlinkedDocCount=0), do NOT suggest fixing that issue.
 - Never reference data not present in the snapshot.
 - If the snapshot is sparse, return fewer suggestions rather than fabricating ones.
+HEALTH RULES:
+- Never give a medical diagnosis, name a condition, or suggest starting, stopping or changing a dose.
+- abnormalMetrics names the trackers whose latest reading the app already flagged out of range. You may say a reading is flagged and suggest logging or reviewing it with a clinician. Do NOT interpret the value.
+- Treat medicationsNotLoggedTodayCount as an unlogged dose, which is not the same as a missed one. Word it as logging, not as a lapse.
 Focus on:
 - expenses categorised as "other"/"general" → re-categorize (only if otherCategoryExpenses > 0)
 - documents not linked to any profile → link them (only if unlinkedDocCount > 0)
 - recurring vendors in recentExpenses with no matching obligation → add as subscription
 - empty trackers → archive or use (only if emptyTrackerCount > 0)
+- overdue tasks or obligations, and documents expiring within 30 days
+- medications with no dose logged today, and readings flagged out of range
 - duplicate-looking profile types
 - missing essential profiles (self has no income/account)
 No emojis. No prose outside the JSON.`,

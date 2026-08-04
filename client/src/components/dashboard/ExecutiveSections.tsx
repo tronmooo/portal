@@ -28,7 +28,7 @@ import { useLocation } from "wouter";
 import {
   ChevronDown, ChevronRight, Check, CreditCard, ArrowRight, X, Clock,
   TriangleAlert, CalendarDays, Flame, DollarSign, CalendarClock, Cake,
-  FolderOpen, Heart, History, Sparkles, PartyPopper, type LucideIcon,
+  FolderOpen, Heart, History, Sparkles, PartyPopper, Lightbulb, type LucideIcon,
 } from "lucide-react";
 import type { AttentionItem } from "@shared/attention";
 import type { ExecSection, ExecSectionId } from "@shared/executive-sections";
@@ -41,6 +41,7 @@ const ACTION_ICON = {
   dismiss: X,
   snooze: Clock,
   open: ArrowRight,
+  taken: Check,
 } as const;
 
 /** A section should be recognisable before its title is read. */
@@ -55,6 +56,7 @@ const SECTION_ICON: Record<ExecSectionId, LucideIcon> = {
   health: Heart,
   activity: History,
   insights: Sparkles,
+  recommendations: Lightbulb,
 };
 
 /** hero = dominates the page · working = normal · reference = compact, folded. */
@@ -70,6 +72,9 @@ const EMPHASIS: Record<ExecSectionId, Emphasis> = {
   birthdays: "reference",
   activity: "reference",
   insights: "reference",
+  // Not reference material: this section exists only because the user just
+  // asked for it, so folding it shut would make them tap twice to read it.
+  recommendations: "working",
 };
 
 export interface ExecutiveSectionsProps {
@@ -185,7 +190,9 @@ function SectionBubble({ section, index, busyKeys, armedKey, leavingKeys, onActi
   busyKeys?: Set<string>; armedKey?: string | null; leavingKeys?: Set<string>;
   onAction: (i: AttentionItem) => void;
 }) {
-  const emphasis = EMPHASIS[section.id];
+  // The static table is the default; a section may raise its own voice when its
+  // contents warrant it (Birthdays unfolds when one lands inside the week).
+  const emphasis = section.emphasis ?? EMPHASIS[section.id];
   const hero = emphasis === "hero";
   const [open, setOpen] = useState(emphasis !== "reference");
   const [showAll, setShowAll] = useState(false);

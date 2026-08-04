@@ -230,6 +230,26 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryFn: () => apiRequest("GET", `/api/insights${param}`).then(r => r.json()),
     staleTime: 5 * 60_000,
   });
+  // §8 Health. Obligations carry `kind` and the taken-today payment ledger,
+  // which the finance snapshot's flattened `upcomingBills` does not — without
+  // them a daily medication is indistinguishable from an electricity bill.
+  // Trackers carry the server-stamped `computed` bands and the dose history.
+  //
+  // Neither adds a round-trip: /api/dashboard-bootstrap already seeds both of
+  // these exact keys (see lib/bootstrap-seed-keys.ts), and scopedKey produces
+  // the same [endpoint, mode, ...ids] shape built here.
+  const { data: obligationsRaw = [] } = useQuery<any[]>({
+    queryKey: ["/api/obligations", mode, ...ids],
+    enabled: ready,
+    queryFn: () => apiRequest("GET", `/api/obligations${param}`).then(r => r.json()),
+    staleTime: 60_000,
+  });
+  const { data: trackersRaw = [] } = useQuery<any[]>({
+    queryKey: ["/api/trackers", mode, ...ids],
+    enabled: ready,
+    queryFn: () => apiRequest("GET", `/api/trackers${param}`).then(r => r.json()),
+    staleTime: 60_000,
+  });
   // Dismissed alerts. The old panel filtered on `n.dismissed` — a field
   // buildNotifications never sets — and never read this preference, so an alert
   // the user dismissed from the bell came straight back on the dashboard.
@@ -270,6 +290,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const reminders = hideTest(Array.isArray(remindersRaw) ? remindersRaw : []);
   const notifications = hideTest(Array.isArray(notificationsRaw) ? notificationsRaw : []);
   const goals = hideTest(goalsRaw || []);
+  const obligations = hideTest(Array.isArray(obligationsRaw) ? obligationsRaw : []);
+  const trackers = hideTest(Array.isArray(trackersRaw) ? trackersRaw : []);
   const allBills = dedupeBills(hideTest(enhanced?.financeSnapshot?.upcomingBills || []));
   const allExpiringDocs = hideTest<any>(enhanced?.expiringDocuments || []);
 
@@ -284,7 +306,30 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     return () => clearTimeout(t);
   }, [anyBriefPending]);
 
-  // ── The ten sections ───────────────────────────────────────────────────────
+  // ── §11 AI Recommendations ─────────────────────────────────────────────────
+  // Tap to generate, never on load: the endpoint is a model call, and a
+  // dashboard open is not a request for advice. Held in state rather than a
+  // query so mounting the tab can't trigger it.
+  const [recommendations, setRecommendations] = useState<any[] | null>(null);
+  const generateRecommendations = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("GET", `/api/dashboard/ai-suggestions?force=true${param ? `&${param.slice(1)}` : ""}`);
+      return r.json();
+    },
+    onSuccess: (d: any) => {
+      const rows = Array.isArray(d?.suggestions) ? d.suggestions : [];
+      setRecommendations(rows);
+      if (rows.length === 0) {
+        toast({ title: "Nothing to suggest yet", description: "Add a little more data and try again." });
+      }
+    },
+    onError: () => toast({ title: "Couldn't generate recommendations", variant: "destructive" }),
+  });
+  // A scope switch invalidates the advice — it was computed for the other
+  // profile's data and would otherwise sit there looking current.
+  useEffect(() => { setRecommendations(null); }, [mode, ids.join(",")]);
+
+  // ── The sections ───────────────────────────────────────────────────────────
   const snoozedDocumentIds = useMemo(() => Object.keys(loadDocSnoozeMap()), [allExpiringDocs.length]);
   const sectionInput = useMemo(() => ({
     today: todayStr,
@@ -293,8 +338,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     dismissedNotificationIds: dismissedIds,
     snoozedDocumentIds,
     recentActivity: stats?.recentActivity || [],
-    insights,
-  }), [todayStr, tasks, allBills, allExpiringDocs, habits, reminders, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, stats, insights]);
+    insights, obligations, trackers,
+    recommendations: recommendations || [],
+  }), [todayStr, tasks, allBills, allExpiringDocs, habits, reminders, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, stats, insights, obligations, trackers, recommendations]);
 
   const sections = useMemo(
     () => buildExecutiveSections(sectionInput, prefs),
@@ -409,6 +455,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     },
     onError: () => toast({ title: "Payment failed", variant: "destructive" }),
   });
+  // A dose is recorded as an obligation payment dated today — the same write
+  // the Wellness page makes, so marking it here and there cannot disagree.
+  const markMedTaken = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("POST", `/api/obligations/${id}/pay`, { date: todayStr });
+    },
+    onSuccess: () => { toast({ title: "Dose logged" }); invalidateDomain("obligations"); },
+    onError: () => toast({ title: "Couldn't log dose", variant: "destructive" }),
+  });
   const completeTask = useMutation({
     mutationFn: async (id: string) => { await apiRequest("PATCH", `/api/tasks/${id}`, { status: "done" }); },
     onSuccess: () => { toast({ title: "Task completed" }); invalidateDomain("tasks"); },
@@ -464,6 +519,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         run(payBill.mutateAsync(idOf(item)));
         return;
       case "complete": run(completeTask.mutateAsync(idOf(item))); return;
+      // No two-tap arming: logging a dose is trivially undone from Wellness,
+      // unlike `pay`, which moves money.
+      case "taken": run(markMedTaken.mutateAsync(idOf(item))); return;
       case "checkin": run(checkinHabit.mutateAsync(idOf(item))); return;
       case "dismiss":
         if (item.kind === "reminder") {
@@ -573,15 +631,31 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         <h2 className="micro-label text-muted-foreground">
           Needs your attention
         </h2>
-        <button
-          onClick={() => setFiltersOpen(o => !o)}
-          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-          data-testid="attention-filters-toggle"
-          aria-expanded={filtersOpen}
-        >
-          <SlidersHorizontal className="h-3 w-3" />
-          Filters
-        </button>
+        <div className="flex items-center gap-1.5">
+          {/* Generating advice costs a model call, so it stays a deliberate tap
+              rather than something a dashboard open triggers. Once generated,
+              the rows render as the AI Recommendations section below. */}
+          <button
+            onClick={() => generateRecommendations.mutate()}
+            disabled={generateRecommendations.isPending}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
+            data-testid="exec-recommendations-generate"
+          >
+            <Sparkles className="h-3 w-3" />
+            {generateRecommendations.isPending
+              ? "Thinking…"
+              : recommendations ? "Refresh advice" : "AI advice"}
+          </button>
+          <button
+            onClick={() => setFiltersOpen(o => !o)}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            data-testid="attention-filters-toggle"
+            aria-expanded={filtersOpen}
+          >
+            <SlidersHorizontal className="h-3 w-3" />
+            Filters
+          </button>
+        </div>
       </div>
       {filtersOpen && <AttentionFilters prefs={prefs} onChange={setPrefs} />}
 

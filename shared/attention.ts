@@ -26,7 +26,9 @@ export type AttentionKind =
 export type AttentionTier = "immediate" | "soon" | "upcoming";
 
 export type AttentionActionKind =
-  | "complete" | "pay" | "checkin" | "dismiss" | "snooze" | "open";
+  // `taken` is deliberately distinct from `complete`: completing routes to
+  // PATCH /api/tasks/:id, and a medication dose is an obligation payment.
+  | "complete" | "pay" | "checkin" | "dismiss" | "snooze" | "open" | "taken";
 
 export interface AttentionItem {
   /** Stable React key. */

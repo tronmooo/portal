@@ -213,6 +213,52 @@ describe("ExecutiveBriefing", () => {
     expect(ai).not.toMatch(/due in -/);
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // Health and AI recommendations, mounted for real. `routes` lets a test
+  // answer specific endpoints while everything else stays an empty list.
+  function stubRoutes(routes: Record<string, any>) {
+    fetchStub.mockImplementation(async (url: any) => {
+      const u = String(url);
+      const hit = Object.keys(routes).find(k => u.includes(k));
+      return new Response(JSON.stringify(hit ? routes[hit] : []), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    });
+  }
+  const today = () => new Date().toLocaleDateString("en-CA");
+
+  it("renders a medication under Health, with a Taken action rather than Pay", async () => {
+    stubRoutes({
+      "/api/obligations": [{
+        id: "o1", name: "Lisinopril 10mg", kind: "medication",
+        status: "active", nextDueDate: today(), payments: [],
+      }],
+    });
+    await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+    const health = await screen.findByTestId("exec-section-health");
+    expect(health.textContent).toContain("Lisinopril 10mg");
+    expect(screen.getByTestId("exec-action-med:o1").textContent).toContain("Taken");
+  });
+
+  it("never asks for AI advice on mount, and renders it only once asked", async () => {
+    stubRoutes({
+      "/api/dashboard/ai-suggestions": {
+        suggestions: [{ title: "Link 3 documents", body: "They have no profile.", action: "Link", priority: "high" }],
+      },
+    });
+    await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+
+    // Generating advice is a model call — a dashboard open must not be one.
+    const asked = () => fetchStub.mock.calls.filter((c: any[]) => String(c[0]).includes("ai-suggestions")).length;
+    expect(asked()).toBe(0);
+    expect(screen.queryByTestId("exec-section-recommendations")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("exec-recommendations-generate"));
+    const recs = await screen.findByTestId("exec-section-recommendations");
+    expect(recs.textContent).toContain("Link 3 documents");
+    expect(asked()).toBe(1);
+  });
+
   it("opens the filters and lets a whole source be switched off", async () => {
     await mount(enhancedWith());
     expect(screen.queryByTestId("attention-filters")).toBeNull();
