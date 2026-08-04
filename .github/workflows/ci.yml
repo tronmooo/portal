@@ -20,7 +20,13 @@ jobs:
       
       - name: Install dependencies
         run: npm ci
-      
+
+      # Same gate as .githooks/pre-push stage (0/2), so a new advisory fails the
+      # build on a PR instead of ambushing the next person at push time. Runs
+      # before tsc: a vulnerable tree should not consume a build.
+      - name: Dependency audit (high+ severity, runtime deps)
+        run: npm run audit:ci
+
       - name: TypeScript check
         run: npx tsc --noEmit
       

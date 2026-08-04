@@ -73,14 +73,25 @@ tests/smoke/
 
 ## Pre-push gate
 
-`.githooks/pre-push` runs:
+`.githooks/pre-push` runs, in order:
 
+0. `npm audit --omit=dev --audit-level=high`  (skip with `SKIP_AUDIT=1`)
 1. `tsc --noEmit`  (skip with `SKIP_TSC=1`)
 2. `npm run test:contracts`  (skip with `SKIP_TESTS=1`)
 
-Both gates are **strict** — push is blocked if either fails. `SKIP_TESTS=1`
-exists only for emergency hotfixes; use sparingly and note it in the commit
-message.
+`SKIP_ALL=1` skips all three. The same audit runs in CI
+(`.github/workflows/ci.yml`), so bypassing it locally only defers the failure
+to the pull request.
+
+All three gates are **strict** — push is blocked if any fails. The skips exist
+only for emergency hotfixes; use sparingly and note them in the commit message.
+
+A note on the audit gate: it fails on the whole dependency tree, not on your
+diff, so it can block a push that changed nothing about dependencies. When that
+happens the fix is to clear the advisory, not to bypass it — and prefer a range
+over an exact pin. Two `overrides` entries pinning `brace-expansion` to an
+exact `5.0.7` were the safe version when written, and became the reason the
+gate failed once the advisory range widened to include it.
 
 ## How to add a regression test (every bug fix needs one)
 
@@ -102,8 +113,8 @@ message.
   not add a second entry — strengthen the existing one.
 - **Never weaken** an assertion to make a failing test pass. If the contract
   is actually wrong, change the assertion AND document why in this file.
-- **Never bypass** with `SKIP_TESTS=1` without recording it in the commit
-  message body.
+- **Never bypass** with `SKIP_TESTS=1`, `SKIP_TSC=1`, `SKIP_AUDIT=1` or
+  `SKIP_ALL=1` without recording it in the commit message body.
 
 ## Hidden tracker categories (BUG-20260528-finance-tracker pattern)
 

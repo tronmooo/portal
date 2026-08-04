@@ -277,7 +277,7 @@ The following test files in `tests/smoke/contracts/` enforce this architecture:
 | `calendar-recurrence.test.ts` (NEW) | Obligation PATCH triggers materializeOccurrences; calendar reflects edit |
 | `profile-filter-canonical.test.ts` (NEW) | Every code path calling profile-filter uses passesProfileFilter() |
 
-**Pre-push hook** (`.githooks/pre-push`) runs `npx tsc --noEmit && npm run test:contracts`. No merges without green.
+**Pre-push hook** (`.githooks/pre-push`) runs three gates in order: `npm audit --omit=dev --audit-level=high`, `npx tsc --noEmit`, then `npm run test:contracts`. Bypasses are `SKIP_AUDIT=1` / `SKIP_TSC=1` / `SKIP_TESTS=1`, or `SKIP_ALL=1` for all three. CI (`.github/workflows/ci.yml`) runs the same audit and tsc. No merges without green.
 
 ---
 
@@ -325,7 +325,7 @@ Execute in this order. Each phase is a single commit gated by the test suite.
 - Do NOT add new features. If something doesn't exist yet, it's out of scope.
 - Do NOT refactor unrelated files. Each commit touches only the files needed for the listed change.
 - Do NOT break existing endpoint shapes. Add fields if needed; never remove.
-- Do NOT bypass the test suite without `SKIP_TESTS=1` and a written justification in the commit message.
+- Do NOT bypass any pre-push gate (`SKIP_TESTS=1`, `SKIP_TSC=1`, `SKIP_AUDIT=1`, `SKIP_ALL=1`) without a written justification in the commit message.
 - Do NOT mark a fix complete without an accompanying `it("BUG-...")` in `regressions.test.ts`.
 
 ---
