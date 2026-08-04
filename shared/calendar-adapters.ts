@@ -21,8 +21,10 @@ import {
   type SourceSystem,
   sourceHref,
 } from "./calendar-occurrences";
-import { parseRecurringMeta } from "./recurring-dates";
+import { parseRecurringMeta, expandRecurrenceDates } from "./recurring-dates";
+import { addYearsISO } from "./date-math";
 import { canonicalObligationCategory } from "./category-canon";
+import { groupMaterializedSeries } from "./series-detect";
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
 const clip = (v: unknown): string => String(v ?? "").slice(0, 10);
@@ -408,12 +410,99 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
 
 // ─── Tasks ───────────────────────────────────────────────────────────────────
 
-/** Recurring tasks carry their rule in `tags` (see shared/recurrence). */
+/**
+ * Recurring tasks carry their rule in `tags` (see shared/recurrence) — but not
+ * every repeating task has one.
+ *
+ * Reported 2026-08-04: the Recurring Dates screen read "Tasks 0" for an account
+ * whose calendar showed "Refill Propranolol prescription (100mg) – August". The
+ * refill schedule is six separate task rows (May…October, ~30 days apart,
+ * identical tags) and NOT ONE of them carries a `recur:` tag, so every "does
+ * this repeat?" question answered no. `groupMaterializedSeries` recognises that
+ * shape at read time and emits ONE series for it — no migration, no writes.
+ *
+ * Rows belonging to a detected group are emitted once, as the group; every
+ * other task keeps its existing per-row behaviour exactly.
+ */
 export function seriesFromTasks(tasks: readonly any[]): CalendarSeries[] {
   const out: CalendarSeries[] = [];
+
+  // Only OPEN, dated tasks can form a live schedule. Completed rows still count
+  // as evidence of the cadence (the May–July refills are done), so they are fed
+  // to the detector but never emitted as their own series.
+  const candidates = (tasks || [])
+    .filter((t: any) => t?.id && isISO(t.dueDate))
+    .map((t: any) => ({
+      id: String(t.id),
+      title: String(t.title ?? ""),
+      date: clip(t.dueDate),
+      ownerId: Array.isArray(t.linkedProfiles) ? t.linkedProfiles[0] ?? null : null,
+      tags: Array.isArray(t.tags) ? t.tags.map(String) : [],
+      row: t,
+    }));
+
+  const grouped = groupMaterializedSeries(candidates);
+  const claimed = new Set<string>();
+  for (const g of grouped) {
+    const open = g.rows.filter((r) => r.row.status !== "done");
+    // Every occurrence already done — the schedule has run out. Leave the rows
+    // to the per-row loop (which drops completed tasks) rather than inventing a
+    // live series with no future dates.
+    if (open.length === 0) continue;
+    for (const r of g.rows) claimed.add(r.id);
+    const anchor = open[0];
+    const t = anchor.row;
+    const profileId = anchor.ownerId ?? undefined;
+
+    // THE GENERATED DATES MUST BE THE REAL ROWS' DATES.
+    //
+    // A detected cadence is an approximation — the refills sit 30 days apart,
+    // which is not the same as "monthly on day 8". Generating from the base
+    // date alone produced Sep 8 while the actual task is due Sep 7, and dropped
+    // Oct 7 for being past a Oct-7 end date. That would put a date on the
+    // calendar that no record holds, which is worse than the miscount being
+    // fixed. So: generate the canonical sequence, then pin each occurrence onto
+    // the row it stands for with `movedDates` (canonical → actual), and let the
+    // series run to the last CANONICAL date so nothing falls off the end.
+    const openDates = open.map((r) => r.date);
+    const canonical = expandRecurrenceDates(anchor.date, g.recurrence, {
+      windowStart: anchor.date,
+      windowEnd: addYearsISO(openDates[openDates.length - 1], 1),
+      cap: Math.max(openDates.length * 3, 12),
+    }).slice(0, openDates.length);
+    const movedDates: Record<string, string> = {};
+    canonical.forEach((canon, i) => {
+      const actual = openDates[i];
+      if (actual && canon !== actual) movedDates[canon] = actual;
+    });
+
+    out.push({
+      id: `task:${anchor.id}`,
+      kind: "task",
+      title: humanizeTitle(g.stem, "Task"),
+      subtitle: t.priority ? `${t.priority} priority` : undefined,
+      source: {
+        system: "task",
+        id: anchor.id,
+        profileId,
+        ownerIds: uniq(Array.isArray(t.linkedProfiles) ? t.linkedProfiles : []),
+        href: sourceHref("task", anchor.id, profileId),
+      },
+      baseDate: anchor.date,
+      recurrence: g.recurrence,
+      // The schedule genuinely stops at the last row that exists — this is a
+      // finite set of generated tasks, not an endless series. The end is the
+      // last CANONICAL date so every real row still gets an occurrence.
+      recurrenceEnd: canonical[canonical.length - 1] || anchor.date,
+      ...(Object.keys(movedDates).length > 0 ? { movedDates } : {}),
+      materializedFrom: { seriesKey: g.seriesKey, rowIds: g.rows.map((r) => r.id) },
+    });
+  }
+
   for (const t of tasks || []) {
     if (!t?.id || !isISO(t.dueDate)) continue;
     if (t.status === "done") continue;
+    if (claimed.has(String(t.id))) continue;
     const tags: string[] = Array.isArray(t.tags) ? t.tags : [];
     const recurTag = tags.find((x) => typeof x === "string" && x.startsWith("recur:"));
     const freq = recurTag ? recurTag.slice(6) : "";

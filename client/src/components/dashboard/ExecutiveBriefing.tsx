@@ -41,6 +41,8 @@ import type { DashboardStats } from "@shared/schema";
 import { dueLabel } from "@shared/now-rank";
 import type { AttentionItem } from "@shared/attention";
 import { buildExecutiveSections } from "@shared/executive-sections";
+import { rollupOccurrences, bucketsForKinds, breakdownLabel } from "@shared/dated-items";
+import type { CalendarOccurrence, OccurrenceKind } from "@shared/calendar-occurrences";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
@@ -284,6 +286,31 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     return () => clearTimeout(t);
   }, [anyBriefPending]);
 
+  // ── The windowed roll-up every tile counts from ─────────────────────────────
+  //
+  // Reported 2026-08-04: "Every badge, counter, and card must use the exact same
+  // source of truth… The dashboard should never report 0 Tasks if there are
+  // tasks with due dates." The tiles below used to re-scan the raw `tasks`
+  // array while the Calendar page bucketed `/api/calendar/timeline` with its own
+  // inline loop — two datasets, two answers, for one question.
+  //
+  // `rollupOccurrences` (shared/dated-items) is now the only bucketing code, and
+  // it reads the CANONICAL timeline window — unfiltered by date, unlike the
+  // today-onward `timeline` the feed uses, because a tile that cannot see
+  // yesterday cannot report an overdue count.
+  const datedRollup = useMemo(() => {
+    const rows = hideTest(Array.isArray(timelineRaw) ? timelineRaw : []).map((item: any) => ({
+      kind: (item?.type || "event") as OccurrenceKind,
+      date: String(item?.date || "").slice(0, 10),
+      effectiveDate: String(item?.date || "").slice(0, 10),
+      status: item?.completed ? "done" : "upcoming",
+    })) as unknown as CalendarOccurrence[];
+    return rollupOccurrences(rows, todayStr);
+  }, [timelineRaw, todayStr, showTestData]);
+  // Tasks and habit schedules share one card, exactly as they share one chip on
+  // the Recurring Dates screen (shared/calendar-categories KIND_TO_CATEGORY).
+  const taskBuckets = useMemo(() => bucketsForKinds(datedRollup, ["task", "habit"]), [datedRollup]);
+
   // ── The ten sections ───────────────────────────────────────────────────────
   const snoozedDocumentIds = useMemo(() => Object.keys(loadDocSnoozeMap()), [allExpiringDocs.length]);
   const sectionInput = useMemo(() => ({
@@ -510,12 +537,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           accent={attnCount === 0 ? "155 65% 45%" : "0 72% 58%"}
           onClick={() => document.querySelector('[data-testid="exec-section-immediate"]')?.scrollIntoView({ behavior: "smooth", block: "start" })}
           testId="brief-stat-attention" />
+        {/* Counts everything dated that needs action — overdue, today, and the
+            next 30 days — with the Today · Upcoming · Overdue split underneath.
+            It reads the shared roll-up, so it cannot say 0 while the calendar
+            shows a dated task, and it agrees with the Calendar page's tiles. */}
         <StatTile label="Tasks" icon={CheckCircle2}
-          value={tasksPending ? "…" : String(agendaTasks.length)} unit={tasksPending ? undefined : "due today"}
-          sub={tasksPending ? "loading"
-            : overdueTasks.length || highCount ? `${overdueTasks.length} overdue · ${highCount} high priority`
-            : doneToday > 0 ? `${plural(doneToday, "task")} completed today`
-            : `${plural(pending.length, "open task")}`}
+          value={timelinePending ? "…" : String(taskBuckets.attention)}
+          unit={timelinePending ? undefined : taskBuckets.attention === 1 ? "needs action" : "need action"}
+          sub={timelinePending ? "loading"
+            : breakdownLabel(taskBuckets)
+            || (doneToday > 0 ? `${plural(doneToday, "task")} completed today` : "Nothing scheduled")}
           accent={ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="brief-stat-tasks" />
         <StatTile label="Events" icon={CalendarDays}
           value={timelinePending ? "…" : String(eventsToday.length)} unit={timelinePending ? undefined : "today"}

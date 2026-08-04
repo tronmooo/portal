@@ -10,6 +10,8 @@ import { SeriesDialogHost } from "@/components/recurring/RecurringDatesManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
+import { rollupOccurrences } from "@shared/dated-items";
+import type { CalendarOccurrence, OccurrenceKind } from "@shared/calendar-occurrences";
 import { ArrowLeft, CalendarDays, Repeat } from "lucide-react";
 import { Link } from "wouter";
 
@@ -38,14 +40,8 @@ export default function CalendarPage() {
   // The third tile used to read "Total" — the row count of /api/events, a number
   // with no window and no relationship to what was on screen. It is now the
   // 30-day horizon, which is answerable and comes from the same fetch.
+  // The window edges are `rollupOccurrences`' business now, not this page's.
   const todayStr = new Date().toLocaleDateString("en-CA");
-  const addDays = (n: number) => {
-    const d = new Date(`${todayStr}T12:00:00`);
-    d.setDate(d.getDate() + n);
-    return d.toLocaleDateString("en-CA");
-  };
-  const weekEndStr = useMemo(() => addDays(7), [todayStr]);
-  const horizonEndStr = useMemo(() => addDays(30), [todayStr]);
   // [PERF 2026-07-31] Fetch the CANONICAL window (shared/calendar-window.ts) —
   // the same key the dashboard bootstrap seeds and the month grid reads, so
   // this query is a cache hit on app open instead of a guaranteed cold fetch.
@@ -59,18 +55,20 @@ export default function CalendarPage() {
       apiRequest("GET", timelineUrl(timelineWindow, filterMode, filterIds)).then(r => r.json()),
     staleTime: 60_000,
   });
+  // The bucketing itself is `rollupOccurrences` (shared/dated-items) — the same
+  // function the Executive Dashboard reads, so the tiles here and the cards
+  // there can no longer disagree about one window. This loop used to live
+  // inline, which is how three surfaces ended up with three answers.
   const evSummary = useMemo(() => {
-    const list = Array.isArray(timeline) ? timeline : [];
-    let today = 0, week = 0, horizon = 0;
-    for (const item of list) {
-      const d = String(item?.date || "").slice(0, 10);
-      if (!d) continue;
-      if (d === todayStr) today++;
-      if (d >= todayStr && d <= weekEndStr) week++; // YYYY-MM-DD sorts lexically
-      if (d >= todayStr && d <= horizonEndStr) horizon++;
-    }
-    return { today, week, horizon };
-  }, [timeline, todayStr, weekEndStr, horizonEndStr]);
+    const list = (Array.isArray(timeline) ? timeline : []).map((item: any) => ({
+      kind: (item?.type || "event") as OccurrenceKind,
+      date: String(item?.date || "").slice(0, 10),
+      effectiveDate: String(item?.date || "").slice(0, 10),
+      status: item?.completed ? "done" : "upcoming",
+    })) as unknown as CalendarOccurrence[];
+    const r = rollupOccurrences(list, todayStr);
+    return { today: r.today, week: r.next7, horizon: r.next30 };
+  }, [timeline, todayStr]);
 
   // Legacy cleanup: strip old ?tab=obligations links (that tab is retired).
   // ?tab=recurring is the Recurring Dates manager and is kept.

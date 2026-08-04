@@ -5,6 +5,7 @@
 // a managed recurring event ("Every year on Feb 11 · Joe · Next: Feb 11 2029")
 // and again in the cross-app feed ("Joe — Birthday · Feb 11 · IN 7 MO").
 import { describe, it, expect } from "vitest";
+import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import {
   seriesFromProfiles,
   seriesFromEvents,
@@ -209,6 +210,58 @@ describe("seriesFromTasks / Reminders / Documents", () => {
   it("treats an untagged task as one-off and drops completed ones", () => {
     expect(seriesFromTasks([{ id: "t2", title: "X", dueDate: "2026-07-26" }])[0].recurrence).toBe("none");
     expect(seriesFromTasks([{ id: "t3", title: "X", dueDate: "2026-07-26", status: "done" }])).toEqual([]);
+  });
+
+  // ── A schedule written as N rows (reported 2026-08-04) ────────────────────
+  //
+  // The account's monthly prescription refill is six separate task rows, none
+  // carrying a `recur:` tag, so the Recurring Dates screen truthfully counted
+  // "Tasks 0" while the refill sat on the calendar. These are the REAL rows.
+  describe("materialized series", () => {
+    const OWNER = "ebfd58a4-b170-49ad-8ccb-c2bc752cd816";
+    const TAGS = ["medication", "prescription", "refill"];
+    const REFILLS = [
+      { id: "1", title: "Refill Propranolol prescription (100mg) - May", dueDate: "2026-05-10", status: "done", tags: TAGS, linkedProfiles: [OWNER] },
+      { id: "2", title: "Refill Propranolol prescription (100mg) - June", dueDate: "2026-06-09", status: "done", tags: TAGS, linkedProfiles: [OWNER] },
+      { id: "3", title: "Refill Propranolol prescription (100mg) - July", dueDate: "2026-07-09", status: "done", tags: TAGS, linkedProfiles: [OWNER] },
+      { id: "4", title: "Refill Propranolol prescription (100mg) - August", dueDate: "2026-08-08", status: "todo", tags: TAGS, linkedProfiles: [OWNER] },
+      { id: "5", title: "Refill Propranolol prescription (100mg) - September", dueDate: "2026-09-07", status: "todo", tags: TAGS, linkedProfiles: [OWNER] },
+      { id: "6", title: "Refill Propranolol prescription (100mg) - October", dueDate: "2026-10-07", status: "todo", tags: TAGS, linkedProfiles: [OWNER] },
+    ];
+
+    it("emits ONE recurring rule for six untagged rows, titled without the month", () => {
+      const series = seriesFromTasks(REFILLS);
+      expect(series).toHaveLength(1);
+      expect(series[0]).toMatchObject({
+        kind: "task",
+        recurrence: "monthly",
+        title: "Refill Propranolol prescription (100mg)",
+        baseDate: "2026-08-08", // the first OPEN row, not the done May one
+      });
+      expect(series[0].materializedFrom?.rowIds).toHaveLength(6);
+    });
+
+    // A detected cadence is an approximation: these refills are 30 days apart,
+    // which is not "monthly on day 8". Generating from the base alone produced
+    // Sep 8 for a task actually due Sep 7, and dropped Oct 7 entirely. A date on
+    // the calendar that no record holds is worse than the miscount being fixed.
+    it("puts occurrences on the REAL rows' dates, not the idealised cadence", () => {
+      const [s] = seriesFromTasks(REFILLS);
+      const dates = generateSeriesOccurrences(s, { todayISO: "2026-08-04" })
+        .map((o) => o.effectiveDate);
+      expect(dates).toEqual(["2026-08-08", "2026-09-07", "2026-10-07"]);
+    });
+
+    it("leaves a fully-completed schedule alone rather than inventing a live rule", () => {
+      expect(seriesFromTasks(REFILLS.map((r) => ({ ...r, status: "done" })))).toEqual([]);
+    });
+
+    it("still emits per-row series for tasks that are not part of a schedule", () => {
+      const mixed = [...REFILLS, { id: "x", title: "Call the dentist", dueDate: "2026-08-04", status: "todo", tags: [], linkedProfiles: [OWNER] }];
+      const series = seriesFromTasks(mixed);
+      expect(series).toHaveLength(2);
+      expect(series.find((s) => s.title === "Call the dentist")?.recurrence).toBe("none");
+    });
   });
 
   it("turns a reminder's fireAt instant into a calendar date", () => {
