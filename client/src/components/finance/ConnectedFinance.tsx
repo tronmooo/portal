@@ -16,7 +16,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
-  Landmark, ArrowDownRight, ArrowUpRight, Search, X, Loader2, RefreshCw,
+  ArrowDownRight, ArrowUpRight, Search, X, Loader2, RefreshCw,
   ChevronRight, AlertTriangle, Repeat, CreditCard, Wallet, TrendingUp, Info,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -125,17 +125,27 @@ export function ConnectedFinance() {
 
   const accountIdsParam = accountFilter === "all" ? "" : `&accountIds=${accountFilter}`;
 
+  // One cheap check first: has this user opted in at all? Everything else on
+  // this screen is gated behind it, so a user who never connects a bank costs
+  // exactly one lightweight request — not a summary computation over an empty
+  // dataset on every Finance page load.
+  const connectionsQ = useQuery<any>({
+    queryKey: ["/api/finance/connections"],
+    queryFn: () => apiRequest("GET", "/api/finance/connections").then((r) => r.json()),
+    refetchOnWindowFocus: false,
+  });
+
+  const accounts: FinancialAccountRecord[] = connectionsQ.data?.accounts ?? [];
+  const configured = connectionsQ.data?.configured !== false;
+  const hasConnections = (connectionsQ.data?.connections ?? [])
+    .filter((c: any) => c.connectionStatus !== "disconnected").length > 0;
+
   const summaryQ = useQuery<any>({
     queryKey: ["/api/finance/summary", bounds.startDate, bounds.endDate, accountFilter],
     queryFn: () =>
       apiRequest("GET", `/api/finance/summary?startDate=${bounds.startDate}&endDate=${bounds.endDate}${accountIdsParam}`)
         .then((r) => r.json()),
-    refetchOnWindowFocus: false,
-  });
-
-  const connectionsQ = useQuery<any>({
-    queryKey: ["/api/finance/connections"],
-    queryFn: () => apiRequest("GET", "/api/finance/connections").then((r) => r.json()),
+    enabled: hasConnections,
     refetchOnWindowFocus: false,
   });
 
@@ -159,48 +169,19 @@ export function ConnectedFinance() {
     }),
   });
 
-  const accounts: FinancialAccountRecord[] = connectionsQ.data?.accounts ?? [];
-  const configured = connectionsQ.data?.configured !== false;
-  const hasConnections = (connectionsQ.data?.connections ?? [])
-    .filter((c: any) => c.connectionStatus !== "disconnected").length > 0;
-
-  if (connectionsQ.isLoading) {
-    return (
-      <Card data-testid="connected-finance-loading">
-        <CardContent className="p-4 space-y-3">
-          <Skeleton className="h-5 w-40" />
-          <Skeleton className="h-20 w-full" />
-        </CardContent>
-      </Card>
-    );
-  }
-
-  // Not connected (or Stripe not configured) — a compact prompt, not an error.
-  if (!configured || !hasConnections) {
-    return (
-      <Card data-testid="connected-finance-empty">
-        <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
-          <div className="flex items-start gap-3 min-w-0">
-            <div className="h-9 w-9 shrink-0 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-              <Landmark className="h-4 w-4 text-emerald-500" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-medium">Connect a bank account</p>
-              <p className="text-xs text-muted-foreground">
-                {configured
-                  ? "Import real balances, transactions, cash flow and spending. You sign in with your bank inside Stripe — Portol never sees your credentials."
-                  : financeErrorMessage("not_configured")}
-              </p>
-            </div>
-          </div>
-          {configured && (
-            <Button asChild size="sm" className="shrink-0" data-testid="btn-goto-settings-connect">
-              <a href="/settings">Connect in Settings</a>
-            </Button>
-          )}
-        </CardContent>
-      </Card>
-    );
+  // OPT-IN ONLY.
+  //
+  // Bank connection is an option the user turns on in Settings → Connected
+  // Services → Finance. Until they do, this component renders NOTHING: no
+  // placeholder, no skeleton, no "connect your bank" prompt. A user who never
+  // wants this sees a Finance tab identical to the one they had before the
+  // feature existed.
+  //
+  // The same applies while the check is still in flight — a skeleton would
+  // flash a card at everyone on every Finance page load, which is the exact
+  // thing this guard exists to prevent. Discovery lives in Settings.
+  if (connectionsQ.isLoading || !configured || !hasConnections) {
+    return null;
   }
 
   const summary = summaryQ.data;

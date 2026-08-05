@@ -723,6 +723,23 @@ describe("browser connect flow", () => {
 describe("Finance tab", () => {
   const src = read("client/src/components/finance/ConnectedFinance.tsx");
 
+  it("renders NOTHING until the user opts in — it is an option, not a promo", () => {
+    // Bank connection is opt-in from Settings. A user who never turns it on
+    // must see the Finance tab exactly as it was before this feature existed:
+    // no placeholder card, no skeleton flash, no "connect your bank" nudge.
+    expect(src).toMatch(/if \(connectionsQ\.isLoading \|\| !configured \|\| !hasConnections\) \{\s*return null;/);
+    // The old prompt card and its CTA must not come back.
+    expect(src).not.toContain("connected-finance-empty");
+    expect(src).not.toContain("btn-goto-settings-connect");
+    expect(src).not.toMatch(/Connect a bank account/);
+  });
+
+  it("does no server work for users who have not connected anything", () => {
+    // The summary endpoint recomputes totals; it must not run on every Finance
+    // page load for the majority who never connect a bank.
+    expect(src).toMatch(/enabled: hasConnections/);
+  });
+
   it("labels the total 'Connected net worth' and says it is not the whole picture", () => {
     expect(src).toMatch(/Connected net worth/);
     expect(src).toMatch(/Not your complete financial picture/i);
