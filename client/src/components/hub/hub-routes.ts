@@ -62,6 +62,23 @@ export function infoTabRoute(selectedIds: string[]): string {
   return selectedIds.length === 1 ? `/profiles/${selectedIds[0]}/info` : "/profiles";
 }
 
+/** Every location that shows the Info tab, in any of its spellings:
+ *  the single-profile page, the combined "everyone" page, and the
+ *  `/linked?tab=info` deep-link a user can type or bookmark.
+ *
+ *  `/linked?tab=info` is NOT a section trackers.tsx knows (getQuerySection
+ *  accepts all|trackers|documents|liabilities|assets), so it silently fell
+ *  through to the unfiltered "All" list — a different screen from the Info
+ *  chip, with the profile scope apparently ignored. QA report 2026-08-05.
+ *  Treating it as an Info location routes both spellings to one destination. */
+export function isInfoLocation(location: string): boolean {
+  const { path, query } = splitLocation(location);
+  if (path === "/profiles") return true;
+  if (/^\/profiles\/[^/]+\/info$/.test(path)) return true;
+  if (path === "/linked" && (query.get("tab") || "").toLowerCase() === "info") return true;
+  return false;
+}
+
 /**
  * The Info route the current location SHOULD be, or null when it's already
  * correct. Every other hub tab has a fixed route that re-reads the profile
@@ -74,12 +91,28 @@ export function infoTabRoute(selectedIds: string[]): string {
  * tabs aggregate profiles, but Info behaves like the self profile remained
  * selected."
  *
+ * INVARIANT — this is the ONLY thing allowed to redirect an Info location.
+ * It is a fixpoint: applying it to its own output always returns null
+ * (`infoTabRoute(ids)` is the one target for a scope, and both Info paths are
+ * recognised above). The Info PAGE must therefore never navigate on its own.
+ * It used to: `/profiles` redirected to the Self profile's Info page while this
+ * function redirected `/profiles/<self>/info` back to `/profiles` whenever the
+ * scope wasn't exactly one person. The two bounced off each other forever —
+ * React error #185, "Maximum update depth exceeded", a white-screen crash on
+ * every switch to Everyone from an Info page (QA report 2026-08-05).
+ *
  * Returns null for any non-Info location, so callers can apply it blindly.
  */
 export function reconcileInfoRoute(location: string, selectedIds: string[] = []): string | null {
+  if (!isInfoLocation(location)) return null;
   const { path } = splitLocation(location);
-  const infoMatch = path.match(/^\/profiles\/([^/]+)\/info$/);
-  if (!infoMatch) return null;
+  // /profiles is correct under EVERY scope: it renders the people in scope, and
+  // it is what "Go to Profiles", the People stat card and every "back to
+  // profiles" link mean. Redirecting it to the selected person's page would
+  // send all of them into one person's Info page instead of the list — and the
+  // default scope is a single profile (initDefaultProfileFilter seeds Self), so
+  // that would be nearly always.
+  if (path === "/profiles") return null;
   const target = infoTabRoute(selectedIds);
   if (target === path) return null;
   return target;
@@ -114,6 +147,9 @@ export function activeHubTab(location: string, selectedIds: string[] = []): HubT
     // trackers.tsx getQuerySection contract: ?tab= selects the section.
     const tab = (query.get("tab") || "").toLowerCase();
     if (tab === "assets" || tab === "profiles") return "assets";
+    // ?tab=info is redirected to the real Info route (reconcileInfoRoute); light
+    // its chip for the frame before that lands rather than flashing no chip.
+    if (tab === "info") return "info";
     if (tab === "documents") return "documents";
     if (tab === "trackers") return "trackers";
     if (tab === "liabilities") return "liabilities";

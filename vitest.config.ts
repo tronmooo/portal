@@ -174,6 +174,8 @@ export default defineConfig({
       'tests/format-full-date.test.ts',
       'tests/detail-hero.test.ts',
       'tests/detail-hero.dom.test.tsx',
+      // QA pass 2026-08-05: the Info-page profile-switch crash.
+      'tests/qa-2026-08-05-info-crash.dom.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

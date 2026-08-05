@@ -125,7 +125,7 @@ export function HubKpiStrip() {
     staleTime: 60_000,
     placeholderData: undefined,
   });
-  const { data: trackers } = useQuery<Tracker[]>({
+  const { data: trackers, isPending: trackersPending } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", mode, ...ids],
     queryFn: () => apiRequest("GET", `/api/trackers${param}`).then(r => r.json()),
     staleTime: 30_000,
@@ -147,7 +147,14 @@ export function HubKpiStrip() {
     ? monthlyIncome - (monthlySpend + (snap?.monthlyObligationTotal ?? 0))
     : null;
 
+  // computeHealthScore returns null for BOTH "still loading" and "this scope
+  // has no health/fitness readings to score" — and the chip rendered "—" for
+  // both, so a person with no trackers looked like a broken tile next to a
+  // person with a score (QA report 2026-08-05, "Bob shows — while Mike shows
+  // 78"). Say which: "…" while the list is in flight, "—" once it has landed
+  // and there is genuinely nothing to score.
   const health = trackers ? computeHealthScore(trackers) : null;
+  const healthValue = health != null ? String(health) : trackersPending ? "…" : "—";
 
   const streak = stats
     ? Math.max(0, ...(stats.streaks || []).map(s => s.days || 0), stats.journalStreak || 0)
@@ -205,7 +212,7 @@ export function HubKpiStrip() {
         icon={HeartPulse}
         accent={tabAccent("wellness")}
         label="Wellness"
-        value={health == null ? "—" : String(health)}
+        value={healthValue}
         tone={health != null && health >= 70 ? "pos" : health != null && health < 45 ? "warn" : undefined}
         onClick={() => navigate("/wellness")}
         testId="hub-kpi-health"
