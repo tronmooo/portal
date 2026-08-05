@@ -964,8 +964,35 @@ export async function processWebhookEvent(
 ): Promise<"processed" | "ignored"> {
   if (!HANDLED_EVENTS.has(event.type)) return "ignored";
 
-  const account = event.data.object as import("stripe").Stripe.FinancialConnections.Account;
-  if (!account?.id) return "ignored";
+  const payloadAccount = event.data.object as import("stripe").Stripe.FinancialConnections.Account;
+  if (!payloadAccount?.id) return "ignored";
+
+  // API-VERSION RESILIENCE.
+  //
+  // A webhook endpoint has its OWN API version, set in the Stripe dashboard and
+  // independent of the version this SDK is pinned to. When they differ, the
+  // event payload is serialized in the ENDPOINT's version — so a field this
+  // code depends on (notably `status_details.active.action`, which is how we
+  // detect "the bank needs re-authorization") can be silently absent, and the
+  // relink state would simply never fire.
+  //
+  // So the event is treated as a SIGNAL ONLY: it tells us which account changed.
+  // We then re-read that account from Stripe, which always answers at our
+  // pinned version, and act on that. One extra call per event buys immunity to
+  // the dashboard setting drifting away from the code.
+  //
+  // If the re-read fails (Stripe down, account already revoked), fall back to
+  // the payload — stale-but-present beats dropping the event.
+  let account = payloadAccount;
+  try {
+    account = await getStripe().financialConnections.accounts.retrieve(payloadAccount.id);
+  } catch (e) {
+    logFinanceError("webhook.retrieveAccount", e, {
+      eventType: event.type,
+      // Which version sent this, so a mismatch is visible in logs.
+      eventApiVersion: (event as any).api_version ?? null,
+    });
+  }
 
   // Resolve the owner: first by an account we already store, then by the
   // account holder mapping (covers account.created for a brand-new account).

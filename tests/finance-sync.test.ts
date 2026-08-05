@@ -335,6 +335,19 @@ describe("webhook handler contract", () => {
     }
   });
 
+  it("re-reads the account from Stripe instead of trusting the event payload's shape", () => {
+    // A webhook endpoint carries its own API version, independent of the SDK
+    // pin. If they drift, payload fields this code depends on — notably
+    // status_details.active.action, the relink signal — can be absent and the
+    // state would silently never fire. The event is a signal; the account is
+    // re-read at our pinned version.
+    const block = SRC.slice(SRC.indexOf("export async function processWebhookEvent"));
+    expect(block).toMatch(/financialConnections\.accounts\.retrieve\(payloadAccount\.id\)/);
+    // And it must degrade to the payload rather than dropping the event.
+    expect(block).toMatch(/let account = payloadAccount/);
+    expect(block).toMatch(/webhook\.retrieveAccount/);
+  });
+
   it("resolves the owning user from our own tables, not from event metadata", () => {
     expect(SRC).toMatch(/userIdForStripeAccount\(/);
     expect(SRC).toMatch(/userIdForCustomer\(/);
