@@ -90,7 +90,20 @@ export function DetailHero({
       {/* Back + actions */}
       {(backHref || onBack || actions) && (
         <div className="flex items-center justify-between gap-2 mb-3">
-          {backHref ? (
+          {backHref && backHref.includes("?") ? (
+            // A query-carrying target ("/linked?tab=assets") must stay INSIDE
+            // the hash: wouter's Link hoists the query out of it, and the
+            // section param then rides on the document URL instead of the
+            // route. A plain hash anchor keeps it where the router reads it —
+            // and is still a real, shareable link.
+            <a
+              href={`#${backHref}`}
+              className="inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="button-back"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> {backLabel}
+            </a>
+          ) : backHref ? (
             <Link
               href={backHref}
               className="inline-flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors"

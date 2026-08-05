@@ -36,6 +36,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { hashNavigate } from "@/lib/hashNavigate";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { itemMatches } from "@/lib/search-index";
 
@@ -377,7 +378,12 @@ export function CommandSearch() {
           return [searchTerm, ...filtered].slice(0, 5);
         });
       }
-      navigate(path);
+      // A query-carrying target ("/trackers?tracker=<id>") must go through
+      // hashNavigate: wouter's hash navigate hoists the query OUT of the hash
+      // ("?tracker=x#/trackers"), which is not the URL we want people to copy.
+      // Same rule the hub tab chips follow (see HubShell.tsx).
+      if (path.includes("?")) hashNavigate(path);
+      else navigate(path);
     },
     [navigate, setOpen]
   );
@@ -509,7 +515,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`tracker-${t.id}`}
                     value={`tracker-${t.id}-${t.name}`}
-                    onSelect={() => handleSelect("/trackers", query)}
+                    onSelect={() => handleSelect(`/trackers?tracker=${t.id}`, query)}
                     data-testid={`item-search-tracker-${t.id}`}
                   >
                     <Activity className="shrink-0 text-emerald-500" />
@@ -530,7 +536,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`task-${t.id}`}
                     value={`task-${t.id}-${t.title}`}
-                    onSelect={() => handleSelect("/dashboard", query)}
+                    onSelect={() => handleSelect("/dashboard/tasks", query)}
                     data-testid={`item-search-task-${t.id}`}
                   >
                     <ListTodo className="shrink-0 text-blue-500" />
@@ -551,7 +557,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`expense-${e.id}`}
                     value={`expense-${e.id}-${e.description}`}
-                    onSelect={() => handleSelect("/dashboard", query)}
+                    onSelect={() => handleSelect("/dashboard/finance", query)}
                     data-testid={`item-search-expense-${e.id}`}
                   >
                     <DollarSign className="shrink-0 text-amber-500" />
@@ -572,7 +578,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`event-${e.id}`}
                     value={`event-${e.id}-${e.title}`}
-                    onSelect={() => handleSelect("/dashboard", query)}
+                    onSelect={() => handleSelect("/calendar", query)}
                     data-testid={`item-search-event-${e.id}`}
                   >
                     <Calendar className="shrink-0 text-sky-500" />
@@ -593,7 +599,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`doc-${d.id}`}
                     value={`doc-${d.id}-${d.name}`}
-                    onSelect={() => handleSelect("/dashboard", query)}
+                    onSelect={() => handleSelect(`/documents/${d.id}`, query)}
                     data-testid={`item-search-document-${d.id}`}
                   >
                     <FileText className="shrink-0 text-slate-500" />
@@ -614,7 +620,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`habit-${h.id}`}
                     value={`habit-${h.id}-${h.name}`}
-                    onSelect={() => handleSelect("/dashboard", query)}
+                    onSelect={() => handleSelect("/dashboard/habits", query)}
                     data-testid={`item-search-habit-${h.id}`}
                   >
                     <Flame className="shrink-0 text-orange-500" />
@@ -635,7 +641,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`journal-${j.id}`}
                     value={`journal-${j.id}-${j.content ?? j.mood ?? j.date ?? j.id}`}
-                    onSelect={() => handleSelect("/dashboard", query)}
+                    onSelect={() => handleSelect("/dashboard/journal", query)}
                     data-testid={`item-search-journal-${j.id}`}
                   >
                     <BookHeart className="shrink-0 text-rose-400" />
@@ -658,7 +664,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`obligation-${o.id}`}
                     value={`obligation-${o.id}-${o.name}`}
-                    onSelect={() => handleSelect("/dashboard", query)}
+                    onSelect={() => handleSelect("/dashboard/obligations", query)}
                     data-testid={`item-search-obligation-${o.id}`}
                   >
                     <CreditCard className="shrink-0 text-indigo-500" />
@@ -679,7 +685,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`artifact-${a.id}`}
                     value={`artifact-${a.id}-${a.title}`}
-                    onSelect={() => handleSelect("/dashboard", query)}
+                    onSelect={() => handleSelect("/artifacts", query)}
                     data-testid={`item-search-artifact-${a.id}`}
                   >
                     <Package className="shrink-0 text-teal-500" />

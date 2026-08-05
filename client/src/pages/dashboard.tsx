@@ -2146,58 +2146,6 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
   const visibleItems = allItems.slice(0, 5);
   const hiddenCount = Math.max(0, totalCount - 5);
 
-  function AttentionItem({ id, title, detail, sourceType, accentColor }: {
-    id: string; title: string; detail: string; sourceType: "task" | "bill"; accentColor: string;
-  }) {
-    return (
-      <div className={`flex items-center gap-1 py-[5px] border-l-2 pl-1.5 pr-0.5 rounded-r-lg transition-colors ${
-        accentColor === '#ef4444' ? 'bg-red-500/5 hover:bg-red-500/8' : 'bg-amber-500/5 hover:bg-amber-500/8'
-      }`} style={{ borderLeftColor: accentColor }}>
-        <span className="text-xs font-medium truncate flex-1 leading-tight">{title}</span>
-        <span className="text-xs-tight text-muted-foreground shrink-0 tabular-nums">{detail}</span>
-        <div className="flex items-center shrink-0 ml-0.5">
-          {sourceType === "task" && (
-            <>
-              <button onClick={() => handleMarkComplete(id)} title="Complete"
-                className="h-5 w-5 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600">
-                <Check className="h-2.5 w-2.5" />
-              </button>
-              <button onClick={() => handleSnooze(id)} title="Snooze 7d"
-                className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600">
-                <Clock className="h-2.5 w-2.5" />
-              </button>
-            </>
-          )}
-          {sourceType === "bill" && (
-            <>
-              <button
-                onClick={() => handleBillPay(id)}
-                title="Mark paid"
-                className="h-5 px-1.5 rounded flex items-center gap-0.5 hover:bg-green-500/20 text-green-600 text-[11px] font-semibold"
-                data-testid={`btn-pay-bill-${id}`}
-              >
-                <DollarSign className="h-2.5 w-2.5" />
-                Pay
-              </button>
-              <button
-                onClick={() => handleBillSnooze(id)}
-                title="Snooze 7d"
-                className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600"
-                data-testid={`btn-snooze-bill-${id}`}
-              >
-                <Clock className="h-2.5 w-2.5" />
-              </button>
-            </>
-          )}
-          <button onClick={() => dismiss(`${sourceType}-${id}`)} title="Dismiss"
-            className="h-5 w-5 rounded flex items-center justify-center hover:bg-muted text-muted-foreground">
-            <X className="h-2 w-2" />
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   if (totalCount === 0) return (
     <CollapsibleSection accent="0 72% 52%" icon={AlertTriangle} label="Action Required" testId="section-needs-attention">
       <div className="text-center py-6">
@@ -2212,7 +2160,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
       <CollapsibleSection accent="0 72% 52%" icon={AlertTriangle} label="Action Required" count={totalCount} testId="section-needs-attention">
         <div className="divide-y divide-border/30">
           {visibleItems.map((item) => (
-            <AttentionItem key={`${item.sourceType}-${item.id}`} {...item} />
+            <AttentionItem key={`${item.sourceType}-${item.id}`} {...item} onComplete={handleMarkComplete} onSnooze={handleSnooze} onPay={handleBillPay} onBillSnooze={handleBillSnooze} onDismiss={dismiss} />
           ))}
         </div>
         {hiddenCount > 0 && (
@@ -2283,7 +2231,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
           <div className="overflow-y-auto overscroll-contain mt-3" style={{ WebkitOverflowScrolling: 'touch', height: 'calc(100dvh - 160px)' }}>
             <div className="space-y-0.5 pr-2">
               {allItems.map((item) => (
-                <AttentionItem key={`sheet-${item.sourceType}-${item.id}`} {...item} />
+                <AttentionItem key={`sheet-${item.sourceType}-${item.id}`} {...item} onComplete={handleMarkComplete} onSnooze={handleSnooze} onPay={handleBillPay} onBillSnooze={handleBillSnooze} onDismiss={dismiss} />
               ))}
             </div>
           </div>
@@ -2629,6 +2577,119 @@ function HealthSection({ data }: { data: any[] }) {
 
 // ─── Section: Bills & Obligations ────────────────────────────────────────────
 
+// One collapsible bill bucket ("Due This Week" / "Due This Month").
+//
+// MUST STAY AT MODULE SCOPE. This was declared inside the section component's
+// body, which gives it a brand-new function identity on every parent render —
+// React then treats it as a different component type, unmounts the old tree and
+// mounts a fresh one, so its `expanded` state reset to false and the group
+// snapped shut again on the next render the page happened to do (a refetch, a
+// scope change, any sibling state update). QA report 2026-08-05: an expander
+// that "never expands". Defining a component inside another component is the
+// bug, not the styling.
+// One row of "Action Required".
+//
+// MUST STAY AT MODULE SCOPE — see BillGroup above. Declared inside its parent
+// it was a new component type on every render, so React threw the row's DOM
+// away and rebuilt it each time the dashboard re-rendered: focus left the
+// button you were about to press and every hover/transition restarted.
+function AttentionItem({ id, title, detail, sourceType, accentColor, onComplete, onSnooze, onPay, onBillSnooze, onDismiss }: {
+id: string; title: string; detail: string; sourceType: "task" | "bill"; accentColor: string;
+onComplete: (id: string) => void;
+onSnooze: (id: string) => void;
+onPay: (id: string) => void;
+onBillSnooze: (id: string) => void;
+onDismiss: (key: string) => void;
+}) {
+  return (
+    <div className={`flex items-center gap-1 py-[5px] border-l-2 pl-1.5 pr-0.5 rounded-r-lg transition-colors ${
+      accentColor === '#ef4444' ? 'bg-red-500/5 hover:bg-red-500/8' : 'bg-amber-500/5 hover:bg-amber-500/8'
+    }`} style={{ borderLeftColor: accentColor }}>
+      <span className="text-xs font-medium truncate flex-1 leading-tight">{title}</span>
+      <span className="text-xs-tight text-muted-foreground shrink-0 tabular-nums">{detail}</span>
+      <div className="flex items-center shrink-0 ml-0.5">
+        {sourceType === "task" && (
+          <>
+            <button onClick={() => onComplete(id)} title="Complete"
+              className="h-5 w-5 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600">
+              <Check className="h-2.5 w-2.5" />
+            </button>
+            <button onClick={() => onSnooze(id)} title="Snooze 7d"
+              className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600">
+              <Clock className="h-2.5 w-2.5" />
+            </button>
+          </>
+        )}
+        {sourceType === "bill" && (
+          <>
+            <button
+              onClick={() => onPay(id)}
+              title="Mark paid"
+              className="h-5 px-1.5 rounded flex items-center gap-0.5 hover:bg-green-500/20 text-green-600 text-[11px] font-semibold"
+              data-testid={`btn-pay-bill-${id}`}
+            >
+              <DollarSign className="h-2.5 w-2.5" />
+              Pay
+            </button>
+            <button
+              onClick={() => onBillSnooze(id)}
+              title="Snooze 7d"
+              className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600"
+              data-testid={`btn-snooze-bill-${id}`}
+            >
+              <Clock className="h-2.5 w-2.5" />
+            </button>
+          </>
+        )}
+        <button onClick={() => onDismiss(`${sourceType}-${id}`)} title="Dismiss"
+          className="h-5 w-5 rounded flex items-center justify-center hover:bg-muted text-muted-foreground">
+          <X className="h-2 w-2" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BillGroup({ title, bills, color, onSelectBill }: {
+  title: string;
+  bills: any[];
+  color: string;
+  onSelectBill: (bill: any) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (bills.length === 0) return null;
+  const groupTotal = bills.reduce((s: number, b: any) => s + (b.amount || 0), 0);
+  return (
+    <div className="space-y-0.5">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex items-center gap-1.5 py-1 text-left hover:bg-muted/30 rounded px-1 -mx-1 transition-colors"
+        aria-expanded={expanded}
+      >
+        <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
+        <span className="text-xs font-semibold flex-1" style={{ color }}>{title}</span>
+        <span className="text-xs text-muted-foreground tabular-nums shrink-0">{bills.length} · {formatMoney(groupTotal)}</span>
+        {expanded ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
+      </button>
+      {expanded && (
+        <div className="divide-y divide-border/30 pl-3">
+          {bills.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((bill: any) => (
+            <div key={bill.id}
+              onClick={() => onSelectBill(bill)}
+              role="button" tabIndex={0} aria-label={`View bill: ${bill.name}`}
+              onKeyDown={onEnterOrSpace(() => onSelectBill(bill))}
+              className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-muted/40 rounded transition-colors">
+              <span className="text-xs truncate flex-1">{bill.name}</span>
+              {bill.autopay && <span className="text-xs-tight text-green-500 shrink-0">autopay</span>}
+              <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ObligationsSection({ data }: { data: any[] }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -2711,40 +2772,6 @@ function ObligationsSection({ data }: { data: any[] }) {
     </CollapsibleSection>
   );
 
-  function BillGroup({ title, bills, color }: { title: string; bills: any[]; color: string }) {
-    const [expanded, setExpanded] = useState(false);
-    if (bills.length === 0) return null;
-    const groupTotal = bills.reduce((s: number, b: any) => s + (b.amount || 0), 0);
-    return (
-      <div className="space-y-0.5">
-        <button
-          onClick={() => setExpanded(v => !v)}
-          className="w-full flex items-center gap-1.5 py-1 text-left hover:bg-muted/30 rounded px-1 -mx-1 transition-colors"
-        >
-          <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
-          <span className="text-xs font-semibold flex-1" style={{ color }}>{title}</span>
-          <span className="text-xs text-muted-foreground tabular-nums shrink-0">{bills.length} · {formatMoney(groupTotal)}</span>
-          {expanded ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
-        </button>
-        {expanded && (
-          <div className="divide-y divide-border/30 pl-3">
-            {bills.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((bill: any) => (
-              <div key={bill.id}
-                onClick={() => setSelectedBill(bill)}
-                role="button" tabIndex={0} aria-label={`View bill: ${bill.name}`}
-                onKeyDown={onEnterOrSpace(() => setSelectedBill(bill))}
-                className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-muted/40 rounded transition-colors">
-                <span className="text-xs truncate flex-1">{bill.name}</span>
-                {bill.autopay && <span className="text-xs-tight text-green-500 shrink-0">autopay</span>}
-                <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(bill.amount)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
   return (
     <>
       <CollapsibleSection accent="43 75% 50%" icon={CreditCard} label="Bills & Subscriptions"
@@ -2770,8 +2797,8 @@ function ObligationsSection({ data }: { data: any[] }) {
               </div>
             );
           })()}
-          <BillGroup title="Due This Week" bills={thisWeekBills} color="#f59e0b" />
-          <BillGroup title="Due This Month" bills={thisMonthBills} color="#6b7280" />
+          <BillGroup title="Due This Week" bills={thisWeekBills} color="#f59e0b" onSelectBill={setSelectedBill} />
+          <BillGroup title="Due This Month" bills={thisMonthBills} color="#6b7280" onSelectBill={setSelectedBill} />
         </div>
         <ViewPageLink href="/bills" label="View all bills" />
       </CollapsibleSection>

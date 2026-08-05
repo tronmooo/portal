@@ -176,6 +176,7 @@ export default defineConfig({
       'tests/detail-hero.dom.test.tsx',
       // QA pass 2026-08-05: the Info-page profile-switch crash.
       'tests/qa-2026-08-05-info-crash.dom.test.tsx',
+      'tests/qa-2026-08-05-navigation.dom.test.tsx',
       // Stripe Financial Connections: money math, calculation module,
       // transfer/recurring/duplicate detection, error redaction.
       'tests/finance-connections.test.ts',

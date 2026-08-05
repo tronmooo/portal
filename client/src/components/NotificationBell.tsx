@@ -215,7 +215,10 @@ export function NotificationBell() {
           setLocation("/dashboard/tasks");
           break;
         case "bill_due":
-          setLocation("/dashboard/finance");
+          // Bills live on the Bills page. This pointed at Finance — the
+          // expenses screen — which does not list the bill you tapped, so an
+          // "Overdue bill: …" row appeared to go nowhere (QA 2026-08-05).
+          setLocation("/dashboard/obligations");
           break;
         case "reminder":
           setLocation("/calendar");

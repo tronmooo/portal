@@ -5537,9 +5537,14 @@ export default function TrackersPage() {
   // so we read window.location.pathname (NOT hash, which is always empty here).
   const [pageLoc] = useLocation();
   useEffect(() => {
+    // This component serves /trackers, /linked AND /liabilities. Only /linked
+    // was special-cased, so the Liabilities page announced itself as
+    // "Trackers — Portol" in the tab and in browser history (QA 2026-08-05).
     const path = pageLoc || window.location.pathname || '';
-    const isLinkedRoute = path.startsWith('/linked');
-    document.title = isLinkedRoute ? "Linked — Portol" : "Trackers — Portol";
+    document.title =
+      path.startsWith('/liabilities') ? "Liabilities — Portol"
+      : path.startsWith('/linked') ? "Linked — Portol"
+      : "Trackers — Portol";
   }, [pageLoc]);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
@@ -6543,7 +6548,11 @@ export default function TrackersPage() {
             const linked: string[] = (t.linkedProfiles || []) as string[];
             const ownerIds = linked.filter(id => personById.has(id));
             const finalOwners = ownerIds.length > 0 ? ownerIds : (selfProfileId ? [selfProfileId] : []);
-            rows.push({ id: t.id, kind: "tracker", name: t.name, subtitle: sub, meta, href: `/trackers/${t.id}`, ownerIds: finalOwners, category: t.category || undefined, lastLogged: relTime(last?.timestamp) });
+            // `/trackers/<id>` is not a route — there is no per-tracker page,
+            // so every tracker row in this list led to the 404 screen. The
+            // tracker's detail view opens via the ?tracker= deep link this page
+            // already handles (see the effect near selectedTrackerId).
+            rows.push({ id: t.id, kind: "tracker", name: t.name, subtitle: sub, meta, href: `/trackers?tracker=${t.id}`, ownerIds: finalOwners, category: t.category || undefined, lastLogged: relTime(last?.timestamp) });
           });
         }
         if (rows.length === 0) {

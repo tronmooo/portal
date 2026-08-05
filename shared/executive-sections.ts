@@ -100,8 +100,15 @@ const ACCENTS: Record<ExecSectionId, string> = {
   recommendations: "262 70% 62%", // violet — the app's AI accent
 };
 
-/** Rows past this per section collapse behind "+N more". */
-const DISPLAY_CAP = 8;
+/** Rows past this per section collapse behind "+N more" in the UI.
+ *
+ *  The builder used to TRUNCATE `items` to this and report the true count in
+ *  `total`, which left the "+N more" button with nothing to reveal: pressing it
+ *  hid the button and no extra rows appeared, because they had never been sent
+ *  (QA report 2026-08-05 — Immediate Attention +5, Habits +4, Health +1).
+ *  `items` now carries every row and the UI does the collapsing, so the button
+ *  has something to expand into. */
+export const DISPLAY_CAP = 8;
 
 // ── Classifiers ──────────────────────────────────────────────────────────────
 
@@ -679,7 +686,9 @@ export function buildExecutiveSections(
       id,
       title: TITLES[id],
       accent: ACCENTS[id],
-      items: all.slice(0, DISPLAY_CAP),
+      // Every row, not the first DISPLAY_CAP: the UI collapses to DISPLAY_CAP
+      // and "+N more" expands to the rest. See DISPLAY_CAP above.
+      items: all,
       total: all.length,
       subtitle: subtitleFor(id, {
         habitsDue, habitsDone, overdueBills, immediate: owned.immediate,
