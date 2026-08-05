@@ -12,7 +12,7 @@
 //   3. Sections render in the user's DISPLAY order, which is different.
 //
 // Precedence is "most specific wins": Immediate Attention takes anything
-// genuinely on fire, then domain sections (health, birthdays, habits,
+// genuinely on fire, then domain sections (health, important dates, habits,
 // documents, bills) take their own, and only then do the generic time buckets
 // (today, next 7 days) get what's left. That is why a dentist appointment lands
 // under Health rather than Today's Agenda, and an expiring passport under
@@ -28,10 +28,11 @@ import { dayLabel } from "./now-rank";
 import { isHabitDueOn, isHabitDoneOn } from "./habit-schedule";
 import { computeKeyFindings } from "./tracker-insights";
 import { isMedicationTracker, computeMissedDoses } from "./medication-doses";
+import { parseRecurringMeta, kindDef, type RecurringKind } from "./recurring-dates";
 
 export type ExecSectionId =
   | "immediate" | "today" | "habits" | "bills" | "upcoming"
-  | "birthdays" | "documents" | "health" | "activity" | "insights"
+  | "importantDates" | "documents" | "health" | "activity" | "insights"
   | "recommendations";
 
 export interface ExecSection {
@@ -49,8 +50,8 @@ export interface ExecSection {
   amount?: number;
   /**
    * Overrides the renderer's static per-section emphasis when the section's
-   * own contents change how loudly it should speak — Birthdays folds itself
-   * away as reference material until something lands inside the week.
+   * own contents change how loudly it should speak — Important Dates folds
+   * itself away as reference material until something lands inside the week.
    */
   emphasis?: "hero" | "working" | "reference";
 }
@@ -58,13 +59,13 @@ export interface ExecSection {
 /** The order the user reads them in. */
 export const SECTION_DISPLAY_ORDER: ExecSectionId[] = [
   "immediate", "today", "habits", "bills", "upcoming",
-  "birthdays", "documents", "health", "activity", "insights",
+  "importantDates", "documents", "health", "activity", "insights",
   "recommendations",
 ];
 
 /** The order they get to claim a record. Most specific first. */
 const SECTION_CLAIM_ORDER: ExecSectionId[] = [
-  "immediate", "health", "birthdays", "habits", "documents",
+  "immediate", "health", "importantDates", "habits", "documents",
   "bills", "today", "upcoming", "activity", "insights",
   // Last: AI recommendations are generated text about the rest of the tab,
   // never a record another section wants.
@@ -77,7 +78,7 @@ const TITLES: Record<ExecSectionId, string> = {
   habits: "Habits Due Today",
   bills: "Bills & Financial Obligations",
   upcoming: "Upcoming · Next 7 Days",
-  birthdays: "Birthdays & Anniversaries",
+  importantDates: "Important Dates",
   documents: "Documents & Expirations",
   health: "Health",
   activity: "Recent Activity",
@@ -91,7 +92,7 @@ const ACCENTS: Record<ExecSectionId, string> = {
   habits:    "155 65% 45%",  // emerald
   bills:     "48 96% 53%",   // yellow
   upcoming:  "239 84% 67%",  // indigo
-  birthdays: "330 80% 62%",  // pink
+  importantDates: "330 80% 62%", // pink
   documents: "205 90% 58%",  // blue
   health:    "350 85% 62%",  // rose
   activity:  "173 60% 44%",  // teal
@@ -125,7 +126,7 @@ export const MEDICATION_RE = new RegExp(
   "i",
 );
 
-/** Holidays sit with birthdays/anniversaries — annual, not actionable. */
+/** Holidays are important dates too — annual, not actionable. */
 export const HOLIDAY_RE =
   /\b(holiday|christmas|thanksgiving|new year|easter|hanukkah|diwali|ramadan|eid|halloween|independence day|labor day|memorial day|veterans day|juneteenth)\b/i;
 
@@ -137,6 +138,46 @@ export function isHealthText(...parts: Array<string | null | undefined>): boolea
 export function isBirthdayText(...parts: Array<string | null | undefined>): boolean {
   const s = parts.filter(Boolean).join(" ");
   return BIRTHDAY_RE.test(s) || HOLIDAY_RE.test(s);
+}
+
+/**
+ * The recurring kinds that belong under Important Dates.
+ *
+ * Deliberately a whitelist, not "everything the manager can create". Important
+ * Dates claims BEFORE bills (see SECTION_CLAIM_ORDER), so admitting `bill` or
+ * `subscription` here would quietly empty the Bills section of every date the
+ * user manages as a recurring series. `appointment` is excluded for the same
+ * reason in the other direction — the health builders already claim it.
+ */
+const CELEBRATORY_KINDS = new Set<RecurringKind>(["birthday", "anniversary", "custom"]);
+
+/**
+ * What kind of important date this row is, resolved most-authoritative first —
+ * or null when it isn't one.
+ *
+ * The label is worth having rather than inferring at render time: a section
+ * that mixes a birthday, a holiday and a graduation is unreadable if every row
+ * just shows a date.
+ */
+export function importantDateKind(e: any): string | null {
+  // 1. A profile's own date-of-birth/anniversary field. Authoritative: it is
+  //    stamped by calendar-adapters, so "Nan's 90th" resolves correctly where
+  //    the title regex sees nothing.
+  const stamped = String(e?.meta?.kind || "").toLowerCase();
+  if (stamped === "birthday") return "Birthday";
+  if (stamped === "anniversary") return "Anniversary";
+
+  // 2. A date created through the Recurring Dates manager carries its type as
+  //    an `rd:kind:<kind>` tag, which rides to us on meta.tags.
+  const rd = parseRecurringMeta(e?.meta?.tags);
+  if (rd.kind) return CELEBRATORY_KINDS.has(rd.kind) ? kindDef(rd.kind).label : null;
+
+  // 3. Fall back to reading the title. Holidays first, so Christmas stops
+  //    reporting itself as a birthday.
+  const text = `${e?.title || ""} ${e?.category || ""}`;
+  if (HOLIDAY_RE.test(text)) return "Holiday";
+  if (BIRTHDAY_RE.test(text)) return /anniversar/i.test(text) ? "Anniversary" : "Birthday";
+  return null;
 }
 
 // ── Inputs ───────────────────────────────────────────────────────────────────
@@ -216,7 +257,7 @@ export function buildExecutiveSections(
   // Candidates per section, before claiming.
   const cand: Record<ExecSectionId, AttentionItem[]> = {
     immediate: [], today: [], habits: [], bills: [], upcoming: [],
-    birthdays: [], documents: [], health: [], activity: [], insights: [],
+    importantDates: [], documents: [], health: [], activity: [], insights: [],
     recommendations: [],
   };
 
@@ -386,31 +427,34 @@ export function buildExecutiveSections(
     });
   }
 
-  // ── §6 Birthdays & Anniversaries ───────────────────────────────────────────
-  // The dates the user is judged on remembering. A birthday two days out and
-  // one six weeks out are not the same news, so the section counts what falls
-  // inside the week and asks the renderer to unfold itself when any does.
+  // ── §6 Important Dates ─────────────────────────────────────────────────────
+  // Birthdays, anniversaries, holidays and any occasion the user manages as a
+  // Recurring Date. The dates you are judged on remembering.
+  //
+  // One date two days out and one six weeks out are not the same news, so the
+  // section counts what falls inside the week and asks the renderer to unfold
+  // itself when any does.
   for (const e of input.events || []) {
     if (!e?.id || (e.type && e.type !== "event")) continue;
+    // Already checked off. The timeline resolves `completed` per occurrence
+    // from the `rd:done:<date>` tag, so ticking this year's anniversary on the
+    // calendar has to stop the briefing nagging about it.
+    if (e.completed) continue;
     const du = daysBetween(today, e.date);
     if (du == null || du < 0 || du > 45) continue;
-    // A profile's date-of-birth field is the authoritative source and arrives
-    // stamped with its own kind (calendar-adapters → getCalendarTimeline), so
-    // trust that before falling back to reading the title. "Nan's 90th" is a
-    // birthday the regex would miss entirely.
-    const stamped = String(e.meta?.kind || "").toLowerCase();
-    const kindLabel =
-      stamped === "birthday" ? "Birthday"
-      : stamped === "anniversary" ? "Anniversary"
-      : null;
-    if (!kindLabel && !isBirthdayText(`${e.title || ""} ${e.category || ""}`)) continue;
-    cand.birthdays.push({
+    const kindLabel = importantDateKind(e);
+    if (!kindLabel) continue;
+    // Only a manager-created series can be checked off from here. A profile's
+    // birthday has `sourceId` of `profile:<id>:birthday` — not an event id —
+    // so offering Done on one would PATCH /api/events/profile:… and 404.
+    const canMarkDone = parseRecurringMeta(e.meta?.tags).isRecurringDate;
+    cand.importantDates.push({
       key: `event:${e.id}`, sourceKey: `event:${e.sourceId || e.id}`, kind: "event",
       title: e.title || "Occasion",
       reason: [kindLabel, du === 0 ? "Today" : dayLabel(du)].filter(Boolean).join(" · "),
       tier: du === 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
       daysUntil: du, score: 0, href: "/calendar",
-      action: { kind: "open", label: "Open" },
+      action: canMarkDone ? { kind: "markdone", label: "Done" } : { kind: "open", label: "Open" },
     });
   }
 
@@ -612,7 +656,7 @@ export function buildExecutiveSections(
   const claimed = new Set<string>();
   const owned: Record<ExecSectionId, AttentionItem[]> = {
     immediate: [], today: [], habits: [], bills: [], upcoming: [],
-    birthdays: [], documents: [], health: [], activity: [], insights: [],
+    importantDates: [], documents: [], health: [], activity: [], insights: [],
     recommendations: [],
   };
   for (const id of SECTION_CLAIM_ORDER) {
@@ -643,7 +687,7 @@ export function buildExecutiveSections(
       }),
       // Birthdays is reference material right up until one lands inside the
       // week, at which point folding it away is the wrong call.
-      emphasis: id === "birthdays" && all.some(i => (i.daysUntil ?? 99) <= 7)
+      emphasis: id === "importantDates" && all.some(i => (i.daysUntil ?? 99) <= 7)
         ? "working" : undefined,
       // Numbers the UI draws instead of writing out: a completion ring for the
       // day's habits, the money at stake for bills.
@@ -675,7 +719,7 @@ function subtitleFor(
   // Birthdays keeps a long tail so nothing is a surprise, but the week is the
   // part that needs acting on — say how the list splits rather than making the
   // user read dates to find out.
-  if (id === "birthdays") {
+  if (id === "importantDates") {
     const week = ctx.items.filter(i => (i.daysUntil ?? 99) <= 7).length;
     const rest = ctx.items.length - week;
     if (week > 0 && rest > 0) return `${week} this week · ${rest} more within 45 days`;

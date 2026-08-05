@@ -240,6 +240,35 @@ describe("ExecutiveBriefing", () => {
     expect(screen.getByTestId("exec-action-med:o1").textContent).toContain("Taken");
   });
 
+  it("shows a Done button on a managed recurring date, but not on a profile birthday", async () => {
+    const soon = (n: number) => {
+      const d = new Date(); d.setDate(d.getDate() + n);
+      return d.toLocaleDateString("en-CA");
+    };
+    stubRoutes({
+      "/api/calendar/timeline": [
+        {
+          id: "ev-rd-1", type: "event", title: "Maya's Graduation", date: soon(3),
+          allDay: true, sourceId: "ev1", linkedProfiles: [],
+          meta: { tags: ["rdate", "rd:kind:custom"] },
+        },
+        {
+          id: "ev-bd-1", type: "event", title: "Mom's Birthday", date: soon(4),
+          allDay: true, sourceId: "profile:p1:birthday", linkedProfiles: [],
+          meta: { kind: "birthday", recurrence: "yearly" },
+        },
+      ],
+    });
+    await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+    const sec = await screen.findByTestId("exec-section-importantDates");
+    expect(sec.textContent).toContain("Maya's Graduation");
+    expect(sec.textContent).toContain("Custom");
+    // Writable occurrence → Done. Profile-derived date → read-only Open, because
+    // its sourceId is not an event id.
+    expect(screen.getByTestId("exec-action-event:ev-rd-1").textContent).toContain("Done");
+    expect(screen.getByTestId("exec-action-event:ev-bd-1").textContent).toContain("Open");
+  });
+
   it("never asks for AI advice on mount, and renders it only once asked", async () => {
     stubRoutes({
       "/api/dashboard/ai-suggestions": {

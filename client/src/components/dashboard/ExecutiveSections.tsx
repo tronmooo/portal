@@ -42,6 +42,7 @@ const ACTION_ICON = {
   snooze: Clock,
   open: ArrowRight,
   taken: Check,
+  markdone: Check,
 } as const;
 
 /** A section should be recognisable before its title is read. */
@@ -51,7 +52,7 @@ const SECTION_ICON: Record<ExecSectionId, LucideIcon> = {
   habits: Flame,
   bills: DollarSign,
   upcoming: CalendarClock,
-  birthdays: Cake,
+  importantDates: Cake,
   documents: FolderOpen,
   health: Heart,
   activity: History,
@@ -69,7 +70,7 @@ const EMPHASIS: Record<ExecSectionId, Emphasis> = {
   upcoming: "working",
   documents: "working",
   health: "working",
-  birthdays: "reference",
+  importantDates: "reference",
   activity: "reference",
   insights: "reference",
   // Not reference material: this section exists only because the user just

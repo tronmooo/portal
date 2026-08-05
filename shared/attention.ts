@@ -26,9 +26,11 @@ export type AttentionKind =
 export type AttentionTier = "immediate" | "soon" | "upcoming";
 
 export type AttentionActionKind =
-  // `taken` is deliberately distinct from `complete`: completing routes to
-  // PATCH /api/tasks/:id, and a medication dose is an obligation payment.
-  | "complete" | "pay" | "checkin" | "dismiss" | "snooze" | "open" | "taken";
+  // `taken` and `markdone` are deliberately distinct from `complete`, and from
+  // each other: completing routes to PATCH /api/tasks/:id, a medication dose is
+  // an obligation payment, and checking off one occurrence of a recurring date
+  // is an edit to that event's tags. Same word to a user, three different writes.
+  | "complete" | "pay" | "checkin" | "dismiss" | "snooze" | "open" | "taken" | "markdone";
 
 export interface AttentionItem {
   /** Stable React key. */

@@ -96,12 +96,12 @@ describe("one record, one section", () => {
     });
     // On fire: past-date task, past-date bill, expired document.
     expect(titles(secs, "immediate").sort()).toEqual(["Electric", "Overdue thing", "Passport"]);
-    // Scheduled today, minus what Health and Birthdays took.
+    // Scheduled today, minus what Health and Important Dates took.
     expect(titles(secs, "today").sort()).toEqual(["Due today", "Standup"]);
     expect(titles(secs, "habits")).toEqual(["Stretch"]);
     expect(titles(secs, "bills")).toEqual(["Internet"]);
     expect(titles(secs, "upcoming").sort()).toEqual(["Team offsite", "This week"]);
-    expect(titles(secs, "birthdays")).toEqual(["Mom's Birthday"]);
+    expect(titles(secs, "importantDates")).toEqual(["Mom's Birthday"]);
     expect(titles(secs, "documents")).toEqual(["Insurance card"]);
     // Dentist is an appointment AND health — Health wins over Today's Agenda.
     expect(titles(secs, "health").sort()).toEqual(["Dentist", "Take Amoxicillin 500mg"]);
@@ -145,11 +145,11 @@ describe("section behaviour", () => {
       bills: [{ id: "b1", name: "Electric", amount: 140, daysUntil: -3 }],
       events: [{ id: "e1", type: "event", title: "Mom's Birthday", date: day(2) }],
     });
-    // immediate < habits < birthdays in display order, even though birthdays
-    // claims before habits.
+    // immediate < habits < importantDates in display order, even though
+    // importantDates claims before habits.
     const order = secs.map(s => s.id);
     expect(order.indexOf("immediate")).toBeLessThan(order.indexOf("habits"));
-    expect(order.indexOf("habits")).toBeLessThan(order.indexOf("birthdays"));
+    expect(order.indexOf("habits")).toBeLessThan(order.indexOf("importantDates"));
     for (let i = 1; i < order.length; i++) {
       expect(SECTION_DISPLAY_ORDER.indexOf(order[i] as any))
         .toBeGreaterThan(SECTION_DISPLAY_ORDER.indexOf(order[i - 1] as any));
@@ -403,7 +403,7 @@ describe("health, activity and insights", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
-  describe("birthdays & anniversaries", () => {
+  describe("important dates", () => {
     it("splits the week from the long tail in the subtitle and unfolds for it", () => {
       const secs = run({
         events: [
@@ -411,7 +411,7 @@ describe("health, activity and insights", () => {
           { id: "e2", type: "event", title: "Wedding Anniversary", date: day(30) },
         ],
       });
-      const s = byId(secs).birthdays;
+      const s = byId(secs).importantDates;
       expect(s.subtitle).toBe("1 this week · 1 more within 45 days");
       expect(s.emphasis).toBe("working");
       // Soonest first, so the week leads.
@@ -421,7 +421,7 @@ describe("health, activity and insights", () => {
     it("stays folded away when nothing lands inside the week", () => {
       const s = byId(run({
         events: [{ id: "e1", type: "event", title: "Mom's Birthday", date: day(30) }],
-      })).birthdays;
+      })).importantDates;
       expect(s.subtitle).toBe("1 within the next 45 days");
       expect(s.emphasis).toBeUndefined();
     });
@@ -432,15 +432,80 @@ describe("health, activity and insights", () => {
       const secs = run({
         events: [{ id: "e1", type: "event", title: "Nan's 90th", date: day(3), meta: { kind: "birthday" } }],
       });
-      expect(titles(secs, "birthdays")).toEqual(["Nan's 90th"]);
-      expect(byId(secs).birthdays.items[0].reason).toContain("Birthday");
+      expect(titles(secs, "importantDates")).toEqual(["Nan's 90th"]);
+      expect(byId(secs).importantDates.items[0].reason).toContain("Birthday");
     });
 
     it("labels an anniversary as one", () => {
       const secs = run({
         events: [{ id: "e1", type: "event", title: "Dave & Sam", date: day(3), meta: { kind: "anniversary" } }],
       });
-      expect(byId(secs).birthdays.items[0].reason).toContain("Anniversary");
+      expect(byId(secs).importantDates.items[0].reason).toContain("Anniversary");
+    });
+
+    // A managed Recurring Date carries its type as an `rd:kind:` tag, which
+    // reaches us on meta.tags. Before this the title regex was the only signal,
+    // so anything not literally called a birthday fell through to Upcoming.
+    const rdate = (over: any = {}) => ({
+      id: "e1", type: "event", title: "Maya's Graduation", date: day(3),
+      sourceId: "ev1", meta: { tags: ["rdate", "rd:kind:custom"] }, ...over,
+    });
+
+    it("claims a custom recurring date and labels it by its kind", () => {
+      const secs = run({ events: [rdate()] });
+      expect(titles(secs, "importantDates")).toEqual(["Maya's Graduation"]);
+      expect(byId(secs).importantDates.items[0].reason).toContain("Custom");
+      // Not left in the generic bucket.
+      expect(titles(secs, "upcoming")).toEqual([]);
+    });
+
+    it("labels a holiday as a holiday, not a birthday", () => {
+      const secs = run({
+        events: [{ id: "e1", type: "event", title: "Christmas Day", date: day(5) }],
+      });
+      expect(byId(secs).importantDates.items[0].reason).toContain("Holiday");
+      expect(byId(secs).importantDates.items[0].reason).not.toContain("Birthday");
+    });
+
+    // The claim-order guard. importantDates claims BEFORE bills, so admitting
+    // every recurring kind here would quietly empty the Bills section.
+    it("does NOT claim a recurring bill — Bills keeps it", () => {
+      const secs = run({
+        events: [rdate({ title: "Rent", meta: { tags: ["rdate", "rd:kind:bill"] } })],
+        bills: [{ id: "b1", name: "Rent", amount: 2500, daysUntil: 3 }],
+      });
+      expect(byId(secs).importantDates).toBeUndefined();
+      expect(titles(secs, "bills")).toEqual(["Rent"]);
+      const keys = allKeys(secs);
+      expect(keys.length).toBe(new Set(keys).size);
+    });
+
+    it("does NOT claim a recurring appointment — Health keeps it", () => {
+      const secs = run({
+        events: [rdate({ title: "Dentist", meta: { tags: ["rdate", "rd:kind:appointment"] } })],
+      });
+      expect(byId(secs).importantDates).toBeUndefined();
+      expect(titles(secs, "health")).toEqual(["Dentist"]);
+    });
+
+    it("drops an occurrence that is already checked off", () => {
+      expect(byId(run({ events: [rdate({ completed: true })] })).importantDates).toBeUndefined();
+    });
+
+    it("offers Done only where an occurrence can actually be written", () => {
+      // A managed series is a real event row — it can take the tag edit.
+      expect(byId(run({ events: [rdate()] })).importantDates.items[0].action)
+        .toEqual({ kind: "markdone", label: "Done" });
+      // A profile birthday's sourceId is `profile:<id>:birthday`, not an event
+      // id — PATCHing /api/events with it would 404, so it stays read-only.
+      const profileBday = byId(run({
+        events: [{
+          id: "birthday-profile:p1:birthday-2026-08-01", type: "event",
+          title: "Mom's Birthday", date: day(3),
+          sourceId: "profile:p1:birthday", meta: { kind: "birthday", recurrence: "yearly" },
+        }],
+      })).importantDates;
+      expect(profileBday.items[0].action).toEqual({ kind: "open", label: "Open" });
     });
   });
 

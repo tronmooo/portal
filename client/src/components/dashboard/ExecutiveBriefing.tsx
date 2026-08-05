@@ -44,6 +44,7 @@ import { buildExecutiveSections } from "@shared/executive-sections";
 import { rollupOccurrences, bucketsForKinds, breakdownLabel } from "@shared/dated-items";
 import type { CalendarOccurrence, OccurrenceKind } from "@shared/calendar-occurrences";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
+import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
@@ -491,6 +492,23 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     onSuccess: () => { toast({ title: "Dose logged" }); invalidateDomain("obligations"); },
     onError: () => toast({ title: "Couldn't log dose", variant: "destructive" }),
   });
+  // Checking off ONE occurrence of a recurring date. Same tag write the
+  // calendar and the Recurring Dates manager make (shared/recurring-dates), so
+  // this year goes done and next year's occurrence stays live automatically.
+  //
+  // The tags come from the timeline row we already hold rather than a fresh
+  // read, so a tag edit made elsewhere inside the 60s cache window could be
+  // overwritten. The canonical applyCalendarAction avoids that with a live row
+  // lookup, but it needs a full CalendarSeries this tab does not build.
+  const markOccurrenceDone = useMutation({
+    mutationFn: async (row: any) => {
+      const date = String(row?.date || "").slice(0, 10);
+      const tags = pruneOccurrenceTags(markOccurrence(row?.meta?.tags ?? [], date, "done"), todayStr);
+      await apiRequest("PATCH", `/api/events/${row.sourceId}`, { tags });
+    },
+    onSuccess: () => { toast({ title: "Marked done" }); invalidateDomain("events"); },
+    onError: () => toast({ title: "Couldn't mark it done", variant: "destructive" }),
+  });
   const completeTask = useMutation({
     mutationFn: async (id: string) => { await apiRequest("PATCH", `/api/tasks/${id}`, { status: "done" }); },
     onSuccess: () => { toast({ title: "Task completed" }); invalidateDomain("tasks"); },
@@ -549,6 +567,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       // No two-tap arming: logging a dose is trivially undone from Wellness,
       // unlike `pay`, which moves money.
       case "taken": run(markMedTaken.mutateAsync(idOf(item))); return;
+      case "markdone": {
+        // The row carries no tags of its own — look the occurrence back up in
+        // the timeline by the id the item key was built from.
+        const rowId = item.key.replace(/^event:/, "");
+        const row = (Array.isArray(timelineRaw) ? timelineRaw : []).find((r: any) => r?.id === rowId);
+        if (!row) { navigate(item.href); return; }
+        run(markOccurrenceDone.mutateAsync(row));
+        return;
+      }
       case "checkin": run(checkinHabit.mutateAsync(idOf(item))); return;
       case "dismiss":
         if (item.kind === "reminder") {
