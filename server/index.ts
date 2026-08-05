@@ -17,6 +17,13 @@ declare module "http" {
   }
 }
 
+// Stripe webhook: the RAW bytes must reach signature verification untouched,
+// so this parser is mounted BEFORE express.json(). express.raw() marks the
+// request as already-parsed, so the JSON parser below skips it and the handler
+// receives a Buffer. Registering it here rather than alongside the route
+// guarantees the ordering regardless of when routes are registered.
+app.use("/api/finance/webhook", express.raw({ type: "*/*", limit: "1mb" }));
+
 app.use(
   express.json({
     limit: '10mb',

@@ -274,6 +274,20 @@ describe("webhook handler contract", () => {
     expect(SRC).toMatch(/rawBody/);
   });
 
+  it("mounts the raw parser BEFORE express.json() in BOTH server entries", () => {
+    // Production runs through vercel-entry.ts and local dev through index.ts.
+    // If express.json() ran first on this path the handler would depend
+    // entirely on the verify() hook to recover the bytes — one refactor away
+    // from every webhook silently failing signature verification.
+    for (const entry of ["server/index.ts", "server/vercel-entry.ts"]) {
+      const src = read(entry);
+      const rawAt = src.indexOf('app.use("/api/finance/webhook", express.raw(');
+      const jsonAt = src.indexOf("express.json({");
+      expect(rawAt, `${entry} does not mount the webhook raw parser`).toBeGreaterThan(-1);
+      expect(rawAt, `${entry} mounts express.json() before the webhook raw parser`).toBeLessThan(jsonAt);
+    }
+  });
+
   it("claims the event id BEFORE processing so a duplicate delivery is a no-op", () => {
     const claimAt = SRC.indexOf('from("finance_webhook_events")');
     const processAt = SRC.indexOf("processWebhookEvent(event)");
