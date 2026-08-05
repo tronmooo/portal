@@ -97,6 +97,51 @@ describe("wellness-metrics", () => {
     expect(v.bloodPressureDia.value).toBe(76);
   });
 
+  // Regression: "Resting Heart Rate" matches /heart\s*rate/, so before
+  // readMetric grew an `exclude` option the heart-rate card rendered resting HR
+  // whenever that tracker sorted first. Tracker order is not guaranteed, so
+  // both orderings must resolve the same way.
+  it("extractVitals keeps heart rate and resting heart rate apart in either order", () => {
+    const hr = tracker({
+      id: "hr", name: "Heart Rate", category: "vitals",
+      fields: [{ name: "heart_rate", type: "number", unit: "bpm", isPrimary: true }],
+      entries: [{ id: "e1", values: { heart_rate: 72 }, computed: {}, timestamp: ISO("2026-07-08") }] as any,
+    });
+    const rhr = tracker({
+      id: "rhr", name: "Resting Heart Rate", category: "vitals",
+      fields: [{ name: "heart_rate", type: "number", unit: "bpm", isPrimary: true }],
+      entries: [{ id: "e2", values: { heart_rate: 54 }, computed: {}, timestamp: ISO("2026-07-08") }] as any,
+    });
+
+    for (const order of [[hr, rhr], [rhr, hr]]) {
+      const v = extractVitals(order);
+      expect(v.heartRate.value).toBe(72);
+      expect(v.heartRate.trackerId).toBe("hr");
+      expect(v.restingHeartRate.value).toBe(54);
+      expect(v.restingHeartRate.trackerId).toBe("rhr");
+    }
+  });
+
+  it("extractVitals still finds heart rate when only resting HR is absent", () => {
+    const hr = tracker({
+      id: "hr", name: "Heart Rate", category: "vitals",
+      fields: [{ name: "heart_rate", type: "number", unit: "bpm", isPrimary: true }],
+      entries: [{ id: "e1", values: { heart_rate: 72 }, computed: {}, timestamp: ISO("2026-07-08") }] as any,
+    });
+    expect(extractVitals([hr]).heartRate.value).toBe(72);
+  });
+
+  // An HRV tracker must not be mistaken for heart rate: "HRV" does not contain
+  // the token "hr" (no word boundary), which is what keeps the card correct.
+  it("extractVitals does not read an HRV tracker as heart rate", () => {
+    const hrv = tracker({
+      id: "hrv", name: "HRV", category: "vitals",
+      fields: [{ name: "hrv", type: "number", unit: "ms", isPrimary: true }],
+      entries: [{ id: "e1", values: { hrv: 48 }, computed: {}, timestamp: ISO("2026-07-08") }] as any,
+    });
+    expect(extractVitals([hrv]).heartRate.value).toBeNull();
+  });
+
   it("countWellnessTrackers counts health/fitness/mental groups only", () => {
     const list = [
       tracker({ id: "1", category: "health" }),

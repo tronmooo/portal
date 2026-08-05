@@ -29,10 +29,28 @@ import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from "@shared/profile-field-identity";
+import {
+  HEALTH_METRICS, HEALTH_PROVIDERS, getHealthMetric, trackerMatchesMetric,
+  healthImportSchema, connectionPrefKey, providerTag,
+} from "@shared/health-metrics";
+import { planHealthEntries, summarize } from "./health-import";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
   return (req.headers['x-timezone'] as string) || DEFAULT_TIMEZONE;
+}
+
+/** Min/max over "YYYY-MM-DD" strings, tolerating nulls. Lexical compare is
+ *  correct for ISO dates, so no Date construction is needed. */
+function minDay(a: string | null | undefined, b: string | null | undefined): string | null {
+  if (!a) return b || null;
+  if (!b) return a;
+  return a < b ? a : b;
+}
+function maxDay(a: string | null | undefined, b: string | null | undefined): string | null {
+  if (!a) return b || null;
+  if (!b) return a;
+  return a > b ? a : b;
 }
 
 /** The caller's active profile selection (the scope chip they can see). */
@@ -3223,6 +3241,172 @@ ${JSON.stringify(ctx, null, 2)}`;
     } catch (err: any) {
       res.status(500).json({ error: "Failed to get calendar status" });
     }
+  }));
+
+  // ==========================================================================
+  // Health data connections (Apple Health / Health Connect / file import)
+  // ==========================================================================
+  //
+  // Imported health data lands in the user's existing TRACKERS rather than a
+  // table of its own, because that is where the app already reads vitals from
+  // (client/src/lib/wellness-metrics.ts extractVitals). Landing it anywhere
+  // else would mean rebuilding the Wellness page, the health score, the
+  // Executive health section and the AI's view of the user's body.
+  //
+  // The client sends pre-aggregated DAILY rows. It has to: an Apple Health
+  // export.xml routinely runs 50-500 MB, far past the 10mb body cap, so the
+  // file is parsed and bucketed in the browser and only the daily totals are
+  // uploaded.
+
+  /** Connection state for one provider, or a fresh empty one. */
+  async function readHealthConnection(provider: string): Promise<any> {
+    const raw = await storage.getPreference(connectionPrefKey(provider));
+    if (!raw) return { connected: false };
+    try { return JSON.parse(raw); } catch { return { connected: false }; }
+  }
+
+  app.get("/api/health/connections", asyncHandler(async (_req, res) => {
+    const [apple, hc, file, trackers] = await Promise.all([
+      readHealthConnection("apple_health"),
+      readHealthConnection("health_connect"),
+      readHealthConnection("file"),
+      storage.getTrackers(),
+    ]);
+
+    // Report what actually landed, per metric, so the card can show real
+    // numbers instead of claiming a connection is healthy on faith.
+    const metrics = HEALTH_METRICS.map(m => {
+      const t = (trackers || []).find(tr => trackerMatchesMetric(tr, m));
+      const entries = t?.entries || [];
+      let lastDay: string | null = null;
+      for (const e of entries) {
+        const day = String(e.timestamp || "").slice(0, 10);
+        if (day && (lastDay === null || day > lastDay)) lastDay = day;
+      }
+      return {
+        id: m.id,
+        label: m.label,
+        trackerName: t?.name || m.trackerName,
+        trackerId: t?.id || null,
+        unit: m.unit,
+        entryCount: t ? (t.entriesTotal ?? entries.length) : 0,
+        lastDay,
+      };
+    });
+
+    res.json({
+      providers: [
+        { id: "apple_health", label: "Apple Health", availability: "native-ios", ...apple },
+        { id: "health_connect", label: "Health Connect", availability: "native-android", ...hc },
+        { id: "file", label: "Health file import", availability: "always", ...file },
+      ],
+      metrics,
+    });
+  }));
+
+  app.post("/api/health/import", asyncHandler(async (req, res) => {
+    const parsed = healthImportSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid health import payload" });
+    }
+    const { provider, rows, chunk: chunkInfo } = parsed.data;
+    const userId = cacheUserKey(req as AuthenticatedRequest);
+
+    // Resolve each metric to a tracker, creating any that don't exist yet.
+    // createTracker is already an idempotent find-or-create keyed on tracker
+    // identity, so an existing "Steps" tracker is reused rather than
+    // duplicated — and it may hand back a name suffixed for the profile, which
+    // is why the RETURNED id is what we use.
+    const wanted = Array.from(new Set(rows.map(r => r.metric)));
+    const existing = await storage.getTrackers();
+    const trackerIdByMetric = new Map<string, string>();
+    for (const metricId of wanted) {
+      const def = getHealthMetric(metricId);
+      if (!def) continue;
+      const found = (existing || []).find(t => trackerMatchesMetric(t, def));
+      if (found) { trackerIdByMetric.set(metricId, found.id); continue; }
+      try {
+        const created = await storage.createTracker({
+          name: def.trackerName,
+          category: def.category,
+          unit: def.unit || undefined,
+          fields: def.fields as any,
+        } as any);
+        if (created?.id) trackerIdByMetric.set(metricId, created.id);
+      } catch (err: any) {
+        log.error("[HealthImport] tracker create failed", def.trackerName, err?.message || err);
+      }
+    }
+
+    const plan = planHealthEntries(rows, {
+      userId,
+      provider,
+      trackerIdFor: (metricId) => trackerIdByMetric.get(metricId),
+      timezone: getTimezone(req),
+    });
+
+    let written = 0;
+    try {
+      written = await storage.bulkUpsertHealthEntries(plan.entries);
+    } catch (err: any) {
+      log.error("[HealthImport] bulk upsert failed", err?.message || err);
+      return res.status(500).json({ error: "Could not save the imported health data. Please try again." });
+    }
+
+    // Roll the connection summary forward across chunks so the card reports the
+    // whole import, not just its final chunk.
+    const prev = await readHealthConnection(provider);
+    const isFirstChunk = !chunkInfo || chunkInfo.index === 0;
+    const isLastChunk = !chunkInfo || chunkInfo.index === chunkInfo.total - 1;
+    const runningTotal = (isFirstChunk ? 0 : Number(prev?.lastImport?.rows) || 0) + written;
+    const runningMetrics = Array.from(new Set([
+      ...(isFirstChunk ? [] : (prev?.lastImport?.metrics || [])),
+      ...plan.metricIds,
+    ]));
+    const summary = summarize(plan);
+    await storage.setPreference(connectionPrefKey(provider), JSON.stringify({
+      connected: true,
+      lastSync: new Date().toISOString(),
+      lastImport: {
+        rows: runningTotal,
+        metrics: runningMetrics,
+        firstDay: isFirstChunk ? summary.firstDay : (minDay(prev?.lastImport?.firstDay, summary.firstDay)),
+        lastDay: isFirstChunk ? summary.lastDay : (maxDay(prev?.lastImport?.lastDay, summary.lastDay)),
+        at: new Date().toISOString(),
+        complete: isLastChunk,
+      },
+    }));
+
+    bustCache(`trackers:`); bustCache(`stats:${userId}`); bustCache(`enhanced:`);
+    res.json({
+      written,
+      skipped: plan.skipped.length,
+      skippedDetail: plan.skipped.slice(0, 20),
+      metrics: plan.metricIds,
+    });
+  }));
+
+  app.delete("/api/health/connections/:provider", asyncHandler(async (req, res) => {
+    const provider = String(req.params.provider || "");
+    if (!(HEALTH_PROVIDERS as readonly string[]).includes(provider)) {
+      return res.status(400).json({ error: "Unknown health provider" });
+    }
+    // Default keeps the data. These entries live in the user's own trackers and
+    // already feed the health score and every Wellness card; wiping years of
+    // history because someone tapped "Disconnect" would be the wrong default.
+    const purge = String(req.query.purge || "") === "true";
+    let deleted = 0;
+    if (purge) {
+      try {
+        deleted = await storage.deleteHealthEntriesByProvider(providerTag(provider));
+      } catch (err: any) {
+        log.error("[HealthImport] purge failed", err?.message || err);
+        return res.status(500).json({ error: "Could not remove the imported health data. Please try again." });
+      }
+    }
+    await storage.setPreference(connectionPrefKey(provider), JSON.stringify({ connected: false }));
+    bustCache(`trackers:`); bustCache(`stats:${cacheUserKey(req as AuthenticatedRequest)}`); bustCache(`enhanced:`);
+    res.json({ disconnected: true, deleted, purged: purge });
   }));
 
   // ---- Profile Type Definitions (Registry) ----
@@ -8145,7 +8329,12 @@ No emojis. No prose outside the JSON.`,
       // Block writes to sensitive / system-managed preference keys to prevent
       // clients from overwriting OAuth tokens or onboarding state.
       const key = req.params.key;
-      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_"];
+      // "health_" reserves the health-integration connection state. Without it
+      // a client could PUT health_conn_apple_health and forge a "connected,
+      // last synced today" status the Settings card would then display as fact.
+      // The server writes these keys internally via storage.setPreference,
+      // which bypasses this route guard.
+      const PREF_KEY_PREFIX_DENY = ["gcal_", "oauth_", "system_", "internal_", "health_"];
       const PREF_KEY_DENYLIST = new Set([
         "gcal_refresh_token", "gcal_access_token",
         "onboarding_completed", "ai_digest", "admin_override",

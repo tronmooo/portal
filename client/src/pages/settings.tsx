@@ -24,10 +24,11 @@ import {
   User, Download, Upload, FileSpreadsheet, Moon, Sun, LogOut, Shield, Database,
   Palette, Info, CheckCircle2, Loader2, ArrowLeft, Bell, BellOff, Bot, Zap,
   Globe, Calendar, Lock, Trash2, HardDrive, RefreshCw, ExternalLink,
-  Smartphone, Monitor, ChevronRight, Heart, Key, Eye, EyeOff, Clock,
+  Smartphone, Monitor, ChevronRight, Key, Eye, EyeOff, Clock,
   Users, Activity, ListTodo, FileText, Sparkles,
 } from "lucide-react";
 import { ChatGPTImportDialog, ChatGPTImportHistory } from "@/components/ChatGPTImportDialog";
+import { HealthConnectionsCard } from "@/components/health/HealthConnectionsCard";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme, COLOR_PRESETS } from "@/components/theme-provider";
@@ -975,19 +976,8 @@ export default function SettingsPage() {
           <CardContent className="space-y-4">
             <GoogleCalendarRow />
             <Separator />
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="h-8 w-8 rounded-lg bg-purple-500/10 flex items-center justify-center">
-                  <Heart className="h-4 w-4 text-purple-500" />
-                </div>
-                <div>
-                  <Label className="text-sm font-medium">Apple Health</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">Import health data from iPhone</p>
-                </div>
-              </div>
-              <Badge variant="outline" className="text-xs">Coming Soon</Badge>
-            </div>
-            <Separator />
+            {/* Apple Health moved to its own Health Connections card below — it
+                is a real integration now rather than a "Coming Soon" placeholder. */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="h-8 w-8 rounded-lg bg-green-500/10 flex items-center justify-center">
@@ -1002,6 +992,9 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* ─── Health Connections ─── */}
+        <HealthConnectionsCard />
 
         {/* ─── About ─── */}
         <Card data-testid="card-about">

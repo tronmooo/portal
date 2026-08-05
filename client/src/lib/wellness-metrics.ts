@@ -52,15 +52,24 @@ function entriesNewestFirst(t: Tracker): TrackerEntry[] {
 }
 
 /** Read a single metric from the first tracker whose name OR category matches
- *  any of the patterns. Matching is by tracker identity, not entry contents. */
+ *  any of the patterns. Matching is by tracker identity, not entry contents.
+ *
+ *  `opts.exclude` rejects trackers that would otherwise match. Needed because
+ *  some vitals are strict subsets of others: "Resting Heart Rate" satisfies
+ *  /heart\s*rate/, so without an exclusion the heart-rate card renders resting
+ *  HR whenever that tracker happens to sort first — and tracker order is not
+ *  guaranteed. Health import makes both trackers exist for the first time, but
+ *  the collision predates it (anyone who hand-created "Resting Heart Rate" hit
+ *  it too). */
 export function readMetric(
   trackers: Tracker[] | undefined | null,
   patterns: RegExp[],
-  opts: { field?: string; unit?: string } = {},
+  opts: { field?: string; unit?: string; exclude?: RegExp[] } = {},
 ): WellnessMetric {
   if (!Array.isArray(trackers) || trackers.length === 0) return { ...EMPTY };
   const match = trackers.find((t) => {
     const hay = `${t.name || ""} ${t.category || ""}`.toLowerCase();
+    if (opts.exclude?.some((p) => p.test(hay))) return false;
     return patterns.some((p) => p.test(hay));
   });
   if (!match) return { ...EMPTY };
@@ -153,7 +162,12 @@ export function extractVitals(trackers: Tracker[] | undefined | null): WellnessV
     weight: readMetric(trackers, [/weight/, /\bmass\b/]),
     bloodPressureSys: bpSys,
     bloodPressureDia: bpDia,
-    heartRate: readMetric(trackers, [/heart\s*rate/, /\bhr\b/, /pulse/], { unit: "bpm" }),
+    // Exclude resting HR: it matches /heart\s*rate/ too, and whichever tracker
+    // sorted first would win this card.
+    heartRate: readMetric(trackers, [/heart\s*rate/, /\bhr\b/, /pulse/], {
+      unit: "bpm",
+      exclude: [/resting\s*(heart|hr)/, /\brhr\b/],
+    }),
     restingHeartRate: readMetric(trackers, [/resting\s*(heart|hr)/, /rhr/], { unit: "bpm" }),
     bodyTemp: readMetric(trackers, [/temp/, /temperature/], { unit: "°F" }),
     glucose: readMetric(trackers, [/glucose|blood\s*sugar/], { unit: "mg/dL" }),

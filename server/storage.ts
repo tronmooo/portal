@@ -45,6 +45,17 @@ export interface Reminder {
   createdAt: string;
 }
 
+/** One row for bulkUpsertHealthEntries. `entryId` is the deterministic uuidv5
+ *  that makes re-import idempotent (server/health-import.ts). */
+export interface HealthEntryUpsert {
+  entryId: string;
+  trackerId: string;
+  values: Record<string, number>;
+  tags: string[];
+  timestamp: string;
+  profileId?: string | null;
+}
+
 export interface IStorage {
   // Profiles
   getProfiles(): Promise<Profile[]>;
@@ -73,6 +84,17 @@ export interface IStorage {
   deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean>;
   deleteTracker(id: string): Promise<boolean>;
   migrateUnlinkedTrackersToSelf(): Promise<number>;
+  /**
+   * Bulk upsert for health-data import. Keyed on the caller-supplied `entryId`
+   * (a deterministic uuidv5 — see server/health-import.ts), so re-importing the
+   * same export updates rows instead of duplicating them, and entries the user
+   * logged by hand are never touched. Batched; does NOT run logEntry's
+   * per-entry alias normalisation or 5-minute duplicate probe, both of which
+   * would cost a round trip per row.
+   */
+  bulkUpsertHealthEntries(rows: HealthEntryUpsert[]): Promise<number>;
+  /** Delete every imported entry carrying `providerTag`. Returns rows removed. */
+  deleteHealthEntriesByProvider(providerTag: string): Promise<number>;
 
   // Tasks
   getTasks(profileIds?: string[]): Promise<Task[]>;
@@ -1160,6 +1182,38 @@ export class MemStorage implements IStorage {
       if (found) return found;
     }
     return undefined;
+  }
+  async bulkUpsertHealthEntries(rows: HealthEntryUpsert[]): Promise<number> {
+    let written = 0;
+    for (const row of rows) {
+      const tracker = this.trackers.get(row.trackerId);
+      if (!tracker) continue;
+      const computed = computeSecondaryData(tracker.name, tracker.category, row.values) as any;
+      const entry: TrackerEntry = {
+        id: row.entryId,
+        values: row.values,
+        computed,
+        tags: row.tags,
+        profileId: row.profileId || undefined,
+        timestamp: row.timestamp,
+      };
+      // Upsert on the deterministic id: a re-import replaces the previous
+      // reading for that day rather than appending a second one.
+      const idx = tracker.entries.findIndex(e => e.id === row.entryId);
+      if (idx === -1) tracker.entries.push(entry);
+      else tracker.entries[idx] = entry;
+      written++;
+    }
+    return written;
+  }
+  async deleteHealthEntriesByProvider(providerTag: string): Promise<number> {
+    let deleted = 0;
+    for (const tracker of this.trackers.values()) {
+      const before = tracker.entries.length;
+      tracker.entries = tracker.entries.filter(e => !(e.tags || []).includes(providerTag));
+      deleted += before - tracker.entries.length;
+    }
+    return deleted;
   }
   async updateTracker(id: string, data: Partial<Tracker>): Promise<Tracker | undefined> {
     const tracker = this.trackers.get(id);

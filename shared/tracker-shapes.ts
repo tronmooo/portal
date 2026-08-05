@@ -105,6 +105,51 @@ const HEART_RATE_SHAPE: TrackerField[] = [
   { name: "heart_rate", type: "number", unit: "bpm", isPrimary: true },
 ];
 
+// --- Shapes for metrics imported from Apple Health / Health Connect ---------
+// These had no canonical shape before health import existed. They are declared
+// here (rather than only inside shared/health-metrics.ts) so a hand-created
+// "VO2 Max" or "Blood Oxygen" tracker gets the same units as an imported one.
+
+const HRV_SHAPE: TrackerField[] = [
+  { name: "hrv", type: "number", unit: "ms", isPrimary: true },
+];
+
+const SPO2_SHAPE: TrackerField[] = [
+  { name: "spo2", type: "number", unit: "%", isPrimary: true },
+];
+
+const RESPIRATORY_SHAPE: TrackerField[] = [
+  { name: "breaths", type: "number", unit: "br/min", isPrimary: true },
+];
+
+const BODY_TEMP_SHAPE: TrackerField[] = [
+  { name: "temperature", type: "number", unit: "°F", isPrimary: true },
+];
+
+const GLUCOSE_SHAPE: TrackerField[] = [
+  { name: "glucose", type: "number", unit: "mg/dL", isPrimary: true },
+];
+
+const BMI_SHAPE: TrackerField[] = [
+  { name: "bmi", type: "number", isPrimary: true },
+];
+
+const VO2_SHAPE: TrackerField[] = [
+  { name: "vo2_max", type: "number", unit: "mL/kg·min", isPrimary: true },
+];
+
+const ACTIVE_ENERGY_SHAPE: TrackerField[] = [
+  { name: "energy", type: "number", unit: "kcal", isPrimary: true },
+];
+
+const EXERCISE_MIN_SHAPE: TrackerField[] = [
+  { name: "minutes", type: "number", unit: "min", isPrimary: true },
+];
+
+const WALK_DISTANCE_SHAPE: TrackerField[] = [
+  { name: "distance", type: "number", unit: "mi", isPrimary: true },
+];
+
 const MOOD_SHAPE: TrackerField[] = [
   { name: "mood",  type: "select", options: ["awful", "bad", "ok", "good", "great"], isPrimary: true },
   { name: "energy", type: "number", unit: "/10" },
@@ -218,7 +263,21 @@ const CATALOG: ShapeEntry[] = [
   { id: "steps",        fields: STEPS_SHAPE, patterns: ["step count", "steps", "pedometer"] },
   // --- Vitals --------------------------------------------------------------
   { id: "blood_pressure", fields: BP_SHAPE, patterns: ["blood pressure", "bp", "systolic", "diastolic"] },
+  // HRV must be tested BEFORE heart_rate: pattern matching is substring-based
+  // (matchShapeEntry uses haystack.includes), and heart_rate's bare "hr" pattern
+  // swallows "HRV" — which would give an HRV tracker a bpm field.
+  { id: "hrv",          fields: HRV_SHAPE, patterns: ["hrv", "heart rate variability"] },
   { id: "heart_rate",   fields: HEART_RATE_SHAPE, patterns: ["heart rate", "resting heart", "rhr", "hr"] },
+  { id: "blood_oxygen", fields: SPO2_SHAPE, patterns: ["blood oxygen", "spo2", "oxygen saturation", "pulse ox"] },
+  { id: "respiratory_rate", fields: RESPIRATORY_SHAPE, patterns: ["respiratory rate", "breathing rate"] },
+  { id: "body_temp",    fields: BODY_TEMP_SHAPE, patterns: ["body temperature", "body temp"] },
+  { id: "blood_glucose", fields: GLUCOSE_SHAPE, patterns: ["blood glucose", "blood sugar", "glucose"] },
+  { id: "bmi",          fields: BMI_SHAPE, patterns: ["bmi", "body mass index"] },
+  // --- Imported activity aggregates ---------------------------------------
+  { id: "vo2_max",      fields: VO2_SHAPE, patterns: ["vo2 max", "vo2max", "vo2"] },
+  { id: "active_energy", fields: ACTIVE_ENERGY_SHAPE, patterns: ["active energy"] },
+  { id: "exercise_minutes", fields: EXERCISE_MIN_SHAPE, patterns: ["exercise minutes", "exercise time", "active minutes"] },
+  { id: "walk_distance", fields: WALK_DISTANCE_SHAPE, patterns: ["walking distance", "distance walked", "walking + running distance"] },
   // --- Nutrition -----------------------------------------------------------
   { id: "nutrition",    fields: NUTRITION_SHAPE, patterns: ["calorie", "calories", "kcal", "macros", "nutrition", "meal", "diet", "food log", "food"] },
   { id: "hydration",    fields: HYDRATION_SHAPE, patterns: ["water", "hydration", "fluid"] },

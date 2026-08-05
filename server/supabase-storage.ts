@@ -97,7 +97,8 @@ import {
   type AiActionLog, type InsertAiActionLog,
   MOOD_SCORES,
 } from "@shared/schema";
-import { type IStorage, type Reminder, computeSecondaryData } from "./storage";
+import { type IStorage, type Reminder, type HealthEntryUpsert, computeSecondaryData } from "./storage";
+import { HEALTH_IMPORT_TAG } from "@shared/health-metrics";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
 import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
@@ -2962,6 +2963,95 @@ export class SupabaseStorage implements IStorage {
     this.logActivity("tracker", `Logged ${tracker.name}`);
     // Return the DATABASE's version of the row, not our intended one.
     return this.rowToTrackerEntry(inserted);
+  }
+
+  /**
+   * Bulk upsert for health-data import.
+   *
+   * logEntry cannot be used here: it fetches the tracker (which itself pulls
+   * every entry on that tracker), runs a 5-minute duplicate probe, and inserts
+   * with a random id — three-plus round trips per row, and insert-only. A
+   * multi-year backfill is tens of thousands of rows, so this batches instead.
+   *
+   * Idempotency comes from the caller-supplied deterministic `entryId`
+   * (server/health-import.ts): the upsert conflicts on the primary key, so a
+   * re-import UPDATEs. Because hand-logged entries carry random uuids that can
+   * never collide with a v5 hash, this can only ever touch rows it wrote
+   * itself — a user's own reading on the same day is left alone.
+   */
+  async bulkUpsertHealthEntries(rows: HealthEntryUpsert[]): Promise<number> {
+    if (!rows.length) return 0;
+
+    // Tracker metadata drives computeSecondaryData (BP category, sleep quality
+    // …). Fetch each tracker once for the whole batch rather than per row.
+    const trackerIds = Array.from(new Set(rows.map(r => r.trackerId)));
+    const { data: trackerRows, error: trackerErr } = await this.supabase
+      .from("trackers")
+      .select("id, name, category")
+      .eq("user_id", this.userId)
+      .in("id", trackerIds);
+    if (trackerErr) throw trackerErr;
+    const meta = new Map<string, { name: string; category: string }>(
+      (trackerRows || []).map((t: any) => [t.id, { name: t.name, category: t.category }]),
+    );
+
+    const payload = rows
+      .filter(r => meta.has(r.trackerId))
+      .map(r => {
+        const m = meta.get(r.trackerId)!;
+        return {
+          id: r.entryId,
+          user_id: this.userId,
+          tracker_id: r.trackerId,
+          entry_values: r.values,
+          computed: { ...computeSecondaryData(m.name, m.category, r.values), validated: true },
+          notes: null,
+          mood: null,
+          tags: r.tags,
+          for_profile: null,
+          profile_id: r.profileId || null,
+          timestamp: r.timestamp,
+          deleted_at: null,
+        };
+      });
+    if (!payload.length) return 0;
+
+    // Keep each statement well inside Postgres parameter limits and the
+    // function's time budget; the route already chunks the request itself.
+    const BATCH = 500;
+    let written = 0;
+    for (let i = 0; i < payload.length; i += BATCH) {
+      const slice = payload.slice(i, i + BATCH);
+      const { data, error } = await this.supabase
+        .from("tracker_entries")
+        .upsert(slice, { onConflict: "id" })
+        .select("id");
+      if (error) throw error;
+      written += data?.length ?? slice.length;
+    }
+
+    bustInsightsCacheFor(this.userId);
+    this.logActivity("tracker", `Imported ${written} health entries`);
+    return written;
+  }
+
+  /**
+   * Delete every entry this pipeline wrote for one provider. Untagged entries
+   * (the user's own logs) are never matched, and the trackers themselves are
+   * left in place — an empty "VO2 Max" tracker is harmless, whereas cascading
+   * the delete would take out anything the user had also logged by hand.
+   */
+  async deleteHealthEntriesByProvider(providerTag: string): Promise<number> {
+    const { data, error } = await this.supabase
+      .from("tracker_entries")
+      .delete()
+      .eq("user_id", this.userId)
+      .contains("tags", [HEALTH_IMPORT_TAG, providerTag])
+      .select("id");
+    if (error) throw error;
+    const deleted = data?.length ?? 0;
+    if (deleted) bustInsightsCacheFor(this.userId);
+    return deleted;
   }
 
   /**
