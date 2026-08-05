@@ -27,9 +27,9 @@ import { HeartPulse, Smartphone, Upload, Activity, Loader2 } from "lucide-react"
 import { HealthImportDialog } from "./HealthImportDialog";
 import {
   getHealthCapability, requestHealthAuthorization, queryDailyAggregates,
-  type HealthCapability,
+  NATIVE_SYNCABLE_METRICS, type HealthCapability,
 } from "@/lib/health-bridge";
-import { HEALTH_METRIC_IDS, HEALTH_IMPORT_CHUNK_SIZE, type DailyRow } from "@shared/health-metrics";
+import { HEALTH_IMPORT_CHUNK_SIZE, type DailyRow } from "@shared/health-metrics";
 
 interface ProviderState {
   id: string;
@@ -113,12 +113,14 @@ export function HealthConnectionsCard() {
   // them through the same endpoint the file import uses.
   const appleSync = useMutation({
     mutationFn: async () => {
-      const granted = await requestHealthAuthorization();
+      const granted = await requestHealthAuthorization(NATIVE_SYNCABLE_METRICS);
       if (!granted) throw new Error("permission-denied");
       const to = new Date();
       const from = new Date(to.getTime() - 90 * 86400000);
+      // Only the metrics a native plugin can actually read. The rest (sleep,
+      // weight, blood pressure …) come through the file import.
       const rows = await queryDailyAggregates(
-        HEALTH_METRIC_IDS,
+        NATIVE_SYNCABLE_METRICS,
         from.toISOString().slice(0, 10),
         to.toISOString().slice(0, 10),
       );

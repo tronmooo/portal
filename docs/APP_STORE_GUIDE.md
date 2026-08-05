@@ -96,6 +96,75 @@ Click on `App/App/Info.plist` and add these keys:
 The first key tells Apple you don't use custom encryption (just HTTPS).
 The second ensures the WebView can load your Vercel server.
 
+---
+
+## HealthKit (optional — Apple Health live sync)
+
+Portol's Health Connections feature works **without any of this**: the file
+import (Settings → Health Connections → Import) parses an Apple Health
+`export.xml` on-device and covers all 20 tracked metrics on every platform,
+with no entitlement and no App Review implications. Only do the following if
+you want automatic background-free syncing on top of that.
+
+### Decide the plugin first
+
+Neither option is clearly better, and the choice is a real trade-off:
+
+| | `capacitor-health` | `@perfood/capacitor-healthkit` |
+|---|---|---|
+| Capacitor version | **8** — matches this repo | **4** peer dep, four majors behind |
+| Platforms | iOS + Android | iOS only |
+| Metrics readable | **3** — steps, active calories, mindfulness (plus workouts) | **~16** — incl. sleep, weight, blood pressure, resting HR, glucose, SpO₂, body fat, respiratory rate |
+| Install | clean | needs a `package.json` `overrides` entry to get past the peer conflict |
+
+The honest summary: the maintained plugin **cannot read sleep or weight**, which
+are the two metrics most people want automated. The comprehensive one reads
+nearly everything but is stale and iOS-only. If native sync is only going to
+deliver step counts, the file import already does more — weigh whether the
+HealthKit entitlement and the extra App Review scrutiny are worth it.
+
+`client/src/lib/health-bridge.ts` probes for **either** plugin at runtime and
+adapts, so nothing in the app code hard-codes the decision. Once you pick one,
+delete the other from `HEALTH_PLUGIN_MODULES` there.
+
+### Steps
+
+1. Install your chosen plugin, then `npx cap sync ios` to pull the native pod.
+2. **Signing & Capabilities → + Capability → HealthKit.** This adds the
+   `com.apple.developer.healthkit` entitlement.
+3. Confirm the usage strings landed in `App/App/Info.plist`:
+   `NSHealthShareUsageDescription` and `NSHealthUpdateUsageDescription`. They
+   are already declared in `capacitor.config.ts` (and mirrored in
+   `ios-assets/InfoPlist-additions.plist`), so `cap sync` should apply them —
+   but verify, because a HealthKit build without them **crashes on first
+   access** and is rejected by App Review.
+4. The privacy manifest already declares `NSPrivacyCollectedDataTypeHealth` and
+   `…Fitness` in `ios-assets/PrivacyInfo.xcprivacy`. Copy that file into the
+   Xcode project if it isn't there — App Review rejects HealthKit builds whose
+   manifest omits them.
+5. In App Store Connect → App Privacy, declare Health & Fitness as collected,
+   linked to the user, **not** used for tracking.
+6. Apple requires a published privacy policy for health apps. Portol serves one
+   at `/privacy` — make sure that URL is set in App Store Connect.
+
+> Apple prohibits using HealthKit data for advertising or selling it to third
+> parties, and rejects apps that request health permissions they don't visibly
+> use. Portol only reads, and only to populate the user's own trackers.
+
+### Verify after building
+
+`getHealthCapability()` drives the Settings row. On a device you should see the
+Apple Health row change from *"Update the Portol app to connect Apple Health"*
+to a working **Connect** button. If it still shows the update message, the
+plugin didn't register — check `window.Capacitor.Plugins` in Safari's Web
+Inspector attached to the device.
+
+> **Note:** the native query path in `health-bridge.ts` has never been executed.
+> It follows `capacitor-health`'s type definitions but has not run on hardware.
+> Expect to correct it on first real build.
+
+---
+
 ### App Icons
 1. In Xcode, open `App/App/Assets.xcassets`
 2. Click on **AppIcon**

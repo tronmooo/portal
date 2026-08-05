@@ -20,18 +20,32 @@
 // Capacitor still injects the native bridge into the remote page, so plugins
 // work normally — remote-URL mode does not rule out HealthKit.
 //
-// To actually enable this later:
-//   1. npm i capacitor-health          (one API over HealthKit + Health Connect)
-//   2. capacitor.config.ts → ios.infoPlist: NSHealthShareUsageDescription
-//      (and NSHealthUpdateUsageDescription only if we ever write back)
-//   3. Xcode → Signing & Capabilities → HealthKit
-//      (entitlement com.apple.developer.healthkit)
+// Info.plist strings and the privacy manifest are already staged
+// (capacitor.config.ts, ios-assets/PrivacyInfo.xcprivacy). What is NOT decided
+// is the plugin, because neither candidate is clearly right and neither can be
+// tested from here — see docs/APP_STORE_GUIDE.md § HealthKit for the full
+// comparison:
+//
+//   capacitor-health              Capacitor 8, iOS + Android, maintained — but
+//                                 queryAggregated only accepts 'steps' |
+//                                 'active-calories' | 'mindfulness'. Cannot
+//                                 read sleep or weight at all.
+//   @perfood/capacitor-healthkit  iOS only, peer-deps on Capacitor 4 (four
+//                                 majors behind), but reads ~16 of our 20
+//                                 metrics including sleep, weight, blood
+//                                 pressure and resting heart rate.
+//
+// This module therefore probes for EITHER and adapts, rather than committing
+// to one. Whoever picks should delete the branch they don't use.
 // =============================================================================
 
 import { HEALTH_METRIC_IDS, type DailyRow } from "@shared/health-metrics";
 
-/** Package probed at runtime. Not a dependency — see the note above. */
-const HEALTH_PLUGIN_MODULE = "capacitor-health";
+/** Packages probed at runtime, in preference order. Neither is a dependency. */
+const HEALTH_PLUGIN_MODULES = ["capacitor-health", "@perfood/capacitor-healthkit"];
+
+/** Names a native plugin may register under on window.Capacitor.Plugins. */
+const HEALTH_PLUGIN_GLOBALS = ["Health", "CapacitorHealthkit", "HealthKit"];
 
 export type HealthPlatform = "ios" | "android" | "web";
 
@@ -54,16 +68,35 @@ function platformOf(): HealthPlatform {
   return p === "ios" || p === "android" ? p : "web";
 }
 
-/** Load the health plugin, or undefined when it isn't in the build. */
+/**
+ * Find the health plugin, or undefined when the app was built without one.
+ *
+ * The global lookup comes FIRST and matters more than it looks. Portol's native
+ * shell loads the web app from https://portol.me rather than bundling it, so
+ * the plugin's npm wrapper is generally NOT in the JS that runs on the device —
+ * but Capacitor registers every native plugin on window.Capacitor.Plugins
+ * regardless. That global is the reliable handle here; the dynamic import is
+ * only a fallback for a locally bundled build.
+ */
 async function loadPlugin(): Promise<any | undefined> {
-  try {
-    // Indirect import: a literal import() would make Rollup resolve the package
-    // at build time, which fails because it is deliberately not installed.
-    const mod = await (Function("p", "return import(p)"))(HEALTH_PLUGIN_MODULE);
-    return mod?.Health ?? mod?.default ?? mod;
-  } catch {
-    return undefined;
+  const plugins = capacitor()?.Plugins;
+  if (plugins) {
+    for (const name of HEALTH_PLUGIN_GLOBALS) {
+      if (plugins[name]) return plugins[name];
+    }
   }
+  for (const modPath of HEALTH_PLUGIN_MODULES) {
+    try {
+      // Indirect import: a literal import() would make Rollup resolve the
+      // package at build time, which fails because it isn't installed.
+      const mod = await (Function("p", "return import(p)"))(modPath);
+      const plugin = mod?.Health ?? mod?.CapacitorHealthkit ?? mod?.default ?? mod;
+      if (plugin) return plugin;
+    } catch {
+      // Not this one — try the next.
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -106,39 +139,84 @@ export async function getHealthCapability(): Promise<HealthCapability> {
 }
 
 /**
+ * capacitor-health's permission vocabulary. Its HealthPermission union is a
+ * closed set of `READ_…` / `WRITE_…` names, not our metric ids, so the request
+ * has to be translated. We ask only for reads.
+ */
+const CAPACITOR_HEALTH_PERMISSIONS: Record<string, string> = {
+  steps: "READ_STEPS",
+  active_energy: "READ_ACTIVE_CALORIES",
+  mindful_minutes: "READ_MINDFULNESS",
+  distance_walked: "READ_DISTANCE",
+  heart_rate: "READ_HEART_RATE",
+  exercise_minutes: "READ_WORKOUTS",
+};
+
+/**
  * Ask for read access to the metrics we import. Returns false when the user
  * declines — the caller should surface that, not retry.
+ *
+ * On iOS the plugin cannot actually tell granted from denied (Apple does not
+ * expose it), so a `true` here means "the prompt was shown", not "we have
+ * access". A subsequent empty query is the real signal.
  */
 export async function requestHealthAuthorization(
   metricIds: string[] = HEALTH_METRIC_IDS,
 ): Promise<boolean> {
   const plugin = await loadPlugin();
   if (!plugin) return false;
+
+  const permissions = Array.from(new Set(
+    metricIds.map((m) => CAPACITOR_HEALTH_PERMISSIONS[m]).filter(Boolean),
+  ));
+  if (permissions.length === 0) return false;
+
   try {
-    const result = await plugin.requestHealthPermissions?.({ permissions: metricIds })
-      ?? await plugin.requestAuthorization?.({ read: metricIds });
-    // Plugins disagree on the success shape; treat anything not explicitly
-    // false or "denied" as granted, and let the query fail loudly otherwise.
-    if (result === false) return false;
-    if (result && typeof result === "object" && "granted" in result) return !!result.granted;
-    return true;
+    if (typeof plugin.requestHealthPermissions === "function") {
+      const result = await plugin.requestHealthPermissions({ permissions });
+      // PermissionResponse is { permissions: [{ [name]: boolean }] }; treat an
+      // explicit all-false as a refusal and anything else as proceed.
+      const entries: any[] = result?.permissions ?? [];
+      if (entries.length > 0) {
+        const anyGranted = entries.some((e) => Object.values(e || {}).some(Boolean));
+        return anyGranted;
+      }
+      return true;
+    }
+    if (typeof plugin.requestAuthorization === "function") {
+      await plugin.requestAuthorization({ read: metricIds, write: [] });
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
 }
 
 /**
+ * Registry metric id → the dataType string `capacitor-health.queryAggregated`
+ * accepts. That plugin's type signature is literally
+ * `'steps' | 'active-calories' | 'mindfulness'`, so this map is short by
+ * necessity, not by omission — everything absent from it genuinely cannot be
+ * read through that plugin, sleep and weight included. Users get those through
+ * the file import instead.
+ */
+const CAPACITOR_HEALTH_DATATYPES: Record<string, string> = {
+  steps: "steps",
+  active_energy: "active-calories",
+  mindful_minutes: "mindfulness",
+};
+
+/**
  * Pull daily aggregates for a date range, already in the shape the import
- * endpoint accepts. Returns [] when the plugin is absent so callers never need
- * a separate availability check before this.
+ * endpoint accepts. Returns [] when the plugin is absent, so callers never need
+ * a separate availability check first.
  *
- * UNVERIFIED against a real plugin — nothing here has executed, because no
- * health plugin is installed and there is no ios/ project to run it in. In
- * particular the `dataType` values are passed as our own registry metric ids;
- * a plugin will almost certainly want its own vocabulary, in which case map
- * through HEALTHKIT_TYPE_MAP / HEALTH_CONNECT_TYPE_MAP (shared/health-metrics)
- * at this boundary. Treat this function as the shape of the integration rather
- * than a working one, and re-check it when the plugin lands.
+ * UNVERIFIED — this has never executed. No plugin is installed and there is no
+ * ios/ project to run one in. The shape follows capacitor-health's documented
+ * API (queryAggregated → { aggregatedData: [{ startDate, endDate, value }] }),
+ * read from its type definitions rather than guessed, but "matches the .d.ts"
+ * is not "works on a device". Re-check against a real build before trusting it.
  */
 export async function queryDailyAggregates(
   metricIds: string[],
@@ -148,17 +226,21 @@ export async function queryDailyAggregates(
   const plugin = await loadPlugin();
   if (!plugin) return [];
 
+  if (typeof plugin.queryAggregated !== "function") return [];
+
   const rows: DailyRow[] = [];
   for (const metric of metricIds) {
+    const dataType = CAPACITOR_HEALTH_DATATYPES[metric];
+    if (!dataType) continue; // Not readable through this plugin — skip quietly.
     try {
-      const res = await plugin.queryAggregated?.({
-        dataType: metric,
+      const res = await plugin.queryAggregated({
+        dataType,
         startDate: fromDay,
         endDate: toDay,
         bucket: "day",
       });
       for (const item of res?.aggregatedData ?? []) {
-        const day = String(item.date || item.startDate || "").slice(0, 10);
+        const day = String(item.startDate || "").slice(0, 10);
         const value = Number(item.value);
         if (/^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(value)) {
           rows.push({ metric, day, value });
@@ -171,3 +253,6 @@ export async function queryDailyAggregates(
   }
   return rows;
 }
+
+/** Metrics a native sync can actually deliver today, for honest UI copy. */
+export const NATIVE_SYNCABLE_METRICS = Object.keys(CAPACITOR_HEALTH_DATATYPES);

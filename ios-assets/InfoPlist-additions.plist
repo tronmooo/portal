@@ -10,5 +10,12 @@
   <string>Portol saves exported documents to your photo library</string>
   <key>ITSAppUsesNonExemptEncryption</key>
   <false/>
+  <!-- HealthKit. Only needed once the HealthKit capability is enabled in
+       Xcode; harmless before that. Kept in sync with capacitor.config.ts,
+       which is what `npx cap sync ios` actually applies. -->
+  <key>NSHealthShareUsageDescription</key>
+  <string>Portol reads steps, sleep, heart rate, weight and other health data so your Wellness page and health score stay up to date without you logging them by hand.</string>
+  <key>NSHealthUpdateUsageDescription</key>
+  <string>Portol does not write to Apple Health. This permission is declared only because the HealthKit capability requires it.</string>
 </dict>
 </plist>
