@@ -202,7 +202,10 @@ function SectionBubble({ section, index, busyKeys, armedKey, leavingKeys, onActi
 
   return (
     <section
-      className={`bubble bubble-enter mb-3 ${hero ? "p-4 sm:p-5" : "p-3.5 sm:p-4"}`}
+      // break-inside-avoid: below, the non-hero sections flow through a CSS
+      // multi-column layout on wide screens, and a bubble split across the
+      // column boundary would render as two half-cards.
+      className={`bubble bubble-enter mb-3 break-inside-avoid ${hero ? "p-4 sm:p-5" : "p-3.5 sm:p-4"}`}
       style={{ ["--accent-hsl" as any]: section.accent, ["--i" as any]: index }}
       data-testid={`exec-section-${section.id}`}
       aria-label={section.title}
@@ -302,15 +305,38 @@ export function ExecutiveSections({
     );
   }
 
+  // COLUMNS (2026-08-05). The feed was a single stack at every width, so on a
+  // desktop the sections became ~700px-wide bands holding a 200px title on the
+  // left and a button on the right with nothing between them — a phone layout
+  // stretched sideways, and a scroll long enough that the bottom sections were
+  // never seen. The hero keeps the full width it earns; everything below it
+  // flows into two columns from lg up.
+  //
+  // CSS multi-column rather than two hand-split arrays on purpose: it preserves
+  // DOM order (so reading order, tab order and the `+N more` focus targets stay
+  // the order the sections were assembled in) and collapses back to one column
+  // below lg with no second code path.
+  const heroes = sections.filter(s => (s.emphasis ?? EMPHASIS[s.id]) === "hero");
+  const rest = sections.filter(s => (s.emphasis ?? EMPHASIS[s.id]) !== "hero");
+
   return (
     <div data-testid="exec-sections">
-      {sections.map((s, i) => (
+      {heroes.map((s, i) => (
         <SectionBubble
           key={s.id} section={s} index={i}
           busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
           onAction={onAction}
         />
       ))}
+      <div className="lg:columns-2 lg:gap-3">
+        {rest.map((s, i) => (
+          <SectionBubble
+            key={s.id} section={s} index={heroes.length + i}
+            busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
+            onAction={onAction}
+          />
+        ))}
+      </div>
     </div>
   );
 }
