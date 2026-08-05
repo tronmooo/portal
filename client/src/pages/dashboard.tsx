@@ -43,6 +43,7 @@ import {
   type FindingDirection,
 } from "@shared/tracker-insights";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
+import { warmSiblingScopes } from "@/lib/scope-prefetch";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
@@ -5244,7 +5245,10 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+    // Third column only at xl: these cards carry a name, a net-worth figure and
+    // a two-part assets/debts line, which needs ~320px. At lg the sidebar leaves
+    // ~720px of content, and thirds of that would wrap the bottom line.
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
       {cards.map((c: any) => {
         const accent = profileAccent(c.id + c.name);
         const share = totalPositiveNW > 0 ? (Math.max(0, c.netWorth) / totalPositiveNW) * 100 : 0;
@@ -5473,6 +5477,33 @@ export default function DashboardPage() {
     return () => clearTimeout(t);
   }, [bootstrapQuery.isFetched, filterMode, filterIds.join(","), currentMonth]);
   const bootstrapSettled = bootstrapQuery.isFetched || bootstrapDeadline;
+
+  // PERF (profile-switch, 2026-08-05): once THIS scope has painted, warm the
+  // other people's scopes in the background so opening the switcher and picking
+  // someone renders from cache instead of waiting out a cold bootstrap. The
+  // sweep is sequential, idle-scheduled and capped (see warmSiblingScopes) and
+  // is keyed off bootstrapQuery.isFetched — not bootstrapSettled — so the 8s
+  // deadline escape hatch (a bootstrap that never landed) never triggers extra
+  // background load on a link that is already struggling.
+  //
+  // The dep is the id STRING, not the profiles array: every warmed bootstrap
+  // re-seeds ["/api/profiles"] with a fresh array reference (seedDashboardCaches),
+  // so depending on the array itself would cancel and restart the sweep on each
+  // one of its own responses.
+  const switchablePeopleKey = useMemo(
+    () => (allProfiles || [])
+      .filter((p: any) => ["self", "person", "pet"].includes(p?.type))
+      .map((p: any) => p.id)
+      .join(","),
+    [allProfiles],
+  );
+  useEffect(() => {
+    if (!bootstrapQuery.isFetched) return;
+    const people = switchablePeopleKey ? switchablePeopleKey.split(",") : [];
+    if (people.length < 2) return;
+    return warmSiblingScopes(people, filterMode === "selected" ? filterIds : []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrapQuery.isFetched, switchablePeopleKey, filterMode, filterIds.join(",")]);
 
   const { data: stats, isPending: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
@@ -5751,7 +5782,11 @@ export default function DashboardPage() {
   const rightSections = useMemo(() => sections.filter(s => s.visible && s.column === "right"), [sections]);
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 md:p-4 space-y-3 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
+    // GUTTERS (2026-08-05): md:px-6, not md:p-4. The hub chrome above this page
+    // (HubShell: px-3 md:px-6) and the app's standard PageContainer (px-4
+    // md:px-6) both indent by 6 at desktop, so a 4 here left every card on the
+    // dashboard sitting half a step inside the tab row that opened it.
+    <div className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 md:px-6 md:py-4 space-y-3 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
       {/* Header — hub-embedded: date + profile filter live in the hub shell
           (HubShell/HubProfileSwitcher write the same profileFilter store this
           page subscribes to), so only the kebab menu remains. */}

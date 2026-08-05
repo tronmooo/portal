@@ -504,9 +504,25 @@ async function getCachedShared(key: string): Promise<any | null> {
   }
   return null;
 }
+// Expired entries are otherwise only dropped when something reads or busts
+// their exact key — and version-stamped keys are never read again after a
+// write, so they would sit in memory holding whole tables (the `bootstrap-raw:`
+// and `insights-data:` snapshots are the heavy ones). Sweep them on a write,
+// throttled so a busy instance pays it at most once a minute.
+const CACHE_SWEEP_INTERVAL_MS = 60_000;
+let lastCacheSweepAt = 0;
+function sweepExpiredCache(now: number): void {
+  if (now - lastCacheSweepAt < CACHE_SWEEP_INTERVAL_MS) return;
+  lastCacheSweepAt = now;
+  for (const [key, entry] of responseCache) {
+    if (now >= entry.expiresAt) responseCache.delete(key);
+  }
+}
 function setCache(key: string, data: any, ttlMs: number = 10000): void {
   if (!CACHE_ENABLED) return;
-  responseCache.set(key, { data, expiresAt: Date.now() + ttlMs });
+  const now = Date.now();
+  sweepExpiredCache(now);
+  responseCache.set(key, { data, expiresAt: now + ttlMs });
   if (sharedCacheEligible(key)) {
     // Fire-and-forget: never block the response on the cache write. If the
     // instance freezes before it lands, the next instance just recomputes.
@@ -527,7 +543,7 @@ function clearAllCache(): void {
 // bootstrap/profile-bootstrap which that list omits (they were only ever
 // cleared by the global wipe this scoped bust replaces).
 const USER_CACHE_PREFIXES = [
-  "stats:", "enhanced:", "bootstrap:", "profile-bootstrap:", "profile-detail:",
+  "stats:", "enhanced:", "bootstrap:", "bootstrap-raw:", "profile-bootstrap:", "profile-detail:",
   "profiles:", "trackers:", "tasks:", "expenses:", "events:", "habits:",
   "obligations:", "journal:", "documents:", "goals:", "insights:",
   "insights-data:", "activity:", "ai-digest:", "artifacts:", "notifications:",
@@ -2881,6 +2897,22 @@ ${JSON.stringify(ctx, null, 2)}`;
     const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
 
+    // PERF (profile-switch, 2026-08-05): the raw tables this handler reads are
+    // fetched UNFILTERED and filtered in JS (see `sharedFetches` in getStats /
+    // getDashboardEnhanced), so they are IDENTICAL for every profile scope —
+    // only the filtering differs. Yet the response cache is keyed by scope, so
+    // picking a second person re-ran the whole ~18-query Supabase fan-out from
+    // scratch (measured 1.5-4.6s per switch, PERF_PLAN_LAUNCH_2026-07-16 §B1).
+    //
+    // Cache the resolved reads once per user instead, and prime the next
+    // scope's request memo with them: switching people then costs the JS
+    // aggregation only. Same pattern (and same freshness guarantee) as the
+    // `insights-data:` cache below — the key is version-stamped via
+    // cacheUserKey, so any write makes it unaddressable, and the TTL matches
+    // the bootstrap payload's own 30s staleness ceiling.
+    const rawCacheKey = `bootstrap-raw:${userId}:${month}`;
+    const rawSnapshot = getCached(rawCacheKey);
+
     const data = await dedupe(cacheKey, async () => {
       // PERF: enable per-request memoization on the scoped storage so that
       // getStats() + getDashboardEnhanced() + the lightweight Promise.all
@@ -2889,6 +2921,10 @@ ${JSON.stringify(ctx, null, 2)}`;
       // Safe because storage is request-scoped via createScopedStorage and
       // memo is opt-in (default OFF).
       try { (storage as any).enableRequestMemo?.(); } catch {}
+      // Reuse the previous scope's reads when they're still addressable.
+      if (rawSnapshot) {
+        try { (storage as any).primeRequestMemo?.(rawSnapshot); } catch {}
+      }
 
       // PERF: reuse the per-endpoint server caches so bootstrap is cheap when
       // /api/stats or /api/dashboard-enhanced have been hit in the last 15s.
@@ -2922,9 +2958,16 @@ ${JSON.stringify(ctx, null, 2)}`;
       const bootstrapWindow = canonicalTimelineWindow(getUserToday(bootstrapTz));
       const bootstrapStart = bootstrapWindow.start;
       const bootstrapEnd = bootstrapWindow.end;
+      // [PERF 2026-08-05] The hero trend line reads /api/net-worth/history on
+      // its own, ungated — so every profile switch fired it in parallel with
+      // this bootstrap. It's one indexed read, so folding it in here costs
+      // nothing and removes a round trip from the switch. Mirrors GET
+      // /api/net-worth/history exactly: per-profile series only when exactly
+      // one profile is selected, otherwise the account aggregate.
+      const nwProfileId = filterIds && filterIds.length === 1 ? filterIds[0] : undefined;
       const [stats, profiles, incomes, expensesForBudget, budgets, obligationsAll, assetPartyLinks, liabilityProfileLinks,
         tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll, remindersAll,
-        calendarTimelineAll, notificationsAll] = await Promise.all([
+        calendarTimelineAll, notificationsAll, netWorthHistory] = await Promise.all([
         cachedStats ?? dedupe(statsCacheKey, async () => {
           // sharedFetches: this same request fetches every table unfiltered
           // for the seed payloads + buildNotifications below — let getStats
@@ -2965,6 +3008,9 @@ ${JSON.stringify(ctx, null, 2)}`;
           ? storage.getCalendarTimeline(bootstrapStart, bootstrapEnd, filterIds).catch(() => [] as any[])
           : Promise.resolve([] as any[]),
         buildNotifications(storage, bootstrapTz).catch(() => [] as any[]),
+        typeof (storage as any).getNetWorthHistory === "function"
+          ? (storage as any).getNetWorthHistory(nwProfileId, 120).catch(() => [] as any[])
+          : Promise.resolve([] as any[]),
       ]);
 
       const enhanced = cachedEnhanced ?? await dedupe(enhancedCacheKey, async () => {
@@ -3077,6 +3123,9 @@ ${JSON.stringify(ctx, null, 2)}`;
               if (!entity) return true;
               return passesProfileFilter(entity.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles });
             }),
+        // Hero trend-line series (see nwProfileId above). Already scoped by the
+        // storage call, so no extra filtering.
+        netWorthHistory: Array.isArray(netWorthHistory) ? netWorthHistory : [],
         month,
         filterIds: filterIds || [],
       };
@@ -3096,6 +3145,18 @@ ${JSON.stringify(ctx, null, 2)}`;
     // accepts 30s of bootstrap staleness; 60s exceeded that budget whenever
     // the busting paths didn't reach a warm instance.
     setCache(cacheKey, data, 30 * 1000);
+    // Publish this request's raw reads for the NEXT scope (see rawCacheKey
+    // above). Only on a miss — refreshing the TTL on every hit would let one
+    // long browsing session extend the snapshot indefinitely past the 30s
+    // staleness ceiling. An empty snapshot means `dedupe` handed us another
+    // request's in-flight result and this storage never read anything, so
+    // there is nothing worth publishing (and nothing to clobber).
+    if (!rawSnapshot) {
+      try {
+        const snap = await (storage as any).snapshotRequestMemo?.();
+        if (snap && Object.keys(snap).length > 0) setCache(rawCacheKey, snap, 30 * 1000);
+      } catch { /* best-effort warm — never fail the response over it */ }
+    }
     try { (storage as any).disableRequestMemo?.(); } catch {}
     res.json(data);
   }));
@@ -4428,7 +4489,16 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
       const ids = profileIdsParam.split(",").filter(Boolean);
       items = await filterByProfileScope(items, ids, uid);
     }
-    res.json(paginate(items, req, res));
+    // paginateFull, NOT paginate: the client computes AGGREGATES over this list
+    // — the hub's WELLNESS score (computeHealthScore) and the Trackers tab's
+    // group counts and streaks — exactly like the Finance page sums expenses.
+    // paginate()'s 100-row default cap silently truncated the set those numbers
+    // are computed from, so the same scope scored differently depending on
+    // whether the cache had been filled by /api/dashboard-bootstrap (which seeds
+    // the WHOLE list under the same key) or by a real fetch of this endpoint.
+    // With 108 trackers that read as "WELLNESS — on one load, 76 on the next"
+    // (QA report 2026-08-05). Explicit ?limit=/?offset= still pages.
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/trackers/:id", asyncHandler(async (req, res) => {
     const tracker = await storage.getTracker(req.params.id);

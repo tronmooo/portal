@@ -34,7 +34,10 @@ export function warmProfileDetail(id: string): void {
   });
 }
 
-export function prefetchScopeBootstrap(mode: "everyone" | "selected", ids: string[]): void {
+export function prefetchScopeBootstrap(
+  mode: "everyone" | "selected",
+  ids: string[],
+): Promise<void> {
   const month = new Date().toISOString().slice(0, 7);
   const cleanIds = mode === "selected" ? ids.filter(Boolean) : [];
   const qs = cleanIds.length > 0
@@ -47,11 +50,11 @@ export function prefetchScopeBootstrap(mode: "everyone" | "selected", ids: strin
   const state = queryClient.getQueryState(queryKey);
   if (state && (state.fetchStatus === "fetching" ||
       (state.data != null && Date.now() - state.dataUpdatedAt < 60_000))) {
-    return;
+    return Promise.resolve();
   }
 
   perfMark(`scope-prefetch-start:${cleanIds.join(",") || "everyone"}`);
-  void queryClient.prefetchQuery({
+  return queryClient.prefetchQuery({
     queryKey,
     queryFn: async () => {
       const r = await apiRequest("GET", `/api/dashboard-bootstrap${qs}`);
@@ -62,4 +65,73 @@ export function prefetchScopeBootstrap(mode: "everyone" | "selected", ids: strin
     },
     staleTime: 60_000,
   });
+}
+
+// ── Sibling-scope warmup ─────────────────────────────────────────────────────
+// Hover/touch prefetch only helps when the pointer rests on the row long enough
+// to cover a 1.5-4.6s bootstrap — on mobile (no hover) and on a decisive click
+// it buys almost nothing, so switching people still meant waiting out a cold
+// aggregation (PERF_PLAN_LAUNCH_2026-07-16 §B1).
+//
+// Once the ACTIVE scope has painted, the app is idle and the network is free:
+// walk the other people in the household and warm each one's bootstrap in the
+// background. seedDashboardCaches fills every scoped query key from each
+// response, so by the time the user opens the switcher the next person's
+// dashboard is already in the client cache — the switch renders with no
+// network at all. On the server these follow-up requests are cheap: the
+// bootstrap reuses the first request's raw table reads (see the
+// `bootstrap-raw:` cache in server/routes.ts), so only the JS aggregation
+// re-runs.
+//
+// Deliberately conservative — this is background work that must never compete
+// with what the user is looking at:
+//   - starts only after the active scope has landed, on an idle callback,
+//   - runs STRICTLY sequentially (one in-flight bootstrap at a time), so it can
+//     never fan out N serverless invocations at once,
+//   - capped at MAX_SIBLING_WARMS profiles,
+//   - skipped while the tab is hidden, and abandoned mid-sweep if it goes
+//     hidden or the caller unmounts/rescopes.
+const MAX_SIBLING_WARMS = 6;
+const SIBLING_WARM_TTL_MS = 5 * 60_000;
+const siblingWarmedAt = new Map<string, number>();
+
+function idle(fn: () => void, timeout = 2_000): void {
+  const w = window as any;
+  if (typeof w.requestIdleCallback === "function") w.requestIdleCallback(fn, { timeout });
+  else setTimeout(fn, 0);
+}
+
+/**
+ * Warm every OTHER person's dashboard scope in the background.
+ * `personIds` is the switcher's profile list; `activeIds` is the scope on
+ * screen right now (skipped — it's already loaded).
+ *
+ * Returns a cancel function; call it when the caller unmounts or the active
+ * scope changes so an in-flight sweep stops queueing further requests.
+ */
+export function warmSiblingScopes(personIds: string[], activeIds: string[]): () => void {
+  let cancelled = false;
+  const cancel = () => { cancelled = true; };
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") return cancel;
+
+  const active = new Set(activeIds.filter(Boolean));
+  const now = Date.now();
+  const targets = personIds
+    .filter(Boolean)
+    .filter((id) => !active.has(id))
+    .filter((id) => now - (siblingWarmedAt.get(id) || 0) >= SIBLING_WARM_TTL_MS)
+    .slice(0, MAX_SIBLING_WARMS);
+  if (targets.length === 0) return cancel;
+
+  const step = (i: number) => {
+    if (cancelled || i >= targets.length) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    const id = targets[i];
+    siblingWarmedAt.set(id, Date.now());
+    prefetchScopeBootstrap("selected", [id])
+      .catch(() => { siblingWarmedAt.delete(id); }) // let a later sweep retry
+      .finally(() => { if (!cancelled) idle(() => step(i + 1)); });
+  };
+  idle(() => step(0));
+  return cancel;
 }

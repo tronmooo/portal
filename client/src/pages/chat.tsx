@@ -1756,7 +1756,7 @@ function SlowResponseHint() {
 // the whole chat chunk into the entry bundle. Re-exported for compatibility.
 export { clearChatCache } from "@/lib/chat-cache";
 import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCache } from "@/lib/chat-cache";
-import { ChatSuggestions, ChatFollowUps, CHAT_ACCENT } from "@/components/chat/ChatSuggestions";
+import { ChatSuggestions, ChatFollowUps } from "@/components/chat/ChatSuggestions";
 import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
 import { scopedKey } from "@shared/query-keys";
 
@@ -3000,12 +3000,10 @@ export default function ChatPage() {
     queryKey: ["/api/profiles"],
   });
 
-  // PROFILE-CONTEXT FIX: the AI must answer within the SAME profile scope the
-  // rest of the UI is showing. The server already honors `profileFilterIds`
-  // (routes.ts /api/chat → processMessage), but the client never sent it, so
-  // every AI command and AI answer silently ignored the selected profile. We
-  // read the scope reactively and stash it in a ref so the mutation closure
-  // always sends the CURRENT selection without re-creating the mutation.
+  // The global profile scope is read here for ONE reason: the dashboard caches
+  // records under scoped query keys, so the suggestion chips below have to look
+  // in the right bucket to find them. It deliberately does NOT give the chat an
+  // identity — it isn't sent to /api/chat and it isn't shown in the UI.
   const chatScope = useProfileScope();
 
   // ── Suggestions, computed from records already in the cache ──────────────
@@ -3021,12 +3019,12 @@ export default function ChatPage() {
       const v = queryClient.getQueryData([...scopedKey(endpoint, mode as any, [...idsForKey])]);
       return Array.isArray(v) ? (v as T[]) : [];
     };
-    const scopeProfiles = chatScope.mode === "selected"
-      ? (profiles || []).filter((p: any) => chatScope.selectedIds.includes(p.id))
-      : [];
+    // No scopeProfiles: chat doesn't speak as a profile, so the chips must not
+    // be about one either ("Log a vet visit for Luna" is a scoped suggestion).
+    // The scoped cache key is still used — it's just where this page's records
+    // happen to live — but nothing about the identity reaches the suggestions.
     return buildChatSuggestions({
       now: new Date(),
-      scopeProfiles: scopeProfiles as any,
       trackers: read("/api/trackers"),
       habits: read("/api/habits"),
       obligations: read("/api/obligations"),
@@ -3034,7 +3032,7 @@ export default function ChatPage() {
       expenses: read("/api/expenses"),
     }, 6);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatScope.mode, chatScope.selectedIds.join(","), profiles, queryClient]);
+  }, [chatScope.mode, chatScope.selectedIds.join(","), queryClient]);
 
   // After a reply, what to offer next — read from the actions the assistant
   // reported, so the chips are about what just happened.
@@ -3046,13 +3044,6 @@ export default function ChatPage() {
     }
     return [];
   }, [messages]);
-
-  // First name of whoever we're chatting as, for the greeting.
-  const chatScopeFirstName = chatScope.mode === "selected"
-    ? (chatScope.selectedNames[0] || "").split(/\s+/)[0] || null
-    : null;
-  const chatScopeRef = useRef<string[]>([]);
-  chatScopeRef.current = chatScope.mode === "selected" ? chatScope.selectedIds : [];
 
   // Default the attachment link target to "my profile" (the self profile) on first
   // load, so anything the user attaches is linked to them unless they pick otherwise.
@@ -3079,9 +3070,10 @@ export default function ChatPage() {
         .filter(m => m.id !== "welcome" && m.id !== userMsgId)
         .slice(-10)
         .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
-      // Scope the AI to the active profile selection (empty array ⇒ household/
-      // everyone, which the server treats as unscoped). See chatScopeRef above.
-      const profileFilterIds = chatScopeRef.current;
+      // Chat is deliberately UNSCOPED. The global profile selector used by the
+      // dashboard does not silently retarget the assistant here: attribution
+      // comes from what the user actually writes ("log Jane's weight"), so the
+      // request carries no profileFilterIds.
       // Streaming send (P0 fix): POST with SSE opt-in and paint frames as they
       // arrive. streamChat resolves with the SAME body the old buffered
       // `apiRequest → res.json()` returned — including when it talks to an
@@ -3093,7 +3085,6 @@ export default function ChatPage() {
         {
           message,
           history,
-          ...(profileFilterIds.length > 0 ? { profileFilterIds } : {}),
         },
         {
           onRound: () => { liveResetPendingRef.current = true; },
@@ -3938,27 +3929,9 @@ export default function ChatPage() {
         data-testid="input-camera"
       />
 
-      {/* Active-profile banner (2026-07-29 tester report: "the chat page
-          doesn't show you which profile you're in" — records were silently
-          attributed out of view). Read from the same global scope store the
-          dashboard uses, so the two can never disagree. */}
-      <div className="shrink-0 bg-background/95 px-4 pt-2 pb-1" data-testid="chat-scope-banner">
-        <div className="max-w-2xl mx-auto">
-          <span className="bubble-row inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] text-muted-foreground"
-            style={{ ["--accent-hsl" as any]: CHAT_ACCENT }}>
-          <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
-          <span>
-            Chatting as{" "}
-            <span className="font-semibold text-foreground">
-              {chatScope.mode === "everyone"
-                ? "Everyone"
-                : chatScope.selectedNames.join(", ") || "Selected profile"}
-            </span>
-            {chatScope.mode !== "everyone" && " — new records will be linked here"}
-          </span>
-          </span>
-        </div>
-      </div>
+      {/* No active-profile banner here on purpose. Chat is not scoped to a
+          profile identity — the message text is what decides attribution
+          ("log Jane's weight"), so there is no "chatting as X" state to show. */}
 
       {/* Messages area */}
       <div ref={scrollRef} onScroll={handleTranscriptScroll} className="flex-1 overflow-y-auto px-4 py-3">
@@ -3975,7 +3948,6 @@ export default function ChatPage() {
           {messages.length <= 1 && !searchOpen && (
             <ChatSuggestions
               suggestions={chatSuggestions}
-              name={chatScopeFirstName}
               onPick={handleSuggestion}
             />
           )}

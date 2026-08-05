@@ -145,6 +145,8 @@ export default defineConfig({
       'tests/profile-edit-event-gating.test.ts',
       'tests/profile-edit-no-ai-regen.test.ts',
       'tests/bootstrap-seed-keys.test.ts',
+      'tests/scope-prefetch-siblings.test.ts',
+      'tests/request-memo-reuse.test.ts',
       'tests/documents-page.test.ts',
       'tests/document-open-perf.test.ts',
       'tests/attention.test.ts',
@@ -172,6 +174,8 @@ export default defineConfig({
       'tests/format-full-date.test.ts',
       'tests/detail-hero.test.ts',
       'tests/detail-hero.dom.test.tsx',
+      // QA pass 2026-08-05: the Info-page profile-switch crash.
+      'tests/qa-2026-08-05-info-crash.dom.test.tsx',
       // Stripe Financial Connections: money math, calculation module,
       // transfer/recurring/duplicate detection, error redaction.
       'tests/finance-connections.test.ts',

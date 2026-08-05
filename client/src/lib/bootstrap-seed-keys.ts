@@ -43,6 +43,11 @@ export function bootstrapSeedEntries(
   add(["/api/liability-profile-links"], b.liabilityProfileLinks);
   add(k("/api/tasks"), b.tasks);
   add(k("/api/habits"), b.habits);
+  // TrendsSection reads habits under a "trends" suffix off the SAME
+  // `/api/habits?profileIds=…` response (dashboard.tsx TrendsSection), exactly
+  // like the trackers pair below. Without this seed it was the one dashboard
+  // query that still fired its own request on every scope switch.
+  add(k("/api/habits", "trends"), b.habits);
   // goalsQueryKey(ids) collapses to this exact key (see @shared/query-keys), so
   // one entry covers the dashboard, goals and trackers pages — no double-seed.
   add(k("/api/goals"), b.goals);
@@ -52,6 +57,9 @@ export function bootstrapSeedEntries(
   add(k("/api/trackers"), b.trackers);
   add(k("/api/trackers", "trends"), b.trackers);
   add(k("/api/reminders"), b.reminders);
+  // Hero trend line (dashboard.tsx). Ungated and keyed by scope, so before the
+  // bootstrap carried it this was a second request racing every profile switch.
+  add(k("/api/net-worth/history"), b.netWorthHistory);
 
   // [PERF 2026-07-17, user report "every tile shows loading on scope switch"]
   // Events tile is gated on the 45-day calendar-timeline query and the AI

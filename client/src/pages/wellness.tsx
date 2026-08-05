@@ -451,7 +451,9 @@ export default function WellnessPage() {
     // (unreachable) and the last cards hid under the 60px fixed bottom nav.
     // Mirror the peers: h-full + overflow-y-auto + pb-24 nav clearance.
     <div
-      className={`h-full overflow-y-auto overflow-x-hidden pb-24 ${embedded ? "px-3 sm:px-4 py-3" : "container mx-auto px-3 sm:px-4 py-4 max-w-7xl"}`}
+      // Embedded gutters match the hub chrome above (HubShell: px-3 md:px-6);
+      // standalone matches PageContainer.
+      className={`h-full overflow-y-auto overflow-x-hidden pb-24 ${embedded ? "px-3 md:px-6 py-3" : "container mx-auto px-3 sm:px-4 py-4 max-w-7xl"}`}
       style={{ WebkitOverflowScrolling: "touch" }}
     >
       {!embedded && (

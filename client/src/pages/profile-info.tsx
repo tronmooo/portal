@@ -20,6 +20,7 @@ import { useRoute, useLocation, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { flattenProfile } from "@/lib/flattenProfile";
+import { useProfileScope } from "@/hooks/useProfileScope";
 import { infoFieldsForType, readField, computeAge } from "@/lib/profile-fields";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
@@ -71,24 +72,39 @@ const NESTED_GROUP_KEYS = new Set([
   "pets", "pet",
 ]);
 
-// ── Route dispatcher: single-profile Info, else redirect to Self's Info ───────
-// There is no standalone "everyone" Info page — /profiles resolves to the Self
-// profile's Info tab (the hub switcher is how you change whose Info you view).
+// ── Route dispatcher: one profile's Info, or the combined view ───────────────
+// /profiles/:id/info → that person. /profiles → everyone in the current scope.
+//
+// NEITHER BRANCH MAY NAVIGATE. Which Info location matches the profile scope is
+// decided in exactly one place — reconcileInfoRoute (hub-routes.ts), applied by
+// HubShell — and this page renders whatever location it is handed.
+//
+// This is not a style rule, it is the fix for a hard crash. `/profiles` used to
+// redirect to the Self profile's Info page, while reconcileInfoRoute redirected
+// `/profiles/<self>/info` back to `/profiles` whenever the scope was not
+// exactly one person. Switching to Everyone from any Info page put the two in a
+// redirect loop: React error #185 ("Maximum update depth exceeded") and a
+// white-screen "Something went wrong". Reproduced 2/2 in the 2026-08-05 QA pass.
 export default function ProfileInfoPage() {
   const [singleMatch, singleParams] = useRoute("/profiles/:id/info");
   const id = singleMatch ? ((singleParams as { id?: string } | null)?.id || "") : "";
   if (id) return <SingleProfileInfo id={id} />;
-  return <InfoSelfRedirect />;
+  return <EveryoneInfo />;
 }
 
-// When no single person is selected, send the Info tab to the Self profile.
-function InfoSelfRedirect() {
+// ── Everyone (or a multi-person selection) ───────────────────────────────────
+// The per-person summary the Info tab owes an aggregated scope: one card per
+// person in scope, each opening that person's full Info page, plus the shared
+// chat-saved facts (which are user-level, not per-profile).
+function EveryoneInfo() {
   const [, navigate] = useLocation();
-  // PERF Phase 2.3 (2026-07-16): this redirect only needs id+type to find the
-  // Self profile, but it fetched the FULL /api/profiles (select * incl. heavy
-  // JSONB — measured 6.4s in production) before navigating. Use the lite
-  // endpoint (same key shape the hub switcher + route dispatcher share), and
-  // when the bootstrap already seeded the full list, resolve with ZERO network.
+  const scope = useProfileScope();
+
+  // PERF Phase 2.3 (2026-07-16): the FULL /api/profiles is heavy (select * incl.
+  // JSONB — measured 6.4s in production), so we read the lite endpoint under the
+  // key the hub switcher and route dispatcher already share. When the bootstrap
+  // has seeded the full list we resolve with ZERO network AND get `fields`, so
+  // the cards can show a line of real detail instead of just a name.
   const fullProfilesCache = queryClient.getQueryData<any[]>(["/api/profiles"]);
   const { data: profiles, isLoading } = useQuery<any[]>({
     queryKey: ["/api/profiles", "lite"],
@@ -96,22 +112,106 @@ function InfoSelfRedirect() {
     initialData: fullProfilesCache as any[] | undefined,
     staleTime: 30_000,
   });
-  const self = (profiles || []).find((p: any) => p.type === "self");
-  useEffect(() => {
-    if (self?.id) navigate(`/profiles/${self.id}/info`, { replace: true });
-  }, [self?.id]);
 
-  if (isLoading || self?.id) {
+  useEffect(() => { document.title = "Everyone · Info — Portol"; }, []);
+
+  const everyone = (profiles || []).filter((p: any) => PERSON_TYPES.has(p?.type));
+  // A multi-person selection is still an aggregated scope — show exactly the
+  // people the rest of the hub is aggregating, not all of them.
+  const people = scope.mode === "selected" && scope.selectedIds.length > 0
+    ? everyone.filter((p: any) => scope.selectedIds.includes(p.id))
+    : everyone;
+
+  if (isLoading && everyone.length === 0) {
     return (
-      <div className="p-6 flex items-center justify-center h-full" data-testid="page-profile-info">
-        <Skeleton className="h-16 w-48" />
+      <div className="p-4 md:p-6 space-y-4" data-testid="page-profile-info">
+        <Skeleton className="h-11 w-48 rounded-full" />
+        <BubbleSkeletonGrid count={4} rows={1} height={96}
+          className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-3" />
       </div>
     );
   }
+
   return (
-    <div className="p-6 text-center" data-testid="page-profile-info">
-      <p className="text-sm text-muted-foreground">No profile to show yet.</p>
+    <div className="p-4 md:p-6 space-y-5 overflow-y-auto h-full pb-24" data-testid="page-profile-info">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-lg font-bold tracking-tight leading-tight truncate" data-testid="info-name">
+            {scope.mode === "selected" && scope.selectedIds.length > 0 ? "Selected people" : "Everyone"}
+          </h1>
+          <p className="text-xs text-muted-foreground">
+            {people.length} {people.length === 1 ? "person" : "people"} · tap anyone to open their info
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2" data-testid="info-people">
+        {people.map((p: any) => (
+          <PersonSummaryCard key={p.id} profile={p} onOpen={() => navigate(`/profiles/${p.id}/info`)} />
+        ))}
+        {people.length === 0 && (
+          <p className="col-span-full text-xs text-muted-foreground py-4 text-center">No people yet.</p>
+        )}
+      </div>
+
+      {/* Chat-saved facts are stored per USER, not per profile, so they belong
+          to the combined view as much as to Self's. */}
+      <MemoriesSection />
     </div>
+  );
+}
+
+const PERSON_TYPES = new Set(["self", "person", "pet"]);
+
+// One person's row in the combined view: who they are, and the first couple of
+// identity details we already hold, so the list is a summary rather than an
+// index of names. Falls back gracefully to just the name when the lite payload
+// (which carries no `fields`) is all we have.
+function PersonSummaryCard({ profile, onOpen }: { profile: any; onOpen: () => void }) {
+  const fields = profile.fields || {};
+  const chips: string[] = [];
+  const age = computeAge(readField(fields, "birthday"));
+  if (age) chips.push(age);
+  for (const d of infoFieldsForType(profile.type)) {
+    if (chips.length >= 3) break;
+    const v = readField(fields, d.key);
+    if (v === undefined || v === null || v === "") continue;
+    const text = stringifyField(v);
+    if (text) chips.push(text);
+  }
+  const tags: string[] = Array.isArray(profile.tags) ? profile.tags : [];
+
+  return (
+    <Card
+      className="p-3 flex items-center gap-3 cursor-pointer hover:border-primary/50 transition-colors"
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
+      data-testid={`info-person-${profile.id}`}
+    >
+      <span
+        className="medallion relative w-10 h-10 shrink-0 overflow-hidden"
+        style={{ ["--accent-hsl" as any]: INFO_TONE.fields }}
+      >
+        {profile.avatar
+          ? <img src={profile.avatar} alt="" className="w-full h-full object-cover rounded-full" />
+          : <span className="text-sm font-bold">{(profile.name || "?").charAt(0).toUpperCase()}</span>}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold truncate">{profile.name}</span>
+        <span className="block text-[11px] text-muted-foreground truncate capitalize">
+          {chips.length > 0 ? chips.join(" · ") : profile.type}
+        </span>
+        {tags.length > 0 && (
+          <span className="mt-1 flex flex-wrap gap-1">
+            {tags.slice(0, 3).map((t: string) => (
+              <Badge key={t} variant="secondary" className="text-[11px] px-1.5 py-0">{t}</Badge>
+            ))}
+          </span>
+        )}
+      </span>
+    </Card>
   );
 }
 

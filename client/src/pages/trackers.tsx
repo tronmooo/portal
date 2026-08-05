@@ -6081,7 +6081,9 @@ export default function TrackersPage() {
   }
 
   return (
-    <div className="px-2 py-2 md:p-4 space-y-2 overflow-y-auto h-full pb-24" data-testid="page-trackers">
+    // px-6 at desktop to line up with the hub tab row and the rest of the app
+    // (HubShell / PageContainer both use md:px-6).
+    <div className="px-2 py-2 md:px-6 md:py-4 space-y-2 overflow-y-auto h-full pb-24" data-testid="page-trackers">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           {/* Hub-embedded: the shell owns navigation — hide the back arrow. */}
