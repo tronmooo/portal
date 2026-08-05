@@ -67,7 +67,6 @@ const _finImport   = () => import("@/pages/finance");
 const _wellImport  = () => import("@/pages/wellness");
 const _habImport   = () => import("@/pages/habits");
 const _jourImport  = () => import("@/pages/journal");
-const _oblImport   = () => import("@/pages/obligations");
 const _taskImport  = () => import("@/pages/tasks");
 const _goalsImport = () => import("@/pages/goals");
 const _privImport  = () => import("@/pages/privacy");
@@ -92,7 +91,6 @@ const FinancePage      = lazy(_finImport);
 const WellnessPage     = lazy(_wellImport);
 const HabitsPage       = lazy(_habImport);
 const JournalPage      = lazy(_jourImport);
-const ObligationsPage  = lazy(_oblImport);
 const TasksPage        = lazy(_taskImport);
 const GoalsPage        = lazy(_goalsImport);
 const PrivacyPage      = lazy(_privImport);
@@ -116,7 +114,6 @@ const MAIN_TAB_IMPORTS = [
   _finImport,
   _habImport,
   _jourImport,
-  _oblImport,
   _taskImport,
 ];
 
@@ -307,9 +304,6 @@ function pullRefreshDomains(location: string): Domain[] | null {
     "/dashboard/journal": ["journal"],
     "/goals": ["goals"],
     "/dashboard/goals": ["goals"],
-    "/obligations": ["obligations"],
-    "/bills": ["obligations"],
-    "/dashboard/obligations": ["obligations"],
     "/wellness": ["trackers", "habits", "dashboard"],
     "/health": ["trackers", "habits", "dashboard"],
     "/dashboard/health": ["trackers", "habits", "dashboard"],
@@ -513,7 +507,6 @@ function RouteTitle() {
       "/dashboard/finance": "Finance — Portol",
       "/dashboard/habits": "Habits — Portol",
       "/dashboard/journal": "Journal — Portol",
-      "/dashboard/obligations": "Bills — Portol",
       "/dashboard/tasks": "Tasks — Portol",
       "/dashboard/documents": "Documents — Portol",
       "/dashboard/artifacts": "Artifacts — Portol",
@@ -530,8 +523,6 @@ function RouteTitle() {
       "/insights": "Insights — Portol",
       "/tasks": "Tasks — Portol",
       "/finance": "Finance — Portol",
-      "/obligations": "Bills — Portol",
-      "/bills": "Bills — Portol",
       "/journal": "Journal — Portol",
       "/habits": "Habits — Portol",
       "/privacy": "Privacy — Portol",
@@ -747,6 +738,16 @@ function RootRedirect() {
   return <PageLoader />;
 }
 
+// The standalone bills list page is gone (2026-08). Bills are managed in the
+// Bills pop-up on Money, and each bill's own record is its liability profile.
+// Old links (/bills, /obligations, /dashboard/obligations, AI confirmations,
+// bookmarks) land on Money with that pop-up already open instead of 404ing.
+function BillsRedirect() {
+  const [, navigate] = useLocation();
+  useEffect(() => { navigate("/finance?popup=bills", { replace: true }); }, []);
+  return <PageLoader />;
+}
+
 function AppRouter() {
   return (
     <SectionErrorBoundary name="app">
@@ -796,7 +797,6 @@ function AppRouter() {
         <Route path="/dashboard/finance" component={FinancePage} />
         <Route path="/dashboard/habits" component={HabitsPage} />
         <Route path="/dashboard/journal" component={JournalPage} />
-        <Route path="/dashboard/obligations" component={ObligationsPage} />
         <Route path="/dashboard/tasks" component={TasksPage} />
         {/* Top-level aliases so the AI assistant's confirmation phrases
             ("added to Tasks page", "saved to Finance page") and any external
@@ -806,10 +806,13 @@ function AppRouter() {
         <Route path="/goals" component={GoalsPage} />
         <Route path="/dashboard/goals" component={GoalsPage} />
         <Route path="/finance" component={FinancePage} />
-        <Route path="/obligations" component={ObligationsPage} />
         <Route path="/journal" component={JournalPage} />
         <Route path="/habits" component={HabitsPage} />
-        <Route path="/bills" component={ObligationsPage} />
+        {/* Retired bills list page — every one of these now opens the Bills
+            pop-up on Money. See <BillsRedirect />. */}
+        <Route path="/bills" component={BillsRedirect} />
+        <Route path="/obligations" component={BillsRedirect} />
+        <Route path="/dashboard/obligations" component={BillsRedirect} />
         {/* Wellness tab (Health→Wellness redesign): a health command center that
             reads the same tracker/habit/stats data as everything else. The deep
             tracker grid still lives under /trackers. /health + /dashboard/health

@@ -410,7 +410,7 @@ function findingsFromObligations(obligations: any[]): KeyFinding[] {
       direction: "stable",
       title: `${o.name || "Reminder"} due in ${days <= 0 ? "today" : `${days} day${days === 1 ? "" : "s"}`}`,
       detail: isMedication ? "Refill" : "Appointment",
-      href: "#/obligations",
+      href: "#/finance?popup=bills",
       importance: 80 - days,
       icon: isMedication ? "💊" : "🩺",
     });
@@ -427,7 +427,7 @@ function findingsFromObligations(obligations: any[]): KeyFinding[] {
         severity: "neutral",
         direction: "stable",
         title: `${subs.length} active subscriptions totaling $${fmtNum(total, 0)}/mo`,
-        href: "#/obligations",
+        href: "#/finance?popup=bills",
         importance: 45,
         icon: "🔁",
       });

@@ -275,6 +275,21 @@ export default function FinancePage() {
   const [financePopup, setFinancePopup] = useState<
     "networth" | "cashflow" | "budget" | "spend" | "income" | "bills" | "savings" | "overview" | null
   >(null);
+  // Deep link: /finance?popup=bills opens the Bills pop-up on arrival. Bills are
+  // managed in that pop-up (and on each liability's own profile) — there is no
+  // separate bills list page, so every "bills" link in the app lands here.
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const q = hash.includes("?") ? hash.split("?")[1] : "";
+    if (!q) return;
+    const want = new URLSearchParams(q).get("popup");
+    const known = ["networth", "cashflow", "budget", "spend", "income", "bills", "savings", "overview"];
+    if (want && known.includes(want)) {
+      setFinancePopup(want as typeof financePopup);
+      const cleaned = hash.split("?")[0];
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
+    }
+  }, []);
 
   // ── Cashflow entry state ─────────────────────────────────────────────────
   const [addCashflowOpen, setAddCashflowOpen] = useState(false);

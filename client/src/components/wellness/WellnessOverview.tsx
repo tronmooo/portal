@@ -467,7 +467,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
 
         {has.meds && (
         <SectionCard onOpen={open("meds")} testId="wellness-medications" title="Medications" icon={Pill} tone={T.pink}
-          badge={dueMeds > 0 ? `${dueMeds} due` : "all taken"} viewAllHref="/obligations">
+          badge={dueMeds > 0 ? `${dueMeds} due` : "all taken"} viewAllHref="/trackers">
           {medications.length === 0 ? <Empty text="No medications to track." /> : (
             <ul className="space-y-1.5">
               {medications.slice(0, 6).map((m) => (
@@ -535,7 +535,7 @@ export function WellnessOverview(props: WellnessOverviewProps) {
 
         {has.supps && (
         <SectionCard onOpen={open("supps")} testId="wellness-supplements" title="Supplements" icon={Leaf} tone={T.green}
-          badge={`${supplements.length} active`} viewAllHref="/obligations">
+          badge={`${supplements.length} active`} viewAllHref="/trackers">
           <ul className="space-y-1.5 text-sm">
             {supplements.slice(0, 5).map((s) => (
               <li key={s.id} className="flex items-center gap-2" data-testid={`wellness-supp-${s.id}`}>

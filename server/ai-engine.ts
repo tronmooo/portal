@@ -969,7 +969,7 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
         "\u2022 Create tasks: \"add a task to buy milk\" \u2192 [/dashboard/tasks](/dashboard/tasks)",
         "\u2022 Reminders & events: \"remind me to call the dentist Friday at 10am\", \"Standup Friday 3pm\" \u2192 [/calendar](/calendar)",
         "\u2022 Track health: \"weight 183\", \"bp 120/80\", \"slept 7.5 hours\" \u2192 [/trackers](/trackers)",
-        "\u2022 Add bills/subscriptions: \"$11 Netflix every month\" \u2192 [/dashboard/obligations](/dashboard/obligations)",
+        "\u2022 Add bills/subscriptions: \"$11 Netflix every month\" \u2192 [Money](/finance)",
         "\u2022 Manage people, pets, vehicles, assets \u2192 [/profiles](/profiles)",
         "\u2022 Open documents: \"open my drivers license\" \u2192 [/linked](/linked)",
         "\u2022 Journal entries: \"add a journal entry saying I had a great day\" \u2192 [/dashboard/journal](/dashboard/journal)",
@@ -5414,7 +5414,7 @@ When the user asks /help, "what can you do", "how do I use this", or similar, su
 - Creating tasks/reminders → /dashboard/tasks
 - Scheduling events → /calendar
 - Logging tracker entries (weight, BP, sleep, mood, workouts) → /trackers
-- Adding obligations/bills/subscriptions → /dashboard/obligations
+- Adding obligations/bills/subscriptions → /finance
 - Creating/updating profiles (people, pets, vehicles, assets) → /profiles
 - Journal entries → /journal
 - Uploading documents → /documents

@@ -860,6 +860,11 @@ export function extendedHorizonFor(kind: OccurrenceKind): number {
  * A profile-owned date always routes to that profile — that is the record the
  * user edits. Only when there is no profile do we fall back to the owning
  * system's own page.
+ *
+ * A bill is the payment side of a liability, so it routes to that liability's
+ * profile (passed in as `profileId` by seriesFromObligations). The bills list
+ * page was deleted 2026-08 — a bill with no liability behind it falls back to
+ * the Bills pop-up on Money, never to a list.
  */
 export function sourceHref(
   system: SourceSystem,
@@ -878,7 +883,7 @@ export function sourceHref(
   switch (system) {
     case "profile": return recordId ? `#/profiles/${recordId}` : "#/profiles";
     case "liability": return recordId ? `#/profiles/${recordId}` : "#/liabilities";
-    case "obligation": return recordId ? `#/obligations?focus=${recordId}` : "#/obligations";
+    case "obligation": return "#/finance?popup=bills";
     case "task": return recordId ? `#/tasks?focus=${recordId}` : "#/tasks";
     case "document": return recordId ? `#/documents/${recordId}` : "#/documents";
     case "goal": return recordId ? `#/goals?focus=${recordId}` : "#/goals";

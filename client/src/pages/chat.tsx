@@ -427,7 +427,7 @@ function actionRoute(type: string, data: any): string | null {
     case "create_task": case "complete_task": return "/tasks";
     case "create_event": case "complete_event": case "create_reminder": return "/calendar";
     case "log_expense": case "log_income": case "log_paycheck": case "set_budget": return "/finance";
-    case "create_obligation": case "pay_obligation": case "add_liability_payment": return "/obligations";
+    case "create_obligation": case "pay_obligation": case "add_liability_payment": return "/finance?popup=bills";
     case "create_habit": case "checkin_habit": case "uncomplete_habit": case "delete_habit": return "/habits";
     case "journal_entry": return "/journal";
     case "create_goal": return "/goals";
@@ -2812,7 +2812,7 @@ const MessageRow = memo(function MessageRow({
                 : result.trackerId ? `/trackers?tracker=${result.trackerId}`
                 : ep === "tasks" ? "/tasks"
                 : ep === "expenses" ? "/finance"
-                : ep === "obligations" ? "/obligations"
+                : ep === "obligations" ? "/finance?popup=bills"
                 : ep === "events" ? "/calendar"
                 : null;
 

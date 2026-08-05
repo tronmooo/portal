@@ -34,7 +34,6 @@ const CANONICAL_FILE = "shared/obligation-windows.ts";
  *   :415 (4.345), :416 (30.44), :2970 (30.44 month-length), :3981 (4.33),
  *   :3982 (2.17), :4514-:4516 (52/12, 26/12, 365/12), :9811-:9813 (52/12,
  *   26/12, 365/12), :10507 (4.33), :10523 (30.44 month-length)
- * client/src/components/ObligationsManager.tsx (2)  :1153 (4.33), :1154 (2.17)
  * client/src/components/dashboard/HeroKPIPopups.tsx (1)  :460 (4.333)
  * client/src/pages/trackers.tsx (2)  :5035, :5075 (inline 52/12 + 26/12 chains)
  * server/ai-engine.ts (1)  :9120 (4.33)
@@ -46,7 +45,6 @@ const CANONICAL_FILE = "shared/obligation-windows.ts";
  */
 const VIOLATION_BUDGETS: Record<string, number> = {
   "client/src/pages/profile-detail.tsx": 13,
-  "client/src/components/ObligationsManager.tsx": 2,
   "client/src/components/dashboard/HeroKPIPopups.tsx": 1,
   "client/src/pages/trackers.tsx": 2,
   "server/ai-engine.ts": 1,

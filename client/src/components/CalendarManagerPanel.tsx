@@ -935,15 +935,18 @@ function ManageList({ filter, onClose }: { filter: string; onClose: () => void }
           else if (it.kind === "event") deleteEvent.mutate(it.id);
           else deleteTask.mutate(it.id);
         };
-        // BUG-REC-003: Edit control on every Manage-tab row. Obligations and
-        // tasks open the dedicated edit page; events open the inline edit
-        // dialog via a window event the calendar listens to.
+        // BUG-REC-003: Edit control on every Manage-tab row. Tasks open the
+        // dedicated edit page; events open the inline edit dialog via a window
+        // event the calendar listens to. A bill is edited on its liability's
+        // own profile (the bills list page was deleted 2026-08) — an unlinked
+        // bill falls back to the Bills pop-up on Money.
         const onEdit = () => {
           if (it.kind === "event") {
             window.dispatchEvent(new CustomEvent("portol:edit-event", { detail: { id: it.id } }));
             onClose();
           } else if (it.kind === "obligation") {
-            setLocation(`/dashboard/obligations?edit=${it.id}`);
+            const liabilityId = (it.raw as Obligation).linkedLiabilityId;
+            setLocation(liabilityId ? `/profiles/${liabilityId}` : "/finance?popup=bills");
             onClose();
           } else {
             setLocation(`/dashboard/tasks?edit=${it.id}`);

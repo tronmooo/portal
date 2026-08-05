@@ -1352,9 +1352,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     // Obligations and tasks don't have an inline edit dialog inside the calendar
     // (the full edit form lives on the dedicated page). Navigate there so the
     // user can edit instead of leaving them stranded with only a Delete button.
+    // A bill IS a liability, so editing it means opening that liability's own
+    // profile — never a bills list (that page was deleted 2026-08). Only a bill
+    // with no liability behind it falls back to the Bills pop-up on Money.
     if (detailItem.type === "obligation") {
+      const liabilityId = detailItem.meta?.liabilityId;
       setDetailItem(null);
-      setLocation("/dashboard/obligations");
+      setLocation(liabilityId ? `/profiles/${liabilityId}` : "/finance?popup=bills");
       return;
     }
     if (detailItem.type === "task") {

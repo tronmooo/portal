@@ -472,7 +472,11 @@ export function buildExecutiveSections(
       title: b.name || "Bill",
       reason: du < 0 ? `${money(amt)} overdue` : du === 0 ? `${money(amt)} due today` : `${money(amt)} due ${dayLabel(du)}`,
       tier: du <= 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
-      daysUntil: du, amount: amt, score: 0, href: "/dashboard/obligations",
+      // Bills-as-liabilities: the record behind a bill is its liability
+      // profile, so that is where the row opens. The bills list page was
+      // deleted 2026-08; an unlinked bill opens the Bills pop-up on Money.
+      daysUntil: du, amount: amt, score: 0,
+      href: b.linkedLiabilityId ? `/profiles/${b.linkedLiabilityId}` : "/finance?popup=bills",
       action: b.autopay ? { kind: "open", label: "Open" } : { kind: "pay", label: "Pay" },
     });
   }

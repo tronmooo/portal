@@ -1398,7 +1398,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                 <Button size="sm" className="w-full mt-1" onClick={() => setQuickAdd("bill")} data-testid="btn-bills-add-bill">
                   <Plus className="h-3.5 w-3.5 mr-1.5" /> Add bill
                 </Button>
-                <ViewPageLink href="/bills" label="View all bills" />
+                <ViewPageLink href="/dashboard/finance" label="View Finance Page" />
               </>
             );
           })()}
@@ -2772,7 +2772,7 @@ function ObligationsSection({ data }: { data: any[] }) {
           <BillGroup title="Due This Week" bills={thisWeekBills} color="#f59e0b" />
           <BillGroup title="Due This Month" bills={thisMonthBills} color="#6b7280" />
         </div>
-        <ViewPageLink href="/bills" label="View all bills" />
+        <ViewPageLink href="/finance?popup=bills" label="View all bills" />
       </CollapsibleSection>
 
       {/* Obligation Detail Popup */}

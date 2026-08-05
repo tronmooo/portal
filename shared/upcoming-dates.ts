@@ -700,7 +700,12 @@ function extractObligations(obligations: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: o.frequency && o.frequency !== "once",
-      href: `#/obligations`,
+      // A bill belongs to the liability it pays off — open that profile. Only
+      // an unlinked bill falls back to the Bills pop-up on Money (the bills
+      // list page was deleted 2026-08).
+      href: o.linkedLiabilityId
+        ? `#/profiles/${o.linkedLiabilityId}`
+        : `#/finance?popup=bills`,
       relatedProfileId: (o.linkedProfiles || [])[0],
       needsActionSoon: !o.autopay && daysUntil <= (o.leadTimeDays || 7),
       icon: CATEGORY_ICONS[cat],

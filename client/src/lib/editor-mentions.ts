@@ -126,7 +126,9 @@ export function searchRowToEntity(row: any): MentionEntity | null {
         type: "obligation",
         label: row.name || "Untitled obligation",
         hint: row.category ? `Bill · ${row.category}` : "Bill",
-        href: `#/dashboard/obligations`,
+        // A bill mention opens the liability it pays; unlinked bills open the
+        // Bills pop-up on Money (the bills list page was deleted 2026-08).
+        href: row.linkedLiabilityId ? `#/profiles/${row.linkedLiabilityId}` : `#/finance?popup=bills`,
       };
     case "journal":
       return {

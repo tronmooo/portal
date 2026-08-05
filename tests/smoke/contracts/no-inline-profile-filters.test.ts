@@ -45,8 +45,6 @@ const CANONICAL_FILES = new Set<string>([
  * BUDGETS MAY ONLY GO DOWN. Every occurrence is documented below so a future
  * migration can find them:
  *
- * client/src/components/ObligationsManager.tsx (2)
- *   :581, :1040  defense-in-depth client re-filter of obligation occurrences
  * client/src/pages/habits.tsx (1)
  *   :414  client-side habit filter (NB: divergent semantics! orphans show for
  *         EVERYONE here, not just self — `lp.length === 0 || ...`)
@@ -70,7 +68,6 @@ const CANONICAL_FILES = new Set<string>([
  *   :2570  calendar matchesProfile closure
  */
 const VIOLATION_BUDGETS: Record<string, number> = {
-  "client/src/components/ObligationsManager.tsx": 2,
   "client/src/pages/habits.tsx": 1,
   "client/src/pages/trackers.tsx": 3,
   "server/ai-engine.ts": 5,

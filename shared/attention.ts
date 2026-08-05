@@ -269,7 +269,10 @@ export function computeAttention(
       daysUntil: du,
       amount: amt,
       score: urgencyScore(du) + impact,
-      href: "/dashboard/obligations",
+      // A bill IS a liability — open its profile, which is where payments,
+      // history and the schedule live. The bills list page was deleted
+      // 2026-08; an unlinked bill opens the Bills pop-up on Money.
+      href: b.linkedLiabilityId ? `/profiles/${b.linkedLiabilityId}` : "/finance?popup=bills",
       action: b.autopay ? { kind: "open", label: "Open" } : { kind: "pay", label: "Pay" },
     });
   }
@@ -521,7 +524,7 @@ export function computeAttention(
           : n.entityType === "profile" && n.entityId ? `/profiles/${n.entityId}`
           : n.entityType === "task" ? "/dashboard/tasks"
           : n.entityType === "habit" ? "/dashboard/habits"
-          : n.entityType === "obligation" ? "/dashboard/obligations"
+          : n.entityType === "obligation" ? "/finance?popup=bills"
           : "/calendar",
         action: { kind: "dismiss", label: "Dismiss" },
       });

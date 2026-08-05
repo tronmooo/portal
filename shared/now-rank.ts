@@ -155,7 +155,10 @@ export function computeNowItems(input: NowInputs): NowItem[] {
       title: b.name || "Bill",
       detail: [amt ? `$${Math.round(amt).toLocaleString()}` : null, dl].filter(Boolean).join(" · "),
       daysUntil: du, amount: amt,
-      action: b.autopay ? "open" : "pay", href: "/dashboard/obligations",
+      // Bills open their liability profile — the record that owns the payment.
+      // (Bills list page deleted 2026-08; unlinked bills open Money's pop-up.)
+      action: b.autopay ? "open" : "pay",
+      href: b.linkedLiabilityId ? `/profiles/${b.linkedLiabilityId}` : "/finance?popup=bills",
       accent: ACCENT.bill, score: urgencyScore(du) + impact,
     });
   }

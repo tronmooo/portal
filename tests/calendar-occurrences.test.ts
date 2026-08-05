@@ -386,7 +386,9 @@ describe("sourceHref — every item knows where it came from", () => {
   });
 
   it("falls back to the owning system's record when there is no profile", () => {
-    expect(sourceHref("obligation", "ob-1")).toBe("#/obligations?focus=ob-1");
+    // No bills list page exists (deleted 2026-08) — a bill with no liability
+    // behind it opens the Bills pop-up on Money instead of a list.
+    expect(sourceHref("obligation", "ob-1")).toBe("#/finance?popup=bills");
     expect(sourceHref("task", "t-1")).toBe("#/tasks?focus=t-1");
     expect(sourceHref("event", "e-1")).toBe("#/calendar?event=e-1");
     expect(sourceHref("document", "d-1")).toBe("#/documents/d-1");
