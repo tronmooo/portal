@@ -8,6 +8,7 @@
 
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { flattenProfile } from "@/lib/flattenProfile";
+import { DeleteDocumentDialog } from "@/components/DeleteDocumentDialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import {
@@ -2824,13 +2825,22 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
       toast({ title: "Upload failed", description: formatApiError(err), variant: "destructive" }),
   });
 
+  // This delete used to fire straight from the trash icon — no confirmation at
+  // all, on a permanent action, while the other three document-delete surfaces
+  // all asked first. It now goes through the shared dialog like the rest, which
+  // also offers to remove the profile fields the document saved.
+  const [deletingDoc, setDeletingDoc] = useState<{ id: string; name?: string } | null>(null);
   const deleteMutation = useMutation({
-    mutationFn: async (docId: string) => {
-      await apiRequest("DELETE", `/api/documents/${docId}`);
+    mutationFn: async ({ docId, purgeFields }: { docId: string; purgeFields: boolean }) => {
+      await apiRequest("DELETE", `/api/documents/${docId}?purgeFields=${purgeFields ? 1 : 0}`);
     },
-    onSuccess: () => {
-      toast({ title: "Document deleted" });
+    onSuccess: (_r, { purgeFields }) => {
+      toast({
+        title: "Document deleted",
+        description: purgeFields ? "The fields it saved were removed too." : undefined,
+      });
       invalidateDomains("documents", "profiles");
+      setDeletingDoc(null);
     },
     onError: (err: Error) =>
       toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
@@ -2917,7 +2927,7 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
                 <Button
                   size="icon"
                   variant="ghost"
-                  onClick={() => deleteMutation.mutate(doc.id)}
+                  onClick={() => setDeletingDoc({ id: doc.id, name: doc.name })}
                   data-testid={`liability-doc-delete-${doc.id}`}
                 >
                   <Trash2 className="w-4 h-4 text-rose-500" />
@@ -2927,6 +2937,12 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
           </div>
         )}
       </CardContent>
+      <DeleteDocumentDialog
+        document={deletingDoc}
+        onOpenChange={(o) => { if (!o) setDeletingDoc(null); }}
+        isDeleting={deleteMutation.isPending}
+        onConfirm={(docId, purgeFields) => deleteMutation.mutate({ docId, purgeFields })}
+      />
     </Card>
   );
 }

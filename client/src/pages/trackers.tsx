@@ -152,6 +152,7 @@ import { Link, useLocation } from "wouter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile, Document, Goal } from "@shared/schema";
 import { ShareButton, DocumentViewerDialog } from "@/components/DocumentViewer";
+import { DeleteDocumentDialog } from "@/components/DeleteDocumentDialog";
 import { prefetchDocument } from "@/lib/document-preview";
 import {
   LineChart,
@@ -5849,17 +5850,22 @@ export default function TrackersPage() {
   });
 
   const docDeleteMutation = useMutation({
-    mutationFn: async (docId: string) => {
-      await apiRequest("DELETE", `/api/documents/${docId}`);
+    // `purgeFields` carries the user's answer to "remove the data it saved too?"
+    // from the shared confirmation dialog.
+    mutationFn: async ({ docId, purgeFields }: { docId: string; purgeFields: boolean }) => {
+      await apiRequest("DELETE", `/api/documents/${docId}?purgeFields=${purgeFields ? 1 : 0}`);
     },
-    onMutate: async (docId: string) => {
+    onMutate: async ({ docId }: { docId: string; purgeFields: boolean }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/documents"] });
       const prev = queryClient.getQueryData<any[]>(["/api/documents"]);
       queryClient.setQueryData<any[]>(["/api/documents"], (old) => old?.filter((d: any) => d.id !== docId));
       return { prev };
     },
-    onSuccess: () => {
-      toast({ title: "Document deleted" });
+    onSuccess: (_r, { purgeFields }) => {
+      toast({
+        title: "Document deleted",
+        description: purgeFields ? "The fields it saved were removed too." : undefined,
+      });
       invalidateDomains("documents", "trackers", "profiles");
     },
     onError: (err: Error, _v: any, ctx: any) => {
@@ -7776,30 +7782,21 @@ export default function TrackersPage() {
       />
 
       {/* Document delete confirmation */}
-      {docDeleteConfirmId && (() => {
-        const docName = allDocuments.find(d => d.id === docDeleteConfirmId)?.name || "this document";
-        return (
-          <AlertDialog open onOpenChange={(open) => { if (!open) setDocDeleteConfirmId(null); }}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete document?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  <span className="font-medium text-foreground">"{docName}"</span> will be permanently deleted and cannot be recovered.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel onClick={() => setDocDeleteConfirmId(null)}>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
-                  onClick={() => { docDeleteMutation.mutate(docDeleteConfirmId); setDocDeleteConfirmId(null); setExpandedDocId(null); }}
-                >
-                  Delete
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        );
-      })()}
+      {/* The old prompt only warned the file was unrecoverable — it never
+          mentioned the profile fields the document had written, which survived
+          it. The shared dialog names them and offers to remove them too. */}
+      <DeleteDocumentDialog
+        document={docDeleteConfirmId
+          ? { id: docDeleteConfirmId, name: allDocuments.find(d => d.id === docDeleteConfirmId)?.name }
+          : null}
+        onOpenChange={(open) => { if (!open) setDocDeleteConfirmId(null); }}
+        isDeleting={docDeleteMutation.isPending}
+        onConfirm={(docId, purgeFields) => {
+          docDeleteMutation.mutate({ docId, purgeFields });
+          setDocDeleteConfirmId(null);
+          setExpandedDocId(null);
+        }}
+      />
 
       {/* Send Dialog removed — now uses native share sheet (Web Share API) */}
 

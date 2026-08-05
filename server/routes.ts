@@ -32,6 +32,9 @@ import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from "@shared/profile-field-identity";
+import {
+  documentDerivedFields, derivedFieldKeys, type DocumentDerivedField,
+} from "@shared/document-field-provenance";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -5627,38 +5630,93 @@ Rules:
     bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d2}:`); bustCache(`notifications:${uid_d2}`);
     res.json(updated);
   }));
+  // ---- What would deleting this document take with it? ----
+  // Feeds the delete confirmation, which has to say out loud what the user is
+  // agreeing to. The SAME function computes the purge below, so the list shown
+  // and the fields removed cannot drift apart — the preview IS the consent.
+  app.get("/api/documents/:id/derived-fields", asyncHandler(async (req, res) => {
+    const doc = await storage.getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ error: "Not found" });
+    const allProfiles = await storage.getProfiles();
+    const profiles: Array<{ id: string; name: string; fields: DocumentDerivedField[] }> = [];
+    for (const p of allProfiles as any[]) {
+      const fields = documentDerivedFields(p.fields, doc.id, (doc as any).extractedData);
+      if (fields.length > 0) profiles.push({ id: p.id, name: p.name, fields });
+    }
+    const total = profiles.reduce((n, p) => n + p.fields.length, 0);
+    const editedCount = profiles.reduce((n, p) => n + p.fields.filter((f) => f.edited).length, 0);
+    res.json({ documentId: doc.id, documentName: doc.name, profiles, total, editedCount });
+  }));
+
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted.
     const docIdToDelete = req.params.id;
-    // CASCADE: remove the profile fields this document's extraction saved, so
-    // a deleted document doesn't leave orphaned data behind on the asset.
-    // Provenance (fields._docFields[docId] = {key: savedValue}) is written by
-    // confirm-extraction; only fields whose CURRENT value still matches what
-    // the document saved are removed — anything the user edited since stays.
+    // ── What happens to the data the document saved ──────────────────────────
+    //
+    // User, 2026-08-05: "When you delete a document, you should delete all the
+    // data that comes with it and it should ask before you delete a document…
+    // there should be an option [that says] do you want to remove all the data
+    // in the info?"
+    //
+    // So this is the user's call, not a silent policy, and `purgeFields` carries
+    // their answer from the confirmation dialog:
+    //
+    //   purgeFields=1  → remove EVERY field the document contributed, matched by
+    //                    identity across nested groups. This is what the dialog
+    //                    listed, so it is what has to go — including a field the
+    //                    user has since edited, which the dialog calls out
+    //                    separately before they agree to it.
+    //   purgeFields=0  → keep the data, drop only the provenance record.
+    //   (absent)       → the pre-existing conservative cascade, kept so an API
+    //                    caller that predates this flag behaves as it always
+    //                    did: provenance-recorded keys whose CURRENT value still
+    //                    matches what the document saved.
+    //
+    // The old behavior was the third case for everyone, and it under-deleted
+    // twice over — it never touched a field written outside confirm-extraction,
+    // and it matched keys by exact string, so a licence saved as `licenseNumber`
+    // left `identity.license` sitting on the profile.
+    const purgeRaw = (req.query.purgeFields ?? (req.body as any)?.purgeFields);
+    const purgeChoice: "purge" | "keep" | "legacy" =
+      purgeRaw === undefined || purgeRaw === null || purgeRaw === ""
+        ? "legacy"
+        : (purgeRaw === "1" || purgeRaw === "true" || purgeRaw === true) ? "purge" : "keep";
+    const docForCascade = await storage.getDocument(docIdToDelete);
     try {
       const profilesForCascade = await storage.getProfiles();
       for (const p of profilesForCascade as any[]) {
         const sources = p.fields?._docFields;
         const recorded = (sources && typeof sources === "object") ? sources[docIdToDelete] : undefined;
-        if (!recorded || typeof recorded !== "object") continue;
-        const nextFields: Record<string, any> = { ...p.fields };
-        const removedKeys: string[] = [];
-        for (const [k, savedVal] of Object.entries(recorded)) {
-          if (k in nextFields && looselyEqual(nextFields[k], savedVal)) {
-            delete nextFields[k];
-            removedKeys.push(k);
-          }
+
+        // Which keys to remove, per the user's choice.
+        let removedKeys: string[] = [];
+        if (purgeChoice === "purge") {
+          removedKeys = derivedFieldKeys(
+            documentDerivedFields(p.fields, docIdToDelete, (docForCascade as any)?.extractedData));
+        } else if (purgeChoice === "legacy" && recorded && typeof recorded === "object") {
+          removedKeys = Object.entries(recorded)
+            .filter(([k, savedVal]) => k in (p.fields || {}) && looselyEqual(p.fields[k], savedVal))
+            .map(([k]) => k);
         }
-        const nextSources: Record<string, any> = { ...sources };
-        delete nextSources[docIdToDelete];
-        // Null markers = deletion intents for the storage merge layer.
-        const patch: Record<string, any> = { ...nextFields };
-        for (const k of removedKeys) patch[k] = null;
-        if (Object.keys(nextSources).length > 0) patch._docFields = nextSources;
-        else { delete patch._docFields; patch._docFields = null; }
-        await storage.updateProfile(p.id, { fields: patch } as any);
+        // Nothing to remove AND no provenance to tidy up — skip the write.
+        if (removedKeys.length === 0 && !recorded) continue;
+
+        // Removal goes through the shared identity resolver, so a key the
+        // document saved at the top level also clears its nested twin. Passing
+        // `fields` alone could never do that: the storage layer MERGES an
+        // incoming fields object, so an omitted key simply stays.
+        const patch: Record<string, any> = {};
+        if (recorded) {
+          const nextSources: Record<string, any> = { ...sources };
+          delete nextSources[docIdToDelete];
+          patch._docFields = Object.keys(nextSources).length > 0 ? nextSources : null;
+        }
+        await storage.updateProfile(p.id, {
+          fields: patch,
+          fieldsToDelete: removedKeys,
+        } as any);
         if (removedKeys.length > 0) {
-          log.info(`[doc-delete-cascade] ${docIdToDelete} → removed ${removedKeys.length} field(s) from ${p.name}: ${removedKeys.join(", ")}`);
+          log.info(`[doc-delete-cascade] ${docIdToDelete} (${purgeChoice}) → removed ${removedKeys.length} field(s) from ${p.name}: ${removedKeys.join(", ")}`);
         }
       }
     } catch (cascadeErr: any) {

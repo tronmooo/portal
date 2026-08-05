@@ -281,6 +281,7 @@ import { getUserToday, toLocalDateStr } from "@shared/timezone";
 import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
+import { DeleteDocumentDialog } from "@/components/DeleteDocumentDialog";
 import { prefetchDocument } from "@/lib/document-preview";
 import { Progress } from "@/components/ui/progress";
 import EditableTitle from "@/components/EditableTitle";
@@ -4079,7 +4080,9 @@ function DocumentsTab({
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
-  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  // The whole document, not just its id — the shared confirmation names the
+  // file it is about to delete.
+  const [deletingDoc, setDeletingDoc] = useState<{ id: string; name?: string } | null>(null);
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
   const [docSearch, setDocSearch] = useState("");
   const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
@@ -4214,10 +4217,10 @@ function DocumentsTab({
   // BUG-20260528-mutation-onmutate-rollback: setQueryData moved to onMutate
   // with snapshot/rollback. See ARCHITECTURE.md §5.3.
   const deleteMutation = useMutation({
-    mutationFn: async (docId: string) => {
-      await apiRequest("DELETE", `/api/documents/${docId}`);
+    mutationFn: async ({ docId, purgeFields }: { docId: string; purgeFields: boolean }) => {
+      await apiRequest("DELETE", `/api/documents/${docId}?purgeFields=${purgeFields ? 1 : 0}`);
     },
-    onMutate: async (docId: string) => {
+    onMutate: async ({ docId }: { docId: string; purgeFields: boolean }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/documents"] });
       await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       const prevDocs = queryClient.getQueryData<any[]>(["/api/documents"]);
@@ -4229,13 +4232,19 @@ function DocumentsTab({
       });
       return { prevDocs, prevDetail };
     },
-    onSuccess: () => {
-      invalidateDomains("documents");
-      toast({ title: "Document deleted" });
-      setDeletingDocId(null);
+    onSuccess: (_r, { purgeFields }) => {
+      // A purge rewrote profile fields, so "profiles" has to go stale too — the
+      // documents domain alone would leave the removed fields on screen.
+      invalidateDomains("documents", "profiles");
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      toast({
+        title: "Document deleted",
+        description: purgeFields ? "The fields it saved were removed too." : undefined,
+      });
+      setDeletingDoc(null);
       onUploaded();
     },
-    onError: (err: Error, _docId, ctx: any) => {
+    onError: (err: Error, _v, ctx: any) => {
       if (ctx?.prevDocs !== undefined) queryClient.setQueryData(["/api/documents"], ctx.prevDocs);
       if (ctx?.prevDetail !== undefined) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
       toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
@@ -4484,7 +4493,7 @@ function DocumentsTab({
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 text-destructive hover:text-destructive"
-                        onClick={() => setDeletingDocId(doc.id)}
+                        onClick={() => setDeletingDoc({ id: doc.id, name: doc.name })}
                         data-testid={`button-delete-doc-${doc.id}`}
                         aria-label={`Delete ${doc.name}`}
                       >
@@ -4561,24 +4570,15 @@ function DocumentsTab({
         />
       )}
 
-      <AlertDialog open={!!deletingDocId} onOpenChange={() => setDeletingDocId(null)}>
-        <AlertDialogContent data-testid="dialog-confirm-delete-document">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete document?</AlertDialogTitle>
-            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="button-cancel-delete-document">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deletingDocId && deleteMutation.mutate(deletingDocId)}
-              disabled={deleteMutation.isPending}
-              data-testid="button-confirm-delete-document"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* "Delete document? This action cannot be undone." said nothing about the
+          profile fields the document had written, which stayed behind. The
+          shared dialog names them and offers to remove them too. */}
+      <DeleteDocumentDialog
+        document={deletingDoc}
+        onOpenChange={(o) => { if (!o) setDeletingDoc(null); }}
+        isDeleting={deleteMutation.isPending}
+        onConfirm={(docId, purgeFields) => deleteMutation.mutate({ docId, purgeFields })}
+      />
     </>
   );
 }

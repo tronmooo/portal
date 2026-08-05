@@ -24,6 +24,8 @@ import express from "express";
 import { createServer, type Server } from "http";
 import { AddressInfo } from "net";
 
+import { deleteProfileFields } from "../shared/profile-field-identity";
+
 const { stubState, stubStorage, aiTasks } = vi.hoisted(() => {
   const state = {
     profiles: new Map<string, any>(),
@@ -40,14 +42,21 @@ const { stubState, stubStorage, aiTasks } = vi.hoisted(() => {
     async getProfilesLite() { return [...state.profiles.values()]; },
     async getAssetPartyLinks() { return []; },
     // Mirrors the Supabase merge semantics (mergeAndApplyDeletes): incoming
-    // null/undefined is a deletion intent; other keys overwrite.
+    // null/undefined is a deletion intent; other keys overwrite. Then the
+    // explicit `fieldsToDelete` signal is applied through the SAME shared
+    // resolver production uses, so a key removed here also loses its nested
+    // twins — a fake that ignored `fieldsToDelete` (as this one used to) makes a
+    // route look broken when only the fake is.
     async updateProfile(id: string, patch: any) {
       const cur = state.profiles.get(id);
       if (!cur) return undefined;
-      const fields: Record<string, any> = { ...(cur.fields || {}) };
+      let fields: Record<string, any> = { ...(cur.fields || {}) };
       for (const [k, v] of Object.entries(patch.fields || {})) {
         if (v === null || v === undefined) delete fields[k];
         else fields[k] = v;
+      }
+      if (Array.isArray(patch.fieldsToDelete) && patch.fieldsToDelete.length > 0) {
+        fields = deleteProfileFields(fields, patch.fieldsToDelete).fields;
       }
       const updated = { ...cur, ...patch, fields };
       state.profiles.set(id, updated);
@@ -262,6 +271,89 @@ describe("POST /api/chat/confirm-extraction", () => {
     // …unrelated fields are untouched, and the provenance entry is cleared.
     expect(after.make).toBe("Honda");
     expect(after._docFields ?? {}).not.toHaveProperty("doc-receipt");
+  });
+
+  // ── The user's answer to "remove the data too?" ──────────────────────────────
+  //
+  // User, 2026-08-05: "When you delete a document, you should delete all the data
+  // that comes with it… there should be an option when you delete the document it
+  // should say are you sure? Do you want to remove all the data in the info?"
+  //
+  // The confirmation dialog previews the fields, then sends the answer as
+  // ?purgeFields=1|0. These pin that the answer is actually honored — a checkbox
+  // the server ignores is worse than no checkbox, because the user believes it.
+  describe("the delete honors what the user chose in the confirmation", () => {
+    async function saveThreeFields() {
+      await fetch(`${base}/api/chat/confirm-extraction`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          extractionId: "doc-receipt",
+          targetProfileId: "profile-crv",
+          confirmedFields: [
+            { key: "currentMileage", value: 69063 },
+            { key: "serviceDate", value: "2026-07-22" },
+            { key: "oilType", value: "Kendall 0W20" },
+          ],
+          createCalendarEvents: [],
+          trackerEntries: [],
+        }),
+      });
+    }
+
+    it("previews the fields the document put on the profile", async () => {
+      await saveThreeFields();
+      const preview = await fetch(`${base}/api/documents/doc-receipt/derived-fields`).then((r) => r.json());
+      expect(preview.documentName).toBe("Oil Change Service Receipt");
+      expect(preview.total).toBeGreaterThan(0);
+      const listed = preview.profiles.flatMap((p: any) => p.fields.map((f: any) => f.path));
+      expect(listed).toContain("mileage");
+      expect(listed).toContain("serviceDate");
+      expect(listed).toContain("oilType");
+      // Never anything the receipt had nothing to do with.
+      expect(listed).not.toContain("make");
+      expect(listed).not.toContain("vin");
+    });
+
+    it("purgeFields=1 removes everything the preview listed, edited values included", async () => {
+      await saveThreeFields();
+      // The user hand-edited one of them — the dialog warns, and the purge still
+      // takes it, because that is what was previewed and agreed to.
+      stubState.profiles.get("profile-crv").fields.oilType = "Mobil 1 5W30 (user corrected)";
+
+      const preview = await fetch(`${base}/api/documents/doc-receipt/derived-fields`).then((r) => r.json());
+      expect(preview.editedCount).toBeGreaterThan(0);
+      const listed: string[] = preview.profiles.flatMap((p: any) => p.fields.map((f: any) => f.path));
+
+      const res = await fetch(`${base}/api/documents/doc-receipt?purgeFields=1`, { method: "DELETE" });
+      expect(res.status).toBe(200);
+
+      const after = stubState.profiles.get("profile-crv").fields;
+      // EXACTLY what was listed is gone — the preview is the consent.
+      for (const p of listed) {
+        const [head, leaf] = p.split(".");
+        if (leaf) expect(after[head]?.[leaf]).toBeUndefined();
+        else expect(after).not.toHaveProperty(head);
+      }
+      expect(after).not.toHaveProperty("oilType");
+      // Nothing else touched.
+      expect(after.make).toBe("Honda");
+      expect(after.vin).toBe("7FARW2H70ME032834");
+      expect(after.vehicles.licensePlate).toBe("8YPJ480");
+    });
+
+    it("purgeFields=0 keeps the data and deletes only the file", async () => {
+      await saveThreeFields();
+      const res = await fetch(`${base}/api/documents/doc-receipt?purgeFields=0`, { method: "DELETE" });
+      expect(res.status).toBe(200);
+
+      const after = stubState.profiles.get("profile-crv").fields;
+      expect(after.mileage).toBe(69063);
+      expect(after.serviceDate).toBe("2026-07-22");
+      expect(after.oilType).toBe("Kendall 0W20");
+      // The provenance record goes regardless — the document it pointed at is gone.
+      expect(after._docFields ?? {}).not.toHaveProperty("doc-receipt");
+    });
   });
 
   it("links a confirm-created expense to the ASSET only — the owner sees it by derivation, counted once", async () => {

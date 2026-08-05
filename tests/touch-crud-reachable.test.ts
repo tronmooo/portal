@@ -151,7 +151,70 @@ describe("the Info tab can edit and delete every field it shows", () => {
 
   it("lets the Info tab delete its documents", () => {
     // The documents card was the one section on the page with no delete at all.
-    expect(SRC).toMatch(/apiRequest\("DELETE", `\/api\/documents\/\$\{docId\}`\)/);
+    expect(SRC).toMatch(/apiRequest\("DELETE", `\/api\/documents\/\$\{docId\}\?purgeFields=/);
     expect(SRC).toContain("info-doc-remove-");
+  });
+});
+
+// ── Deleting a document asks first, and offers to take its data with it ───────
+//
+// User, 2026-08-05: "When you delete a document, you should delete all the data
+// that comes with it and it should ask before you delete a document. If there is
+// data I've saved with the document there should be an option when you delete the
+// document it should say are you sure? Do you want to remove all the data in the
+// info?"
+//
+// Four screens delete documents. They had four different answers to "does this
+// ask first?" — the liability card didn't ask at all — and none of them mentioned
+// the profile fields the document had written. One shared dialog now, so the
+// question and the options can't differ by screen.
+describe("every document delete goes through the shared confirmation", () => {
+  const SURFACES = [
+    "pages/profile-info.tsx",
+    "pages/profile-detail.tsx",
+    "pages/trackers.tsx",
+    "pages/liability-detail.tsx",
+  ];
+
+  function read(rel: string): string {
+    return fs.readFileSync(path.resolve(ROOT, rel), "utf8");
+  }
+
+  it("finds every surface that deletes a document", () => {
+    // Guards the list below: a NEW delete surface must be added here, or this
+    // whole describe block silently stops covering it.
+    const withDelete = walk(ROOT).filter((f) =>
+      /apiRequest\("DELETE", `\/api\/documents\//.test(fs.readFileSync(f, "utf8")));
+    const rel = withDelete.map((f) => path.relative(ROOT, f)).sort();
+    expect(rel).toEqual(SURFACES.slice().sort());
+  });
+
+  for (const surface of SURFACES) {
+    it(`${surface} confirms through DeleteDocumentDialog`, () => {
+      const src = read(surface);
+      expect(src).toContain("DeleteDocumentDialog");
+      // No delete may fire straight from a click handler — liability-detail.tsx
+      // used to do exactly that, with no prompt on a permanent action.
+      expect(src).not.toMatch(/onClick=\{\(\)\s*=>\s*deleteMutation\.mutate\(doc\.id\)\}/);
+    });
+
+    it(`${surface} passes the user's purge choice to the server`, () => {
+      // The checkbox is meaningless if the caller drops it: the flag has to
+      // reach DELETE /api/documents/:id or the data silently survives (or
+      // silently doesn't) regardless of what the user chose.
+      expect(read(surface)).toMatch(/purgeFields=\$\{purgeFields \? 1 : 0\}/);
+    });
+  }
+
+  it("the dialog states what it will remove and defaults to removing it", () => {
+    const dlg = read("components/DeleteDocumentDialog.tsx");
+    // Asks the server what is actually on the profile right now…
+    expect(dlg).toContain("derived-fields");
+    // …offers the choice, checked by default ("delete the document" should mean
+    // the data goes too)…
+    expect(dlg).toContain("useState(true)");
+    expect(dlg).toContain("doc-delete-purge-fields");
+    // …and warns when a purge would discard the user's own edit.
+    expect(dlg).toContain("editedCount");
   });
 });

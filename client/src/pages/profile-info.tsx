@@ -30,10 +30,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { DeleteDocumentDialog } from "@/components/DeleteDocumentDialog";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag } from "lucide-react";
 import { deleteProfileFields } from "@shared/profile-field-identity";
@@ -512,18 +509,22 @@ function SingleProfileInfo({ id }: { id: string }) {
 // The section earns its place — these are the documents filed under THIS person,
 // shown beside the fields they wrote, which the global Documents tab can't do.
 // What it had no excuse for was being the one card on the page with no delete:
-// every field here removes, and the documents just sat there. They now delete
-// from here exactly as they do from the Documents tab (same DELETE endpoint,
-// same optimistic update), behind a confirm because a document is a real file
-// and deleting one is not a field edit.
+// every field here removes, and the documents just sat there.
+//
+// The delete asks first, through the SHARED confirmation every document-delete
+// surface now uses (components/DeleteDocumentDialog) — which also offers to take
+// the profile fields the document saved with it, since "delete the document"
+// ought to mean the data goes too.
 function DocumentsSection({ documents, profileId }: { documents: any[]; profileId: string }) {
   const [viewing, setViewing] = useState<any | null>(null);
   const [confirming, setConfirming] = useState<any | null>(null);
   const { toast } = useToast();
 
   const removeDoc = useMutation({
-    mutationFn: async (docId: string) => { await apiRequest("DELETE", `/api/documents/${docId}`); },
-    onMutate: async (docId: string) => {
+    mutationFn: async ({ docId, purgeFields }: { docId: string; purgeFields: boolean }) => {
+      await apiRequest("DELETE", `/api/documents/${docId}?purgeFields=${purgeFields ? 1 : 0}`);
+    },
+    onMutate: async ({ docId }: { docId: string; purgeFields: boolean }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
       const prevDetail = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
       const prevDocs = queryClient.getQueryData<any[]>(["/api/documents"]);
@@ -534,11 +535,17 @@ function DocumentsSection({ documents, profileId }: { documents: any[]; profileI
       queryClient.setQueryData<any[]>(["/api/documents"], (old) => (old || []).filter((d: any) => d.id !== docId));
       return { prevDetail, prevDocs };
     },
-    onSuccess: () => {
-      toast({ title: "Document deleted" });
+    onSuccess: (_r, { purgeFields }) => {
+      toast({
+        title: "Document deleted",
+        description: purgeFields ? "The fields it saved were removed too." : undefined,
+      });
+      // A purge rewrote profile fields, so the profile detail must refetch — not
+      // just the documents list.
       invalidateDomains("documents", "profiles");
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
     },
-    onError: (err: Error, _id, ctx: any) => {
+    onError: (err: Error, _v, ctx: any) => {
       if (ctx?.prevDetail !== undefined) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
       if (ctx?.prevDocs !== undefined) queryClient.setQueryData(["/api/documents"], ctx.prevDocs);
       toast({ title: "Failed to delete", description: formatApiError(err), variant: "destructive" });
@@ -586,25 +593,12 @@ function DocumentsSection({ documents, profileId }: { documents: any[]; profileI
           data={viewing.fileData || ""}
         />
       )}
-      <AlertDialog open={!!confirming} onOpenChange={(o) => { if (!o) setConfirming(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete "{confirming?.name}"?</AlertDialogTitle>
-            <AlertDialogDescription>
-              The file is permanently removed from every profile it's linked to, not just this one.
-              Fields it already saved stay on the profile — remove those separately if you want them gone too.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => { if (confirming) removeDoc.mutate(confirming.id); setConfirming(null); }}
-              data-testid="info-doc-delete-confirm"
-            >Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteDocumentDialog
+        document={confirming}
+        onOpenChange={(o) => { if (!o) setConfirming(null); }}
+        isDeleting={removeDoc.isPending}
+        onConfirm={(docId, purgeFields) => { removeDoc.mutate({ docId, purgeFields }); setConfirming(null); }}
+      />
     </Card>
   );
 }
