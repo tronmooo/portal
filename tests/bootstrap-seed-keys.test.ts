@@ -34,6 +34,7 @@ function sampleBootstrap() {
     documents: [{ id: "d1" }],
     trackers: [{ id: "tr1" }],
     reminders: [{ id: "r1" }],
+    netWorthHistory: [{ snapshotDate: "2026-07-01", netWorth: 10 }],
   };
 }
 
@@ -48,6 +49,28 @@ describe("bootstrapSeedEntries", () => {
     expect(byKey.has(JSON.stringify(["/api/profiles"]))).toBe(true);
     expect(byKey.has(JSON.stringify(["/api/asset-party-links"]))).toBe(true);
     expect(byKey.has(JSON.stringify(["/api/liability-profile-links"]))).toBe(true);
+  });
+
+  // Regression: TrendsSection reads habits/trackers under a "trends" suffix off
+  // the same `/api/habits` / `/api/trackers` responses. Trackers were seeded and
+  // habits were not, so every profile switch still paid a round trip for a
+  // payload the bootstrap had already delivered.
+  it("seeds the TrendsSection habits/trackers suffix slots from the same payload", () => {
+    const entries = bootstrapSeedEntries(sampleBootstrap(), "selected", ["p1"], MONTH);
+    const byKey = new Map(entries.map((e) => [JSON.stringify(e.key), e.data]));
+    expect(byKey.get(JSON.stringify([...scopedKey("/api/habits", "selected", ["p1"], "trends")])))
+      .toEqual([{ id: "h1" }]);
+    expect(byKey.get(JSON.stringify([...scopedKey("/api/trackers", "selected", ["p1"], "trends")])))
+      .toEqual([{ id: "tr1" }]);
+  });
+
+  // The hero trend line is keyed by scope and ungated, so an unseeded slot means
+  // a second request racing the bootstrap on every profile switch.
+  it("seeds the hero net-worth history slot", () => {
+    const entries = bootstrapSeedEntries(sampleBootstrap(), "selected", ["p1"], MONTH);
+    const byKey = new Map(entries.map((e) => [JSON.stringify(e.key), e.data]));
+    expect(byKey.get(JSON.stringify([...scopedKey("/api/net-worth/history", "selected", ["p1"])])))
+      .toEqual([{ snapshotDate: "2026-07-01", netWorth: 10 }]);
   });
 
   it("seeds goals exactly once, on the slot goalsQueryKey collapses to (no double-seed)", () => {

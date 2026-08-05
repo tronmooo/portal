@@ -644,6 +644,54 @@ export class SupabaseStorage implements IStorage {
   }
 
   /**
+   * PERF (profile-switch, 2026-08-05): export this request's resolved memo so a
+   * LATER request for the same user can start with the same tables already in
+   * hand (see primeRequestMemo).
+   *
+   * Why this is safe to reuse across requests: the caller keys the snapshot by
+   * the user's data VERSION (cacheUserKey → `<uid>@v<n>`), so any write makes
+   * the old snapshot unaddressable — exactly the scheme the response cache
+   * already relies on — and it is stored under a short TTL on top of that.
+   *
+   * Rejected reads are dropped rather than cached: a failed fetch must not be
+   * replayed into the next request as if it had succeeded.
+   */
+  async snapshotRequestMemo(): Promise<Record<string, unknown>> {
+    const out: Record<string, unknown> = {};
+    await Promise.all(
+      Array.from(this.memoCache.entries()).map(async ([key, promise]) => {
+        try {
+          const value = await promise;
+          if (value !== undefined) out[key] = value;
+        } catch { /* failed read — leave the slot empty so the next request retries */ }
+      }),
+    );
+    return out;
+  }
+
+  /**
+   * Seed the request memo with reads captured by an earlier request
+   * (snapshotRequestMemo). Every subsequent getTasks()/getExpenses()/… that
+   * would have hit Supabase resolves from memory instead.
+   *
+   * This is what makes the SECOND profile scope cheap: /api/dashboard-bootstrap
+   * fetches every table UNFILTERED (see the `sharedFetches` path in getStats /
+   * getDashboardEnhanced) and filters in JS, so switching people changes only
+   * the JS filtering — the ~18 Supabase round trips behind it are identical
+   * work the server used to redo from scratch for every person.
+   *
+   * No-op unless the memo is enabled (never leaks into a plain request), and it
+   * never overwrites a live entry, so an in-flight read always wins.
+   */
+  primeRequestMemo(entries: Record<string, unknown> | null | undefined): void {
+    if (!this.memoEnabled || !entries) return;
+    for (const [key, value] of Object.entries(entries)) {
+      if (value === undefined || this.memoCache.has(key)) continue;
+      this.memoCache.set(key, Promise.resolve(value));
+    }
+  }
+
+  /**
    * PERF (durable-fix-phase1, 2026-05-30): build a memo-key suffix for the
    * optional profileIds filter on every list method. Deterministic (sorted)
    * so that two equivalent filters hit the same memo entry.

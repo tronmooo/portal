@@ -43,6 +43,7 @@ import {
   type FindingDirection,
 } from "@shared/tracker-insights";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
+import { warmSiblingScopes } from "@/lib/scope-prefetch";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
@@ -5473,6 +5474,33 @@ export default function DashboardPage() {
     return () => clearTimeout(t);
   }, [bootstrapQuery.isFetched, filterMode, filterIds.join(","), currentMonth]);
   const bootstrapSettled = bootstrapQuery.isFetched || bootstrapDeadline;
+
+  // PERF (profile-switch, 2026-08-05): once THIS scope has painted, warm the
+  // other people's scopes in the background so opening the switcher and picking
+  // someone renders from cache instead of waiting out a cold bootstrap. The
+  // sweep is sequential, idle-scheduled and capped (see warmSiblingScopes) and
+  // is keyed off bootstrapQuery.isFetched — not bootstrapSettled — so the 8s
+  // deadline escape hatch (a bootstrap that never landed) never triggers extra
+  // background load on a link that is already struggling.
+  //
+  // The dep is the id STRING, not the profiles array: every warmed bootstrap
+  // re-seeds ["/api/profiles"] with a fresh array reference (seedDashboardCaches),
+  // so depending on the array itself would cancel and restart the sweep on each
+  // one of its own responses.
+  const switchablePeopleKey = useMemo(
+    () => (allProfiles || [])
+      .filter((p: any) => ["self", "person", "pet"].includes(p?.type))
+      .map((p: any) => p.id)
+      .join(","),
+    [allProfiles],
+  );
+  useEffect(() => {
+    if (!bootstrapQuery.isFetched) return;
+    const people = switchablePeopleKey ? switchablePeopleKey.split(",") : [];
+    if (people.length < 2) return;
+    return warmSiblingScopes(people, filterMode === "selected" ? filterIds : []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrapQuery.isFetched, switchablePeopleKey, filterMode, filterIds.join(",")]);
 
   const { data: stats, isPending: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],

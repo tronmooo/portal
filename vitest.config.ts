@@ -145,6 +145,8 @@ export default defineConfig({
       'tests/profile-edit-event-gating.test.ts',
       'tests/profile-edit-no-ai-regen.test.ts',
       'tests/bootstrap-seed-keys.test.ts',
+      'tests/scope-prefetch-siblings.test.ts',
+      'tests/request-memo-reuse.test.ts',
       'tests/documents-page.test.ts',
       'tests/document-open-perf.test.ts',
       'tests/attention.test.ts',
