@@ -2,6 +2,9 @@ import express, { type Express, type Request } from "express";
 import { canonicalExpenseCategory, canonicalObligationCategory, EXPENSE_CATEGORIES } from "@shared/category-canon";
 import { createServer, type Server } from "http";
 import { createHash } from "crypto";
+// Server-only + dependency-free on purpose: the AI module graph is loaded
+// lazily below, so the upload error path must not reach into it for a hash.
+import { uploadContentTag } from "./upload-content-tag";
 import { createClient } from "@supabase/supabase-js";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -1823,6 +1826,37 @@ export async function registerRoutes(
       res.json(result);
     } catch (err: any) {
       log.error("[Upload]", err?.message || "unknown error");
+      // Before reporting a failure, check whether the file is nonetheless SAVED.
+      //
+      // processFileUpload writes the document partway through and then runs
+      // several more AI passes over it. A failure in one of those (or in its own
+      // fallback save) surfaced here as a bare 500, so the client said "Failed to
+      // process the uploaded file" about a file sitting safely in Documents.
+      //
+      // User, 2026-08-05: "when I uploaded the photo there was an error message
+      // even though it was uploaded I don't know why it happened".
+      //
+      // Every stored upload carries its content tag, so the answer is one lookup
+      // away. If it's there, this is a partial success — say what happened to
+      // extraction, and hand back the document rather than sending the user off
+      // to re-upload a file they already have.
+      try {
+        const tag = uploadContentTag((req.body as any)?.fileData || "");
+        const docs = await storage.getDocuments();
+        const saved = (docs || []).find((d: any) => Array.isArray(d.tags) && d.tags.includes(tag));
+        if (saved) {
+          return res.json({
+            reply: `Saved "${saved.name}" — but something went wrong while reading it, so nothing was extracted. The file is in your Documents; you can link it to a profile yourself, or re-upload to try extraction again.`,
+            actions: [],
+            results: [saved],
+            documentId: saved.id,
+            documentPreview: { id: saved.id, name: saved.name, mimeType: saved.mimeType, data: "" },
+            extractionFailed: true,
+          });
+        }
+      } catch (lookupErr: any) {
+        log.error("[Upload] saved-document lookup failed", lookupErr?.message || "unknown error");
+      }
       res.status(500).json({ error: "Failed to process upload" });
     }
   }));

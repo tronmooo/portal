@@ -121,11 +121,33 @@ export interface FieldDeletionResult {
 
 /**
  * Remove EVERY storage key matching the given UI keys — at the top level and
- * inside every nested group — comparing on identity rather than exact string.
+ * inside EVERY nested object — comparing on identity rather than exact string.
  *
  * This is what makes a delete stick. Deleting "License" previously removed the
  * top-level `license` key only, leaving `identity.licenseNumber` to be promoted
  * straight back on the next read, so the field appeared undeletable.
+ *
+ * "EVERY nested object" is literal, and it is the second half of the same bug.
+ * This function used to descend only into objects whose key appeared in
+ * `PROFILE_FIELD_GROUPS` — a hand-maintained list of ~17 names. But the Info tab
+ * renders ANY object-valued field as a group with a delete button on each cell,
+ * and document extraction invents group names freely (`education`,
+ * `employment`, `credentials`, `vaccinations`, …). A field inside one of those
+ * had a visible X that removed nothing at all: the click succeeded, the PATCH
+ * succeeded, and the field was still there after the refetch.
+ *
+ * User, 2026-08-05: "when I delete stuff from the info tab I want it to be gone
+ * forever why is it still there".
+ *
+ * So the rule is now structural rather than name-based — if it's an object, we
+ * look inside it. A whitelist could only ever be as complete as the last
+ * document type someone remembered to add, which is the exact failure mode this
+ * module exists to end.
+ *
+ * Deleting a group's OWN key (e.g. "identity") removes the whole group. That
+ * was previously impossible: the group branch consumed the key before the
+ * top-level check ran, so a group could be emptied one field at a time but
+ * never removed outright.
  *
  * Pure: returns new objects, never mutates the input. Empty nested groups are
  * dropped so the UI doesn't render a hollow section.
@@ -146,9 +168,13 @@ export function deleteProfileFields(
     // Reserved metadata (_ownershipPercentage etc.) is never a user field.
     if (key.startsWith("_")) { out[key] = value; continue; }
 
-    const isGroup =
-      (PROFILE_FIELD_GROUPS as readonly string[]).includes(key) &&
-      value && typeof value === "object" && !Array.isArray(value);
+    // Checked BEFORE descending, so deleting "identity" drops the whole group
+    // rather than falling through to the per-entry sweep and keeping it.
+    if (targets.has(fieldIdentity(key))) { removed.push(key); continue; }
+
+    // Structural, not name-based: any plain object holds fields, whatever it is
+    // called. See the doc comment above for why the group whitelist was wrong.
+    const isGroup = !!value && typeof value === "object" && !Array.isArray(value);
 
     if (isGroup) {
       const kept: Record<string, any> = {};
@@ -162,8 +188,7 @@ export function deleteProfileFields(
       continue;
     }
 
-    if (targets.has(fieldIdentity(key))) removed.push(key);
-    else out[key] = value;
+    out[key] = value;
   }
   return { fields: out, removed };
 }

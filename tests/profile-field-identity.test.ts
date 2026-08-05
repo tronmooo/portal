@@ -150,6 +150,64 @@ describe("deleting a field actually deletes it", () => {
     expect(fields.restrictions).toBeUndefined();
     expect((fields.identity as any)?.restrictions).toBeUndefined();
   });
+
+  // ── Nested objects the group whitelist never knew about ────────────────────
+  // User, 2026-08-05: "when I delete stuff from the info tab I want it to be
+  // gone forever why is it still there".
+  //
+  // The Info tab renders EVERY object-valued field as a group with a delete
+  // button on each cell, but this function only descended into the ~17 names in
+  // PROFILE_FIELD_GROUPS. Extraction invents group names freely, so a field
+  // under `education`/`employment`/`credentials` had a working-looking X that
+  // removed nothing — the PATCH succeeded and the field survived the refetch.
+  it("deletes a field inside a nested object that is NOT a known group name", () => {
+    const fields = {
+      education: { school: "UCSD", degree: "BS" },
+      employment: { employer: "Acme" },
+    };
+    expect((PROFILE_FIELD_GROUPS as readonly string[]).includes("education")).toBe(false);
+
+    const { fields: after, removed } = deleteProfileFields(fields, ["school"]);
+    expect((after.education as any)?.school).toBeUndefined();
+    expect((after.education as any)?.degree).toBe("BS");
+    expect(removed).toEqual(["education.school"]);
+  });
+
+  it("drops an unknown nested object once its last field is deleted", () => {
+    const { fields } = deleteProfileFields(
+      { credentials: { certNumber: "A-1" }, name: "R" },
+      ["certNumber"],
+    );
+    expect(fields.credentials).toBeUndefined();
+    expect(fields.name).toBe("R");
+  });
+
+  it("still matches by identity inside an unknown nested object", () => {
+    // `licenseNo` folds to `license`, so deleting the UI's "License" reaches it
+    // even though nobody listed `vaultedIds` as a group.
+    const { fields } = deleteProfileFields(
+      { vaultedIds: { licenseNo: "S226-116-24-800-0", passport: "X1" } },
+      ["license"],
+    );
+    expect((fields.vaultedIds as any)?.licenseNo).toBeUndefined();
+    expect((fields.vaultedIds as any)?.passport).toBe("X1");
+  });
+
+  it("deletes a whole group by its own key", () => {
+    // Previously impossible: the group branch consumed the key before the
+    // top-level check ran, so `identity` could be emptied field by field but
+    // never removed outright.
+    const { fields, removed } = deleteProfileFields(LICENSE_PROFILE_FIELDS, ["identity"]);
+    expect(fields.identity).toBeUndefined();
+    expect(removed).toContain("identity");
+    expect(fields.other).toBeDefined();
+  });
+
+  it("leaves arrays alone unless the array's own key is deleted", () => {
+    const src = { loans: [{ balance: 100 }], balance: 250 };
+    expect(deleteProfileFields(src, ["balance"]).fields).toEqual({ loans: [{ balance: 100 }] });
+    expect(deleteProfileFields(src, ["loans"]).fields).toEqual({ balance: 250 });
+  });
 });
 
 describe("one field renders once", () => {

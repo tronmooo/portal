@@ -29,6 +29,7 @@ import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, t
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { createHash } from "crypto";
+import { uploadContentTag } from "./upload-content-tag";
 import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
@@ -1732,7 +1733,9 @@ export async function processFileUpload(
   // file re-sent within the window short-circuits to the existing document,
   // rebuilding the extraction checklist from its saved extractedData so the
   // confirm-and-save flow still works.
-  const uploadHashTag = `sha256:${createHash("sha256").update(cleanBase640).digest("hex").slice(0, 32)}`;
+  // Shared with the /api/upload error path, which uses the same tag to ask
+  // "is this file already saved?" before reporting a failure.
+  const uploadHashTag = uploadContentTag(cleanBase640);
   try {
     const recentDocs = await storage.getDocuments();
     const cutoffMs = Date.now() - 60 * 60 * 1000;
@@ -1944,6 +1947,17 @@ Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nT
 ${userMessage ? `User said: "${userMessage}"` : ""}
 ${classifierContext}
 Return only what you actually read. When a value is unreadable or blank, leave that field out — but include every field you CAN read.`;
+
+  // The document row, once it exists. Hoisted OUT of the try below because the
+  // catch needs to know whether the file was already stored.
+  //
+  // User, 2026-08-05: "when I uploaded the photo there was an error message even
+  // though it was uploaded". Extraction runs several AI passes AFTER the
+  // document is written (date verification, event/expense synthesis, checklist
+  // assembly), so a failure in any of them landed in a catch that unconditionally
+  // called createDocument again — a SECOND copy of the same file, on top of the
+  // one already saved. Reusing the row keeps one upload to one document.
+  let savedDocument: any = null;
 
   try {
     const isImage = mimeType.startsWith("image/");
@@ -2227,6 +2241,7 @@ Return ONLY the JSON object, nothing else.`;
         });
       }
     }
+    savedDocument = document;
     results.push(document);
 
     // === AUTO-PROPAGATE: Link document to parent profiles up the chain ===
@@ -2713,8 +2728,11 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     const errMsg = err?.message || String(err);
     console.error("File extraction error:", errMsg);
     console.error("File extraction stack:", err?.stack);
-    // Still store the document even if AI fails
-    const document = await storage.createDocument({
+    // Still store the document even if AI fails — but only if the failure came
+    // BEFORE it was stored. When extraction got far enough to write the row and
+    // then died in a later pass, creating another one here produced two copies
+    // of the same file from a single upload.
+    const document = savedDocument || await storage.createDocument({
       name: fileName,
       type: "other",
       mimeType,

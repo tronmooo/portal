@@ -105,10 +105,24 @@ describe("the Info tab can edit and delete every field it shows", () => {
     // it was all permanently read-only.
     const start = SRC.indexOf("{nestedGroups.map(");
     expect(start, "nested group rendering not found").toBeGreaterThan(-1);
-    const block = SRC.slice(start, start + 2000);
-    expect(block, "nested fields still render as static text").toContain("FieldCell");
+    // Anchor on the cell itself rather than a byte window from the map — a
+    // window is measuring comment length, and this test failed once for the
+    // crime of someone explaining the code above it.
+    const cell = SRC.indexOf("<FieldCell", start);
+    expect(cell, "nested fields still render as static text").toBeGreaterThan(-1);
+    const block = SRC.slice(cell, cell + 400);
     expect(block).toMatch(/onSave=\{/);
     expect(block).toMatch(/onRemove=\{/);
+  });
+
+  it("writes a nested edit back into its group, not to the top level", () => {
+    // saveField sends `{ fields: { [key]: value } }`, which storage merges at
+    // the TOP level — so editing `identity.class` minted a top-level `class`
+    // and left the nested value stale. Nested cells must use saveGroupField.
+    const start = SRC.indexOf("{nestedGroups.map(");
+    const cell = SRC.indexOf("<FieldCell", start);
+    const block = SRC.slice(cell, cell + 400);
+    expect(block).toMatch(/onSave=\{[^}]*saveGroupField\(/);
   });
 
   it("deletes through the shared identity resolver, nested keys included", () => {
@@ -117,9 +131,27 @@ describe("the Info tab can edit and delete every field it shows", () => {
   });
 
   it("keeps the remove button visible without hover", () => {
-    const at = SRC.indexOf("aria-label={`Remove ${label}`}");
+    // Anchored on the testid, which survives the aria-label gaining a
+    // `removeTitle ||` override for cells whose X removes a different field.
+    const at = SRC.indexOf("data-testid={`info-remove-${label}`}");
     expect(at).toBeGreaterThan(-1);
     const btn = SRC.slice(Math.max(0, at - 600), at);
     expect(btn).not.toMatch(/opacity-0(?!.*sm:)/);
+  });
+
+  it("gives every field cell a delete, including the derived Age", () => {
+    // User, 2026-08-05: "Why will it not let me delete the age". Age is computed
+    // from Birthday and had no key of its own, so it got no X; Birthday was
+    // separately excluded by name. Both are removable now.
+    expect(SRC).toContain("removeAge");
+    expect(SRC).toMatch(/removeAge\s*=\s*\(\)\s*=>\s*\n?\s*removeField\("birthday"/);
+    // The old hard-coded escape hatch must not come back.
+    expect(SRC).not.toMatch(/!\["birthday"\]\.includes/);
+  });
+
+  it("lets the Info tab delete its documents", () => {
+    // The documents card was the one section on the page with no delete at all.
+    expect(SRC).toMatch(/apiRequest\("DELETE", `\/api\/documents\/\$\{docId\}`\)/);
+    expect(SRC).toContain("info-doc-remove-");
   });
 });

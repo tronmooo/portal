@@ -30,6 +30,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag } from "lucide-react";
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { stringifyField, previewUnrenderable } from "@/lib/field-display";
@@ -159,6 +164,19 @@ function SingleProfileInfo({ id }: { id: string }) {
 
   const saveField = (key: string, value: string) =>
     patch.mutate({ fields: { [key]: value } });
+  // A nested-group edit has to write BACK INTO THE GROUP. `saveField` sends
+  // `{ fields: { [key]: value } }`, which the storage layer merges at the TOP
+  // level — so editing `identity.class` minted a new top-level `class` and left
+  // the nested one holding the old value. The whole group object goes on the
+  // wire because mergeAndApplyDeletes REPLACES a key rather than deep-merging
+  // it, so the sibling entries have to travel with the edited one.
+  const saveGroupField = (group: string, groupRaw: any, key: string, value: string) => {
+    if (!groupRaw || typeof groupRaw !== "object" || Array.isArray(groupRaw)) {
+      saveField(key, value);
+      return;
+    }
+    patch.mutate({ fields: { [group]: { ...groupRaw, [key]: value } } });
+  };
   // Profile field delete must use the explicit `fieldsToDelete` signal.
   // The storage layer (mergeAndApplyDeletes) MERGES incoming `fields` on top
   // of the existing JSONB, so sending `{ fields: rest }` with the key omitted
@@ -166,7 +184,7 @@ function SingleProfileInfo({ id }: { id: string }) {
   // Optimistically strip the key from the detail cache so the X click feels
   // instant, and roll back if the PATCH fails. Mirrors the pattern used in
   // profile-detail.tsx so both Info and Detail pages behave the same way.
-  const removeField = (key: string) => {
+  const removeField = (key: string, onRemoved?: () => void) => {
     (async () => {
       await queryClient.cancelQueries({ queryKey: ["/api/profiles", id, "detail"] });
       const prev = queryClient.getQueryData(["/api/profiles", id, "detail"]);
@@ -183,12 +201,20 @@ function SingleProfileInfo({ id }: { id: string }) {
         queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
         queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
         queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "none" });
+        onRemoved?.();
       } catch (err: any) {
         if (prev !== undefined) queryClient.setQueryData(["/api/profiles", id, "detail"], prev);
         toast({ title: "Failed to remove", description: formatApiError(err), variant: "destructive" });
       }
     })();
   };
+
+  // Age is DERIVED — computeAge(birthday) on every render, with no stored key
+  // of its own. Removing it therefore has to remove the birthday, and the toast
+  // names what actually went so the result is never a surprise.
+  const removeAge = () =>
+    removeField("birthday", () =>
+      toast({ title: "Birthday removed", description: "Age is calculated from it, so it's gone too." }));
 
   const avatarMutation = useMutation({
     mutationFn: async (payload: { fileData: string; mimeType: string }) => {
@@ -254,7 +280,7 @@ function SingleProfileInfo({ id }: { id: string }) {
   // Custom scalar fields the user (or chat) added that aren't in the identity
   // whitelist and aren't nested storage groups — surfaced so "+ Add field" AND
   // anything saved from chat via update_profile shows up.
-  const nestedGroups: Array<{ key: string; entries: Array<[string, any]> }> = [];
+  const nestedGroups: Array<{ key: string; raw: any; entries: Array<[string, any]> }> = [];
   for (const [k, v] of Object.entries(fields)) {
     if (shownKeys.has(k.toLowerCase())) continue;
     if (["dateofbirth", "dob"].includes(k.toLowerCase())) continue;
@@ -264,7 +290,9 @@ function SingleProfileInfo({ id }: { id: string }) {
       const entries = Array.isArray(v)
         ? v.map((item, i) => [String(i + 1), typeof item === "object" ? JSON.stringify(item) : item] as [string, any])
         : Object.entries(v).filter(([, vv]) => vv !== undefined && vv !== null && vv !== "" && typeof vv !== "object");
-      if (entries.length > 0) nestedGroups.push({ key: k, entries });
+      // `raw` travels with the group so an edit can write back into it rather
+      // than minting a top-level twin — see saveGroupField.
+      if (entries.length > 0) nestedGroups.push({ key: k, raw: v, entries });
       continue;
     }
     if (NESTED_GROUP_KEYS.has(k)) continue; // group key holding a scalar — skip label noise
@@ -333,7 +361,18 @@ function SingleProfileInfo({ id }: { id: string }) {
             value={r.value}
             editable={r.key !== "__age"}
             onSave={r.key !== "__age" ? (v) => saveField(r.key, v) : undefined}
-            onRemove={r.key !== "__age" && !["birthday"].includes(r.key) ? () => removeField(r.key) : undefined}
+            // EVERY cell can be removed, including the two that could not be.
+            // User, 2026-08-05: "Why will it not let me delete the age".
+            //
+            // Age has no storage of its own — it is computed from Birthday on
+            // every render (computeAge), so it had no key to delete and got no
+            // X at all. Birthday was separately hard-excluded from removal.
+            // Between them the top-left corner of this grid was permanently
+            // stuck. Removing Age removes the Birthday it is derived from,
+            // which is the only thing that can make it go away; the tooltip and
+            // the toast say so, so nobody deletes a birthday by surprise.
+            onRemove={r.key === "__age" ? removeAge : () => removeField(r.key)}
+            removeTitle={r.key === "__age" ? "Remove Birthday — Age is calculated from it" : undefined}
           />
         ))}
         {rows.length === 0 && (
@@ -344,7 +383,21 @@ function SingleProfileInfo({ id }: { id: string }) {
       {/* Nested field groups (e.g. finance, health, credentials) */}
       {nestedGroups.map(g => (
         <Card className="p-4" key={g.key} data-testid={`info-group-${g.key}`}>
-          <SectionHeading title={fieldLabel(g.key)} icon={Layers} accent={INFO_TONE.group} count={g.entries.length} />
+          <SectionHeading
+            title={fieldLabel(g.key)} icon={Layers} accent={INFO_TONE.group} count={g.entries.length}
+            // Emptying a group one cell at a time used to be the ONLY way to be
+            // rid of it, and until this delete existed the group key itself was
+            // unreachable from the UI entirely. One tap removes the whole thing.
+            meta={(
+              <button
+                onClick={() => removeField(g.key)}
+                className="h-6 w-6 grid place-items-center rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 active:bg-destructive/20 transition-colors"
+                aria-label={`Remove ${fieldLabel(g.key)}`}
+                title={`Remove all ${fieldLabel(g.key)} fields`}
+                data-testid={`info-remove-group-${g.key}`}
+              ><X className="h-3.5 w-3.5" /></button>
+            )}
+          />
           {/*
             Nested-group fields used to render as plain <div> text — no
             FieldCell, no onSave, no onRemove. Every value under IDENTITY,
@@ -359,6 +412,12 @@ function SingleProfileInfo({ id }: { id: string }) {
             nested groups by field identity (shared/profile-field-identity), so
             deleting `identity.licenseNumber` really removes it rather than
             leaving a twin to be promoted back on the next read.
+
+            2026-08-05: both halves of that were still broken for any group whose
+            name wasn't on a hardcoded list. The delete swept only the ~17 names
+            in PROFILE_FIELD_GROUPS (fixed in shared/, so an `education` group
+            deletes like an `identity` one), and the edit wrote to the TOP level
+            instead of back into the group (fixed by saveGroupField).
           */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mt-2">
             {g.entries.map(([k, v]) => (
@@ -367,7 +426,7 @@ function SingleProfileInfo({ id }: { id: string }) {
                 label={fieldLabel(k)}
                 value={stringifyField(v)}
                 editable
-                onSave={(nv) => saveField(k, nv)}
+                onSave={(nv) => saveGroupField(g.key, g.raw, k, nv)}
                 onRemove={() => removeField(k)}
               />
             ))}
@@ -383,8 +442,12 @@ function SingleProfileInfo({ id }: { id: string }) {
         onSaveTags={(tags) => patch.mutate({ tags })}
       />
 
-      {/* Documents linked to this profile */}
-      <DocumentsSection documents={documents} />
+      {/* Documents linked to this profile. This is NOT the Documents tab in
+          miniature — that tab is the whole library, this is the subset filed
+          under THIS person, sitting next to the fields those documents wrote.
+          It stays because that adjacency is the point, but it now deletes like
+          everything else on the page rather than being the one read-only card. */}
+      <DocumentsSection documents={documents} profileId={id} />
 
       {/* Chat-saved facts (the memories store) — user-level, shown on Self */}
       {isSelf && <MemoriesSection />}
@@ -442,27 +505,75 @@ function SingleProfileInfo({ id }: { id: string }) {
 }
 
 // ── Documents section ─────────────────────────────────────────────────────────
-function DocumentsSection({ documents }: { documents: any[] }) {
+// User, 2026-08-05: "why is there a documents place inside the info tab when we
+// already have a documents tab[?] it should allow me to delete everything but
+// it's not".
+//
+// The section earns its place — these are the documents filed under THIS person,
+// shown beside the fields they wrote, which the global Documents tab can't do.
+// What it had no excuse for was being the one card on the page with no delete:
+// every field here removes, and the documents just sat there. They now delete
+// from here exactly as they do from the Documents tab (same DELETE endpoint,
+// same optimistic update), behind a confirm because a document is a real file
+// and deleting one is not a field edit.
+function DocumentsSection({ documents, profileId }: { documents: any[]; profileId: string }) {
   const [viewing, setViewing] = useState<any | null>(null);
+  const [confirming, setConfirming] = useState<any | null>(null);
+  const { toast } = useToast();
+
+  const removeDoc = useMutation({
+    mutationFn: async (docId: string) => { await apiRequest("DELETE", `/api/documents/${docId}`); },
+    onMutate: async (docId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      const prevDetail = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
+      const prevDocs = queryClient.getQueryData<any[]>(["/api/documents"]);
+      queryClient.setQueryData<any>(["/api/profiles", profileId, "detail"], (old: any) => {
+        if (!old?.relatedDocuments) return old;
+        return { ...old, relatedDocuments: old.relatedDocuments.filter((d: any) => d.id !== docId) };
+      });
+      queryClient.setQueryData<any[]>(["/api/documents"], (old) => (old || []).filter((d: any) => d.id !== docId));
+      return { prevDetail, prevDocs };
+    },
+    onSuccess: () => {
+      toast({ title: "Document deleted" });
+      invalidateDomains("documents", "profiles");
+    },
+    onError: (err: Error, _id, ctx: any) => {
+      if (ctx?.prevDetail !== undefined) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
+      if (ctx?.prevDocs !== undefined) queryClient.setQueryData(["/api/documents"], ctx.prevDocs);
+      toast({ title: "Failed to delete", description: formatApiError(err), variant: "destructive" });
+    },
+  });
+
   if (!documents || documents.length === 0) return null;
   return (
     <Card className="p-4" data-testid="info-documents">
       <SectionHeading title="Documents" icon={FileText} accent={INFO_TONE.docs} count={documents.length} />
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
         {documents.map((d: any) => (
-          <button
-            key={d.id}
-            onPointerDown={() => prefetchDocument(d.id, d.mimeType)}
-            onClick={() => setViewing(d)}
-            className="flex items-center gap-2 p-2.5 rounded-lg border hover:border-primary/50 text-left min-w-0"
-            data-testid={`info-doc-${d.id}`}
-          >
-            <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-            <span className="min-w-0">
-              <span className="block text-sm font-medium truncate">{d.name}</span>
-              <span className="block text-[11px] text-muted-foreground truncate">{d.type || d.mimeType}</span>
-            </span>
-          </button>
+          <div key={d.id} className="relative">
+            <button
+              onPointerDown={() => prefetchDocument(d.id, d.mimeType)}
+              onClick={() => setViewing(d)}
+              className="w-full flex items-center gap-2 p-2.5 pr-8 rounded-lg border hover:border-primary/50 text-left min-w-0"
+              data-testid={`info-doc-${d.id}`}
+            >
+              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium truncate">{d.name}</span>
+                <span className="block text-[11px] text-muted-foreground truncate">{d.type || d.mimeType}</span>
+              </span>
+            </button>
+            {/* Always visible, like every other X on this page — Portol is used
+                on a phone, where nothing ever hovers. */}
+            <button
+              onClick={() => setConfirming(d)}
+              className="absolute top-1 right-1 h-6 w-6 grid place-items-center rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 active:bg-destructive/20 transition-colors"
+              aria-label={`Delete ${d.name}`}
+              title={`Delete ${d.name}`}
+              data-testid={`info-doc-remove-${d.id}`}
+            ><X className="h-3.5 w-3.5" /></button>
+          </div>
         ))}
       </div>
       {viewing && (
@@ -475,6 +586,25 @@ function DocumentsSection({ documents }: { documents: any[] }) {
           data={viewing.fileData || ""}
         />
       )}
+      <AlertDialog open={!!confirming} onOpenChange={(o) => { if (!o) setConfirming(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{confirming?.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The file is permanently removed from every profile it's linked to, not just this one.
+              Fields it already saved stay on the profile — remove those separately if you want them gone too.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { if (confirming) removeDoc.mutate(confirming.id); setConfirming(null); }}
+              data-testid="info-doc-delete-confirm"
+            >Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
@@ -521,12 +651,15 @@ function MemoriesSection() {
 }
 
 // ── Single editable identity cell ────────────────────────────────────────────
-function FieldCell({ label, value, editable, onSave, onRemove }: {
+function FieldCell({ label, value, editable, onSave, onRemove, removeTitle }: {
   label: string;
   value: string;
   editable: boolean;
   onSave?: (v: string) => void;
   onRemove?: () => void;
+  /** Tooltip for the X when it removes something other than this cell's label
+   *  — Age's X removes the Birthday it's computed from. */
+  removeTitle?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -564,7 +697,8 @@ function FieldCell({ label, value, editable, onSave, onRemove }: {
         <button
           onClick={e => { e.stopPropagation(); onRemove(); }}
           className="absolute top-0.5 right-0.5 h-6 w-6 grid place-items-center rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 active:bg-destructive/20 transition-colors"
-          aria-label={`Remove ${label}`}
+          aria-label={removeTitle || `Remove ${label}`}
+          title={removeTitle || `Remove ${label}`}
           data-testid={`info-remove-${label}`}
         ><X className="h-3.5 w-3.5" /></button>
       )}
