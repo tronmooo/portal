@@ -29,6 +29,7 @@ const { stubState, stubStorage, aiTasks } = vi.hoisted(() => {
     profiles: new Map<string, any>(),
     documents: new Map<string, any>(),
     expenses: [] as any[],
+    links: [] as Array<{ profileId: string; kind: string; entityId: string }>,
   };
   const tasks: string[] = [];
   // Minimal storage stub: the methods confirm-extraction uses are real;
@@ -67,7 +68,10 @@ const { stubState, stubStorage, aiTasks } = vi.hoisted(() => {
       state.expenses.push(row);
       return row;
     },
-    async linkProfileTo() { return undefined; },
+    async linkProfileTo(profileId: string, kind: string, entityId: string) {
+      state.links.push({ profileId, kind, entityId });
+      return undefined;
+    },
     async propagateDocumentToAncestors() { return []; },
   };
   const storage = new Proxy(impl, {
@@ -140,6 +144,7 @@ describe("POST /api/chat/confirm-extraction", () => {
     stubState.profiles.clear();
     stubState.documents.clear();
     stubState.expenses.length = 0;
+    stubState.links.length = 0;
     aiTasks.length = 0;
     stubState.profiles.set("profile-crv", vehicleProfile());
     stubState.profiles.set("profile-self", { id: "profile-self", name: "Robert", type: "self", fields: {}, tags: [] });
@@ -407,6 +412,125 @@ describe("POST /api/chat/confirm-extraction", () => {
     } finally {
       (stubStorage as any).updateProfile = realUpdate;
     }
+  });
+
+  // ── Save only what you selected (bug report 2026-08-05) ───────────────────
+  // A grocery receipt with a $50 total. The user deselects every extracted
+  // field — merchant, date, category, receipt details, profile info — because
+  // the only thing they want is the expense. That is a complete request, and
+  // NOTHING they deselected may be written anywhere.
+  it("saves ONLY the $50 expense when every extracted field is deselected", async () => {
+    const profileBefore = JSON.stringify(stubState.profiles.get("profile-crv").fields);
+
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        confirmedFields: [],
+        targetProfileId: "profile-crv",
+        saveToProfile: false,
+        saveDocument: false,
+        createCalendarEvents: [],
+        trackerEntries: [],
+        createExpense: {
+          description: "Corner Market",
+          amount: 50,
+          category: "food",
+          date: "2026-08-04",
+          profileId: "profile-crv",
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.failures).toEqual([]);
+
+    // The expense exists, built from exactly what the user chose: total,
+    // owner, category, payment date.
+    expect(stubState.expenses).toHaveLength(1);
+    expect(stubState.expenses[0]).toMatchObject({
+      amount: 50,
+      category: "food",
+      date: "2026-08-04",
+      linkedProfiles: ["profile-crv"],
+    });
+
+    // …and not one byte of the deselected receipt data reached the profile…
+    expect(JSON.stringify(stubState.profiles.get("profile-crv").fields)).toBe(profileBefore);
+    // …or the document.
+    expect(stubState.documents.get("doc-receipt").extractedData).toEqual({});
+  });
+
+  it("keeps the values on the document without touching the profile when saveToProfile is off", async () => {
+    const profileBefore = JSON.stringify(stubState.profiles.get("profile-crv").fields);
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        targetProfileId: "profile-crv",
+        saveToProfile: false,
+        saveDocument: true,
+        confirmedFields: [{ key: "oilType", value: "Kendall 0W20" }],
+        createCalendarEvents: [],
+        trackerEntries: [],
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).success).toBe(true);
+    // On the document…
+    expect(stubState.documents.get("doc-receipt").extractedData.oilType).toBe("Kendall 0W20");
+    // …and nowhere near the profile.
+    expect(JSON.stringify(stubState.profiles.get("profile-crv").fields)).toBe(profileBefore);
+  });
+
+  it("files the receipt under the chosen owner even when no field is saved", async () => {
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        targetProfileId: "profile-crv",
+        confirmedFields: [],
+        saveToProfile: false,
+        saveDocument: true,
+        createCalendarEvents: [],
+        trackerEntries: [],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    // The user is told where the file went, and it is actually linked there.
+    expect(data.saved.join("; ")).toContain("Documents");
+    expect(stubState.links).toContainEqual({
+      profileId: "profile-crv", kind: "document", entityId: "doc-receipt",
+    });
+  });
+
+  it("rejects a confirm with no destination selected at all, and says what to pick", async () => {
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        confirmedFields: [],
+        saveToProfile: false,
+        saveDocument: false,
+        createCalendarEvents: [],
+        trackerEntries: [],
+      }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.message).toContain("expense");
+    expect(data.message).toContain("profile");
+    expect(data.message).toContain("document");
+    // Nothing was written on the way to the rejection.
+    expect(stubState.expenses).toHaveLength(0);
+    expect(stubState.documents.get("doc-receipt").extractedData).toEqual({});
   });
 
   it("does not create a duplicate expense when one with the same date and amount already exists", async () => {

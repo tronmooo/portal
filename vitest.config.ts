@@ -169,6 +169,10 @@ export default defineConfig({
       // Chat suggestions built from the user's own records (2026-07-31).
       'tests/chat-suggestions.test.ts',
       'tests/chat-empty-state.dom.test.tsx',
+      // Save only what you selected: destination-based gating for the photo /
+      // document extraction review (2026-08-05).
+      'tests/extraction-save-plan.test.ts',
+      'tests/extraction-confirmation.dom.test.tsx',
       'tests/format-full-date.test.ts',
       'tests/detail-hero.test.ts',
       'tests/detail-hero.dom.test.tsx',

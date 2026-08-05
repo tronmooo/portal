@@ -27,6 +27,7 @@ import { buildImportPrompt, planImport, applyImport, undoImport } from "./financ
 import { registerCacheBuster } from "./cache-bus";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
+import { selectedSaveActions } from "@shared/extraction-save-plan";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from "@shared/profile-field-identity";
 
@@ -2217,6 +2218,24 @@ ${JSON.stringify(ctx, null, 2)}`;
         return res.status(400).json({ error: "extractionId required" });
       }
 
+      // Destination switches. Both default to ON so older clients (and the
+      // AI paths that post here directly) keep their behaviour, but a client
+      // that says "don't put this on a profile" is obeyed to the letter — no
+      // deselected data is written anywhere.
+      const saveToProfile = req.body.saveToProfile !== false;
+      const saveDocument = req.body.saveDocument !== false;
+
+      // The gate is "did the user pick at least one thing to DO", not "did the
+      // user tick at least one extracted field". A receipt whose every field is
+      // deselected, saving only its total as an expense, is a complete request.
+      const selectedActions = selectedSaveActions(req.body);
+      if (selectedActions.length === 0) {
+        return res.status(400).json({
+          error: "Nothing selected to save",
+          message: "Select at least one destination — save the total as an expense, save selected fields to a profile, or keep the original as a document.",
+        });
+      }
+
       // Ownership: extractionId must point to a document owned by this user.
       const extractionDoc = await storage.getDocument(extractionId);
       if (!extractionDoc) {
@@ -2231,7 +2250,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         }
       }
 
-      log.info(`[confirm-extraction] extractionId=${extractionId}, fields=${confirmedFields?.length || 0}, profileId=${targetProfileId || 'NONE'}, events=${createCalendarEvents?.length || 0}, trackers=${trackerEntries?.length || 0}`);
+      log.info(`[confirm-extraction] extractionId=${extractionId}, actions=[${selectedActions.join(",")}], fields=${confirmedFields?.length || 0}, profileId=${targetProfileId || 'NONE'}, events=${createCalendarEvents?.length || 0}, trackers=${trackerEntries?.length || 0}`);
 
       // Helper: unwrap {value, confidence} objects into plain values.
       // Declared BEFORE the AI profile-pick below — it used to sit after it,
@@ -2243,7 +2262,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       // Falls back to self profile (legacy behaviour) if AI can't decide.
       let resolvedProfileId = targetProfileId;
       let resolvedProfileSource: "caller" | "ai" | "self-default" | "none" = targetProfileId ? "caller" : "none";
-      if (!resolvedProfileId && confirmedFields && confirmedFields.length > 0) {
+      if (!resolvedProfileId && saveToProfile && confirmedFields && confirmedFields.length > 0) {
         const profiles = await storage.getProfiles();
         if (profiles.length > 0) {
           // Wave 2 #4 — AI picks the best profile from extracted name-ish fields.
@@ -2296,8 +2315,10 @@ ${JSON.stringify(ctx, null, 2)}`;
       // Each extracted field gets routed to the correct destination based on what it IS.
       // The document always keeps ALL data as the source of truth.
 
-      // Step 0: ALWAYS save all confirmed fields to the document's extractedData (source of truth)
-      if (confirmedFields && confirmedFields.length > 0) {
+      // Step 0: save all confirmed fields to the document's extractedData
+      // (source of truth). Skipped only when the user explicitly turned the
+      // "keep the original as a document" destination off.
+      if (saveDocument && confirmedFields && confirmedFields.length > 0) {
         try {
           const doc = await storage.getDocument(extractionId);
           if (doc) {
@@ -2314,8 +2335,11 @@ ${JSON.stringify(ctx, null, 2)}`;
         }
       }
 
-      // Step 1: Classify each field and route to the correct destination
-      if (confirmedFields && confirmedFields.length > 0) {
+      // Step 1: Classify each field and route to the correct destination.
+      // `saveToProfile === false` means the user kept values on the document
+      // but chose NOT to put them on a profile — honour that instead of
+      // writing them anyway.
+      if (saveToProfile && confirmedFields && confirmedFields.length > 0) {
         // Document-metadata fields that should NOT be saved to profiles
         const DOC_ONLY_FIELDS = new Set(['fileName', 'barcode', 'signatureType', 'documentTitle', 'reportTitle', 'signedBy', 'electronicSignature', 'electronicallySignedBy', 'facilityAddress']);
 
@@ -2480,11 +2504,15 @@ ${JSON.stringify(ctx, null, 2)}`;
               }
               log.info(`[confirm-extraction] Routed ${savedKeys.length}/${confirmedKeys.length} fields to profile ${profile.name}${unsavedKeys.length > 0 ? ` (FAILED: ${unsavedKeys.join(", ")})` : ""}`);
 
-              // Link the document to the profile
-              try {
-                await storage.linkProfileTo(resolvedProfileId, "document", extractionId);
-                await storage.propagateDocumentToAncestors(extractionId, resolvedProfileId);
-              } catch { /* may already be linked */ }
+              // Link the document to the profile — unless the user turned the
+              // document destination off, in which case the fields go to the
+              // profile and the file is left where it is.
+              if (saveDocument) {
+                try {
+                  await storage.linkProfileTo(resolvedProfileId, "document", extractionId);
+                  await storage.propagateDocumentToAncestors(extractionId, resolvedProfileId);
+                } catch { /* may already be linked */ }
+              }
             } else {
               // A profile id was resolved but the profile can't be loaded
               // (deleted mid-flight?) — the fields did NOT reach any profile.
@@ -2499,6 +2527,24 @@ ${JSON.stringify(ctx, null, 2)}`;
           // resolved (none selected, no AI match, no self profile). Say so —
           // the fields are on the document, NOT on any profile.
           failures.push(`no profile selected — ${Object.keys(profileFields).length} confirmed field(s) were saved to the document only`);
+        }
+      }
+
+      // 1b. Keep the original as a document. This is a destination in its own
+      // right: an expense-only save still files the receipt under the chosen
+      // owner, and the confirmation says so instead of leaving the user to
+      // guess where the file went.
+      if (saveDocument) {
+        const docHome = resolvedProfileId || targetProfileId;
+        const linkedByFieldSave = saveToProfile && resolvedProfileId && confirmedFields && confirmedFields.length > 0;
+        if (docHome && !linkedByFieldSave) {
+          try {
+            await storage.linkProfileTo(docHome, "document", extractionId);
+            await storage.propagateDocumentToAncestors(extractionId, docHome);
+          } catch { /* may already be linked */ }
+        }
+        if (!confirmedFields || confirmedFields.length === 0) {
+          saved.push(`Kept ${extractionDoc.name || "the original file"} in Documents`);
         }
       }
 
@@ -2668,8 +2714,14 @@ ${JSON.stringify(ctx, null, 2)}`;
           // to the ASSET — one row, one link. The owner sees it through the
           // ownedAssetIds widening on /api/expenses and the dashboard, so it
           // counts toward the owner exactly once and is never double-linked.
-          // Fall back to self only when no asset was resolved.
-          let expenseLinks: string[] = resolvedProfileId ? [resolvedProfileId] : [];
+          // The owner the user picked in the review panel wins; then the
+          // resolved extraction profile; self only as a last resort.
+          let expenseLinks: string[] = [];
+          if (exp.profileId) {
+            const chosenOwner = await storage.getProfile(exp.profileId);
+            if (chosenOwner) expenseLinks = [exp.profileId];
+          }
+          if (expenseLinks.length === 0 && resolvedProfileId) expenseLinks = [resolvedProfileId];
           if (expenseLinks.length === 0) {
             const selfForExpense = (await storage.getProfiles()).find((p: any) => p.type === 'self');
             if (selfForExpense) expenseLinks = [selfForExpense.id];
@@ -2681,6 +2733,7 @@ ${JSON.stringify(ctx, null, 2)}`;
             // canonical bucket so the dashboard never splits one category.
             category: canonicalExpenseCategory(exp.category || 'general'),
             vendor: exp.vendor,
+            // The payment date the user picked in the review panel.
             date: exp.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
             tags: [],
             linkedProfiles: expenseLinks,
