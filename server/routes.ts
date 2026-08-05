@@ -25,6 +25,7 @@ import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { registerCacheBuster } from "./cache-bus";
+import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
@@ -9010,6 +9011,13 @@ No emojis. No prose outside the JSON.`,
     if (!ok) return res.status(404).json({ error: "Not found" });
     res.json({ deleted: true });
   }));
+
+  // ── Stripe Financial Connections (/api/finance/*) ──────────────────────────
+  // Bank connections, account/transaction sync, and the signed Stripe webhook.
+  // Registered here (before the error handler) so it shares this app's auth
+  // middleware, CORS and no-store cache headers. The webhook route inside is
+  // exempted from bearer auth in server/auth.ts and authenticates by signature.
+  registerFinanceRoutes(app);
 
   // Global async error handler — catches unhandled promise rejections from route handlers
   app.use((err: any, _req: any, res: any, _next: any) => {

@@ -28,6 +28,7 @@ import {
   Users, Activity, ListTodo, FileText, Sparkles,
 } from "lucide-react";
 import { ChatGPTImportDialog, ChatGPTImportHistory } from "@/components/ChatGPTImportDialog";
+import { FinanceConnectionCard } from "@/components/finance/FinanceConnectionCard";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme, COLOR_PRESETS } from "@/components/theme-provider";
@@ -975,6 +976,10 @@ export default function SettingsPage() {
           <CardContent className="space-y-4">
             <GoogleCalendarRow />
             <Separator />
+            {/* Finance — real Stripe Financial Connections. Replaces the old
+                "Plaid (Banking) — Coming Soon" placeholder row. */}
+            <FinanceConnectionCard />
+            <Separator />
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="h-8 w-8 rounded-lg bg-purple-500/10 flex items-center justify-center">
@@ -983,19 +988,6 @@ export default function SettingsPage() {
                 <div>
                   <Label className="text-sm font-medium">Apple Health</Label>
                   <p className="text-xs text-muted-foreground mt-0.5">Import health data from iPhone</p>
-                </div>
-              </div>
-              <Badge variant="outline" className="text-xs">Coming Soon</Badge>
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="h-8 w-8 rounded-lg bg-green-500/10 flex items-center justify-center">
-                  <HardDrive className="h-4 w-4 text-green-500" />
-                </div>
-                <div>
-                  <Label className="text-sm font-medium">Plaid (Banking)</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">Auto-import bank transactions</p>
                 </div>
               </div>
               <Badge variant="outline" className="text-xs">Coming Soon</Badge>

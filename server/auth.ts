@@ -300,6 +300,16 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     return next();
   }
 
+  // Stripe webhook. There is no user session on a server-to-server callback —
+  // it authenticates by verifying Stripe's signature over the RAW body against
+  // STRIPE_WEBHOOK_SECRET inside the handler, and resolves the owning user
+  // through our own stripe_account_holders / financial_accounts mapping rather
+  // than trusting anything in the payload. An unsigned request is rejected
+  // there, so skipping the bearer-token check here is safe.
+  if (req.path === "/finance/webhook") {
+    return next();
+  }
+
   // Public share endpoints — read-only, identified by random share token.
   // The handler looks up artifacts by metadata->>shareToken (no user filter).
   if (req.path.startsWith("/public/")) {

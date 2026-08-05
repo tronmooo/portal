@@ -18,6 +18,7 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { MoneyOverview } from "@/components/finance/MoneyOverview";
+import { ConnectedFinance } from "@/components/finance/ConnectedFinance";
 import { NetWorthPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
 import {
   CashFlowWaterfallPopup, SpendPopup, IncomePopup, BillsDuePopup,
@@ -1093,6 +1094,13 @@ export default function FinancePage() {
         </div>
         <p className="text-sm text-muted-foreground mt-0.5">Expense tracking and analysis{filterCategory !== "all" && ` — ${filterCategory}`}</p>
       </div>
+
+      {/* ── Connected accounts (Stripe Financial Connections) ──
+          Real bank balances, transactions, cash flow, spending, income and
+          liabilities. Renders a compact "connect a bank" prompt when nothing is
+          linked, so it never crowds out the manual view below. All totals come
+          from the server's shared/finance-calc.ts module. */}
+      <ConnectedFinance />
 
       {/* ── Money overview (2026-07 redesign) ── replaces the two ad-hoc KPI
           grids with the mockup snapshot/budgets/bills/balance-sheet/breakdown

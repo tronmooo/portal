@@ -105,12 +105,12 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
  */
 export const CONTENT_SECURITY_POLICY =
   "default-src 'self'; " +
-  "script-src 'self' 'unsafe-eval' https://accounts.google.com https://apis.google.com https://challenges.cloudflare.com; " +
+  "script-src 'self' 'unsafe-eval' https://accounts.google.com https://apis.google.com https://challenges.cloudflare.com https://js.stripe.com; " +
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://api.fontshare.com; " +
   "font-src 'self' data: https://fonts.gstatic.com https://api.fontshare.com; " +
   "img-src 'self' data: blob: https:; " +
-  "connect-src 'self' https://*.supabase.co https://api.anthropic.com https://api.resend.com https://challenges.cloudflare.com wss://*.supabase.co; " +
-  "frame-src 'self' blob: https://accounts.google.com https://challenges.cloudflare.com; " +
+  "connect-src 'self' https://*.supabase.co https://api.anthropic.com https://api.resend.com https://challenges.cloudflare.com wss://*.supabase.co https://api.stripe.com https://*.stripe.com; " +
+  "frame-src 'self' blob: https://accounts.google.com https://challenges.cloudflare.com https://js.stripe.com https://*.stripe.com; " +
   "worker-src 'self'; " +
   "child-src 'self'; " +
   "object-src 'self' blob:; " +

@@ -172,6 +172,12 @@ export default defineConfig({
       'tests/format-full-date.test.ts',
       'tests/detail-hero.test.ts',
       'tests/detail-hero.dom.test.tsx',
+      // Stripe Financial Connections: money math, calculation module,
+      // transfer/recurring/duplicate detection, error redaction.
+      'tests/finance-connections.test.ts',
+      // Server-side wiring: env validation, sign normalization, webhook
+      // signature verification, idempotency, user isolation.
+      'tests/finance-sync.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

@@ -7,6 +7,9 @@ import type { ParsedAction } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate } from "@shared/nutrition-shaped";
 import {
+  FINANCE_TOOL_DEFINITIONS, FINANCE_TOOL_SYSTEM_GUIDANCE, executeFinanceTool, isFinanceTool,
+} from "./finance-ai-tools";
+import {
   insertProfileSchema,
   insertTaskSchema,
   insertExpenseSchema,
@@ -4662,6 +4665,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       required: ["expenseDescription"],
     },
   },
+
+  // --- Connected bank data (Stripe Financial Connections) ---
+  // Read-only summaries plus one explicitly-confirmed refresh action. Claude
+  // never touches Stripe directly; these tools run server-side against the
+  // authenticated user's own rows. See server/finance-ai-tools.ts.
+  ...FINANCE_TOOL_DEFINITIONS,
 ];
 
 // ============================================================
@@ -4704,6 +4713,8 @@ Whenever the user mentions ANY actual debt, loan, credit card, mortgage, auto lo
 - User asks about totals/payoff → get_liability_summary
 
 The legacy create_profile(type:"loan") is forbidden for new entries — it skips subtype, structured fields, and the liability detail UI. The full LIABILITIES section below has subtype recognition tables, payment phrasing, ownership rules, and multi-action examples — follow it strictly.
+
+${FINANCE_TOOL_SYSTEM_GUIDANCE}
 
 DIAGNOSTICS & INSIGHTS MODE:
 When the user asks questions like "how am I doing?", "give me a health summary", "what's my financial situation?", "diagnose my habits", "what do I need to focus on?", or any open-ended question about their status:
@@ -5994,6 +6005,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
   // sending the same command within 30s would collide.
   const dedupUser = userId || "_global";
   switch (name) {
+    // ── Connected bank data (Stripe Financial Connections) ──
+    // These read the `financial_*` tables through their own user-scoped layer
+    // rather than through `storage`. `userId` is the VERIFIED id from the
+    // request and the tool schemas have no user field, so a prompt cannot
+    // redirect one of these at another user's records.
+    case "get_financial_summary":
+    case "search_financial_transactions":
+    case "get_spending_breakdown":
+    case "get_account_balances":
+    case "refresh_financial_data": {
+      if (!isFinanceTool(name)) return { error: `Unknown tool: ${name}` };
+      return executeFinanceTool(name, input, userId);
+    }
+
     case "search": {
       const results = await storage.search(input.query);
       // Filter by profile if specified
@@ -14523,6 +14548,12 @@ export const READ_ONLY_TOOLS = new Set<string>([
   "find_orphans", "validate_profile_isolation", "find_duplicates",
   "validate_dashboard_counts", "explain_dashboard_item", "refresh_dashboard",
   "get_missed_doses", "get_dose_history",
+  // Connected bank data (Stripe Financial Connections). These four are pure
+  // reads over the authenticated user's own financial_* rows.
+  // `refresh_financial_data` is deliberately NOT here — it is an action that
+  // calls out to the institution, so it carries a typed action below.
+  "get_financial_summary", "search_financial_transactions",
+  "get_spending_breakdown", "get_account_balances",
 ]);
 
 // Every WRITE tool → a typed ParsedAction so the chat UI shows it as a real
@@ -14644,6 +14675,10 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   create_domain: "manage_domain",
   update_domain: "manage_domain",
   delete_domain: "manage_domain",
+  // Connected bank data — pulling fresh data from the institution is a real
+  // side effect (it costs a Stripe call and hits the bank), so it surfaces as
+  // a typed action rather than the silent "retrieve" fallback.
+  refresh_financial_data: "update_entity",
 };
 
 // Map tool names to ParsedAction types (read-only tools + anything
