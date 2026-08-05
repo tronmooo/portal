@@ -2624,7 +2624,14 @@ export class SupabaseStorage implements IStorage {
     const cutoff = new Date(Date.now() - daysBack * 86400000).toISOString();
     // PERF (durable-fix-phase1): push profileIds filter into Postgres using the
     // existing idx_trackers_linked_profiles_gin index.
-    let trackersQuery = this.supabase.from("trackers").select("*").eq("user_id", this.userId);
+    // ORDER BY is not optional here. Postgres makes no ordering guarantee for an
+    // unordered select, so two calls could hand back the same rows in different
+    // order — and anything that slices the result (the ?limit= pager, the
+    // persisted-bootstrap shell projection) then kept a DIFFERENT subset each
+    // time, which is how the same scope produced two different wellness scores
+    // (QA report 2026-08-05). Newest first, matching the other list reads.
+    let trackersQuery = this.supabase.from("trackers").select("*").eq("user_id", this.userId)
+      .order("created_at", { ascending: false });
     trackersQuery = this._applyProfileFilter(trackersQuery, profileIds);
     const [trackersResult, entriesResult] = await Promise.all([
       trackersQuery,

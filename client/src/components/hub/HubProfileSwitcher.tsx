@@ -130,7 +130,13 @@ export function HubProfileSwitcher() {
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => navigate("/profiles")} data-testid="hub-switch-manage">
+        {/* Says "everyone", so it selects everyone. The Info screen renders the
+            people in the current scope (like every other hub tab), so landing
+            there with one person still selected would have shown exactly that
+            one person under a menu item promising the opposite. */}
+        <DropdownMenuItem
+          onClick={() => { setFilterEveryone(); navigate("/profiles"); }}
+          data-testid="hub-switch-manage">
           View everyone’s info…
         </DropdownMenuItem>
       </DropdownMenuContent>

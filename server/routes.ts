@@ -4488,7 +4488,16 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
       const ids = profileIdsParam.split(",").filter(Boolean);
       items = await filterByProfileScope(items, ids, uid);
     }
-    res.json(paginate(items, req, res));
+    // paginateFull, NOT paginate: the client computes AGGREGATES over this list
+    // — the hub's WELLNESS score (computeHealthScore) and the Trackers tab's
+    // group counts and streaks — exactly like the Finance page sums expenses.
+    // paginate()'s 100-row default cap silently truncated the set those numbers
+    // are computed from, so the same scope scored differently depending on
+    // whether the cache had been filled by /api/dashboard-bootstrap (which seeds
+    // the WHOLE list under the same key) or by a real fetch of this endpoint.
+    // With 108 trackers that read as "WELLNESS — on one load, 76 on the next"
+    // (QA report 2026-08-05). Explicit ?limit=/?offset= still pages.
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/trackers/:id", asyncHandler(async (req, res) => {
     const tracker = await storage.getTracker(req.params.id);

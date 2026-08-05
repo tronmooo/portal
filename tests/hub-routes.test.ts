@@ -160,4 +160,86 @@ describe("reconcileInfoRoute — Info follows the profile scope", () => {
   it("tolerates a trailing slash", () => {
     expect(reconcileInfoRoute(`/profiles/${ALICE}/info/`, [])).toBe("/profiles");
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Regression: QA report 2026-08-05 — switching the person switcher to
+  // "Everyone" (or anyone else) from a single-profile Info page white-screened
+  // with React error #185, "Maximum update depth exceeded". Two redirects were
+  // fighting: this reconciler sent /profiles/<self>/info → /profiles, and the
+  // Info page sent /profiles → /profiles/<self>/info, forever.
+  //
+  // The fix makes this function the ONLY redirect and a FIXPOINT: applying it to
+  // its own output must always return null. If a future change reintroduces a
+  // navigation on the page, these are the tests that should have caught it.
+  // ───────────────────────────────────────────────────────────────────────────
+  it("is a fixpoint — its target is never itself redirected again", () => {
+    const scopes = [[], [ALICE], [BOB], [ALICE, BOB]];
+    const locations = [
+      "/profiles",
+      `/profiles/${ALICE}/info`,
+      `/profiles/${BOB}/info`,
+      "/linked?tab=info",
+    ];
+    for (const ids of scopes) {
+      for (const loc of locations) {
+        const once = reconcileInfoRoute(loc, ids);
+        if (once === null) continue;
+        expect(reconcileInfoRoute(once, ids), `${loc} @ [${ids}] → ${once}`).toBeNull();
+      }
+    }
+  });
+
+  it("does not bounce /profiles back and forth under an aggregated scope", () => {
+    // The exact loop from the crash: Everyone, sitting on someone's Info page.
+    const step1 = reconcileInfoRoute(`/profiles/${ALICE}/info`, []);
+    expect(step1).toBe("/profiles");
+    expect(reconcileInfoRoute(step1!, [])).toBeNull();
+  });
+
+  it("routes the ?tab=info deep-link to the same place the Info chip goes", () => {
+    // /linked?tab=info is not a section trackers.tsx knows, so it used to fall
+    // through to the unfiltered "All" list — a different screen from the Info
+    // tab, with the person filter apparently ignored (QA report 2026-08-05).
+    expect(reconcileInfoRoute("/linked?tab=info", [ALICE])).toBe(`/profiles/${ALICE}/info`);
+    expect(reconcileInfoRoute("/linked?tab=info", [])).toBe("/profiles");
+    expect(reconcileInfoRoute("/linked?tab=info", [ALICE, BOB])).toBe("/profiles");
+    // …and it agrees with the chip's own target for every scope.
+    for (const ids of [[], [ALICE], [ALICE, BOB]]) {
+      expect(reconcileInfoRoute("/linked?tab=info", ids)).toBe(infoTabRoute(ids));
+    }
+  });
+
+  it("leaves /profiles alone under every scope", () => {
+    // It renders the people in scope, and it is where "Go to Profiles", the
+    // People stat card and the back links point. Bouncing it to the selected
+    // person's Info page would hijack all of them — the default scope is a
+    // single profile, so it would happen nearly always.
+    for (const ids of [[], [ALICE], [ALICE, BOB]]) {
+      expect(reconcileInfoRoute("/profiles", ids), `scope [${ids}]`).toBeNull();
+    }
+  });
+});
+
+// The Info page must never navigate — reconcileInfoRoute owns that decision.
+// A `navigate(...)`/`hashNavigate(...)` call reintroduced in the redirect
+// branch is what caused the 2026-08-05 white-screen crash, and it is invisible
+// to the pure route tests above, so assert it against the source.
+describe("Info page redirect guard", () => {
+  it("pages/profile-info.tsx contains no navigation call", () => {
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../client/src/pages/profile-info.tsx"), "utf8",
+    );
+    // Strip comments so the explanatory notes about the old bug don't trip it.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    // navigate(...) in an event handler is fine — a user clicking a card. What
+    // must never come back is a redirect fired from a render/effect, so read
+    // each effect BODY (up to its dependency array) rather than the whole file.
+    const effectBodies = [...code.matchAll(/useEffect\(\s*\(\)\s*=>\s*\{([\s\S]*?)\}\s*,\s*\[/g)]
+      .map(m => m[1]);
+    expect(effectBodies.length, "expected to find the page's effects").toBeGreaterThan(0);
+    for (const body of effectBodies) {
+      expect(/navigate\(/.test(body), "profile-info.tsx must not navigate from an effect").toBe(false);
+    }
+    expect(/hashReplace\(|hashNavigate\(/.test(code)).toBe(false);
+  });
 });
