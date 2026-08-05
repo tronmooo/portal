@@ -16,6 +16,7 @@ import { BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { hashNavigate, hashReplace } from "@/lib/hashNavigate";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useResumeTick } from "@/hooks/useResumeTick";
+import { useOverflowX } from "@/hooks/useOverflowX";
 import { HUB_TABS, activeHubTab, hubTabAccent, infoTabRoute, reconcileInfoRoute } from "./hub-routes";
 import { HubKpiStrip } from "./HubKpiStrip";
 import { HubProfileSwitcher } from "./HubProfileSwitcher";
@@ -46,6 +47,8 @@ export function HubShell() {
     weekday: "long", month: "long", day: "numeric", timeZone: BROWSER_TIMEZONE,
   });
 
+  const [tabsRef, tabsClipped] = useOverflowX<HTMLDivElement>([]);
+
   return (
     // --tab-accent is published here and read by the tab chip, the KPI strip's
     // underline, and every SectionHeading on the page below. One variable, so a
@@ -60,7 +63,16 @@ export function HubShell() {
         <HubProfileSwitcher />
       </div>
       <HubKpiStrip />
-      <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1 pb-2 [mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]" role="tablist" aria-label="Hub sections">
+      {/* The right-edge fade means "there are more tabs this way", so it only
+          belongs here when there actually are — on a desktop all eight fit. */}
+      <div
+        ref={tabsRef}
+        className={`flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1 pb-2 ${
+          tabsClipped ? "[mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]" : ""
+        }`}
+        role="tablist"
+        aria-label="Hub sections"
+      >
         {HUB_TABS.map(tab => {
           const isActive = active === tab.id;
           return (

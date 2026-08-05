@@ -5245,7 +5245,10 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+    // Third column only at xl: these cards carry a name, a net-worth figure and
+    // a two-part assets/debts line, which needs ~320px. At lg the sidebar leaves
+    // ~720px of content, and thirds of that would wrap the bottom line.
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
       {cards.map((c: any) => {
         const accent = profileAccent(c.id + c.name);
         const share = totalPositiveNW > 0 ? (Math.max(0, c.netWorth) / totalPositiveNW) * 100 : 0;
@@ -5779,7 +5782,11 @@ export default function DashboardPage() {
   const rightSections = useMemo(() => sections.filter(s => s.visible && s.column === "right"), [sections]);
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 md:p-4 space-y-3 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
+    // GUTTERS (2026-08-05): md:px-6, not md:p-4. The hub chrome above this page
+    // (HubShell: px-3 md:px-6) and the app's standard PageContainer (px-4
+    // md:px-6) both indent by 6 at desktop, so a 4 here left every card on the
+    // dashboard sitting half a step inside the tab row that opened it.
+    <div className="h-full overflow-y-auto overflow-x-hidden px-3 py-3 md:px-6 md:py-4 space-y-3 max-w-full pb-24" style={{WebkitOverflowScrolling: 'touch'}} data-testid="page-dashboard">
       {/* Header — hub-embedded: date + profile filter live in the hub shell
           (HubShell/HubProfileSwitcher write the same profileFilter store this
           page subscribes to), so only the kebab menu remains. */}

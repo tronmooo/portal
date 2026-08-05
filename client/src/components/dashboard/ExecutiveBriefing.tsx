@@ -91,6 +91,30 @@ function BriefBubble({ children }: { children: React.ReactNode }) {
 // showing "…" while its query is still in flight (BUG-20260715-everyone-zeros:
 // a wall of hard zeros reads as "aggregation is broken"), so the counting
 // animation only applies when the value is genuinely numeric.
+//
+// SPANNING (see the grid in ExecutiveBriefing): the prominent tile is the one
+// that stretches, and it stretches by exactly the amount that makes seven tiles
+// divide evenly into the column count — 2 of 2, 3 of 3, 2 of 4. That is the
+// whole reason the grid never ends in a row of holes.
+//
+// A tile stretched across a wide row would otherwise be a phone tile with a
+// band of dead space beside it, so in the 3-column layouts — the only ones
+// where this tile is both full-row AND wide — the sub-line leaves the stack and
+// pins to the tile's right edge. Per breakpoint:
+//
+//   base  2 cols · spans 2 · full row at phone width · stacked
+//   sm    3 cols · spans 3 · full row, ~615px        · pinned
+//   md    2 cols · spans 2 · sidebar cuts it to ~400 · stacked
+//   lg    3 cols · spans 3 · ~720px                  · pinned
+//   xl    4 cols · spans 2 · half a row              · stacked
+const SUB_POSITION = [
+  "w-full mt-1.5",                                                            // stacked
+  "sm:w-auto sm:ml-auto sm:max-w-[50%] sm:self-center sm:text-right sm:mt-0",  // pinned
+  "md:w-full md:ml-0 md:max-w-none md:self-auto md:text-left md:mt-1.5",       // stacked
+  "lg:w-auto lg:ml-auto lg:max-w-[50%] lg:self-center lg:text-right lg:mt-0",  // pinned
+  "xl:w-full xl:ml-0 xl:max-w-none xl:self-auto xl:text-left xl:mt-1.5",       // stacked
+].join(" ");
+
 function StatTile({ label, value, unit, sub, accent, icon, onClick, testId, prominent }: {
   label: string; value: string; unit?: string; sub?: string; accent: string;
   icon: LucideIcon; onClick: () => void; testId: string; prominent?: boolean;
@@ -102,10 +126,14 @@ function StatTile({ label, value, unit, sub, accent, icon, onClick, testId, prom
     <button
       onClick={onClick}
       data-testid={testId}
-      className={`bubble bubble-interactive bubble-enter text-left touch-hit ${prominent ? "p-3.5 col-span-2 sm:col-span-1" : "p-3"}`}
+      className={`bubble bubble-interactive bubble-enter text-left touch-hit ${
+        prominent
+          ? "p-3.5 col-span-2 sm:col-span-3 md:col-span-2 lg:col-span-3 xl:col-span-2"
+          : "p-3"
+      }`}
       style={{ ["--accent-hsl" as any]: accent }}
     >
-      <div className="flex items-start gap-2.5">
+      <div className={`flex items-start gap-2.5 ${prominent ? "flex-wrap" : ""}`}>
         <Medallion icon={icon} accent={accent} size={prominent ? "lg" : "sm"} />
         <div className="min-w-0 flex-1">
           <span className="block micro-label text-muted-foreground truncate">
@@ -118,8 +146,16 @@ function StatTile({ label, value, unit, sub, accent, icon, onClick, testId, prom
             {unit && <span className="text-[11px] font-semibold truncate" style={{ color: `hsl(${accent} / 0.85)` }}>{unit}</span>}
           </div>
         </div>
+        {prominent && sub && (
+          // Clamped rather than truncated: on the widths where this pins right,
+          // the extra room is exactly where the rest of the sentence
+          // ("· 8 expiring documents") finally fits.
+          <div className={`${SUB_POSITION} text-[11px] text-muted-foreground line-clamp-2`}>
+            {sub}
+          </div>
+        )}
       </div>
-      {sub && <div className="text-[11px] text-muted-foreground truncate mt-1.5">{sub}</div>}
+      {!prominent && sub && <div className="text-[11px] text-muted-foreground truncate mt-1.5">{sub}</div>}
     </button>
   );
 }
@@ -614,7 +650,21 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           Loading-vs-empty (BUG-20260715-everyone-zeros): while a tile's query
           is still pending (cold Everyone switch, cold reload) it shows "…",
           never a hard 0 — a wall of zeros reads as "aggregation is broken". */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 mb-4" data-testid="brief-stat-row">
+      {/* COLUMN COUNT (2026-08-05). This row used to be `grid-cols-2
+          sm:grid-cols-3`, capped at three columns forever, so every desktop
+          width laid seven tiles out as 3 · 3 · 1 and the page opened on a row
+          holding one tile and two holes.
+
+          Two things drive the ladder below. First, the tile count: the Attention
+          tile's span is picked so 7 tiles always divide evenly — spanning 2 over
+          2 columns = 8 cells, spanning 3 over 3 = 9, spanning 2 over 4 = 8. No
+          width ends in a gap. Second, THE SIDEBAR, which is what makes this
+          non-monotonic: it becomes inline at md (768px, see use-mobile) and
+          takes 16rem, so the content box actually SHRINKS from ~615px at sm to
+          ~400px there. Holding 3 columns across that step is what truncated the
+          units to "n…" and "nee…". Columns follow the content box, not the
+          viewport: 2 · sm 3 · md 2 (sidebar arrives) · lg 3 · xl 4. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 mb-4" data-testid="brief-stat-row">
         <StatTile prominent label="Attention" icon={TriangleAlert}
           value={tasksPending || enhanced === undefined ? "…" : String(attnCount)}
           unit={tasksPending || enhanced === undefined ? undefined : attnCount > 0 ? (attnCount === 1 ? "item needs action" : "items need action") : undefined}
@@ -650,18 +700,21 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           unit={enhanced === undefined ? undefined : docsSoonCount === 1 ? "needs attention" : "need attention"}
           sub={enhanced === undefined ? "loading" : nextDoc ? `${nextDoc.documentName || nextDoc.name || "Document"} ${docExpiryPhrase(nextDoc.daysUntil)}` : "all good"}
           accent={ACCENTS.docs} onClick={() => setPopup("docs")} testId="brief-stat-documents" />
-        {/* Zero habits ≠ "all done" — it means nothing is scheduled. */}
+        {/* Zero habits ≠ "all done" — it means nothing is scheduled.
+            "0 of 12" + "completed" does not fit a tile at any column count: it
+            broke across two lines with the unit truncated to "complet…", which
+            made this the one tile taller than its row. "0/12 done" says the same
+            thing on one line, and the sub-line carries the detail. */}
         <StatTile label="Habits" icon={Flame}
-          value={habitsPending ? "…" : habitsDueToday.length === 0 ? "—" : `${habitsDoneCount} of ${habitsDueToday.length}`}
-          unit={habitsPending || habitsDueToday.length === 0 ? undefined : "completed"}
+          value={habitsPending ? "…" : habitsDueToday.length === 0 ? "—" : `${habitsDoneCount}/${habitsDueToday.length}`}
+          unit={habitsPending || habitsDueToday.length === 0 ? undefined : "done"}
           sub={habitsPending ? "loading" : habitsDueToday.length === 0 ? "No habits scheduled today" : missedCount > 0 ? `${missedCount} remaining today` : "all done today"}
           accent={ACCENTS.habits} onClick={() => setPopup("habits")} testId="brief-stat-habits" />
-        {/* The six tiles above leave one empty cell in the 2-column mobile
-            grid. Rather than pad it with another count that's already on
-            screen, it carries the one thing nothing else answers: how much of
-            today is actually finished. Completable items only — tasks and
-            habits have a done-state, events and bills do not, so counting them
-            would make the bar unable to reach 100%. */}
+        {/* The seventh tile. Rather than pad the row with another count that's
+            already on screen, it carries the one thing nothing else answers:
+            how much of today is actually finished. Completable items only —
+            tasks and habits have a done-state, events and bills do not, so
+            counting them would make the bar unable to reach 100%. */}
         <StatTile label="Today" icon={Gauge}
           value={tasksPending || habitsPending ? "…" : dayCompletable === 0 ? "—" : `${dayPct}%`}
           unit={tasksPending || habitsPending || dayCompletable === 0 ? undefined : "done"}

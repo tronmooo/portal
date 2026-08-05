@@ -19,6 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import { useOverflowX } from "@/hooks/useOverflowX";
 import { computeHealthScore } from "@/lib/tracker-health";
 import type { DashboardStats, Tracker } from "@shared/schema";
 import { MetricCard } from "@/components/ui/metric-card";
@@ -84,7 +85,11 @@ function StatChip({ label, value, icon, accent, tone, sub, subTone, onClick, tes
       onClick={onClick}
       testId={testId}
       density="dense"
-      className="shrink-0"
+      // grow + min-w-fit: share out any spare width so six chips span the strip
+      // on a desktop instead of huddling at the left with a third of the row
+      // empty — but never shrink below the number they exist to show, so on a
+      // phone they keep their natural size and the row scrolls as before.
+      className="grow basis-0 min-w-fit"
       headerRight={sub ? (
         <span className={`text-[11px] font-bold whitespace-nowrap ${
           subTone === "pos" ? "text-emerald-500" : subTone === "neg" ? "text-red-500" : "text-amber-500"
@@ -160,11 +165,22 @@ export function HubKpiStrip() {
   // those colours are declared.
   const tabAccent = (id: string) => HUB_TABS.find(t => t.id === id)!.accent;
 
+  // Values are listed as deps because a chip changing from "—" to "1,398,804"
+  // is what most often pushes the row into (or out of) overflow.
+  const [stripRef, clipped] = useOverflowX<HTMLDivElement>([
+    netWorth, cashFlow, health, streak, tasksDue, tasksLate, expDocs.length, minDocDays,
+  ]);
+
   return (
     // Horizontal scroll with an edge fade so cut-off chips read as "more to
-    // the right" instead of a broken layout at narrow widths.
+    // the right" instead of a broken layout at narrow widths — but only when
+    // something is genuinely cut off. On a desktop the six chips fit and share
+    // the full width, and fading the last one there just looked like a bug.
     <div
-      className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar [mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]"
+      ref={stripRef}
+      className={`flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar ${
+        clipped ? "[mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]" : ""
+      }`}
       data-testid="hub-kpi-strip"
     >
       <StatChip
