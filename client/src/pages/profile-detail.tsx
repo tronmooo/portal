@@ -13106,8 +13106,16 @@ export default function ProfileDetailPage() {
 
   const linkedTypes = ["vehicle", "asset", "subscription", "loan", "investment", "property", "insurance"];
   const isLinkedType = linkedTypes.includes(profile.type);
-  const backHref = isLinkedType ? "/trackers" : "/profiles";
-  const backLabel = isLinkedType ? "Back to Linked" : "Back to Profiles";
+  // Back goes to the listing this profile actually came FROM. It used to send
+  // every linked type to /trackers — the Trackers list — under a label reading
+  // "Back to Linked", so leaving an asset dropped you somewhere that did not
+  // contain it (QA report 2026-08-05).
+  // (Liability/loan profiles returned above into LiabilityProfilePage, so the
+  // only linked types reaching here are assets and the subscription/insurance
+  // family.)
+  const listedUnderAssets = ["vehicle", "asset", "investment", "property"].includes(profile.type);
+  const backHref = listedUnderAssets ? "/linked?tab=assets" : isLinkedType ? "/linked" : "/profiles";
+  const backLabel = listedUnderAssets ? "Back to Assets" : isLinkedType ? "Back to Linked" : "Back to Profiles";
 
   const visual = profileVisual(profile.type);
 

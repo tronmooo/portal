@@ -186,7 +186,10 @@ describe("section behaviour", () => {
     }));
     const secs = run({ events });
     expect(byId(secs).upcoming.total).toBe(10);
-    expect(byId(secs).upcoming.items.length).toBe(8);   // display cap
+    // Every row ships; the UI collapses to DISPLAY_CAP and "+N more" expands to
+    // the rest. Truncating here is what left that button with nothing to reveal
+    // (QA report 2026-08-05).
+    expect(byId(secs).upcoming.items.length).toBe(10);
   });
 
   it("does not count a weekly habit on a day it isn't scheduled", () => {

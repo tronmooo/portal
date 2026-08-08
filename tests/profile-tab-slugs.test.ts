@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import { resolve as resolvePath } from "path";
 import {
   PROFILE_TAB_SLUGS, isProfileTabSlug, tabSlugFromLabel,
   resolveProfileTab, slugForProfileTab,
@@ -64,5 +66,49 @@ describe("slugForProfileTab", () => {
       const slug = slugForProfileTab(PERSON_TABS, tab.value);
       expect(resolveProfileTab(PERSON_TABS, slug), tab.value).toBe(tab.value);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QA report 2026-08-05 (profile sub-tabs). The detail page derives a tab's URL
+// from its LABEL, and isHubRoute() only treats /profiles/:id/<slug> as a profile
+// route when <slug> is in PROFILE_TAB_SLUGS. The list held just the seven
+// person-tab slugs, so opening Contained, Financials, Money, Maintenance,
+// Activity, Notes, Payments, Statements … produced a URL the router did not
+// recognise as a profile route and the hub chrome dropped out on those tabs
+// only.
+//
+// The list and the page's tab tables are two files that must agree, so read the
+// tab tables straight out of the page and assert every label lands on a known
+// slug. A new tab now fails here instead of silently half-working.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PROFILE_TAB_SLUGS covers every tab the detail page can open", () => {
+  const src = readFileSync(
+    resolvePath(__dirname, "../client/src/pages/profile-detail.tsx"), "utf8",
+  );
+  // Tab rows are the object literals carrying a `testId: "tab-…"`, which is what
+  // distinguishes them from the field-definition tables in the same file.
+  const tabRows = [...src.matchAll(
+    /\{\s*value:\s*"([a-z-]+)",\s*label:\s*"([^"]+)",\s*testId:\s*"tab-[a-z-]+"\s*\}/g,
+  )];
+
+  it("finds the page's tab tables", () => {
+    expect(tabRows.length).toBeGreaterThan(40);
+  });
+
+  it("every tab label slugifies to a recognised profile tab slug", () => {
+    const unknown = [...new Set(
+      tabRows.map(m => m[2]).filter(label => !isProfileTabSlug(tabSlugFromLabel(label))),
+    )];
+    expect(unknown, `add these to PROFILE_TAB_SLUGS: ${unknown.join(", ")}`).toEqual([]);
+  });
+
+  it("every slug in the list is reachable from some tab label or value", () => {
+    const reachable = new Set([
+      ...tabRows.map(m => tabSlugFromLabel(m[2])),
+      ...tabRows.map(m => m[1]),
+    ]);
+    const stale = PROFILE_TAB_SLUGS.filter(s => !reachable.has(s));
+    expect(stale, `no tab produces these slugs: ${stale.join(", ")}`).toEqual([]);
   });
 });

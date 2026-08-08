@@ -155,7 +155,16 @@ function DynamicCard({ card }: { card: WellnessCard }) {
     ? `${card.pair.systolic ?? "—"}/${card.pair.diastolic ?? "—"}`
     : fmt(card.value, card.isCount ? 0 : 1);
   return (
-    <Link href="/trackers" className="block h-full">
+    // Deep-link to THE tracker this card is showing. Every one of these cards
+    // used to point at the bare /trackers list, so tapping any of ~35 metrics
+    // landed you on the same undifferentiated page and you had to find the
+    // tracker again by hand (QA report 2026-08-05). ?tracker=<id> is the
+    // existing deep-link contract trackers.tsx already honours.
+    <a
+      href={`#/trackers?tracker=${card.id}`}
+      className="block h-full"
+      data-testid={`wellness-metric-link-${card.id}`}
+    >
       {/* --accent-hsl, not an inline borderColor: the bubble paints its own
           border from the accent, and an inline one silently wins over it. */}
       <Card interactive className="p-3 h-full flex flex-col" data-testid={`wellness-metric-${card.id}`}
@@ -175,7 +184,7 @@ function DynamicCard({ card }: { card: WellnessCard }) {
         {card.series.length >= 2 && <div className="mt-2 flex-1 flex items-end"><Spark series={card.series} color={tone} /></div>}
         <div className="text-[11px] text-muted-foreground mt-1.5">{card.entryCount} logged</div>
       </Card>
-    </Link>
+    </a>
   );
 }
 function DynamicMetricGrid({ cards }: { cards: WellnessCard[] }) {

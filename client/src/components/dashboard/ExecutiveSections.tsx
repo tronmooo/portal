@@ -31,6 +31,7 @@ import {
   FolderOpen, Heart, History, Sparkles, PartyPopper, Lightbulb, type LucideIcon,
 } from "lucide-react";
 import type { AttentionItem } from "@shared/attention";
+import { DISPLAY_CAP } from "@shared/executive-sections";
 import type { ExecSection, ExecSectionId } from "@shared/executive-sections";
 import { Medallion, ProgressRing, CountUp, Pill, toneForDays, tonePalette, type PillTone } from "./visuals";
 
@@ -197,7 +198,12 @@ function SectionBubble({ section, index, busyKeys, armedKey, leavingKeys, onActi
   const hero = emphasis === "hero";
   const [open, setOpen] = useState(emphasis !== "reference");
   const [showAll, setShowAll] = useState(false);
-  const hidden = section.total - section.items.length;
+  // The section carries EVERY row; this is where they collapse. Previously the
+  // builder truncated the list and this only knew how many were missing, so
+  // "+N more" had nothing to reveal — it removed itself and the rows never
+  // appeared (QA report 2026-08-05).
+  const visible = showAll ? section.items : section.items.slice(0, DISPLAY_CAP);
+  const hidden = section.items.length - visible.length;
   const Icon = SECTION_ICON[section.id];
 
   return (
@@ -254,11 +260,11 @@ function SectionBubble({ section, index, busyKeys, armedKey, leavingKeys, onActi
 
       {open && (
         <div className={`space-y-2 ${hero ? "mt-3.5" : "mt-3"}`}>
-          {section.items.map((i) => (
+          {visible.map((i) => (
             <Row key={i.key} item={i} hero={hero}
               busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys} onAction={onAction} />
           ))}
-          {hidden > 0 && !showAll && (
+          {hidden > 0 && (
             <button
               onClick={() => setShowAll(true)}
               className="w-full rounded-full py-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
