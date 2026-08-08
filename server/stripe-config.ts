@@ -46,18 +46,59 @@ export class FinanceConfigError extends Error {
   }
 }
 
+/**
+ * Read an environment variable, tolerating the casing a human actually typed.
+ *
+ * Exact match wins. Failing that we scan case-insensitively, because a hosting
+ * dashboard is a free-text box and `Stripe_Publishable_key` is a completely
+ * reasonable thing to type — but `process.env` is case-sensitive on Linux, so
+ * the server would report itself unconfigured while the value sat right there.
+ * That failure is invisible and maddening to debug.
+ *
+ * Safety: this only widens NAME matching, never what a value is allowed to be.
+ * The publishable key still has to start with `pk_` before it can reach a
+ * browser, so a mis-named secret cannot leak through this path.
+ */
 function env(name: string): string | undefined {
-  const v = process.env[name];
-  return v && v.trim() ? v.trim() : undefined;
+  const exact = process.env[name];
+  if (exact && exact.trim()) return exact.trim();
+
+  const wanted = name.toLowerCase();
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.toLowerCase() === wanted && value && value.trim()) return value.trim();
+  }
+  return undefined;
 }
+
+/** First non-empty of several accepted names. */
+function envAny(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = env(name);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+// Accepted spellings for the webhook signing secret. Stripe's own dashboard
+// labels this value "Signing secret", so naming the variable after the label is
+// the natural thing to do — accept it rather than fail with a message that
+// points at a different name than the one the user was shown.
+const WEBHOOK_SECRET_NAMES = [
+  "STRIPE_WEBHOOK_SECRET",
+  "STRIPE_SIGNING_SECRET",
+  "STRIPE_WEBHOOK_SIGNING_SECRET",
+];
+
+const PUBLISHABLE_KEY_NAMES = [
+  "STRIPE_PUBLISHABLE_KEY",
+  "VITE_STRIPE_PUBLISHABLE_KEY",
+  "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+];
 
 // ── Publishable key ─────────────────────────────────────────────────────────
 
 export function publishableKeyForClient(): string | null {
-  const raw =
-    env("STRIPE_PUBLISHABLE_KEY") ??
-    env("VITE_STRIPE_PUBLISHABLE_KEY") ??
-    env("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY");
+  const raw = envAny(...PUBLISHABLE_KEY_NAMES);
   if (!raw) return null;
   // Fail closed: only a real publishable key may cross to the browser. If
   // someone pastes sk_live_… here we return null rather than leak it.
@@ -86,7 +127,7 @@ export interface StripeConfigStatus {
 
 export function stripeConfigStatus(): StripeConfigStatus {
   const secret = env("STRIPE_SECRET_KEY");
-  const webhook = env("STRIPE_WEBHOOK_SECRET");
+  const webhook = envAny(...WEBHOOK_SECRET_NAMES);
   const publishable = publishableKeyForClient();
 
   const missing: string[] = [];
@@ -125,7 +166,7 @@ export function assertStripeConfigured(): void {
 }
 
 export function assertWebhookConfigured(): string {
-  const secret = env("STRIPE_WEBHOOK_SECRET");
+  const secret = envAny(...WEBHOOK_SECRET_NAMES);
   if (!secret) {
     throw new FinanceConfigError(
       "not_configured",

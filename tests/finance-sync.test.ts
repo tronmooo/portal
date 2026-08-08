@@ -75,6 +75,45 @@ describe("stripe configuration", () => {
     expect(mod.publishableKeyForClient()).toBe("pk_test_abc123");
   });
 
+  it("finds the key whatever casing a human typed into the hosting dashboard", async () => {
+    // process.env is case-sensitive on Linux, so a dashboard entry named
+    // `Stripe_Publishable_key` silently read as absent and the whole feature
+    // reported itself unconfigured with the value sitting right there.
+    (process.env as any).Stripe_Publishable_key = "pk_test_mixed_case";
+    const mod = await import("../server/stripe-config");
+    expect(mod.publishableKeyForClient()).toBe("pk_test_mixed_case");
+    delete (process.env as any).Stripe_Publishable_key;
+  });
+
+  it("accepts STRIPE_SIGNING_SECRET — the name Stripe's own dashboard uses", async () => {
+    // The dashboard labels this value "Signing secret", so that is what people
+    // name the variable. Failing with a message pointing at a different name
+    // than the one they were shown is our bug, not theirs.
+    (process.env as any).STRIPE_Signing_secret = "whsec_from_dashboard_label";
+    const mod = await import("../server/stripe-config");
+    expect(mod.assertWebhookConfigured()).toBe("whsec_from_dashboard_label");
+    expect(mod.stripeConfigStatus().webhooksConfigured).toBe(true);
+    delete (process.env as any).STRIPE_Signing_secret;
+  });
+
+  it("still prefers the exact canonical name when several are present", async () => {
+    process.env.STRIPE_WEBHOOK_SECRET = "whsec_canonical";
+    (process.env as any).STRIPE_SIGNING_SECRET = "whsec_alias";
+    const mod = await import("../server/stripe-config");
+    expect(mod.assertWebhookConfigured()).toBe("whsec_canonical");
+    delete (process.env as any).STRIPE_SIGNING_SECRET;
+  });
+
+  it("does not let looser NAME matching loosen VALUE checks", async () => {
+    // A secret key mis-named as the publishable one must still be refused.
+    (process.env as any).stripe_publishable_KEY = "sk_test_secret_in_wrong_slot";
+    const mod = await import("../server/stripe-config");
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(mod.publishableKeyForClient()).toBeNull();
+    spy.mockRestore();
+    delete (process.env as any).stripe_publishable_KEY;
+  });
+
   it("treats a missing webhook secret as degraded, not broken", async () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_x";
     process.env.STRIPE_PUBLISHABLE_KEY = "pk_test_x";
