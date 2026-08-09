@@ -4612,14 +4612,9 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
-  // Chat-created reminders ("remind me to take evening medication") must show
-  // in the cross-app Upcoming feed, not only in the Executive briefing's
-  // Reminders section (user report 2026-07-15).
-  const { data: reminders = [] } = useQuery<any[]>({
-    queryKey: ["/api/reminders", filterMode, ...filterIds],
-    enabled: ready,
-    queryFn: () => apiRequest("GET", `/api/reminders${profileParam}`).then(r => r.json()),
-  });
+  // (Removed 2026-08-09: a /api/reminders query feeding this list. "Remind me
+  // to take evening medication" is a TASK with a due time now, and `tasks`
+  // above already carries it — a second source would list it twice.)
 
   const [entityFilter, setEntityFilter] = useState<"all" | UpcomingEntityKind>("all");
   const [pins, setPins] = useState<Set<string>>(() => loadUpcomingPins());
@@ -4634,8 +4629,8 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
   };
 
   const all = useMemo(() => aggregateUpcomingDates({
-    profiles, documents, tasks, events, obligations, goals, reminders,
-  }), [profiles, documents, tasks, events, obligations, goals, reminders]);
+    profiles, documents, tasks, events, obligations, goals,
+  }), [profiles, documents, tasks, events, obligations, goals]);
 
   const filtered = useMemo(() => {
     let items = all;
@@ -4797,7 +4792,7 @@ export function QuickActionsSection({ filterMode, filterIds, allProfiles = [] }:
     { k: "income", label: "Income", icon: ArrowDownToLine },
     { k: "bill", label: "Bill", icon: CreditCard },
     { k: "note", label: "Note", icon: StickyNote },
-    { k: "reminder", label: "Reminder", icon: Bell },
+    { k: "task", label: "Task", icon: Bell },
   ];
   return (
     <div className="flex flex-wrap gap-2" data-testid="section-quick-actions">

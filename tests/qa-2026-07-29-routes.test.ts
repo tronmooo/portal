@@ -97,92 +97,104 @@ describe("PROP-005 (route): a create lands on the profile in scope", () => {
     expect(h.db.tasks[0].linkedProfiles).toEqual([MIKE.id]);
   });
 
-  it("files a reminder's scalar profileId the same way", async () => {
-    await h.api("POST", "/api/reminders", { title: "Call the plumber", fireAt: "2026-07-29T17:51" }, asMike);
-    expect(h.db.reminders[0].profileId).toBe(MIKE.id);
+  it("files a TIMED task the same way", async () => {
+    await h.api("POST", "/api/tasks", { title: "Call the plumber", dueDate: "2026-07-29", dueTime: "17:51" }, asMike);
+    expect(h.db.tasks[0].linkedProfiles).toEqual([MIKE.id]);
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CRUD-T2-001 — "remind me at 5:51 PM" was stored as 10:51 AM
+//
+// The original bug: a reminder's time was an INSTANT (`fire_at timestamptz`),
+// and the quick-add dialog posts a zone-less `<input type="datetime-local">`
+// value, so the server read 17:51 as UTC and displayed it back as 10:51 AM.
+//
+// Reminders were retired on 2026-08-09. A task stores the user's WALL CLOCK —
+// `dueDate` plus `dueTime`, two plain strings — so there is no instant to
+// convert and no zone to get wrong. These pin that the wall clock survives the
+// round trip verbatim, which is what makes the old bug unrepresentable.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("CRUD-T2-001 (route): a reminder is stored at the time the user meant", () => {
-  it("reads the quick-add dialog's zone-less datetime as the user's wall clock", async () => {
-    const r = await h.api("POST", "/api/reminders", { title: "Call the plumber", fireAt: "2026-07-29T17:51" });
+describe("CRUD-T2-001 (route): a timed task keeps the time the user meant", () => {
+  it("stores the hour the user typed, unshifted", async () => {
+    const r = await h.api("POST", "/api/tasks", { title: "Call the plumber", dueDate: "2026-07-29", dueTime: "17:51" });
     expect(r.status).toBe(201);
-    const parts = getZonedParts(h.db.reminders[0].fireAt, TZ);
-    expect(parts.date).toBe("2026-07-29");
-    expect(parts.hours).toBe(17);   // was 10 before the fix
-    expect(parts.minutes).toBe(51);
+    expect(h.db.tasks[0].dueDate).toBe("2026-07-29");
+    expect(h.db.tasks[0].dueTime).toBe("17:51");  // was read back as 10:51 before
   });
 
-  it("uses the CALLER's zone, not a hard-coded one", async () => {
-    await h.api("POST", "/api/reminders", { title: "Berlin", fireAt: "2026-07-29T17:51" }, { "X-Timezone": "Europe/Berlin" });
-    expect(getZonedParts(h.db.reminders[0].fireAt, "Europe/Berlin").hours).toBe(17);
-  });
-
-  it("leaves a fully-qualified instant alone", async () => {
-    await h.api("POST", "/api/reminders", { title: "UTC", fireAt: "2026-07-29T17:51:00Z" });
-    expect(h.db.reminders[0].fireAt).toBe("2026-07-29T17:51:00.000Z");
+  it("stores the same wall clock whatever zone the caller is in", async () => {
+    await h.api("POST", "/api/tasks", { title: "Berlin", dueDate: "2026-07-29", dueTime: "17:51" }, { "X-Timezone": "Europe/Berlin" });
+    expect(h.db.tasks[0].dueTime).toBe("17:51");
   });
 
   it("keeps the same rule on edit", async () => {
-    const c = await h.api("POST", "/api/reminders", { title: "Move me", fireAt: "2026-07-29T09:00" });
-    await h.api("PATCH", `/api/reminders/${c.data.id}`, { fireAt: "2026-07-29T17:51" });
-    expect(getZonedParts(h.db.reminders[0].fireAt, TZ).hours).toBe(17);
+    const c = await h.api("POST", "/api/tasks", { title: "Move me", dueDate: "2026-07-29", dueTime: "09:00" });
+    await h.api("PATCH", `/api/tasks/${c.data.id}`, { dueTime: "17:51" });
+    expect(h.db.tasks[0].dueTime).toBe("17:51");
+  });
+
+  it("leaves a task with no clock time all-day rather than inventing midnight", async () => {
+    await h.api("POST", "/api/tasks", { title: "Buy milk", dueDate: "2026-07-29" });
+    expect(h.db.tasks[0].dueTime).toBeUndefined();
+  });
+
+  it("lets a timed task go back to all-day", async () => {
+    // "" and null both fail the HH:MM validator, but they are how the UI says
+    // "make this all-day". A 400 here would strand the task at an hour the user
+    // just removed.
+    const c = await h.api("POST", "/api/tasks", { title: "Buy milk", dueDate: "2026-07-29", dueTime: "09:00" });
+    const r = await h.api("PATCH", `/api/tasks/${c.data.id}`, { dueTime: null });
+    expect(r.status).toBe(200);
+    expect(h.db.tasks[0].dueTime).toBeUndefined();
   });
 
   it("still rejects an unparseable time", async () => {
-    expect((await h.api("POST", "/api/reminders", { title: "X", fireAt: "not a date" })).status).toBe(400);
+    expect((await h.api("POST", "/api/tasks", { title: "X", dueDate: "2026-07-29", dueTime: "5:51 pm" })).status).toBe(400);
+    expect((await h.api("POST", "/api/tasks", { title: "X", dueDate: "2026-07-29", dueTime: "25:00" })).status).toBe(400);
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CRUD-T2-002 — a deleted reminder came back from its calendar mirror
+//
+// A reminder was one row whose calendar appearance was a SECOND row (a mirrored
+// event), so deleting one left the other projecting something the user had
+// already removed, and editing one stranded a copy at the old time. Retiring
+// the entity deleted the whole class: a timed task IS its own calendar entry.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("CRUD-T2-002 (route): a deleted reminder does not resurface", () => {
-  // The state the chat tool leaves behind: a reminder row plus a companion
-  // calendar event tagged "reminder" on the same local day.
-  async function seedMirroredReminder() {
-    const created = await h.api("POST", "/api/reminders", { title: "Call the plumber", fireAt: "2026-07-29T17:51" });
-    h.db.events.push({
-      id: "mirror-1", title: "Call the plumber", date: "2026-07-29", time: "17:51",
-      tags: ["reminder"], linkedProfiles: [],
-    });
-    return created.data.id;
-  }
-
-  it("takes the calendar mirror with it on delete", async () => {
-    const rid = await seedMirroredReminder();
-    const r = await h.api("DELETE", `/api/reminders/${rid}`);
-    expect(r.status).toBe(200);
-    expect(h.db.reminders).toHaveLength(0);
-    expect(h.db.events).toHaveLength(0); // the orphan that used to come back
+describe("CRUD-T2-002 (route): a timed task has nothing to fall out of sync with", () => {
+  it("creates exactly one row — no companion event to strand", async () => {
+    await h.api("POST", "/api/tasks", { title: "Call the plumber", dueDate: "2026-07-29", dueTime: "17:51" });
+    expect(h.db.tasks).toHaveLength(1);
+    expect(h.db.events).toHaveLength(0);
   });
 
-  it("leaves an unrelated real event with the same title alone", async () => {
-    const rid = await seedMirroredReminder();
+  it("leaves nothing behind on delete", async () => {
+    const c = await h.api("POST", "/api/tasks", { title: "Call the plumber", dueDate: "2026-07-29", dueTime: "17:51" });
+    const r = await h.api("DELETE", `/api/tasks/${c.data.id}`);
+    expect(r.status).toBe(200);
+    expect(h.db.events).toHaveLength(0);
+  });
+
+  it("never touches a real event the user typed with the same title", async () => {
+    const c = await h.api("POST", "/api/tasks", { title: "Call the plumber", dueDate: "2026-07-29", dueTime: "17:51" });
     h.db.events.push({ id: "real-1", title: "Call the plumber", date: "2026-07-29", tags: [], linkedProfiles: [] });
-    await h.api("DELETE", `/api/reminders/${rid}`);
+    await h.api("DELETE", `/api/tasks/${c.data.id}`);
     expect(h.db.events.map(e => e.id)).toEqual(["real-1"]);
   });
 
-  it("moves the mirror when the reminder time is edited", async () => {
-    const rid = await seedMirroredReminder();
-    await h.api("PATCH", `/api/reminders/${rid}`, { fireAt: "2026-08-02T09:15" });
-    const mirror = h.db.events.find(e => e.id === "mirror-1");
-    expect(mirror.date).toBe("2026-08-02");
-    expect(mirror.time).toBe("09:15");
+  it("moving the task moves the only row there is", async () => {
+    const c = await h.api("POST", "/api/tasks", { title: "Call the plumber", dueDate: "2026-07-29", dueTime: "17:51" });
+    await h.api("PATCH", `/api/tasks/${c.data.id}`, { dueDate: "2026-08-02", dueTime: "09:15" });
+    expect(h.db.tasks[0]).toMatchObject({ dueDate: "2026-08-02", dueTime: "09:15" });
+    expect(h.db.events).toHaveLength(0);
   });
 
-  it("retitles the mirror when the reminder is renamed", async () => {
-    const rid = await seedMirroredReminder();
-    await h.api("PATCH", `/api/reminders/${rid}`, { title: "Call the electrician" });
-    expect(h.db.events.find(e => e.id === "mirror-1").title).toBe("Call the electrician");
-  });
-
-  it("deleting an already-deleted reminder still 404s (no silent success)", async () => {
-    expect((await h.api("DELETE", "/api/reminders/nope")).status).toBe(404);
+  it("the retired reminder routes answer 410, not 404 — a stale client learns why", async () => {
+    const r = await h.api("POST", "/api/reminders", { title: "X", fireAt: "2026-07-29T17:51" });
+    expect(r.status).toBe(410);
+    expect(String(r.data.error)).toMatch(/timed tasks/i);
   });
 });
 

@@ -37,7 +37,7 @@ import { formatMoney } from "@/lib/format";
 export const RULE_ICONS: Record<OccurrenceKind, any> = {
   birthday: Cake, anniversary: CalendarHeart, subscription: CreditCard,
   liability: Wallet, bill: Receipt, renewal: RefreshCw, maintenance: Wrench,
-  appointment: Stethoscope, reminder: Bell, task: CheckSquare, habit: Repeat,
+  appointment: Stethoscope, task: CheckSquare, habit: Repeat,
   document: FileText, event: CalendarDays, custom: CalendarDays,
 };
 
@@ -46,7 +46,7 @@ export const RULE_ICONS: Record<OccurrenceKind, any> = {
 export const RULE_HSL: Record<OccurrenceKind, string> = {
   birthday: "262 60% 62%", anniversary: "330 55% 60%", subscription: "220 60% 60%",
   liability: "270 50% 60%", bill: "0 55% 58%", renewal: "38 65% 52%",
-  maintenance: "199 55% 52%", appointment: "155 45% 46%", reminder: "48 65% 52%",
+  maintenance: "199 55% 52%", appointment: "155 45% 46%",
   task: "210 55% 58%", habit: "170 45% 46%", document: "215 12% 58%",
   event: "240 8% 58%", custom: "240 8% 58%",
 };

@@ -42,7 +42,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("QuickActionsSection", () => {
   it("renders all five quick-add buttons", () => {
     wrap(<QuickActionsSection filterMode="everyone" filterIds={[]} />);
-    for (const k of ["expense", "income", "bill", "note", "reminder"]) {
+    for (const k of ["expense", "income", "bill", "note", "task"]) {
       expect(screen.getByTestId(`quick-action-${k}`)).toBeTruthy();
     }
   });

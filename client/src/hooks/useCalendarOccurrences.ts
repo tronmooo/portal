@@ -98,10 +98,6 @@ export function useCalendarOccurrences(
     queryKey: [...scopedKey("/api/tasks", mode, kIds)],
     queryFn: () => get(`/api/tasks${profileParam}`),
   });
-  const reminders = useQuery<any[]>({
-    queryKey: [...scopedKey("/api/reminders", mode, kIds)],
-    queryFn: () => get(`/api/reminders${profileParam}`),
-  });
   const documents = useQuery<any[]>({
     queryKey: [...scopedKey("/api/documents", mode, kIds)],
     queryFn: () => get(`/api/documents${profileParam}`),
@@ -124,10 +120,9 @@ export function useCalendarOccurrences(
         events: eventList,
         obligations: Array.isArray(obligations.data) ? obligations.data : [],
         tasks: Array.isArray(tasks.data) ? tasks.data : [],
-        reminders: Array.isArray(reminders.data) ? reminders.data : [],
         documents: Array.isArray(documents.data) ? documents.data : [],
       }),
-    [profileList, eventList, obligations.data, tasks.data, reminders.data, documents.data],
+    [profileList, eventList, obligations.data, tasks.data, documents.data],
   );
 
   // Self ids drive the soft-orphan rule: an unassigned record belongs to the
@@ -242,7 +237,7 @@ export function useCalendarOccurrences(
     todayISO,
     isLoading:
       events.isLoading || profiles.isLoading || obligations.isLoading ||
-      tasks.isLoading || reminders.isLoading || documents.isLoading,
+      tasks.isLoading || documents.isLoading,
   };
 }
 

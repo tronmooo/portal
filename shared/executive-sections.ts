@@ -285,11 +285,11 @@ export function buildExecutiveSections(
   // stops a medication also rendering as a bill and a blood-pressure reading
   // also rendering as an insight — see the claim loop.
   //
-  // Medications and refills come off the reminder rows (already collapsed per
-  // series+day by the attention model, so a three-times-daily course is one
-  // row); medical appointments come off the calendar.
+  // Medications and refills come off the TASK rows — "take Amoxicillin at 8am"
+  // is a timed task since reminders were retired (2026-08-09); medical
+  // appointments come off the calendar.
   for (const item of attention.items) {
-    if (item.kind === "reminder" && isHealthText(item.title)) cand.health.push(item);
+    if (item.kind === "task" && isHealthText(item.title)) cand.health.push(item);
   }
 
   // (a) Doses due — medication obligations with nothing logged against today.
@@ -529,8 +529,8 @@ export function buildExecutiveSections(
   }
 
   // ── §2 Today's Agenda ──────────────────────────────────────────────────────
-  // Everything actually scheduled today: events, tasks due today, reminders due
-  // today. Health and birthdays have already claimed theirs.
+  // Everything actually scheduled today: events and tasks due today. Health and
+  // birthdays have already claimed theirs.
   for (const e of input.events || []) {
     if (!e?.id || (e.type && e.type !== "event")) continue;
     if (String(e.date || "").slice(0, 10) !== today) continue;
@@ -554,10 +554,6 @@ export function buildExecutiveSections(
       action: { kind: "complete", label: "Complete" },
     });
   }
-  for (const item of attention.items) {
-    if (item.kind === "reminder") cand.today.push(item);
-  }
-
   // ── §5 Upcoming · Next 7 Days ──────────────────────────────────────────────
   for (const e of input.events || []) {
     if (!e?.id || (e.type && e.type !== "event")) continue;

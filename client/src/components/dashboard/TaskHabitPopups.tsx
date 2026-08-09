@@ -363,10 +363,30 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     if (value) tags.push(prefix + value);
     updateMutation.mutate({ id: t.id, patch: { tags } });
   };
+  /**
+   * A task's clock time is a column (2026-08-09), not a tag. Older rows carry
+   * it as `time:HH:MM`, so writing the column also strips the tag — otherwise
+   * the two would disagree and the reader below would keep preferring the
+   * column while the tag quietly said something else.
+   */
+  const setDueTime = (t: any, value: string) => {
+    const tags = (t.tags || []).filter((x: string) => !x.startsWith("time:"));
+    // null, not undefined — JSON drops undefined, and the server reads null as
+    // "clear it" (an empty HH:MM would fail validation).
+    updateMutation.mutate({ id: t.id, patch: { dueTime: value || null, tags } });
+  };
   const hasFlag = (t: any, flag: string) => (t.tags || []).includes(flag);
   const toggleFlag = (t: any, flag: string) => {
-    const tags = hasFlag(t, flag) ? (t.tags || []).filter((x: string) => x !== flag) : [...(t.tags || []), flag];
-    updateMutation.mutate({ id: t.id, patch: { tags } });
+    const turningOn = !hasFlag(t, flag);
+    const tags = turningOn ? [...(t.tags || []), flag] : (t.tags || []).filter((x: string) => x !== flag);
+    // Marking a task all-day drops its hour rather than leaving a disabled
+    // input showing a time the calendar no longer honours.
+    const patch: Record<string, any> = { tags };
+    if (flag === "allday" && turningOn) {
+      patch.dueTime = null;
+      patch.tags = tags.filter((x: string) => !x.startsWith("time:"));
+    }
+    updateMutation.mutate({ id: t.id, patch });
   };
 
   // Priority gains a 4th level — "critical" — encoded as a `prio:critical` tag
@@ -434,7 +454,8 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   const PRIO_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
   const sortTasks = (list: any[]) => {
     if (sortBy === "priority") return [...list].sort((a, b) => (PRIO_RANK[effPrio(a)] ?? 2) - (PRIO_RANK[effPrio(b)] ?? 2));
-    if (sortBy === "due") return [...list].sort((a, b) => ((a.dueDate || "9999") + (metaOf(a, "time:") || "99:99")).localeCompare((b.dueDate || "9999") + (metaOf(b, "time:") || "99:99")));
+    const clockOf = (t: any) => t.dueTime || metaOf(t, "time:") || "99:99";
+    if (sortBy === "due") return [...list].sort((a, b) => ((a.dueDate || "9999") + clockOf(a)).localeCompare((b.dueDate || "9999") + clockOf(b)));
     return list; // smart = server order
   };
 
@@ -521,13 +542,16 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     const recurrence = composer.kind === "recurring" ? composer.recurrence : "";
     if (recurrence) tags.push(`recur:${recurrence}`);
     if (composer.priority === "critical") tags.push("prio:critical");
-    if (composer.dueTime) tags.push(`time:${composer.dueTime}`);
     if (composer.category) tags.push(`cat:${composer.category}`);
     createMutation.mutate({
       title,
       priority: composer.priority === "critical" ? "high" : composer.priority,
       tags,
       ...(composer.dueDate ? { dueDate: composer.dueDate } : recurrence ? { dueDate: todayStr } : {}),
+      // A task's clock time is a real column (2026-08-09), not a `time:` tag.
+      // The tag was invisible to the calendar and to notifications, which is
+      // why timed work had to be filed as a "reminder" to be seen at all.
+      ...(composer.dueTime ? { dueTime: composer.dueTime } : {}),
     });
     setComposer(emptyComposer);
   };
@@ -548,13 +572,14 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     const rule = ruleOf(t);
     const recurring = !!rule.freq;
     const expanded = expandedId === t.id;
-    const isReminder = (t.tags || []).includes("reminder") || (t.source === "reminder");
     const onCalendar = !!t.dueDate;
     const ep = effPrio(t);
     const pColor = PLINE[ep] || '#42A5F5';
     const subs = subtasksOf(t);
     const subDone = subs.filter((s: any) => s.done).length;
-    const dTime = metaOf(t, "time:");
+    // `dueTime` is the column; `time:` is the legacy tag rows carried before
+    // 2026-08-09. Read both so an older task still shows its hour.
+    const dTime = t.dueTime || metaOf(t, "time:");
     const cat = metaOf(t, "cat:");
     const est = metaOf(t, "est:");
     const overdue = !dimmed && t.dueDate && t.dueDate < todayStr;
@@ -587,7 +612,6 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
             <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
               {ep === 'critical' && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-violet-500/15 text-violet-500 font-semibold">Critical</span>}
               {overdue && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 font-semibold">Overdue</span>}
-              {isReminder && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400"><Bell className="h-2.5 w-2.5" />Reminder</span>}
               {/* The task's kind, always stated. A schedule says how often it
                   comes back; a one-time task says it doesn't — silence used to
                   be the only marker, which is how six one-offs sat under
@@ -645,7 +669,9 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
             </div>
             <div>
               <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Clock className="h-3 w-3" />Due time</label>
-              <input type="time" value={dTime} disabled={hasFlag(t, 'allday')} onChange={e => setMetaTag(t, 'time:', e.target.value)}
+              {/* Writes the real `dueTime` column and clears any legacy
+                  `time:` tag, so one task can never carry two clock times. */}
+              <input type="time" value={dTime} disabled={hasFlag(t, 'allday')} onChange={e => setDueTime(t, e.target.value)}
                 className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-40" data-testid="task-due-time" />
             </div>
           </div>

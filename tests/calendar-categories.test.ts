@@ -52,7 +52,6 @@ describe("every kind lands in exactly one chip", () => {
     expect(categoryForKind("subscription")).toBe("subscriptions");
     expect(categoryForKind("liability")).toBe("liabilities");
     expect(categoryForKind("task")).toBe("tasks");
-    expect(categoryForKind("reminder")).toBe("reminders");
     // Each kind gets a real source category. "Important" is NOT a source type.
     expect(categoryForKind("anniversary")).toBe("anniversaries");
     expect(categoryForKind("document")).toBe("documents");
@@ -68,7 +67,7 @@ describe("every kind lands in exactly one chip", () => {
     expect(CALENDAR_CATEGORIES.map((c) => c.id)).toEqual([
       "all", "important", "birthdays", "anniversaries", "bills",
       "subscriptions", "liabilities", "documents", "tasks",
-      "reminders", "events", "other",
+      "events", "other",
     ]);
   });
 });

@@ -115,73 +115,37 @@ describe("one record, one row", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Reminders — stale, and multiplied
+// Timed tasks — what reminders became
+//
+// The Reminders block was removed on 2026-08-09 with the entity. Everything it
+// did — surfacing a scheduled dose or chore, windowed so a month-old one stops
+// claiming to be live — is now the Tasks block reading a task's `dueDate` and
+// `dueTime`. `normalizeReminderTitle` outlives the entity because the rows the
+// AI wrote before the change are still in the database.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("reminders", () => {
-  it("excludes month-old reminders that were never stamped fired", () => {
-    // Exactly the screenshot: fired Jun 24 – Jul 3, still listed on Jul 29
-    // because the firing cron is unreachable and listReminders has no floor.
+describe("timed tasks", () => {
+  it("says the hour a timed task is due", () => {
     const { items } = run({
-      reminders: [
-        { id: "r1", title: "Refill Lisinopril at CVS", fireAt: "2026-06-24T02:00:00" },
-        { id: "r2", title: "Call the dentist", fireAt: "2026-07-02T03:00:00" },
-      ],
-    });
-    expect(items).toHaveLength(0);
-  });
-
-  it("keeps one that fired inside the window", () => {
-    const { items } = run({
-      reminders: [{ id: "r1", title: "Call the dentist", fireAt: "2026-07-29T07:00:00" }],
+      tasks: [{ id: "t1", title: "Take Amoxicillin 500mg", dueDate: "2026-07-29", dueTime: "08:00", priority: "medium" }],
     });
     expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("task");
+    expect(items[0].reason).toBe("Due today \u00B7 8:00 AM");
+  });
+
+  it("leaves an all-day task without a phantom time", () => {
+    const { items } = run({
+      tasks: [{ id: "t1", title: "Buy milk", dueDate: "2026-07-29", priority: "medium" }],
+    });
+    expect(items[0].reason).toBe("Due today");
+  });
+
+  it("still reads the hour on an overdue one", () => {
+    const { items } = run({
+      tasks: [{ id: "t1", title: "Call the dentist", dueDate: "2026-07-28", dueTime: "17:30", priority: "medium" }],
+    });
+    expect(items[0].reason).toContain("5:30 PM");
     expect(items[0].tier).toBe("immediate");
-    expect(items[0].reason).toBe("Was due — not dismissed");
-  });
-
-  it("collapses a medication's daily doses into one row", () => {
-    // Three parallel series exist because the AI wrote a different title each
-    // turn; the old dedupe keyed on exact (title, fire_at) and kept all three.
-    const { items } = run({
-      reminders: [
-        { id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-07-29T08:00:00" },
-        { id: "r2", title: "Take Amoxicillin 500mg (Morning Dose)", fireAt: "2026-07-29T09:00:00" },
-        { id: "r3", title: "Take Amoxicillin 500mg (Evening Dose)", fireAt: "2026-07-29T09:30:00" },
-      ],
-    });
-    expect(items).toHaveLength(1);
-    expect(items[0].count).toBe(3);
-    expect(items[0].reason).toBe("3 doses today");
-    expect(items[0].children).toHaveLength(3);
-  });
-
-  it("collapses the same reminder duplicated at different times", () => {
-    // "Call the dentist" appeared twice — same title, fire times a minute apart,
-    // which slipped past the exact-timestamp dedupe.
-    const { items } = run({
-      reminders: [
-        { id: "r1", title: "Call the dentist", fireAt: "2026-07-29T03:00:00" },
-        { id: "r2", title: "Call the dentist", fireAt: "2026-07-29T03:01:00" },
-      ],
-    });
-    expect(items).toHaveLength(1);
-  });
-
-  it("keeps different medications apart", () => {
-    const { items } = run({
-      reminders: [
-        { id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-07-29T08:00:00" },
-        { id: "r2", title: "Take Lisinopril", fireAt: "2026-07-29T08:00:00" },
-      ],
-    });
-    expect(items).toHaveLength(2);
-  });
-
-  it("ignores reminders already stamped fired", () => {
-    const { items } = run({
-      reminders: [{ id: "r1", title: "Done one", fireAt: "2026-07-29T08:00:00", firedAt: "2026-07-29T08:00:01" }],
-    });
-    expect(items).toHaveLength(0);
   });
 
   it("normalizeReminderTitle strips only a trailing dose qualifier", () => {
@@ -393,7 +357,6 @@ describe("counts and the rest", () => {
   });
 
   it("ships defaults that match the shipped config", () => {
-    expect(DEFAULT_ATTENTION_CONFIG.reminderStaleHours).toBe(48);
     expect(DEFAULT_ATTENTION_CONFIG.minTier).toBe("upcoming");
   });
 });

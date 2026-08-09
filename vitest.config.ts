@@ -119,7 +119,7 @@ export default defineConfig({
       'tests/ai-button-parity.test.ts',
       'tests/action-split.test.ts',
       'tests/bulk-extraction-normalize.test.ts',
-      'tests/upcoming-reminders.test.ts',
+      'tests/upcoming-timed-tasks.test.ts',
       'tests/estimation-engine.test.ts',
       'tests/canonical-activity.test.ts',
       'tests/habit-intent.test.ts',
@@ -155,8 +155,7 @@ export default defineConfig({
       'tests/wellness-popups.dom.test.tsx',
       'tests/design-system-drift.test.ts',
       'tests/reminder-cron.test.ts',
-      'tests/reminder-create-verification.test.ts',
-      'tests/reminder-series-calendar.test.ts',
+      'tests/timed-tasks.test.ts',
       'tests/document-open-hook.dom.test.tsx',
       // Production audit 2026-07-29 regressions.
       'tests/anthropic-budget.test.ts',

@@ -67,10 +67,25 @@ type EntityMeta = {
    * report a good write as failed).
    */
   byId?: (s: IStorage, id: string) => Promise<any | undefined>;
+  /**
+   * The storage method `byId` calls. Verification checks it exists before
+   * trusting a by-id answer: an older backend or a test double that lacks the
+   * method returns `undefined` through optional chaining, which is
+   * indistinguishable from "no such row" — and reporting a good write as lost
+   * is the exact failure this verification exists to prevent. Named here so
+   * the check is a capability test rather than a guess about the result.
+   */
+  byIdMethod?: string;
 };
 
 const ENTITY_META: Record<string, EntityMeta> = {
-  task: { list: (s) => s.getTasks(), name: (r) => r.title },
+  // Tasks verify by primary key when the storage offers it. `getTasks()` is a
+  // scoped list — it drops done and soft-deleted rows — so a task the same turn
+  // completes, or one written outside the active profile scope, can be missing
+  // from it while sitting in the database. That mismatch is what reported
+  // genuinely-saved writes as lost back when reminders carried the timed work;
+  // tasks carry it now, so they get the authoritative read.
+  task: { list: (s) => s.getTasks(), name: (r) => r.title, byId: (s, id) => (s as any).getTask(id), byIdMethod: "getTask" },
   expense: { list: (s) => s.getExpenses(), name: (r) => r.description },
   income: { list: (s) => s.getIncomes(), name: (r) => r.description },
   event: { list: (s) => s.getEvents(), name: (r) => r.title },
@@ -82,13 +97,6 @@ const ENTITY_META: Record<string, EntityMeta> = {
   journal: { list: (s) => s.getJournalEntries(), name: (r) => String(r.content || "").slice(0, 40) },
   memory: { list: (s) => s.getMemories(), name: (r) => r.key },
   artifact: { list: (s) => s.getArtifacts(), name: (r) => r.title },
-  // Reminders verify by primary key: listReminders serves only PENDING rows
-  // (fired_at IS NULL), so a list scan can miss a reminder that really exists.
-  reminder: {
-    list: (s) => s.listReminders(),
-    name: (r) => r.title,
-    byId: (s, id) => (s as any).getReminder?.(id),
-  },
   document: { list: (s) => s.getDocuments(), name: (r) => r.name },
   paycheck: { list: (s) => s.getPaychecks(), name: (r) => r.source },
   // Tracker ENTRIES (the individual logged data points) verify by primary key.
@@ -104,7 +112,8 @@ const ENTITY_META: Record<string, EntityMeta> = {
       const first = Object.entries(vals).find(([k]) => !String(k).startsWith("_"));
       return first ? `${first[0]}: ${first[1]}` : "entry";
     },
-    byId: (s, id) => (s as any).getTrackerEntry?.(id),
+    byId: (s, id) => (s as any).getTrackerEntry(id),
+    byIdMethod: "getTrackerEntry",
   },
 };
 
@@ -130,7 +139,10 @@ const TOOL_ENTITY: Record<string, string> = {
   save_memory: "memory", update_memory: "memory", delete_memory: "memory",
   create_artifact: "artifact", update_artifact: "artifact", delete_artifact: "artifact",
   duplicate_artifact: "artifact", toggle_artifact_item: "artifact",
-  create_reminder: "reminder", update_reminder: "reminder", delete_reminder: "reminder",
+  // create_reminder / update_reminder / delete_reminder are gone (reminders
+  // were retired 2026-08-09). The executor translates those legacy names into
+  // the task tools, and the envelope sees the task call, so they need no
+  // mapping of their own.
   create_document: "document",
   log_expected_paycheck: "paycheck", confirm_paycheck_received: "paycheck", delete_paycheck: "paycheck",
 };
@@ -148,7 +160,7 @@ const normalizeName = (s: string): string =>
 function extractEntityId(result: any): string | undefined {
   return result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id
     || result?.obligation?.id || result?.income?.id || result?.artifact?.id
-    || result?.reminder?.id || result?.memory?.id || result?.payment?.id
+    || result?.memory?.id || result?.payment?.id
     || result?.entity?.id;
 }
 
@@ -157,12 +169,13 @@ function extractEntityId(result: any): string | undefined {
  * with `_verify: { type?, id }`, and verification (plus the undo ledger) will
  * target the real row.
  *
- * `create_reminder` is exactly this case: it returns the mirrored CALENDAR
- * EVENT's id as `id` so the chat action card's Undo targets the visible
- * calendar entry. Without the hint, verification looked that event id up in
- * the reminders table, never found it, and reported six genuinely-saved
- * reminders as "could NOT be confirmed … Nothing was saved" — while the rows
- * sat in the database. The hint is stripped before the envelope is returned.
+ * The retired `create_reminder` was exactly this case: it returned the mirrored
+ * CALENDAR EVENT's id as `id` so the chat card's Undo targeted the visible
+ * calendar entry, while the row it actually wrote lived in another table.
+ * Without the hint, verification looked that event id up in the wrong table,
+ * never found it, and reported genuinely-saved writes as "could NOT be
+ * confirmed … Nothing was saved". The hint is stripped before the envelope is
+ * returned.
  */
 function verifyTarget(toolName: string, result: any): { type?: string; id?: string } {
   const hint = result?._verify;
@@ -183,7 +196,7 @@ const VERBS: Record<string, string> = { create: "Created", update: "Updated", de
 
 /** Entity types whose delete is a recoverable soft delete (deleted_at). */
 export const SOFT_DELETE_TYPES = new Set([
-  "task", "habit", "expense", "income", "event", "document", "reminder", "profile", "obligation",
+  "task", "habit", "expense", "income", "event", "document", "profile", "obligation",
 ]);
 
 /**
@@ -329,7 +342,6 @@ const DELETE_FN: Record<string, (s: AnyStorage, id: string) => Promise<any>> = {
   income: (s, id) => s.deleteIncome(id),
   event: (s, id) => s.deleteEvent(id),
   habit: (s, id) => s.deleteHabit(id),
-  reminder: (s, id) => s.deleteReminder(id),
   document: (s, id) => s.deleteDocument(id),
   profile: (s, id) => s.deleteProfile(id),
   obligation: (s, id) => s.deleteObligation(id),
@@ -409,20 +421,11 @@ export async function executeReversePlan(
     case "delete": {
       const fn = DELETE_FN[type];
       if (!fn || !id) return { ok: false, description: `No delete path for ${type}.` };
-      // A reminder owns a mirrored calendar event (server/reminder-mirror).
-      // Read it BEFORE the delete — the mirror is matched on the reminder's
-      // title + fire date, which are gone once the row is soft-deleted — or
-      // undoing the create strands a ghost entry on the calendar
-      // (QA 2026-07-29, CRUD-T2-002).
-      let mirrorSource: { title: string; fireAt: string } | null = null;
-      if (type === "reminder") {
-        try { mirrorSource = (await s.getReminder?.(id)) ?? null; } catch { mirrorSource = null; }
-      }
+      // No companion-row cleanup here any more: a timed task IS its own
+      // calendar entry, so deleting it removes the thing the user sees. The
+      // retired reminder entity needed a mirrored event deleted alongside it,
+      // which is how a deleted reminder used to reappear on the next fetch.
       await fn(s, id);
-      if (mirrorSource) {
-        const { deleteReminderMirrors } = await import("./reminder-mirror");
-        await deleteReminderMirrors(s, mirrorSource, s._timezone);
-      }
       return { ok: true, description: `Removed ${name} (${plan.soft ? "recoverable" : "permanent"} delete).` };
     }
     case "restore": {
@@ -505,15 +508,23 @@ export async function finalizeToolResult(
       // Prefer an authoritative primary-key read-back when the entity type
       // offers one: it is a single indexed lookup (cheaper than a per-user
       // list) and it cannot be fooled by a truncated list.
-      if (meta.byId) {
+      // A storage that does not implement the by-id read (an older backend, a
+      // test double) falls through to the list instead of being read as "row
+      // not found".
+      const canReadById = !!meta.byId
+        && (!meta.byIdMethod || typeof (ctx.storage as any)[meta.byIdMethod] === "function");
+      let byIdAnswered = false;
+      if (canReadById) {
         let row: any | undefined;
         let readFailed = false;
-        try { row = await meta.byId(ctx.storage, entityId); } catch { readFailed = true; }
+        try { row = await meta.byId!(ctx.storage, entityId); } catch { readFailed = true; }
         if (!readFailed) {
+          byIdAnswered = true;
           verification.database_record_exists = op === "delete" ? !!row && !row.deletedAt : !!row;
           if (row && op !== "delete") entityName = meta.name(row) || entityName;
         }
-      } else {
+      }
+      if (!byIdAnswered) {
       let rows: any[] | null = null;
       try { rows = await meta.list(ctx.storage); } catch { rows = null; }
       if (rows) {

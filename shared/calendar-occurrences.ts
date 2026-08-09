@@ -1,7 +1,7 @@
 // shared/calendar-occurrences.ts — THE calendar occurrence engine.
 //
 // One engine generates every date the app shows: birthdays, anniversaries,
-// subscriptions, liabilities/bills, reminders, habits, recurring tasks and
+// subscriptions, liabilities/bills, habits, recurring tasks and
 // plain calendar events. Every surface (the calendar grid, the recurring
 // manager, the dashboard's upcoming stream, notifications) consumes what this
 // module returns and renders nothing it computed itself.
@@ -49,7 +49,6 @@ export type OccurrenceKind =
   | "renewal"
   | "maintenance"
   | "appointment"
-  | "reminder"
   | "task"
   | "habit"
   | "document"
@@ -63,7 +62,6 @@ export type SourceSystem =
   | "obligation"
   | "liability"
   | "task"
-  | "reminder"
   | "habit"
   | "document"
   | "goal";
@@ -77,7 +75,6 @@ export const KIND_LABELS: Record<OccurrenceKind, string> = {
   renewal: "Renewal",
   maintenance: "Maintenance",
   appointment: "Appointment",
-  reminder: "Reminder",
   task: "Task",
   habit: "Habit",
   document: "Document Expiration",
@@ -103,7 +100,6 @@ export const HORIZON_DAYS: Record<OccurrenceKind, number> = {
   renewal: 366,
   maintenance: 366,
   appointment: 366,
-  reminder: 366,
   task: 366,
   habit: 366,
   document: 366,
@@ -376,7 +372,6 @@ const AUTHORITY: Partial<Record<OccurrenceKind, SourceSystem>> = {
   document: "document",
   task: "task",
   habit: "habit",
-  reminder: "reminder",
 };
 
 /**
@@ -883,7 +878,6 @@ export function sourceHref(
     case "document": return recordId ? `#/documents/${recordId}` : "#/documents";
     case "goal": return recordId ? `#/goals?focus=${recordId}` : "#/goals";
     case "habit": return recordId ? `#/habits?focus=${recordId}` : "#/habits";
-    case "reminder": return "#/calendar";
     case "event": return recordId ? `#/calendar?event=${recordId}` : "#/calendar";
     default: return "#/calendar";
   }

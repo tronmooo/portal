@@ -2,7 +2,7 @@
 // One question: what requires my attention right now?
 //
 // This tab used to render 17 collapsible sections (agenda, overdue, tasks,
-// priority, habits, reminders, birthdays, appointments, important dates, docs,
+// priority, habits, birthdays, appointments, important dates, docs,
 // bills, calendar, notifications, projects, activity, notes, AI brief) plus a
 // Today strip. Four of them were urgency from a different angle, and the rest
 // restated data that already has a home on the Calendar, Trackers, Documents,
@@ -236,17 +236,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryFn: () => apiRequest("GET", timelineUrl(timelineWindow, mode, ids)).then(r => r.json()),
     staleTime: 60_000,
   });
-  // Reminders are profile-scoped like every other briefing query — pass the
-  // active filter so a selected profile shows only its own reminders (the
-  // server enforces strict isolation; unlinked reminders appear only in the
-  // unfiltered "Everyone" view). Keying on mode/ids makes switching profiles
-  // refetch instead of showing another profile's cached reminders.
-  const { data: remindersRaw = [] } = useQuery<any[]>({
-    queryKey: ["/api/reminders", mode, ...ids],
-    enabled: ready,
-    queryFn: () => apiRequest("GET", `/api/reminders${param}`).then(r => r.json()),
-    staleTime: 60_000,
-  });
+  // (Removed 2026-08-09: a /api/reminders query. A "remind me at 9am" is a TASK
+  // with a due time now, and `tasksRaw` already carries it.)
   const { data: goalsRaw = [], isPending: goalsPending } = useQuery<any[]>({
     queryKey: ["/api/goals", mode, ...ids],
     enabled: ready,
@@ -326,7 +317,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // feed and tiles are today-onward only (preserves the previous behavior of
   // the old today→+45 fetch exactly).
   const timeline = hideTest((timelineRaw || []).filter((it: any) => String(it?.date || "").slice(0, 10) >= todayStr));
-  const reminders = hideTest(Array.isArray(remindersRaw) ? remindersRaw : []);
   const notifications = hideTest(Array.isArray(notificationsRaw) ? notificationsRaw : []);
   const goals = hideTest(goalsRaw || []);
   const obligations = hideTest(Array.isArray(obligationsRaw) ? obligationsRaw : []);
@@ -398,13 +388,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const sectionInput = useMemo(() => ({
     today: todayStr,
     tasks, bills: allBills, documents: allExpiringDocs, habits,
-    reminders, events: timeline, goals, notifications,
+    events: timeline, goals, notifications,
     dismissedNotificationIds: dismissedIds,
     snoozedDocumentIds,
     recentActivity: stats?.recentActivity || [],
     insights, obligations, trackers,
     recommendations: recommendations || [],
-  }), [todayStr, tasks, allBills, allExpiringDocs, habits, reminders, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, stats, insights, obligations, trackers, recommendations]);
+  }), [todayStr, tasks, allBills, allExpiringDocs, habits, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, stats, insights, obligations, trackers, recommendations]);
 
   const sections = useMemo(
     () => buildExecutiveSections(sectionInput, prefs),
@@ -431,7 +421,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const habitsDoneCount = habitsDueToday.filter((h: any) => isHabitDoneOn(h, todayStr)).length;
   const missedCount = habitsDueToday.length - habitsDoneCount;
 
-  // Day progress over COMPLETABLE items only. Events, bills and reminders have
+  // Day progress over COMPLETABLE items only. Events and bills have
   // no done-state, so including them would make the figure unable to reach
   // 100% — the bug that made "4 of 10 habits" render as 33%.
   const dayCompletable = agendaTasks.length + doneToday + habitsDueToday.length;
@@ -555,13 +545,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     onSuccess: () => { toast({ title: "Checked in" }); invalidateDomain("habits"); },
     onError: () => toast({ title: "Check-in failed", variant: "destructive" }),
   });
-  const dismissReminders = useMutation({
-    mutationFn: async (idList: string[]) => {
-      for (const id of idList) await apiRequest("DELETE", `/api/reminders/${id}`);
-    },
-    onSuccess: () => { toast({ title: "Reminder dismissed" }); queryClient.invalidateQueries({ queryKey: ["/api/reminders"] }); },
-    onError: () => toast({ title: "Couldn't dismiss reminder", variant: "destructive" }),
-  });
   const dismissAlert = useMutation({
     // Same store the bell and the AI's dismiss_notifications tool write to, so
     // a dismissal here silences it everywhere.
@@ -614,13 +597,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       }
       case "checkin": run(checkinHabit.mutateAsync(idOf(item))); return;
       case "dismiss":
-        if (item.kind === "reminder") {
-          // A rolled-up medication row stands for every dose under it.
-          const idList = item.children?.length ? item.children.map(idOf) : [idOf(item)];
-          run(dismissReminders.mutateAsync(idList));
-        } else {
-          run(dismissAlert.mutateAsync(item.key.replace(/^alert:/, "")));
-        }
+        run(dismissAlert.mutateAsync(item.key.replace(/^alert:/, "")));
         return;
       default:
         navigate(item.href);

@@ -57,7 +57,7 @@ export interface ParsedAction {
   type:
     // Creates / logs (undoable in the chat UI)
     | "create_profile" | "create_tracker" | "log_entry" | "create_task" | "log_expense"
-    | "create_event" | "create_reminder" | "create_goal" | "create_habit" | "create_obligation"
+    | "create_event" | "create_goal" | "create_habit" | "create_obligation"
     | "journal_entry" | "create_artifact" | "save_memory" | "create_liability"
     | "add_liability_payment" | "log_income" | "log_paycheck"
     // State changes
@@ -745,6 +745,14 @@ export type InsertMemory = z.infer<typeof insertMemorySchema>;
 // TASKS (unchanged)
 // ============================================================
 
+/**
+ * A to-do. Portol models scheduled life with exactly two entities — EVENTS
+ * (things that happen) and TASKS (things you do) — so a task carries a clock
+ * time of its own rather than delegating timed intent to a third "reminder"
+ * kind. `dueTime` is the wall-clock time on `dueDate` in the user's zone; it
+ * puts the task on the calendar at that hour and is when its notification
+ * fires. Repetition lives in `tags` (shared/recurrence: recur:/runtil:/rcount:).
+ */
 export interface Task {
   id: string;
   deletedAt?: string | null;
@@ -753,6 +761,8 @@ export interface Task {
   status: "todo" | "in_progress" | "done";
   priority: "low" | "medium" | "high";
   dueDate?: string;
+  /** HH:MM, 24-hour, in the user's timezone. Absent = an all-day to-do. */
+  dueTime?: string;
   linkedProfiles: string[];
   tags: string[];
   createdAt: string;
@@ -760,12 +770,16 @@ export interface Task {
   updatedAt?: string;
 }
 
+/** HH:MM, 24-hour. Rejects "9am", "25:00" and other things that aren't a time. */
+export const CLOCK_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export const insertTaskSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   status: z.enum(["todo", "in_progress", "done"]).optional(),
   priority: z.enum(["low", "medium", "high"]).default("medium"),
   dueDate: z.string().optional(),
+  dueTime: z.string().regex(CLOCK_TIME_RE, "Use HH:MM (24-hour)").optional(),
   tags: z.array(z.string()).optional().default([]),
   linkedProfiles: z.array(z.string()).optional().default([]),
 });

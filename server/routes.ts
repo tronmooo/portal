@@ -8,7 +8,6 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
-import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { computeKeyFindings } from "@shared/tracker-insights";
@@ -50,7 +49,7 @@ function activeProfileIds(req: Request): string[] {
  * chosen owner always wins. See shared/active-scope.ts for the reasoning.
  *
  * `field` is the entity's owner column: `linkedProfiles` (array) on expenses /
- * incomes / obligations / tasks / events, `profileId` (scalar) on reminders.
+ * incomes / obligations / tasks / events.
  */
 function applyActiveProfileScope(
   req: Request,
@@ -1508,20 +1507,25 @@ export async function registerRoutes(
   app.get("/api/cron/weekly-review", cronWeeklyReview);
   app.post("/api/cron/weekly-review", cronWeeklyReview);
 
-  // ---- Cron: fire due reminders (BUG 3) ----
+  // ---- Cron: daily maintenance ----
   // Vercel serverless has no always-on background, so a scheduled GET drives
-  // delivery. Gated by ?key= matching CRON_SECRET. For every user, find
-  // reminders whose fire_at has passed and that haven't fired, drop an in-app
-  // task marker, and stamp fired_at so they don't re-fire.
-  const cronFireDueReminders: any = asyncHandler(async (req: any, res: any) => {
+  // the app's one recurring housekeeping job. Gated by CRON_SECRET.
+  //
+  // This used to be "fire due reminders": it walked every user's pending
+  // reminder rows, created a `Reminder: <title>` TASK as the in-app marker, and
+  // stamped fired_at. Reminders were retired on 2026-08-09 — a timed task IS
+  // the thing the user sees now, so there is nothing to convert into a task any
+  // more, and nothing to stamp. What remains is the response-cache sweep the
+  // job always carried alongside it.
+  //
+  // The ROUTE NAME is deliberately unchanged: it is wired into vercel.json's
+  // `crons` block, and a schedule pointing at a 404 fails silently. A second
+  // path is registered under the honest name for anything configured later.
+  const cronDailyMaintenance: any = asyncHandler(async (req: any, res: any) => {
     const secret = process.env.CRON_SECRET;
     // Accept the Bearer header as well as ?key=. Vercel Cron authenticates with
     // `Authorization: Bearer $CRON_SECRET` and cannot append a query string, so
-    // the ?key=-only check is why this endpoint was never reachable from a
-    // schedule — the comment above claimed vercel.json configured it, and
-    // vercel.json had no `crons` block at all. Reminders therefore never got
-    // stamped fired_at, and listReminders (which filters `fired_at IS NULL`
-    // with no lower bound on fire_at) kept serving month-old rows as live.
+    // a ?key=-only check made this endpoint unreachable from a schedule.
     // ?key= is kept so the job can still be triggered by hand.
     const provided = String(
       req.query.key || (req.headers.authorization || "").replace("Bearer ", "")
@@ -1530,57 +1534,19 @@ export async function registerRoutes(
       return res.status(401).json({ error: "Unauthorized" });
     }
     try {
-      const { createClient } = await import("@supabase/supabase-js");
-      const url = process.env.VITE_SUPABASE_URL;
-      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (!url || !key) return res.status(500).json({ error: "Supabase admin env vars missing" });
-      const admin = createClient(url, key);
-      const { data: usersList, error: listErr } = await (admin as any).auth.admin.listUsers({ perPage: 1000 });
-      if (listErr) throw listErr;
-      const users = usersList?.users || [];
-      const { createScopedStorage, requestStorageContext } = await import("./storage");
-
-      const now = new Date();
-      let fired = 0;
-      for (const u of users) {
-        try {
-          const scoped = createScopedStorage(u.id);
-          await new Promise<void>((resolve) => {
-            requestStorageContext.run(scoped, async () => {
-              try {
-                const due = await scoped.listReminders({ dueBefore: now });
-                for (const r of due) {
-                  // In-app marker: no notifications table exists, so surface the
-                  // fired reminder as a task the user will see on the dashboard.
-                  try {
-                    await scoped.createTask({
-                      title: `Reminder: ${r.title}`,
-                      priority: "high",
-                      tags: ["reminder"],
-                      linkedProfiles: r.profileId ? [r.profileId] : undefined,
-                      source: "reminder",
-                    } as any);
-                  } catch { /* marker is best-effort */ }
-                  await scoped.markReminderFired(r.id);
-                  fired++;
-                }
-              } catch { /* per-user failure shouldn't abort the run */ }
-              resolve();
-            });
-          });
-        } catch { /* skip user */ }
-      }
-      // Piggyback the daily shared-response-cache sweep on the one scheduled
-      // cron (Hobby plan allows only daily jobs): expired rows are already
-      // unreadable — this just keeps the table from growing without bound.
-      try { await (storage as any).sweepResponseCache?.(); } catch { /* best-effort */ }
-      res.json({ fired });
+      // Expired rows are already unreadable — this just keeps the table from
+      // growing without bound.
+      let swept = 0;
+      try { swept = (await (storage as any).sweepResponseCache?.()) || 0; } catch { /* best-effort */ }
+      res.json({ swept });
     } catch (err: any) {
-      log.error("[Cron Fire Reminders]", err?.message || err);
+      log.error("[Cron Daily Maintenance]", err?.message || err);
       res.status(500).json({ error: "Cron failed" });
     }
   });
-  app.get("/api/cron/fire-due-reminders", cronFireDueReminders);
+  app.get("/api/cron/daily-maintenance", cronDailyMaintenance);
+  // Legacy path — still what vercel.json schedules.
+  app.get("/api/cron/fire-due-reminders", cronDailyMaintenance);
 
   // ---- Cron: daily net-worth snapshot (W4-5) ----
   // Global cross-user job. Gated by ?key= matching CRON_SECRET, runs under the
@@ -1635,9 +1601,9 @@ export async function registerRoutes(
   // Global cross-user job. For every recurring-bill liability whose next due
   // date falls within the reminder window: autopay bills are auto-logged (a
   // liability_payments row is written and the due date rolls forward), and
-  // non-autopay bills get a one-time reminder (deduped by title + fire date) so
-  // the user sees it on the dashboard. This is the liability-native replacement
-  // for materializeOccurrences / fire-due-reminders on obligations.
+  // non-autopay bills get a one-time "Bill due" TASK at the due date (deduped by
+  // title + date) so the user sees it on the dashboard and can check it off.
+  // This is the liability-native replacement for materializeOccurrences.
   const REMINDER_WINDOW_DAYS = 3;
   const cronLiabilityDueScan: any = asyncHandler(async (req: any, res: any) => {
     const secret = process.env.CRON_SECRET;
@@ -1668,7 +1634,7 @@ export async function registerRoutes(
                 const windowEnd = toLocalDateStr(new Date(Date.now() + REMINDER_WINDOW_DAYS * 86400000), DEFAULT_TIMEZONE);
                 const profiles = await scoped.getProfiles();
                 const bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey));
-                const existingReminders = await scoped.listReminders().catch(() => [] as any[]);
+                const existingTasks = await scoped.getTasks().catch(() => [] as any[]);
                 for (const bill of bills) {
                   const f: any = bill.fields || {};
                   const due = readDueDate(f);
@@ -1694,14 +1660,22 @@ export async function registerRoutes(
                       autopaid++;
                     } catch { /* per-bill best effort */ }
                   } else {
-                    // Non-autopay: surface a reminder (deduped by title + fire date).
+                    // Non-autopay: surface a timed TASK at the due date, deduped
+                    // on title + date. A task is checkable and lands on the
+                    // calendar at its hour; the reminder rows this used to write
+                    // were neither.
                     const title = `Bill due: ${bill.name}`;
-                    const fireAt = `${due}T09:00:00`;
-                    const dup = (existingReminders || []).some((r: any) =>
-                      r.title === title && String(r.fireAt || "").slice(0, 10) === due);
+                    const dup = (existingTasks || []).some((t: any) =>
+                      t.title === title && String(t.dueDate || "").slice(0, 10) === due && t.status !== "done");
                     if (!dup) {
                       try {
-                        await scoped.createReminder({ title, fireAt, profileId: bill.id });
+                        await scoped.createTask({
+                          title,
+                          priority: "high",
+                          dueDate: due,
+                          dueTime: "09:00",
+                          linkedProfiles: [bill.id],
+                        } as any);
                         reminded++;
                       } catch { /* best effort */ }
                     }
@@ -2966,7 +2940,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       // one profile is selected, otherwise the account aggregate.
       const nwProfileId = filterIds && filterIds.length === 1 ? filterIds[0] : undefined;
       const [stats, profiles, incomes, expensesForBudget, budgets, obligationsAll, assetPartyLinks, liabilityProfileLinks,
-        tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll, remindersAll,
+        tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll,
         calendarTimelineAll, notificationsAll, netWorthHistory] = await Promise.all([
         cachedStats ?? dedupe(statsCacheKey, async () => {
           // sharedFetches: this same request fetches every table unfiltered
@@ -3002,7 +2976,6 @@ ${JSON.stringify(ctx, null, 2)}`;
         storage.getEvents(),
         storage.getDocuments(),
         storage.getTrackers(),
-        (storage as any).listReminders ? (storage as any).listReminders() : Promise.resolve([] as any[]),
         // [PERF 2026-07-17] Events tile and AI Brief seeds (see comment above).
         storage.getCalendarTimeline
           ? storage.getCalendarTimeline(bootstrapStart, bootstrapEnd, filterIds).catch(() => [] as any[])
@@ -3077,8 +3050,8 @@ ${JSON.stringify(ctx, null, 2)}`;
         liabilityProfileLinks: liabilityProfileLinks || [],
         // [PERF 2026-07-16] Briefing/Upcoming seed datasets — each filtered with
         // the SAME canonical rule its GET endpoint applies (passesProfileFilter
-        // over linkedProfiles; scalar profileId for reminders), so seeding a
-        // profile-scoped cache key can never leak another profile's rows.
+        // over linkedProfiles), so seeding a profile-scoped cache key can never
+        // leak another profile's rows.
         tasks: scopeByLinkedProfiles(tasksAll),
         habits: scopeByLinkedProfiles(habitsAll),
         goals: scopeByLinkedProfiles(goalsAll),
@@ -3093,11 +3066,6 @@ ${JSON.stringify(ctx, null, 2)}`;
           if (filterIds && filterIds.length > 0) t = await filterByProfileScope(t, filterIds, userId);
           return t;
         })(),
-        reminders: (!filterIds || filterIds.length === 0)
-          ? (remindersAll || [])
-          : (remindersAll || []).filter((r: any) =>
-              passesProfileFilter(r.profileId ? [r.profileId] : [], { selectedIds: filterIds, allProfiles: profiles })
-            ),
         // [PERF 2026-07-17] Calendar timeline for the Events tile — already
         // scoped by getCalendarTimeline(profileIds), so no extra filtering.
         // Shape mirrors GET /api/calendar/timeline exactly.
@@ -4920,6 +4888,16 @@ Rules:
     res.status(201).json(taskSanitized ? { ...newTask, warning: SANITIZE_NOTICE } : newTask);
   }));
   app.patch("/api/tasks/:id", asyncHandler(async (req, res) => {
+    // CLEARING the clock time. `dueTime` is validated as HH:MM, so "" and null
+    // both fail the regex — but they are how a client says "make this all-day
+    // again", and a 400 there would leave the task stuck at an hour the user
+    // just removed. Normalise the clear to an explicit null and keep it out of
+    // the schema's way.
+    let clearDueTime = false;
+    if ("dueTime" in (req.body || {}) && (req.body.dueTime === null || req.body.dueTime === "")) {
+      clearDueTime = true;
+      delete req.body.dueTime;
+    }
     {
       const parsed = insertTaskSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
@@ -4932,6 +4910,7 @@ Rules:
       req.body.title = sanitize(req.body.title);
     }
     if (req.body.description) req.body.description = sanitize(req.body.description);
+    if (clearDueTime) req.body.dueTime = undefined;
     const updated = await storage.updateTask(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_t2 = cacheUserKey(req as AuthenticatedRequest);
@@ -6026,132 +6005,18 @@ Rules:
     res.status(201).json(created);
   }));
 
-  // ---- Reminders (manual create from the dashboard quick-add) --------------
-  // Previously reminders were ONLY created by the AI / cron; the dashboard
-  // "Add reminder" quick-action needs a plain REST create. listReminders /
-  // createReminder already exist on IStorage (used by the cron firer).
-  app.get("/api/reminders", asyncHandler(async (req, res) => {
-    let reminders = await storage.listReminders();
-    // Profile isolation (BUG-20260709-reminder-leak): reminders carry a scalar
-    // `profileId`, but this endpoint previously returned EVERY reminder for the
-    // user regardless of the active profile filter — so medication / refill /
-    // appointment reminders (many created with no profile) leaked into EVERY
-    // profile's dashboard REMINDERS card. This was the ONE list endpoint that
-    // bypassed the canonical scope rule that /api/tasks, /api/obligations,
-    // /api/expenses, etc. all apply.
-    //
-    // Apply the app-wide default rule ("belongs_to_self"): unassigned items
-    // default to the primary person. When a profile filter is active a reminder
-    // shows if it is linked to a selected profile; an UNLINKED reminder falls
-    // through only when the selection includes the self (default) profile — so
-    // it appears on the primary person's dashboard, never on a different
-    // person/pet/asset profile. This matches passesProfileFilter used by every
-    // sibling endpoint, so reminders now scope identically to tasks/incomes/etc.
-    const profileIdsParam = req.query.profileIds as string | undefined;
-    const fp = req.query.profileId as string | undefined;
-    const reminderFilterIds = profileIdsParam
-      ? profileIdsParam.split(",").filter(Boolean)
-      : (fp ? [fp] : []);
-    if (reminderFilterIds.length > 0) {
-      const allProfiles = await storage.getProfiles();
-      reminders = reminders.filter((r) =>
-        passesProfileFilter(
-          r.profileId ? [r.profileId] : [],
-          { selectedIds: reminderFilterIds, allProfiles },
-        ),
-      );
-    }
-    res.json(reminders);
-  }));
-  app.post("/api/reminders", asyncHandler(async (req, res) => {
-    const rawTitle = typeof req.body?.title === "string" ? req.body.title.trim() : "";
-    if (!rawTitle) return res.status(400).json({ error: "Title is required" });
-    // fireAt is optional — default to now so a quick "remind me" lands in the
-    // feed immediately. An explicit date must be valid.
-    //
-    // TIMEZONE (QA 2026-07-29 CRUD-T2-001): the quick-add dialog posts an
-    // `<input type="datetime-local">` value — "2026-07-29T17:51", with no zone.
-    // `new Date()` read that as the HOST's local time, and the host is a UTC
-    // function, so 5:51 PM Pacific was stored as 5:51 PM UTC and displayed back
-    // as 10:51 AM. parseUserDateTime composes zone-less input against the
-    // caller's timezone; anything carrying an offset is untouched.
-    let fireAt: string;
-    if (req.body?.fireAt) {
-      const d = parseUserDateTime(req.body.fireAt, getTimezone(req));
-      if (isNaN(d.getTime())) return res.status(400).json({ error: "Invalid fireAt date" });
-      fireAt = d.toISOString();
-    } else {
-      fireAt = new Date().toISOString();
-    }
-    const scoped = applyActiveProfileScope(req, { ...req.body }, "profileId");
-    const profileId = typeof scoped?.profileId === "string" && scoped.profileId ? scoped.profileId : undefined;
-    const created = await storage.createReminder({ title: sanitize(rawTitle), fireAt, profileId });
-    res.status(201).json(created);
-  }));
-  // Dismiss/complete a reminder from the UI (briefing Reminders popup "Done").
-  // Reminders are one-shot rows with no completed flag, so done = delete. The
-  // AI tools (update_reminder/delete_reminder) already used the same storage
-  // methods; this is the first REST surface for it.
-  app.delete("/api/reminders/:id", asyncHandler(async (req, res) => {
-    // Read the row BEFORE deleting: the mirrored calendar event is matched by
-    // title + fire date, which are gone once the reminder is.
-    // Snapshot before deleting — the mirror is matched by title + fire date,
-    // both of which are gone once the row is. Copying (rather than holding a
-    // reference) keeps this correct whatever the storage layer does to the row.
-    const prior = (await storage.listReminders()).find(r => r.id === req.params.id);
-    const before = prior ? { title: prior.title, fireAt: prior.fireAt } : undefined;
-    const ok = await storage.deleteReminder(req.params.id);
-    if (!ok) return res.status(404).json({ error: "Reminder not found" });
-    // A reminder deleted here must not come back from the calendar mirror the
-    // chat tool created for it (QA 2026-07-29 CRUD-T2-002: a deleted reminder
-    // reappeared at its original time on the next fetch).
-    if (before) await deleteReminderMirrors(storage as any, before, getTimezone(req));
-    const uid_rm = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`events:${uid_rm}`); bustCache(`calendar:${uid_rm}`); bustCache(`enhanced:`);
-    res.json({ success: true });
-  }));
-  // EDIT a reminder. `storage.updateReminder` has existed since the AI tools
-  // landed, but no REST route ever exposed it — a reminder could be created and
-  // deleted but never corrected, so a typo'd title or a wrong time meant
-  // delete-and-retype. Pinned by tests/crud-coverage.test.ts, which now fails
-  // if any creatable resource loses its update or delete route.
-  app.patch("/api/reminders/:id", asyncHandler(async (req, res) => {
-    const patch: { title?: string; fireAt?: string; profileId?: string | null } = {};
-    if (req.body?.title !== undefined) {
-      const t = typeof req.body.title === "string" ? req.body.title.trim() : "";
-      if (!t) return res.status(400).json({ error: "Title must be a non-empty string" });
-      patch.title = sanitize(t);
-    }
-    if (req.body?.fireAt !== undefined) {
-      // Same zone-less-input rule as POST — see the comment there.
-      const d = parseUserDateTime(req.body.fireAt, getTimezone(req));
-      if (isNaN(d.getTime())) return res.status(400).json({ error: "Invalid fireAt date" });
-      patch.fireAt = d.toISOString();
-    }
-    if (req.body?.profileId !== undefined) {
-      patch.profileId = typeof req.body.profileId === "string" && req.body.profileId
-        ? req.body.profileId
-        : null;
-    }
-    if (Object.keys(patch).length === 0) {
-      return res.status(400).json({ error: "No supported fields to update" });
-    }
-    // SNAPSHOT, not a reference. The mirror is located by the reminder's OLD
-    // title and OLD fire date, so this value has to survive the update — and a
-    // storage layer that updates its row in place would otherwise hand us the
-    // same object and we'd search for the mirror at the new date and find
-    // nothing. Copy the two fields we need before anything mutates.
-    const prior = (await storage.listReminders()).find(r => r.id === req.params.id);
-    const before = prior ? { title: prior.title, fireAt: prior.fireAt } : undefined;
-    const updated = await storage.updateReminder(req.params.id, patch);
-    if (!updated) return res.status(404).json({ error: "Reminder not found" });
-    // Carry the mirrored calendar entry to the new title/time instead of
-    // leaving a stale copy behind at the old one.
-    if (before) await syncReminderMirrors(storage as any, before, updated, getTimezone(req));
-    const uid_rp = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`events:${uid_rp}`); bustCache(`calendar:${uid_rp}`); bustCache(`enhanced:`);
-    res.json(updated);
-  }));
+  // ---- Reminders: GONE -----------------------------------------------------
+  // GET/POST/PATCH/DELETE /api/reminders were removed on 2026-08-09 along with
+  // the entity. Portol has EVENTS and TASKS; a "remind me at 9am" is a task
+  // with `dueTime`, so the task routes serve every one of those calls. A
+  // deliberate 410 (rather than a 404) tells a stale client the difference
+  // between "this moved" and "this is broken", and names where to go.
+  const remindersGone: any = (_req: any, res: any) => res.status(410).json({
+    error: "Reminders were replaced by timed tasks. Use /api/tasks with dueDate + dueTime.",
+  });
+  app.all("/api/reminders", remindersGone);
+  app.all("/api/reminders/:id", remindersGone);
+
   app.patch("/api/obligations/:id", asyncHandler(async (req, res) => {
     if (req.body?.category !== undefined) {
       req.body.category = canonicalObligationCategory(req.body.category);

@@ -38,7 +38,7 @@ import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@sha
 import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
 import { detectMoodFromText } from "@shared/mood-detect";
-import { detectRecurrenceFreq } from "@shared/recurrence";
+import { detectRecurrenceFreq, parseRecurrence, withAnchorDay } from "@shared/recurrence";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
@@ -59,8 +59,7 @@ import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
-import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime } from "@shared/timezone";
-import { deleteReminderMirrors, deleteReminderSeriesMirrors, syncReminderMirrors } from "./reminder-mirror";
+import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr } from "@shared/timezone";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries } from "@shared/series-detect";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
@@ -599,9 +598,9 @@ function heuristicClassify(rawInput: string, ctx?: ClassifyCaptureContext): Capt
   let type = "unknown";
   if (/\$\s?\d|\bpaid\b|\bbought\b|\bspent\b|\bcost\b/.test(lower)) type = "expense";
   else if (/\bweight\b|\bbp\b|\bblood pressure\b|\bsteps\b|\bsugar\b|\bcalories\b|\bwater\b|\bsleep\b|\bmiles?\b|\bkm\b|\bworkout\b|\bgym\b|\brun\b|\bate\b|\bdrank\b/.test(lower)) type = "tracker_entry";
-  // A "remind me" with a clock time is a calendar reminder/event, not a plain task.
-  else if (/\bremind\b/.test(lower) && /\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\bat\s+\d{1,2}\b|\bnoon\b|\bmidnight\b/.test(lower)) type = "event";
-  else if (/\btodo\b|\btask\b|\bremind me\b|\bneed to\b|\bhave to\b/.test(lower)) type = "task";
+  // "Remind me to <do something>" is a TASK, clock time or not — a task carries
+  // its own due time. Only an occasion the user attends is an event.
+  else if (/\btodo\b|\btask\b|\bremind me\b|\bneed to\b|\bhave to\b|\bremind\b/.test(lower)) type = "task";
   else if (/\bappointment\b|\bmeeting\b|\bcalendar\b|\bschedule\b/.test(lower)) type = "event";
   else if (/\bnote\b|\bthought\b|\bidea\b/.test(lower)) type = "note";
 
@@ -2867,59 +2866,31 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Tasks ---
   {
     name: "create_task",
-    description: "Create a new TASK — an undated or date-only to-do with NO clock time ('add a task to buy milk', 'remind me to renew registration before Aug 1'). IMPORTANT: if the user gives a CLOCK TIME or says 'remind me … at <time>' / mentions a specific day+time ('Friday at 10am', 'tomorrow at 3pm'), that is a calendar reminder — use create_reminder instead (it notifies AND lands on the calendar). For recurring chores ('water plants weekly', 'take meds daily', 'pay rent monthly', 'check tire pressure every two weeks'), set the recurrence field — a new dated instance is auto-created each time the task is completed.",
+    description: "Create a TASK — something the USER DOES: a chore, an errand, a to-do, anything they'd want to check off. Portol has exactly two scheduled things: EVENTS (something that happens — a meeting, a flight, a party) and TASKS (something you do). There is no third 'reminder' kind. ALWAYS use this when the user says 'remind me to <do something>', however it's phrased and whatever time they give — 'remind me to call the dentist Friday at 10am', 'remind me to take my meds at 8am daily', 'every Tuesday I have to mow the lawn at 9 AM'. A clock time does NOT make it an event: set dueTime and it lands on the calendar at that hour AND notifies. Use create_event instead only when the thing is an occasion the user attends rather than a job they perform.",
     input_schema: {
       type: "object" as const,
       properties: {
         title: { type: "string", description: "Task title" },
         priority: { type: "string", enum: ["low", "medium", "high"], description: "Priority level" },
-        dueDate: { type: "string", description: "Due date (YYYY-MM-DD)" },
+        dueDate: { type: "string", description: "Due date (YYYY-MM-DD). For a repeating task this is the FIRST occurrence — resolve 'every Tuesday' to the next actual Tuesday." },
+        dueTime: { type: "string", description: "Clock time on the due date, as HH:MM 24-hour ('09:00', '17:30'). SET THIS whenever the user names a time ('at 9 AM', 'at 5:30', 'first thing at 8'). It puts the task on the calendar at that hour and is when the notification fires. Omit ONLY for a to-do with no time of day ('buy milk')." },
         tags: { type: "array", items: { type: "string" }, description: "Tags" },
-        recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"], description: "Set ONLY when THIS task itself repeats forever on a schedule (e.g. 'water plants weekly', 'check tire pressure every two weeks', 'take vitamins every morning'→daily, 'change batteries every year'→yearly). For odd intervals like 'every 3 days' put it in the title and the parser will encode it. LEAVE UNSET for one-time tasks — the default. A task that is done once and finished ('call the dentist', 'renew passport', 'obtain quotes from contractors', every step of a project plan) is one-time even when the same message asks for some OTHER thing to repeat, and even when it has a due date. Never copy a cadence from a sibling task in the same request." },
+        recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"], description: "Set ONLY when THIS task itself repeats on a schedule (e.g. 'water plants weekly', 'mow the lawn every Tuesday'→weekly, 'take vitamins every morning'→daily, 'change batteries every year'→yearly). For odd intervals like 'every 3 days' put it in the title and the parser will encode it. LEAVE UNSET for one-time tasks — the default. A task that is done once and finished ('call the dentist', 'renew passport', 'obtain quotes from contractors', every step of a project plan) is one-time even when the same message asks for some OTHER thing to repeat, and even when it has a due date. Never copy a cadence from a sibling task in the same request." },
+        recurrenceEnd: { type: "string", description: "OPTIONAL, only with recurrence: the date the series stops (YYYY-MM-DD). Resolve a spoken duration to it — 'for the next year' from Aug 11 2026 → '2027-08-11', 'until Christmas' → that date. Omit for an open-ended schedule; a recurring task repeats indefinitely unless this or occurrences says otherwise." },
+        occurrences: { type: "number", description: "OPTIONAL, only with recurrence: stop after this many times ('take it 10 times', 'four sessions'). Use recurrenceEnd instead when the user gives a duration or an end date." },
         forProfile: { type: "string", description: "Name of an EXISTING profile to link this task to (e.g. 'Max', 'Mom', 'Tesla'). Only set this if the person/entity already exists as a profile. If the user just mentions someone by name in the task (e.g. 'return book to Sarah'), put the name in the title instead — do NOT create a profile for them." },
       },
       required: ["title"],
     },
   },
-  {
-    name: "create_reminder",
-    description: "Create a REAL reminder that fires a notification at a specific date AND time AND places it on the calendar as an event (it shows up on the Calendar and dashboard, not just as a task). ALWAYS use this (NOT create_task) whenever the user says 'remind me' OR gives a clock time to be reminded — e.g. 'remind me to call the dentist Friday at 10am', 'remind me tomorrow at 3pm', 'remind Bob to take meds at 8am'. A request with a day and/or a clock time is a calendar reminder, not a plain task. Only fall back to create_task for an undated to-do with NO time intent ('add a task to buy milk'). NEVER use this when the user says 'move/change/push/reschedule MY <x> reminder' — that refers to an EXISTING reminder: call update_reminder instead (creating a second one leaves the old one firing too).",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        title: { type: "string", description: "What to be reminded about (e.g. 'call the dentist', 'take Amoxicillin 500mg')." },
-        fireAt: { type: "string", description: "When the FIRST reminder should fire, as a full ISO 8601 datetime (e.g. '2026-06-05T15:00:00'). Resolve relative phrasing like 'tomorrow at 3pm' to an absolute datetime. For a recurring reminder this is the first occurrence." },
-        forProfile: { type: "string", description: "OPTIONAL: name of an EXISTING person/pet profile this reminder is for (e.g. 'Bob', 'Mom'). Omit for the user themselves." },
-        recurrence: { type: "string", enum: ["daily", "twice_daily", "three_times_daily", "weekly", "monthly", "quarterly", "yearly"], description: "OPTIONAL: set for a REPEATING reminder. 'twice daily for 10 days' → 'twice_daily'. 'every three months' / 'quarterly' → 'quarterly'. Omit for a one-time reminder." },
-        count: { type: "number", description: "OPTIONAL: total occurrences when the user gives a FINITE duration ('twice daily for 10 days' = 20, 'daily for a week' = 7). Capped at 90. OMIT for an open-ended repeat ('every Thursday', 'quarterly', no end date) — a standing horizon is generated instead, and the tool tells you the through-date to report." },
-      },
-      required: ["title", "fireAt"],
-    },
-  },
-  {
-    name: "update_reminder",
-    description: "Move or rename an EXISTING reminder ('move my dentist reminder to 4pm', 'push that reminder to tomorrow'). Finds the pending reminder by title (partial match) and updates its time and/or title — the mirrored calendar entry moves with it. Do NOT create a new reminder for a time change.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        title: { type: "string", description: "Title of the pending reminder to update (partial match)" },
-        newFireAt: { type: "string", description: "New fire time as full ISO 8601 datetime (resolve 'tomorrow 9am' to absolute)" },
-        newTitle: { type: "string", description: "New title, when renaming" },
-      },
-      required: ["title"],
-    },
-  },
-  {
-    name: "delete_reminder",
-    description: "Delete a pending reminder ('cancel my dentist reminder', 'delete the medication reminders'). Finds ALL un-fired occurrences matching the title (partial match) and removes them, plus the mirrored calendar entry.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        title: { type: "string", description: "Title of the reminder(s) to delete (partial match)" },
-      },
-      required: ["title"],
-    },
-  },
+  // REMINDERS ARE GONE (2026-08-09). Portol models scheduled life with two
+  // entities: EVENTS (things that happen) and TASKS (things you do). A
+  // "reminder" was a third kind that existed only because tasks had no clock
+  // time, and it was the worst of both: it could not be checked off, it never
+  // appeared in the Recurring list, and it reached the calendar only through a
+  // mirrored companion event. Timed intent now belongs to create_task's
+  // `dueTime`; update_task and delete_task handle the rest. The executor still
+  // accepts the old tool names from an in-flight turn and translates them.
   {
     name: "restore_task",
     description: "Restore (undelete) a recently DELETED task — 'bring back the task I just deleted', 'restore the passport task'. Searches soft-deleted tasks by title. NOT for un-completing (use update_task changes.status:'todo').",
@@ -2953,7 +2924,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   },
   {
     name: "create_notification",
-    description: "Create a PERSISTED notification in the notification bell — 'notify me about the insurance renewal', 'create an urgent notification that rent changed', 'add a reminder notification'. This is a bell entry, NOT a scheduled reminder (use create_reminder for time-based firing).",
+    description: "Create a PERSISTED notification in the notification bell — 'notify me about the insurance renewal', 'create an urgent notification that rent changed'. This is a bell entry only: it has no date and nothing to do. If the user wants something to HAPPEN at a time, that is a task — use create_task with dueDate + dueTime.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3847,7 +3818,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       type: "object" as const,
       properties: {
         title: { type: "string", description: "Title of the task to update (partial match)" },
-        changes: { type: "object", description: "Fields to update — can include 'title', 'description', 'priority', 'dueDate', 'status'. Avoid changes.tags (it REPLACES the whole array) — use addTags/removeTags instead." },
+        changes: { type: "object", description: "Fields to update — can include 'title', 'description', 'priority', 'dueDate' (YYYY-MM-DD), 'dueTime' (HH:MM 24-hour; '' clears it), 'status'. Use dueTime for 'move it to 4pm' / 'push my dentist task to tomorrow at 9'. Avoid changes.tags (it REPLACES the whole array) — use addTags/removeTags instead." },
         addTags: { type: "array", items: { type: "string" }, description: "Tags to ADD (merged with existing, deduped). Use the tag grammar from the tool description." },
         removeTags: { type: "array", items: { type: "string" }, description: "Tags to REMOVE. An entry ending in ':' removes every tag with that prefix (e.g. 'recur:' clears recurrence; 'st:' clears all subtasks)." },
         forProfile: { type: "string", description: "MOVE the task to this profile (person/pet name) — replaces the current owner. Use for 'that task is actually Mike's' / 'move it to Luna's list'." },
@@ -3924,7 +3895,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "delete_event",
-    description: "Delete a calendar EVENT by title. NOT for reminders — when the user says 'reminder' ('delete the pickup reminder', 'cancel my dentist reminder'), use delete_reminder instead; reminders live in their own table and deleting a look-alike event leaves the reminder still armed.",
+    description: "Delete a calendar EVENT by title — an occasion that was going to happen (a meeting, an appointment someone else scheduled). When the user says 'reminder' ('delete the pickup reminder', 'cancel my dentist reminder') they mean the TASK of that name — use delete_task; there is no reminder entity.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -4694,7 +4665,7 @@ After you finish acting, confirm in the FEWEST words that clearly state what was
 SPEAK TO THE USER, NOT ABOUT THEM: Every word you write is shown DIRECTLY to the user as your reply. NEVER narrate your own plan or reasoning in the third person — do NOT write "I'll let the user know…", "Let me confirm everything else", "No existing laptop liability was found, so I'll tell them…". Just say the thing to them directly: e.g. "Couldn't find a laptop liability to apply the $125 to — want me to create one?". If something couldn't be done, state it plainly in one line; don't preface it with a description of what you're about to do. Start your reply with the recap itself — no lead-in.
 Example for a multi-log request:
 ✅ Logged: Multivitamin, Fish Oil, Amoxicillin 500 mg (8 AM)
-✅ Amoxicillin reminder: twice daily × 10 days
+✅ Amoxicillin task: daily at 8 AM × 10 days
 ✅ Journal entry added
 
 EXISTING DATA (this is fresh from the database — use it for every answer):
@@ -4841,7 +4812,7 @@ BEHAVIOR:
   * FOLLOW-UPS KEEP THE SUBJECT: when the user corrects you ("that's my license plate — I want my driver's license number") or sends a short follow-up ("so what is it?"), resolve what they mean from the conversation history. NEVER reply "What specific information are you referring to?" when the history already names the subject — re-run the lookup for the corrected subject and answer.
 - NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something but it's NOT in the data snapshot above, it was DELETED. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
-- When creating tasks from reminders, extract the due date if mentioned.
+- Extract the due date AND the clock time when either is mentioned ("Friday at 10am" → dueDate + dueTime:"10:00").
 - BIAS TO ACTION: When the user asks to create, schedule, add, mark off, complete, or check in something, DO IT immediately. NEVER ask clarifying questions for simple CRUD. Just execute.
   - "Mark off my run" → checkin_habit(name: "Running" or "Morning Run" — find closest match) — DO NOT ask which one
   - "I went on my morning run" / "I did X" / "I took X" / "I smoked X" / "I went to X" → log_tracker_entry — these are ACTIVITY REPORTS, not habit check-ins. Habits only move on EXPLICIT language ("mark off", "check in", "my X habit").
@@ -4887,7 +4858,7 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 
 ━━━ COMPLETION vs DELETION vs UPDATE (DIFFERENT THINGS) ━━━
 - "mark X done" / "I completed X" / "finished X" / "checked off X" → complete_task OR checkin_habit OR update_goal(status:completed) OR complete_event
-- "delete X" / "remove X" / "get rid of X" → delete_task OR delete_habit OR delete_event OR delete_goal OR delete_tracker. If the user says "REMINDER" anywhere in the request → delete_reminder, NEVER delete_event.
+- "delete X" / "remove X" / "get rid of X" → delete_task OR delete_habit OR delete_event OR delete_goal OR delete_tracker. "Cancel/delete my X reminder" means the TASK named X → delete_task.
 - "update X" / "change X to" / "edit X" → update_task OR update_habit OR update_goal OR update_event OR update_tracker_entry
 - "undo X" / "unmark X" / "I didn't do X" → uncomplete_habit (remove checkin)
 - NEVER use create_* when user says complete/done/finished for an EXISTING item
@@ -5010,16 +4981,12 @@ NEVER substitute a create_task when the user explicitly asks for a journal entry
 - "check off milk on my grocery list" / "uncheck X" → toggle_artifact_item(title, itemText)
 - delete: delete_artifact(title)
 
-━━━ REMINDER / RESTORE / NOTIFICATION CRUD ━━━
-- set a reminder: create_reminder(title, fireAt)
-- "move my X reminder to 4pm" / "push it to tomorrow" → update_reminder(title, newFireAt) — NEVER create a second reminder for a time change
-- "cancel/delete the X reminder(s)" → delete_reminder(title) — removes every pending occurrence + the calendar entry
-- REPEATING reminders: set recurrence and give count ONLY for a finite duration ("for 10 days" = 10). For an open-ended repeat ("every Thursday", "quarterly", "no end date") OMIT count — the tool generates a standing horizon and returns the date it runs through. Report that through-date; do NOT claim it repeats forever.
-- Completing a task automatically cancels reminders whose title contains the task's title. Don't call delete_reminder separately after complete_task — say the reminder was cancelled if the result reports it.
+━━━ RESTORE / NOTIFICATION CRUD ━━━
+- THERE IS NO REMINDER ENTITY. Portol has EVENTS (things that happen) and TASKS (things you do). "Remind me to <do something>" is a TASK, always — whatever time is given.
 - "bring back / restore the task I deleted" → restore_task(title?) — searches recently DELETED tasks (they are NOT in your data context; call the tool). "un-complete" is update_task(changes.status:'todo'), not restore.
 - "restore the X habit" → restore_habit(name?)
 - "dismiss my notifications" / "clear the bill alerts" → dismiss_notifications(which:'all' or matching text)
-- "create/add a notification" / "notify me that X" (no specific time) → create_notification. With a specific date/time ("remind me Friday at 3") → create_reminder instead.
+- "create/add a notification" / "notify me that X" (no specific time, nothing to do) → create_notification. If there IS something to do at a time ("remind me Friday at 3 to call the vet") → create_task(dueDate, dueTime).
 - "mark my notifications read" → mark_notifications_read; "mute info notifications" / "stop showing streak alerts" → set_notification_preferences; "unmute everything" → set_notification_preferences(clear:true)
 
 ━━━ INCOME / PAYCHECK / BUDGET / MEMORY CRUD ━━━
@@ -6596,286 +6563,54 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return { deleted: true, name: profile.name, id: profile.id };
     }
 
+    // ── Legacy reminder tool names ───────────────────────────────────────
+    //
+    // Reminders were retired on 2026-08-09: Portol has EVENTS and TASKS, and a
+    // task carries its own clock time. The tool definitions are gone, so the
+    // model no longer chooses these — but a turn already in flight, a replayed
+    // transcript, or a bulk plan drafted a moment earlier can still name them.
+    // Translating beats erroring: the user asked for a thing to happen at a
+    // time, and that is exactly a timed task.
     case "create_reminder": {
-      // BUG 3: real reminders. Resolve an optional forProfile name to a
-      // profileId, persist the reminder, and let the cron fire loop deliver it.
-      // GUARD (2026-06-25): a reminder with a missing/unparseable fireAt would
-      // otherwise persist a reminder AND a companion calendar event literally
-      // dated "Invalid Date" (new Date(undefined) → NaN). The upstream payload
-      // validator normally catches this, but defend the executor too so no
-      // direct caller can write junk. Reject instead of creating garbage.
-      {
-        // Zone-less datetimes are the user's wall clock, not the host's — see
-        // the create_reminder branch of validateAiPayload.
-        const when = input.fireAt ? parseUserDateTime(input.fireAt, aiUserTimezone()) : null;
-        if (!when || isNaN(when.getTime())) {
-          return { error: `I need a valid date and time for the reminder "${input.title || ""}". Tell me when (e.g. "tomorrow at 10am").` };
-        }
-        input.fireAt = when.toISOString();
+      const when = input.fireAt ? parseUserDateTime(input.fireAt, aiUserTimezone()) : null;
+      if (!when || isNaN(when.getTime())) {
+        return { error: `I need a valid date and time for "${input.title || ""}". Tell me when (e.g. "tomorrow at 10am").` };
       }
-      let reminderProfileId: string | undefined;
-      // Third-person fallback: "remind Bob to ..." should target Bob even if the
-      // model didn't populate forProfile. Parse the captured name (skip me/us).
-      let reminderNameHint = input.forProfile;
-      if (!reminderNameHint) {
-        const tp = String((input as any).__userMessage || "").match(/\bremind\s+(\w+)\s+(?:to\s+)?/i);
-        const nm = tp?.[1] || "";
-        if (nm && !/^(me|myself|us|i)$/i.test(nm)) reminderNameHint = nm;
-      }
-      const reminderForProfile = await resolveForProfile(reminderNameHint, input.title || "");
-      if (reminderForProfile) {
-        const profiles = await storage.getProfiles();
-        const matched = matchProfileByName(profiles, reminderForProfile);
-        if (matched) reminderProfileId = matched.id;
-      }
-      // RECURRENCE: "twice daily for 10 days" etc. expands into multiple reminder
-      // rows so each dose fires its own notification. Non-recurring = a single row.
-      // DST-STABLE SERIES (QA report 2026-07-25: "Reminder times change from
-      // 2:00 AM to 1:00 AM after daylight-saving transitions"). "Every day at
-      // 2 AM" is a WALL-CLOCK promise, but the series was built by adding a
-      // fixed 86,400,000 ms — and the fall-back day is 25 hours long, so every
-      // occurrence after the transition slid an hour earlier. Step calendar
-      // days in the USER'S timezone and re-compose the same local time instead
-      // (shared/timezone addZonedDays).
-      const remSeriesTz = (storage as any)._timezone || DEFAULT_TIMEZONE;
-      const firstAt = new Date(input.fireAt);
-      const firstMs = firstAt.getTime();
-      const recur = String((input as any).recurrence || "").toLowerCase();
-      // OPEN-ENDED SERIES. Reminders are materialized rows — there is no
-      // recurrence rule on the table — so "every Thursday, no end date" cannot
-      // be stored as a rule. An omitted count used to collapse to ONE reminder,
-      // which silently turned a standing weekly reminder into a single event.
-      // Generate a cadence-appropriate horizon instead, and say the
-      // through-date in the reply rather than implying an infinite series the
-      // rows do not back.
-      const REMINDER_HORIZON: Record<string, number> = {
-        daily: 90, twice_daily: 90, three_times_daily: 90,
-        weekly: 104, monthly: 24, quarterly: 8, yearly: 5,
+      const tz = aiUserTimezone();
+      // The old `count` was a number of materialized rows; a task expresses the
+      // same finite series as rcount, so it carries straight across.
+      const legacyCount = Math.floor(Number((input as any).count) || 0);
+      // twice_daily / three_times_daily have no task equivalent — a task is one
+      // row per day — so they collapse to daily, which is what the calendar
+      // showed for them anyway.
+      const legacyRecur = String((input as any).recurrence || "").toLowerCase();
+      const RECUR_ALIAS: Record<string, string> = {
+        daily: "daily", twice_daily: "daily", three_times_daily: "daily",
+        weekly: "weekly", monthly: "monthly", yearly: "yearly", quarterly: "every-13-weeks",
       };
-      const explicitCount = Math.floor(Number((input as any).count) || 0);
-      const occCount = !recur
-        ? 1
-        : explicitCount > 0
-          ? Math.max(1, Math.min(90, explicitCount))
-          : (REMINDER_HORIZON[recur] ?? 90);
-      const occ: number[] = [];
-      // Month-stepped cadences share the clamped, zone-aware arithmetic below.
-      const MONTH_STEP: Record<string, number> = { monthly: 1, quarterly: 3, yearly: 12 };
-      if (!recur) {
-        occ.push(firstMs);
-      } else if (recur === "twice_daily") {
-        for (let i = 0; i < occCount; i++) {
-          const day = Math.floor(i / 2), slot = i % 2;
-          occ.push(addZonedDays(firstAt, day, remSeriesTz, slot * 12 * 60).getTime());
-        }
-      } else if (recur === "three_times_daily") {
-        for (let i = 0; i < occCount; i++) {
-          const day = Math.floor(i / 3), slot = i % 3;
-          occ.push(addZonedDays(firstAt, day, remSeriesTz, slot * 8 * 60).getTime());
-        }
-      } else if (recur === "weekly") {
-        for (let i = 0; i < occCount; i++) occ.push(addZonedDays(firstAt, i * 7, remSeriesTz).getTime());
-      } else if (MONTH_STEP[recur]) {
-        // Calendar months in the user's zone: clamped to month end (so a day-31
-        // series doesn't overflow) and re-composed at the same wall-clock time.
-        // Quarterly and yearly step the SAME way — never by a fixed day count,
-        // which would drift off the anchor day and across DST.
-        const remParts = getZonedParts(firstAt, remSeriesTz);
-        const anchorDay = Number(remParts.date.slice(8, 10));
-        for (let i = 0; i < occCount; i++) {
-          const dateISO = addMonthsISO(remParts.date, i * MONTH_STEP[recur], anchorDay);
-          occ.push(zonedTimeToUTC(dateISO, remParts.hours, remParts.minutes, remSeriesTz).getTime());
-        }
-      } else { // "daily" or any other recurring token
-        for (let i = 0; i < occCount; i++) occ.push(addZonedDays(firstAt, i, remSeriesTz).getTime());
-      }
-      let reminder;
-      try {
-        for (let i = 0; i < occ.length; i++) {
-          const rem = await storage.createReminder({
-            title: input.title,
-            fireAt: new Date(occ[i]).toISOString(),
-            profileId: reminderProfileId,
-          });
-          if (i === 0) reminder = rem; // first occurrence drives the calendar mirror + card
-        }
-      } catch (e: any) {
-        // The reminders table is provisioned by an additive migration. Until it
-        // lands, fail soft so chat stays usable instead of throwing a 500.
-        const missingTable = /reminders/i.test(String(e?.message || e)) && /(relation|table|exist)/i.test(String(e?.message || e));
-        if (missingTable) {
-          return { error: "Reminders aren't available yet — the reminders table hasn't been provisioned. Try again shortly." };
-        }
-        throw e;
-      }
-      if (!reminder) {
-        return { error: `I couldn't schedule the reminder "${input.title || ""}". Please try again.` };
-      }
-      const _remTz = (storage as any)._timezone || DEFAULT_TIMEZONE;
-      const fireDate = new Date(reminder.fireAt);
-      const human = fireDate.toLocaleString("en-US", {
-        timeZone: _remTz,
-        weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-      });
-      // The last occurrence actually written. A repeating reminder is a finite
-      // set of rows, so the reply names the date it runs through instead of
-      // implying it repeats forever.
-      const throughHuman = occ.length > 1
-        ? new Date(occ[occ.length - 1]).toLocaleDateString("en-US", { timeZone: _remTz, month: "short", year: "numeric" })
-        : "";
-
-      // A timed reminder is also a calendar item — the user expects "remind me
-      // to call the dentist Friday at 10am" to show up on the calendar/dashboard
-      // exactly like an event, not just fire a silent notification. So we mirror
-      // the reminder onto the calendar by creating a companion event. The
-      // reminder row still drives the in-app notification via the cron loop; the
-      // event makes it visible. The card/undo target this event id.
-      // BUG-20260709-reminder-calendar-clutter: a lead-up reminder for an event
-      // ("Driver License Renewal — 30 days away") must NOT also become its own
-      // calendar entry — that turned one important date into 4 calendar rows.
-      // Lead-up reminders stay in the Reminders section + fire a notification;
-      // only stand-alone reminders mirror onto the calendar.
-      const isLeadUpReminder = /(?:[—-]\s*)?\b\d+\s*(?:day|days|hour|hours|week|weeks|month|months)\s*(?:away|before|out|prior|ahead)\b/i.test(input.title || "");
-      let calendarEvent: any = null;
-      try {
-        if (isLeadUpReminder) {
-          // Skip the calendar mirror — notification-only lead-up reminder.
-        } else {
-        // WHOLE-SERIES MIRROR (2026-08-09). "Every Tuesday I mow the lawn at
-        // 9 AM for the next year" wrote 52 reminder rows and then mirrored only
-        // occurrence #1 onto the calendar — chat reported "52 weekly reminders
-        // set" while every Tuesday after the first was blank on the calendar,
-        // because getCalendarTimeline reads events, not the reminders table.
-        // Mirror the SERIES instead: one recurring event ending on the last
-        // occurrence, which both calendar timelines already expand per date.
-        // Cadences the calendar has no pattern for (quarterly, and the
-        // multiple-times-a-day ones below day granularity) fall back to one
-        // event per occurrence — bounded by the same horizon that capped the
-        // reminder rows.
-        const REMINDER_EVENT_RECURRENCE: Record<string, RecurrencePattern> = {
-          daily: "daily", twice_daily: "daily", three_times_daily: "daily",
-          weekly: "weekly", monthly: "monthly", yearly: "yearly",
-        };
-        const seriesPattern: RecurrencePattern | undefined = recur ? REMINDER_EVENT_RECURRENCE[recur] : undefined;
-        const asLocalDate = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { timeZone: _remTz });
-        const asLocalTime = (ms: number) => new Date(ms).toLocaleTimeString("en-GB", { timeZone: _remTz, hour: "2-digit", minute: "2-digit" });
-        // One recurring event for a mappable cadence; otherwise every occurrence
-        // gets its own row. A non-recurring reminder is the single-element case.
-        const mirrorInstants = seriesPattern ? [occ[0]] : occ;
-        const seriesEnd = seriesPattern && occ.length > 1 ? asLocalDate(occ[occ.length - 1]) : undefined;
-        const existingEvents = await storage.getEvents();
-        for (const instant of mirrorInstants) {
-          const evDate = asLocalDate(instant); // YYYY-MM-DD
-          const evTime = asLocalTime(instant); // HH:MM (24h)
-          const evDedupKey = `event:${safeLC(reminderForProfile || "")}:${safeLC(input.title)}:${evDate}`;
-          const dupEvent = existingEvents.find(e => e.title.toLowerCase() === safeLC(input.title) && e.date === evDate);
-          if (dupEvent) {
-            calendarEvent = calendarEvent || dupEvent;
-            continue;
-          }
-          if (isDuplicateCreation(dedupUser, evDedupKey)) continue;
-          const remEventPayload = validateAiPayload(insertEventSchema, {
-            title: input.title.trim(),
-            date: evDate,
-            time: evTime,
-            allDay: false,
-            recurrence: seriesPattern ?? "none",
-            ...(seriesEnd ? { recurrenceEnd: seriesEnd } : {}),
-            category: "personal",
-            source: "chat",
-            linkedProfiles: reminderProfileId ? [reminderProfileId] : [],
-            linkedDocuments: [],
-            tags: ["reminder"],
-          }, "event");
-          if (remEventPayload.ok) {
-            const created = await storage.createEvent(remEventPayload.data);
-            markCreation(dedupUser, evDedupKey);
-            calendarEvent = calendarEvent || created;
-            if (reminderProfileId) {
-              await storage.linkProfileTo(reminderProfileId, "event", created.id)
-                .catch((e: any) => console.warn("[AI] Reminder event linking failed:", e?.message));
-            }
-          }
-        }
-        }
-      } catch (e: any) {
-        // Calendar mirroring is best-effort — a failure here must not lose the
-        // reminder itself, which was already persisted above.
-        console.warn("[AI] Failed to mirror reminder onto calendar:", e?.message || e);
-      }
-
-      return {
-        ...reminder,
-        // Surface the calendar event id as the primary id so the chat action
-        // card and its Undo button target the visible calendar entry.
-        id: calendarEvent?.id || reminder.id,
-        // ...but tell the envelope to verify the REMINDER row, not the mirror
-        // event. Without this the post-write read-back looked the event id up
-        // in the reminders table, never found it, and reported genuinely-saved
-        // reminders as "could NOT be confirmed … Nothing was saved" — the
-        // "reminder system save failure" users hit while the rows sat in the
-        // database. Stripped from the envelope before it reaches the client.
-        _verify: { type: "reminder", id: reminder.id },
-        reminderId: reminder.id,
-        eventId: calendarEvent?.id,
+      return executeTool("create_task", {
         title: input.title,
-        date: calendarEvent?.date,
-        time: calendarEvent?.time,
+        dueDate: toLocalDateStr(when, tz),
+        dueTime: toLocalTimeStr(when, tz),
+        recurrence: RECUR_ALIAS[legacyRecur] || undefined,
+        occurrences: legacyCount > 1 ? legacyCount : undefined,
         forProfile: input.forProfile,
-        // How many occurrences the series really has, and the last date it
-        // covers — the chat card showed one row for a 52-week series, which
-        // read as "only one got saved".
-        occurrences: occ.length,
-        through: occ.length > 1 ? new Date(occ[occ.length - 1]).toLocaleDateString("en-CA", { timeZone: _remTz }) : undefined,
-        message: recur
-          ? `Set ${occ.length} ${recur.replace(/_/g, " ")} reminders starting ${human}${throughHuman ? `, through ${throughHuman}` : ""}. Tell the user the through-date — this is a fixed set of occurrences, not an endless series; they can extend it any time.`
-          : `Reminder set for ${human} and added to your calendar. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
-        actions: [{ type: "create", category: "reminder", data: reminder }],
-      };
+        __userMessage: (input as any).__userMessage,
+      }, userId);
     }
 
     case "update_reminder": {
-      const pending = await storage.listReminders();
-      const needle = safeLC(input.title).trim();
-      const matches = pending.filter(r => safeLC(r.title).includes(needle));
-      if (matches.length === 0) return { error: `No pending reminder found matching "${input.title}"`, candidates: pending.slice(0, 5).map(r => r.title) };
-      // Earliest matching occurrence — the one the user means by "my X reminder".
-      const target = matches.slice().sort((a, b) => String(a.fireAt).localeCompare(String(b.fireAt)))[0];
-      const patch: { title?: string; fireAt?: string } = {};
-      if (input.newTitle && String(input.newTitle).trim()) patch.title = String(input.newTitle).trim();
-      if (input.newFireAt) {
-        const when = parseUserDateTime(input.newFireAt, aiUserTimezone());
-        if (isNaN(when.getTime())) return { error: `Invalid new time: "${input.newFireAt}"` };
-        patch.fireAt = when.toISOString();
-      }
-      if (!patch.title && !patch.fireAt) return { error: "Nothing to change — pass newFireAt and/or newTitle" };
-      const updated = await storage.updateReminder(target.id, patch);
-      // Move the mirrored calendar entry (same title, tagged "reminder") along.
-      // Shared with PATCH /api/reminders/:id so an edit made in chat and an edit
-      // made in the UI leave the calendar in the same state.
-      if (updated) await syncReminderMirrors(storage as any, target, updated, aiUserTimezone());
-      return { updated: true, reminder: updated, message: `Reminder "${target.title}" updated${patch.fireAt ? ` — now fires ${new Date(patch.fireAt).toLocaleString("en-US", { timeZone: (storage as any)._timezone || DEFAULT_TIMEZONE, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : ""}.` };
+      return executeTool("update_task", {
+        title: input.title,
+        changes: {
+          ...(input.newTitle ? { title: input.newTitle } : {}),
+          ...(input.newFireAt ? { dueDate: input.newFireAt } : {}),
+        },
+      }, userId);
     }
 
     case "delete_reminder": {
-      const pending = await storage.listReminders();
-      const needle = safeLC(input.title).trim();
-      const matches = pending.filter(r => safeLC(r.title).includes(needle));
-      if (matches.length === 0) return { error: `No pending reminder found matching "${input.title}"`, candidates: pending.slice(0, 5).map(r => r.title) };
-      let removed = 0;
-      for (const r of matches) { if (await storage.deleteReminder(r.id)) removed++; }
-      // Remove the mirrored calendar entries too — otherwise the deleted
-      // reminder keeps showing on the calendar. Shared with
-      // DELETE /api/reminders/:id (server/reminder-mirror.ts).
-      //
-      // This tool removes EVERY un-fired occurrence of a series, so the series
-      // mirror goes with it wholesale. Per-occurrence cleanup would only stamp
-      // 52 `rd:skip:` tags onto an event nothing renders any more.
-      for (const t of new Set(matches.map(r => r.title))) {
-        await deleteReminderSeriesMirrors(storage as any, t);
-      }
-      for (const r of matches) await deleteReminderMirrors(storage as any, r, aiUserTimezone());
-      return { deleted: true, count: removed, title: matches[0].title, message: `Deleted ${removed} pending reminder${removed === 1 ? "" : "s"} for "${matches[0].title}".` };
+      return executeTool("delete_task", { title: input.title }, userId);
     }
 
     case "restore_task": {
@@ -7147,12 +6882,40 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (recurFreq && !taskTags.some(t => String(t).startsWith("recur:"))) {
         taskTags.push(`recur:${recurFreq}`);
       }
+      // Where the series STOPS. "Every Tuesday for the next year" is a finite
+      // schedule, and a task that repeats forever when the user said "for a
+      // year" is as wrong as one that fires once. `runtil:`/`rcount:` are read
+      // by the recurrence engine and by the calendar projection alike, so the
+      // end date is honoured on screen and on completion.
+      if (recurFreq) {
+        const until = String(input.recurrenceEnd || "").slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(until) && !taskTags.some(t => String(t).startsWith("runtil:"))) {
+          taskTags.push(`runtil:${until}`);
+        }
+        const count = Math.floor(Number(input.occurrences) || 0);
+        if (count > 1 && !taskTags.some(t => String(t).startsWith("rcount:"))) {
+          taskTags.push(`rcount:${count}`);
+        }
+      }
+      // A monthly/yearly series is pinned to its start day-of-month here — the
+      // only moment the start date is known — so later steps clamp (Jan 31 →
+      // Feb 28 → Mar 31) instead of drifting.
+      if (recurFreq && input.dueDate) {
+        const anchored = withAnchorDay(parseRecurrence(taskTags), String(input.dueDate).slice(0, 10));
+        if (anchored.anchorDay != null && !taskTags.some(t => String(t).startsWith("ranchor:"))) {
+          taskTags.push(`ranchor:${anchored.anchorDay}`);
+        }
+      }
 
       // P0.3a: validate with the shared insert schema before writing.
       const taskPayload = validateAiPayload(insertTaskSchema, {
         title: input.title,
         priority: input.priority || "medium",
         dueDate: input.dueDate,
+        // A clock time makes this a timed task — on the calendar at that hour,
+        // notified at that hour. Anything unparseable is treated as "no time
+        // given" rather than guessing midnight.
+        dueTime: normalizeClockTime(input.dueTime) ?? undefined,
         description: input.description,
         tags: taskTags,
         linkedProfiles: taskLinkedProfiles,
@@ -7187,46 +6950,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         return { error: result.error || "Task not found", candidates: result.candidates };
       }
       const doneTask = await storage.updateTask(result.match.id, { status: "done" });
-      // A reminder set FOR a task ("remind me to renew my passport") outlives
-      // the task unless something clears it, so finishing the job left the
-      // notification firing forever. Completing the task retires its pending
-      // reminders and their mirrored calendar entries — the same cleanup
-      // delete_reminder does, so both doors leave the same state.
-      //
-      // Strictly best-effort: the completion is the user's actual request and
-      // must not fail because a reminder could not be tidied up.
-      let clearedReminders = 0;
-      try {
-        const doneNeedle = safeLC(result.match.title).trim();
-        if (doneNeedle.length >= 3) {
-          const pending = await storage.listReminders();
-          // One direction only: the REMINDER must name the task ("Renew
-          // passport — 45 days before" ← "Renew passport"). Matching the other
-          // way round would let a long task title sweep up unrelated
-          // short-titled reminders.
-          const orphaned = pending.filter(r => safeLC(r.title).includes(doneNeedle));
-          // Every occurrence goes, so a series mirror goes with them rather
-          // than lingering as an all-skipped event (same rule as
-          // delete_reminder). Retire it first so the per-occurrence pass below
-          // has only stand-alone mirrors left to clean up.
-          for (const t of new Set(orphaned.map(r => r.title))) {
-            await deleteReminderSeriesMirrors(storage as any, t);
-          }
-          for (const r of orphaned) {
-            if (await storage.deleteReminder(r.id)) clearedReminders++;
-            await deleteReminderMirrors(storage as any, r, aiUserTimezone());
-          }
-        }
-      } catch (e: any) {
-        console.warn("[AI] Reminder cleanup after task completion failed:", e?.message || e);
-      }
-      if (clearedReminders > 0) {
-        return {
-          ...doneTask,
-          clearedReminders,
-          message: `Marked "${result.match.title}" done and cancelled ${clearedReminders} reminder${clearedReminders === 1 ? "" : "s"} for it. Tell the user the reminder was cancelled too.`,
-        };
-      }
+      // (Removed 2026-08-09: a pass that hunted down reminder rows whose title
+      // contained the task's and deleted them plus their mirrored calendar
+      // events. It existed because a reminder set FOR a task was a separate row
+      // that outlived it, so finishing the job left a notification firing
+      // forever. There is no separate row now — completing the task IS retiring
+      // the thing that fires, and a recurring task advances to its next
+      // occurrence rather than needing cleanup.)
       return doneTask;
     }
 
@@ -10237,6 +9967,30 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const match = tasks.find(t => t.title.toLowerCase().includes(safeLC(input.title)));
       if (!match) return { error: `No task found matching "${input.title}"` };
       const changes: Record<string, any> = { ...(input.changes || {}) };
+      // A task carries a clock time, so "move it to 4pm" and "push it to
+      // tomorrow at 9" are ordinary task edits. `dueDate` may arrive as a full
+      // datetime ("2026-08-12T16:00") — split it rather than storing the whole
+      // string in a date column and losing the hour.
+      if (changes.dueDate !== undefined && changes.dueDate !== null) {
+        const raw = String(changes.dueDate);
+        const tz = aiUserTimezone();
+        const timeFromDate = normalizeClockTime(raw);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+          changes.dueDate = raw;
+        } else {
+          const when = parseUserDateTime(raw, tz);
+          if (isNaN(when.getTime())) return { error: `I couldn't read "${raw}" as a date.` };
+          changes.dueDate = toLocalDateStr(when, tz);
+          if (timeFromDate && changes.dueTime === undefined) changes.dueTime = timeFromDate;
+        }
+      }
+      if (changes.dueTime !== undefined) {
+        // An explicit empty value clears the time (back to an all-day to-do).
+        const t = normalizeClockTime(changes.dueTime);
+        if (t) changes.dueTime = t;
+        else if (String(changes.dueTime).trim() === "") changes.dueTime = undefined;
+        else return { error: `I couldn't read "${changes.dueTime}" as a time of day.` };
+      }
       // Additive tag edits MERGE with the task's existing tags server-side.
       // storage.updateTask replaces the whole array, so a bare changes.tags
       // from the model (which can't see current tags) would wipe subtasks/
@@ -14398,20 +14152,19 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
     // BUG-D: external calendar sync is not connected. If the user asks to sync a
     // Google/Apple/Outlook calendar, be honest instead of pretending it worked.
-    // Checked BEFORE the reminder prefix so a "sync my calendar" message gets the
-    // definitive sync disclaimer, not the reminder one.
+    // Checked BEFORE the delivery caveat so a "sync my calendar" message gets
+    // the definitive sync disclaimer, not the notification one.
     {
       const msgForDisclaimer = userMessage || "";
-      // BUG 3: a real reminder was persisted when allActions carries a reminder
-      // create. The create_reminder executor already returns the honest
-      // "Reminder set for ..." message, so we don't prepend anything here.
-      const reminderCreated = allActions.some(a => a.type === "create_reminder");
+      // "Remind me to X" now creates a TASK with a due time. When one was
+      // written, the task tool's own confirmation is the honest answer and
+      // nothing is prepended; when nothing was written, say how delivery works
+      // rather than letting the user assume a phone alert is coming.
+      const taskCreated = allActions.some(a => a.type === "create_task");
       if (/((google|apple|outlook|gcal|icloud)\s*calendar.*sync|sync.*(google|apple|outlook|gcal|icloud)\s*calendar|sync.*calendar)/i.test(msgForDisclaimer)) {
         finalReply = "Google/Apple/Outlook calendar sync isn't connected yet. Your Portol calendar still works internally.";
-      } else if (!reminderCreated && /(remind\s+(?:me|him|her|them|\w+)|notify me|alert me|reminder)/i.test(msgForDisclaimer)) {
-        // The message asked for a reminder but none was persisted (e.g. no clock
-        // time, so it became a task). Be honest about in-app-only delivery.
-        finalReply = `I've added that to your calendar/dashboard so you'll see it. Heads up: timed push and email reminders aren't connected yet — only in-app notifications fire.\n\n${finalReply}`;
+      } else if (!taskCreated && /(remind\s+(?:me|him|her|them|\w+)|notify me|alert me|reminder)/i.test(msgForDisclaimer)) {
+        finalReply = `I've added that to your calendar/dashboard so you'll see it. Heads up: push and email aren't connected yet — only in-app notifications fire.\n\n${finalReply}`;
       }
     }
 
@@ -14633,9 +14386,10 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   log_medication_dose: "log_entry",
   skip_medication_dose: "log_entry",
   link_document: "link_entities",
-  create_reminder: "create_reminder",
-  update_reminder: "update_entity",
-  delete_reminder: "delete_entity",
+  // No create_reminder / update_reminder / delete_reminder: reminders were
+  // retired 2026-08-09. The executor still answers those names by delegating to
+  // the task tools, so the action type comes from create_task / update_task /
+  // delete_task and is already mapped above.
   dismiss_notifications: "update_entity",
   // Trackers
   log_tracker_entry: "log_entry",

@@ -201,9 +201,6 @@ async function deleteSourceRecord(
     case "task":
       await apiRequest("DELETE", `/api/tasks/${id}`);
       return;
-    case "reminder":
-      await apiRequest("DELETE", `/api/reminders/${id}`);
-      return;
     case "profile": {
       // Clear the date field, never the profile. Deleting Joe because you
       // wanted his birthday off the calendar would be catastrophic.

@@ -48,7 +48,6 @@ export function actionLabelFor(action: CalendarAction, kind: OccurrenceKind): st
   if (action === "complete") {
     if (isPaymentKind(kind)) return "Mark paid";
     if (kind === "task" || kind === "habit") return "Complete";
-    if (kind === "reminder") return "Dismiss";
     return ACTION_LABELS.complete;
   }
   if (action === "edit") {
@@ -60,7 +59,7 @@ export function actionLabelFor(action: CalendarAction, kind: OccurrenceKind): st
     if (kind === "birthday" || kind === "anniversary") return "Remove from calendar";
     return ACTION_LABELS.deleteSeries;
   }
-  if (action === "move" && (kind === "task" || kind === "reminder")) return "Reschedule";
+  if (action === "move" && kind === "task") return "Reschedule";
   return ACTION_LABELS[action];
 }
 
@@ -90,7 +89,7 @@ export interface ActionCapability {
  *   obligation — real occurrence rows (/api/obligation-occurrences)
  *   liability  — an occurrences map on the liability profile
  *
- * A profile's birthday field, a one-shot reminder and a document expiry have
+ * A profile's birthday field, a task and a document expiry have
  * no per-occurrence storage, so those actions are disabled rather than faked.
  */
 const PER_OCCURRENCE_SYSTEMS = new Set<SourceSystem>(["event", "obligation", "liability"]);
@@ -102,7 +101,6 @@ const MANAGE_AT: Record<SourceSystem, string> = {
   obligation: "its bill",
   liability: "its liability page",
   task: "the task",
-  reminder: "the reminder",
   habit: "the habit",
   document: "the document",
   goal: "the goal",

@@ -77,9 +77,9 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Event", operation: "Export .ics file", ui: "Calendar item → Export", aiTools: [], status: "excluded", reason: "Browser file download — nothing for chat to return." },
 
   // ── Reminders ──────────────────────────────────────────────────────────────
-  { entity: "Reminder", operation: "Create", ui: "Quick-add → Reminder", aiTools: ["create_reminder"], status: "covered" },
-  { entity: "Reminder", operation: "Edit / move time", ui: "(no UI surface — chat only)", aiTools: ["update_reminder"], status: "added" },
-  { entity: "Reminder", operation: "Delete", ui: "(no UI surface — chat only)", aiTools: ["delete_reminder"], status: "added" },
+  // Reminders were retired 2026-08-09 — a timed task covers every row they had.
+  { entity: "Task", operation: "Create with a clock time", ui: "Quick-add → Task (datetime)", aiTools: ["create_task"], status: "covered" },
+  { entity: "Task", operation: "Move time / reschedule", ui: "Tasks popup row editor", aiTools: ["update_task"], status: "covered" },
 
   // ── Expenses ───────────────────────────────────────────────────────────────
   { entity: "Expense", operation: "Create", ui: "Finance tab / Quick-add", aiTools: ["create_expense"], status: "covered" },

@@ -58,13 +58,13 @@ import { useLocation } from "wouter";
 const OCC_ICONS: Record<OccurrenceKind, any> = {
   birthday: Cake, anniversary: CalendarHeart, subscription: CreditCard,
   liability: Wallet, bill: Receipt, renewal: RefreshCw, maintenance: Wrench,
-  appointment: Stethoscope, reminder: Bell, task: CheckSquare, habit: Repeat,
+  appointment: Stethoscope, task: CheckSquare, habit: Repeat,
   document: FileText, event: CalendarClock, custom: Repeat,
 };
 const KIND_HSL: Record<OccurrenceKind, string> = {
   birthday: "262 75% 64%", anniversary: "330 75% 60%", subscription: "220 80% 62%",
   liability: "270 70% 62%", bill: "0 72% 58%", renewal: "38 92% 52%",
-  maintenance: "199 85% 55%", appointment: "155 62% 44%", reminder: "48 90% 55%",
+  maintenance: "199 85% 55%", appointment: "155 62% 44%",
   task: "210 80% 60%", habit: "170 60% 45%", document: "215 15% 60%",
   event: "240 8% 60%", custom: "240 8% 60%",
 };
@@ -631,7 +631,7 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
 
 // ─── Unified occurrence list ──────────────────────────────────────────────────
 // Everything the calendar knows about — birthdays, anniversaries, bills,
-// subscriptions, liabilities, reminders, tasks, documents and plain events —
+// subscriptions, liabilities, tasks, documents and plain events —
 // comes from ONE engine (shared/calendar-occurrences) via one hook, already
 // deduplicated. There is no longer a second "from across your app" collection
 // competing with this one: two lists meant two answers, and it was never clear
@@ -808,7 +808,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
             <p className="micro-label text-muted-foreground">
               Upcoming · {streamOccurrences.length}
             </p>
-            <p className="text-[11px] text-muted-foreground">birthdays · bills · subscriptions · reminders</p>
+            <p className="text-[11px] text-muted-foreground">birthdays · bills · subscriptions · tasks</p>
           </div>
           <div className="bubble divide-y divide-/50 overflow-hidden">
             {streamOccurrences.slice(0, 60).map(occ => (

@@ -27,7 +27,6 @@ export interface FakeDb {
   obligations: any[];
   tasks: any[];
   events: any[];
-  reminders: any[];
   documents: any[];
   /** Call counter for the binary-materializing read, so a test can prove the
    *  metadata route never touches it. */
@@ -89,10 +88,22 @@ export function makeFakeStorage(db: FakeDb) {
     materializeObligationOccurrences: async () => [],
 
     getTasks: async () => db.tasks,
+    getTask: async (rid: string) => db.tasks.find(t => t.id === rid),
     createTask: async (data: any) => {
       const row = { id: id("task"), status: "todo", ...data };
       db.tasks.push(row);
       return row;
+    },
+    updateTask: async (rid: string, patch: any) => {
+      const row = db.tasks.find(t => t.id === rid);
+      if (!row) return undefined;
+      Object.assign(row, patch);
+      return row;
+    },
+    deleteTask: async (rid: string) => {
+      const before = db.tasks.length;
+      db.tasks = db.tasks.filter(t => t.id !== rid);
+      return db.tasks.length < before;
     },
 
     getEvents: async () => db.events,
@@ -146,23 +157,6 @@ export function makeFakeStorage(db: FakeDb) {
       return row;
     },
 
-    listReminders: async () => db.reminders,
-    createReminder: async (data: any) => {
-      const row = { id: id("rem"), ...data };
-      db.reminders.push(row);
-      return row;
-    },
-    updateReminder: async (rid: string, patch: any) => {
-      const row = db.reminders.find(r => r.id === rid);
-      if (!row) return undefined;
-      Object.assign(row, patch);
-      return row;
-    },
-    deleteReminder: async (rid: string) => {
-      const before = db.reminders.length;
-      db.reminders = db.reminders.filter(r => r.id !== rid);
-      return db.reminders.length < before;
-    },
   };
 
   return new Proxy(impl, {
@@ -186,7 +180,7 @@ export interface Harness {
 export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness> {
   const db: FakeDb = {
     profiles: [], expenses: [], incomes: [], obligations: [],
-    tasks: [], events: [], reminders: [], documents: [], getDocumentCalls: 0, ...seed,
+    tasks: [], events: [], documents: [], getDocumentCalls: 0, ...seed,
   };
   const storage = makeFakeStorage(db);
 

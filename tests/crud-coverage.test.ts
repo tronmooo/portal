@@ -15,7 +15,8 @@
 // What it found on first run:
 //   • reminders  — create + delete, no update. `storage.updateReminder` had
 //     existed for months with no route calling it, so a typo'd reminder could
-//     only be deleted and retyped.  → PATCH /api/reminders/:id added.
+//     only be deleted and retyped.  → PATCH /api/reminders/:id added, and then
+//     the whole entity was retired on 2026-08-09 in favour of timed tasks.
 //   • paychecks  — no general update (see EXEMPT below).
 //
 // A new resource that ships without a delete now fails here, with the resource
@@ -92,7 +93,6 @@ describe("every resource you can create, you can also change and remove", () => 
     expect(CREATABLE.length).toBeGreaterThan(15);
     expect(CREATABLE).toContain("tasks");
     expect(CREATABLE).toContain("obligations");
-    expect(CREATABLE).toContain("reminders");
   });
 
   it.each(CREATABLE)("%s can be deleted", (resource) => {

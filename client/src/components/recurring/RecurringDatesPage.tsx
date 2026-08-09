@@ -401,7 +401,7 @@ function EmptyState({ category, onAdd, upcoming }: {
           : `No ${label.toLowerCase()}`}
       </p>
       <p className="text-xs text-muted-foreground mt-0.5 max-w-xs mx-auto">
-        Birthdays, bills, subscriptions, liabilities, tasks and reminders all appear here — each one
+        Birthdays, bills, subscriptions, liabilities and tasks all appear here — each one
         once, with its own schedule.
       </p>
       {onAdd && category === "all" && (

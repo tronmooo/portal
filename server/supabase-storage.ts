@@ -69,6 +69,7 @@ import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { parseRecurringMeta } from "../shared/recurring-dates";
+import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
   type Profile, type InsertProfile,
@@ -97,7 +98,7 @@ import {
   type AiActionLog, type InsertAiActionLog,
   MOOD_SCORES,
 } from "@shared/schema";
-import { type IStorage, type Reminder, computeSecondaryData } from "./storage";
+import { type IStorage, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
 import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
@@ -1019,6 +1020,7 @@ export class SupabaseStorage implements IStorage {
     return {
       id: r.id, title: r.title, description: r.description || undefined,
       status: r.status, priority: r.priority, dueDate: r.due_date || undefined,
+      dueTime: r.due_time || undefined,
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [], createdAt: r.created_at,
       updatedAt: r.updated_at || r.created_at,
     };
@@ -3144,6 +3146,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("tasks").insert({
       id, user_id: this.userId, title: data.title, description: data.description || null,
       status: (data as any).status || "todo", priority: data.priority || "medium", due_date: data.dueDate || null,
+      due_time: data.dueTime || null,
       linked_profiles: [], tags: data.tags || [],
       source: (data as any).source || "manual", created_at: now,
     });
@@ -3171,6 +3174,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("tasks").update({
       title: merged.title, description: merged.description || null, status: merged.status,
       priority: merged.priority, due_date: merged.dueDate || null,
+      due_time: merged.dueTime || null,
       tags: merged.tags,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
@@ -3217,6 +3221,8 @@ export class SupabaseStorage implements IStorage {
       description: prev.description || undefined,
       priority: prev.priority,
       dueDate: nextDue,
+      // The next instance keeps the same hour — a 9 AM chore is 9 AM every week.
+      dueTime: prev.dueTime || undefined,
       tags: prev.tags || [],
       linkedProfiles: prev.linkedProfiles || [],
     } as any);
@@ -3676,11 +3682,32 @@ export class SupabaseStorage implements IStorage {
     for (const task of tasks) {
       // Use dueDate if available, otherwise fall back to createdAt so every task appears on the calendar
       const rawDate = task.dueDate || task.createdAt;
-      if (rawDate) {
-        const d = rawDate.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
-          items.push({ id: `task-${task.id}`, type: "task", title: task.title, date: d, allDay: true, color: task.priority === "high" ? "#A13544" : task.priority === "medium" ? "#BB653B" : "#797876", category: "task", description: task.description, completed: task.status === "done", linkedProfiles: task.linkedProfiles, sourceId: task.id, meta: { priority: task.priority, status: task.status } });
-        }
+      if (!rawDate) continue;
+      const taskColor = task.priority === "high" ? "#A13544" : task.priority === "medium" ? "#BB653B" : "#797876";
+      // A task carries its own clock time now (Portol has two entities, events
+      // and tasks — see shared/schema.ts Task), and a repeating task is
+      // projected across the window instead of appearing once on its stored due
+      // date. Without the projection "every Tuesday at 9 AM" occupied one
+      // Tuesday and the rest of the year was blank.
+      const taskDates = task.dueDate
+        ? taskOccurrenceDates({ dueDate: task.dueDate, tags: task.tags, status: task.status }, startDate, endDate, { todayISO: rdTodayISO })
+        : (rawDate.slice(0, 10) >= startDate && rawDate.slice(0, 10) <= endDate ? [rawDate.slice(0, 10)] : []);
+      const isSeries = taskRepeats(task as any);
+      for (const d of taskDates) {
+        items.push({
+          // A projected occurrence is not the stored row, so its id carries the
+          // date — two occurrences of one task must not collide as one item.
+          id: isSeries ? `task-${task.id}-${d}` : `task-${task.id}`,
+          type: "task", title: task.title, date: d,
+          time: task.dueTime || undefined,
+          allDay: !task.dueTime,
+          color: taskColor, category: "task", description: task.description,
+          // Only the stored occurrence can be complete; projected future ones
+          // are always still to do.
+          completed: task.status === "done" && d === String(task.dueDate || "").slice(0, 10),
+          linkedProfiles: task.linkedProfiles, sourceId: task.id,
+          meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries },
+        });
       }
     }
 
@@ -6705,106 +6732,6 @@ export class SupabaseStorage implements IStorage {
     const newBudgets = source.map(b => ({ ...b, id: crypto.randomUUID() }));
     await this.setBudgets(toMonth, newBudgets);
     return newBudgets.length;
-  }
-
-  // ============================================================
-  // REMINDERS (fired by GET /api/cron/fire-due-reminders)
-  // ============================================================
-  // Service role bypasses RLS, so every query filters by user_id ourselves.
-  private mapReminder(row: any): Reminder {
-    return {
-      id: row.id,
-      title: row.title,
-      fireAt: row.fire_at,
-      firedAt: row.fired_at ?? null,
-      profileId: row.profile_id ?? null,
-      channel: row.channel || "in_app",
-      createdAt: row.created_at,
-    };
-  }
-
-  async createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder> {
-    // DEDUP (BUG-20260709-dup-reminder): a stale/replayed action was creating a
-    // second identical reminder (same title + same fire time). An unfired
-    // reminder with the same user + title + fire_at is a duplicate — return the
-    // existing one instead of inserting again. Recurring reminders differ by
-    // fireAt, so this never collapses legitimate multi-occurrence schedules.
-    {
-      const { data: existing } = await this.supabase
-        .from("reminders")
-        .select("*")
-        .eq("user_id", this.userId)
-        .eq("title", data.title)
-        .eq("fire_at", data.fireAt)
-        .is("fired_at", null)
-        .is("deleted_at", null)
-        .limit(1);
-      if (existing && existing.length > 0) return this.mapReminder(existing[0]);
-    }
-    const { data: row, error } = await this.supabase.from("reminders").insert({
-      user_id: this.userId,
-      profile_id: data.profileId || null,
-      title: data.title,
-      fire_at: data.fireAt,
-      channel: "in_app",
-    }).select().single();
-    if (error) throw error;
-    this.logActivity("reminder", `Set reminder: ${data.title}`);
-    return this.mapReminder(row);
-  }
-
-  async listReminders(filter?: { dueBefore?: Date }): Promise<Reminder[]> {
-    let q = this.supabase.from("reminders").select("*")
-      .eq("user_id", this.userId)
-      .is("fired_at", null)
-      .is("deleted_at", null);
-    if (filter?.dueBefore) q = q.lte("fire_at", filter.dueBefore.toISOString());
-    const { data, error } = await q.order("fire_at", { ascending: true });
-    if (error) throw error;
-    return (data || []).map(r => this.mapReminder(r));
-  }
-
-  // Authoritative single-row read-back for chat write verification. Note the
-  // deliberate ABSENCE of a fired_at filter: listReminders serves only pending
-  // rows, so a reminder the cron fires between the write and the verification
-  // read would vanish from it and a good write would report as failed.
-  async getReminder(id: string): Promise<Reminder | undefined> {
-    const { data, error } = await this.supabase.from("reminders").select("*")
-      .eq("id", id).eq("user_id", this.userId)
-      .is("deleted_at", null)
-      .limit(1);
-    if (error) throw error;
-    return data && data.length > 0 ? this.mapReminder(data[0]) : undefined;
-  }
-
-  async markReminderFired(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("reminders")
-      .update({ fired_at: new Date().toISOString() })
-      .eq("id", id).eq("user_id", this.userId);
-    if (error) throw error;
-    return true;
-  }
-
-  async updateReminder(id: string, data: { title?: string; fireAt?: string; profileId?: string | null }): Promise<Reminder | undefined> {
-    const patch: any = {};
-    if (data.title !== undefined) patch.title = data.title;
-    if (data.fireAt !== undefined) patch.fire_at = data.fireAt;
-    if (data.profileId !== undefined) patch.profile_id = data.profileId;
-    if (Object.keys(patch).length === 0) return undefined;
-    const { data: row, error } = await this.supabase.from("reminders")
-      .update(patch).eq("id", id).eq("user_id", this.userId)
-      .select().single();
-    if (error) throw error;
-    return row ? this.mapReminder(row) : undefined;
-  }
-
-  async deleteReminder(id: string): Promise<boolean> {
-    const { data, error } = await this.supabase.from("reminders")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", id).eq("user_id", this.userId)
-      .select("id");
-    if (error) throw error;
-    return Array.isArray(data) && data.length > 0;
   }
 
   // ============================================================
