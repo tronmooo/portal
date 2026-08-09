@@ -723,7 +723,7 @@ function BirthdaySection() {
   );
 }
 
-// ─── Task / Reminder section ──────────────────────────────────────────────
+// ─── Task section ─────────────────────────────────────────────────────────
 
 function TaskSection() {
   const { toast } = useToast();
@@ -748,7 +748,7 @@ function TaskSection() {
     },
     onSuccess: () => {
       invalidateAll();
-      toast({ title: "Reminder added" });
+      toast({ title: "Task added" });
     },
     onError: (err, _v, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
@@ -761,7 +761,7 @@ function TaskSection() {
       <CardContent className="p-4 space-y-3">
         <div className="flex items-center gap-2">
           <Bell className="h-4 w-4 text-purple-500" />
-          <p className="text-sm font-medium">Task or reminder</p>
+          <p className="text-sm font-medium">Task</p>
         </div>
         <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="What needs to be done?" data-testid="task-title" />
         <div className="grid grid-cols-2 gap-2">
@@ -787,7 +787,7 @@ function TaskSection() {
           create.mutate({ title: title.trim(), dueDate, priority, description: description || undefined });
           setTitle(""); setDescription("");
         }} data-testid="task-create">
-          <Plus className="h-3.5 w-3.5 mr-1" /> Add reminder
+          <Plus className="h-3.5 w-3.5 mr-1" /> Add task
         </Button>
       </CardContent>
     </Card>

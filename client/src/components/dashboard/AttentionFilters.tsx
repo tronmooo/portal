@@ -128,7 +128,6 @@ export function AttentionFilters({ prefs, onChange }: {
         <div className="flex flex-wrap gap-1.5">
           <Toggle label="Tasks" on={draft.includeTasks} onChange={v => set({ includeTasks: v })} testId="attention-toggle-tasks" />
           <Toggle label="Habits" on={draft.includeHabits} onChange={v => set({ includeHabits: v })} testId="attention-toggle-habits" />
-          <Toggle label="Reminders" on={draft.includeReminders} onChange={v => set({ includeReminders: v })} testId="attention-toggle-reminders" />
           <Toggle label="Today's events" on={draft.includeEvents} onChange={v => set({ includeEvents: v })} testId="attention-toggle-events" />
           <Toggle label="Birthdays" on={draft.includeBirthdays} onChange={v => set({ includeBirthdays: v })} testId="attention-toggle-birthdays" />
         </div>

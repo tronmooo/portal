@@ -20,13 +20,13 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Receipt, ArrowDownToLine, CreditCard, StickyNote, Bell } from "lucide-react";
 import {
-  buildExpensePayload, buildIncomePayload, buildBillPayload, buildNotePayload, buildReminderPayload,
+  buildExpensePayload, buildIncomePayload, buildBillPayload, buildNotePayload, buildTimedTaskPayload,
   parseAmount, type BuildResult,
 } from "@shared/quick-add";
 import { LARGE_TRANSACTION_AMOUNT } from "@shared/schema";
 import { useActiveCreateProfileId } from "@/hooks/useProfileScope";
 
-export type QuickAddKind = "expense" | "income" | "bill" | "note" | "reminder";
+export type QuickAddKind = "expense" | "income" | "bill" | "note" | "task";
 
 const EXPENSE_CATEGORIES = ["entertainment", "food", "general", "health", "housing", "insurance", "pet", "shopping", "subscription", "transport", "travel", "utilities", "vehicle"];
 const INCOME_CATEGORIES = ["bonus", "business", "dividends", "gift", "interest", "rental", "salary", "other"];
@@ -41,7 +41,10 @@ const CONFIG: Record<QuickAddKind, {
   income: { title: "Add income", description: "A pay or income stream.", icon: ArrowDownToLine, endpoint: "/api/incomes", build: buildIncomePayload, successNoun: "Income" },
   bill: { title: "Add bill", description: "A recurring obligation.", icon: CreditCard, endpoint: "/api/obligations", build: buildBillPayload, successNoun: "Bill" },
   note: { title: "Add note", description: "A quick journal note.", icon: StickyNote, endpoint: "/api/journal", build: buildNotePayload, successNoun: "Note" },
-  reminder: { title: "Add reminder", description: "We'll surface it when it's due.", icon: Bell, endpoint: "/api/reminders", build: buildReminderPayload, successNoun: "Reminder" },
+  // Reminders were retired 2026-08-09 — Portol has events and tasks, and a
+  // task carries its own clock time. The tile keeps the bell so the muscle
+  // memory still works; what it writes is a timed task.
+  task: { title: "Add task", description: "Lands on your calendar at that time — check it off when it's done.", icon: Bell, endpoint: "/api/tasks", build: buildTimedTaskPayload, successNoun: "Task" },
 };
 
 function sortProfilesForSelect(a: { type?: string; name?: string }, b: { type?: string; name?: string }) {
@@ -121,7 +124,7 @@ export function QuickAddDialog({
       case "income": return cfg.build({ description: text1, amount, category, frequency, date }, owner);
       case "bill": return cfg.build({ name: text1, amount, frequency, category, nextDueDate: date, autopay }, owner);
       case "note": return cfg.build({ content: text1, date }, owner);
-      case "reminder": return cfg.build({ title: text1, fireAt: date }, owner);
+      case "task": return cfg.build({ title: text1, at: date }, owner);
     }
   }, [kind, text1, amount, category, vendor, date, frequency, autopay, owner, cfg]);
 
@@ -164,7 +167,7 @@ export function QuickAddDialog({
   };
   const onKey = (e: React.KeyboardEvent) => { if (e.key === "Enter" && kind !== "note") submit(); };
   const Icon = cfg.icon;
-  const text1Label = kind === "bill" ? "Name" : kind === "reminder" ? "Title" : kind === "note" ? "Note" : "Description";
+  const text1Label = kind === "bill" ? "Name" : kind === "task" ? "Title" : kind === "note" ? "Note" : "Description";
 
   return (
     <BubbleModal
@@ -180,7 +183,7 @@ export function QuickAddDialog({
                 onChange={(e) => setText1(e.target.value)} data-testid={`input-quick-add-${kind}-text`} />
             ) : (
               <Input value={text1} autoFocus onKeyDown={onKey}
-                placeholder={kind === "bill" ? "e.g. Rent" : kind === "reminder" ? "e.g. Pay water bill" : "What was it for?"}
+                placeholder={kind === "bill" ? "e.g. Rent" : kind === "task" ? "e.g. Mow the lawn" : "What was it for?"}
                 onChange={(e) => setText1(e.target.value)}
                 aria-invalid={attempted && !text1.trim() ? true : undefined}
                 className={attempted && !text1.trim() ? "border-destructive focus-visible:ring-destructive" : ""}
@@ -233,8 +236,8 @@ export function QuickAddDialog({
 
           {kind !== "note" && (
             <div className="space-y-1">
-              <Label className="text-xs">{kind === "bill" ? "Next due" : kind === "reminder" ? "When" : "Date"}</Label>
-              <Input type={kind === "reminder" ? "datetime-local" : "date"} value={date} onChange={(e) => setDate(e.target.value)} data-testid={`input-quick-add-${kind}-date`} />
+              <Label className="text-xs">{kind === "bill" ? "Next due" : kind === "task" ? "When" : "Date"}</Label>
+              <Input type={kind === "task" ? "datetime-local" : "date"} value={date} onChange={(e) => setDate(e.target.value)} data-testid={`input-quick-add-${kind}-date`} />
             </div>
           )}
 

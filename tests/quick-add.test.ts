@@ -5,7 +5,7 @@ import {
   buildIncomePayload,
   buildBillPayload,
   buildNotePayload,
-  buildReminderPayload,
+  buildTimedTaskPayload,
 } from "../shared/quick-add";
 
 describe("parseAmount", () => {
@@ -75,13 +75,27 @@ describe("buildNotePayload", () => {
   });
 });
 
-describe("buildReminderPayload", () => {
-  it("builds title + optional fireAt + profileId", () => {
-    const r = buildReminderPayload({ title: "Call mom", fireAt: "2026-07-01T09:00:00Z" }, "bob");
+// The quick-add tile that used to write a reminder writes a TIMED TASK.
+// Reminders were retired 2026-08-09 — Portol has events and tasks, and a task
+// carries its own clock time — so the datetime the dialog collects has to reach
+// the task as a due DATE plus a due TIME, not as one opaque string.
+describe("buildTimedTaskPayload", () => {
+  it("splits the datetime into dueDate + dueTime and links the owner", () => {
+    const r = buildTimedTaskPayload({ title: "Call mom", at: "2026-07-01T09:00" }, "bob");
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.body).toMatchObject({ title: "Call mom", fireAt: "2026-07-01T09:00:00Z", profileId: "bob" });
+    if (r.ok) expect(r.body).toMatchObject({
+      title: "Call mom", dueDate: "2026-07-01", dueTime: "09:00", linkedProfiles: ["bob"],
+    });
+  });
+  it("leaves a date-only value as an all-day task", () => {
+    const r = buildTimedTaskPayload({ title: "Buy milk", at: "2026-07-01" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.body.dueDate).toBe("2026-07-01");
+      expect(r.body.dueTime).toBeUndefined();
+    }
   });
   it("rejects empty title", () => {
-    expect(buildReminderPayload({ title: "" }).ok).toBe(false);
+    expect(buildTimedTaskPayload({ title: "" }).ok).toBe(false);
   });
 });

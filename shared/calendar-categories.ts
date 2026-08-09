@@ -41,7 +41,6 @@ export type CalendarCategory =
   | "liabilities"
   | "documents"
   | "tasks"
-  | "reminders"
   | "events"
   | "other"
   | "important";
@@ -65,7 +64,6 @@ export const CALENDAR_CATEGORIES: CalendarCategoryDef[] = [
   { id: "liabilities", label: "Liabilities", short: "Liabilities" },
   { id: "documents", label: "Document Expirations", short: "Documents" },
   { id: "tasks", label: "Tasks", short: "Tasks" },
-  { id: "reminders", label: "Reminders", short: "Reminders" },
   { id: "events", label: "Events", short: "Events" },
   { id: "other", label: "Other", short: "Other" },
 ];
@@ -93,7 +91,6 @@ const KIND_TO_CATEGORY: Record<OccurrenceKind, SourceCategory> = {
   document: "documents",
   task: "tasks",
   habit: "tasks",
-  reminder: "reminders",
   // Renewals, maintenance and appointments are calendar events with a flavour;
   // none of them is inherently "important".
   renewal: "events",
@@ -195,7 +192,7 @@ export function countRules(
   const counts: CalendarCategoryCounts = {
     all: 0, important: 0, birthdays: 0, anniversaries: 0, bills: 0,
     subscriptions: 0, liabilities: 0, documents: 0, tasks: 0,
-    reminders: 0, events: 0, other: 0,
+    events: 0, other: 0,
   };
   const seen = new Set<string>();
   for (const s of series || []) {

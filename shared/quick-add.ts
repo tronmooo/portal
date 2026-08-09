@@ -1,7 +1,7 @@
 // Pure POST-payload builders for the dashboard quick-add dialogs.
 //
 // Extracted so the exact request body for each "add from the dashboard" action
-// (expense, income, bill/obligation, note, reminder) is unit-testable and
+// (expense, income, bill/obligation, note, timed task) is unit-testable and
 // identical to what the existing page-level forms send (finance.tsx,
 // journal.tsx, profile-detail.tsx). The dialogs are thin shells around these.
 //
@@ -11,6 +11,7 @@
 // else self) is handled by the caller passing `ownerProfileId`.
 
 import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE } from "./schema";
+import { normalizeClockTime } from "./timezone";
 
 export type BuildResult =
   | { ok: true; body: Record<string, any> }
@@ -169,20 +170,34 @@ export function buildNotePayload(input: NoteInput, ownerProfileId?: string): Bui
   };
 }
 
-export interface ReminderInput {
+/**
+ * The quick-add "remind me" tile builds a TIMED TASK.
+ *
+ * Reminders were retired on 2026-08-09 — Portol has EVENTS and TASKS, and a
+ * task carries its own clock time — so the tile keeps its familiar bell while
+ * writing the entity that is actually visible on the calendar and can be
+ * checked off. `at` (an ISO datetime, which is what the datetime-local input
+ * produces) is split into the task's due date and its due time.
+ */
+export interface TimedTaskInput {
   title: string;
-  fireAt?: string; // ISO datetime or date
+  at?: string; // ISO datetime or date
 }
 
-export function buildReminderPayload(input: ReminderInput, ownerProfileId?: string): BuildResult {
+export function buildTimedTaskPayload(input: TimedTaskInput, ownerProfileId?: string): BuildResult {
   const title = (input.title || "").trim();
   if (!title) return { ok: false, error: "Title is required" };
+  const raw = String(input.at || "").trim();
+  const dueDate = raw.slice(0, 10);
+  const dueTime = normalizeClockTime(raw);
   return {
     ok: true,
     body: {
       title,
-      ...(input.fireAt ? { fireAt: input.fireAt } : {}),
-      ...(ownerProfileId ? { profileId: ownerProfileId } : {}),
+      priority: "medium",
+      ...(/^\d{4}-\d{2}-\d{2}$/.test(dueDate) ? { dueDate } : {}),
+      ...(dueTime ? { dueTime } : {}),
+      ...linkedProfiles(ownerProfileId),
     },
   };
 }

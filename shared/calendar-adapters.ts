@@ -4,7 +4,7 @@
 // is only possible if every system's records arrive in ONE normalized form.
 // Each adapter here converts one system's rows into `CalendarSeries`
 // (shared/calendar-occurrences); nothing downstream ever touches a raw event,
-// obligation, profile field, task or reminder again.
+// obligation, profile field or task again.
 //
 // The adapters are also where SHADOW records are declared. A birthday typed in
 // as a recurring calendar event is a shadow of the profile's date-of-birth
@@ -527,33 +527,6 @@ export function seriesFromTasks(tasks: readonly any[]): CalendarSeries[] {
   return out;
 }
 
-// ─── Reminders ───────────────────────────────────────────────────────────────
-
-/** One-shot reminder rows (`fireAt` is a UTC instant). */
-export function seriesFromReminders(reminders: readonly any[]): CalendarSeries[] {
-  const out: CalendarSeries[] = [];
-  for (const r of reminders || []) {
-    if (!r?.id || !r.fireAt) continue;
-    const date = clip(String(r.fireAt));
-    if (!isISO(date)) continue;
-    out.push({
-      id: `reminder:${r.id}`,
-      kind: "reminder",
-      title: humanizeTitle(r.title, "Reminder"),
-      source: {
-        system: "reminder",
-        id: r.id,
-        profileId: r.profileId || undefined,
-        ownerIds: uniq([r.profileId]),
-        href: sourceHref("reminder", r.id, r.profileId || undefined),
-      },
-      baseDate: date,
-      recurrence: "none",
-    });
-  }
-  return out;
-}
-
 // ─── Documents ───────────────────────────────────────────────────────────────
 
 /** Document expirations — one-off dates that still belong on the calendar. */
@@ -598,7 +571,6 @@ export interface CalendarInputs {
   events?: readonly any[];
   obligations?: readonly any[];
   tasks?: readonly any[];
-  reminders?: readonly any[];
   documents?: readonly any[];
 }
 
@@ -622,7 +594,6 @@ export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
     ...seriesFromEvents(input.events || [], { knownBirthdayProfiles, knownAnniversaryProfiles }),
     ...seriesFromObligations(input.obligations || []),
     ...seriesFromTasks(input.tasks || []),
-    ...seriesFromReminders(input.reminders || []),
     ...seriesFromDocuments(input.documents || []),
   ];
 }

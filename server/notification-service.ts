@@ -198,6 +198,16 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   }
 
   // --- Task Due Dates ---
+  // A task carries a clock time now, so a timed task says its hour: "Mow the
+  // lawn is due today · 9:00 AM". This is the notification the retired reminder
+  // entity used to exist for.
+  const atTime = (t: any) => {
+    const hhmm = String(t?.dueTime || "");
+    if (!/^\d{2}:\d{2}$/.test(hhmm)) return "";
+    const [h, m] = hhmm.split(":").map(Number);
+    const ampm = h < 12 ? "AM" : "PM";
+    return ` \u00B7 ${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${ampm}`;
+  };
   for (const task of tasks) {
     if (task.status === "done" || !task.dueDate) continue;
     const due = parseDate(task.dueDate);
@@ -209,7 +219,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
         type: "task_overdue",
         severity: "critical",
         title: `Overdue: ${task.title}`,
-        message: `Was due ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago`,
+        message: `Was due ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago${atTime(task)}`,
         entityId: task.id,
         entityType: "task",
         dueDate: task.dueDate,
@@ -220,7 +230,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
         type: "task_due_today",
         severity: "warning",
         title: `${task.title} is due today`,
-        message: `Priority: ${task.priority}`,
+        message: `Priority: ${task.priority}${atTime(task)}`,
         entityId: task.id,
         entityType: "task",
         dueDate: task.dueDate,
@@ -231,7 +241,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
         type: "task_due_today",
         severity: "info",
         title: `${task.title} due in ${diff} day${diff !== 1 ? "s" : ""}`,
-        message: `Priority: ${task.priority}`,
+        message: `Priority: ${task.priority}${atTime(task)}`,
         entityId: task.id,
         entityType: "task",
         dueDate: task.dueDate,
@@ -317,45 +327,10 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     }
   }
 
-  // --- Upcoming reminders (incl. recurring medication reminders) ---
-  // Surface pending reminders in the bell so a scheduled dose/appointment is
-  // visible BEFORE it fires — not only when the cron converts it into a task.
-  // listReminders() returns only un-fired reminders, so nothing here is a
-  // duplicate of an already-fired-and-tasked reminder.
-  try {
-    const reminders = await storage.listReminders().catch(() => [] as any[]);
-    const nowMs = Date.now();
-    const horizonMs = nowMs + 7 * 86400000; // next 7 days
-    // Group by title so a recurring reminder ("twice daily for 10 days")
-    // shows as ONE bell entry (next occurrence + how many upcoming) instead
-    // of flooding the popup with 14 identical rows.
-    const byTitle = new Map<string, { title: string; earliest: number; id: string; count: number }>();
-    for (const rem of reminders) {
-      const whenMs = rem.fireAt ? new Date(rem.fireAt).getTime() : NaN;
-      if (isNaN(whenMs) || whenMs > horizonMs) continue;
-      const key = (rem.title || "").trim().toLowerCase();
-      const g = byTitle.get(key);
-      if (!g) byTitle.set(key, { title: rem.title, earliest: whenMs, id: rem.id, count: 1 });
-      else { g.count++; if (whenMs < g.earliest) { g.earliest = whenMs; g.id = rem.id; } }
-    }
-    for (const g of byTitle.values()) {
-      const overdue = g.earliest < nowMs;
-      const whenHuman = new Date(g.earliest).toLocaleString("en-US", {
-        timeZone: notifTz, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-      });
-      const more = g.count > 1 ? ` · ${g.count} upcoming` : "";
-      notifications.push({
-        id: `reminder-${g.id}`,
-        type: "reminder",
-        severity: overdue ? "warning" : "info",
-        title: g.title,
-        message: (overdue ? "Overdue" : `Next: ${whenHuman}`) + more,
-        entityId: g.id,
-        entityType: "reminder",
-        dueDate: new Date(g.earliest).toISOString(),
-      });
-    }
-  } catch { /* reminders in the bell are best-effort */ }
+  // (Removed 2026-08-09: an "Upcoming reminders" pass that read the reminders
+  // table. Reminders were retired — a scheduled dose or appointment is a TASK
+  // with a due date and a clock time, and the Task Due Dates pass above already
+  // surfaces it, so this second source would now double every one of them.)
 
   // --- Recurring Dates (shared/recurring-dates) ---
   // Managed recurring dates (anniversaries, renewals, maintenance, custom

@@ -358,8 +358,6 @@ function actionIcon(type: string) {
     case "create_event":
     case "complete_event":
       return <CalendarDays className="h-3 w-3" />;
-    case "create_reminder":
-      return <Bell className="h-3 w-3" />;
     case "create_goal":
       return <Target className="h-3 w-3" />;
     case "create_habit":
@@ -389,7 +387,6 @@ const ACTION_LABELS: Record<string, string> = {
   delete_habit: "Delete Habit",
   create_goal: "Create Goal",
   create_event: "Create Event",
-  create_reminder: "Set Reminder",
   complete_event: "Complete Event",
   log_entry: "Log Entry",
   create_tracker: "Create Tracker",
@@ -440,7 +437,7 @@ function actionRoute(type: string, data: any): string | null {
     case "log_entry": case "log_tracker_entry": case "add_tracker_entry": case "update_tracker_entry": case "delete_tracker_entry":
       return data?._trackerId ? `/trackers?tracker=${data._trackerId}` : "/trackers";
     case "create_task": case "complete_task": return "/tasks";
-    case "create_event": case "complete_event": case "create_reminder": return "/calendar";
+    case "create_event": case "complete_event": return "/calendar";
     case "log_expense": case "log_income": case "log_paycheck": case "set_budget": return "/finance";
     case "create_obligation": case "pay_obligation": case "add_liability_payment": return "/obligations";
     case "create_habit": case "checkin_habit": case "uncomplete_habit": case "delete_habit": return "/habits";
@@ -2437,7 +2434,7 @@ const MessageRow = memo(function MessageRow({
           <div className="mt-3 space-y-1.5">
             {msg.actions.filter(a => !msg.turnId || !(a.data as any)?._turnId || (a.data as any)._turnId === msg.turnId).filter(a => [
               'log_entry', 'log_tracker_entry', 'add_tracker_entry',
-              'log_expense', 'create_task', 'create_event', 'create_reminder',
+              'log_expense', 'create_task', 'create_event',
               'create_habit', 'checkin_habit', 'create_obligation',
               'create_goal', 'create_profile', 'update_profile',
               'create_tracker', 'journal_entry', 'create_artifact',
@@ -2461,8 +2458,6 @@ const MessageRow = memo(function MessageRow({
                 create_task: "tasks",
                 log_expense: "expenses",
                 create_event: "events",
-                create_reminder: "events", // mirrored onto the calendar; undo removes the event
-
                 create_habit: "habits",
                 create_obligation: "obligations",
                 create_goal: "goals",

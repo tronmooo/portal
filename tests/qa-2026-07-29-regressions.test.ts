@@ -24,7 +24,6 @@ import {
 } from "../shared/quick-add";
 import { resolveCreateOwnerIds, parseActiveProfileIds, ACTIVE_PROFILE_HEADER } from "../shared/active-scope";
 import { parseUserDateTime, isZonelessDateTime, getZonedParts } from "../shared/timezone";
-import { findReminderMirrors } from "../server/reminder-mirror";
 import { formatStoredDate, farFutureWarning } from "../client/src/lib/dates";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -211,41 +210,14 @@ describe("CRUD-T2-001: a zone-less time is the USER's wall clock", () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CRUD-T2-002 — a deleted reminder came back from its calendar mirror
+//
+// RETIRED 2026-08-09 along with the entity. The bug was structural: a reminder
+// was one row and its calendar appearance was a SECOND row (a mirrored event),
+// so deleting one left the other projecting a reminder the user had already
+// removed. A timed task is a single row that is its own calendar entry, so the
+// two can no longer disagree — there is nothing left to keep in sync, and
+// tests/timed-tasks.test.ts pins that a deleted task leaves no calendar trace.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("CRUD-T2-002: a deleted reminder's calendar mirror is found", () => {
-  const LA = "America/Los_Angeles";
-  const reminder = { title: "Call the plumber", fireAt: "2026-07-30T00:51:00.000Z" }; // 17:51 PDT on the 29th
-  const mirror = { id: "ev1", title: "Call the plumber", date: "2026-07-29", tags: ["reminder"] };
-
-  it("matches the mirror the chat tool created", () => {
-    expect(findReminderMirrors([mirror], reminder, LA).map(e => e.id)).toEqual(["ev1"]);
-  });
-
-  it("matches case-insensitively, as the chat tool wrote it", () => {
-    expect(findReminderMirrors([{ ...mirror, title: "call the PLUMBER" }], reminder, LA)).toHaveLength(1);
-  });
-
-  it("leaves a real calendar event with the same name alone", () => {
-    // No "reminder" tag = the user's own event. Deleting a reminder must not
-    // take an unrelated event with it.
-    expect(findReminderMirrors([{ ...mirror, tags: [] }], reminder, LA)).toHaveLength(0);
-  });
-
-  it("leaves a mirror on a different day alone", () => {
-    expect(findReminderMirrors([{ ...mirror, date: "2026-07-28" }], reminder, LA)).toHaveLength(0);
-  });
-
-  it("uses the USER's day, not UTC's", () => {
-    // The instant above is July 30 in UTC and July 29 in Pacific. Matching on
-    // the UTC day would miss the mirror and leave the orphan behind.
-    expect(findReminderMirrors([mirror], reminder, LA)).toHaveLength(1);
-    expect(findReminderMirrors([{ ...mirror, date: "2026-07-30" }], reminder, "UTC")).toHaveLength(1);
-  });
-
-  it("returns nothing for an unparseable fire time instead of matching everything", () => {
-    expect(findReminderMirrors([mirror], { title: "Call the plumber", fireAt: "nonsense" }, LA)).toHaveLength(0);
-  });
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CRUD-T1-001 / EDGE-004 — due dates rendered a day early, and hid the year

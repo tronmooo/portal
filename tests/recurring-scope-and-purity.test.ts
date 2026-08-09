@@ -2,7 +2,7 @@
 //
 // Screenshot (profile filter = "robert sennabaum"):
 //
-//   Important 17 · Bills 0 · Subs 0 · Liabilities 0 · Tasks 3 · Reminders 0
+//   Important 17 · Bills 0 · Subs 0 · Liabilities 0 · Tasks 3
 //
 //   ⚠ Florida Driver License — Expiration    Custom · Does not repeat · No upcoming date
 //   ⚠ Florida Driver License – Sennabaum …   Custom · Does not repeat · No upcoming date
@@ -65,9 +65,10 @@ const RAW = {
   tasks: [
     { id: "t1", title: "Refill Propranolol prescription", dueDate: "2026-08-08", tags: ["recur:monthly"], linkedProfiles: [ROBERT] },
     { id: "t2", title: "One-off errand", dueDate: "2026-08-02", linkedProfiles: [ROBERT] },
+    // A timed task with NO owner at all — the soft-orphan case. (This was a
+    // reminder row until reminders were retired on 2026-08-09.)
+    { id: "t3", title: "Call the vet", dueDate: "2026-08-03", dueTime: "10:00", linkedProfiles: [] },
   ],
-  // A reminder with NO profileId at all — the soft-orphan case.
-  reminders: [{ id: "r1", title: "Call the vet", fireAt: "2026-08-03T17:00:00.000Z" }],
   documents: [{ id: "d1", name: "Passport", extractedData: { expiration_date: "2029-01-01" } }],
 };
 
@@ -149,12 +150,13 @@ describe("profile scope matches the whole ownership chain", () => {
     expect(ownerCandidates(chatgpt)).toContain(ROBERT);
   });
 
-  it("keeps an unowned reminder visible for the primary person", () => {
-    // "Reminders 0" — an orphan reminder matched no profile at all.
-    const withReminder = filterSeriesByProfiles(
+  it("keeps an unowned timed task visible for the primary person", () => {
+    // The soft-orphan rule: a record with no owner belongs to the primary
+    // person. Dropping it is what once made the manager read "Reminders 0".
+    const withOrphan = filterSeriesByProfiles(
       seriesFromAll(RAW), [ROBERT], { selfIds: SELF_IDS },
     );
-    expect(withReminder.some((s) => s.title === "Call the vet")).toBe(true);
+    expect(withOrphan.some((s) => s.title === "Call the vet")).toBe(true);
   });
 
   it("does NOT leak another person's records into scope", () => {

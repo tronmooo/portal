@@ -12,7 +12,6 @@ import {
   seriesFromObligations,
   seriesFromLiabilityProfiles,
   seriesFromTasks,
-  seriesFromReminders,
   seriesFromDocuments,
   seriesFromAll,
   filterSeriesByProfiles,
@@ -198,7 +197,7 @@ describe("seriesFromLiabilityProfiles", () => {
   });
 });
 
-describe("seriesFromTasks / Reminders / Documents", () => {
+describe("seriesFromTasks / Documents", () => {
   it("reads a recurring task's rule from its tags", () => {
     const [s] = seriesFromTasks([
       { id: "t1", title: "Water plants", dueDate: "2026-07-26", tags: ["recur:weekly"], linkedProfiles: ["me"] },
@@ -264,9 +263,11 @@ describe("seriesFromTasks / Reminders / Documents", () => {
     });
   });
 
-  it("turns a reminder's fireAt instant into a calendar date", () => {
-    const [s] = seriesFromReminders([{ id: "r1", title: "Call mom", fireAt: "2026-08-03T17:00:00.000Z" }]);
-    expect(s).toMatchObject({ kind: "reminder", baseDate: "2026-08-03", recurrence: "none" });
+  it("turns a timed task into a calendar series on its due date", () => {
+    // What `seriesFromReminders` used to cover. Reminders were retired
+    // 2026-08-09; a "call mom at 10am" is a task with a dueTime.
+    const [s] = seriesFromTasks([{ id: "t9", title: "Call mom", dueDate: "2026-08-03", dueTime: "10:00", status: "todo", tags: [] }]);
+    expect(s).toMatchObject({ kind: "task", baseDate: "2026-08-03", recurrence: "none" });
   });
 
   it("picks up a document expiration under any of its field spellings", () => {
@@ -329,7 +330,6 @@ describe("seriesFromAll is total and safe", () => {
       events: [joeBirthdayEvent],
       obligations: [{ id: "ob-1", name: "Netflix", frequency: "monthly", category: "subscription", nextDueDate: "2026-08-02" }],
       tasks: [{ id: "t1", title: "T", dueDate: "2026-08-01" }],
-      reminders: [{ id: "r1", title: "R", fireAt: "2026-08-01T10:00:00Z" }],
       documents: [{ id: "d1", name: "D", extractedData: { expiration_date: "2027-01-01" } }],
     });
     const ids = all.map((s) => s.id);

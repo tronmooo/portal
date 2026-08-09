@@ -4,6 +4,7 @@ import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEF
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
+import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
 
@@ -35,15 +36,11 @@ import {
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
-export interface Reminder {
-  id: string;
-  title: string;
-  fireAt: string;
-  firedAt?: string | null;
-  profileId?: string | null;
-  channel: string;
-  createdAt: string;
-}
+// NOTE: the `Reminder` entity was retired on 2026-08-09. Portol models
+// scheduled life with EVENTS (things that happen) and TASKS (things you do),
+// and a task carries its own clock time — so a "remind me at 9am" is a task
+// with `dueTime`, visible on the calendar and checkable, rather than a
+// notification-only row that was none of those things.
 
 export interface IStorage {
   // Profiles
@@ -244,17 +241,6 @@ export interface IStorage {
   updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}): Promise<boolean>;
   deleteBudget(month: string, budgetId: string): Promise<boolean>;
   copyBudgetsToMonth(fromMonth: string, toMonth: string): Promise<number>;
-
-  // Reminders (real, fired by GET /api/cron/fire-due-reminders)
-  createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder>;
-  listReminders(filter?: { dueBefore?: Date }): Promise<Reminder[]>;
-  /** Authoritative by-id read-back (chat write verification). Unlike
-   *  listReminders it does NOT filter on fired_at, so a reminder the cron
-   *  stamps between the write and the read-back still verifies as written. */
-  getReminder(id: string): Promise<Reminder | undefined>;
-  markReminderFired(id: string): Promise<boolean>;
-  updateReminder(id: string, data: { title?: string; fireAt?: string; profileId?: string | null }): Promise<Reminder | undefined>;
-  deleteReminder(id: string): Promise<boolean>;
 
   // Paychecks
   getPaychecks(): Promise<any[]>;
@@ -1366,26 +1352,29 @@ export class MemStorage implements IStorage {
       }
     }
 
-    // 2. Tasks with due dates
+    // 2. Tasks with due dates. A task carries its own clock time, and a
+    // repeating task is projected across the window (shared/task-occurrences)
+    // rather than appearing once on its stored due date — same rule as the
+    // Supabase timeline, so the two can't disagree about a recurring chore.
     for (const task of this.tasks.values()) {
-      if (task.dueDate) {
-        const d = task.dueDate.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
-          items.push({
-            id: `task-${task.id}`,
-            type: "task",
-            title: task.title,
-            date: d,
-            allDay: true,
-            color: task.priority === "high" ? "#A13544" : task.priority === "medium" ? "#BB653B" : "#797876",
-            category: "task",
-            description: task.description,
-            completed: task.status === "done",
-            linkedProfiles: task.linkedProfiles,
-            sourceId: task.id,
-            meta: { priority: task.priority, status: task.status },
-          });
-        }
+      if (!task.dueDate) continue;
+      const isSeries = taskRepeats(task as any);
+      for (const d of taskOccurrenceDates(task as any, startDate, endDate, { todayISO: rdTodayISO })) {
+        items.push({
+          id: isSeries ? `task-${task.id}-${d}` : `task-${task.id}`,
+          type: "task",
+          title: task.title,
+          date: d,
+          time: task.dueTime || undefined,
+          allDay: !task.dueTime,
+          color: task.priority === "high" ? "#A13544" : task.priority === "medium" ? "#BB653B" : "#797876",
+          category: "task",
+          description: task.description,
+          completed: task.status === "done" && d === String(task.dueDate || "").slice(0, 10),
+          linkedProfiles: task.linkedProfiles,
+          sourceId: task.id,
+          meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries },
+        });
       }
     }
 
@@ -2405,60 +2394,6 @@ export class MemStorage implements IStorage {
   async setFinanceImportStatus(id: string, status: "committed" | "undone") {
     const row = this.financeImports.get(id);
     if (row) { row.status = status; if (status === "undone") row.undoneAt = new Date().toISOString(); }
-  }
-
-  // Reminder stubs
-  private reminderStore: Reminder[] = [];
-  async createReminder(data: { title: string; fireAt: string; profileId?: string }): Promise<Reminder> {
-    // Same dedup contract as SupabaseStorage: an unfired reminder with the same
-    // title and fire time is the same reminder, so a replayed or retried action
-    // returns the existing row instead of inserting a twin. Recurring series
-    // differ by fireAt, so a legitimate multi-occurrence schedule is untouched.
-    const dup = this.reminderStore.find(
-      r => !r.firedAt && r.title === data.title && r.fireAt === data.fireAt,
-    );
-    if (dup) return dup;
-    const reminder: Reminder = {
-      id: crypto.randomUUID(),
-      title: data.title,
-      fireAt: data.fireAt,
-      firedAt: null,
-      profileId: data.profileId ?? null,
-      channel: "in_app",
-      createdAt: new Date().toISOString(),
-    };
-    this.reminderStore.push(reminder);
-    return reminder;
-  }
-  async listReminders(filter?: { dueBefore?: Date }): Promise<Reminder[]> {
-    return this.reminderStore.filter(r => {
-      if (r.firedAt) return false;
-      if (filter?.dueBefore && new Date(r.fireAt) > filter.dueBefore) return false;
-      return true;
-    });
-  }
-  async getReminder(id: string): Promise<Reminder | undefined> {
-    return this.reminderStore.find(x => x.id === id);
-  }
-  async markReminderFired(id: string): Promise<boolean> {
-    const r = this.reminderStore.find(x => x.id === id);
-    if (!r) return false;
-    r.firedAt = new Date().toISOString();
-    return true;
-  }
-  async updateReminder(id: string, data: { title?: string; fireAt?: string; profileId?: string | null }): Promise<Reminder | undefined> {
-    const r = this.reminderStore.find(x => x.id === id);
-    if (!r) return undefined;
-    if (data.title !== undefined) r.title = data.title;
-    if (data.fireAt !== undefined) r.fireAt = data.fireAt;
-    if (data.profileId !== undefined) (r as any).profileId = data.profileId;
-    return r;
-  }
-  async deleteReminder(id: string): Promise<boolean> {
-    const idx = this.reminderStore.findIndex(x => x.id === id);
-    if (idx === -1) return false;
-    this.reminderStore.splice(idx, 1);
-    return true;
   }
 
   // Paycheck stubs

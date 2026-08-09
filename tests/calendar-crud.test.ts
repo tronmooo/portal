@@ -63,9 +63,11 @@ const SERIES: Record<string, CalendarSeries> = {
     source: { system: "task", id: "t1", profileId: "robert", href: "#/profiles/robert" },
     baseDate: "2026-08-08", recurrence: "monthly",
   },
-  reminder: {
-    id: "reminder:r1", kind: "reminder", title: "Call the vet",
-    source: { system: "reminder", id: "r1", href: "#/calendar" },
+  // A one-off TIMED task — the shape that used to be a reminder, before
+  // reminders were retired on 2026-08-09.
+  timedTask: {
+    id: "task:t2", kind: "task", title: "Call the vet",
+    source: { system: "task", id: "t2", href: "#/tasks" },
     baseDate: "2026-08-03", recurrence: "none",
   },
 };
@@ -171,9 +173,9 @@ describe("each action hits the right API", () => {
     expect(requests[0]).toMatchObject({ method: "PATCH", url: "/api/tasks/t1" });
   });
 
-  it("deletes a one-off reminder rather than pretending it has a series", async () => {
-    await run(SERIES.reminder, "deleteOccurrence");
-    expect(requests[0]).toMatchObject({ method: "DELETE", url: "/api/reminders/r1" });
+  it("deletes a one-off timed task rather than pretending it has a series", async () => {
+    await run(SERIES.timedTask, "deleteOccurrence");
+    expect(requests[0]).toMatchObject({ method: "DELETE", url: "/api/tasks/t2" });
   });
 });
 

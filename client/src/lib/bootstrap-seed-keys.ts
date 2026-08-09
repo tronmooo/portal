@@ -56,7 +56,6 @@ export function bootstrapSeedEntries(
   add(k("/api/documents"), b.documents);
   add(k("/api/trackers"), b.trackers);
   add(k("/api/trackers", "trends"), b.trackers);
-  add(k("/api/reminders"), b.reminders);
   // Hero trend line (dashboard.tsx). Ungated and keyed by scope, so before the
   // bootstrap carried it this was a second request racing every profile switch.
   add(k("/api/net-worth/history"), b.netWorthHistory);
@@ -96,7 +95,6 @@ const TRIMMABLE_LIST_FIELDS = [
   "events",
   "documents",
   "trackers",
-  "reminders",
 ] as const;
 
 export interface BootstrapShellMeta {

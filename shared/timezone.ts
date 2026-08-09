@@ -228,6 +228,51 @@ export function parseUserDateTime(input: string | Date | number, timezone: strin
 }
 
 /**
+ * Coerce however a clock time arrived into the canonical `HH:MM` (24-hour) a
+ * task's `dueTime` stores.
+ *
+ * Tasks carry a clock time of their own, and that time reaches them from three
+ * directions that all used to be handled separately (and inconsistently): a
+ * `<input type="time">` value, a model argument that may be "9am" / "9:30 PM" /
+ * "09:00", and the time half of a full datetime the model resolved. One parser
+ * for all three, so "9 AM" can never be stored as an all-day task because a
+ * regex didn't recognise it.
+ *
+ * Returns null for anything that isn't a time — callers treat that as "no clock
+ * time given", i.e. an all-day to-do, rather than guessing midnight.
+ */
+export function normalizeClockTime(input: unknown): string | null {
+  const raw = String(input ?? "").trim();
+  if (!raw) return null;
+  const pad = (h: number, m: number) =>
+    `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+
+  // The time half of a datetime ("2026-08-11T09:00:00", "2026-08-11 09:00").
+  const dt = raw.match(/^\d{4}-\d{2}-\d{2}[T ](\d{1,2}):(\d{2})/);
+  if (dt) {
+    const h = Number(dt[1]), m = Number(dt[2]);
+    return h <= 23 && m <= 59 ? pad(h, m) : null;
+  }
+  // 12-hour with a meridiem: "9am", "9:30 PM", "12 a.m."
+  const ampm = raw.match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)$/i);
+  if (ampm) {
+    let h = Number(ampm[1]);
+    const m = ampm[2] ? Number(ampm[2]) : 0;
+    if (h < 1 || h > 12 || m > 59) return null;
+    h %= 12;
+    if (/^p/i.test(ampm[3])) h += 12;
+    return pad(h, m);
+  }
+  // 24-hour, with or without seconds.
+  const h24 = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (h24) {
+    const h = Number(h24[1]), m = Number(h24[2]);
+    return h <= 23 && m <= 59 ? pad(h, m) : null;
+  }
+  return null;
+}
+
+/**
  * Returns a formatted locale string for the system prompt / human-readable display.
  * e.g. "Tuesday, April 7, 2026 at 6:30 PM"
  */

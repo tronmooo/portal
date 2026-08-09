@@ -105,7 +105,7 @@ describe("the chip counts stop lying", () => {
     const counts = countRules(series);
     const sourceTotal =
       counts.birthdays + counts.anniversaries + counts.bills + counts.subscriptions +
-      counts.liabilities + counts.documents + counts.tasks + counts.reminders +
+      counts.liabilities + counts.documents + counts.tasks +
       counts.events + counts.other;
     expect(sourceTotal).toBe(counts.all);
   });

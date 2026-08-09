@@ -67,19 +67,8 @@ export interface AttentionConfig {
   billsWithinDays: number;
   /** Non-overdue tasks further out than this never surface. */
   tasksWithinDays: number;
-  /**
-   * How long a fired-but-undismissed reminder stays actionable.
-   *
-   * Reminders never get stamped `fired_at` in production (the cron that would
-   * do it is unreachable — see server/routes.ts cronFireDueReminders), and
-   * listReminders has no lower bound on fire_at, so a reminder from June is
-   * still "active" in July. Without this window the feed shows month-old
-   * medication nags forever.
-   */
-  reminderStaleHours: number;
   includeTasks: boolean;
   includeHabits: boolean;
-  includeReminders: boolean;
   includeEvents: boolean;
   includeBirthdays: boolean;
   /** Lowest tier allowed through. "upcoming" = show everything. */
@@ -92,10 +81,8 @@ export const DEFAULT_ATTENTION_CONFIG: AttentionConfig = {
   docsWithinDays: 30,
   billsWithinDays: 30,
   tasksWithinDays: 7,
-  reminderStaleHours: 48,
   includeTasks: true,
   includeHabits: true,
-  includeReminders: true,
   includeEvents: true,
   includeBirthdays: false,
   minTier: "upcoming",
@@ -115,8 +102,6 @@ export interface AttentionInputs {
   documents?: any[];
   /** /api/habits rows (with `checkins`). */
   habits?: any[];
-  /** /api/reminders rows. */
-  reminders?: any[];
   /** /api/calendar/timeline items. */
   events?: any[];
   /** /api/goals rows. */
@@ -169,14 +154,23 @@ function money(n: number): string {
   return `$${Math.round(n).toLocaleString()}`;
 }
 
+/** " · 9:00 AM" for a task with a clock time; "" for an all-day one. */
+function clockLabel(hhmm: unknown): string {
+  const s = String(hhmm || "");
+  if (!/^\d{2}:\d{2}$/.test(s)) return "";
+  const [h, m] = s.split(":").map(Number);
+  return ` \u00B7 ${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+}
+
 /**
- * Collapse the variants one reminder series gets written under.
+ * Collapse the variants one repeating series gets written under.
  *
- * The AI expands a recurrence into N independent rows and picks the title
- * freely each turn, so a single amoxicillin course exists as "Take Amoxicillin
- * 500mg", "…(Morning Dose)" and "…(Evening Dose)" — three parallel series that
- * the exact-title dedupe never merged. Stripping a trailing dose/time
- * parenthetical puts them back together.
+ * A recurrence used to be expanded into N independent rows whose title the
+ * model picked freely each turn, so a single amoxicillin course existed as
+ * "Take Amoxicillin 500mg", "…(Morning Dose)" and "…(Evening Dose)" — three
+ * parallel series the exact-title dedupe never merged. One recurring task
+ * replaces all of that, but the historical rows are still out there, so the
+ * strip stays.
  */
 export function normalizeReminderTitle(raw: string): string {
   return stripDoseQualifier(raw).toLowerCase().replace(/\s+/g, " ");
@@ -233,12 +227,16 @@ export function computeAttention(
       if (du > cfg.tasksWithinDays) continue;
       const prio = String(t.priority || "").toLowerCase();
       const impact = prio === "high" || prio === "urgent" ? 120 : prio === "low" ? -20 : 30;
+      // A task carries a clock time now, so a timed one says its hour — this is
+      // the row that used to come from the reminders table ("Take meds · 8:00
+      // AM"), and losing the time would make it read as a vague all-day chore.
+      const at = clockLabel(t.dueTime);
       claim({
         key: `task:${t.id}`,
         sourceKey: `task:${t.id}`,
         kind: "task",
         title: t.title || "Task",
-        reason: du < 0 ? dayLabel(du) : du === 0 ? "Due today" : `Due ${dayLabel(du)}`,
+        reason: (du < 0 ? dayLabel(du) : du === 0 ? "Due today" : `Due ${dayLabel(du)}`) + at,
         tier: tierOf(du),
         daysUntil: du,
         score: urgencyScore(du) + impact,
@@ -375,61 +373,10 @@ export function computeAttention(
     }
   }
 
-  // ── Reminders ──────────────────────────────────────────────────────────────
-  // Windowed (see reminderStaleHours) and collapsed per series+day, so a
-  // three-times-daily course is one row instead of three, and June's reminders
-  // stop being presented as live in July.
-  if (cfg.includeReminders) {
-    const floor = nowMs - cfg.reminderStaleHours * 3600_000;
-    const ceiling = nowMs + 24 * 3600_000;
-    const groups = new Map<string, { rows: any[]; fireMs: number }>();
-    for (const r of input.reminders || []) {
-      if (!r?.id || r.firedAt) continue;
-      const raw = r.title || r.message || r.content || "";
-      const fireMs = r.fireAt ? new Date(r.fireAt).getTime() : NaN;
-      if (isNaN(fireMs) || fireMs < floor || fireMs > ceiling) continue;
-      const key = `${normalizeReminderTitle(raw)}@${localDateOf(new Date(fireMs))}`;
-      const g = groups.get(key);
-      if (g) { g.rows.push(r); g.fireMs = Math.min(g.fireMs, fireMs); }
-      else groups.set(key, { rows: [r], fireMs });
-    }
-    for (const { rows, fireMs } of groups.values()) {
-      const lead = rows[0];
-      const display = lead.title || lead.message || lead.content || "Reminder";
-      const overdue = fireMs < nowMs;
-      const children = rows.length > 1
-        ? rows.map((r: any) => ({
-            key: `reminder:${r.id}`,
-            sourceKey: `reminder:${r.id}`,
-            kind: "reminder" as const,
-            title: r.title || r.message || r.content || "Reminder",
-            reason: new Date(r.fireAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
-            tier: "immediate" as const,
-            daysUntil: 0,
-            score: urgencyScore(0),
-            href: "/calendar",
-            action: { kind: "dismiss" as const, label: "Done" },
-          }))
-        : undefined;
-      for (const r of rows) claimed.add(`reminder:${r.id}`);
-      built.push({
-        key: `reminder:${lead.id}`,
-        sourceKey: `reminder:${lead.id}`,
-        kind: "reminder",
-        title: rows.length > 1 ? stripDoseQualifier(display) : display,
-        reason: rows.length > 1
-          ? `${rows.length} doses today`
-          : overdue ? "Was due — not dismissed" : "Due today",
-        tier: "immediate",
-        daysUntil: 0,
-        score: urgencyScore(0) + 60,
-        href: "/calendar",
-        action: { kind: "dismiss", label: "Done" },
-        children,
-        count: rows.length,
-      });
-    }
-  }
+  // (Removed 2026-08-09: a Reminders block that read /api/reminders rows,
+  // windowed them by staleness and collapsed them per series+day. Reminders
+  // were retired — a scheduled dose or chore is a TASK with a due time, which
+  // the Tasks block above already claims, so keeping this would double it.)
 
   // ── Events ─────────────────────────────────────────────────────────────────
   // Only what's still ahead of you today. The Calendar owns the schedule; a

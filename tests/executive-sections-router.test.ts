@@ -44,6 +44,8 @@ describe("one record, one section", () => {
         { id: "t1", title: "Overdue thing", status: "todo", dueDate: day(-2) },
         { id: "t2", title: "Due today", status: "todo", dueDate: TODAY },
         { id: "t3", title: "This week", status: "todo", dueDate: day(3) },
+        // A medication is a TIMED TASK since reminders were retired 2026-08-09.
+        { id: "t4", title: "Take Amoxicillin 500mg", status: "todo", dueDate: TODAY, dueTime: "08:00" },
       ],
       bills: [
         { id: "b1", name: "Electric", amount: 140, daysUntil: -3 },
@@ -54,7 +56,6 @@ describe("one record, one section", () => {
         { documentId: "d2", documentName: "Insurance card", daysUntil: 12 },
       ],
       habits: [{ id: "h1", name: "Stretch", frequency: "daily", targetPerDay: 1, checkins: [] }],
-      reminders: [{ id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-07-29T08:00:00" }],
       events: [
         { id: "e1", type: "event", title: "Dentist", date: TODAY, time: "15:00" },
         { id: "e2", type: "event", title: "Standup", date: TODAY, time: "09:00" },
@@ -76,6 +77,8 @@ describe("one record, one section", () => {
         { id: "t1", title: "Overdue thing", status: "todo", dueDate: day(-2) },
         { id: "t2", title: "Due today", status: "todo", dueDate: TODAY },
         { id: "t3", title: "This week", status: "todo", dueDate: day(3) },
+        // A medication is a TIMED TASK since reminders were retired 2026-08-09.
+        { id: "t4", title: "Take Amoxicillin 500mg", status: "todo", dueDate: TODAY, dueTime: "08:00" },
       ],
       bills: [
         { id: "b1", name: "Electric", amount: 140, daysUntil: -3 },
@@ -86,7 +89,6 @@ describe("one record, one section", () => {
         { documentId: "d2", documentName: "Insurance card", daysUntil: 12 },
       ],
       habits: [{ id: "h1", name: "Stretch", frequency: "daily", targetPerDay: 1, checkins: [] }],
-      reminders: [{ id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-07-29T08:00:00" }],
       events: [
         { id: "e1", type: "event", title: "Dentist", date: TODAY, time: "15:00" },
         { id: "e2", type: "event", title: "Standup", date: TODAY, time: "09:00" },
@@ -214,36 +216,27 @@ describe("section behaviour", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe("health, activity and insights", () => {
   it("puts medications, refills and medical appointments under Health", () => {
+    // Medications and refills are TIMED TASKS since reminders were retired
+    // (2026-08-09) — the routing rule is the text, not the entity.
     const secs = run({
-      reminders: [
-        { id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-07-29T08:00:00" },
-        { id: "r2", title: "Refill Lisinopril at CVS", fireAt: "2026-07-29T08:30:00" },
-        { id: "r3", title: "Move the car", fireAt: "2026-07-29T08:45:00" },
+      tasks: [
+        { id: "t1", title: "Take Amoxicillin 500mg", status: "todo", dueDate: TODAY, dueTime: "08:00" },
+        { id: "t2", title: "Refill Lisinopril at CVS", status: "todo", dueDate: TODAY, dueTime: "08:30" },
+        { id: "t3", title: "Move the car", status: "todo", dueDate: TODAY, dueTime: "08:45" },
       ],
       events: [{ id: "e1", type: "event", title: "Annual physical", date: day(3), time: "11:00" }],
     });
     expect(titles(secs, "health").sort()).toEqual(["Annual physical", "Refill Lisinopril at CVS", "Take Amoxicillin 500mg"]);
-    // A non-health reminder stays on Today's Agenda.
+    // A non-health task stays on Today's Agenda.
     expect(titles(secs, "today")).toEqual(["Move the car"]);
   });
 
-  it("still collapses a medication's doses into one row", () => {
+  it("drops a task whose due date is long past the attention window", () => {
     const secs = run({
-      reminders: [
-        { id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-07-29T08:00:00" },
-        { id: "r2", title: "Take Amoxicillin 500mg (Morning Dose)", fireAt: "2026-07-29T09:00:00" },
-        { id: "r3", title: "Take Amoxicillin 500mg (Evening Dose)", fireAt: "2026-07-29T09:30:00" },
-      ],
+      tasks: [{ id: "t1", title: "Take Amoxicillin 500mg", status: "todo", dueDate: day(-40) }],
     });
-    expect(byId(secs).health.items).toHaveLength(1);
-    expect(byId(secs).health.items[0].count).toBe(3);
-  });
-
-  it("still drops month-old reminders that were never stamped fired", () => {
-    const secs = run({
-      reminders: [{ id: "r1", title: "Take Amoxicillin 500mg", fireAt: "2026-06-24T02:00:00" }],
-    });
-    expect(secs).toEqual([]);
+    // Overdue by more than a month — surfaced as on-fire, not silently lost.
+    expect(titles(secs, "immediate")).toEqual(["Take Amoxicillin 500mg"]);
   });
 
   it("lists what was finished today and what was recently added", () => {
