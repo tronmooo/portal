@@ -52,8 +52,7 @@ export const TOOL_INTENT_ENTITY: Record<string, IntentEntity> = {
   create_event: "event", update_event: "event", delete_event: "event",
   complete_event: "event",
 
-  // Reminders
-  create_reminder: "reminder", update_reminder: "reminder", delete_reminder: "reminder",
+  // (No reminders: retired 2026-08-09. "Remind me to X" is a task.)
 
   // Trackers + entries
   create_tracker: "tracker", update_tracker: "tracker", delete_tracker: "tracker",
@@ -104,16 +103,16 @@ export function toolOperation(toolName: string): IntentOperation {
  * never a routing error for the other.
  *
  * - asset/profile: assets, vehicles and properties ARE profile rows.
- * - task/reminder/event: the three dated-item shapes the app deliberately
- *   routes between by time-of-day precision ("remind me Friday at 10am" is a
- *   reminder, not a task). That routing is the system prompt's job, not this
- *   gate's — flagging it here would fight a rule that is already correct.
+ * - task/event: the two dated-item shapes. The app routes between them by what
+ *   the thing IS — something you do vs something that happens — not by whether
+ *   a clock time was given, since a task carries one. That routing is the
+ *   system prompt's job, not this gate's.
  * - expense/income and obligation/liability: adjacent money shapes with
  *   documented cross-routing rules in the prompt.
  */
 const COMPATIBLE: Array<Set<IntentEntity>> = [
   new Set<IntentEntity>(["asset", "profile"]),
-  new Set<IntentEntity>(["task", "reminder", "event"]),
+  new Set<IntentEntity>(["task", "event"]),
   new Set<IntentEntity>(["expense", "income"]),
   new Set<IntentEntity>(["obligation", "liability", "expense"]),
   new Set<IntentEntity>(["tracker", "journal"]),
@@ -152,7 +151,6 @@ const CREATE_TOOL_FOR: Partial<Record<IntentEntity, string>> = {
   habit: "create_habit",
   task: "create_task",
   event: "create_event",
-  reminder: "create_reminder",
   tracker: "create_tracker",
   expense: "create_expense",
   income: "log_income",

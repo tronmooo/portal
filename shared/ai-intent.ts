@@ -28,7 +28,6 @@ export type IntentEntity =
   | "habit"
   | "task"
   | "event"
-  | "reminder"
   | "tracker"
   | "expense"
   | "income"
@@ -205,7 +204,10 @@ const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number }> 
   { entity: "obligation", re: /\b(?:recurring\s+)?bills?\b|\bsubscriptions?\b|\bobligations?\b/, weight: 0.9 },
   { entity: "asset", re: /\bassets?\b/, weight: 0.98 },
   { entity: "event", re: /\bevents?\b|\bappointments?\b|\bmeetings?\b|\bon\s+my\s+calendar\b/, weight: 0.95 },
-  { entity: "reminder", re: /\bremind(?:er|ers)?\b|\bremind\s+me\b/, weight: 0.9 },
+  // "Remind me to X" is a TASK. Reminders were retired 2026-08-09 — Portol has
+  // events (things that happen) and tasks (things you do), and a task carries
+  // its own clock time, so the word no longer names an entity of its own.
+  { entity: "task", re: /\bremind(?:er|ers)?\b|\bremind\s+me\b/, weight: 0.9 },
   { entity: "task", re: /\btasks?\b|\bto-?dos?\b|\bchores?\b/, weight: 0.95 },
   { entity: "goal", re: /\bgoals?\b|\bprojects?\b|\btargets?\b/, weight: 0.9 },
   { entity: "tracker", re: /\btrackers?\b/, weight: 0.95 },
@@ -278,7 +280,7 @@ export function extractEntityName(message: string): string | null {
       String.raw`\s+(?:an?|the|some)?\s*` +
       String.raw`(?:new\s+)?` +
       // optional entity noun, optionally followed by a connector
-      String.raw`(?:asset|profile|vehicle|car|truck|habit|task|event|reminder|tracker|goal|obligation|liability|document|artifact)?` +
+      String.raw`(?:asset|profile|vehicle|car|truck|habit|task|event|tracker|goal|obligation|liability|document|artifact)?` +
       String.raw`\s*(?:for|called|named|titled|to\s+track|entry\s+for)?\s*` +
       // The determiner is optional AND so is the space after it. Requiring the
       // space meant "Add Robert's truck" — no determiner — matched nothing at
@@ -297,7 +299,7 @@ export function extractEntityName(message: string): string | null {
 
   if (!name || name.length < 2 || name.length > 120) return null;
   // A bare entity noun is not a name ("create an asset" alone).
-  if (/^(asset|profile|vehicle|habit|task|event|reminder|tracker|goal|one|it|this|that)$/i.test(name)) return null;
+  if (/^(asset|profile|vehicle|habit|task|event|tracker|goal|one|it|this|that)$/i.test(name)) return null;
   return name;
 }
 

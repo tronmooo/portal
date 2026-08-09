@@ -265,7 +265,7 @@ const OP_VERB: Record<IntentOperation, string> = {
 
 const ENTITY_NOUN: Partial<Record<IntentEntity, string>> = {
   asset: "asset", profile: "profile", habit: "habit", task: "task",
-  event: "event", reminder: "reminder", tracker: "tracker entry",
+  event: "event", tracker: "tracker entry",
   expense: "expense", income: "income", obligation: "bill",
   liability: "liability", goal: "goal", journal: "journal entry",
   memory: "memory", artifact: "artifact", document: "document",

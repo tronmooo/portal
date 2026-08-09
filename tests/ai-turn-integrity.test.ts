@@ -615,10 +615,19 @@ describe("tool routing map", () => {
   it("maps every write tool the report touched", () => {
     for (const tool of [
       "create_profile", "update_profile", "create_habit", "checkin_habit",
-      "create_event", "create_reminder", "create_task", "log_tracker_entry",
+      "create_event", "create_task", "log_tracker_entry",
     ]) {
       expect(TOOL_INTENT_ENTITY[tool], tool).toBeTruthy();
     }
+  });
+
+  it("reads 'remind me to X' as a TASK — there is no reminder entity", () => {
+    // Reminders were retired 2026-08-09. Leaving `reminder` in the intent
+    // vocabulary would have the routing gate hand the model `create_reminder`
+    // as the tool it should have used — a tool that no longer exists.
+    expect(detectEntity("remind me to mow the lawn at 9am").entity).toBe("task");
+    expect(detectEntity("delete my dentist reminder").entity).toBe("task");
+    expect(TOOL_INTENT_ENTITY.create_reminder).toBeUndefined();
   });
 
   it("detects the entity noun the user used", () => {
