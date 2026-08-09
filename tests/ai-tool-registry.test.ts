@@ -12,6 +12,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import path from "path";
 import { TOOL_DEFINITIONS, TOOL_ACTION_MAP, READ_ONLY_TOOLS } from "../server/ai-engine";
+import { TOOL_INTENT_ENTITY } from "@shared/ai-tool-routing";
 
 const SRC = fs.readFileSync(path.resolve(__dirname, "../server/ai-engine.ts"), "utf8");
 const toolNames = TOOL_DEFINITIONS.map((t: any) => t.name);
@@ -65,5 +66,40 @@ describe("AI tool registry", () => {
       (n) => !READ_ONLY_TOOLS.has(n) && !TOOL_ACTION_MAP[n],
     );
     expect(unclassified, `tools missing from both maps: ${unclassified.join(", ")}`).toEqual([]);
+  });
+
+  // ── Intent-routing coverage (2026-08-09 remediation) ──────────────────────
+  // A write tool absent from TOOL_INTENT_ENTITY is UNGATED: the routing guard
+  // in processMessage can't tell what entity it writes, so it can't catch a
+  // create-turned-update or a habit tool firing on an asset request. Absence
+  // fails safe (the call proceeds), which is exactly why it needs a guard —
+  // a new tool would silently opt out of the protection.
+  it("every CRUD write tool declares the entity it writes", () => {
+    // System/dashboard/bulk tools operate on preferences, plans and
+    // diagnostics rather than a user-facing entity — nothing to route.
+    const NON_ENTITY_TOOLS = new Set([
+      "dismiss_notifications", "create_notification", "mark_notifications_read",
+      "set_notification_preferences", "configure_dashboard_sections",
+      "preview_bulk_action", "execute_bulk_action", "bulk_complete_tasks",
+      "undo_last_action", "repair_relations", "refresh_dashboard",
+      "sync_calendar", "create_domain", "update_domain", "delete_domain",
+      "set_budget", "create_budget", "update_budget", "delete_budget",
+      "copy_budgets_previous_month", "schedule_medication_refills",
+      "link_entities",
+      // Reads that carry their own action type instead of sitting in
+      // READ_ONLY_TOOLS: nothing is written, so nothing is routed.
+      "recall_memory", "refresh_financial_data",
+    ]);
+    const writeTools = toolNames.filter((n) => !READ_ONLY_TOOLS.has(n) && !NON_ENTITY_TOOLS.has(n));
+    const unmapped = writeTools.filter((n) => !TOOL_INTENT_ENTITY[n]);
+    expect(
+      unmapped,
+      `write tools with no intent entity (they bypass routing checks): ${unmapped.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("TOOL_INTENT_ENTITY only lists real tools", () => {
+    const bogus = Object.keys(TOOL_INTENT_ENTITY).filter((n) => !toolNames.includes(n));
+    expect(bogus, `TOOL_INTENT_ENTITY keys that are not real tools: ${bogus.join(", ")}`).toEqual([]);
   });
 });

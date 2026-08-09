@@ -98,7 +98,14 @@ export interface ChatMessage {
     trackerName?: string;
     createdTracker?: { id: string; name: string };
     detail?: string;
+    turnId?: string;
+    sourceMessageId?: string;
   }>;
+  /** Turn identity — set by the server on every assistant reply. Action cards
+   *  and operation rows render only under the message whose turnId they carry,
+   *  so historical actions never re-attach to a newer response. */
+  turnId?: string;
+  sourceMessageId?: string;
   attachment?: {
     name: string;
     mimeType: string;

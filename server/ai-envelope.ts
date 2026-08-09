@@ -32,6 +32,16 @@ export interface ToolVerification {
   duplicate_count?: number;
   /** Every profile id the record links to belongs to this user. */
   profile_isolation_valid?: boolean;
+  /**
+   * The record read back after the write carries the NAME the tool was asked
+   * to write. False means the write landed on a different record than the
+   * request named — the shape of the 2026-08-09 "Updated the Dodge Ram" bug,
+   * where the operation succeeded against something the user hadn't asked
+   * about. Reported, never enforced: names are legitimately normalized
+   * (deduplication suffixes, canonical tracker names), so this is a signal for
+   * the model and the failure log, not a hard failure.
+   */
+  requested_name_matches?: boolean;
 }
 
 export interface TurnVerifyContext {
@@ -579,6 +589,22 @@ export async function finalizeToolResult(
         verification,
         ...(entityType && entityId ? { entity: { type: entityType, id: entityId, ...(entityName ? { name: String(entityName).slice(0, 80) } : {}) } } : {}),
       };
+    }
+
+    // Did the write land on the record the request NAMED? A create/update
+    // that succeeds against a different row is the failure mode behind
+    // "Updated the Dodge Ram 2025" on a request to create one. Compared on
+    // normalized names, and only when the input named something to begin with.
+    if (op !== "delete" && verification.database_record_exists === true) {
+      const requested = input?.title || input?.name || input?.description || input?.trackerName || input?.key;
+      const requestedNorm = normalizeName(String(requested ?? ""));
+      const writtenNorm = normalizeName(String(entityName ?? ""));
+      if (requestedNorm && writtenNorm) {
+        verification.requested_name_matches =
+          writtenNorm === requestedNorm ||
+          writtenNorm.startsWith(requestedNorm) ||
+          requestedNorm.startsWith(writtenNorm);
+      }
     }
 
     const message = typeof result?.message === "string" && result.message

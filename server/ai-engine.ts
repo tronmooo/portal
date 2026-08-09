@@ -31,12 +31,23 @@ import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderV
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
+import { parseTurnIntent, parseTurnPlan, parseDailyTarget, isActionable, type ParsedIntent, type TurnIntentPlan } from "@shared/ai-intent";
+import {
+  checkToolAgainstIntent,
+  isStaleTurnReplay,
+  staleReplayViolation,
+  toolTargetLabel,
+  type RoutingViolation,
+} from "@shared/ai-tool-routing";
+import { toUserFacingError, stripInternalText } from "@shared/ai-message-kinds";
+import { checkClaims, honestFailureReply, groundedSummary, describeMismatch, stripStaleCapabilityClaims, type ExecutedOperation } from "@shared/ai-claim-check";
+import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectRecurrenceFreq } from "@shared/recurrence";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
@@ -3571,11 +3582,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- CRUD: Habits ---
   {
     name: "create_habit",
-    description: "Create a new habit — ONLY when the user EXPLICITLY asks for a recurring habit/routine ('make this a habit', 'add a habit to meditate', 'remind me to stretch every day'). A past-tense activity report ('I took a shower', 'I smoked a blunt', 'I went to the bathroom') is NEVER a habit — log it with log_tracker_entry. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).",
+    description: "Create a new habit — ONLY when the user EXPLICITLY asks for a recurring habit/routine ('make this a habit', 'add a habit to meditate', 'remind me to stretch every day'). A past-tense activity report ('I took a shower', 'I smoked a blunt', 'I went to the bathroom') is NEVER a habit — log it with log_tracker_entry. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).\n\nHabits are COUNT-BASED, not binary: a habit that happens N times a day is ONE habit with dailyTarget:N, and each check-in counts toward that target. 'Walk the dog twice a day' → create_habit(name:'Walk the Dog', dailyTarget:2) — ONE call. NEVER create two habits for a twice-daily routine, and NEVER tell the user habits are limited to a single daily check-off; that limitation does not exist. Only split into separate habits when the user explicitly asks for separate ones (e.g. 'make a morning walk habit and an evening walk habit').",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name" },
+        dailyTarget: { type: "integer", minimum: 1, maximum: 10, description: "How many times PER DAY the habit should be completed. Set whenever the user states a per-day count: 'twice a day' → 2, '3x daily' → 3, 'brush teeth three times a day' → 3, 'morning and night' → 2. Defaults to 1. The habit is only 'done' for a day once this many check-ins are recorded, and streaks honor it." },
         frequency: { type: "string", enum: ["daily", "weekly", "custom"], description: "Frequency. Use 'custom' and set `days` when the user names specific weekdays (e.g. 'Mon/Wed/Fri')." },
         days: { type: "array", items: { type: "string" }, description: "Specific weekdays the habit occurs on, e.g. ['monday','wednesday','friday'] for 'every Mon, Wed, and Fri'. Set this whenever the user names particular days; the habit is then scheduled only on those days." },
         icon: { type: "string", description: "Emoji icon" },
@@ -3890,12 +3902,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "update_habit",
-    description: "Update a habit. Find by name (partial match), then apply changes. Use this to reschedule a habit — e.g. 'move my lisinopril to the evening' → changes: { timeOfDay: 'evening' }.",
+    description: "Update a habit. Find by name (partial match), then apply changes. Use this to reschedule a habit — e.g. 'move my lisinopril to the evening' → changes: { timeOfDay: 'evening' } — or to change how many times a day it should happen — 'make walking the dog three times a day' → changes: { targetPerDay: 3 }.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name (partial match)" },
-        changes: { type: "object", description: "Fields to update — can include 'name', 'icon', 'color', 'frequency', 'targetDays', 'timeOfDay' (morning|afternoon|evening|bedtime|anytime), 'scheduledTime' (HH:MM 24h)." },
+        changes: { type: "object", description: "Fields to update — can include 'name', 'icon', 'color', 'frequency', 'targetDays', 'targetPerDay' (1-10, how many times per day), 'timeOfDay' (morning|afternoon|evening|bedtime|anytime), 'scheduledTime' (HH:MM 24h)." },
       },
       required: ["name", "changes"],
     },
@@ -4839,7 +4851,8 @@ BEHAVIOR:
   * BEFORE saying "I don't have that saved", you MUST call recall_memory with a focused query (e.g. "vin", "license plate", "policy number"). recall_memory searches EVERY profile field, every document's extracted data, memories, and captures, and already bridges these label synonyms. Only answer "not saved" if recall_memory ALSO comes back empty.
   * DOCUMENT-SPECIFIC FIELD QUESTIONS — RETRIEVAL ORDER (CRITICAL): when the user names a document type ("driver's license number", "passport expiration", "registration expiry", "insurance policy number"), the answer MUST come from a document of THAT type. Order: (1) the "DOCUMENT FIELD LOOKUP" block at the top of EXISTING DATA, when present — it already ran the type-scoped structured-field search, trust it over everything else; (2) that document's own extracted fields via retrieve_document; (3) recall_memory / search_documents as the LAST resort. Field labels COLLIDE across document types: a vehicle registration's "License Number" is the license PLATE — NOT a driver's license number — and a registration's "Expiration Date" is the registration's, not the license's. NEVER answer with a same-named field from the wrong document type; if the right document/field isn't stored, say exactly that instead.
   * FOLLOW-UPS KEEP THE SUBJECT: when the user corrects you ("that's my license plate — I want my driver's license number") or sends a short follow-up ("so what is it?"), resolve what they mean from the conversation history. NEVER reply "What specific information are you referring to?" when the history already names the subject — re-run the lookup for the corrected subject and answer.
-- NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something but it's NOT in the data snapshot above, it was DELETED. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
+- ANSWER THE CURRENT MESSAGE ONLY (NEVER VIOLATE — the server blocks stale calls): every tool call you make must serve the request in the user's LATEST message. Earlier messages in this conversation were already handled in their own turns and their actions are already saved and already shown to the user. Do NOT re-run them. If the last message is "Create an asset for my Dodge Ram", the ONLY writes for this turn are about the Dodge Ram — not the habit, the reminder, or the event from earlier messages. Conversation history is for RESOLVING REFERENCES ("do it again", "change that", "delete the one I just made", "the license I mentioned"), never a backlog to work through.
+- NEVER ASSUME PAST ACTIONS STILL EXIST: If the CURRENT message asks for something that conversation history says you already created but the data snapshot doesn't list, it was DELETED — call the tool again for it. The dedup check inside the tool prevents real duplicates. This applies only to what the current message asks for; it is not permission to replay earlier requests.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - BIAS TO ACTION: When the user asks to create, schedule, add, mark off, complete, or check in something, DO IT immediately. NEVER ask clarifying questions for simple CRUD. Just execute.
@@ -4902,8 +4915,11 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 - REPEATING TASKS WRITTEN AS SEVERAL ROWS: a schedule is sometimes stored as one task per occurrence ("Refill X - August", "Refill X - September", …) with no recurrence tag. Treat those as ONE repeating task, not several: describe it as "a monthly schedule with N occurrences", never as separate to-dos. delete_task removes the WHOLE series and reports seriesDeleted + count — say how many occurrences went and that it is gone from tasks, calendar and recurring dates. To drop a single occurrence the user must name its date ("delete the September refill").
 
 ━━━ HABIT CRUD ━━━
-- create: create_habit(name, forProfile?)
-- mark done TODAY: checkin_habit(name, forProfile?) → adds today's check-in
+- create: create_habit(name, dailyTarget?, forProfile?)
+- HABITS ARE COUNT-BASED, NOT BINARY. A habit carries dailyTarget (1-10), accepts that many check-ins per day, tracks completion_count against the target, and can carry timeOfDay/scheduledTime. Streaks only count a day once the target is met. NEVER tell the user habits are "binary", "yes/no", "a single daily check-off", or that they must count repetitions themselves — all of that is false.
+- "N times a day" → ONE habit with dailyTarget:N. "Create a habit to walk the dog twice a day" → create_habit(name:"Walk the Dog", dailyTarget:2). ONE call, no disclaimer, no offer to split it. Create SEPARATE habits only when the user explicitly asks for separate ones ("a morning walk habit and an evening walk habit").
+- change the per-day count later: update_habit(name, changes:{ targetPerDay: N })
+- mark done TODAY: checkin_habit(name, forProfile?) → adds today's check-in; repeat it for each completion when the user reports more than one ("walked the dog both times today" → two calls)
 - undo/unmark: uncomplete_habit(name, forProfile?, date?) → removes check-in
 - update: update_habit(name, changes)
 - delete: delete_habit(name)
@@ -5071,6 +5087,10 @@ BEFORE calling ANY delete tool (delete_profile, delete_task, delete_expense, del
 This is a HARD RULE — never silently delete anything the user didn't explicitly ask to delete.
 
 ━━━ HONESTY RULES ━━━
+- DESCRIBE WHAT THE SYSTEM DID, NOT WHAT YOU PLANNED. The words "Created", "Updated", "Deleted", "Marked complete", "Scheduled" and "Saved" are reserved for a tool that RETURNED success in THIS turn. Your summary must name the same operation and the same entity as the tool result: if the result says action:"create_profile" you say created; if it says action:"update_profile" you say updated. Never describe an update as a creation or a creation as an update — the server compares your wording against the executed tools and will replace your reply with a failure notice if they disagree.
+- Do not summarize a write you did not perform this turn, and do not restate earlier turns' actions as though they just happened.
+- NEVER quote a tool's error text back to the user. Tool errors are written for you, not for them: they name internal tools and give you instructions. Say in your own plain words what did not happen and what you need.
+- Never volunteer limitations you have not verified. Do not tell a user a feature is unavailable, binary, manual, or unsupported unless a tool result in this turn said so.
 - OWNERSHIP PHRASING: write results may include an "owner" field — the person who actually owns the touched item, resolved through nested assets (a Honda CRV nested under Jim is JIM'S car). When owner is someone other than the user, name them: "Color updated to white on Jim's Honda CRV 2021" — NEVER call another person's asset, vehicle, or liability "your".
 - If a tool returns {error: "..."} → tell the user it FAILED. Never say "Done!" on failure.
 - If item not found → say "I couldn't find [X]" with specific name. Offer to search.
@@ -5079,6 +5099,7 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - Example failure: "❌ Couldn't find a task called 'stretching' for Joe. Do you want to check all his tasks?"
 - VERIFICATION (NEVER claim an unverified write): every write tool result carries "success". success:false means the write was read back from the database and was NOT there — the data was NOT saved. Say plainly that it failed and invite them to retry; NEVER say "logged", "saved", "done", or restate the value as if it were stored. This applies to tracker logs exactly like everything else: "logged 24 oz" on a success:false result is a lie about the user's data. Write tools also return a "verification" object; database_record_exists:false after a create/update means the same thing. After a delete, database_record_exists:false means the delete IS confirmed.
 - If verification.duplicate_count > 0, mention it once ("note: you already have N similar entries") but do NOT block, merge, or delete — duplicates are allowed.
+- If verification.requested_name_matches is false, the write landed on a DIFFERENT record than the one you named. Do not describe it as the record the user asked about: say which record was actually touched, and offer to fix it.
 - Destructive BULK operations always take two turns: preview_bulk_action first (relay its counts + sample names verbatim), then execute_bulk_action({plan_id, confirm:true}) ONLY after the user explicitly confirms in their NEXT message. Never loop single delete_* calls for a "delete all …" request, and never call execute_bulk_action in the same turn as the preview.
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
 - HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
@@ -5091,11 +5112,26 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - DATA HEALTH: "is my data healthy" / "check for orphans" → find_orphans; "fix/repair them" (after seeing issues) → repair_relations(confirm:true); "duplicate expenses?" → find_duplicates; "are my dashboard numbers right" → validate_dashboard_counts; "refresh my dashboard" / "counts look stale" → refresh_dashboard; "why is X on my dashboard / in today's agenda" → explain_dashboard_item(name). Relay these tools' message fields — never invent health results.
 
 TOOL CHOICE RULES — CRITICAL:
+
+ENTITY INTENT ROUTING (NEVER VIOLATE — the server enforces this and will BLOCK mismatched calls):
+Before every write, settle four things from THE CURRENT MESSAGE and pick the tool from them, not from a vague sense of the topic:
+  1. ENTITY — asset/profile, habit, task, event, reminder, tracker, expense, obligation, liability, goal, journal, memory, artifact.
+  2. OPERATION — create | update | delete | complete.
+  3. TARGET — for update/delete/complete only: which existing record. A create has NO target.
+  4. FIELDS — every attribute the user stated.
+Example: "Create an asset for my Dodge Ram 2025. It's white, four-wheel-drive." → entity=asset, operation=create, target=none, fields={name:"Dodge Ram 2025", color:"white", driveType:"4WD"} → create_profile(type:"vehicle", name:"Dodge Ram 2025", fields:{color:"white", driveType:"4WD", year:2025}). NOT update_profile. NOT create_tracker. NOT create_habit.
+
+CREATE VS UPDATE SAFETY (NEVER VIOLATE):
+- "Create/add/make/register a <thing>" is a CREATE. The default operation is CREATE and it does not change because a record with a similar name already exists.
+- Switch to update ONLY when the user's own words ask for one: "update", "change", "edit", "modify", "set", "correct", "my existing X", "the X I already have", "the X I just made".
+- If the user said CREATE and a matching record already exists, and a duplicate would be harmful, ASK ONE SHORT QUESTION ("You already have a Dodge Ram 2025 — add a second one, or update that one?") and call nothing. Never silently update instead, and never describe an update as a creation.
+- Never widen a request: a create for one entity is not permission to write a different entity "while you're there".
+
 DATA CLASSIFICATION RULES (NEVER VIOLATE):
 - MEDICATION: When a user mentions a NEW/prescribed medication ("prescribed lisinopril", "Max is on Heartgard now"), update the PROFILE with medication info in their health fields (update_profile with fields: { medications: "..." }). Do NOT create a "Medication" tracker unless the user asks to track doses over time.
 - MEDICATION DOSES: "I took my Lisinopril" / "gave Max his pill" → log_medication_dose. "I skipped/forgot tonight's dose" → skip_medication_dose (missed:true when forgotten). "what doses did I miss this week" / "how's my adherence" → get_missed_doses. "show my dose history" / "when did I last take it" → get_dose_history. These need a medication TRACKER; if none exists, say so and offer to create one. If the user has several medications and didn't name one, the tool will ask — relay its question.
 - WATER INTAKE / HYDRATION: If a user says "drank 8 glasses of water" or "8oz water", log to the existing Hydration/Water tracker if one exists. If none exists, create a habit ("Drink water") rather than a tracker — daily water goals are habits, not measurements.
-- HABITS vs TRACKERS: Habits are binary daily actions (did it / didn't). Trackers are numeric measurements over time. "Take medication" = habit. "Blood pressure 120/80" = tracker. "Drank 8 glasses" = habit check-in. "Weight 180 lbs" = tracker.
+- HABITS vs TRACKERS: Habits are recurring actions with a per-day COUNT (dailyTarget 1-10, multiple check-ins per day, optional scheduled time). Trackers are numeric measurements over time. "Take medication" = habit. "Blood pressure 120/80" = tracker. "Drank 8 glasses" = habit check-in. "Weight 180 lbs" = tracker. Habits are NOT binary — never describe them as a single yes/no check-off.
 - LOANS/BILLS: When a user mentions rent, bills, or debts, use create_obligation. Do NOT create a "loan" profile for recurring bills. Loans are only for actual loan instruments (mortgage, car loan, student loan) with APR, term, and principal.
 
 LIABILITIES — FIRST-CLASS DEBT INSTRUMENTS (CRITICAL — read carefully):
@@ -9533,6 +9569,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           .filter((n: any): n is number => typeof n === "number" && n >= 0 && n <= 6);
         if (nums.length > 0) habitTargetDays = Array.from(new Set(nums)).sort((a, b) => a - b);
       }
+      // COUNT-BASED HABITS (2026-08-09 regression): "walk the dog twice a day"
+      // is ONE habit with targetPerDay 2 — the field has existed on habits
+      // since streaks learned to count check-ins (shared/habit-schedule.ts),
+      // but the tool never exposed it, so the model claimed habits were binary
+      // and offered to create two of them instead. Trust the model's
+      // dailyTarget when it sets one; otherwise read the count straight out of
+      // the user's own words so an older/terser model still gets it right.
+      const habitDailyTarget = (() => {
+        const explicit = Number(input.dailyTarget ?? input.targetPerDay);
+        if (Number.isFinite(explicit) && explicit >= 1) return Math.min(10, Math.round(explicit));
+        const fromMessage = parseDailyTarget(habitMsg);
+        return fromMessage ?? 1;
+      })();
+
       // P0.3a: validate with the shared insert schema before writing.
       const habitTimeOfDay = input.timeOfDay === "night" ? "bedtime" : input.timeOfDay;
       const habitPayload = validateAiPayload(insertHabitSchema, {
@@ -9540,6 +9590,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         frequency: habitTargetDays ? "custom" : (input.frequency || "daily"),
         icon: input.icon,
         color: input.color,
+        targetPerDay: habitDailyTarget,
         ...(habitTargetDays ? { targetDays: habitTargetDays } : {}),
         ...(habitTimeOfDay ? { timeOfDay: habitTimeOfDay } : {}),
         ...(input.scheduledTime ? { scheduledTime: input.scheduledTime } : {}),
@@ -12727,7 +12778,8 @@ async function runBulkLogPath(
   userId: string | undefined,
   chatModel: string,
   ctx: { trackerNames: string[]; profileNames: string[]; habitNames: string[] },
-): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[] } | null> {
+  turn?: { turnId: string; sourceMessageId?: string },
+): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[]; turnId?: string; sourceMessageId?: string } | null> {
   const heuristicCount = countActionClauses(userMessage);
   const tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
   const extractionSystem = buildExtractionSystemPrompt({
@@ -12833,7 +12885,7 @@ async function runBulkLogPath(
         outcome.createdTracker = { id: result.__createdTracker.id, name: result.__createdTracker.name };
         createdTrackers.push(outcome.createdTracker);
       }
-      actions.push({ type: actionType, category: "ai", data: { ...op.input, _entityId: entityId || undefined } });
+      actions.push({ type: actionType, category: "ai", data: { ...op.input, _entityId: entityId || undefined, ...(turn ? { _turnId: turn.turnId, ...(turn.sourceMessageId ? { _sourceMessageId: turn.sourceMessageId } : {}) } : {}) } });
       results.push(result);
       logAction(op.tool, actionType, String((op.input as any)?.trackerName || (op.input as any)?.title || (op.input as any)?.description || op.tool), entityId, userId);
     } catch (err: any) {
@@ -12842,7 +12894,8 @@ async function runBulkLogPath(
   }
 
   logger.info("ai", `Bulk path: ${operations.filter(o => o.status === "ok").length}/${operations.length} ops ok (${Date.now() - startedAt}ms, model ${chatModel})`);
-  return { reply: buildBulkReply(operations, createdTrackers), actions, results, operations };
+  if (turn) for (const op of operations) { op.turnId = turn.turnId; op.sourceMessageId = turn.sourceMessageId; }
+  return { reply: buildBulkReply(operations, createdTrackers), actions, results, operations, turnId: turn?.turnId, sourceMessageId: turn?.sourceMessageId };
 }
 
 // ============================================================
@@ -12880,7 +12933,7 @@ export type ChatStreamEvent =
       operation?: OperationOutcome;
     };
 
-export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: { profileFilterIds?: string[]; debug?: boolean; onEvent?: (ev: ChatStreamEvent) => void }): Promise<{
+export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: { profileFilterIds?: string[]; debug?: boolean; onEvent?: (ev: ChatStreamEvent) => void; turnId?: string; sourceMessageId?: string }): Promise<{
   reply: string;
   actions: ParsedAction[];
   results: any[];
@@ -12891,9 +12944,39 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   report?: ReportSpec;
   artifact?: any;
   operations?: OperationOutcome[];
+  /** Turn identity. Every action/operation in this response carries the same
+   *  turnId, so the client can render ONLY this turn's cards under this
+   *  turn's reply (spec items 7 + 8). */
+  turnId?: string;
+  sourceMessageId?: string;
   /** Routing observability: which path/model served this reply (front door only). */
   meta?: { route: string; model: string; attempts?: Array<{ model: string; error?: string }> };
 }> {
+  // ── TURN IDENTITY (spec item 7) ───────────────────────────────────────────
+  // One id for this user message and everything it produces. The client sends
+  // its optimistic message id as sourceMessageId; the server owns the turnId
+  // so a retried/duplicated client id can never merge two turns' actions.
+  const turnId = options?.turnId || randomUUID();
+  const sourceMessageId = options?.sourceMessageId;
+
+  // ── PRE-EXECUTION INTENT OBJECT (spec item 9) ─────────────────────────────
+  // Structured entity/operation/target/fields parsed from THIS message, before
+  // any model call. Tool selection is checked against it (spec items 2 + 3)
+  // rather than trusted from free-form model text.
+  // One message can carry several requests, so the plan holds a LIST — a tool
+  // is allowed when it serves any of them, blocked when it serves none AND we
+  // parsed the whole message (plan.exhaustive).
+  const turnPlan: TurnIntentPlan = parseTurnPlan(userMessage);
+  const turnIntent: ParsedIntent = turnPlan.intents[0] ?? parseTurnIntent(userMessage);
+  const turnIntentActionable = turnPlan.intents.some(isActionable);
+  if (turnIntentActionable) {
+    logger.info("ai", `[turn ${turnId.slice(0, 8)}] intent ${turnPlan.intents.filter(isActionable).map((i) => `${i.entity}/${i.operation}@${i.confidence}`).join(" + ")}${turnPlan.exhaustive ? "" : " (partial)"}${turnIntent.fields?.name ? ` name="${turnIntent.fields.name}"` : ""}`);
+  }
+  /** Prior USER messages only — the corpus stale-replay detection matches against. */
+  const priorUserMessages: string[] = (conversationHistory || [])
+    .filter((m) => m?.role === "user" && typeof m.content === "string")
+    .map((m) => m.content);
+
   // Streaming progress emitter — no-op unless the caller opted into SSE
   // (routes.ts /api/chat?stream=1). A throwing listener must never break the
   // turn, so every emission is wrapped. Fast paths (doc-open, bulk) don't
@@ -13764,7 +13847,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         trackerNames: (trackers || []).map((t: any) => String(t.name)).filter(Boolean),
         profileNames: (allProfiles || []).map((p: any) => String(p.name)).filter(Boolean),
         habitNames: (habits || []).map((h: any) => String(h.name)).filter(Boolean),
-      });
+      }, { turnId, sourceMessageId });
       if (bulk) return bulk;
     } catch (err: any) {
       logger.warn("ai", `Bulk path crashed (${err?.message}) — continuing with the agentic loop`);
@@ -13987,7 +14070,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         if (totalToolCalls >= MAX_TOOL_CALLS) {
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify({ error: "Tool call limit reached for this message. Please send a new message for additional actions." }), is_error: true });
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
-            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Tool call limit reached" });
+            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Tool call limit reached", turnId, sourceMessageId });
           }
           emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: "Tool call limit reached" });
           continue;
@@ -13996,6 +14079,69 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         emitEvent({ type: "tool_start", tool: toolUse.name, label: opRawLabel(toolUse) });
 
         try {
+          // ── ROUTING GATE (spec items 2, 3, 7) ───────────────────────────
+          // The last thing between a tool_use block and a database write.
+          // Three refusals, all deterministic and all checked against the
+          // structured intent for THIS message rather than the model's prose:
+          //   · the tool writes a different entity than the user asked for;
+          //   · the user said CREATE and this tool UPDATES (create-vs-update
+          //     safety — a same-named record existing is never a licence to
+          //     switch operations);
+          //   · the call is replaying a request from an EARLIER message.
+          // A blocked call returns a directive to the model (so it can correct
+          // itself on the next round-trip) and is recorded as a production
+          // error, but never surfaces as a success card or an action.
+          const routingViolation: RoutingViolation | null = (() => {
+            if (READ_ONLY_TOOLS.has(toolUse.name)) return null;
+            const input = (toolUse.input || {}) as Record<string, any>;
+            const label = toolTargetLabel(input);
+            if (label && isStaleTurnReplay(input, userMessage, priorUserMessages)) {
+              return staleReplayViolation(toolUse.name, label);
+            }
+            return checkToolAgainstIntent(toolUse.name, turnPlan);
+          })();
+          if (routingViolation) {
+            logger.warn("ai", `[turn ${turnId.slice(0, 8)}] BLOCKED ${toolUse.name}: ${routingViolation.mismatchType}`);
+            recordChatFailure({
+              turnId,
+              sourceMessageId,
+              userId,
+              userMessage,
+              parsedIntent: {
+                entity: turnIntent.entity,
+                operation: turnIntent.operation,
+                target: turnIntent.target,
+                confidence: turnIntent.confidence,
+              },
+              toolSelected: toolUse.name,
+              toolResult: "blocked before execution",
+              mismatchType: routingViolation.mismatchType,
+              detail: routingViolation.modelDirective,
+            });
+            toolResults.push({
+              type: "tool_result" as const,
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({ error: routingViolation.modelDirective, code: routingViolation.mismatchType }),
+              is_error: true,
+            });
+            // A stale replay is not the user's failure and must not appear in
+            // their per-operation checklist at all — it belongs to an older
+            // turn. Routing mismatches DO surface, in plain language.
+            if (routingViolation.mismatchType !== "stale_turn_replay") {
+              allOperations.push({
+                index: allOperations.length,
+                raw: opRawLabel(toolUse),
+                tool: toolUse.name,
+                status: "failed",
+                error: routingViolation.userMessage,
+                turnId,
+                sourceMessageId,
+              } as OperationOutcome);
+            }
+            emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: routingViolation.userMessage });
+            continue;
+          }
+
           // Validate input before executing
           const validation = validateToolInput(toolUse.name, toolUse.input as Record<string, any>);
           if (!validation.valid) {
@@ -14004,9 +14150,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify(errorResult), is_error: true });
             // Don't push to allActions for validation failures — nothing was actually done
             if (!READ_ONLY_TOOLS.has(toolUse.name)) {
-              allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: errorResult.error });
+              allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: toUserFacingError(errorResult.error, toolUse.name), turnId, sourceMessageId });
             }
-            emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: errorResult.error });
+            emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: toUserFacingError(errorResult.error, toolUse.name) });
             continue;
           }
           if (validation.warnings.length > 0) {
@@ -14099,6 +14245,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 ...(ownerInfo ? { _ownerName: ownerInfo.name, _ownerProfileId: ownerInfo.id } : {}),
                 ...((result as any)?.trackerId ? { _trackerId: (result as any).trackerId } : {}),
                 ...(previousState ? { _previousState: previousState } : {}),
+                // Turn identity LAST so a tool input key can never shadow it.
+                // The client renders a card only under the message carrying
+                // the same turn id (spec items 7 + 8).
+                _turnId: turnId,
+                ...(sourceMessageId ? { _sourceMessageId: sourceMessageId } : {}),
               },
             };
             allActions.push(actionForStream);
@@ -14142,6 +14293,14 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             content: JSON.stringify(isSuccess ? summarizeResult(result) : (result?.error ? { error: result.error } : { error: "Action failed — data was not saved. Tell the user it didn't work." })),
             is_error: !isSuccess,
           });
+          // A tool's `error` is written FOR THE MODEL — it names internal
+          // tools and gives orders ("do NOT create one. Log the activity with
+          // log_tracker_entry(...)"). Rendering it verbatim is exactly how
+          // evaluator text leaked into the chat (spec item 6). The model still
+          // receives the raw directive above; the user gets a plain sentence.
+          const userFacingError = isSuccess
+            ? undefined
+            : toUserFacingError(result?.error || "Action failed — data was not saved", toolUse.name);
           let operationForStream: OperationOutcome | undefined;
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
             operationForStream = {
@@ -14149,10 +14308,12 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               raw: opRawLabel(toolUse),
               tool: toolUse.name,
               status: isSuccess ? "ok" : "failed",
-              error: isSuccess ? undefined : (result?.error || "Action failed — data was not saved"),
+              error: userFacingError,
               entityId: isSuccess ? (entityId || undefined) : undefined,
               trackerName: inp.trackerName ? String(inp.trackerName) : undefined,
               createdTracker: isSuccess && (result as any)?.__createdTracker?.id ? (result as any).__createdTracker : undefined,
+              turnId,
+              sourceMessageId,
             };
             allOperations.push(operationForStream);
           }
@@ -14160,7 +14321,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             type: "tool_result",
             tool: toolUse.name,
             ok: isSuccess,
-            error: isSuccess ? undefined : (result?.error || "Action failed — data was not saved"),
+            error: userFacingError,
             action: actionForStream,
             operation: operationForStream,
           });
@@ -14172,10 +14333,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             content: JSON.stringify({ error: err.message }),
             is_error: true,
           });
+          const thrownUserError = toUserFacingError(err.message, toolUse.name);
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
-            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: err.message });
+            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: thrownUserError, turnId, sourceMessageId });
           }
-          emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: err.message });
+          emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: thrownUserError });
         }
       }
 
@@ -14512,6 +14674,85 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       }
     }
 
+    // ── RESPONSE MUST MATCH TOOL RESULT (spec items 4, 5, 6, 12) ───────────
+    // Last gate before the reply leaves the server. The model wrote its
+    // summary from its PLAN; this re-reads it against what actually executed
+    // and refuses to ship a claim the tool results don't support.
+    //
+    //   · claims a write, nothing succeeded            → replace with the
+    //                                                    honest failure text
+    //   · says "created" when only updates ran         → log + relabel
+    //   · repeats a capability that no longer exists   → log + strip
+    //   · echoes a model-facing directive              → strip
+    //
+    // Everything is logged with the full turn context so these show up as
+    // metrics rather than as screenshots in a bug report.
+    try {
+      const executed: ExecutedOperation[] = allOperations.map((op) => ({
+        tool: op.tool,
+        status: op.status,
+        entityId: op.entityId,
+        raw: op.raw,
+      }));
+      const claimCheck = checkClaims({
+        reply: finalReply,
+        operations: executed,
+        intentEntity: turnIntentActionable ? turnIntent.entity : undefined,
+        intentOperation: turnIntentActionable ? turnIntent.operation : undefined,
+      });
+      for (const v of claimCheck.violations) {
+        recordChatFailure({
+          turnId,
+          sourceMessageId,
+          userId,
+          userMessage,
+          parsedIntent: turnIntentActionable
+            ? { entity: turnIntent.entity, operation: turnIntent.operation, target: turnIntent.target, confidence: turnIntent.confidence }
+            : null,
+          toolSelected: allOperations.map((o) => o.tool).join(",") || undefined,
+          toolResult: allOperations.map((o) => `${o.tool}:${o.status}`).join(",") || "none",
+          assistantClaim: v.claim,
+          mismatchType: v.mismatchType,
+          detail: `${describeMismatch(v.mismatchType)} — ${v.detail}`,
+        });
+      }
+      // Only an UNSUPPORTED SUCCESS invalidates the whole reply: the user is
+      // being told something was saved when nothing was. The rest are logged
+      // and, where the text itself is the problem, scrubbed.
+      const operationMismatch = claimCheck.violations.some(
+        (v) => v.mismatchType === "claimed_create_but_updated" || v.mismatchType === "claimed_entity_not_written",
+      );
+      if (claimCheck.unsupportedSuccess && allActions.length === 0) {
+        finalReply = honestFailureReply(executed);
+      } else if (operationMismatch) {
+        // Writes DID land, but the prose named the wrong operation or the
+        // wrong entity — "Updated the Dodge Ram" for a create, or a habit
+        // described on an asset turn. Replace the prose with a summary built
+        // only from what executed; the action cards carry the detail.
+        finalReply = groundedSummary(executed);
+      } else if (claimCheck.violations.some((v) => v.mismatchType === "claimed_stale_capability")) {
+        // Strip the false limitation rather than the whole answer — the write
+        // itself succeeded and the user should still hear about it.
+        const cleaned = stripStaleCapabilityClaims(finalReply);
+        if (cleaned) finalReply = cleaned;
+      }
+      // Internal directives the model echoed back (spec item 6).
+      const scrubbed = stripInternalText(finalReply);
+      if (scrubbed && scrubbed !== finalReply) {
+        recordChatFailure({
+          turnId, sourceMessageId, userId, userMessage,
+          parsedIntent: null,
+          assistantClaim: finalReply.slice(0, 200),
+          mismatchType: "internal_text_leaked",
+          detail: "assistant reply contained model-facing directive text",
+        });
+        finalReply = scrubbed;
+      }
+    } catch (e: any) {
+      // Validation must never cost the user their reply.
+      logger.warn("ai", `[claim-check] skipped: ${e?.message || e}`);
+    }
+
     return {
       reply: finalReply,
       actions: allActions,
@@ -14523,6 +14764,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       report: richReport,
       artifact: artifact || undefined,
       operations: allOperations.length > 0 ? allOperations : undefined,
+      turnId,
+      sourceMessageId,
     };
   } catch (err: any) {
     console.error("AI engine error:", err.message);

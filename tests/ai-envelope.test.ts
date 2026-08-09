@@ -308,6 +308,56 @@ describe("trimExtractedFields", () => {
   });
 });
 
+// ── requested_name_matches ──────────────────────────────────────────────────
+// The 2026-08-09 report's shape: a write that SUCCEEDS against a record the
+// user never named ("Updated the Dodge Ram 2025" on a request to create one).
+// Reported, never enforced — legitimate normalization (dedup suffixes,
+// canonical tracker names) keeps names from matching exactly.
+describe("finalizeToolResult — requested_name_matches", () => {
+  it("true when the written record carries the requested name", async () => {
+    const storage = stubStorage({ getProfiles: async () => [...PROFILES, { id: "p1", name: "Dodge Ram 2025" }] });
+    const env = await finalizeToolResult(
+      "create_profile", "create_profile",
+      { name: "Dodge Ram 2025" }, { id: "p1", name: "Dodge Ram 2025" },
+      buildTurnVerifyContext(storage),
+    );
+    expect(env.success).toBe(true);
+    expect(env.verification.requested_name_matches).toBe(true);
+  });
+
+  it("false when the write landed on a different record", async () => {
+    const storage = stubStorage({ getProfiles: async () => [...PROFILES, { id: "p2", name: "Honda CR-V" }] });
+    const env = await finalizeToolResult(
+      "update_profile", "update_profile",
+      { name: "Dodge Ram 2025" }, { id: "p2", name: "Honda CR-V" },
+      buildTurnVerifyContext(storage),
+    );
+    expect(env.verification.requested_name_matches).toBe(false);
+    // Reported, not enforced — the write itself is still a success.
+    expect(env.success).toBe(true);
+  });
+
+  it("tolerates a dedup suffix on the written name", async () => {
+    const storage = stubStorage({ getHabits: async () => [{ id: "h1", name: "Walk the Dog - Rex" }] });
+    const env = await finalizeToolResult(
+      "create_habit", "create_habit",
+      { name: "Walk the Dog" }, { id: "h1", name: "Walk the Dog - Rex" },
+      buildTurnVerifyContext(storage),
+    );
+    expect(env.verification.requested_name_matches).toBe(true);
+  });
+
+  it("omits the check when the input named nothing", async () => {
+    const storage = stubStorage({ getExpenses: async () => [{ id: "e1", description: "coffee" }] });
+    const env = await finalizeToolResult(
+      "create_expense", "log_expense",
+      { amount: 5 }, { id: "e1" },
+      buildTurnVerifyContext(storage),
+    );
+    expect(env.verification?.requested_name_matches).toBeUndefined();
+  });
+});
+
 // ── docContentMatches (document content search) ──────────────────────────────
 import { docContentMatches } from "../server/ai-envelope";
 

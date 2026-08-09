@@ -183,6 +183,10 @@ export default defineConfig({
       // Server-side wiring: env validation, sign normalization, webhook
       // signature verification, idempotency, user isolation.
       'tests/finance-sync.test.ts',
+      // Chat hallucination / routing / claim-validation regressions
+      // (2026-08-09 report): habit daily targets, create-vs-update safety,
+      // per-turn action isolation, no internal evaluator text in the UI.
+      'tests/ai-turn-integrity.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

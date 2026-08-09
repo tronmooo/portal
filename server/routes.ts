@@ -1206,9 +1206,18 @@ export async function registerRoutes(
             console.warn("[classifyCapture] swallowed error:", (err as Error).message);
             return null;
           });
+      // Turn identity (chat hallucination remediation, item 7): the client's
+      // optimistic message id rides along so every action/operation the engine
+      // emits can be traced back to the message that caused it. The engine
+      // mints the turn id itself — a replayed or duplicated client id must
+      // never merge two turns' action cards.
+      const sourceMessageId = typeof req.body?.sourceMessageId === "string" && req.body.sourceMessageId.length <= 128
+        ? req.body.sourceMessageId
+        : undefined;
       const result = await (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, {
         profileFilterIds,
         debug,
+        sourceMessageId,
         // Forward engine progress frames (round / assistant_delta /
         // tool_start / tool_result) straight onto the SSE stream.
         ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),

@@ -8,6 +8,7 @@ import { setFilterSelected, setFilterEveryone } from "@/lib/profileFilter";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stopProp } from "@/lib/event-utils";
+import { isInternalDirective } from "@shared/ai-message-kinds";
 
 // ── Lazy-loaded heavy components ─────────────────────────────────────────────
 // chat.tsx is the EAGER home page (imported non-lazy in App.tsx). Anything
@@ -405,7 +406,21 @@ const ACTION_LABELS: Record<string, string> = {
   create_artifact: "Create Artifact",
 };
 
-function actionLabel(type: string) {
+function actionLabel(type: string, data?: any) {
+  // The card names the ENTITY that was written, not the table it lives in.
+  // Assets/vehicles/properties are profile rows, so create_profile(type:"asset")
+  // is "Create Asset" — the card and the assistant text must agree on what
+  // happened, and "Create Profile" for a truck reads like a different action.
+  if ((type === "create_profile" || type === "update_profile") && data?.type) {
+    const kind = String(data.type).toLowerCase();
+    const noun = kind === "vehicle" || kind === "property" || kind === "asset" || kind === "investment"
+      ? "Asset"
+      : kind === "person" ? "Person"
+      : kind === "pet" ? "Pet"
+      : kind === "subscription" ? "Subscription"
+      : null;
+    if (noun) return `${type.startsWith("create") ? "Create" : "Update"} ${noun}`;
+  }
   return ACTION_LABELS[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -2232,6 +2247,21 @@ const MessageRow = memo(function MessageRow({
 }: MessageRowProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  // Failed/skipped operations this message may show. Three filters, in order:
+  //  1. successes already render as action cards above;
+  //  2. TURN SCOPING — an operation belongs to the turn that produced it, so
+  //     an older turn's failure never reappears under a newer answer
+  //     (operations from before turn ids existed carry none and still show);
+  //  3. INTERNAL TEXT — tool errors are written for the model ("do NOT create
+  //     one. Log the activity with log_tracker_entry(...)"). The server now
+  //     rewrites those into plain sentences; this is the client-side backstop
+  //     so an older server can't leak one into the conversation.
+  const visibleFailedOps: any[] = ((msg as any).operations || []).filter(
+    (op: any) =>
+      op?.status !== "ok" &&
+      (!(msg as any).turnId || !op?.turnId || op.turnId === (msg as any).turnId) &&
+      !isInternalDirective(op?.error),
+  );
   return (
     <div
       className={`message-in flex ${
@@ -2396,10 +2426,16 @@ const MessageRow = memo(function MessageRow({
           </button>
         )}
 
-        {/* Action badges */}
+        {/* Action badges — THIS TURN ONLY.
+            Screenshots from 2026-08-09 showed a "Mow the lawn" reminder card
+            and a "Soccer" event card stacked under an unrelated Dodge Ram
+            answer. Every action the server emits now carries the turn that
+            produced it, so a card renders only beneath the message it belongs
+            to. Actions from before turn ids existed have no _turnId and are
+            shown as-is, so old conversations don't lose their history. */}
         {msg.actions && msg.actions.length > 0 && (
           <div className="mt-3 space-y-1.5">
-            {msg.actions.filter(a => [
+            {msg.actions.filter(a => !msg.turnId || !(a.data as any)?._turnId || (a.data as any)._turnId === msg.turnId).filter(a => [
               'log_entry', 'log_tracker_entry', 'add_tracker_entry',
               'log_expense', 'create_task', 'create_event', 'create_reminder',
               'create_habit', 'checkin_habit', 'create_obligation',
@@ -2485,7 +2521,7 @@ const MessageRow = memo(function MessageRow({
                 ? String(action.data.values.item) : '';
               const entityTitle = isTrackerEntry
                 ? (entryItem || trackerName || 'Entry')
-                : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || (action as any).title || '').toUpperCase() || actionLabel(action.type).toUpperCase();
+                : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || (action as any).title || '').toUpperCase() || actionLabel(action.type, action.data).toUpperCase();
               const entityDetails = isTrackerEntry
                 ? entryValues
                 : action.data?.amount
@@ -2525,7 +2561,7 @@ const MessageRow = memo(function MessageRow({
                         <p className={`text-xs font-semibold ${
                           isUndone ? 'line-through text-muted-foreground' : 'text-foreground'
                         }`}>
-                          {entityTitle || actionLabel(action.type).toUpperCase()}
+                          {entityTitle || actionLabel(action.type, action.data).toUpperCase()}
                         </p>
                         {/* WHO badge — always show */}
                         <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
@@ -2540,7 +2576,7 @@ const MessageRow = memo(function MessageRow({
                         )}
                       </div>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
-                        {entityDetails || actionLabel(action.type)}
+                        {entityDetails || actionLabel(action.type, action.data)}
                         {isUndone && ' · DELETED'}
                       </p>
                     </div>
@@ -2590,7 +2626,7 @@ const MessageRow = memo(function MessageRow({
                             queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
                             queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
                             toast({
-                              title: `Deleted: ${entityTitle || actionLabel(action.type)}`,
+                              title: `Deleted: ${entityTitle || actionLabel(action.type, action.data)}`,
                               description: `Removed from ${whoFor}'s ${trackerName || 'data'}`,
                             });
                           } catch {
@@ -2762,9 +2798,9 @@ const MessageRow = memo(function MessageRow({
             NOT succeed (successes already render as action cards).
             Multi-action messages get honest per-item failure/skip
             reporting instead of a vague "some failed". */}
-        {msg.operations && msg.operations.some((op: any) => op.status !== "ok") && (
+        {visibleFailedOps.length > 0 && (
           <div className="mt-2 space-y-1 text-xs">
-            {msg.operations.filter((op: any) => op.status !== "ok").map((op: any, oi: number) => (
+            {visibleFailedOps.map((op: any, oi: number) => (
               <div key={oi} className="flex items-start gap-1.5">
                 <span aria-hidden>{op.status === "deduped" ? "↩️" : op.status === "skipped" ? "⏸️" : "❌"}</span>
                 <span className="text-muted-foreground">
@@ -3085,6 +3121,10 @@ export default function ChatPage() {
         {
           message,
           history,
+          // Turn identity: the server stamps every action and operation it
+          // produces with the turn id it derives from this, so the reply's
+          // cards can be scoped to the message that caused them.
+          sourceMessageId: userMsgId,
         },
         {
           onRound: () => { liveResetPendingRef.current = true; },
@@ -3123,6 +3163,8 @@ export default function ChatPage() {
         actions: data.actions,
         results: data.results,
         operations: data.operations,
+        turnId: data.turnId,
+        sourceMessageId: data.sourceMessageId,
         documentPreview: data.documentPreview,
         documentPreviews: data.documentPreviews,
         charts: data.charts,

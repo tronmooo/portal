@@ -36,6 +36,12 @@ export interface OperationOutcome {
   createdTracker?: { id: string; name: string };
   /** Compact human-readable summary of what was recorded ("duration 60, method blunt, at 8:15 AM"). */
   detail?: string;
+  /** Which chat turn produced this operation. The client renders an operation
+   *  only under the assistant message carrying the same turnId, so an older
+   *  turn's outcome can never reappear beneath a newer answer (spec item 8). */
+  turnId?: string;
+  /** The user message id this operation traces back to. */
+  sourceMessageId?: string;
 }
 
 /** Compact "duration 60, method blunt, at 8:15 AM" summary of an operation's
