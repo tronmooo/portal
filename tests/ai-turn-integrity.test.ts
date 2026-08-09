@@ -555,6 +555,45 @@ describe("one create request produces one record", () => {
   });
 });
 
+// ── Whose is it? ────────────────────────────────────────────────────────────
+// Ownership decides which balance sheet an asset lands on. "This is Bob's
+// MacBook" must file the laptop under Bob and keep it OFF the user's totals.
+describe("ownership from a possessive", () => {
+  it("splits owner from name on a create request", () => {
+    const intent = parseTurnIntent("Create a profile for Bob's MacBook Pro");
+    expect(intent.fields.owner).toBe("Bob");
+    expect(intent.fields.name).toBe("MacBook Pro");
+  });
+
+  it("reads the same owner however the sentence is phrased", () => {
+    for (const [msg, owner, name] of [
+      ["Add Robert's truck", "Robert", "truck"],
+      ["Create an asset for Mom's iPad", "Mom", "iPad"],
+    ] as Array<[string, string, string]>) {
+      const intent = parseTurnIntent(msg);
+      expect(intent.fields.owner, msg).toBe(owner);
+      expect(intent.fields.name, msg).toBe(name);
+    }
+  });
+
+  it("treats 'my' as the user, not a third-party owner", () => {
+    const intent = parseTurnIntent("Create a profile for my MacBook Pro m4");
+    expect(intent.fields.owner).toBeUndefined();
+    expect(intent.fields.name).toBe("MacBook Pro m4");
+  });
+
+  it("does not invent an owner from a brand possessive", () => {
+    const intent = parseTurnIntent("Create an asset for Levi's 501 Jeans");
+    expect(intent.fields.owner).toBeUndefined();
+  });
+
+  it("still routes to a plain asset create", () => {
+    const intents = parseTurnIntents("Create a profile for Bob's MacBook Pro");
+    expect(checkToolAgainstIntent("create_profile", intents)).toBeNull();
+    expect(checkToolAgainstIntent("create_habit", intents)?.mismatchType).toBe("entity_mismatch");
+  });
+});
+
 // ── Tool/entity map integrity ───────────────────────────────────────────────
 
 describe("tool routing map", () => {

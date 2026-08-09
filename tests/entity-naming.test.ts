@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
+import {
+  stripTrackerOwnerSuffix, stripOwnerPossessivePrefix,
+  extractOwnerPossessive, detectPossessiveOwner,
+} from "../shared/entity-naming";
 import { MemStorage } from "../server/storage";
 
 describe("stripTrackerOwnerSuffix", () => {
@@ -92,5 +95,76 @@ describe("storage read-time name heal (MemStorage parity)", () => {
     await store.createProfile({ name: "Craig", type: "person" } as any);
     const profiles = await store.getProfiles();
     expect(profiles.find(p => p.type === "person")?.name).toBe("Craig");
+  });
+});
+
+
+// ── Possessive ownership (2026-08-09 user report) ───────────────────────────
+// "This is Bob's MacBook" had its possessive stripped to "MacBook" and was
+// then parented to SELF, because the strip threw away the only evidence of who
+// owned it — so the laptop counted toward the user's net worth instead of
+// Bob's. The owner is in the sentence; losing it during cleanup is what put
+// the asset on the wrong balance sheet.
+describe("extractOwnerPossessive", () => {
+  it("keeps the owner it stripped", () => {
+    expect(extractOwnerPossessive("Bob's MacBook", ["Bob"]))
+      .toEqual({ name: "MacBook", owner: "Bob" });
+    expect(extractOwnerPossessive("Robert's Ford F250 2025", ["Robert", "Bob"]))
+      .toEqual({ name: "Ford F250 2025", owner: "Robert" });
+  });
+
+  it("returns the caller's spelling so it resolves straight back to the profile", () => {
+    expect(extractOwnerPossessive("bob's macbook", ["Bob"]).owner).toBe("Bob");
+  });
+
+  it("leaves brands and unknown owners alone", () => {
+    expect(extractOwnerPossessive("Levi's 501 Jeans", ["Bob"]))
+      .toEqual({ name: "Levi's 501 Jeans", owner: null });
+    expect(extractOwnerPossessive("Steve's MacBook", ["Bob"]))
+      .toEqual({ name: "Steve's MacBook", owner: null });
+  });
+
+  it("stays byte-identical to the old strip-only helper", () => {
+    for (const [name, owners] of [
+      ["Craig's Ford F250 2025", ["Craig"]],
+      ["Levi's 501 Jeans", ["Craig"]],
+      ["Ford F250", ["Craig"]],
+    ] as Array<[string, string[]]>) {
+      expect(stripOwnerPossessivePrefix(name, owners)).toBe(extractOwnerPossessive(name, owners).name);
+    }
+  });
+});
+
+describe("detectPossessiveOwner", () => {
+  it("finds an owner with no profile list to check against", () => {
+    expect(detectPossessiveOwner("Bob's MacBook")).toEqual({ name: "MacBook", owner: "Bob" });
+    expect(detectPossessiveOwner("Robert's truck")).toEqual({ name: "truck", owner: "Robert" });
+  });
+
+  it("understands relationship words", () => {
+    expect(detectPossessiveOwner("wife's car")).toEqual({ name: "car", owner: "wife" });
+    expect(detectPossessiveOwner("Mom's iPad")).toEqual({ name: "iPad", owner: "Mom" });
+  });
+
+  it("does not treat a lowercase common noun as an owner", () => {
+    expect(detectPossessiveOwner("today's total")).toBeNull();
+    expect(detectPossessiveOwner("the car's battery")).toBeNull();
+  });
+
+  it("does not fire on a name with no possessive", () => {
+    expect(detectPossessiveOwner("MacBook Pro M4")).toBeNull();
+    expect(detectPossessiveOwner("my MacBook Pro M4")).toBeNull();
+    expect(detectPossessiveOwner("")).toBeNull();
+  });
+
+  it("does not mistake a brand possessive for a person", () => {
+    for (const name of ["Levi's 501 Jeans", "McDonald's gift card", "Lowe's credit card", "Sam's Club membership"]) {
+      expect(detectPossessiveOwner(name), name).toBeNull();
+    }
+  });
+
+  it("does not fire when nothing is left after the possessive", () => {
+    expect(detectPossessiveOwner("Bob's")).toBeNull();
+    expect(detectPossessiveOwner("Bob's a")).toBeNull();
   });
 });

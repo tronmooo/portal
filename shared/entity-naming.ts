@@ -73,14 +73,92 @@ export function stripLeadingDeterminer(name: string): string {
  *   stripOwnerPossessivePrefix("Levi's 501 Jeans", ["Craig"]) === "Levi's 501 Jeans"
  */
 export function stripOwnerPossessivePrefix(name: string, ownerNames: Array<string | null | undefined>): string {
-  if (!name) return name;
-  let out = String(name).trim();
-  for (const owner of ownerNames) {
-    const o = (owner || "").trim();
+  return extractOwnerPossessive(name, ownerNames).name;
+}
+
+/**
+ * Like `stripOwnerPossessivePrefix`, but KEEPS the owner it matched.
+ *
+ * Regression (2026-08-09, user report): "this is Bob's MacBook" had its
+ * possessive stripped to "MacBook" and was then parented to SELF, because the
+ * strip threw away the only evidence of who owned it. The laptop counted
+ * toward the user's net worth instead of Bob's. The owner is in the sentence —
+ * losing it during cleanup is what made the asset land on the wrong balance
+ * sheet.
+ *
+ *   extractOwnerPossessive("Bob's MacBook", ["Bob"])
+ *     → { name: "MacBook", owner: "Bob" }
+ *   extractOwnerPossessive("Levi's 501 Jeans", ["Bob"])
+ *     → { name: "Levi's 501 Jeans", owner: null }
+ *
+ * Still conservative: only a possessive matching a KNOWN owner name is
+ * removed, so brands survive. `owner` is the caller's original spelling from
+ * `ownerNames`, ready to resolve straight back to that profile.
+ */
+export function extractOwnerPossessive(
+  name: string,
+  ownerNames: Array<string | null | undefined>,
+): { name: string; owner: string | null } {
+  const original = String(name ?? "").trim();
+  if (!original) return { name: original, owner: null };
+  let out = original;
+  let owner: string | null = null;
+  for (const candidate of ownerNames) {
+    const o = (candidate || "").trim();
     if (!o) continue;
     // <owner> followed by a possessive marker ('s / ' / s) and whitespace.
     const re = new RegExp(`^${escapeRegExp(o)}(?:['’ʼ]s?|s)\\s+`, "i");
-    if (re.test(out)) out = out.replace(re, "").trim();
+    if (re.test(out)) {
+      out = out.replace(re, "").trim();
+      // First match wins — it is the outermost possessive, i.e. the owner.
+      if (!owner) owner = o;
+    }
   }
-  return out || String(name).trim();
+  if (!out) return { name: original, owner: null };
+  return { name: out, owner };
+}
+
+/**
+ * Owner named by a possessive, WITHOUT needing to know the owner list first.
+ *
+ * Used before profile resolution so an owner the user names but who has no
+ * profile yet ("this is Robert's MacBook", no Robert on file) can be asked
+ * about instead of silently filed under the user.
+ *
+ * Matches a single leading capitalized token or a relationship word. Returns
+ * null for anything else, so "Levi's 501 Jeans" and lowercase noise are left
+ * alone; a false positive here becomes a clarifying question, never a
+ * misattributed asset.
+ */
+const RELATIONSHIP_WORDS =
+  /^(wife|husband|spouse|partner|mom|mother|dad|father|son|daughter|brother|sister|roommate|girlfriend|boyfriend|fiance|fiancee|grandma|grandmother|grandpa|grandfather|aunt|uncle|cousin|nephew|niece)$/i;
+
+/**
+ * Brands whose name IS a possessive. Capitalization alone can't tell "Bob's
+ * MacBook" from "Levi's 501 Jeans", and treating a brand as an owner would
+ * interrupt the user with a pointless "who is Levi?" question. A short list of
+ * the ones people actually own things from beats a clever rule here; anything
+ * missing costs one clarifying question, never a misfiled asset.
+ */
+const BRAND_POSSESSIVES = new Set([
+  "levi", "levis", "mcdonald", "mcdonalds", "kohl", "kohls", "macy", "macys",
+  "wendy", "wendys", "arby", "arbys", "denny", "dennys", "applebee", "applebees",
+  "lowe", "lowes", "sam", "sams", "bj", "bjs", "trader joe", "dunkin", "dunkins",
+  "victoria", "victorias", "dillard", "dillards", "hardee", "hardees",
+  "jimmy john", "papa john", "raising cane", "culver", "culvers",
+]);
+
+export function detectPossessiveOwner(name: string): { name: string; owner: string } | null {
+  const raw = String(name ?? "").trim();
+  // "<Token>'s <rest>" — one token only; multi-word owners must come from the
+  // known-owner path above, where the full name is available to match against.
+  const m = raw.match(/^([\p{L}][\p{L}'’-]*)['’]s\s+(.+)$/u);
+  if (!m) return null;
+  const [, token, rest] = m;
+  const looksLikePerson = /^\p{Lu}/u.test(token) || RELATIONSHIP_WORDS.test(token);
+  if (!looksLikePerson) return null;
+  if (BRAND_POSSESSIVES.has(token.toLowerCase())) return null;
+  const remaining = rest.trim();
+  if (remaining.length < 2) return null;
+  return { name: remaining, owner: token };
 }

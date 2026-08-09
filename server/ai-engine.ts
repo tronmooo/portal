@@ -70,7 +70,7 @@ import {
   summarizeEnrichment,
   type Enrichment,
 } from "@shared/estimation-engine";
-import { stripOwnerPossessivePrefix, stripLeadingDeterminer } from "@shared/entity-naming";
+import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossessive, detectPossessiveOwner } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -2849,7 +2849,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         fields: { type: "object", description: "Entity-specific fields. Include ALL known info in the right keys." },
         tags: { type: "array", items: { type: "string" }, description: "Tags for categorization" },
         notes: { type: "string", description: "Additional notes" },
-        forProfile: { type: "string", description: "Owner or parent profile name — an EXISTING profile the new one nests under. Set it when the user names a person/pet who owns the item ('Bob Johnson's car' → 'Bob Johnson') or a container asset it lives inside ('Add Samsung refrigerator to my house' → 'My House').\n\nDO NOT set this to the item being created. In 'create a profile for my MacBook Pro M4', 'my MacBook Pro M4' is the NAME — there is no owner in that sentence, so leave forProfile unset. Setting it to the item's own name creates a second, bogus profile. When in doubt, omit it: an unowned profile defaults to the user." },
+        forProfile: { type: "string", description: "Owner or parent profile name — an EXISTING profile the new one nests under. This decides WHOSE net worth and totals the item counts toward, so getting it right matters.\n\nSET IT whenever the user names an owner, most often as a possessive: 'this is Bob's MacBook' → forProfile:'Bob', name:'MacBook'. 'Robert's truck' → forProfile:'Robert', name:'truck'. 'my wife's car' → forProfile:'Wife' (or her name if you know it). Never leave the owner's name inside `name` — 'Bob's MacBook' as a name files the laptop under the USER and it shows up on the wrong balance sheet.\n\nIt can also be a container asset the item lives inside ('Add Samsung refrigerator to my house' → 'My House').\n\nDO NOT set this to the item being created. In 'create a profile for my MacBook Pro M4', 'my MacBook Pro M4' is the NAME — 'my' means the user, not a third party — so leave forProfile unset. Setting it to the item's own name creates a second, bogus profile." },
       },
       required: ["type", "name"],
     },
@@ -5150,6 +5150,16 @@ ONE REQUEST CREATES ONE RECORD (NEVER VIOLATE — the server blocks the second c
 - The type parameter is REQUIRED and must be one of the enum values. Pick the one matching what the entity IS — laptop/phone/TV/tool → asset; car/truck → vehicle; house/land → property. NEVER type an object as "person"; person is for human beings only.
 - When a tool returns PARENT_NOT_FOUND or AMBIGUOUS_PARENT, ASK the user — do NOT invent the missing parent by creating a profile for it.
 
+WHOSE IS IT? OWNERSHIP FROM POSSESSIVES (NEVER VIOLATE):
+Ownership decides which balance sheet an asset lands on, whose totals it counts toward, and whose dashboard shows it. Read it off the sentence every time:
+- "this is Bob's MacBook" → create_profile(type:"asset", name:"MacBook", forProfile:"Bob"). The possessive names the OWNER; what follows it is the NAME.
+- "Robert's truck", "my wife's car", "Mom's iPad" → same shape: forProfile is the person, name is the thing.
+- NEVER leave the owner inside the name. "Bob's MacBook" as a name files the laptop under the USER, and it silently counts toward the user's net worth instead of Bob's.
+- "my <thing>" / "our <thing>" means the USER — leave forProfile unset, and drop the "my" from the name.
+- A brand possessive is not an owner: "Levi's 501 Jeans", "McDonald's gift card" — the name stays whole and forProfile stays unset.
+- If the named owner has no profile yet the tool returns OWNER_NOT_FOUND. Relay its question and wait: offer to create that person and file the item under them, or to keep it as the user's. NEVER guess, and never fall back to filing it under the user — that puts the item on the wrong person's totals with nothing to show it happened.
+- After a successful write, name the owner in your reply ("Added the MacBook under Bob") so the user can see where it landed.
+
 DATA CLASSIFICATION RULES (NEVER VIOLATE):
 - MEDICATION: When a user mentions a NEW/prescribed medication ("prescribed lisinopril", "Max is on Heartgard now"), update the PROFILE with medication info in their health fields (update_profile with fields: { medications: "..." }). Do NOT create a "Medication" tracker unless the user asks to track doses over time.
 - MEDICATION DOSES: "I took my Lisinopril" / "gave Max his pill" → log_medication_dose. "I skipped/forgot tonight's dose" → skip_medication_dose (missed:true when forgotten). "what doses did I miss this week" / "how's my adherence" → get_missed_doses. "show my dose history" / "when did I last take it" → get_dose_history. These need a medication TRACKER; if none exists, say so and offer to create one. If the user has several medications and didn't name one, the tool will ask — relay its question.
@@ -6330,16 +6340,52 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // resolved parent, and any person/self profile). People/pets keep their
       // names verbatim. stripOwnerPossessivePrefix only removes a genuine
       // possessive ("<Owner>'s "), so brands like "Levi's" are left intact.
+      //
+      // POSSESSIVE OWNERSHIP (2026-08-09, user report): stripping the prefix
+      // used to THROW THE OWNER AWAY. "This is Bob's MacBook" became "MacBook"
+      // parented to SELF, so the laptop landed on the user's balance sheet
+      // instead of Bob's — the owner was right there in the sentence and the
+      // cleanup deleted the only evidence of it. The owner is now kept and
+      // used as the parent whenever the model didn't already name one.
       if (isChildType && input.name) {
         const ownerCandidates = [
           input.forProfile,
           intendedParentId ? existingProfiles.find(p => p.id === intendedParentId)?.name : undefined,
           ...existingProfiles.filter(p => p.type === "person" || p.type === "self").map(p => p.name),
         ];
-        const cleanedName = stripOwnerPossessivePrefix(input.name, ownerCandidates);
+        const { name: cleanedName, owner: matchedOwner } = extractOwnerPossessive(input.name, ownerCandidates);
         if (cleanedName !== input.name) {
-          logger.info("ai", `Asset naming rule: stripped owner prefix "${input.name}" → "${cleanedName}"`);
+          logger.info("ai", `Asset naming rule: stripped owner prefix "${input.name}" → "${cleanedName}"${matchedOwner ? ` (owner: ${matchedOwner})` : ""}`);
           input.name = cleanedName;
+        }
+        // The possessive named an owner and the model set no forProfile —
+        // adopt it, so the asset nests under that person and counts on THEIR
+        // totals rather than defaulting to self further down.
+        if (matchedOwner && !input.forProfile && !intendedParentId) {
+          const ownerRes = resolveProfileByName(existingProfiles, matchedOwner);
+          if (ownerRes.kind === "found") {
+            intendedParentId = ownerRes.profile.id;
+            input.forProfile = ownerRes.profile.name;
+            logger.info("ai", `Possessive ownership: "${input.name}" attributed to ${ownerRes.profile.name} (${ownerRes.profile.id})`);
+          }
+        }
+      }
+
+      // An owner the user NAMED but who has no profile yet. Silently filing
+      // the asset under self would put it on the wrong balance sheet, and the
+      // user would have no way to know — ask instead. Runs only when nothing
+      // above resolved an owner, and only for possessives that look like a
+      // person ("Robert's MacBook"), never brands ("Levi's 501 Jeans").
+      if (isChildType && input.name && !input.forProfile && !intendedParentId) {
+        const unresolved = detectPossessiveOwner(input.name);
+        if (unresolved) {
+          return {
+            error: "OWNER_NOT_FOUND",
+            message: `"${input.name}" looks like it belongs to ${unresolved.owner}, but I don't have a profile for ${unresolved.owner} yet. Want me to create ${unresolved.owner} and file the ${unresolved.name} under them, or is this yours?`,
+            owner: unresolved.owner,
+            childName: unresolved.name,
+            childType: input.type,
+          };
         }
       }
       const existingProfile = existingProfiles.find(p => {

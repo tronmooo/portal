@@ -22,6 +22,8 @@
 // RIGHT when it is confident and SILENT (entity "unknown", confidence 0) when
 // it is not — a low-confidence intent never blocks a tool call.
 
+import { detectPossessiveOwner } from "./entity-naming";
+
 export type IntentEntity =
   | "habit"
   | "task"
@@ -278,7 +280,10 @@ export function extractEntityName(message: string): string | null {
       // optional entity noun, optionally followed by a connector
       String.raw`(?:asset|profile|vehicle|car|truck|habit|task|event|reminder|tracker|goal|obligation|liability|document|artifact)?` +
       String.raw`\s*(?:for|called|named|titled|to\s+track|entry\s+for)?\s*` +
-      String.raw`(?:my|our|the|a|an)?\s+` +
+      // The determiner is optional AND so is the space after it. Requiring the
+      // space meant "Add Robert's truck" — no determiner — matched nothing at
+      // all, so an owned asset arrived with no name to attribute.
+      String.raw`(?:(?:my|our|the|a|an)\s+)?` +
       String.raw`(.+)`,
     "i",
   );
@@ -303,6 +308,17 @@ export function extractFields(message: string, entity: IntentEntity): Record<str
 
   const name = extractEntityName(message);
   if (name) fields.name = name;
+
+  // WHOSE is it? "this is Bob's MacBook" → owner Bob, name MacBook. Ownership
+  // decides which balance sheet the asset lands on, so it is a first-class
+  // field, not a detail to be cleaned out of the name and forgotten.
+  if (name) {
+    const possessive = detectPossessiveOwner(name);
+    if (possessive) {
+      fields.owner = possessive.owner;
+      fields.name = possessive.name;
+    }
+  }
 
   if (entity === "habit") {
     const target = parseDailyTarget(message);
