@@ -1557,7 +1557,7 @@ export class MemStorage implements IStorage {
   }
   async getHabit(id: string) { return this.habits.get(id); }
   async createHabit(data: InsertHabit): Promise<Habit> {
-    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", targetPerDay: data.targetPerDay || 1, timeOfDay: data.timeOfDay ?? undefined, scheduledTime: data.scheduledTime ?? undefined, currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
+    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", targetPerDay: data.targetPerDay || 1, startDate: data.startDate ?? undefined, endDate: data.endDate ?? undefined, timeOfDay: data.timeOfDay ?? undefined, scheduledTime: data.scheduledTime ?? undefined, currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
     this.habits.set(habit.id, habit);
     this.logActivity("habit", `Created habit: ${habit.name}`);
     return habit;
@@ -1580,6 +1580,22 @@ export class MemStorage implements IStorage {
     habit.longestStreak = Math.max(longest, habit.longestStreak);
     this.logActivity("habit", `Checked in: ${habit.name}${value ? ` (${value})` : ""}`);
     return checkin;
+  }
+  /**
+   * Remove ONE completion. Each check-in is its own row, so undoing one leaves
+   * the day's other completions exactly where they were — the property the
+   * whole per-occurrence model rests on.
+   */
+  async deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean> {
+    const habit = this.habits.get(habitId);
+    if (!habit) return false;
+    const before = habit.checkins.length;
+    habit.checkins = habit.checkins.filter((c) => c.id !== checkinId);
+    if (habit.checkins.length === before) return false;
+    const { current, longest } = calculateStreak(habit.checkins, habit.targetPerDay || 1);
+    habit.currentStreak = current;
+    habit.longestStreak = Math.max(longest, habit.longestStreak);
+    return true;
   }
   async updateHabit(id: string, data: Partial<Habit>): Promise<Habit | undefined> {
     const habit = this.habits.get(id);
@@ -2330,7 +2346,10 @@ export class MemStorage implements IStorage {
     }
     return n;
   }
-  async deleteHabitCheckin(_habitId: string, _checkinId: string): Promise<boolean> { return false; }
+  // (deleteHabitCheckin lives with the other habit methods above. It was a
+  // `return false` stub here until 2026-08-09 — undoing a check-in against this
+  // backend silently did nothing and reported failure, so nothing that used it
+  // could be tested.)
   async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> { return { migrated: 0, errors: ["Not supported in MemStorage"] }; }
 
   // Budget stubs

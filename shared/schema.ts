@@ -426,7 +426,25 @@ export interface Habit {
   color?: string;
   frequency: HabitFrequency;
   targetDays?: number[]; // 0=Sun..6=Sat for custom frequency
-  targetPerDay: number; // How many times per day (default 1, e.g., 3 for "brush teeth 3x daily")
+  /**
+   * Completions required on each scheduled DAY (default 1, e.g. 3 for "brush
+   * teeth 3× daily"). Each one is its own check-in row with its own timestamp —
+   * see shared/habit-progress.ts for the day-progress math.
+   */
+  targetPerDay: number;
+  /**
+   * The window the habit is scheduled in. Together with `targetPerDay` these
+   * keep three different commitments from collapsing into one shape:
+   *
+   *   "2x per day"            targetPerDay 2, no endDate      → 2 a day, open-ended
+   *   "daily for 2 days"      targetPerDay 1, endDate = +1d   → 1 a day, 2 days
+   *   "2x per day for 7 days" targetPerDay 2, endDate = +6d   → 14 occurrences
+   *
+   * Both are YYYY-MM-DD, inclusive. `startDate` absent = scheduled from
+   * creation; `endDate` absent = open-ended, which is the common case.
+   */
+  startDate?: string;
+  endDate?: string;
   timeOfDay?: HabitTimeOfDay; // Scheduled slot; editable from the habit profile
   scheduledTime?: string; // "HH:MM" (24h) when timeOfDay is "custom" or a precise time is set
   currentStreak: number;
@@ -436,6 +454,11 @@ export interface Habit {
   createdAt: string;
 }
 
+/**
+ * ONE completion of a habit. A habit needing three completions a day has three
+ * of these on that date, each with its own timestamp — they are never collapsed
+ * into a counter, so any single one can be undone without disturbing the rest.
+ */
 export interface HabitCheckin {
   id: string;
   date: string; // YYYY-MM-DD
@@ -451,6 +474,10 @@ export const insertHabitSchema = z.object({
   frequency: z.enum(["daily", "weekly", "custom"]).default("daily"),
   targetDays: z.array(z.number().min(0).max(6)).optional(),
   targetPerDay: z.number().min(1).max(10).default(1),
+  // Nullable so a PATCH can clear the window ("make it open-ended") rather than
+  // only ever narrowing it.
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").nullable().optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").nullable().optional(),
   // Nullable so a PATCH can explicitly clear a habit's schedule (send null),
   // not just leave it unset (undefined).
   timeOfDay: z.enum(["morning", "afternoon", "evening", "bedtime", "anytime"]).nullable().optional(),

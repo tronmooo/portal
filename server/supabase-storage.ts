@@ -70,6 +70,7 @@ import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/e
 import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { parseRecurringMeta } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
+import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
   type Profile, type InsertProfile,
@@ -1079,6 +1080,7 @@ export class SupabaseStorage implements IStorage {
       id: r.id, name: r.name, icon: r.icon || undefined, color: r.color || undefined,
       frequency: r.frequency, targetDays: r.target_days || undefined,
       targetPerDay: r.target_per_day || 1,
+      startDate: r.start_date || undefined, endDate: r.end_date || undefined,
       timeOfDay: r.time_of_day || undefined,
       scheduledTime: r.scheduled_time || undefined,
       currentStreak: live.current, longestStreak: Math.max(live.longest, r.longest_streak || 0),
@@ -4503,6 +4505,7 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, name: data.name, icon: data.icon || null,
       color: data.color || null, frequency: data.frequency || "daily",
       target_days: data.targetDays || null, target_per_day: data.targetPerDay || 1,
+      start_date: (data as any).startDate || null, end_date: (data as any).endDate || null,
       time_of_day: (data as any).timeOfDay || null,
       scheduled_time: (data as any).scheduledTime || null,
       current_streak: 0, longest_streak: 0,
@@ -4570,6 +4573,7 @@ export class SupabaseStorage implements IStorage {
       name: merged.name, icon: merged.icon || null, color: merged.color || null,
       frequency: merged.frequency, target_days: merged.targetDays || null,
       target_per_day: merged.targetPerDay || existing.targetPerDay || 1,
+      start_date: merged.startDate || null, end_date: merged.endDate || null,
       time_of_day: merged.timeOfDay || null,
       scheduled_time: merged.scheduledTime || null,
     }).eq("id", id).eq("user_id", this.userId);
@@ -5987,14 +5991,17 @@ export class SupabaseStorage implements IStorage {
     weekStart.setDate(weekStart.getDate() - daysSinceMonday);
     const weekStartStr = weekStart.toISOString().slice(0, 10);
     const todayCompleted = allActiveHabits.filter(h => {
-      if (h.frequency === "daily") {
-        const tpd = h.targetPerDay || 1;
-        return h.checkins.filter(c => c.date === todayStr2).length >= tpd;
-      }
+      if (h.frequency === "daily") return habitDayProgress(h as any, todayStr2).isComplete;
       // weekly: completed if any checkin exists this week
       return h.checkins.some(c => c.date >= weekStartStr && c.date <= todayStr2);
     }).length;
-    const habitCompletionRate = allActiveHabits.length > 0 ? Math.round((todayCompleted / allActiveHabits.length) * 100) : 0;
+    // The rate is over OCCURRENCES so a 3× daily habit at 1 of 3 reads as a
+    // third done rather than as zero. Habits not scheduled today are excluded
+    // from both sides — they were previously counted as incomplete all week.
+    const occurrenceRollup = habitsDayRollup(allActiveHabits as any[], todayStr2);
+    const habitCompletionRate = occurrenceRollup.required > 0
+      ? occurrenceRollup.percent
+      : (allActiveHabits.length > 0 ? Math.round((todayCompleted / allActiveHabits.length) * 100) : 0);
 
     // BUG-20260528-upcoming-window: getStats() used a 7-day window while
     // getDashboardEnhanced() used 30 days. Tile count permanently differed

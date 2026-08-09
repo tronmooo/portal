@@ -18,6 +18,7 @@
 
 import { dayLabel, urgencyScore } from "./now-rank";
 import { isHabitDueOn, isHabitDoneOn, type HabitScheduleShape } from "./habit-schedule";
+import { habitDayProgress } from "./habit-progress";
 
 export type AttentionKind =
   | "task" | "bill" | "document" | "habit" | "reminder" | "event" | "goal" | "alert";
@@ -331,7 +332,13 @@ export function computeAttention(
         sourceKey: `habit:${h.id}`,
         kind: "habit",
         title: h.name || "Habit",
-        reason: `${streak}-day streak breaks today`,
+        // A part-done multi-completion habit is not "nothing done yet".
+        reason: (() => {
+          const p = habitDayProgress(h, today);
+          return p.isPartial
+            ? `${streak}-day streak breaks today · ${p.completed} of ${p.required} done`
+            : `${streak}-day streak breaks today`;
+        })(),
         tier: "immediate",
         daysUntil: 0,
         score: urgencyScore(0) + 140,

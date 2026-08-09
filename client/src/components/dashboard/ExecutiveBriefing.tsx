@@ -44,6 +44,7 @@ import { buildExecutiveSections } from "@shared/executive-sections";
 import { rollupOccurrences, bucketsForKinds, breakdownLabel } from "@shared/dated-items";
 import type { CalendarOccurrence, OccurrenceKind } from "@shared/calendar-occurrences";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
+import { habitsDayRollup } from "@shared/habit-progress";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
@@ -420,12 +421,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const habitsDueToday = (habits || []).filter((h: any) => isHabitDueOn(h, todayStr));
   const habitsDoneCount = habitsDueToday.filter((h: any) => isHabitDoneOn(h, todayStr)).length;
   const missedCount = habitsDueToday.length - habitsDoneCount;
+  // Occurrences, not habits: a day needing four doses across two habits is only
+  // half done after two of them, whichever habits they belonged to.
+  const habitOccurrences = habitsDayRollup(habits || [], todayStr);
 
   // Day progress over COMPLETABLE items only. Events and bills have
   // no done-state, so including them would make the figure unable to reach
   // 100% — the bug that made "4 of 10 habits" render as 33%.
-  const dayCompletable = agendaTasks.length + doneToday + habitsDueToday.length;
-  const dayDone = doneToday + habitsDoneCount;
+  const dayCompletable = agendaTasks.length + doneToday + habitOccurrences.required;
+  const dayDone = doneToday + habitOccurrences.completed;
   const dayPct = dayCompletable > 0 ? Math.round((dayDone / dayCompletable) * 100) : 0;
 
   const tl = (timeline || []).filter((i: any) => (i.date || "").slice(0, 10) >= todayStr);

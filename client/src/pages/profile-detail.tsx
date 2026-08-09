@@ -278,6 +278,7 @@ import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr } from "@shared/timezone";
+import { habitDayProgress } from "@shared/habit-progress";
 import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
@@ -3709,10 +3710,12 @@ function ProductivityHubTab({
       })
       .sort((a, b) => new Date(a.startTime || a.start_time || a.start || a.date).getTime() - new Date(b.startTime || b.start_time || b.start || b.date).getTime());
   }, [events]);
-  const habitsDoneToday = useMemo(() => habits.filter(h => {
-    const checkins = Array.isArray(h.checkins) ? h.checkins : [];
-    return checkins.some((c: any) => c.date === todayISO);
-  }).length, [habits, todayISO]);
+  // A habit is done today when its DAY'S TARGET is met — one check-in on a
+  // "2× daily" habit is half, not done (shared/habit-progress.ts).
+  const habitsDoneToday = useMemo(
+    () => habits.filter((h) => habitDayProgress(h as any, todayISO).isComplete).length,
+    [habits, todayISO],
+  );
   const tasksDueToday = useMemo(() => openTasks.filter(t => {
     const due = t.dueDate || t.dueAt || t.due_at;
     if (!due) return false;

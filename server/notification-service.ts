@@ -10,6 +10,7 @@ import type { IStorage } from "./storage";
 import { getUserToday } from "@shared/timezone";
 import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "@shared/recurring-dates";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
+import { habitDayProgress } from "@shared/habit-progress";
 
 export interface AppNotification {
   id: string;
@@ -303,12 +304,18 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     const dueToday = isHabitDueOn(habit, todayStr);
     const checkedInToday = isHabitDoneOn(habit, todayStr);
     if (dueToday && !checkedInToday && habit.currentStreak >= 3) {
+      // A habit needing several completions a day is usually PART-done when
+      // this fires. "Check in today" on a habit already at 2 of 3 reads as if
+      // nothing had been recorded; say what is actually left.
+      const p = habitDayProgress(habit as any, todayStr);
       notifications.push({
         id: `habit-risk-${habit.id}`,
         type: "habit_at_risk",
         severity: "warning",
         title: `Don't break your ${habit.name} streak!`,
-        message: `${habit.currentStreak} day${habit.currentStreak !== 1 ? "s" : ""} and counting — check in today`,
+        message: p.required > 1
+          ? `${habit.currentStreak} day${habit.currentStreak !== 1 ? "s" : ""} and counting — ${p.completed} of ${p.required} done, ${p.remaining} to go`
+          : `${habit.currentStreak} day${habit.currentStreak !== 1 ? "s" : ""} and counting — check in today`,
         entityId: habit.id,
         entityType: "habit",
       });

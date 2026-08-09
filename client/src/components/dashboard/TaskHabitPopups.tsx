@@ -8,6 +8,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
+import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import { normalizeFilter } from "@/lib/filter-utils";
@@ -1348,13 +1349,36 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     for (let i = periodDays - 1; i >= 0; i--) { const d = new Date(t); d.setDate(t.getDate() - i); arr.push(dateKey(d)); }
     return arr;
   }, [periodDays]);
-  const isDone = (h: any, dk: string) => (h.checkins || []).some((c: any) => c.date === dk);
-  const todayCheckinId = (h: any): string | undefined => (h.checkins || []).find((c: any) => c.date === today)?.id;
+  // A habit can require several completions a day, each its own check-in row.
+  // "Done" is the DAY's target being met — not "there is at least one row" —
+  // and everything below reads it through the one shared module so this popup,
+  // the habits page and the server can't disagree (shared/habit-progress.ts).
+  const isDone = (h: any, dk: string) => habitDayProgress(h, dk).isComplete;
+  const progressOn = (h: any, dk: string) => habitDayProgress(h, dk);
   const togglePending = checkinMutation.isPending || deleteCheckinMutation.isPending;
+  /**
+   * The main button records or removes ONE occurrence.
+   *
+   * On a 2× daily habit: tap → 1 of 2 (50%), tap → 2 of 2 (100%), tap → back to
+   * 1 of 2. It used to check in once and then delete that check-in, so a
+   * twice-daily habit could never reach its own target from this screen.
+   */
   const toggleToday = (h: any) => {
-    const cid = todayCheckinId(h);
-    if (cid) deleteCheckinMutation.mutate({ id: h.id, checkinId: cid });
-    else checkinMutation.mutate({ id: h.id });
+    const p = progressOn(h, today);
+    if (p.isComplete) {
+      const last = p.occurrences[p.occurrences.length - 1]?.checkin;
+      if (last?.id) deleteCheckinMutation.mutate({ id: h.id, checkinId: last.id });
+      return;
+    }
+    checkinMutation.mutate({ id: h.id });
+  };
+  /** Tap occurrence N directly: fill the next one, or undo that exact one. */
+  const toggleOccurrence = (h: any, occ: any) => {
+    if (occ.done && occ.checkin?.id && !String(occ.checkin.id).startsWith('tmp-')) {
+      deleteCheckinMutation.mutate({ id: h.id, checkinId: occ.checkin.id });
+    } else if (!occ.done) {
+      checkinMutation.mutate({ id: h.id });
+    }
   };
   // Time-of-day bucket. Prefer the habit's EXPLICIT schedule (editable from the
   // habit profile); fall back to inferring the slot from the most recent
@@ -1423,18 +1447,25 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     return [...list].sort((a: any, b: any) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
   }, [active, timeFilter, open]);
 
-  // Summary metrics for the selected period.
+  // Summary metrics, counted in OCCURRENCES rather than habits.
+  //
+  // The ring used to divide "habits with any check-in" by "habits × days", so a
+  // day needing four doses across two habits read 100% after two taps. It also
+  // credited days a habit was never scheduled for. Both are fixed by asking
+  // habitsDayRollup per day: unscheduled days contribute nothing to either side.
   const totalActive = active.length;
-  const completedInWindow = active.reduce((s: number, h: any) => s + windowDates.filter((dk) => isDone(h, dk)).length, 0);
-  const possible = totalActive * periodDays;
+  const windowRollups = windowDates.map((dk) => habitsDayRollup(active, dk));
+  const completedInWindow = windowRollups.reduce((s, r) => s + r.completed, 0);
+  const possible = windowRollups.reduce((s, r) => s + r.required, 0);
   const overallPct = possible > 0 ? Math.round((completedInWindow / possible) * 100) : 0;
-  const completedToday = active.filter((h: any) => isDone(h, today)).length;
+  const todayRollup = habitsDayRollup(active, today);
+  const completedToday = todayRollup.completed;
   const bestStreak = active.reduce((m: number, h: any) => Math.max(m, h.currentStreak || 0), 0);
   const allTimeCheckins = active.reduce((s: number, h: any) => s + (h.checkins || []).length, 0);
   const completedStat = period === 'today' ? completedToday : completedInWindow;
 
   const STAT_CHIPS = [
-    { Icon: CheckCircle2, color: '155 60% 48%', value: completedStat, label: 'Completed' },
+    { Icon: CheckCircle2, color: '155 60% 48%', value: period === 'today' ? `${completedToday}/${todayRollup.required}` : completedStat, label: 'Completed' },
     { Icon: Flame, color: '28 90% 55%', value: bestStreak, label: 'Day Streak' },
     { Icon: Target, color: '262 70% 62%', value: totalActive, label: 'Habits' },
     { Icon: ListChecks, color: '205 90% 58%', value: allTimeCheckins, label: 'Check-ins' },
@@ -1595,7 +1626,9 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
             <div className="space-y-2 pt-1">
               {visible.map((h: any) => {
                 const color = (h.color && h.color !== '#4F98A3') ? h.color : VIVID[h.id.charCodeAt(0) % VIVID.length];
-                const done = isDone(h, today);
+                const dayProgress = progressOn(h, today);
+                const done = dayProgress.isComplete;
+                const multi = dayProgress.required > 1;
                 const streak = h.currentStreak || 0;
                 const emoji = h.icon || getEmoji(h.name);
                 const freqLabel = (h.targetPerDay || 1) > 1 ? `${h.targetPerDay}× daily` : (h.frequency === 'weekly' ? 'Weekly' : 'Daily');
@@ -1612,12 +1645,56 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                         <p className="text-sm font-semibold truncate">{h.name}</p>
                         <p className="text-[11px] text-muted-foreground truncate">
                           {freqLabel}{sLabel ? ` · ${sLabel}` : ''}
+                          {h.endDate ? ` · through ${h.endDate}` : ''}
                         </p>
+                        {/* TODAY'S OCCURRENCES — one tappable dot each.
+                            A multi-completion habit shows how far through the
+                            day it is; tapping a filled dot undoes THAT
+                            completion and leaves the others alone. */}
+                        {multi && dayProgress.isScheduled && (
+                          <div className="mt-1.5 flex items-center gap-1.5">
+                            <div className="flex gap-1" data-testid={`habit-occurrences-${h.id}`}>
+                              {dayProgress.occurrences.map((occ) => (
+                                <button
+                                  key={occ.index}
+                                  type="button"
+                                  disabled={togglePending}
+                                  onClick={(e) => { e.stopPropagation(); toggleOccurrence(h, occ); }}
+                                  aria-label={occ.done ? `Undo completion ${occ.position}` : `Record completion ${occ.position}`}
+                                  title={occ.done ? `Completion ${occ.position} — tap to undo` : `Completion ${occ.position} of ${dayProgress.required}`}
+                                  data-testid={`habit-occ-${h.id}-${occ.position}`}
+                                  className="touch-manipulation active:scale-90 transition-transform"
+                                  style={{ minWidth: 22, minHeight: 22, padding: 3 }}
+                                >
+                                  <span className="block h-3.5 w-3.5 rounded-full border-2 transition-colors"
+                                    style={{
+                                      background: occ.done ? color : 'transparent',
+                                      borderColor: occ.done ? color : 'hsl(var(--muted-foreground) / 0.45)',
+                                    }} />
+                                </button>
+                              ))}
+                            </div>
+                            <span className="text-[11px] tabular-nums text-muted-foreground" data-testid={`habit-progress-label-${h.id}`}>
+                              {dayProgress.label} · {dayProgress.percent}%
+                            </span>
+                          </div>
+                        )}
+                        {/* The last 7 days: filled only when the whole day's
+                            target was met, half-lit when it was started. */}
                         <div className="mt-1.5 flex gap-1">
-                          {last7.map((dk) => (
-                            <span key={dk} className="h-2 w-2 rounded-full" title={dk}
-                              style={{ background: isDone(h, dk) ? 'hsl(155 60% 48%)' : 'hsl(var(--muted))' }} />
-                          ))}
+                          {last7.map((dk) => {
+                            const p = progressOn(h, dk);
+                            return (
+                              <span key={dk} className="h-2 w-2 rounded-full" title={`${dk} — ${p.isScheduled ? p.label : 'not scheduled'}`}
+                                style={{
+                                  background: p.isComplete ? 'hsl(155 60% 48%)' : 'hsl(var(--muted))',
+                                  // A started-but-unfinished day is neither a
+                                  // success nor a blank — show it as partial.
+                                  opacity: !p.isComplete && p.isPartial ? 0.95 : 1,
+                                  boxShadow: !p.isComplete && p.isPartial ? 'inset 0 0 0 2px hsl(155 60% 48%)' : undefined,
+                                }} />
+                            );
+                          })}
                         </div>
                       </div>
                       <div className="flex flex-col items-end gap-1 shrink-0">
@@ -1638,9 +1715,23 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                           <div className="flex h-7 w-7 items-center justify-center rounded-full border-2 transition-all"
                             style={{
                               background: done ? 'hsl(262 70% 58%)' : 'transparent',
-                              borderColor: done ? 'hsl(262 70% 58%)' : 'hsl(var(--muted-foreground) / 0.5)',
+                              borderColor: done || dayProgress.isPartial ? 'hsl(262 70% 58%)' : 'hsl(var(--muted-foreground) / 0.5)',
                             }}>
-                            {done && <Check className="h-4 w-4 text-white" strokeWidth={3} />}
+                            {done
+                              ? <Check className="h-4 w-4 text-white" strokeWidth={3} />
+                              /* Partial: say how far in, rather than showing an
+                                 empty circle that reads as "not started". */
+                              : dayProgress.isPartial
+                                ? (
+                                  /* "1/2" at the type scale's floor. A 10× habit
+                                     would overflow the 28px circle, so past 9 the
+                                     count alone carries it — the dots above have
+                                     the full picture either way. */
+                                  <span className="text-[11px] font-bold tabular-nums leading-none" style={{ color: 'hsl(262 70% 58%)' }}>
+                                    {dayProgress.required >= 10 ? dayProgress.completed : `${dayProgress.completed}/${dayProgress.required}`}
+                                  </span>
+                                )
+                                : null}
                           </div>
                         </button>
                       </div>

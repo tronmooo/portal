@@ -499,3 +499,59 @@ export function hasBackReference(message: string): boolean {
   const m = lc(message);
   return ANAPHORA.some((re) => re.test(m));
 }
+
+// ── How long does the habit run? ────────────────────────────────────────────
+//
+// "2× per day" and "2× per day for 7 days" are different commitments — the
+// second is fourteen occurrences with an end, the first is endless. Without a
+// duration they collapsed into the same row and the bounded one nagged forever.
+// See shared/habit-schedule.ts (isHabitDueOn honours the window).
+
+const DURATION_UNIT_DAYS: Record<string, number> = {
+  day: 1, days: 1,
+  week: 7, weeks: 7,
+  month: 30, months: 30,
+  year: 365, years: 365,
+};
+
+/**
+ * How many DAYS the user asked the habit to run for, or null when they didn't
+ * bound it — which is the common case and must stay open-ended.
+ *
+ * Only fires on an explicit duration ("for 7 days", "for the next two weeks",
+ * "for a month"). Deliberately does NOT read "3 times a day" as a duration:
+ * that is the per-day target, and confusing the two would end a habit after
+ * three days.
+ */
+export function parseDurationDays(message: string): number | null {
+  const m = lc(message);
+  if (!m) return null;
+
+  const unitAlt = Object.keys(DURATION_UNIT_DAYS).join("|");
+  const wordAlt = Object.keys(NUMBER_WORDS).join("|");
+
+  // "for 7 days", "for the next 2 weeks", "over the next three months"
+  const re = new RegExp(
+    String.raw`\b(?:for|over|during)\s+(?:the\s+)?(?:next\s+)?(\d{1,3}|${wordAlt})\s+(${unitAlt})\b`,
+  );
+  const hit = m.match(re);
+  if (hit) {
+    const n = NUMBER_WORDS[hit[1]] ?? Number(hit[1]);
+    const unit = DURATION_UNIT_DAYS[hit[2]];
+    if (Number.isFinite(n) && n > 0 && unit) return clampDuration(n * unit);
+  }
+
+  // "for a week", "for a month", "for the next year"
+  const singular = m.match(new RegExp(String.raw`\b(?:for|over)\s+(?:a|an|the\s+next)\s+(${unitAlt})\b`));
+  if (singular) {
+    const unit = DURATION_UNIT_DAYS[singular[1]];
+    if (unit) return clampDuration(unit);
+  }
+
+  return null;
+}
+
+/** A decade is already past useful; anything longer is a typo, not a plan. */
+function clampDuration(days: number): number {
+  return Math.max(1, Math.min(3650, Math.round(days)));
+}

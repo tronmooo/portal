@@ -24,6 +24,9 @@ export interface HabitScheduleShape {
   /** 0 = Sunday … 6 = Saturday. */
   targetDays?: number[] | null;
   targetPerDay?: number | null;
+  /** Inclusive YYYY-MM-DD window. Absent = open-ended in that direction. */
+  startDate?: string | null;
+  endDate?: string | null;
   checkins?: Array<{ date?: string | null }> | null;
 }
 
@@ -48,9 +51,20 @@ function dayOfWeekFor(dateStr: string): number {
  *             the habit is never scheduled, which is what the user configured)
  * An unknown/absent frequency is treated as daily, matching how the UI has
  * always rendered habits created before the field existed.
+ *
+ * The WINDOW is checked first. "2× per day for 7 days" is a bounded commitment
+ * — fourteen occurrences, not an endless two-a-day — and without this a habit
+ * with an end date kept nagging forever, which is why "for a week" used to be
+ * indistinguishable from "every day". Both bounds are inclusive; an absent
+ * bound is open in that direction, which is the common case.
  */
 export function isHabitDueOn(habit: HabitScheduleShape, dateStr: string): boolean {
-  const dow = dayOfWeekFor(dateStr);
+  const day = String(dateStr).slice(0, 10);
+  const start = String(habit.startDate || "").slice(0, 10);
+  const end = String(habit.endDate || "").slice(0, 10);
+  if (start && day < start) return false;
+  if (end && day > end) return false;
+  const dow = dayOfWeekFor(day);
   const freq = habit.frequency || "daily";
   if (freq === "weekly") return habit.targetDays?.includes(dow) ?? dow === 1;
   if (freq === "custom") return habit.targetDays?.includes(dow) ?? false;

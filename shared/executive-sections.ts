@@ -26,6 +26,7 @@
 import { computeAttention, BIRTHDAY_RE, type AttentionItem, type AttentionInputs, type AttentionConfig } from "./attention";
 import { dayLabel } from "./now-rank";
 import { isHabitDueOn, isHabitDoneOn } from "./habit-schedule";
+import { habitDayProgress } from "./habit-progress";
 import { computeKeyFindings } from "./tracker-insights";
 import { isMedicationTracker, computeMissedDoses } from "./medication-doses";
 import { parseRecurringMeta, kindDef, type RecurringKind } from "./recurring-dates";
@@ -476,10 +477,15 @@ export function buildExecutiveSections(
     habitsDue++;
     if (isHabitDoneOn(h, today)) { habitsDone++; continue; }
     const streak = Number(h.currentStreak ?? h.streak ?? 0);
+    const hp = habitDayProgress(h, today);
     cand.habits.push({
       key: `habit:${h.id}`, sourceKey: `habit:${h.id}`, kind: "habit",
       title: h.name || "Habit",
-      reason: streak >= 3 ? `${streak}-day streak on the line` : "Not checked in yet",
+      // "Not checked in yet" was shown for a habit already at 1 of 2 — the
+      // partial state had nowhere to appear, so it read as zero progress.
+      reason: hp.isPartial
+        ? `${hp.completed} of ${hp.required} done · ${hp.remaining} to go`
+        : streak >= 3 ? `${streak}-day streak on the line` : "Not checked in yet",
       tier: streak >= 3 ? "immediate" : "soon",
       daysUntil: 0, score: 0, href: "/dashboard/habits",
       action: { kind: "checkin", label: "Check in" },

@@ -24,6 +24,7 @@
 // Pinned by tests/chat-suggestions.test.ts.
 
 import { isHabitOutstandingOn, type HabitScheduleShape } from "./habit-schedule";
+import { habitDayProgress } from "./habit-progress";
 import { dayLabel } from "./now-rank";
 import type { ConceptIcon } from "./icon-vocabulary";
 
@@ -164,11 +165,14 @@ export function buildChatSuggestions(input: SuggestionInput, max = 6): ChatSugge
   for (const h of habits) {
     if (!h?.name) continue;
     if (!isHabitOutstandingOn(h, today)) continue;
+    // A multi-completion habit that is part-done needs a suggestion that says
+    // so — "Mark X done · still due today" reads as if nothing were recorded.
+    const hp = habitDayProgress(h as any, today);
     push({
       id: `habit:${h.id}`,
       text: `Mark ${h.name} done`,
       label: `Mark ${h.name} done`,
-      reason: "still due today",
+      reason: hp.isPartial ? `${hp.completed} of ${hp.required} done today` : "still due today",
       icon: "habits",
       kind: "due",
       score: 100,

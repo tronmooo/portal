@@ -29,6 +29,7 @@ import { Link } from "wouter";
 import type { Habit, Profile } from "@shared/schema";
 import { getUserToday, addDays, parseLocalDate } from "@shared/timezone";
 import { useState, useEffect } from "react";
+import { habitDayProgress } from "@shared/habit-progress";
 import { useToast } from "@/hooks/use-toast";
 
 const ICON_MAP: Record<string, any> = { Droplets, Brain, BookOpen, Smartphone, Zap, Flame };
@@ -41,9 +42,13 @@ function HabitCard({ habit }: { habit: Habit }) {
   // here keeps the client's "today" in lockstep with the server's
   // getUserToday(timezone) used by the canonical streak calculation.
   const today = getUserToday(BROWSER_TIMEZONE);
-  const todayCheckins = habit.checkins.filter(c => c.date === today).length;
-  const targetPerDay = (habit as any).targetPerDay || 1;
-  const completedToday = todayCheckins >= targetPerDay;
+  // One shared answer for "how far through today is this habit?" — the same
+  // module the popup, the briefing, the notifications and the server read, so
+  // this page can no longer disagree with them (shared/habit-progress.ts).
+  const dayProgress = habitDayProgress(habit as any, today);
+  const todayCheckins = dayProgress.completed;
+  const targetPerDay = dayProgress.required || ((habit as any).targetPerDay || 1);
+  const completedToday = dayProgress.isComplete;
   const Icon = ICON_MAP[habit.icon || ""] || Flame;
   // Auto-assign vivid colors from palette if no distinctive color set
   const VIVID_PALETTE = ['#E8545A','#E67E3B','#E8A838','#4BAE63','#2E9EBF','#7B68EE','#C2558B','#5B8FDB','#48C7A0','#D4628A'];
@@ -244,8 +249,10 @@ function HabitCard({ habit }: { habit: Habit }) {
     // instead of Date.now() millisecond arithmetic (DST/tz-shift safe).
     const ds = addDays(today, -i);
     const dayOfWeek = parseLocalDate(ds).getDay();
-    const count = habit.checkins.filter(c => c.date === ds).length;
-    last14.push({ date: ds, done: count >= targetPerDay, count, dayLabel: DAY_LABELS[dayOfWeek], isToday: i === 0, isSunday: dayOfWeek === 0 });
+    // Per-day progress, so an unscheduled day and a part-done day are not both
+    // rendered as a plain miss.
+    const p = habitDayProgress(habit as any, ds);
+    last14.push({ date: ds, done: p.isComplete, count: p.completed, dayLabel: DAY_LABELS[dayOfWeek], isToday: i === 0, isSunday: dayOfWeek === 0 });
   }
   const completedDays = last14.filter(d => d.done).length;
 

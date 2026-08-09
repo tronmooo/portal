@@ -36,8 +36,8 @@ import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
-import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
-import { parseTurnIntent, parseTurnPlan, parseDailyTarget, isActionable, type ParsedIntent, type TurnIntentPlan } from "@shared/ai-intent";
+import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
+import { parseTurnIntent, parseTurnPlan, parseDailyTarget, parseDurationDays, isActionable, type ParsedIntent, type TurnIntentPlan } from "@shared/ai-intent";
 import {
   checkToolAgainstIntent,
   isStaleTurnReplay,
@@ -74,7 +74,8 @@ import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossess
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
-import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr } from "@shared/timezone";
+import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
+import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries } from "@shared/series-detect";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
@@ -3562,7 +3563,9 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name" },
-        dailyTarget: { type: "integer", minimum: 1, maximum: 10, description: "How many times PER DAY the habit should be completed. Set whenever the user states a per-day count: 'twice a day' → 2, '3x daily' → 3, 'brush teeth three times a day' → 3, 'morning and night' → 2. Defaults to 1. The habit is only 'done' for a day once this many check-ins are recorded, and streaks honor it." },
+        dailyTarget: { type: "integer", minimum: 1, maximum: 10, description: "How many times PER DAY the habit should be completed. Set whenever the user states a per-day count: 'twice a day' → 2, '3x daily' → 3, 'brush teeth three times a day' → 3, 'morning and night' → 2. Defaults to 1. Each completion is recorded separately and the day shows fractional progress (1 of 2 = 50%); the day is only done once this many are in, and streaks honor it." },
+        durationDays: { type: "integer", minimum: 1, description: "OPTIONAL: how many days the habit runs for, when the user bounds it ('for the next 7 days' → 7, 'for two weeks' → 14, 'for a month' → 30). OMIT for an ongoing habit, which is the default. This is a DURATION, never a per-day count — 'three times a day' is dailyTarget:3 with no durationDays. Combined they are distinct commitments: dailyTarget:2 alone = twice a day forever; dailyTarget:1 + durationDays:2 = once a day for two days; dailyTarget:2 + durationDays:7 = fourteen occurrences." },
+        endDate: { type: "string", description: "OPTIONAL: the last day the habit is scheduled (YYYY-MM-DD), when the user names a date rather than a length ('until the end of the month', 'through Sept 30'). Use durationDays for 'for N days'." },
         frequency: { type: "string", enum: ["daily", "weekly", "custom"], description: "Frequency. Use 'custom' and set `days` when the user names specific weekdays (e.g. 'Mon/Wed/Fri')." },
         days: { type: "array", items: { type: "string" }, description: "Specific weekdays the habit occurs on, e.g. ['monday','wednesday','friday'] for 'every Mon, Wed, and Fri'. Set this whenever the user names particular days; the habit is then scheduled only on those days." },
         icon: { type: "string", description: "Emoji icon" },
@@ -3576,11 +3579,13 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "checkin_habit",
-    description: "Check in to a habit — mark it DONE for today. ONLY when the user EXPLICITLY references the habit: 'mark X done', 'mark off X', 'completed X habit', 'checked off X', 'check in X'. A plain activity report ('I did X', 'I took a shower', 'I went to the bathroom') is NOT a habit check-in — log it with log_tracker_entry instead. Find by habit name. Set forProfile ONLY when the user names that person in THIS message ('mark off Joe's water habit') — never infer a profile from conversation history or from who owns a similar-sounding habit.",
+    description: "Record ONE completion of a habit. ONLY when the user EXPLICITLY references the habit: 'mark X done', 'mark off X', 'completed X habit', 'checked off X', 'I took my first dose', 'I did one of them'. A plain activity report ('I did X', 'I took a shower') is NOT a habit check-in — log it with log_tracker_entry instead. IMPORTANT: a habit can require SEVERAL completions a day (2× daily, 3× daily). One call records ONE occurrence and fills the next outstanding one — it does NOT finish the day. 'Mark my medication done' on a twice-daily habit leaves it at 1 of 2 (50%); the user saying 'again' or 'I took the second one' later records the second. Pass `count` ONLY when they explicitly said how many ('I took both doses' → 2, 'I did it twice today' → 2). The result reports completed/required/percent — quote those, never just 'done'. Set forProfile ONLY when the user names that person in THIS message ('mark off Joe's water habit') — never infer a profile from conversation history or from who owns a similar-sounding habit.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name (partial match)" },
+        count: { type: "number", description: "OPTIONAL: how many completions to record at once, when the user explicitly said so ('I took both doses' → 2, 'I finished it three times today' → 3, 'mark all of them done' → the number remaining). OMIT for a plain 'mark it done', which records exactly one. Never exceeds the day's remaining occurrences." },
+        date: { type: "string", description: "OPTIONAL: the day to record against (YYYY-MM-DD). Defaults to today." },
         forProfile: { type: "string", description: "Profile name if this habit belongs to someone other than the user (e.g. 'Joe', 'Rex', 'Mom'). Omit for user's own habits." },
       },
       required: ["name"],
@@ -3882,7 +3887,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name (partial match)" },
-        changes: { type: "object", description: "Fields to update — can include 'name', 'icon', 'color', 'frequency', 'targetDays', 'targetPerDay' (1-10, how many times per day), 'timeOfDay' (morning|afternoon|evening|bedtime|anytime), 'scheduledTime' (HH:MM 24h)." },
+        changes: { type: "object", description: "Fields to update — can include 'name', 'icon', 'color', 'frequency', 'targetDays', 'targetPerDay' (1-10, completions required PER DAY), 'startDate'/'endDate' (YYYY-MM-DD, the window the habit runs in — set endDate for 'for the next 7 days'; null clears it), 'timeOfDay' (morning|afternoon|evening|bedtime|anytime), 'scheduledTime' (HH:MM 24h)." },
       },
       required: ["name", "changes"],
     },
@@ -4029,11 +4034,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // ─── MISSING TOOLS: uncomplete_habit, complete_event, tracker entry CRUD ───
   {
     name: "uncomplete_habit",
-    description: "Remove/undo a habit check-in for today (or a specific date). Use when user says 'unmark X habit', 'undo my X checkin', 'I didn't actually do X', 'remove today's X checkin'. This is the OPPOSITE of checkin_habit.",
+    description: "Remove ONE completion of a habit. Use when user says 'unmark X habit', 'undo my X checkin', 'I didn't actually do X', 'remove one of today's X'. The OPPOSITE of checkin_habit, and equally per-occurrence: on a 2× daily habit at 2 of 2, one call leaves it at 1 of 2 (50%) — it does NOT clear the whole day. Removes the LAST completion recorded that day unless `occurrence` names a different one.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name (partial match)" },
+        occurrence: { type: "number", description: "OPTIONAL: which completion of the day to remove, 1-based ('undo my first dose' → 1). Omit to remove the most recent one, which is what a plain 'undo that' means." },
         forProfile: { type: "string", description: "Profile name if unchecking someone else's habit." },
         date: { type: "string", description: "Date to uncheck (YYYY-MM-DD). Defaults to today." },
       },
@@ -4903,6 +4909,9 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 ━━━ HABIT CRUD ━━━
 - create: create_habit(name, dailyTarget?, forProfile?)
 - HABITS ARE COUNT-BASED, NOT BINARY. A habit carries dailyTarget (1-10), accepts that many check-ins per day, tracks completion_count against the target, and can carry timeOfDay/scheduledTime. Streaks only count a day once the target is met. NEVER tell the user habits are "binary", "yes/no", "a single daily check-off", or that they must count repetitions themselves — all of that is false.
+- ONE CHECK-IN = ONE OCCURRENCE, NOT THE WHOLE DAY. checkin_habit records a single completion and fills the next outstanding one. On a 2× daily habit, "mark my medication done" leaves it at 1 of 2 (50%) — say exactly that, never "done" or "complete". "Again" / "I took the second one" records the second. Pass count ONLY when the user said how many ("I took both doses" → 2). uncomplete_habit removes ONE completion the same way, the most recent unless they name which.
+- REPORT THE FRACTION. Every check-in result carries completed / required / percent. Quote them: "Medication — 1 of 2 today (50%)". Claiming a partially-done habit is finished is a false statement about a real-world action, and for medication it is a dangerous one.
+- HOW OFTEN vs HOW LONG are different numbers. "3 times a day" is dailyTarget:3. "For 7 days" is durationDays:7. "Twice a day for a week" is BOTH (dailyTarget:2, durationDays:7 — fourteen occurrences). Never read a duration as a per-day count or the reverse.
 - "N times a day" → ONE habit with dailyTarget:N. "Create a habit to walk the dog twice a day" → create_habit(name:"Walk the Dog", dailyTarget:2). ONE call, no disclaimer, no offer to split it. Create SEPARATE habits only when the user explicitly asks for separate ones ("a morning walk habit and an evening walk habit").
 - change the per-day count later: update_habit(name, changes:{ targetPerDay: N })
 - mark done TODAY: checkin_habit(name, forProfile?) → adds today's check-in; repeat it for each completion when the user reports more than one ("walked the dog both times today" → two calls)
@@ -9467,6 +9476,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         return fromMessage ?? 1;
       })();
 
+      // HOW LONG, not just how often. "Twice a day for 7 days" is fourteen
+      // occurrences with an end; without a window it became an endless
+      // twice-a-day habit that nagged forever. The duration is read from the
+      // model's argument, else from the user's own words — and never from the
+      // per-day count, which is a different number entirely.
+      const habitWindow = (() => {
+        const tz = aiUserTimezone();
+        const start = getUserToday(tz);
+        const explicitEnd = String(input.endDate || "").slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(explicitEnd)) return { startDate: start, endDate: explicitEnd };
+        const days = Number(input.durationDays) >= 1
+          ? Math.floor(Number(input.durationDays))
+          : parseDurationDays(habitMsg);
+        if (!days || days < 1) return null;  // open-ended, the common case
+        // Inclusive: a 7-day habit starting today runs today plus six more.
+        return { startDate: start, endDate: addDays(start, days - 1) };
+      })();
+
       // P0.3a: validate with the shared insert schema before writing.
       const habitTimeOfDay = input.timeOfDay === "night" ? "bedtime" : input.timeOfDay;
       const habitPayload = validateAiPayload(insertHabitSchema, {
@@ -9475,6 +9502,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         icon: input.icon,
         color: input.color,
         targetPerDay: habitDailyTarget,
+        ...(habitWindow ? habitWindow : {}),
         ...(habitTargetDays ? { targetDays: habitTargetDays } : {}),
         ...(habitTimeOfDay ? { timeOfDay: habitTimeOfDay } : {}),
         ...(input.scheduledTime ? { scheduledTime: input.scheduledTime } : {}),
@@ -9537,7 +9565,67 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           code: "HABIT_NOT_FOUND",
         };
       }
-      return storage.checkinHabit(habit.id);
+
+      // ONE OCCURRENCE AT A TIME.
+      //
+      // A habit can require several completions a day, each its own check-in
+      // row. "Mark my medication done" fills the NEXT outstanding dose — not
+      // the whole day — because completing a dose the user hasn't taken is a
+      // real-world error, not a display one. A count only comes from an
+      // explicit phrase ("I took both doses", "twice today", "all of them").
+      const checkinDate = input.date || getUserToday(aiUserTimezone());
+      const fresh = (await storage.getHabit(habit.id)) || habit;
+      const before = habitDayProgress(fresh as any, checkinDate);
+
+      if (!before.isScheduled) {
+        return {
+          error: `"${habit.name}" isn't scheduled on ${checkinDate}${(fresh as any).endDate ? ` — the schedule ran through ${(fresh as any).endDate}` : ""}. Ask before checking in an unscheduled day.`,
+          code: "HABIT_NOT_SCHEDULED",
+        };
+      }
+
+      const spoken = parseCompletionCount(String((input as any).__userMessage || ""));
+      const askedFor = Number((input as any).count) > 0
+        ? Math.floor(Number((input as any).count))
+        : spoken?.all ? before.remaining
+        : spoken?.count ?? 1;
+      const toRecord = Math.max(0, Math.min(askedFor, before.remaining));
+
+      if (toRecord === 0) {
+        return {
+          alreadyComplete: true,
+          habitId: habit.id,
+          name: habit.name,
+          date: checkinDate,
+          progress: before,
+          message: `"${habit.name}" is already complete for ${checkinDate} — ${before.completed} of ${before.required} done. Nothing recorded. Tell the user it was already finished; do NOT retry.`,
+        };
+      }
+
+      const recorded: any[] = [];
+      for (let i = 0; i < toRecord; i++) {
+        const c = await storage.checkinHabit(habit.id, checkinDate);
+        if (c) recorded.push(c);
+      }
+      const after = habitDayProgress((await storage.getHabit(habit.id)) as any, checkinDate);
+      return {
+        id: habit.id,
+        habitId: habit.id,
+        name: habit.name,
+        date: checkinDate,
+        checkins: recorded,
+        recorded: recorded.length,
+        // The numbers the reply must quote. A partial day is a real outcome —
+        // saying "done" after one of two doses is the thing being fixed.
+        completed: after.completed,
+        required: after.required,
+        percent: after.percent,
+        progress: after,
+        currentStreak: (await storage.getHabit(habit.id))?.currentStreak ?? 0,
+        message: after.required > 1
+          ? `Recorded ${recorded.length} completion${recorded.length === 1 ? "" : "s"} of "${habit.name}" — ${after.completed} of ${after.required} done today (${after.percent}%). ${after.isComplete ? "That finishes the day." : `${after.remaining} still to go.`} Report the count and the percent, not just "done".`
+          : `Checked in "${habit.name}" for ${checkinDate}.`,
+      };
     }
 
     case "create_obligation": {
@@ -10378,7 +10466,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // `changes` object). This lets time-of-day scheduling flow through while
       // ignoring stray keys.
       const rawChanges = (input.changes || {}) as Record<string, any>;
-      const allowed: (keyof typeof rawChanges)[] = ["name", "icon", "color", "frequency", "targetDays", "targetPerDay", "timeOfDay", "scheduledTime"];
+      const allowed: (keyof typeof rawChanges)[] = ["name", "icon", "color", "frequency", "targetDays", "targetPerDay", "startDate", "endDate", "timeOfDay", "scheduledTime"];
       const changes: Record<string, any> = {};
       for (const k of allowed) if (rawChanges[k] !== undefined) changes[k] = rawChanges[k];
       // Normalize a bare "night" alias the model may emit for bedtime.
@@ -10426,13 +10514,46 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       const habit = matchHabitByName(eligible, input.name || "") ?? matchHabitByName(habits, input.name || "");
       if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
-      const targetDate = input.date || new Date().toLocaleDateString('en-CA');
-      // Find and delete today's checkin
+      const targetDate = input.date || getUserToday(aiUserTimezone());
       const fullHabit = await storage.getHabit(habit.id);
-      const checkin = (fullHabit?.checkins || []).find((c: any) => c.date === targetDate);
-      if (!checkin) return { error: `No check-in found for "${habit.name}" on ${targetDate}` };
+      if (!fullHabit) return { error: "Habit not found: " + (input.name || "unknown") };
+
+      // ONE OCCURRENCE AT A TIME, same as check-in. Undo removes the LAST
+      // completion recorded that day — the one the user just made a mistake on
+      // — unless they named a position ("undo my first dose"). It used to take
+      // the FIRST row it found, which on a three-dose day silently renumbered
+      // the remaining two under the user.
+      const undoPosition = Number((input as any).occurrence) > 0
+        ? Math.floor(Number((input as any).occurrence))
+        : parseOccurrencePosition(String((input as any).__userMessage || ""));
+      const checkin = undoPosition
+        ? checkinAtPosition(fullHabit as any, targetDate, undoPosition)
+        : latestCheckinOn(fullHabit as any, targetDate);
+      if (!checkin?.id) {
+        return {
+          error: undoPosition
+            ? `"${habit.name}" has no completion #${undoPosition} recorded on ${targetDate}.`
+            : `No check-in found for "${habit.name}" on ${targetDate}`,
+        };
+      }
       await storage.deleteHabitCheckin(habit.id, checkin.id);
-      return { uncompleted: true, habitName: habit.name, date: targetDate };
+      const after = habitDayProgress((await storage.getHabit(habit.id)) as any, targetDate);
+      return {
+        uncompleted: true,
+        id: habit.id,
+        habitId: habit.id,
+        habitName: habit.name,
+        name: habit.name,
+        date: targetDate,
+        removedCheckinId: checkin.id,
+        completed: after.completed,
+        required: after.required,
+        percent: after.percent,
+        progress: after,
+        message: after.required > 1
+          ? `Removed one completion of "${habit.name}" — now ${after.completed} of ${after.required} for ${targetDate} (${after.percent}%). The other completions are untouched.`
+          : `Un-checked "${habit.name}" for ${targetDate}.`,
+      };
     }
 
     case "complete_event": {
