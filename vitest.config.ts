@@ -156,6 +156,7 @@ export default defineConfig({
       'tests/design-system-drift.test.ts',
       'tests/reminder-cron.test.ts',
       'tests/reminder-create-verification.test.ts',
+      'tests/reminder-series-calendar.test.ts',
       'tests/document-open-hook.dom.test.tsx',
       // Production audit 2026-07-29 regressions.
       'tests/anthropic-budget.test.ts',

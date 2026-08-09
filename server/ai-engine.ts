@@ -3,7 +3,7 @@ import { getAnthropicClient } from "./anthropic-client";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { storage } from "./storage";
-import type { ParsedAction } from "@shared/schema";
+import type { ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate } from "@shared/nutrition-shaped";
 import {
@@ -60,7 +60,7 @@ import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime } from "@shared/timezone";
-import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
+import { deleteReminderMirrors, deleteReminderSeriesMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries } from "@shared/series-detect";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
@@ -6741,20 +6741,46 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (isLeadUpReminder) {
           // Skip the calendar mirror — notification-only lead-up reminder.
         } else {
-        const evDate = fireDate.toLocaleDateString("en-CA", { timeZone: _remTz }); // YYYY-MM-DD
-        const evTime = fireDate.toLocaleTimeString("en-GB", { timeZone: _remTz, hour: "2-digit", minute: "2-digit" }); // HH:MM (24h)
-        const evDedupKey = `event:${safeLC(reminderForProfile || "")}:${safeLC(input.title)}:${evDate}`;
+        // WHOLE-SERIES MIRROR (2026-08-09). "Every Tuesday I mow the lawn at
+        // 9 AM for the next year" wrote 52 reminder rows and then mirrored only
+        // occurrence #1 onto the calendar — chat reported "52 weekly reminders
+        // set" while every Tuesday after the first was blank on the calendar,
+        // because getCalendarTimeline reads events, not the reminders table.
+        // Mirror the SERIES instead: one recurring event ending on the last
+        // occurrence, which both calendar timelines already expand per date.
+        // Cadences the calendar has no pattern for (quarterly, and the
+        // multiple-times-a-day ones below day granularity) fall back to one
+        // event per occurrence — bounded by the same horizon that capped the
+        // reminder rows.
+        const REMINDER_EVENT_RECURRENCE: Record<string, RecurrencePattern> = {
+          daily: "daily", twice_daily: "daily", three_times_daily: "daily",
+          weekly: "weekly", monthly: "monthly", yearly: "yearly",
+        };
+        const seriesPattern: RecurrencePattern | undefined = recur ? REMINDER_EVENT_RECURRENCE[recur] : undefined;
+        const asLocalDate = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { timeZone: _remTz });
+        const asLocalTime = (ms: number) => new Date(ms).toLocaleTimeString("en-GB", { timeZone: _remTz, hour: "2-digit", minute: "2-digit" });
+        // One recurring event for a mappable cadence; otherwise every occurrence
+        // gets its own row. A non-recurring reminder is the single-element case.
+        const mirrorInstants = seriesPattern ? [occ[0]] : occ;
+        const seriesEnd = seriesPattern && occ.length > 1 ? asLocalDate(occ[occ.length - 1]) : undefined;
         const existingEvents = await storage.getEvents();
-        const dupEvent = existingEvents.find(e => e.title.toLowerCase() === safeLC(input.title) && e.date === evDate);
-        if (dupEvent) {
-          calendarEvent = dupEvent;
-        } else if (!isDuplicateCreation(dedupUser, evDedupKey)) {
+        for (const instant of mirrorInstants) {
+          const evDate = asLocalDate(instant); // YYYY-MM-DD
+          const evTime = asLocalTime(instant); // HH:MM (24h)
+          const evDedupKey = `event:${safeLC(reminderForProfile || "")}:${safeLC(input.title)}:${evDate}`;
+          const dupEvent = existingEvents.find(e => e.title.toLowerCase() === safeLC(input.title) && e.date === evDate);
+          if (dupEvent) {
+            calendarEvent = calendarEvent || dupEvent;
+            continue;
+          }
+          if (isDuplicateCreation(dedupUser, evDedupKey)) continue;
           const remEventPayload = validateAiPayload(insertEventSchema, {
             title: input.title.trim(),
             date: evDate,
             time: evTime,
             allDay: false,
-            recurrence: "none",
+            recurrence: seriesPattern ?? "none",
+            ...(seriesEnd ? { recurrenceEnd: seriesEnd } : {}),
             category: "personal",
             source: "chat",
             linkedProfiles: reminderProfileId ? [reminderProfileId] : [],
@@ -6762,10 +6788,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             tags: ["reminder"],
           }, "event");
           if (remEventPayload.ok) {
-            calendarEvent = await storage.createEvent(remEventPayload.data);
+            const created = await storage.createEvent(remEventPayload.data);
             markCreation(dedupUser, evDedupKey);
+            calendarEvent = calendarEvent || created;
             if (reminderProfileId) {
-              await storage.linkProfileTo(reminderProfileId, "event", calendarEvent.id)
+              await storage.linkProfileTo(reminderProfileId, "event", created.id)
                 .catch((e: any) => console.warn("[AI] Reminder event linking failed:", e?.message));
             }
           }
@@ -6795,6 +6822,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         date: calendarEvent?.date,
         time: calendarEvent?.time,
         forProfile: input.forProfile,
+        // How many occurrences the series really has, and the last date it
+        // covers — the chat card showed one row for a 52-week series, which
+        // read as "only one got saved".
+        occurrences: occ.length,
+        through: occ.length > 1 ? new Date(occ[occ.length - 1]).toLocaleDateString("en-CA", { timeZone: _remTz }) : undefined,
         message: recur
           ? `Set ${occ.length} ${recur.replace(/_/g, " ")} reminders starting ${human}${throughHuman ? `, through ${throughHuman}` : ""}. Tell the user the through-date — this is a fixed set of occurrences, not an endless series; they can extend it any time.`
           : `Reminder set for ${human} and added to your calendar. You'll get an in-app notification when it fires (push and email aren't connected yet).`,
@@ -6835,6 +6867,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Remove the mirrored calendar entries too — otherwise the deleted
       // reminder keeps showing on the calendar. Shared with
       // DELETE /api/reminders/:id (server/reminder-mirror.ts).
+      //
+      // This tool removes EVERY un-fired occurrence of a series, so the series
+      // mirror goes with it wholesale. Per-occurrence cleanup would only stamp
+      // 52 `rd:skip:` tags onto an event nothing renders any more.
+      for (const t of new Set(matches.map(r => r.title))) {
+        await deleteReminderSeriesMirrors(storage as any, t);
+      }
       for (const r of matches) await deleteReminderMirrors(storage as any, r, aiUserTimezone());
       return { deleted: true, count: removed, title: matches[0].title, message: `Deleted ${removed} pending reminder${removed === 1 ? "" : "s"} for "${matches[0].title}".` };
     }
@@ -7166,6 +7205,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           // way round would let a long task title sweep up unrelated
           // short-titled reminders.
           const orphaned = pending.filter(r => safeLC(r.title).includes(doneNeedle));
+          // Every occurrence goes, so a series mirror goes with them rather
+          // than lingering as an all-skipped event (same rule as
+          // delete_reminder). Retire it first so the per-occurrence pass below
+          // has only stand-alone mirrors left to clean up.
+          for (const t of new Set(orphaned.map(r => r.title))) {
+            await deleteReminderSeriesMirrors(storage as any, t);
+          }
           for (const r of orphaned) {
             if (await storage.deleteReminder(r.id)) clearedReminders++;
             await deleteReminderMirrors(storage as any, r, aiUserTimezone());
