@@ -1212,7 +1212,9 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Tasks ----
-  async getTasks() { return Array.from(this.tasks.values()); }
+  // Deletes are SOFT (deletedAt) to match SupabaseStorage, so the chat's
+  // restore_task tool works against this backend too.
+  async getTasks() { return Array.from(this.tasks.values()).filter(t => !(t as any).deletedAt); }
   async getTask(id: string) { return this.tasks.get(id); }
   async createTask(data: InsertTask): Promise<Task> {
     const task: Task = { id: randomUUID(), ...data, status: "todo", priority: data.priority || "medium", linkedProfiles: [], tags: data.tags || [], createdAt: new Date().toISOString() };
@@ -1228,7 +1230,12 @@ export class MemStorage implements IStorage {
     if (data.status === "done") this.logActivity("task", `Completed: ${t.title}`);
     return updated;
   }
-  async deleteTask(id: string) { return this.tasks.delete(id); }
+  async deleteTask(id: string) {
+    const t = this.tasks.get(id);
+    if (!t || (t as any).deletedAt) return false;
+    (t as any).deletedAt = new Date().toISOString();
+    return true;
+  }
 
   // ---- Expenses ----
   async getExpenses() { return Array.from(this.expenses.values()); }
@@ -1558,7 +1565,7 @@ export class MemStorage implements IStorage {
   async getHabits() {
     // Refresh streaks on read — the stored value is a snapshot from the last
     // check-in write and goes stale as days pass (see supabase rowToHabit).
-    const list = Array.from(this.habits.values());
+    const list = Array.from(this.habits.values()).filter(h => !(h as any).deletedAt);
     for (const h of list) {
       const { current, longest } = calculateStreak(h.checkins || [], h.targetPerDay || 1);
       h.currentStreak = current;
@@ -1599,7 +1606,12 @@ export class MemStorage implements IStorage {
     this.habits.set(id, updated);
     return updated;
   }
-  async deleteHabit(id: string) { return this.habits.delete(id); }
+  async deleteHabit(id: string) {
+    const h = this.habits.get(id);
+    if (!h || (h as any).deletedAt) return false;
+    (h as any).deletedAt = new Date().toISOString();
+    return true;
+  }
 
   // ---- Obligations ----
   async getObligations() { return Array.from(this.obligations.values()); }
@@ -2259,12 +2271,36 @@ export class MemStorage implements IStorage {
   }
   async deleteIncome(id: string): Promise<boolean> { return this.incomes.delete(id); }
 
-  // Soft-delete restore stubs
-  async restoreTask(_id: string): Promise<boolean> { return false; }
-  async restoreHabit(_id: string): Promise<boolean> { return false; }
-  async getDeletedTasks(_limit?: number): Promise<Task[]> { return []; }
-  async getDeletedHabits(_limit?: number): Promise<Habit[]> { return []; }
-  async restoreEntity(_entityType: string, _id: string): Promise<boolean> { return false; }
+  // Soft-delete restore (tasks + habits keep their rows with deletedAt set)
+  async restoreTask(id: string): Promise<boolean> {
+    const t = this.tasks.get(id);
+    if (!t || !(t as any).deletedAt) return false;
+    delete (t as any).deletedAt;
+    return true;
+  }
+  async restoreHabit(id: string): Promise<boolean> {
+    const h = this.habits.get(id);
+    if (!h || !(h as any).deletedAt) return false;
+    delete (h as any).deletedAt;
+    return true;
+  }
+  async getDeletedTasks(limit = 25): Promise<Task[]> {
+    return Array.from(this.tasks.values())
+      .filter(t => (t as any).deletedAt)
+      .sort((a, b) => String((b as any).deletedAt).localeCompare(String((a as any).deletedAt)))
+      .slice(0, limit);
+  }
+  async getDeletedHabits(limit = 25): Promise<Habit[]> {
+    return Array.from(this.habits.values())
+      .filter(h => (h as any).deletedAt)
+      .sort((a, b) => String((b as any).deletedAt).localeCompare(String((a as any).deletedAt)))
+      .slice(0, limit);
+  }
+  async restoreEntity(entityType: string, id: string): Promise<boolean> {
+    if (entityType === "task") return this.restoreTask(id);
+    if (entityType === "habit") return this.restoreHabit(id);
+    return false; // other MemStorage entities are hard-deleted
+  }
 
   // AI action ledger stubs (in-memory, bounded)
   private aiActionLogStore: import("@shared/schema").AiActionLog[] = [];
@@ -2461,17 +2497,48 @@ export class MemStorage implements IStorage {
     return true;
   }
 
-  // Paycheck stubs
-  async getPaychecks() { return []; }
-  async createPaycheck(p: any) { return { id: crypto.randomUUID(), ...p }; }
-  async confirmPaycheck(id: string, _actual_amount?: number) { return { id, confirmed: true }; }
-  async deletePaycheck(_id: string) {}
+  // Paychecks
+  private paycheckStore: any[] = [];
+  async getPaychecks() { return this.paycheckStore.slice(); }
+  async createPaycheck(p: any) {
+    const row = { id: crypto.randomUUID(), confirmed: false, createdAt: new Date().toISOString(), ...p };
+    this.paycheckStore.push(row);
+    return row;
+  }
+  async confirmPaycheck(id: string, actual_amount?: number) {
+    const row = this.paycheckStore.find(p => p.id === id);
+    if (!row) return undefined;
+    row.confirmed = true;
+    row.received_date = new Date().toISOString().slice(0, 10);
+    if (actual_amount != null) row.actual_amount = actual_amount;
+    return row;
+  }
+  async deletePaycheck(id: string) {
+    const idx = this.paycheckStore.findIndex(p => p.id === id);
+    if (idx !== -1) this.paycheckStore.splice(idx, 1);
+  }
 
-  // Loan stubs
-  async getLoanSchedule(_loanId: string) { return []; }
-  async getAllLoanSchedules() { return []; }
-  async createLoanSchedule(entries: any[]) { return entries; }
-  async markLoanPayment(id: string) { return { id, paid: true }; }
+  // Loan amortization schedules (rows use the same snake_case field names the
+  // Supabase table exposes, since the executors read loan_name/payment_number).
+  private loanScheduleStore: any[] = [];
+  async getLoanSchedule(loanId: string) {
+    return this.loanScheduleStore
+      .filter(r => r.loan_id === loanId || r.loan_name === loanId)
+      .sort((a, b) => Number(a.payment_number) - Number(b.payment_number));
+  }
+  async getAllLoanSchedules() { return this.loanScheduleStore.slice(); }
+  async createLoanSchedule(entries: any[]) {
+    const rows = entries.map(e => ({ id: crypto.randomUUID(), paid: false, ...e }));
+    this.loanScheduleStore.push(...rows);
+    return rows;
+  }
+  async markLoanPayment(id: string) {
+    const row = this.loanScheduleStore.find(r => r.id === id);
+    if (!row) return undefined;
+    row.paid = true;
+    row.paid_date = new Date().toISOString().slice(0, 10);
+    return row;
+  }
 
   // Cashflow stubs
   async getCashflow(_month?: string) { return []; }
@@ -2499,33 +2566,218 @@ export class MemStorage implements IStorage {
     return { deleted };
   }
 
-  // Liabilities — stubs (MemStorage is dev-only; no persistence needed).
-  async getLiabilityAssetLinks(_id?: string) { return []; }
-  async getLiabilityAssetLinksForAsset(_id: string) { return []; }
-  async createLiabilityAssetLink(_data: any): Promise<any> { throw new Error("MemStorage: liability links not implemented"); }
-  async updateLiabilityAssetLink(_id: string, _patch: any): Promise<any> { return undefined; }
-  async deleteLiabilityAssetLink(_id: string) { return false; }
-  async getLiabilityProfileLinks(_id?: string) { return []; }
-  async getLiabilityProfileLinksForParty(_id: string) { return []; }
-  async createLiabilityProfileLink(_data: any): Promise<any> { throw new Error("MemStorage: liability links not implemented"); }
-  async updateLiabilityProfileLink(_id: string, _patch: any): Promise<any> { return undefined; }
-  async deleteLiabilityProfileLink(_id: string) { return false; }
-  async ensureLiabilityOwnerLink(_id: string) { /* MemStorage: no-op */ }
-  async getAssetPartyLinks(_id?: string) { return []; }
-  async getAssetPartyLinksForParty(_id: string) { return []; }
+  // Liabilities — full in-memory implementation so every chat tool that links,
+  // splits, or pays against a liability works on this backend too.
+  private liabilityAssetLinkStore: any[] = [];
+  private liabilityProfileLinkStore: any[] = [];
+  private assetPartyLinkStore: any[] = [];
+  private ownershipHistoryStore: any[] = [];
+  private liabilityPaymentStore: any[] = [];
+
+  async getLiabilityAssetLinks(id?: string) {
+    return id ? this.liabilityAssetLinkStore.filter(l => l.liabilityProfileId === id) : this.liabilityAssetLinkStore.slice();
+  }
+  async getLiabilityAssetLinksForAsset(id: string) {
+    return this.liabilityAssetLinkStore.filter(l => l.assetProfileId === id);
+  }
+  async createLiabilityAssetLink(data: any): Promise<any> {
+    const dup = this.liabilityAssetLinkStore.find(l =>
+      l.liabilityProfileId === data.liabilityProfileId && l.assetProfileId === data.assetProfileId);
+    if (dup) return dup;
+    const row = { id: crypto.randomUUID(), role: "collateral", createdAt: new Date().toISOString(), ...data };
+    this.liabilityAssetLinkStore.push(row);
+    return row;
+  }
+  async updateLiabilityAssetLink(id: string, patch: any): Promise<any> {
+    const row = this.liabilityAssetLinkStore.find(l => l.id === id);
+    if (!row) return undefined;
+    Object.assign(row, patch);
+    return row;
+  }
+  async deleteLiabilityAssetLink(id: string) {
+    const idx = this.liabilityAssetLinkStore.findIndex(l => l.id === id);
+    if (idx === -1) return false;
+    this.liabilityAssetLinkStore.splice(idx, 1);
+    return true;
+  }
+  async getLiabilityProfileLinks(id?: string) {
+    return id ? this.liabilityProfileLinkStore.filter(l => l.liabilityProfileId === id) : this.liabilityProfileLinkStore.slice();
+  }
+  async getLiabilityProfileLinksForParty(id: string) {
+    return this.liabilityProfileLinkStore.filter(l => l.partyProfileId === id);
+  }
+  async createLiabilityProfileLink(data: any): Promise<any> {
+    const dup = this.liabilityProfileLinkStore.find(l =>
+      l.liabilityProfileId === data.liabilityProfileId && l.partyProfileId === data.partyProfileId);
+    if (dup) { Object.assign(dup, data); return dup; }
+    const row = { id: crypto.randomUUID(), role: "owner", ownershipPercentage: 100, createdAt: new Date().toISOString(), ...data };
+    this.liabilityProfileLinkStore.push(row);
+    return row;
+  }
+  async updateLiabilityProfileLink(id: string, patch: any): Promise<any> {
+    const row = this.liabilityProfileLinkStore.find(l => l.id === id);
+    if (!row) return undefined;
+    Object.assign(row, patch);
+    return row;
+  }
+  async deleteLiabilityProfileLink(id: string) {
+    const idx = this.liabilityProfileLinkStore.findIndex(l => l.id === id);
+    if (idx === -1) return false;
+    this.liabilityProfileLinkStore.splice(idx, 1);
+    return true;
+  }
+  async ensureLiabilityOwnerLink(liabilityProfileId: string) {
+    if (this.liabilityProfileLinkStore.some(l => l.liabilityProfileId === liabilityProfileId)) return;
+    const liab = this.profiles.get(liabilityProfileId) as any;
+    const ownerId = liab?.parentProfileId;
+    if (!ownerId) return;
+    await this.createLiabilityProfileLink({ liabilityProfileId, partyProfileId: ownerId, role: "owner", ownershipPercentage: 100 });
+  }
+  async getAssetPartyLinks(id?: string) {
+    return id ? this.assetPartyLinkStore.filter(l => l.assetProfileId === id) : this.assetPartyLinkStore.slice();
+  }
+  async getAssetPartyLinksForParty(id: string) {
+    return this.assetPartyLinkStore.filter(l => l.partyProfileId === id);
+  }
   async getProfileAssetValue(_profileId: string) { return { assetValue: 0, liabilityValue: 0, netValue: 0, assets: [], liabilities: [] }; }
-  async createAssetPartyLink(_data: any): Promise<any> { throw new Error("MemStorage: asset party links not implemented"); }
-  async updateAssetPartyLink(_id: string, _patch: any) { return undefined; }
-  async deleteAssetPartyLink(_id: string) { return false; }
-  async setAssetOwners(_assetProfileId: string, _owners: any[]): Promise<any[]> { return []; }
-  async setLiabilityOwners(_liabilityProfileId: string, _owners: any[]): Promise<any[]> { return []; }
-  async getOwnershipHistory(_opts?: any) { return []; }
-  async recordOwnershipHistory(_entry: any): Promise<any> { return { id: "mem", changedAt: new Date().toISOString(), ..._entry }; }
-  async deleteOwnershipHistoryEntry(_id: string) { return false; }
-  async getLiabilityPayments(_id: string) { return []; }
-  async createLiabilityPayment(_data: any): Promise<any> { throw new Error("MemStorage: liability payments not implemented"); }
-  async updateLiabilityPayment(_id: string, _data: any): Promise<any> { return undefined; }
-  async deleteLiabilityPayment(_id: string) { return false; }
+  async createAssetPartyLink(data: any): Promise<any> {
+    const dup = this.assetPartyLinkStore.find(l =>
+      l.assetProfileId === data.assetProfileId && l.partyProfileId === data.partyProfileId);
+    if (dup) { Object.assign(dup, data); return dup; }
+    const row = { id: crypto.randomUUID(), role: "owner", ownershipPercentage: 100, createdAt: new Date().toISOString(), ...data };
+    this.assetPartyLinkStore.push(row);
+    return row;
+  }
+  async updateAssetPartyLink(id: string, patch: any) {
+    const row = this.assetPartyLinkStore.find(l => l.id === id);
+    if (!row) return undefined;
+    Object.assign(row, patch);
+    return row;
+  }
+  async deleteAssetPartyLink(id: string) {
+    const idx = this.assetPartyLinkStore.findIndex(l => l.id === id);
+    if (idx === -1) return false;
+    this.assetPartyLinkStore.splice(idx, 1);
+    return true;
+  }
+  async setAssetOwners(assetProfileId: string, owners: any[]): Promise<any[]> {
+    this.assetPartyLinkStore = this.assetPartyLinkStore.filter(l => l.assetProfileId !== assetProfileId);
+    const rows = [];
+    for (const o of owners) rows.push(await this.createAssetPartyLink({ assetProfileId, ...o }));
+    return rows;
+  }
+  async setLiabilityOwners(liabilityProfileId: string, owners: any[]): Promise<any[]> {
+    this.liabilityProfileLinkStore = this.liabilityProfileLinkStore.filter(l => l.liabilityProfileId !== liabilityProfileId);
+    const rows = [];
+    for (const o of owners) rows.push(await this.createLiabilityProfileLink({ liabilityProfileId, ...o }));
+    return rows;
+  }
+  async getOwnershipHistory(opts?: any) {
+    let rows = this.ownershipHistoryStore.slice().reverse();
+    if (opts?.subjectProfileId) rows = rows.filter(r => r.subjectProfileId === opts.subjectProfileId);
+    return rows.slice(0, opts?.limit || 100);
+  }
+  async recordOwnershipHistory(entry: any): Promise<any> {
+    const row = { id: crypto.randomUUID(), changedAt: new Date().toISOString(), ...entry };
+    this.ownershipHistoryStore.push(row);
+    return row;
+  }
+  async deleteOwnershipHistoryEntry(id: string) {
+    const idx = this.ownershipHistoryStore.findIndex(r => r.id === id);
+    if (idx === -1) return false;
+    this.ownershipHistoryStore.splice(idx, 1);
+    return true;
+  }
+  async getLiabilityPayments(id: string) {
+    return this.liabilityPaymentStore
+      .filter(p => p.liabilityProfileId === id)
+      .sort((a, b) => String(b.paymentDate || "").localeCompare(String(a.paymentDate || ""))
+        || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  }
+  async createLiabilityPayment(data: any): Promise<any> {
+    const now = new Date().toISOString();
+    const row = {
+      id: crypto.randomUUID(),
+      principalPortion: 0, interestPortion: 0, fees: 0,
+      paymentType: "standard", sourceAccount: null, documentId: null, notes: null,
+      remainingBalanceAfter: null,
+      createdAt: now, updatedAt: now,
+      ...data,
+    };
+    this.liabilityPaymentStore.push(row);
+    return row;
+  }
+  async updateLiabilityPayment(id: string, data: any): Promise<any> {
+    const row = this.liabilityPaymentStore.find(p => p.id === id);
+    if (!row) return undefined;
+    Object.assign(row, data, { updatedAt: new Date().toISOString() });
+    return row;
+  }
+  async deleteLiabilityPayment(id: string) {
+    let removed = false;
+    const idx = this.liabilityPaymentStore.findIndex(p => p.id === id);
+    if (idx !== -1) { this.liabilityPaymentStore.splice(idx, 1); removed = true; }
+    // Obligation payments are embedded on the obligation row in this backend;
+    // undo_last_payment deletes by payment id, so clean those too.
+    for (const ob of this.obligations.values()) {
+      const pIdx = (ob.payments || []).findIndex((p: any) => p.id === id);
+      if (pIdx !== -1) { ob.payments.splice(pIdx, 1); removed = true; }
+    }
+    return removed;
+  }
+
+  // Ownership consistency scan/repair — same contract as SupabaseStorage so
+  // the chat's find_orphans / repair_relations tools work on this backend.
+  private ownedEntityLists(): Array<{ et: string; rows: any[] }> {
+    return [
+      { et: "expense", rows: Array.from(this.expenses.values()) },
+      { et: "tracker", rows: Array.from(this.trackers.values()) },
+      { et: "task", rows: Array.from(this.tasks.values()).filter(t => !(t as any).deletedAt) },
+      { et: "event", rows: Array.from(this.events.values()) },
+      { et: "obligation", rows: Array.from(this.obligations.values()) },
+      { et: "document", rows: Array.from(this.documents.values()) },
+      { et: "artifact", rows: Array.from(this.artifacts.values()) },
+    ];
+  }
+  async getOwnershipConsistency(): Promise<{
+    disagreementCount: number;
+    jsonbOnlyCount: number;
+    financeDisagreementCount: number;
+    perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }>;
+  }> {
+    const validIds = new Set(Array.from(this.profiles.keys()));
+    const perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }> = {};
+    let totalDisagree = 0;
+    for (const { et, rows } of this.ownedEntityLists()) {
+      let disagree = 0, agree = 0;
+      for (const r of rows) {
+        const lp: string[] = Array.isArray(r.linkedProfiles) ? r.linkedProfiles.filter((x: any) => typeof x === "string") : [];
+        if (lp.length === 0) continue;
+        if (lp.every(pid => validIds.has(pid))) agree++; else disagree++;
+      }
+      perType[et] = { disagree, jsonbOnly: 0, agree, total: rows.length };
+      totalDisagree += disagree;
+    }
+    return { disagreementCount: totalDisagree, jsonbOnlyCount: 0, financeDisagreementCount: 0, perType };
+  }
+  async repairOwnershipConsistency(): Promise<{ scanned: number; repaired: number; details: string[] }> {
+    const validIds = new Set(Array.from(this.profiles.keys()));
+    let scanned = 0, repaired = 0;
+    const details: string[] = [];
+    for (const { et, rows } of this.ownedEntityLists()) {
+      for (const r of rows) {
+        scanned++;
+        const lp: string[] = Array.isArray(r.linkedProfiles) ? r.linkedProfiles.filter((x: any) => typeof x === "string") : [];
+        if (lp.length === 0) continue;
+        const dangling = lp.filter(pid => !validIds.has(pid));
+        if (dangling.length === 0) continue;
+        r.linkedProfiles = lp.filter(pid => validIds.has(pid));
+        repaired++;
+        if (details.length < 50) details.push(`${et} ${r.id}: removed dangling owner(s) ${dangling.join(", ")}`);
+      }
+    }
+    return { scanned, repaired, details };
+  }
 
   // Universal Captures (PR Y) ---------------------------------------------
   private captures: Map<string, import("@shared/schema").Capture> = new Map();

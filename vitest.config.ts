@@ -109,6 +109,7 @@ export default defineConfig({
       'tests/wellness-dynamic.test.ts',
       'tests/query-key-hygiene.test.ts',
       'tests/ai-tool-registry.test.ts',
+      'tests/ai-executor-sweep.test.ts',
       'tests/ai-envelope.test.ts',
       'tests/bulk-actions.test.ts',
       'tests/ai-system-tools.test.ts',

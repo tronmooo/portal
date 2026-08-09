@@ -25,14 +25,26 @@ export async function findOrphans(storage: IStorage): Promise<any> {
     return { error: "Orphan scan isn't available in this deployment." };
   }
   const result = await (storage as any).getOwnershipConsistency();
-  const issues = Array.isArray(result?.issues) ? result.issues : [];
+  // getOwnershipConsistency returns COUNTS ({disagreementCount, perType, …}),
+  // not an issues array — the old `result.issues` read made this scan report
+  // "everything healthy" no matter how much drift existed.
+  const perType: Record<string, { disagree: number; jsonbOnly: number; agree: number; total: number }> =
+    result?.perType && typeof result.perType === "object" ? result.perType : {};
+  const scanned = Object.values(perType).reduce((s, t) => s + (t?.total || 0), 0);
+  const issueCount = (result?.disagreementCount || 0) + (result?.jsonbOnlyCount || 0) + (result?.financeDisagreementCount || 0);
+  const issues = Object.entries(perType)
+    .filter(([, t]) => (t?.disagree || 0) > 0 || (t?.jsonbOnly || 0) > 0)
+    .map(([type, t]) => ({ type, records_with_dangling_owners: t.disagree, jsonb_only: t.jsonbOnly }));
+  if ((result?.financeDisagreementCount || 0) > 0) {
+    issues.push({ type: "finance_ownership_drift", records_with_dangling_owners: result.financeDisagreementCount, jsonb_only: 0 });
+  }
   return {
-    scanned: result?.scanned ?? undefined,
-    issue_count: issues.length,
+    scanned,
+    issue_count: issueCount,
     issues: issues.slice(0, 25),
-    message: issues.length === 0
+    message: issueCount === 0
       ? "No orphaned or inconsistent ownership records found — everything is linked to a valid profile."
-      : `Found ${issues.length} ownership issue${issues.length === 1 ? "" : "s"} (showing up to 25). Say "repair my data" to fix them.`,
+      : `Found ${issueCount} ownership issue${issueCount === 1 ? "" : "s"} across ${issues.length} record type${issues.length === 1 ? "" : "s"}. Say "repair my data" to fix them.`,
   };
 }
 

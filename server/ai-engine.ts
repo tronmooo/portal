@@ -8125,7 +8125,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return { result: r, actions: [{ type: "create", category: "paycheck", data: r }] };
     }
     case "confirm_paycheck_received": {
-      const r = await storage.confirmPaycheck(input.paycheck_id, input.actual_amount);
+      // The model often passes the SOURCE NAME ("my Acme paycheck") rather than
+      // a row id — resolve either. Unconfirmed rows win; earliest expected first.
+      let paycheckId = String(input.paycheck_id || "");
+      const allPaychecks = await storage.getPaychecks();
+      if (!allPaychecks.some((p: any) => p.id === paycheckId)) {
+        const needle = safeLC(paycheckId);
+        const byName = allPaychecks
+          .filter((p: any) => needle && safeLC(p.source).includes(needle))
+          .sort((a: any, b: any) => Number(!!a.confirmed) - Number(!!b.confirmed)
+            || String(a.expected_date || "").localeCompare(String(b.expected_date || "")));
+        if (byName.length === 0) {
+          return { error: `No paycheck found matching "${input.paycheck_id}"`, candidates: allPaychecks.slice(0, 5).map((p: any) => `${p.source} (${p.expected_date})`) };
+        }
+        paycheckId = byName[0].id;
+      }
+      const r = await storage.confirmPaycheck(paycheckId, input.actual_amount);
+      if (!r) return { error: `Couldn't confirm that paycheck` };
       return { result: r, actions: [{ type: "update", category: "paycheck", data: r }] };
     }
     case "delete_paycheck": {
@@ -9921,13 +9937,31 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // P0.3a: validate with the shared insert schema before writing. Unknown
       // artifact types fall back to "note" instead of failing the whole save.
       const ARTIFACT_TYPES = ["checklist", "note", "markdown", "code", "html", "react", "svg", "mermaid", "chart", "doc", "sheet"];
+      const artifactType = ARTIFACT_TYPES.includes(input.type) ? input.type : "note";
+      // The model regularly sends checklist items as plain strings (or omits
+      // them and puts one item per line in content, as the schema doc allows).
+      // Coerce both shapes instead of rejecting the whole save.
+      let artifactItems: Array<{ text: string; checked?: boolean }> = Array.isArray(input.items)
+        ? input.items
+            .map((it: any) => typeof it === "string"
+              ? { text: it, checked: false }
+              : (it && typeof it === "object" && typeof it.text === "string" ? { text: it.text, checked: !!it.checked } : null))
+            .filter(Boolean) as Array<{ text: string; checked: boolean }>
+        : [];
+      if (artifactType === "checklist" && artifactItems.length === 0 && input.content) {
+        artifactItems = String(input.content)
+          .split(/\r?\n/)
+          .map((line: string) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*(?:\[[ xX]?\]\s*)?/, "").trim())
+          .filter(Boolean)
+          .map((text: string) => ({ text, checked: false }));
+      }
       const artifactPayload = validateAiPayload(insertArtifactSchema, {
         title: input.title,
         content: input.content || "",
-        type: ARTIFACT_TYPES.includes(input.type) ? input.type : "note",
+        type: artifactType,
         tags: input.tags || [],
         pinned: false,
-        items: input.items || [],
+        items: artifactItems,
         linkedProfiles: input.linkedProfiles || [],
         language: input.language,
         dataBindings: input.dataBindings,
@@ -11545,9 +11579,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const updates: Record<string, any> = {};
       if (input.amount !== undefined) updates.amount = Number(input.amount);
       if (input.category) updates.category = input.category;
-      const ok = await storage.updateBudget(month, input.budgetId, updates);
-      if (!ok) return { error: `Budget not found with ID "${input.budgetId}" in ${month}. Use get_budget_summary to find the correct budget ID.` };
-      return { success: true, budgetId: input.budgetId, month, ...updates, message: `Budget updated successfully`, actions: [{ type: "update", category: "budget", data: { id: input.budgetId, month, ...updates } }] };
+      // The model usually knows the CATEGORY ("update my food budget"), not the
+      // row id — resolve either before giving up.
+      let budgetId = String(input.budgetId || "");
+      const monthBudgets = await storage.getBudgets(month);
+      if (!monthBudgets.some((b: any) => b.id === budgetId)) {
+        const needle = safeLC(budgetId);
+        const byCategory = monthBudgets.find((b: any) => safeLC(b.category) === needle)
+          || monthBudgets.find((b: any) => needle && safeLC(b.category).includes(needle));
+        if (byCategory) budgetId = byCategory.id;
+      }
+      const ok = await storage.updateBudget(month, budgetId, updates);
+      if (!ok) return { error: `Budget not found matching "${input.budgetId}" in ${month}. Existing categories: ${monthBudgets.map((b: any) => b.category).join(", ") || "none"}.` };
+      return { success: true, budgetId, month, ...updates, message: `Budget updated successfully`, actions: [{ type: "update", category: "budget", data: { id: budgetId, month, ...updates } }] };
     }
 
     case "upload_document": {
@@ -11894,7 +11938,21 @@ function kpisFromBreakdown(data: Array<Record<string, any>>, valueKey: string, n
 }
 
 async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
-  const { chartType, title, subtitle, dataSource, trackerName, dateRange, forProfile, groupBy, showLegend } = input;
+  const { chartType, title, subtitle, trackerName, dateRange, forProfile, groupBy, showLegend } = input;
+  // Normalize the source the model actually sent — singulars and common
+  // synonyms show up despite the schema enum, and "tracker" failing where
+  // "trackers" works is indistinguishable from a broken feature to the user.
+  const SOURCE_ALIASES: Record<string, string> = {
+    tracker: "trackers", expense: "expenses", spending: "expenses",
+    bill: "obligations", bills: "obligations", obligation: "obligations", subscriptions: "obligations",
+    habit: "habits", goal: "goals", asset: "assets", "net worth": "assets", networth: "assets",
+    profile: "profiles", task: "tasks",
+  };
+  const rawSource = String(input.dataSource || "").toLowerCase().trim();
+  const dataSource = SOURCE_ALIASES[rawSource] || rawSource;
+  if (dataSource === "trackers" && !trackerName) {
+    throw new Error("Tell me which tracker to chart (e.g. trackerName:'Weight') — I can chart any logged metric.");
+  }
   const since = dateRangeStart(dateRange);
   const profileId = await resolveProfileId(forProfile);
 
