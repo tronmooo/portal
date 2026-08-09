@@ -22,6 +22,10 @@ export interface Scenario {
   input: Record<string, any>;
   expect?: Expectation;
   note?: string;
+  /** What the user "said" for this turn — only needed by the chat-loop suite,
+   * and only for tools that guard on the user's actual words (the habit
+   * tools reject a tool call whose message shows no explicit habit intent). */
+  utterance?: string;
   /** Extra assertion on the raw result. */
   verify?: (res: any, ctx: { storage: MemStorage; ids: Record<string, string> }) => void | Promise<void>;
 }
@@ -45,7 +49,7 @@ export const SCENARIOS: Scenario[] = [
   },
   { tool: "create_task", input: { title: "Buy sweep milk" } },
   { tool: "create_reminder", input: { title: "Sweep dentist appointment", fireAt: "2026-09-10T15:00:00" } },
-  { tool: "create_habit", input: { name: "Meditate", frequency: "daily", timeOfDay: "morning" } },
+  { tool: "create_habit", input: { name: "Meditate", frequency: "daily", timeOfDay: "morning" }, utterance: "Create a habit: meditate every morning." },
   { tool: "create_tracker", input: { name: "Weight", category: "health", unit: "lbs", fields: [{ name: "weight", type: "number", unit: "lbs" }] } },
   { tool: "create_tracker", input: { name: "Lisinopril", category: "medication", fields: [{ name: "dosage", type: "number", unit: "mg" }] } },
   { tool: "create_expense", input: { amount: 42.5, description: "Groceries at Safeway", category: "Food" } },
@@ -77,7 +81,7 @@ export const SCENARIOS: Scenario[] = [
   { tool: "log_medication_dose", input: { medication: "Lisinopril" } },
   { tool: "skip_medication_dose", input: { medication: "Lisinopril", reason: "forgot" } },
   { tool: "log_tracker_entry", input: { trackerName: "Weight", values: { weight: 178 } } },
-  { tool: "checkin_habit", input: { name: "Meditate" } },
+  { tool: "checkin_habit", input: { name: "Meditate" }, utterance: "Mark my Meditate habit done for today." },
 
   // ── Reads ─────────────────────────────────────────────────────────────
   { tool: "search", input: { query: "passport" } },

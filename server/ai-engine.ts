@@ -9618,7 +9618,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           code: "HABIT_NOT_FOUND",
         };
       }
-      return storage.checkinHabit(habit.id);
+      const checkinRow = await storage.checkinHabit(habit.id);
+      if (!checkinRow) return { error: `Couldn't check in "${habit.name}"` };
+      // _verify: the returned id is the CHECK-IN row; read-back must target the
+      // habit itself (same contract as create_reminder / pay_obligation —
+      // without it the envelope reported a saved check-in as "Nothing was
+      // saved").
+      return { ...checkinRow, habitName: habit.name, _verify: { type: "habit", id: habit.id } };
     }
 
     case "create_obligation": {
@@ -9828,9 +9834,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return { error: `No unpaid occurrence found for ${ob.name} in ${label}. Open occurrences: ${open.length ? open.join(", ") : "none"}.` };
         }
         const result = await (storage as any).payOccurrence(ob.id, target.date, { amount: payAmount, method: input.method });
-        return { ...(result || {}), _paidMonth: label };
+        // _verify: the returned id is the PAYMENT row; read-back must target
+        // the obligation (same contract as create_reminder's mirror-event id —
+        // without it the envelope reported a saved payment as "Nothing was
+        // saved").
+        return { ...(result || {}), _paidMonth: label, _verify: { type: "obligation", id: ob.id } };
       }
-      return storage.payObligation(ob.id, payAmount, input.method, input.confirmationNumber);
+      const paid = await storage.payObligation(ob.id, payAmount, input.method, input.confirmationNumber);
+      if (!paid) return { error: `Couldn't record the payment on ${ob.name}` };
+      return { ...paid, _verify: { type: "obligation", id: ob.id } };
     }
 
     case "journal_entry": {

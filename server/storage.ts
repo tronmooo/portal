@@ -834,13 +834,16 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Profiles ----
+  // Deletes are SOFT (deletedAt) to match SupabaseStorage, so undo can
+  // restore a deleted profile on this backend too.
   async getProfiles() {
-    const all = Array.from(this.profiles.values());
+    const all = Array.from(this.profiles.values()).filter(p => !(p as any).deletedAt);
     return all.map(p => this.healProfileName(p, all));
   }
   async getProfile(id: string) {
     const p = this.profiles.get(id);
-    return p ? this.healProfileName(p, Array.from(this.profiles.values())) : p;
+    if (!p || (p as any).deletedAt) return undefined;
+    return this.healProfileName(p, Array.from(this.profiles.values()));
   }
   // Parity with SupabaseStorage: strip a legacy possessive owner prefix from
   // child/asset profile names ("Craig's Ford F250" → "Ford F250").
@@ -1048,7 +1051,11 @@ export class MemStorage implements IStorage {
       }
     }
 
-    return this.profiles.delete(id);
+    // The profile ROW itself is a soft delete (deletedAt), matching Supabase —
+    // "undo that" after a profile delete restores the row (children stay gone,
+    // same as restoreEntity on the real backend).
+    (profile as any).deletedAt = new Date().toISOString();
+    return true;
   }
 
   async linkProfileTo(profileId: string, entityType: string, entityId: string) {
@@ -2299,6 +2306,12 @@ export class MemStorage implements IStorage {
   async restoreEntity(entityType: string, id: string): Promise<boolean> {
     if (entityType === "task") return this.restoreTask(id);
     if (entityType === "habit") return this.restoreHabit(id);
+    if (entityType === "profile" || entityType === "obligation") {
+      const p = this.profiles.get(id);
+      if (p && (p as any).deletedAt) { delete (p as any).deletedAt; return true; }
+      // Obligations may live in the obligations map on this backend.
+      return false;
+    }
     return false; // other MemStorage entities are hard-deleted
   }
 
