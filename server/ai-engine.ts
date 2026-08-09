@@ -42,8 +42,12 @@ import {
   checkToolAgainstIntent,
   isStaleTurnReplay,
   staleReplayViolation,
+  findDuplicateCreateInTurn,
+  duplicateCreateViolation,
+  recordTurnCreate,
   toolTargetLabel,
   type RoutingViolation,
+  type TurnCreate,
 } from "@shared/ai-tool-routing";
 import { toUserFacingError, stripInternalText } from "@shared/ai-message-kinds";
 import { checkClaims, honestFailureReply, groundedSummary, describeMismatch, stripStaleCapabilityClaims, type ExecutedOperation } from "@shared/ai-claim-check";
@@ -66,7 +70,7 @@ import {
   summarizeEnrichment,
   type Enrichment,
 } from "@shared/estimation-engine";
-import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
+import { stripOwnerPossessivePrefix, stripLeadingDeterminer } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -2845,7 +2849,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         fields: { type: "object", description: "Entity-specific fields. Include ALL known info in the right keys." },
         tags: { type: "array", items: { type: "string" }, description: "Tags for categorization" },
         notes: { type: "string", description: "Additional notes" },
-        forProfile: { type: "string", description: "Owner or parent profile name. When creating a vehicle/asset/subscription/loan/investment/property FOR a person (e.g. 'Bob Johnson's car'), set this to the owner's name. Can ALSO be the name of an asset/vehicle/property profile (e.g. 'My House', 'Kitchen') so the new asset becomes nested inside that parent asset. Example: 'Add Samsung refrigerator to my house' → forProfile: 'My House'. The created profile will be a child of the specified profile." },
+        forProfile: { type: "string", description: "Owner or parent profile name — an EXISTING profile the new one nests under. Set it when the user names a person/pet who owns the item ('Bob Johnson's car' → 'Bob Johnson') or a container asset it lives inside ('Add Samsung refrigerator to my house' → 'My House').\n\nDO NOT set this to the item being created. In 'create a profile for my MacBook Pro M4', 'my MacBook Pro M4' is the NAME — there is no owner in that sentence, so leave forProfile unset. Setting it to the item's own name creates a second, bogus profile. When in doubt, omit it: an unowned profile defaults to the user." },
       },
       required: ["type", "name"],
     },
@@ -5127,6 +5131,13 @@ CREATE VS UPDATE SAFETY (NEVER VIOLATE):
 - If the user said CREATE and a matching record already exists, and a duplicate would be harmful, ASK ONE SHORT QUESTION ("You already have a Dodge Ram 2025 — add a second one, or update that one?") and call nothing. Never silently update instead, and never describe an update as a creation.
 - Never widen a request: a create for one entity is not permission to write a different entity "while you're there".
 
+ONE REQUEST CREATES ONE RECORD (NEVER VIOLATE — the server blocks the second call):
+- "Create a profile for my MacBook Pro M4" is ONE profile: create_profile(type:"asset", name:"MacBook Pro M4"). Exactly one call. Not an asset plus a person, not two spellings of the same thing.
+- "for my <thing>" names WHAT to create, not WHO owns it. forProfile is for a PERSON or PET the item belongs to ("Bob's Honda", "Luna's vet"), and only when that profile already exists. If the thing after "for" is the item itself, it is the name — leave forProfile unset.
+- NEVER put a determiner in a name. "my MacBook Pro M4" → name:"MacBook Pro M4". "our house" → name:"House" (or whatever the user calls it).
+- The type parameter is REQUIRED and must be one of the enum values. Pick the one matching what the entity IS — laptop/phone/TV/tool → asset; car/truck → vehicle; house/land → property. NEVER type an object as "person"; person is for human beings only.
+- When a tool returns PARENT_NOT_FOUND or AMBIGUOUS_PARENT, ASK the user — do NOT invent the missing parent by creating a profile for it.
+
 DATA CLASSIFICATION RULES (NEVER VIOLATE):
 - MEDICATION: When a user mentions a NEW/prescribed medication ("prescribed lisinopril", "Max is on Heartgard now"), update the PROFILE with medication info in their health fields (update_profile with fields: { medications: "..." }). Do NOT create a "Medication" tracker unless the user asks to track doses over time.
 - MEDICATION DOSES: "I took my Lisinopril" / "gave Max his pill" → log_medication_dose. "I skipped/forgot tonight's dose" → skip_medication_dose (missed:true when forgotten). "what doses did I miss this week" / "how's my adherence" → get_missed_doses. "show my dose history" / "when did I last take it" → get_dose_history. These need a medication TRACKER; if none exists, say so and offer to create one. If the user has several medications and didn't name one, the tool will ask — relay its question.
@@ -6244,6 +6255,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           logger.info("ai", `create_profile guard: stripped fabricated fields for "${input.name}": ${stripped.join(", ")}`);
         }
       }
+      // NAME HYGIENE (2026-08-09 regression): "Create a profile for my MacBook
+      // Pro m4" made TWO profiles — "MacBook Pro M4" and "my MacBook Pro m4" —
+      // because the determiner survived into the name and the dedup below
+      // compares names for equality. "my"/"our" is the speaker's word, never
+      // part of what the thing is called. Runs before dedup so the second
+      // write collapses into the first instead of creating a twin.
+      if (input.name) {
+        const deDetermined = stripLeadingDeterminer(input.name);
+        if (deDetermined !== input.name) {
+          logger.info("ai", `Profile naming: stripped leading determiner "${input.name}" → "${deDetermined}"`);
+          input.name = deDetermined;
+        }
+      }
+
       // DEDUP: Check if profile with same name already exists
       const existingProfiles = await storage.getProfiles();
       const childTypes = ["vehicle", "asset", "subscription", "loan", "investment", "account", "property"];
@@ -6323,11 +6348,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // existing asset can't pile up redundant field variants.
         const mergedIncoming = canonicalizeProfileFields(flattenAiProfileFields(input.fields), existingProfile.fields).fields;
         const mergedFields = sweepRedundantAliases({ ...existingProfile.fields, ...mergedIncoming }).fields;
+        // A create that dedups onto an existing record must never RETYPE it
+        // into an identity type. Without this, the stray second call from the
+        // 2026-08-09 report — create_profile(name:"my MacBook Pro m4") with a
+        // bad type — would land on the laptop it just deduped against and turn
+        // that asset into a person. Retyping something into a human being is
+        // never the safe reading of a create; "change its type" is an update.
+        const IDENTITY_TYPES = new Set(["person", "pet", "self"]);
+        const keepExistingType =
+          IDENTITY_TYPES.has(String(input.type)) && !IDENTITY_TYPES.has(String(existingProfile.type));
+        if (keepExistingType) {
+          logger.warn("ai", `create_profile dedup: refused to retype "${existingProfile.name}" from ${existingProfile.type} to ${input.type}`);
+        }
         const mergedProfile = await storage.updateProfile(existingProfile.id, {
           fields: mergedFields,
           notes: input.notes || existingProfile.notes,
           tags: input.tags?.length ? input.tags : existingProfile.tags,
-          type: input.type || existingProfile.type,
+          type: keepExistingType ? existingProfile.type : (input.type || existingProfile.type),
         });
         // SAY it was a merge — otherwise the model replies "profile created"
         // for a profile that already existed.
@@ -6393,10 +6430,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
 
       // P0.3a: validate the full payload with the shared insert schema before
-      // any write. Unknown types get the same "person" fallback storage applies.
+      // any write.
+      //
+      // TYPE FALLBACK (2026-08-09 regression): this used to default an
+      // absent/invalid type to "person", which is how a laptop was filed as a
+      // human being ("my MacBook Pro m4 — Person"). `type` is REQUIRED by the
+      // tool schema, so reaching here without one means the call was
+      // malformed — and of all the wrong answers, "person" is the worst: it
+      // pollutes the people list, the owner badges, and ownership attribution.
+      // "asset" is the generic bucket for a thing, and it is recoverable with
+      // one update. A profile is only a person when the model SAYS person.
       const PROFILE_TYPES = ["person", "pet", "vehicle", "account", "property", "subscription", "medical", "self", "loan", "investment", "asset", "liability"];
+      const resolvedProfileType = PROFILE_TYPES.includes(input.type) ? input.type : "asset";
+      if (resolvedProfileType !== input.type) {
+        logger.warn("ai", `create_profile got type=${JSON.stringify(input.type)} for "${input.name}" — defaulting to "asset" (never "person")`);
+      }
       const profilePayload = validateAiPayload(insertProfileSchema, {
-        type: PROFILE_TYPES.includes(input.type) ? input.type : "person",
+        type: resolvedProfileType,
         name: input.name,
         fields: finalFields,
         tags: input.tags || [],
@@ -13910,6 +13960,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // Per-operation outcome report (success AND failure) so the client can
     // render an honest per-action checklist — same shape as the bulk path.
     const allOperations: OperationOutcome[] = [];
+    // Creates this turn already performed, keyed by determiner-free name, so a
+    // second create of the same thing is refused instead of producing a twin
+    // record (2026-08-09: one "MacBook Pro m4" request → two profiles).
+    const turnCreates: TurnCreate[] = [];
     const richCharts: ChartSpec[] = [];
     const richTables: TableSpec[] = [];
     let richReport: ReportSpec | undefined;
@@ -14098,6 +14152,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             if (label && isStaleTurnReplay(input, userMessage, priorUserMessages)) {
               return staleReplayViolation(toolUse.name, label);
             }
+            // One request creates ONE record: a second create of the same
+            // name this turn is fan-out, not work.
+            const dupCreate = findDuplicateCreateInTurn(toolUse.name, input, turnCreates);
+            if (dupCreate) return duplicateCreateViolation(toolUse.name, label, dupCreate);
             return checkToolAgainstIntent(toolUse.name, turnPlan);
           })();
           if (routingViolation) {
@@ -14124,10 +14182,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               content: JSON.stringify({ error: routingViolation.modelDirective, code: routingViolation.mismatchType }),
               is_error: true,
             });
-            // A stale replay is not the user's failure and must not appear in
-            // their per-operation checklist at all — it belongs to an older
-            // turn. Routing mismatches DO surface, in plain language.
-            if (routingViolation.mismatchType !== "stale_turn_replay") {
+            // A stale replay belongs to an older turn, and a blocked duplicate
+            // create is already represented by the first create's card — both
+            // stay out of the user's per-operation checklist entirely. Genuine
+            // routing mismatches DO surface, in plain language.
+            if (routingViolation.userMessage) {
               allOperations.push({
                 index: allOperations.length,
                 raw: opRawLabel(toolUse),
@@ -14187,11 +14246,21 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const result = (rawResult && !rawResult.error && !READ_ONLY_TOOLS.has(toolUse.name))
             ? await finalizeToolResult(toolUse.name, actionType, inputWithCtx, rawResult, turnVerifyCtx)
             : rawResult;
+          // A tool that DEDUPED did not create anything — it found the record
+          // already there and merged into it. Two things must not happen for
+          // one of these:
+          //   · a green "Create Profile" card, which tells the user a second
+          //     record was made when it wasn't;
+          //   · a ledger row, because a create's reverse plan is DELETE, and
+          //     undoing it would destroy the record the user already had.
+          // The operation is reported with status "deduped" instead.
+          const wasDeduped = !!(result && !result.error && (result as any).deduped === true);
+
           // Persist the action to the durable ledger (undo/audit). Never
           // blocks or fails the tool; excluded for the ledger's own tools and
           // for bulk tools (preview writes no entities; execute logs its own
           // single restore_set row inside executeBulkPlan).
-          if (result && !result.error && !READ_ONLY_TOOLS.has(toolUse.name)
+          if (result && !result.error && !wasDeduped && !READ_ONLY_TOOLS.has(toolUse.name)
               && toolUse.name !== "undo_last_action"
               && toolUse.name !== "preview_bulk_action"
               && toolUse.name !== "merge_profiles"
@@ -14204,7 +14273,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // Captured so the tool_result stream frame carries the exact same
           // ParsedAction object the buffered response will contain.
           let actionForStream: ParsedAction | undefined;
-          if (result && !result.error) {
+          if (result && !result.error && !wasDeduped) {
             // Forward revert metadata so the chat UI can render an Undo/Revert
             // button. _previousState is set by tools that support reversal
             // (currently update_profile).
@@ -14254,6 +14323,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             };
             allActions.push(actionForStream);
             allResults.push(result);
+            // Remember what this turn has created, under the name the tool was
+            // ASKED for — a later call spelling it differently ("my MacBook
+            // Pro m4") keys to the same thing and gets refused.
+            const created = recordTurnCreate(toolUse.name, inp);
+            if (created) turnCreates.push(created);
           }
           if (validation.warnings.length > 0 && result) {
             result._validationWarnings = validation.warnings;
@@ -14307,7 +14381,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               index: allOperations.length,
               raw: opRawLabel(toolUse),
               tool: toolUse.name,
-              status: isSuccess ? "ok" : "failed",
+              status: isSuccess ? (wasDeduped ? "deduped" : "ok") : "failed",
               error: userFacingError,
               entityId: isSuccess ? (entityId || undefined) : undefined,
               trackerName: inp.trackerName ? String(inp.trackerName) : undefined,

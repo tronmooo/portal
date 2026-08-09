@@ -167,7 +167,12 @@ export function checkClaims(input: ClaimCheckInput): ClaimCheckResult {
   const { reply, operations } = input;
   const violations: ClaimViolation[] = [];
   const claims = extractSuccessClaims(reply);
-  const succeeded = operations.filter((o) => o.status === "ok");
+  // "deduped" landed in the database exactly as much as "ok" did — the tool
+  // found the record already there and merged into it. The honesty question
+  // here is "was anything saved", and for a dedup the answer is yes. Whether
+  // the reply should have said "created" or "already existed" is the tool's
+  // own message to relay, not a missing write.
+  const succeeded = operations.filter((o) => o.status === "ok" || o.status === "deduped");
 
   violations.push(...findStaleCapabilityClaims(reply));
 
@@ -242,7 +247,7 @@ export function checkClaims(input: ClaimCheckInput): ClaimCheckResult {
  * rendering success — never alongside it.
  */
 export function honestFailureReply(operations: ExecutedOperation[]): string {
-  const failed = operations.filter((o) => o.status !== "ok").length;
+  const failed = operations.filter((o) => o.status !== "ok" && o.status !== "deduped").length;
   if (operations.length === 0) {
     return "I wasn't able to complete that — nothing was saved. Could you rephrase it and I'll try again?";
   }
@@ -272,17 +277,18 @@ const ENTITY_NOUN: Partial<Record<IntentEntity, string>> = {
  * be true, and the action cards below it carry the detail.
  */
 export function groundedSummary(operations: ExecutedOperation[]): string {
-  const ok = operations.filter((o) => o.status === "ok");
+  const ok = operations.filter((o) => o.status === "ok" || o.status === "deduped");
   if (ok.length === 0) return honestFailureReply(operations);
 
   const parts = ok.slice(0, 6).map((o) => {
-    const verb = OP_VERB[toolOperation(o.tool)];
+    // A dedup is not a create: say what actually happened to the record.
+    const verb = o.status === "deduped" ? "Updated the existing" : OP_VERB[toolOperation(o.tool)];
     const noun = ENTITY_NOUN[TOOL_INTENT_ENTITY[o.tool]] ?? "record";
     const label = o.raw && o.raw !== o.tool ? ` "${o.raw}"` : "";
     return `${verb} ${noun}${label}`;
   });
   const more = ok.length > parts.length ? ` (+${ok.length - parts.length} more)` : "";
-  const failed = operations.filter((o) => o.status !== "ok").length;
+  const failed = operations.length - ok.length;
   const tail = failed ? ` ${failed} step${failed > 1 ? "s" : ""} didn't go through.` : "";
   return `${parts.join(". ")}.${more}${tail}`;
 }

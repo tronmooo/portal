@@ -128,7 +128,8 @@ export function areEntitiesCompatible(a: IntentEntity, b: IntentEntity): boolean
 export type RoutingMismatch =
   | "create_downgraded_to_update"
   | "entity_mismatch"
-  | "stale_turn_replay";
+  | "stale_turn_replay"
+  | "duplicate_create_in_turn";
 
 export interface RoutingViolation {
   mismatchType: RoutingMismatch;
@@ -316,6 +317,83 @@ export function isStaleTurnReplay(
   // otherwise the model invented a name and that is a different problem.
   const priorTokens = new Set(priorUserMessages.flatMap(tokenize));
   return labelTokens.every((t) => priorTokens.has(t));
+}
+
+// ── One request, one record ─────────────────────────────────────────────────
+
+/** A create this turn already performed. */
+export interface TurnCreate {
+  tool: string;
+  entity: IntentEntity;
+  /** Determiner-free, punctuation-free, lowercased name. */
+  key: string;
+}
+
+/**
+ * Name key for same-turn duplicate detection. Drops the determiners and
+ * punctuation that let one request produce two records: "my MacBook Pro m4"
+ * and "MacBook Pro M4" are the same laptop.
+ */
+export function createNameKey(label: string): string {
+  return String(label ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\b(?:my|our|the|a|an)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Has this turn already created this exact thing?
+ *
+ * Regression (2026-08-09): "Create a profile for my MacBook Pro m4" ran
+ * create_profile TWICE — once as an asset named "MacBook Pro M4", once as a
+ * person named "my MacBook Pro m4" — and the user got two records from one
+ * request. A create request produces ONE record.
+ *
+ * Matched on the NAME, not on the entity alone, so "add my cat Luna and my dog
+ * Rex" (two creates, two names) is untouched. Only a second create of the
+ * SAME name on a compatible entity is refused.
+ */
+export function findDuplicateCreateInTurn(
+  toolName: string,
+  input: Record<string, any> | undefined | null,
+  priorCreates: TurnCreate[],
+): TurnCreate | null {
+  if (toolOperation(toolName) !== "create") return null;
+  const entity = TOOL_INTENT_ENTITY[toolName];
+  if (!entity) return null;
+  const key = createNameKey(toolTargetLabel(input));
+  if (!key) return null;
+  return (
+    priorCreates.find((c) => c.key === key && areEntitiesCompatible(c.entity, entity)) ?? null
+  );
+}
+
+export function recordTurnCreate(toolName: string, input: Record<string, any> | undefined | null): TurnCreate | null {
+  if (toolOperation(toolName) !== "create") return null;
+  const entity = TOOL_INTENT_ENTITY[toolName];
+  const key = createNameKey(toolTargetLabel(input));
+  if (!entity || !key) return null;
+  return { tool: toolName, entity, key };
+}
+
+export function duplicateCreateViolation(toolName: string, label: string, prior: TurnCreate): RoutingViolation {
+  const entity = TOOL_INTENT_ENTITY[toolName] ?? "unknown";
+  return {
+    mismatchType: "duplicate_create_in_turn",
+    tool: toolName,
+    expectedEntity: prior.entity,
+    actualEntity: entity,
+    expectedOperation: "create",
+    actualOperation: "create",
+    modelDirective:
+      `Blocked: you already created "${label}" in this turn with ${prior.tool}. ` +
+      `One request creates ONE record — do not create it a second time under a different type or spelling. ` +
+      `If you need to add details to it, call the matching update tool instead.`,
+    // Silent: the first create's card already tells the user it exists.
+    userMessage: "",
+  };
 }
 
 export function staleReplayViolation(toolName: string, label: string): RoutingViolation {

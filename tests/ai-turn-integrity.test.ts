@@ -28,7 +28,12 @@ import {
   toolOperation,
   TOOL_INTENT_ENTITY,
   areEntitiesCompatible,
+  createNameKey,
+  findDuplicateCreateInTurn,
+  recordTurnCreate,
+  duplicateCreateViolation,
 } from "@shared/ai-tool-routing";
+import { stripLeadingDeterminer } from "@shared/entity-naming";
 import {
   isInternalDirective,
   toUserFacingError,
@@ -454,6 +459,99 @@ describe("old requests are not re-executed on a new turn", () => {
         expect(blocked, `${msg} must not run ${earlier.tool}`).toBe(true);
       }
     });
+  });
+});
+
+// ── One request, one record ─────────────────────────────────────────────────
+// 2026-08-09 screenshot: "Create a profile for my MacBook Pro m4" produced TWO
+// profiles — "MacBook Pro M4" (Asset) and "my MacBook Pro m4" (Person). Three
+// separate defects lined up: the model fanned one request into two calls, the
+// determiner survived into the name so name-equality dedup missed it, and an
+// absent/invalid type silently defaulted to "person", filing a laptop as a
+// human being.
+const MACBOOK_MSG = "Create a profile for my MacBook Pro m4";
+
+describe("one create request produces one record", () => {
+  it("reads the request as a single asset create named without the determiner", () => {
+    const intent = parseTurnIntent(MACBOOK_MSG);
+    expect(intent.operation).toBe("create");
+    expect(["asset", "profile"]).toContain(intent.entity);
+    expect(parseTurnIntents(MACBOOK_MSG).filter(isActionable)).toHaveLength(1);
+  });
+
+  it("strips a leading first-person determiner from a name", () => {
+    expect(stripLeadingDeterminer("my MacBook Pro m4")).toBe("MacBook Pro m4");
+    expect(stripLeadingDeterminer("Our House")).toBe("House");
+    expect(stripLeadingDeterminer("  my  Truck ")).toBe("Truck");
+  });
+
+  it("leaves real names alone", () => {
+    for (const name of ["MacBook Pro M4", "The Home Depot", "MyFitnessPal", "Mystic River House", "Amy"]) {
+      expect(stripLeadingDeterminer(name), name).toBe(name);
+    }
+  });
+
+  it("keys both spellings of the same thing to one name", () => {
+    expect(createNameKey("my MacBook Pro m4")).toBe(createNameKey("MacBook Pro M4"));
+    expect(createNameKey("the Dodge Ram 2025")).toBe(createNameKey("Dodge Ram 2025"));
+  });
+
+  it("blocks the second create of the same thing in one turn", () => {
+    const first = recordTurnCreate("create_profile", { name: "MacBook Pro M4", type: "asset" });
+    expect(first).not.toBeNull();
+    const dup = findDuplicateCreateInTurn(
+      "create_profile",
+      { name: "my MacBook Pro m4", type: "person" },
+      [first!],
+    );
+    expect(dup).not.toBeNull();
+    const v = duplicateCreateViolation("create_profile", "my MacBook Pro m4", dup!);
+    expect(v.mismatchType).toBe("duplicate_create_in_turn");
+    // Silent for the user — the first card already shows the record.
+    expect(v.userMessage).toBe("");
+    expect(v.modelDirective).toMatch(/already created/i);
+  });
+
+  it("does NOT block two creates of DIFFERENT things in one turn", () => {
+    const luna = recordTurnCreate("create_profile", { name: "Luna", type: "pet" })!;
+    expect(findDuplicateCreateInTurn("create_profile", { name: "Rex", type: "pet" }, [luna])).toBeNull();
+  });
+
+  it("does NOT block an update after a create of the same record", () => {
+    const mac = recordTurnCreate("create_profile", { name: "MacBook Pro M4", type: "asset" })!;
+    expect(findDuplicateCreateInTurn("update_profile", { name: "MacBook Pro M4" }, [mac])).toBeNull();
+  });
+
+  it("does NOT block a create with no name to key on", () => {
+    const mac = recordTurnCreate("create_profile", { name: "MacBook Pro M4", type: "asset" })!;
+    expect(findDuplicateCreateInTurn("create_expense", { amount: 2400 }, [mac])).toBeNull();
+    expect(recordTurnCreate("create_expense", { amount: 2400 })).toBeNull();
+  });
+
+  it("does not confuse a create on an unrelated entity", () => {
+    const mac = recordTurnCreate("create_profile", { name: "MacBook Pro M4", type: "asset" })!;
+    // Same name, different entity family — a habit called "MacBook Pro M4" is
+    // odd but it is not the asset, so it is not a duplicate create.
+    expect(findDuplicateCreateInTurn("create_habit", { name: "MacBook Pro M4" }, [mac])).toBeNull();
+  });
+
+  it("counts a deduped write as landed, not as a lost one", () => {
+    const res = checkClaims({
+      reply: "MacBook Pro M4 asset profile created.",
+      operations: [{ tool: "create_profile", status: "deduped", entityId: "p1", raw: "MacBook Pro M4" }],
+      intentEntity: "asset",
+      intentOperation: "create",
+    });
+    expect(res.unsupportedSuccess).toBe(false);
+  });
+
+  it("says what a dedup actually did when it rebuilds the summary", () => {
+    const summary = groundedSummary([
+      { tool: "create_profile", status: "deduped", entityId: "p1", raw: "MacBook Pro M4" },
+    ]);
+    expect(summary).toMatch(/Updated the existing/i);
+    expect(summary).toContain("MacBook Pro M4");
+    expect(summary).not.toMatch(/didn'?t go through/i);
   });
 });
 

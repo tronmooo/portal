@@ -98,6 +98,20 @@ describe("AI tool registry", () => {
     ).toEqual([]);
   });
 
+  // Source guard, not a behavior test: executeTool binds the real storage
+  // proxy, so this pins the one line by reading it. 2026-08-09 — create_profile
+  // silently defaulted an absent/invalid `type` to "person", which filed a
+  // MacBook Pro as a human being and put it in the people list, the owner
+  // badges, and ownership attribution. `type` is REQUIRED by the tool schema;
+  // reaching the fallback means a malformed call, and of every wrong answer
+  // "person" is the most damaging and the least recoverable.
+  it("create_profile never falls back to type 'person'", () => {
+    const fallback = SRC.match(/const resolvedProfileType\s*=\s*PROFILE_TYPES\.includes\(input\.type\)\s*\?\s*input\.type\s*:\s*"(\w+)"/);
+    expect(fallback, "create_profile type fallback line not found — did it move?").toBeTruthy();
+    expect(fallback![1]).not.toBe("person");
+    expect(fallback![1]).toBe("asset");
+  });
+
   it("TOOL_INTENT_ENTITY only lists real tools", () => {
     const bogus = Object.keys(TOOL_INTENT_ENTITY).filter((n) => !toolNames.includes(n));
     expect(bogus, `TOOL_INTENT_ENTITY keys that are not real tools: ${bogus.join(", ")}`).toEqual([]);

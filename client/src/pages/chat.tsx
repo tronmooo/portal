@@ -2805,7 +2805,7 @@ const MessageRow = memo(function MessageRow({
                 <span aria-hidden>{op.status === "deduped" ? "↩️" : op.status === "skipped" ? "⏸️" : "❌"}</span>
                 <span className="text-muted-foreground">
                   <span className="font-medium">{op.trackerName || op.raw || op.tool}</span>
-                  {op.status === "deduped" ? " — duplicate of an entry logged moments ago" : op.error ? ` — ${op.error}` : ""}
+                  {op.status === "deduped" ? " — already existed, so I updated it instead of adding a duplicate" : op.error ? ` — ${op.error}` : ""}
                 </span>
               </div>
             ))}
