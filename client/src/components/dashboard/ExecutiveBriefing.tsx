@@ -551,7 +551,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     onError: () => toast({ title: "Couldn't complete task", variant: "destructive" }),
   });
   const checkinHabit = useMutation({
-    mutationFn: async (id: string) => { await apiRequest("POST", `/api/habits/${id}/checkin`, {}); },
+    // Records ONE completion. On a multi-completion habit the tile keeps
+    // reading "1/2 done" until the target is met — checking in once does not
+    // finish a habit whose target is 2.
+    mutationFn: async (id: string) => { await apiRequest("POST", `/api/habits/${id}/checkin`, { count: 1, source: "manual" }); },
     onSuccess: () => { toast({ title: "Checked in" }); invalidateDomain("habits"); },
     onError: () => toast({ title: "Check-in failed", variant: "destructive" }),
   });

@@ -15,6 +15,7 @@ import {
   insertExpenseSchema,
   insertEventSchema,
   insertHabitSchema,
+  HABIT_MAX_TARGET_PER_DAY,
   insertObligationSchema,
   insertTrackerSchema,
   insertGoalSchema,
@@ -36,7 +37,14 @@ import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
-import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
+// hasExplicitHabitCheckinIntent is no longer consulted here: whether a report
+// is a habit completion is now decided by whether a habit of the USER'S OWN
+// matches it (see checkin_habit), not by the phrasing. Creating a habit still
+// requires explicit language, so hasExplicitHabitCreateIntent stays.
+import { hasExplicitHabitCreateIntent } from "@shared/habit-intent";
+import { checkHistoryReplay, replayRefusal } from "@shared/action-scope";
+import { habitCheckinCount, habitDayProgress, habitCompletionsOn } from "@shared/habit-schedule";
+import { parseCompletionCount, parseDailyTargetChange, hasMultipleCountPhrases, hasMultipleDailyTargets } from "@shared/habit-count-language";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectRecurrenceFreq } from "@shared/recurrence";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
@@ -59,7 +67,7 @@ import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
-import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime } from "@shared/timezone";
+import { DEFAULT_TIMEZONE, getUserToday, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime } from "@shared/timezone";
 import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries } from "@shared/series-detect";
@@ -1205,10 +1213,29 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     } catch { /* profile fetch failed — keep full list rather than break check-ins */ }
     const habit = matchHabitByName(selfScoped, habitName);
     if (habit) {
-      const checkin = await storage.checkinHabit(habit.id);
-      actions.push({ type: "checkin_habit", category: "habit", data: { habitName: habit.name } });
-      if (checkin) results.push(checkin);
-      return { matched: true, reply: `Checked in "${habit.name}" — ${habit.currentStreak + 1}-day streak.`, actions, results };
+      // Honor a count on the fast path too — "done water twice" must record
+      // two occurrences, not one, and the reply must show the day's progress
+      // rather than claiming the habit is finished after the first of three.
+      const spoken = parseCompletionCount(message);
+      const day = getUserToday(aiUserTimezone());
+      if (spoken?.mode === "set") {
+        await storage.setHabitDayCount(habit.id, day, spoken.count, { at: spoken.at, source: "ai_chat" });
+      } else {
+        const checkin = await storage.checkinHabit(habit.id, { date: day, count: spoken?.count || 1, at: spoken?.at, source: "ai_chat" });
+        if (checkin) results.push(checkin);
+      }
+      const after = await storage.getHabit(habit.id);
+      const prog = habitDayProgress(after || habit, day);
+      actions.push({ type: "checkin_habit", category: "habit", data: { habitName: habit.name, count: prog.count, target: prog.target } });
+      const streakNote = prog.done ? ` — ${after?.currentStreak ?? habit.currentStreak}-day streak.` : "";
+      return {
+        matched: true,
+        reply: prog.target > 1
+          ? `"${habit.name}" — ${prog.count} / ${prog.target} today${prog.exceeded ? " (past your goal)" : ""}.${streakNote}`
+          : `Checked in "${habit.name}"${streakNote || "."}`,
+        actions,
+        results,
+      };
     }
   }
 
@@ -3576,6 +3603,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name" },
+        targetPerDay: { type: "integer", description: "How many times per day the habit should be completed — the DAILY TARGET. 'walk the dog twice a day' → 2, 'drink water 8 times a day' → 8, 'brush teeth 2x daily' → 2. Defaults to 1 (a plain once-a-day checkbox). This is HOW MANY, independent of timeOfDay/scheduledTime which is WHEN." },
+        unitLabel: { type: "string", description: "Optional noun for a count-based habit — 'glasses', 'walks', 'doses'. Only set it when the user uses such a word." },
         frequency: { type: "string", enum: ["daily", "weekly", "custom"], description: "Frequency. Use 'custom' and set `days` when the user names specific weekdays (e.g. 'Mon/Wed/Fri')." },
         days: { type: "array", items: { type: "string" }, description: "Specific weekdays the habit occurs on, e.g. ['monday','wednesday','friday'] for 'every Mon, Wed, and Fri'. Set this whenever the user names particular days; the habit is then scheduled only on those days." },
         icon: { type: "string", description: "Emoji icon" },
@@ -3589,11 +3618,23 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "checkin_habit",
-    description: "Check in to a habit — mark it DONE for today. ONLY when the user EXPLICITLY references the habit: 'mark X done', 'mark off X', 'completed X habit', 'checked off X', 'check in X'. A plain activity report ('I did X', 'I took a shower', 'I went to the bathroom') is NOT a habit check-in — log it with log_tracker_entry instead. Find by habit name. Set forProfile ONLY when the user names that person in THIS message ('mark off Joe's water habit') — never infer a profile from conversation history or from who owns a similar-sounding habit.",
+    description:
+      "Record COMPLETIONS of a habit. Habits support multiple completions per day, each stored as its own timestamped occurrence — this NEVER just flips a done flag.\n" +
+      "Use it for explicit habit language ('mark off X', 'check in X', 'completed my X habit') AND for a plain report of doing something the user has a habit for ('I walked the dog', 'I took my medication twice'). If NO habit matches the activity, the tool says so — log it with log_tracker_entry instead.\n" +
+      "COUNT vs TOTAL — get this right:\n" +
+      "  • count:N ADDS N completions. Use for 'I walked the dog twice', 'I did it again' (1), 'two more', 'another one', 'I did it three times'.\n" +
+      "  • setTotal:N makes today's total EXACTLY N, adding or removing occurrences to get there. Use ONLY when the user is stating a running total or correcting the count: 'I've only walked the dog twice today', 'I've done it twice so far', 'make today 2'.\n" +
+      "  • When in doubt use count — it is additive and the user can undo one.\n" +
+      "Set forProfile ONLY when the user names that person in THIS message ('mark off Joe's water habit') — never infer a profile from conversation history or from who owns a similar-sounding habit.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name (partial match)" },
+        count: { type: "integer", description: "How many completions to ADD. 'once'/'again'/'one more' → 1, 'twice'/'two more' → 2, 'three times' → 3. Defaults to 1. Going past the daily target is fine and is recorded (4/3) — never clamp it." },
+        setTotal: { type: "integer", description: "Make today's total exactly this number instead of adding. Only for running totals / corrections ('I've only done it twice today', 'I've done it twice so far'). 0 clears the day." },
+        at: { type: "string", description: "Clock time the completion happened, 24h HH:MM, when the user gives one: 'at 8 AM' → '08:00', 'this morning' → '08:00', 'tonight' → '20:00'. Omit when they don't say." },
+        date: { type: "string", description: "YYYY-MM-DD the completion belongs to. Defaults to today; set it for 'I did it yesterday'." },
+        notes: { type: "string", description: "Optional note the user attached to this completion." },
         forProfile: { type: "string", description: "Profile name if this habit belongs to someone other than the user (e.g. 'Joe', 'Rex', 'Mom'). Omit for user's own habits." },
       },
       required: ["name"],
@@ -3890,12 +3931,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "update_habit",
-    description: "Update a habit. Find by name (partial match), then apply changes. Use this to reschedule a habit — e.g. 'move my lisinopril to the evening' → changes: { timeOfDay: 'evening' }.",
+    description: "Update a habit's CONFIGURATION (not its completions). Find by name (partial match), then apply changes. Reschedule: 'move my lisinopril to the evening' → changes:{ timeOfDay:'evening' }. Change the DAILY TARGET: 'set my water habit to 8 times per day' → changes:{ targetPerDay:8 }; 'change walking the dog from twice a day to three times a day' → changes:{ targetPerDay:3 }. Lowering a target never deletes completions already recorded.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name (partial match)" },
-        changes: { type: "object", description: "Fields to update — can include 'name', 'icon', 'color', 'frequency', 'targetDays', 'timeOfDay' (morning|afternoon|evening|bedtime|anytime), 'scheduledTime' (HH:MM 24h)." },
+        changes: { type: "object", description: "Fields to update — can include 'name', 'icon', 'color', 'frequency', 'targetDays', 'targetPerDay' (the daily target, an integer ≥ 1), 'unitLabel', 'timeOfDay' (morning|afternoon|evening|bedtime|anytime), 'scheduledTime' (HH:MM 24h)." },
       },
       required: ["name", "changes"],
     },
@@ -4042,11 +4083,13 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // ─── MISSING TOOLS: uncomplete_habit, complete_event, tracker entry CRUD ───
   {
     name: "uncomplete_habit",
-    description: "Remove/undo a habit check-in for today (or a specific date). Use when user says 'unmark X habit', 'undo my X checkin', 'I didn't actually do X', 'remove today's X checkin'. This is the OPPOSITE of checkin_habit.",
+    description: "Remove habit completions — the OPPOSITE of checkin_habit. Removes the MOST RECENT completion(s) on the day, leaving earlier ones and their timestamps intact. Use for 'undo that', 'remove one', 'I accidentally marked my medication twice, remove one' (count:1), 'take off two of those' (count:2), 'clear today's water' / 'reset today' (all:true).",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Habit name (partial match)" },
+        count: { type: "integer", description: "How many completions to remove, newest first. Defaults to 1." },
+        all: { type: "boolean", description: "Remove EVERY completion on the date — 'reset today', 'clear all of them'. Overrides count." },
         forProfile: { type: "string", description: "Profile name if unchecking someone else's habit." },
         date: { type: "string", description: "Date to uncheck (YYYY-MM-DD). Defaults to today." },
       },
@@ -4839,12 +4882,14 @@ BEHAVIOR:
   * BEFORE saying "I don't have that saved", you MUST call recall_memory with a focused query (e.g. "vin", "license plate", "policy number"). recall_memory searches EVERY profile field, every document's extracted data, memories, and captures, and already bridges these label synonyms. Only answer "not saved" if recall_memory ALSO comes back empty.
   * DOCUMENT-SPECIFIC FIELD QUESTIONS — RETRIEVAL ORDER (CRITICAL): when the user names a document type ("driver's license number", "passport expiration", "registration expiry", "insurance policy number"), the answer MUST come from a document of THAT type. Order: (1) the "DOCUMENT FIELD LOOKUP" block at the top of EXISTING DATA, when present — it already ran the type-scoped structured-field search, trust it over everything else; (2) that document's own extracted fields via retrieve_document; (3) recall_memory / search_documents as the LAST resort. Field labels COLLIDE across document types: a vehicle registration's "License Number" is the license PLATE — NOT a driver's license number — and a registration's "Expiration Date" is the registration's, not the license's. NEVER answer with a same-named field from the wrong document type; if the right document/field isn't stored, say exactly that instead.
   * FOLLOW-UPS KEEP THE SUBJECT: when the user corrects you ("that's my license plate — I want my driver's license number") or sends a short follow-up ("so what is it?"), resolve what they mean from the conversation history. NEVER reply "What specific information are you referring to?" when the history already names the subject — re-run the lookup for the corrected subject and answer.
-- NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something but it's NOT in the data snapshot above, it was DELETED. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
+- NEVER ASSUME PAST ACTIONS STILL EXIST: If the user asks IN THIS MESSAGE for something the conversation history shows you previously created, and it's NOT in the data snapshot above, it was DELETED — call the tool again. The dedup check inside the tool will prevent actual duplicates. This rule is about re-doing what the user is asking for RIGHT NOW; it is NEVER a licence to re-run an earlier turn's request on its own.
+- SCOPE — THIS MESSAGE ONLY (CRITICAL): Every write you make must trace back to a clause in the user's CURRENT message. The conversation history is context for understanding that message ("it", "again", "the same one") — it is NOT a list of pending work. A request from an earlier turn was already handled by the assistant turn that followed it; never re-execute it. Real incident: the user asked for a "walk the dog" habit and the assistant ALSO re-created the previous turn's "mow the lawn" reminder. Before you finish, check every tool call you made and drop any whose subject the current message never mentions or refers to.
+- NEVER DO MORE THAN ASKED: Create exactly the records the user asked for and nothing else. Do not add a reminder, task, event, goal, tracker, or habit the user did not request as a "helpful" extra. If you think a companion record would help, SAY SO in your reply and let the user ask for it.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - BIAS TO ACTION: When the user asks to create, schedule, add, mark off, complete, or check in something, DO IT immediately. NEVER ask clarifying questions for simple CRUD. Just execute.
   - "Mark off my run" → checkin_habit(name: "Running" or "Morning Run" — find closest match) — DO NOT ask which one
-  - "I went on my morning run" / "I did X" / "I took X" / "I smoked X" / "I went to X" → log_tracker_entry — these are ACTIVITY REPORTS, not habit check-ins. Habits only move on EXPLICIT language ("mark off", "check in", "my X habit").
+  - "I went on my morning run" / "I did X" / "I took X" / "I smoked X" → checkin_habit if the user has their OWN habit for it (the Habits line lists them), otherwise log_tracker_entry. Never both, and never another profile's habit.
   - "schedule a doctor appointment" → create_task immediately
   - If ambiguous between 2 items with similar names, pick the closest match and do it. You can mention in your response what you picked.
   - NEVER present numbered options for simple check-ins, completions, or mark-offs. That is hostile UX.
@@ -4902,12 +4947,25 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 - REPEATING TASKS WRITTEN AS SEVERAL ROWS: a schedule is sometimes stored as one task per occurrence ("Refill X - August", "Refill X - September", …) with no recurrence tag. Treat those as ONE repeating task, not several: describe it as "a monthly schedule with N occurrences", never as separate to-dos. delete_task removes the WHOLE series and reports seriesDeleted + count — say how many occurrences went and that it is gone from tasks, calendar and recurring dates. To drop a single occurrence the user must name its date ("delete the September refill").
 
 ━━━ HABIT CRUD ━━━
-- create: create_habit(name, forProfile?)
-- mark done TODAY: checkin_habit(name, forProfile?) → adds today's check-in
-- undo/unmark: uncomplete_habit(name, forProfile?, date?) → removes check-in
-- update: update_habit(name, changes)
+A habit is NOT a checkbox. It has a DAILY TARGET (targetPerDay) and each completion is its own timestamped occurrence, so a day reads "2 / 3", not "done / not done". The Habits line in EXISTING DATA shows today's count and target for every habit — read it before deciding anything below.
+- create: create_habit(name, targetPerDay?, forProfile?). "walk the dog twice a day" → targetPerDay:2. "drink water 8 times a day" → targetPerDay:8. Omit it for a plain once-a-day habit.
+- record completions: checkin_habit(name, count?, setTotal?, at?, date?, forProfile?)
+- remove completions: uncomplete_habit(name, count?, all?, date?, forProfile?)
+- change the target/schedule/name: update_habit(name, changes)
 - delete: delete_habit(name)
-- DUPLICATE FOR ANOTHER PROFILE: "give Luna the same water habit" / "duplicate this habit for Mike" → read the existing habit (its frequency/schedule), then create_habit with the SAME name+schedule and forProfile set to the target. Habits are profile-exclusive — never just add the second profile to the existing habit's links.
+
+COUNTS — the single most important habit rule. Map the user's words to ONE of these:
+  ADD (count:N) — the default. "I walked the dog" → count:1. "I walked the dog twice" → count:2. "three times" → count:3. "again" / "one more" / "another" → count:1. "twice more" / "two more" → count:2. "I completed all three" reports where the day LANDED — use setTotal:3.
+  SET (setTotal:N) — only when the user states a RUNNING TOTAL or corrects the count: "I've done it twice so far" → setTotal:2. "I only walked the dog twice today" → setTotal:2. "make today 3" → setTotal:3.
+  REMOVE — "I accidentally marked my medication twice, remove one" → uncomplete_habit(count:1). "undo that" → uncomplete_habit(count:1). "reset today's water" / "clear them all" → uncomplete_habit(all:true).
+  TARGET — "set my water habit to 8 times per day" → update_habit(changes:{targetPerDay:8}). "change walking the dog from twice a day to three times a day" → update_habit(changes:{targetPerDay:3}). Changing a target is NOT a completion; never also call checkin_habit for it.
+- EXCEEDING IS ALLOWED: if the user walked the dog 4 times on a target of 3, record all 4. Never cap at the target, never refuse the extra, and report it as "4 / 3".
+- TIMES: pass "at" in 24h HH:MM whenever the user says when — "at 8 AM" → at:"08:00", "this morning" → at:"08:00", "tonight" → at:"20:00". "I brushed my teeth this morning and again tonight" is TWO calls: at:"08:00" and at:"20:00".
+- FOLLOW-UPS: "I did it again" / "actually twice more" refer to the habit from the previous turn — resolve "it" from the conversation and add to THAT habit. This is the one case where the subject legitimately comes from history.
+- ONE MESSAGE, MANY HABITS: "I walked the dog twice, took my medication once, drank water four times, and brushed my teeth this morning and again tonight" → checkin_habit(Walk Dog, count:2), checkin_habit(Medication, count:1), checkin_habit(Water, count:4), checkin_habit(Brush Teeth, count:1, at:"08:00"), checkin_habit(Brush Teeth, count:1, at:"20:00"). Never collapse them into one call.
+- REPORT THE NUMBERS: the tool returns previousCount, count and target. Say "Walk Dog is now 2 / 3 today", not a bare "done". A habit with a target above 1 is NOT complete until the count reaches it.
+- ACTIVITY WITH NO HABIT: if checkin_habit comes back HABIT_NOT_FOUND, the user has no habit for that activity — log it with log_tracker_entry instead, and do NOT create a habit unless they asked for one.
+- DUPLICATE FOR ANOTHER PROFILE: "give Luna the same water habit" / "duplicate this habit for Mike" → read the existing habit (its frequency/schedule/target), then create_habit with the SAME name+schedule+targetPerDay and forProfile set to the target. Habits are profile-exclusive — never just add the second profile to the existing habit's links.
 
 ━━━ GOAL CRUD ━━━
 - PROJECTS ARE GOALS: "create a project called X" / "my kitchen remodel project" / "add X to my projects" → the Goals module IS the projects list. create_goal(title, type:"custom"), update_goal, delete_goal. Never create a tracker/artifact for a "project".
@@ -4943,7 +5001,7 @@ When the user attaches a clock time or date to an action, pass it via the at par
 - Pass only the explicit facts; the server's estimation engine converts units and derives the rest (steps from distance via the user's own stride/history, pace from distance+duration, calories from weight+pace) with per-value confidence.
 - ESTIMATE HONESTY: the tool result's estimateNote lists derived/estimated values. Reply like "Logged a 1-mile walk — about 2,150 steps and ~20 minutes based on your walking history." NEVER present an estimated number as something the user said, and NEVER invent numbers not in the tool result.
 - Explicit user values are never overwritten by estimates: "1 mile and 2,400 steps" saves BOTH exactly as given.
-- ACTIVITY ≠ HABIT: "I did / I took / I smoked / I went / I played" are ACTIVITY REPORTS → log_tracker_entry, ALWAYS — even when a habit with a similar name exists (on any profile). NEVER call checkin_habit or create_habit for them, never ask "did you mean the habit?", and never derail the rest of the message over a habit. Habits move ONLY on explicit language: "mark off X", "check in X", "completed my X habit", "make this a habit", "every day", "remind me".
+- ACTIVITY vs HABIT — decided by WHAT EXISTS, not by phrasing: "I did / I took / I went / I played" reports go to checkin_habit when the user has a habit of THEIR OWN for that activity (see the Habits line in EXISTING DATA), because that is what they created the habit for — "I walked the dog" on a Walk the Dog habit is a completion. When NO habit of theirs matches, it is an ACTIVITY REPORT → log_tracker_entry, and you must not invent a habit for it. Two hard limits stay: NEVER check in ANOTHER PROFILE'S habit from an unqualified message (the user saying "I went to the bathroom" must not touch Rex's bathroom habit), and NEVER call create_habit off an activity report — creating a habit still requires explicit language ("make this a habit", "every day", "add a habit to …").
 - NEVER DROP DETAILS: every number, unit, duration, count, method, and timestamp the user states MUST appear in the entry ("for an hour" → duration:60; "once" → count:1; "a blunt" → method:"blunt"; "at 8:15 AM" → at:"8:15 AM"). Losing a stated detail is a logging failure.
 - PROFILE OWNERSHIP: entries belong to the user (self) unless THIS message explicitly names someone else ("Rex threw up", "log water for Mom"). NEVER pick a profile from conversation history, from the active dashboard filter chatter, or from which profile happens to own a similar tracker/habit name.
 
@@ -5095,7 +5153,7 @@ DATA CLASSIFICATION RULES (NEVER VIOLATE):
 - MEDICATION: When a user mentions a NEW/prescribed medication ("prescribed lisinopril", "Max is on Heartgard now"), update the PROFILE with medication info in their health fields (update_profile with fields: { medications: "..." }). Do NOT create a "Medication" tracker unless the user asks to track doses over time.
 - MEDICATION DOSES: "I took my Lisinopril" / "gave Max his pill" → log_medication_dose. "I skipped/forgot tonight's dose" → skip_medication_dose (missed:true when forgotten). "what doses did I miss this week" / "how's my adherence" → get_missed_doses. "show my dose history" / "when did I last take it" → get_dose_history. These need a medication TRACKER; if none exists, say so and offer to create one. If the user has several medications and didn't name one, the tool will ask — relay its question.
 - WATER INTAKE / HYDRATION: If a user says "drank 8 glasses of water" or "8oz water", log to the existing Hydration/Water tracker if one exists. If none exists, create a habit ("Drink water") rather than a tracker — daily water goals are habits, not measurements.
-- HABITS vs TRACKERS: Habits are binary daily actions (did it / didn't). Trackers are numeric measurements over time. "Take medication" = habit. "Blood pressure 120/80" = tracker. "Drank 8 glasses" = habit check-in. "Weight 180 lbs" = tracker.
+- HABITS vs TRACKERS: Habits are COUNTED repetitions of an action against a daily target (1x, 2x, 3x, 8x a day) — each completion is its own occurrence. Trackers are numeric measurements over time. "Take medication twice a day" = habit with targetPerDay 2. "Blood pressure 120/80" = tracker. "Drank 8 glasses" = 8 habit completions if a water habit exists. "Weight 180 lbs" = tracker.
 - LOANS/BILLS: When a user mentions rent, bills, or debts, use create_obligation. Do NOT create a "loan" profile for recurring bills. Loans are only for actual loan instruments (mortgage, car loan, student loan) with APR, term, and principal.
 
 LIABILITIES — FIRST-CLASS DEBT INSTRUMENTS (CRITICAL — read carefully):
@@ -5206,7 +5264,7 @@ NEVER:
   * NEVER claim a note was attached without actually calling create_document. There is no Google Drive integration — every note lives as a Portol document linked to the profile. If the user mentions Google Drive / Dropbox / iCloud, politely clarify that Portol stores notes natively and proceed with create_document anyway.
 - Never accept a NEGATIVE liability balance. If the user says "set balance to -$500" or "I overpaid by $200", do NOT pass a negative number. Instead either: (a) set balance to 0 and explain there's no negative-debt concept, or (b) log a 'reversal' payment for the overpaid amount.
 - Never split a self-owned liability into multiple ownership rows unless the user explicitly says they share it. Default = single owner = self at 100%, recorded implicitly via the parent profile.
-- GOALS + HABITS: When creating a daily or recurring goal tied to a tracker (e.g., "run every day", "drink 8 glasses of water daily", "meditate 10 min daily"), ALSO create a companion habit via create_habit so the user gets daily check-in tracking. The goal tracks progress toward the target; the habit tracks daily consistency. Always do BOTH calls when the goal implies a daily action.
+- GOALS + HABITS: A goal and a habit are two different records — create only the one the user asked for. "Set a goal to run every day" → create_goal ONLY. "Make running a daily habit" → create_habit ONLY. Create BOTH only when the user asks for both ("set a goal to drink 8 glasses a day and track it as a habit"). When you create just the goal, you MAY offer in your reply: "want a daily habit check-in for this too?" — but do not create it unasked.
 
 CRITICAL ROUTING RULES (NEVER VIOLATE):
 - "X owes me $Y" or "collect $Y from X" or "X owes me $Y for Z" → ALWAYS create_task with title like "Collect $Y from X for Z" and forProfile: "X". NEVER EVER use save_memory for debts/money owed. This applies to ALL variations: "owes me", "owes us", "I lent X $Y", "X hasn't paid me back".
@@ -9535,11 +9593,22 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       // P0.3a: validate with the shared insert schema before writing.
       const habitTimeOfDay = input.timeOfDay === "night" ? "bedtime" : input.timeOfDay;
+      // DAILY TARGET: "a habit to walk the dog twice a day" is targetPerDay 2,
+      // not a once-a-day checkbox the user has to tap twice. The model
+      // normally passes it; when it doesn't, read it off the sentence rather
+      // than silently dropping the "twice a day" the user actually said.
+      const explicitTarget = Number.isFinite(Number(input.targetPerDay)) && Number(input.targetPerDay) >= 1
+        ? Math.floor(Number(input.targetPerDay))
+        : undefined;
+      const spokenTarget = hasMultipleDailyTargets(habitMsg) ? null : parseDailyTargetChange(habitMsg);
+      const habitTargetPerDay = explicitTarget ?? spokenTarget ?? undefined;
       const habitPayload = validateAiPayload(insertHabitSchema, {
         name: habitName,
         frequency: habitTargetDays ? "custom" : (input.frequency || "daily"),
         icon: input.icon,
         color: input.color,
+        ...(habitTargetPerDay ? { targetPerDay: habitTargetPerDay } : {}),
+        ...(input.unitLabel ? { unitLabel: String(input.unitLabel).slice(0, 24) } : {}),
         ...(habitTargetDays ? { targetDays: habitTargetDays } : {}),
         ...(habitTimeOfDay ? { timeOfDay: habitTimeOfDay } : {}),
         ...(input.scheduledTime ? { scheduledTime: input.scheduledTime } : {}),
@@ -9564,22 +9633,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "checkin_habit": {
       const habits = await storage.getHabits();
-      // HABIT ≠ ACTIVITY LOG (user directive 2026-07-15): a habit is only
-      // checked in when the user EXPLICITLY says so ("mark off my run",
-      // "completed my water habit"). A plain activity report ("I went to the
-      // bathroom at 8:15 AM") must be a tracker entry — previously it matched
-      // ANOTHER PROFILE'S "Go to the bathroom 3x daily" habit and derailed
-      // the whole message into a clarifying question.
       const checkinMsg = String((input as any).__userMessage || "");
-      if (checkinMsg && !hasExplicitHabitCheckinIntent(checkinMsg)) {
-        return {
-          error: `The user reported an activity, not a habit check-in — do NOT touch habits. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
-          code: "NOT_A_HABIT_CHECKIN",
-        };
-      }
       // Scope to the named profile, else to self-owned/unowned habits.
       // NEVER fall back to other profiles' habits — an unqualified message
-      // can only ever move the user's own streaks.
+      // can only ever move the user's own streaks. This scoping is what keeps
+      // the 2026-07-15 incident fixed ("I went to the bathroom at 8:15 AM"
+      // matched ANOTHER PROFILE'S "Go to the bathroom 3x daily" habit).
       let eligible = habits;
       if (input.forProfile) {
         const allProfs = await storage.getProfiles();
@@ -9597,12 +9656,58 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // it let unqualified messages check in other people's habits.
       const habit = matchHabitByName(eligible, input.name || "");
       if (!habit) {
+        // HABIT ≠ ACTIVITY LOG: with no habit of that name in the user's own
+        // scope, a report of doing something is a tracker entry. (The old
+        // guard refused on phrasing alone and ran BEFORE the lookup, so
+        // "I walked the dog" could not move a Walk the Dog habit the user
+        // had deliberately created. Now the habit's existence decides.)
         return {
           error: `No habit named "${input.name || "unknown"}" on ${input.forProfile ? `${input.forProfile}'s` : "the user's"} profile. Do NOT create a habit and do NOT check in another profile's habit — if the user reported doing something, log it with log_tracker_entry instead.`,
           code: "HABIT_NOT_FOUND",
         };
       }
-      return storage.checkinHabit(habit.id);
+      const day = typeof input.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.date)
+        ? input.date : getUserToday(aiUserTimezone());
+      // The model normally passes count/setTotal/at itself. When it doesn't,
+      // read them straight off the sentence so "I walked the dog twice" is
+      // still two completions and not one.
+      //
+      // The fallback is OFF for messages carrying several different counts
+      // ("dog twice, medication once, water four times") — there is no way to
+      // tell from the whole sentence which count belongs to THIS habit, and
+      // guessing would log two doses of medication. Those messages must carry
+      // an explicit per-call count, which the tool description demands.
+      const parsedCount = hasMultipleCountPhrases(checkinMsg) ? null : parseCompletionCount(checkinMsg);
+      const explicitTotal = Number.isFinite(Number(input.setTotal)) ? Math.max(0, Math.floor(Number(input.setTotal))) : undefined;
+      const inferredTotal = explicitTotal === undefined && parsedCount?.mode === "set" ? parsedCount.count : undefined;
+      const count = Number.isFinite(Number(input.count)) && Number(input.count) > 0
+        ? Math.floor(Number(input.count))
+        : (parsedCount?.mode === "add" ? parsedCount.count : 1);
+      const at = typeof input.at === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(input.at)
+        ? input.at : parsedCount?.at;
+      const setTotal = explicitTotal ?? inferredTotal;
+
+      const before = habitCheckinCount(habit, day);
+      if (setTotal !== undefined) {
+        await storage.setHabitDayCount(habit.id, day, setTotal, { at, notes: input.notes, source: "ai_chat" });
+      } else {
+        await storage.checkinHabit(habit.id, { date: day, count, at, notes: input.notes, source: "ai_chat" });
+      }
+      const updated = await storage.getHabit(habit.id);
+      const progress = habitDayProgress(updated || habit, day);
+      return {
+        habit: updated,
+        habitName: habit.name,
+        date: day,
+        // Explicit before/after so the reply can be honest about what changed
+        // ("2 → 4 of 3") instead of guessing from the habit object.
+        previousCount: before,
+        count: progress.count,
+        target: progress.target,
+        completedToday: progress.done,
+        exceededTarget: progress.exceeded,
+        progress: `${progress.count}/${progress.target}`,
+      };
     }
 
     case "create_obligation": {
@@ -10419,13 +10524,39 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // `changes` object). This lets time-of-day scheduling flow through while
       // ignoring stray keys.
       const rawChanges = (input.changes || {}) as Record<string, any>;
-      const allowed: (keyof typeof rawChanges)[] = ["name", "icon", "color", "frequency", "targetDays", "targetPerDay", "timeOfDay", "scheduledTime"];
+      const allowed: (keyof typeof rawChanges)[] = ["name", "icon", "color", "frequency", "targetDays", "targetPerDay", "unitLabel", "timeOfDay", "scheduledTime"];
       const changes: Record<string, any> = {};
       for (const k of allowed) if (rawChanges[k] !== undefined) changes[k] = rawChanges[k];
       // Normalize a bare "night" alias the model may emit for bedtime.
       if (changes.timeOfDay === "night") changes.timeOfDay = "bedtime";
+      // "set my water habit to 8 times per day" / "change walking the dog from
+      // twice a day to three times a day" — recover the new daily target from
+      // the sentence when the model routed here without it.
+      if (changes.targetPerDay === undefined) {
+        const uhMsg = String((input as any).__userMessage || "");
+        const spoken = hasMultipleDailyTargets(uhMsg) ? null : parseDailyTargetChange(uhMsg);
+        if (spoken !== null) changes.targetPerDay = spoken;
+      }
+      if (changes.targetPerDay !== undefined) {
+        const n = Math.floor(Number(changes.targetPerDay));
+        if (!Number.isFinite(n) || n < 1) delete changes.targetPerDay;
+        else changes.targetPerDay = Math.min(n, HABIT_MAX_TARGET_PER_DAY);
+      }
+      if (Object.keys(changes).length === 0) {
+        return { error: `No recognized changes for habit "${uhMatch.name}". Pass a changes object with fields like targetPerDay, name, frequency, or timeOfDay.` };
+      }
       const updated = await storage.updateHabit(uhMatch.id, changes);
-      return { updated: true, habit: updated };
+      // Lowering a target never deletes completions already recorded — say so
+      // honestly rather than implying today's history was rewritten.
+      const uhToday = getUserToday(aiUserTimezone());
+      const uhProgress = updated ? habitDayProgress(updated, uhToday) : undefined;
+      return {
+        updated: true,
+        habit: updated,
+        habitName: uhMatch.name,
+        ...(changes.targetPerDay !== undefined ? { targetPerDay: changes.targetPerDay } : {}),
+        ...(uhProgress ? { progress: `${uhProgress.count}/${uhProgress.target}`, completedToday: uhProgress.done } : {}),
+      };
     }
 
     case "delete_habit": {
@@ -10467,13 +10598,35 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       const habit = matchHabitByName(eligible, input.name || "") ?? matchHabitByName(habits, input.name || "");
       if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
-      const targetDate = input.date || new Date().toLocaleDateString('en-CA');
-      // Find and delete today's checkin
+      const targetDate = typeof input.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.date)
+        ? input.date : getUserToday(aiUserTimezone());
       const fullHabit = await storage.getHabit(habit.id);
-      const checkin = (fullHabit?.checkins || []).find((c: any) => c.date === targetDate);
-      if (!checkin) return { error: `No check-in found for "${habit.name}" on ${targetDate}` };
-      await storage.deleteHabitCheckin(habit.id, checkin.id);
-      return { uncompleted: true, habitName: habit.name, date: targetDate };
+      const onDay = habitCompletionsOn(fullHabit || habit, targetDate);
+      if (onDay.length === 0) return { error: `No completions recorded for "${habit.name}" on ${targetDate}` };
+      // Remove the NEWEST completions first so an explicitly-timed earlier one
+      // ("I brushed my teeth at 8am") survives an undo of the later entry.
+      const wantAll = input.all === true;
+      const removeCount = wantAll
+        ? onDay.length
+        : Math.min(onDay.length, Math.max(1, Math.floor(Number(input.count) || 1)));
+      if (wantAll) {
+        await storage.resetHabitDay(habit.id, targetDate);
+      } else {
+        for (let i = 0; i < removeCount; i++) await storage.undoLastHabitCheckin(habit.id, targetDate);
+      }
+      const after = await storage.getHabit(habit.id);
+      const progress = habitDayProgress(after || habit, targetDate);
+      return {
+        uncompleted: true,
+        habitName: habit.name,
+        date: targetDate,
+        removed: removeCount,
+        previousCount: onDay.length,
+        count: progress.count,
+        target: progress.target,
+        progress: `${progress.count}/${progress.target}`,
+        habit: after,
+      };
     }
 
     case "complete_event": {
@@ -13528,9 +13681,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     `Active Tasks: ${tasks.filter(t => t.status !== "done").slice(0, 15).map(t => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`,
     `Recent Expenses (last 10): ${expenses.slice(-10).map(e => `$${e.amount} - ${e.description} (${e.date?.slice(0,10)})`).join("; ") || "none"}`,
     `Upcoming Events (next 10): ${events.filter(e => new Date(e.date) >= new Date()).slice(0, 10).map(e => `${e.title} on ${e.date}`).join("; ") || "none"}`,
-    `Habits (${habits.length}): ${habits.slice(0, 20).map(h => {
+    // Habits carry TODAY'S PROGRESS against their daily target, not just a
+    // streak. Without it the assistant cannot tell "I've done it twice so far"
+    // (set today to 2) from "I did it twice more" (add 2 to what's there).
+    `Habits (${habits.length}) [today's completions / daily target]: ${habits.slice(0, 20).map(h => {
       const hOwner = (h.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name || pid.slice(0,8)).join(",");
-      return `${h.name} (${h.frequency}, ${h.currentStreak}d streak, owner:${hOwner || "unlinked"})`;
+      const hp = habitDayProgress(h, getUserToday(aiUserTimezone()));
+      return `${h.name} (${hp.count}/${hp.target} today${hp.exceeded ? " — exceeded" : hp.done ? " — complete" : ""}, ${h.frequency}, ${h.currentStreak}d streak, owner:${hOwner || "unlinked"})`;
     }).join("; ") || "none"}`,
     `Obligations (${obligations.length}): ${obligations.filter((o: any) => o.status !== "cancelled").slice(0, 20).map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
     // Assets & vehicles with full field data
@@ -13801,8 +13958,17 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         if (msg?.role !== "user" && msg?.role !== "assistant") continue;
         if (typeof msg.content !== "string") continue;
         const cleaned = sanitize(msg.content);
-        const content = cleaned.length > 1500 ? cleaned.slice(0, 1500) + "\n[...truncated]" : cleaned;
-        if (!content) continue;
+        let content = cleaned.length > 1500 ? cleaned.slice(0, 1500) + "\n[...truncated]" : cleaned;
+        // An action-only assistant turn can sanitize down to nothing. Dropping
+        // it here used to collapse the two user turns around it into ONE
+        // "user A --- user B" message, which the model then read as a single
+        // request with both action items still pending — the exact replay that
+        // re-created a previous turn's reminder. Keep the turn with a stand-in
+        // so the alternation (and "that request was already handled") survives.
+        if (!content) {
+          if (msg.role !== "assistant") continue;
+          content = "(Handled — the requested actions were completed.)";
+        }
         const last = messages[messages.length - 1];
         if (last && last.role === msg.role) {
           last.content = `${last.content}\n---\n${content}`;
@@ -14017,6 +14183,24 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // create_profile (and any other guarded tool) can compare requested
           // fields against what the user actually said.
           const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
+          // ONLY WHAT THE USER ASKED FOR (user report 2026-08-09): "create a
+          // habit to walk the dog twice a day" also re-created the previous
+          // turn's "Mow the lawn" reminder. Refuse any create whose subject
+          // exists ONLY in the carried-forward history — see shared/action-scope.
+          const replay = checkHistoryReplay({
+            toolName: toolUse.name,
+            input: inputWithCtx as Record<string, any>,
+            userMessage,
+            history: conversationHistory,
+          });
+          if (replay.replay) {
+            const refusal = replayRefusal(toolUse.name, replay.subject || "");
+            logger.warn("ai", `Blocked history replay: ${toolUse.name}("${replay.subject}") — not in the current message`);
+            toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify(refusal), is_error: true });
+            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Not requested in this message" });
+            emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: "Not requested in this message" });
+            continue;
+          }
           // Pre-write snapshot for update/delete tools (one list read) — gives
           // the action ledger a `before` for reapply/recreate undo plans.
           const beforeRows = READ_ONLY_TOOLS.has(toolUse.name)

@@ -6,6 +6,7 @@ import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/ent
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
+import { buildHabitCompletionRows, type HabitCheckinOptions } from "./habit-completions";
 
 // Per-request storage context — eliminates the global userId race condition (C-1)
 // Auth middleware runs storage within this context so all downstream code
@@ -124,7 +125,18 @@ export interface IStorage {
   getHabits(profileIds?: string[]): Promise<Habit[]>;
   getHabit(id: string): Promise<Habit | undefined>;
   createHabit(data: InsertHabit): Promise<Habit>;
-  checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined>;
+  /**
+   * Record one or more completions. Each is its own occurrence row — passing
+   * `{ count: 3 }` writes three, and going past the habit's daily target is
+   * recorded (4/3), never refused.
+   */
+  checkinHabit(habitId: string, dateOrOptions?: string | HabitCheckinOptions, value?: number, notes?: string): Promise<HabitCheckin | undefined>;
+  /** Make `date` hold exactly `total` completions ("I've only done it twice"). */
+  setHabitDayCount(habitId: string, date: string, total: number, opts?: HabitCheckinOptions): Promise<number | undefined>;
+  /** Remove the most recent completion on `date` ("undo one"). */
+  undoLastHabitCheckin(habitId: string, date: string): Promise<HabitCheckin | undefined>;
+  /** Remove every completion on `date` ("reset today"). Returns how many. */
+  resetHabitDay(habitId: string, date: string): Promise<number | undefined>;
   updateHabit(id: string, data: Partial<Habit>): Promise<Habit | undefined>;
   deleteHabit(id: string): Promise<boolean>;
 
@@ -1568,29 +1580,87 @@ export class MemStorage implements IStorage {
   }
   async getHabit(id: string) { return this.habits.get(id); }
   async createHabit(data: InsertHabit): Promise<Habit> {
-    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", targetPerDay: data.targetPerDay || 1, timeOfDay: data.timeOfDay ?? undefined, scheduledTime: data.scheduledTime ?? undefined, currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
+    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", targetPerDay: data.targetPerDay || 1, unitLabel: data.unitLabel ?? undefined, timeOfDay: data.timeOfDay ?? undefined, scheduledTime: data.scheduledTime ?? undefined, currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
     this.habits.set(habit.id, habit);
     this.logActivity("habit", `Created habit: ${habit.name}`);
     return habit;
   }
-  async checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined> {
-    const habit = this.habits.get(habitId);
-    if (!habit) return undefined;
-    const checkinDate = date || getUserToday();
-    // Allow multiple check-ins per day up to targetPerDay (matches Supabase implementation)
-    const todayCheckins = habit.checkins.filter(c => c.date === checkinDate);
-    const maxPerDay = habit.targetPerDay || 1;
-    if (todayCheckins.length >= maxPerDay) {
-      return todayCheckins[todayCheckins.length - 1];
-    }
-    const checkin: HabitCheckin = { id: randomUUID(), date: checkinDate, value, notes, timestamp: new Date().toISOString() };
-    habit.checkins.push(checkin);
-    // Recalculate streaks (with targetPerDay support)
+  /** Recompute this habit's streak columns from its completion rows. */
+  private _resyncHabitStreak(habit: Habit) {
     const { current, longest } = calculateStreak(habit.checkins, habit.targetPerDay || 1);
     habit.currentStreak = current;
-    habit.longestStreak = Math.max(longest, habit.longestStreak);
-    this.logActivity("habit", `Checked in: ${habit.name}${value ? ` (${value})` : ""}`);
-    return checkin;
+    habit.longestStreak = Math.max(longest, habit.longestStreak || 0);
+  }
+
+  private _dayCompletions(habit: Habit, date: string): HabitCheckin[] {
+    return habit.checkins
+      .filter(c => c.date === date)
+      .sort((a, b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
+  }
+
+  /**
+   * Mirror of SupabaseStorage.checkinHabit — every completion is its own
+   * occurrence, and exceeding the daily target is recorded rather than
+   * refused. The old "already at max for today, return the last row" branch
+   * is gone: it made every tap past the target a silent no-op.
+   */
+  async checkinHabit(habitId: string, dateOrOptions?: string | HabitCheckinOptions, value?: number, notes?: string): Promise<HabitCheckin | undefined> {
+    const habit = this.habits.get(habitId);
+    if (!habit) return undefined;
+    const opts: HabitCheckinOptions = typeof dateOrOptions === "string" || dateOrOptions == null
+      ? { date: dateOrOptions as string | undefined, value, notes }
+      : dateOrOptions;
+    const checkinDate = opts.date || getUserToday();
+    const count = Math.max(1, Math.floor(opts.count ?? 1));
+    const rows = buildHabitCompletionRows({
+      habitId, userId: "mem", date: checkinDate, count,
+      at: opts.at, value: opts.value, notes: opts.notes, source: opts.source,
+      timezone: opts.timezone,
+    });
+    const created: HabitCheckin[] = rows.map(r => ({
+      id: r.id, date: r.date, value: r.value ?? undefined, notes: r.notes ?? undefined,
+      timestamp: r.timestamp, source: r.source, createdAt: r.created_at,
+    }));
+    habit.checkins.push(...created);
+    this._resyncHabitStreak(habit);
+    this.logActivity("habit", `Checked in: ${habit.name}${count > 1 ? ` ×${count}` : ""}`);
+    return created[created.length - 1];
+  }
+
+  async setHabitDayCount(habitId: string, date: string, total: number, opts?: HabitCheckinOptions): Promise<number | undefined> {
+    const habit = this.habits.get(habitId);
+    if (!habit) return undefined;
+    const target = Math.max(0, Math.floor(total));
+    const existing = this._dayCompletions(habit, date);
+    if (existing.length > target) {
+      // Newest go first so an explicitly-timed earlier completion survives.
+      const doomed = new Set(existing.slice(target).map(c => c.id));
+      habit.checkins = habit.checkins.filter(c => !doomed.has(c.id));
+    } else if (existing.length < target) {
+      await this.checkinHabit(habitId, { ...opts, date, count: target - existing.length });
+    }
+    this._resyncHabitStreak(habit);
+    return target;
+  }
+
+  async undoLastHabitCheckin(habitId: string, date: string): Promise<HabitCheckin | undefined> {
+    const habit = this.habits.get(habitId);
+    if (!habit) return undefined;
+    const onDay = this._dayCompletions(habit, date);
+    const last = onDay[onDay.length - 1];
+    if (!last) return undefined;
+    habit.checkins = habit.checkins.filter(c => c.id !== last.id);
+    this._resyncHabitStreak(habit);
+    return last;
+  }
+
+  async resetHabitDay(habitId: string, date: string): Promise<number | undefined> {
+    const habit = this.habits.get(habitId);
+    if (!habit) return undefined;
+    const removed = habit.checkins.filter(c => c.date === date).length;
+    habit.checkins = habit.checkins.filter(c => c.date !== date);
+    this._resyncHabitStreak(habit);
+    return removed;
   }
   async updateHabit(id: string, data: Partial<Habit>): Promise<Habit | undefined> {
     const habit = this.habits.get(id);
@@ -2341,7 +2411,19 @@ export class MemStorage implements IStorage {
     }
     return n;
   }
-  async deleteHabitCheckin(_habitId: string, _checkinId: string): Promise<boolean> { return false; }
+  async deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean> {
+    // Was a hard-coded `false`, which made "undo one completion" impossible in
+    // the dev backend and in every test that runs against MemStorage.
+    const habit = this.habits.get(habitId);
+    if (!habit) return false;
+    const before = habit.checkins.length;
+    habit.checkins = habit.checkins.filter(c => c.id !== checkinId);
+    if (habit.checkins.length === before) return false;
+    const { current, longest } = calculateStreak(habit.checkins, habit.targetPerDay || 1);
+    habit.currentStreak = current;
+    habit.longestStreak = longest;
+    return true;
+  }
   async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> { return { migrated: 0, errors: ["Not supported in MemStorage"] }; }
 
   // Budget stubs

@@ -27,6 +27,7 @@ import { getCanonicalGroup } from "@/lib/tracker-health";
 import { readField } from "@/lib/profile-fields";
 import { buildWellnessCards } from "@/lib/wellness-dynamic";
 import { computeKeyFindings } from "@shared/tracker-insights";
+import { habitDayProgress } from "@shared/habit-schedule";
 import {
   WellnessOverview,
   type WellnessMed, type WellnessSupp, type WellnessAppt,
@@ -107,17 +108,18 @@ export default function WellnessPage() {
   const [togglingHabitId, setTogglingHabitId] = useState<string | null>(null);
   const toggleHabit = useMutation({
     mutationFn: async ({ id, next }: { id: string; next: boolean }) => {
-      const h = (habits || []).find((x: any) => x.id === id);
-      const existing = (h?.checkins || []).find((c: any) => c.date === today);
+      // MULTI-COMPLETION: "on" records one more occurrence (so a 3x habit
+      // advances 1→2→3 instead of the second tap being a no-op); "off" clears
+      // the day. Both go through the count-aware endpoints.
       if (next) {
-        if (!existing) await apiRequest("POST", `/api/habits/${id}/checkin`, { date: today });
-      } else if (existing) {
-        // Idempotent untoggle: a 404 means the check-in is already gone (the
+        await apiRequest("POST", `/api/habits/${id}/checkin`, { date: today, count: 1, source: "manual" });
+      } else {
+        // Idempotent untoggle: a 404 means nothing is recorded today (the
         // rendered state was stale — e.g. a slow refetch after a previous
         // toggle). The desired state already holds, so that is NOT an error;
         // surfacing it as one is the "red error but it worked" report.
         try {
-          await apiRequest("DELETE", `/api/habits/${id}/checkin/${existing.id}`);
+          await apiRequest("POST", `/api/habits/${id}/checkin/reset`, { date: today });
         } catch (e: any) {
           if (!String(e?.message || "").startsWith("404")) throw e;
         }
@@ -135,7 +137,7 @@ export default function WellnessPage() {
           ? {
               ...h,
               checkins: next
-                ? [...(h.checkins || []).filter((c: any) => c.date !== today), { id: "tmp-" + Date.now(), date: today }]
+                ? [...(h.checkins || []), { id: "tmp-" + Date.now(), date: today, timestamp: new Date().toISOString() }]
                 : (h.checkins || []).filter((c: any) => c.date !== today),
             }
           : h));
@@ -244,10 +246,12 @@ export default function WellnessPage() {
 
   // Habits (today's completion via checkins).
   const activeHabits = (habits || []).filter((h: any) => !h.archivedAt);
-  const habitCards = activeHabits.map((h: any) => ({
-    id: h.id, name: h.name,
-    done: (h.checkins || []).some((c: any) => c.date === today),
-  }));
+  // Target-aware: a "medication 2x daily" habit with one dose logged is NOT
+  // done, and must keep showing up as still-outstanding today.
+  const habitCards = activeHabits.map((h: any) => {
+    const p = habitDayProgress(h, today);
+    return { id: h.id, name: h.name, done: p.done, count: p.count, target: p.target };
+  });
   const habitsCompleted = habitCards.filter((h) => h.done).length;
   // Missed habits = active habits not yet checked in today.
   const missedHabits = habitCards.filter((h) => !h.done);

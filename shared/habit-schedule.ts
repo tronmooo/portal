@@ -19,12 +19,21 @@
 // Pure and dependency-free so the client attention feed, the notification
 // builder and the calendar timeline can all share one answer.
 
+export interface HabitCompletionShape {
+  id?: string;
+  date?: string | null;
+  timestamp?: string | null;
+  value?: number | null;
+  notes?: string | null;
+  source?: string | null;
+}
+
 export interface HabitScheduleShape {
   frequency?: "daily" | "weekly" | "custom" | string;
   /** 0 = Sunday … 6 = Saturday. */
   targetDays?: number[] | null;
   targetPerDay?: number | null;
-  checkins?: Array<{ date?: string | null }> | null;
+  checkins?: HabitCompletionShape[] | null;
 }
 
 /**
@@ -57,6 +66,30 @@ export function isHabitDueOn(habit: HabitScheduleShape, dateStr: string): boolea
   return true;
 }
 
+/** The habit's daily target — how many completions make a day successful. */
+export function habitDailyTarget(habit: HabitScheduleShape): number {
+  const t = Number(habit?.targetPerDay);
+  return Number.isFinite(t) && t >= 1 ? Math.floor(t) : 1;
+}
+
+/**
+ * Every completion recorded on `dateStr`, oldest first.
+ *
+ * Each completion is its own occurrence — a habit done three times today
+ * returns three entries with three distinct timestamps, which is what the
+ * "previous completion times" list and "undo one" both read.
+ */
+export function habitCompletionsOn<T extends HabitCompletionShape>(
+  habit: { checkins?: T[] | null },
+  dateStr: string,
+): T[] {
+  const day = String(dateStr).slice(0, 10);
+  return (habit?.checkins || [])
+    .filter((c) => String(c?.date || "").slice(0, 10) === day)
+    .slice()
+    .sort((a, b) => String(a?.timestamp || "").localeCompare(String(b?.timestamp || "")));
+}
+
 /** Check-ins recorded for `dateStr`. */
 export function habitCheckinCount(habit: HabitScheduleShape, dateStr: string): number {
   const day = String(dateStr).slice(0, 10);
@@ -65,7 +98,47 @@ export function habitCheckinCount(habit: HabitScheduleShape, dateStr: string): n
 
 /** Has the habit met its per-day target on `dateStr`? Honors `targetPerDay`. */
 export function isHabitDoneOn(habit: HabitScheduleShape, dateStr: string): boolean {
-  return habitCheckinCount(habit, dateStr) >= (habit.targetPerDay || 1);
+  return habitCheckinCount(habit, dateStr) >= habitDailyTarget(habit);
+}
+
+export interface HabitDayProgress {
+  /** Completions recorded — may exceed `target`; that is recorded, not clamped. */
+  count: number;
+  target: number;
+  /** count >= target. */
+  done: boolean;
+  /** count > target — the user went past their goal. */
+  exceeded: boolean;
+  /** How many more to reach the target (0 once done). */
+  remaining: number;
+  /** 0..1, clamped for progress bars. Use count/target for the raw number. */
+  ratio: number;
+  /** "not_started" | "in_progress" | "complete" | "exceeded". */
+  state: "not_started" | "in_progress" | "complete" | "exceeded";
+}
+
+/**
+ * Today's picture for one habit: "2 / 3 completed today".
+ *
+ * The one place that decides what "done" means for a multi-completion habit,
+ * so the habits page, the dashboard, the executive briefing and the
+ * notification builder cannot drift apart — the drift they had was showing a
+ * "medication 2x daily" habit as finished after the first dose.
+ */
+export function habitDayProgress(habit: HabitScheduleShape, dateStr: string): HabitDayProgress {
+  const target = habitDailyTarget(habit);
+  const count = habitCheckinCount(habit, dateStr);
+  const done = count >= target;
+  const exceeded = count > target;
+  return {
+    count,
+    target,
+    done,
+    exceeded,
+    remaining: Math.max(0, target - count),
+    ratio: target > 0 ? Math.min(1, count / target) : 0,
+    state: count === 0 ? "not_started" : exceeded ? "exceeded" : done ? "complete" : "in_progress",
+  };
 }
 
 /** Scheduled today and not yet satisfied — the "still due" rule. */

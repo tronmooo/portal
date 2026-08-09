@@ -7,6 +7,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { computeHabitStats } from "@shared/habit-stats";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
 import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -333,6 +334,7 @@ import {
   insertExpenseSchema,
   insertEventSchema,
   insertHabitSchema,
+  habitCheckinRequestSchema,
   insertObligationSchema,
   insertArtifactSchema,
   insertJournalEntrySchema,
@@ -5895,6 +5897,21 @@ Rules:
     }
     res.json(habit);
   }));
+  // Statistics for one habit — averages, goal-completion rate, days
+  // reached/exceeded, streaks, completion times. Partial days (2 of 3) are
+  // retained in the averages even though they don't count as streak days.
+  app.get("/api/habits/:id/stats", asyncHandler(async (req, res) => {
+    const habit = await storage.getHabit(req.params.id);
+    if (!habit) return res.status(404).json({ error: "Not found" });
+    const daysRaw = Number(req.query.days);
+    const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(400, Math.floor(daysRaw)) : 30;
+    const tz = getTimezone(req);
+    res.json({
+      habitId: habit.id,
+      name: habit.name,
+      ...computeHabitStats(habit, { today: getUserToday(tz), days }),
+    });
+  }));
   app.post("/api/habits", asyncHandler(async (req, res) => {
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
       return res.status(400).json({ error: "Habit name is required" });
@@ -5911,15 +5928,53 @@ Rules:
     bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h3}`);
     res.status(201).json(newHabit);
   }));
+  // Record completions. MULTI-COMPLETION: `count` adds that many separate
+  // occurrence rows ("I walked the dog twice"), `setTotal` makes the day hold
+  // exactly that many ("I've only walked the dog twice today"), and `at`
+  // stamps them with the clock time the user gave. Exceeding the habit's
+  // daily target is recorded, never refused.
   app.post("/api/habits/:id/checkin", asyncHandler(async (req, res) => {
-    const { date, value, notes } = req.body;
-    const checkin = await storage.checkinHabit(req.params.id, date, value, notes);
-    if (!checkin) return res.status(404).json({ error: "Habit not found" });
+    const parsed = habitCheckinRequestSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
+    const { date, count, setTotal, at, value, notes, source } = parsed.data;
+    const day = date || getUserToday(getTimezone(req));
+    let result: unknown;
+    if (setTotal !== undefined) {
+      result = await storage.setHabitDayCount(req.params.id, day, setTotal, { at, value, notes, source });
+    } else {
+      result = await storage.checkinHabit(req.params.id, { date: day, count, at, value, notes, source });
+    }
+    if (result === undefined) return res.status(404).json({ error: "Habit not found" });
     // Return the full updated habit (with recalculated streak) instead of just the checkin
     const updatedHabit = await storage.getHabit(req.params.id);
     const uid_h1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`habits:${uid_h1}`); bustCache(`stats:${uid_h1}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h1}`);
-    res.status(201).json(updatedHabit || checkin);
+    res.status(201).json(updatedHabit || result);
+  }));
+  // Undo ONE completion — removes the most recent occurrence on the day,
+  // leaving the earlier ones (and their timestamps) intact.
+  app.post("/api/habits/:id/checkin/undo", asyncHandler(async (req, res) => {
+    const existing = await storage.getHabit(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Habit not found" });
+    const day = typeof req.body?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date)
+      ? req.body.date : getUserToday(getTimezone(req));
+    const removed = await storage.undoLastHabitCheckin(req.params.id, day);
+    if (!removed) return res.status(404).json({ error: `No completions recorded on ${day}` });
+    const uid_hu = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`habits:${uid_hu}`); bustCache(`stats:${uid_hu}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_hu}`);
+    res.json(await storage.getHabit(req.params.id));
+  }));
+  // Reset the day — clears every completion recorded on it. Only that day;
+  // previous days are never touched.
+  app.post("/api/habits/:id/checkin/reset", asyncHandler(async (req, res) => {
+    const existing = await storage.getHabit(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Habit not found" });
+    const day = typeof req.body?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date)
+      ? req.body.date : getUserToday(getTimezone(req));
+    const removed = await storage.resetHabitDay(req.params.id, day);
+    const uid_hr = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`habits:${uid_hr}`); bustCache(`stats:${uid_hr}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_hr}`);
+    res.json({ removed: removed ?? 0, habit: await storage.getHabit(req.params.id) });
   }));
   app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
     const ok = await storage.deleteHabitCheckin(req.params.id, req.params.checkinId);
@@ -7083,10 +7138,12 @@ Rules:
       if (data.habits && Array.isArray(data.habits)) {
         for (const h of data.habits) {
           await tryImport("habits", h.name || "unnamed", async () => {
-            const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency });
+            const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency, targetPerDay: h.targetPerDay, unitLabel: h.unitLabel });
             if (h.checkins) {
+              // One row per completion — a backup with three check-ins on the
+              // same day restores as three completions, not one.
               for (const c of h.checkins) {
-                await tryImport("habitCheckins", `${h.name} checkin`, () => storage.checkinHabit(created.id, c.date, c.value, c.notes));
+                await tryImport("habitCheckins", `${h.name} checkin`, () => storage.checkinHabit(created.id, { date: c.date, value: c.value, notes: c.notes, source: "import" }));
               }
             }
           });

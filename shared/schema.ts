@@ -412,6 +412,19 @@ export type HabitFrequency = "daily" | "weekly" | "custom";
 // inferring the slot from the last check-in timestamp.
 export type HabitTimeOfDay = "morning" | "afternoon" | "evening" | "bedtime" | "anytime";
 
+/**
+ * Where a single completion came from. Kept on the completion row, not the
+ * habit, so a day can mix a manual tap with an AI-chat "I walked the dog
+ * twice" and still explain itself later.
+ */
+export type HabitCompletionSource = "manual" | "ai_chat" | "automation" | "import";
+
+/** Daily-target presets the UI offers; anything else is a custom number. */
+export const HABIT_TARGET_PRESETS = [1, 2, 3, 5, 8] as const;
+
+/** A habit's daily target is at least 1 and never unbounded. */
+export const HABIT_MAX_TARGET_PER_DAY = 50;
+
 export interface Habit {
   id: string;
   name: string;
@@ -419,7 +432,18 @@ export interface Habit {
   color?: string;
   frequency: HabitFrequency;
   targetDays?: number[]; // 0=Sun..6=Sat for custom frequency
-  targetPerDay: number; // How many times per day (default 1, e.g., 3 for "brush teeth 3x daily")
+  /**
+   * THE DAILY TARGET — how many completions make today a success. 1 behaves
+   * like a plain checkbox; >1 renders as progress ("2 / 3 today"). Exceeding
+   * it is allowed and recorded (4 / 3), never blocked.
+   *
+   * Independent of `timeOfDay`/`scheduledTime`: the target is HOW MANY, the
+   * schedule is WHEN. Medication can be target 2 scheduled at 8am and 8pm;
+   * water can be target 8 with no schedule at all.
+   */
+  targetPerDay: number;
+  /** Optional noun for count-based habits — "glasses", "walks", "doses". */
+  unitLabel?: string;
   timeOfDay?: HabitTimeOfDay; // Scheduled slot; editable from the habit profile
   scheduledTime?: string; // "HH:MM" (24h) when timeOfDay is "custom" or a precise time is set
   currentStreak: number;
@@ -429,12 +453,20 @@ export interface Habit {
   createdAt: string;
 }
 
+/**
+ * ONE completion occurrence. Never overwritten to record a second completion —
+ * a habit done three times today has three of these rows.
+ */
 export interface HabitCheckin {
   id: string;
-  date: string; // YYYY-MM-DD
-  value?: number; // Optional numeric value (e.g., glasses of water)
+  date: string; // YYYY-MM-DD (user-local day the completion belongs to)
+  value?: number; // Optional numeric value (e.g., ounces of water)
   notes?: string;
+  /** When the user actually did it — may be backdated ("I did it at 8am"). */
   timestamp: string;
+  source?: HabitCompletionSource;
+  /** When the row was entered, which differs from `timestamp` when backdated. */
+  createdAt?: string;
 }
 
 export const insertHabitSchema = z.object({
@@ -443,12 +475,33 @@ export const insertHabitSchema = z.object({
   color: z.string().optional(),
   frequency: z.enum(["daily", "weekly", "custom"]).default("daily"),
   targetDays: z.array(z.number().min(0).max(6)).optional(),
-  targetPerDay: z.number().min(1).max(10).default(1),
+  // Raised from 10: "drink water 8x" fit, but nothing above it did, and the
+  // UI now offers a custom target.
+  targetPerDay: z.number().int().min(1).max(HABIT_MAX_TARGET_PER_DAY).default(1),
+  unitLabel: z.string().max(24).nullable().optional(),
   // Nullable so a PATCH can explicitly clear a habit's schedule (send null),
   // not just leave it unset (undefined).
   timeOfDay: z.enum(["morning", "afternoon", "evening", "bedtime", "anytime"]).nullable().optional(),
   scheduledTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM (24h)").nullable().optional(),
 });
+
+/** Body accepted by POST /api/habits/:id/checkin. */
+export const habitCheckinRequestSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /** How many completions to record in one call ("I walked the dog twice"). */
+  count: z.number().int().min(1).max(HABIT_MAX_TARGET_PER_DAY).default(1),
+  /**
+   * Make today's TOTAL equal this number instead of adding to it ("I've only
+   * walked the dog twice today"). Adds or removes rows to land exactly here.
+   */
+  setTotal: z.number().int().min(0).max(HABIT_MAX_TARGET_PER_DAY).optional(),
+  /** Clock time the completion happened, when the user gave one. */
+  at: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM (24h)").optional(),
+  value: z.number().optional(),
+  notes: z.string().max(500).optional(),
+  source: z.enum(["manual", "ai_chat", "automation", "import"]).default("manual"),
+});
+export type HabitCheckinRequest = z.input<typeof habitCheckinRequestSchema>;
 
 export type InsertHabit = z.input<typeof insertHabitSchema>;
 

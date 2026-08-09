@@ -5,6 +5,7 @@ import type {
 } from "@shared/schema";
 import { MOOD_SCORES } from "@shared/schema";
 import { getUserToday, addDays as tzAddDays, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { habitDayProgress } from "@shared/habit-schedule";
 import {
   currentMonthYM,
   previousMonthYM,
@@ -156,7 +157,11 @@ function analyzeSpending(expenses: Expense[], now: Date, insights: Insight[], ti
 
 function analyzeStreaks(habits: Habit[], todayStr: string, insights: Insight[]) {
   for (const habit of habits) {
-    const checkedInToday = habit.checkins?.some(c => c.date === todayStr);
+    // A day counts as done only when the DAILY TARGET is met — a "medication
+    // 2x daily" habit with one dose logged is still at risk, and saying
+    // otherwise is how a streak quietly dies.
+    const todayProgress = habitDayProgress(habit, todayStr);
+    const checkedInToday = todayProgress.done;
 
     // Streak at risk
     if (!checkedInToday && habit.currentStreak >= 3) {
@@ -164,7 +169,9 @@ function analyzeStreaks(habits: Habit[], todayStr: string, insights: Insight[]) 
         id: randomUUID(),
         type: "habit_streak",
         title: `${habit.name} streak at risk!`,
-        description: `${habit.currentStreak}-day streak — check in today to keep it alive.`,
+        description: todayProgress.target > 1
+          ? `${habit.currentStreak}-day streak — ${todayProgress.count}/${todayProgress.target} done today, ${todayProgress.remaining} more to keep it alive.`
+          : `${habit.currentStreak}-day streak — check in today to keep it alive.`,
         severity: habit.currentStreak >= 7 ? "warning" : "info",
         relatedEntityType: "habit",
         relatedEntityId: habit.id,

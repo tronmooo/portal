@@ -278,6 +278,7 @@ import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr } from "@shared/timezone";
+import { habitDayProgress } from "@shared/habit-schedule";
 import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
@@ -3709,10 +3710,11 @@ function ProductivityHubTab({
       })
       .sort((a, b) => new Date(a.startTime || a.start_time || a.start || a.date).getTime() - new Date(b.startTime || b.start_time || b.start || b.date).getTime());
   }, [events]);
-  const habitsDoneToday = useMemo(() => habits.filter(h => {
-    const checkins = Array.isArray(h.checkins) ? h.checkins : [];
-    return checkins.some((c: any) => c.date === todayISO);
-  }).length, [habits, todayISO]);
+  // Target-aware: a habit is done today only once its DAILY TARGET is met.
+  const habitsDoneToday = useMemo(
+    () => habits.filter(h => habitDayProgress(h, todayISO).done).length,
+    [habits, todayISO],
+  );
   const tasksDueToday = useMemo(() => openTasks.filter(t => {
     const due = t.dueDate || t.dueAt || t.due_at;
     if (!due) return false;
@@ -3829,8 +3831,8 @@ function ProductivityHubTab({
           ) : (
             <div className="space-y-2">
               {habits.map((h: any) => {
-                const checkins = Array.isArray(h.checkins) ? h.checkins : [];
-                const doneToday = checkins.some((c: any) => c.date === todayISO);
+                const hp = habitDayProgress(h, todayISO);
+                const doneToday = hp.done;
                 const streak = Number(h.currentStreak) || 0;
                 return (
                   <Card key={h.id} data-testid={`hub-habit-${h.id}`}>
@@ -3842,7 +3844,7 @@ function ProductivityHubTab({
                         <div className="min-w-0">
                           <p className="text-sm font-semibold truncate">{h.name}</p>
                           <p className="text-[11px] text-muted-foreground capitalize">
-                            {(h.frequency || "daily")}{Number(h.targetPerDay) > 1 ? ` · ${h.targetPerDay}×/day` : ""}{doneToday ? " · done today" : ""}
+                            {(h.frequency || "daily")}{hp.target > 1 ? ` · ${hp.count} / ${hp.target} today` : (doneToday ? " · done today" : "")}
                           </p>
                         </div>
                       </div>
@@ -4022,8 +4024,8 @@ const ProfileHabitsTab = memo(function ProfileHabitsTab({ habits, profileName }:
   return (
     <div className="space-y-2">
       {habits.map((h: any) => {
-        const checkins = Array.isArray(h.checkins) ? h.checkins : [];
-        const doneToday = checkins.some((c: any) => c.date === today);
+        const hp = habitDayProgress(h, today);
+        const doneToday = hp.done;
         const streak = Number(h.currentStreak) || 0;
         return (
           <Card key={h.id} data-testid={`profile-habit-${h.id}`}>
@@ -4035,8 +4037,7 @@ const ProfileHabitsTab = memo(function ProfileHabitsTab({ habits, profileName }:
                 <div className="min-w-0">
                   <p className="text-sm font-semibold truncate">{h.name}</p>
                   <p className="text-xs text-muted-foreground capitalize">
-                    {(h.frequency || "daily")}{Number(h.targetPerDay) > 1 ? ` · ${h.targetPerDay}×/day` : ""}
-                    {doneToday ? " · done today" : ""}
+                    {(h.frequency || "daily")}{hp.target > 1 ? ` · ${hp.count} / ${hp.target} today` : (doneToday ? " · done today" : "")}
                   </p>
                 </div>
               </div>

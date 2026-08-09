@@ -19,6 +19,7 @@ import {
   type RecurrenceRule,
 } from "@shared/recurrence";
 import { groupMaterializedSeries } from "@shared/series-detect";
+import { habitDayProgress } from "@shared/habit-schedule";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1191,7 +1192,8 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     const total = habitsList.filter((h: any) => !h.archivedAt).length;
     if (total === 0) return;
     const completed = habitsList.filter((h: any) =>
-      !h.archivedAt && (h.checkins || []).some((c: any) => c.date === today)
+      // Target-aware: 1 of 2 doses is not a completed habit.
+      !h.archivedAt && habitDayProgress(h, today).done
     ).length;
     const pct = Math.round((completed / total) * 100);
     const statsKey = ["/api/stats", filterMode, ...filterIds];
@@ -1202,7 +1204,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   };
 
   const checkinMutation = useMutation({
-    mutationFn: ({ id }: { id: string }) => apiRequest("POST", `/api/habits/${id}/checkin`, { date: today }),
+    mutationFn: ({ id }: { id: string }) => apiRequest("POST", `/api/habits/${id}/checkin`, { date: today, count: 1, source: "manual" }),
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
@@ -1214,10 +1216,13 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
         (old || []).map((h: any) => h.id === id
           ? {
               ...h,
-              checkins: [...(h.checkins || []), { date: today, id: 'tmp-' + Date.now() }],
-              currentStreak: (h.checkins || []).some((c: any) => c.date === today)
+              checkins: [...(h.checkins || []), { date: today, id: 'tmp-' + Date.now(), timestamp: new Date().toISOString() }],
+              // The streak moves only when this completion CROSSES the target.
+              currentStreak: habitDayProgress(h, today).done
                 ? h.currentStreak
-                : Number(h.currentStreak || 0) + 1,
+                : (habitDayProgress(h, today).count + 1 >= habitDayProgress(h, today).target
+                    ? Number(h.currentStreak || 0) + 1
+                    : h.currentStreak),
             }
           : h)
       );
@@ -1236,15 +1241,16 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     },
   });
 
-  // Un-check (toggle off) today's completion. The design's check button toggles,
-  // so tapping a completed habit must remove today's check-in.
-  const deleteCheckinMutation = useMutation({
-    mutationFn: async ({ id, checkinId }: { id: string; checkinId: string }) => {
-      // Idempotent un-check: 404 = already gone (stale render / double tap);
-      // the desired state holds, so don't surface a red error for it.
+  // Clear today's completions. The check button toggles, so tapping a habit
+  // that has REACHED ITS TARGET resets the day — for a 3x habit that means the
+  // taps cycle 0→1→2→3→0 rather than the second tap erasing the first.
+  const resetTodayMutation = useMutation({
+    mutationFn: async ({ id }: { id: string }) => {
       try {
-        await apiRequest("DELETE", `/api/habits/${id}/checkin/${checkinId}`);
+        return await apiRequest("POST", `/api/habits/${id}/checkin/reset`, { date: today });
       } catch (e: any) {
+        // 404 = nothing recorded today (stale render / double tap); the
+        // desired state already holds, so don't surface a red error for it.
         if (!String(e?.message || "").startsWith("404")) throw e;
       }
     },
@@ -1259,7 +1265,8 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
           ? {
               ...h,
               checkins: (h.checkins || []).filter((c: any) => c.date !== today),
-              currentStreak: (h.checkins || []).some((c: any) => c.date === today)
+              // The streak only falls if today HAD reached the target.
+              currentStreak: habitDayProgress(h, today).done
                 ? Math.max(0, Number(h.currentStreak || 0) - 1)
                 : h.currentStreak,
             }
@@ -1322,12 +1329,21 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     for (let i = periodDays - 1; i >= 0; i--) { const d = new Date(t); d.setDate(t.getDate() - i); arr.push(dateKey(d)); }
     return arr;
   }, [periodDays]);
-  const isDone = (h: any, dk: string) => (h.checkins || []).some((c: any) => c.date === dk);
-  const todayCheckinId = (h: any): string | undefined => (h.checkins || []).find((c: any) => c.date === today)?.id;
-  const togglePending = checkinMutation.isPending || deleteCheckinMutation.isPending;
+  // A day is done only when the habit's DAILY TARGET is met. Using "has any
+  // check-in" showed a "medication 2x daily" habit as finished after the first
+  // dose — on the dashboard, in the 7-day dots, and in the completion percent.
+  const isDone = (h: any, dk: string) => habitDayProgress(h, dk).done;
+  const dayCount = (h: any, dk: string) => habitDayProgress(h, dk).count;
+  const dayTarget = (h: any) => habitDayProgress(h, today).target;
+  const togglePending = checkinMutation.isPending || resetTodayMutation.isPending;
+  /**
+   * Tapping the circle records ONE more completion. It only clears the day
+   * once the target has been reached — on a 3x habit the taps read
+   * 0→1→2→3→0, so every completion is reachable from the dashboard instead of
+   * the second tap wiping the first.
+   */
   const toggleToday = (h: any) => {
-    const cid = todayCheckinId(h);
-    if (cid) deleteCheckinMutation.mutate({ id: h.id, checkinId: cid });
+    if (habitDayProgress(h, today).done) resetTodayMutation.mutate({ id: h.id });
     else checkinMutation.mutate({ id: h.id });
   };
   // Time-of-day bucket. Prefer the habit's EXPLICIT schedule (editable from the
@@ -1570,9 +1586,11 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
               {visible.map((h: any) => {
                 const color = (h.color && h.color !== '#4F98A3') ? h.color : VIVID[h.id.charCodeAt(0) % VIVID.length];
                 const done = isDone(h, today);
+                const todayCount = dayCount(h, today);
+                const target = dayTarget(h);
                 const streak = h.currentStreak || 0;
                 const emoji = h.icon || getEmoji(h.name);
-                const freqLabel = (h.targetPerDay || 1) > 1 ? `${h.targetPerDay}× daily` : (h.frequency === 'weekly' ? 'Weekly' : 'Daily');
+                const freqLabel = target > 1 ? `${todayCount} / ${target} today` : (h.frequency === 'weekly' ? 'Weekly' : 'Daily');
                 const sLabel = schedLabel(h);
                 const editing = editingScheduleId === h.id;
                 return (
@@ -1589,8 +1607,9 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                         </p>
                         <div className="mt-1.5 flex gap-1">
                           {last7.map((dk) => (
-                            <span key={dk} className="h-2 w-2 rounded-full" title={dk}
-                              style={{ background: isDone(h, dk) ? 'hsl(155 60% 48%)' : 'hsl(var(--muted))' }} />
+                            <span key={dk} className="h-2 w-2 rounded-full"
+                              title={`${dk}: ${dayCount(h, dk)} / ${target}`}
+                              style={{ background: isDone(h, dk) ? 'hsl(155 60% 48%)' : dayCount(h, dk) > 0 ? 'hsl(155 40% 48% / 0.45)' : 'hsl(var(--muted))' }} />
                           ))}
                         </div>
                       </div>
@@ -1606,7 +1625,10 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                         </span>
                         <span className="micro-label text-muted-foreground/70 leading-none">day streak</span>
                         <button onClick={() => toggleToday(h)} disabled={togglePending}
-                          aria-label={done ? 'Mark not done today' : 'Mark done today'}
+                          data-testid={`habit-toggle-${h.id}`}
+                          aria-label={done
+                            ? `Clear today's ${todayCount} completion${todayCount === 1 ? '' : 's'} of ${h.name}`
+                            : `Record a completion of ${h.name} (${todayCount} of ${target} today)`}
                           className="touch-manipulation active:scale-90 transition-transform mt-0.5"
                           style={{ minWidth: 40, minHeight: 40 }}>
                           <div className="flex h-7 w-7 items-center justify-center rounded-full border-2 transition-all"
@@ -1614,7 +1636,13 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                               background: done ? 'hsl(262 70% 58%)' : 'transparent',
                               borderColor: done ? 'hsl(262 70% 58%)' : 'hsl(var(--muted-foreground) / 0.5)',
                             }}>
-                            {done && <Check className="h-4 w-4 text-white" strokeWidth={3} />}
+                            {/* Partial progress reads as its count, not as an
+                                empty circle — 1 of 3 is real progress. */}
+                            {done
+                              ? <Check className="h-4 w-4 text-white" strokeWidth={3} />
+                              : todayCount > 0
+                                ? <span className="text-[11px] font-bold tabular-nums text-foreground">{todayCount}</span>
+                                : null}
                           </div>
                         </button>
                       </div>

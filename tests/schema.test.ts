@@ -3,6 +3,7 @@ import {
   insertTaskSchema,
   insertExpenseSchema,
   insertHabitSchema,
+  HABIT_MAX_TARGET_PER_DAY,
   insertObligationSchema,
   insertEventSchema,
   insertDocumentSchema,
@@ -91,14 +92,18 @@ describe('Schema Validation', () => {
       expect(result.targetPerDay).toBe(1);
     });
 
-    it('accepts targetPerDay up to 10', () => {
-      const result = insertHabitSchema.safeParse({ name: 'Water', targetPerDay: 8 });
-      expect(result.success).toBe(true);
+    it('accepts every daily target up to the cap', () => {
+      // Raised from 10 with multi-completion habits: "drink water 8x" fit, but
+      // nothing above it did, and the UI now offers a custom target.
+      for (const n of [1, 2, 3, 5, 8, 12, HABIT_MAX_TARGET_PER_DAY]) {
+        expect(insertHabitSchema.safeParse({ name: 'Water', targetPerDay: n }).success, String(n)).toBe(true);
+      }
     });
 
-    it('rejects targetPerDay over 10', () => {
-      const result = insertHabitSchema.safeParse({ name: 'Too many', targetPerDay: 11 });
-      expect(result.success).toBe(false);
+    it('rejects a target above the cap, below 1, or fractional', () => {
+      for (const n of [HABIT_MAX_TARGET_PER_DAY + 1, 0, -1, 2.5]) {
+        expect(insertHabitSchema.safeParse({ name: 'Too many', targetPerDay: n }).success, String(n)).toBe(false);
+      }
     });
   });
 

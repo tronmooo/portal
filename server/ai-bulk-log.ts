@@ -114,7 +114,7 @@ ROUTING RULES:
 - A future to-do ("need to call the dentist") → create_task({ title, dueDate? }). An appointment with a time → create_event.
 - "at 8:15 AM" style times → pass through the at parameter (bare time strings are fine).
 - Journaling as an activity ("journaled") → log_tracker_entry trackerName "Journaling". An actual journal passage ("journal that today was great: ...") → journal_entry.
-- checkin_habit ONLY on explicit habit language ("mark off X", "checked in X", "completed my X habit"). A plain activity report ("I did/took/smoked/went/played X") is ALWAYS log_tracker_entry — even when a habit with a similar name exists.
+- checkin_habit when the activity matches one of the user's EXISTING HABITS below ("I walked the dog", "mark off X", "completed my X habit"); otherwise the activity is ALWAYS log_tracker_entry. Habits are counted, not binary: pass count for repetitions ("twice" → count:2, "three times" → count:3, "again" → count:1) and at:"HH:MM" when a time is stated. "brushed my teeth this morning and again tonight" is TWO checkin_habit operations, at:"08:00" and at:"20:00". Never create a habit from an activity report.
 - NEVER drop a stated detail: every number, unit, duration, count, method, and timestamp must land in values/at ("for an hour" → duration:60; "once" → count:1; "a blunt" → method:"blunt"; "at 8:15 AM" → at:"8:15 AM").
 - forProfile: set ONLY when THIS message names someone else ("Rex", "Mom"). Never infer a profile from anything else.
 

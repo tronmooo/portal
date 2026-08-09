@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { showUndoToast } from "@/lib/undo-delete";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Flame, Plus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, Trash2, AlertCircle } from "lucide-react";
+import { Flame, Plus, Minus, Check, Trophy, Droplets, Brain, BookOpen, Smartphone, Zap, Trash2, AlertCircle, RotateCcw, Clock } from "lucide-react";
 import { PageContainer, PageHeader } from "@/components/ui/page-shell";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 
@@ -27,11 +27,21 @@ import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 const HABITS_ACCENT = "155 65% 45%";
 import { Link } from "wouter";
 import type { Habit, Profile } from "@shared/schema";
+import { HABIT_TARGET_PRESETS, HABIT_MAX_TARGET_PER_DAY } from "@shared/schema";
+import { habitDayProgress, habitCompletionsOn } from "@shared/habit-schedule";
 import { getUserToday, addDays, parseLocalDate } from "@shared/timezone";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 const ICON_MAP: Record<string, any> = { Droplets, Brain, BookOpen, Smartphone, Zap, Flame };
+
+/** "2026-08-09T15:04:00Z" → "3:04 PM" in the viewer's clock. */
+function formatCompletionTime(timestamp?: string): string {
+  if (!timestamp) return "—";
+  const d = new Date(timestamp);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
 
 function HabitCard({ habit }: { habit: Habit }) {
   const { toast } = useToast();
@@ -41,22 +51,32 @@ function HabitCard({ habit }: { habit: Habit }) {
   // here keeps the client's "today" in lockstep with the server's
   // getUserToday(timezone) used by the canonical streak calculation.
   const today = getUserToday(BROWSER_TIMEZONE);
-  const todayCheckins = habit.checkins.filter(c => c.date === today).length;
-  const targetPerDay = (habit as any).targetPerDay || 1;
-  const completedToday = todayCheckins >= targetPerDay;
+  // One shared definition of "how am I doing today" (shared/habit-schedule) so
+  // this card, the dashboard and the server agree. A habit with a target above
+  // 1 is NOT complete after its first completion.
+  const progress = habitDayProgress(habit, today);
+  const todayCheckins = progress.count;
+  const targetPerDay = progress.target;
+  const completedToday = progress.done;
+  const isMulti = targetPerDay > 1;
+  const [showTimes, setShowTimes] = useState(false);
+  const [showCustomTarget, setShowCustomTarget] = useState(false);
+  const [customTarget, setCustomTarget] = useState(String(targetPerDay));
   const Icon = ICON_MAP[habit.icon || ""] || Flame;
   // Auto-assign vivid colors from palette if no distinctive color set
   const VIVID_PALETTE = ['#E8545A','#E67E3B','#E8A838','#4BAE63','#2E9EBF','#7B68EE','#C2558B','#5B8FDB','#48C7A0','#D4628A'];
   const accentColor = (habit.color && habit.color !== '#4F98A3') ? habit.color : VIVID_PALETTE[habit.id.charCodeAt(0) % VIVID_PALETTE.length];
 
 
-  // Today's checkins sorted by timestamp (oldest first) so dot indices match checkin order
-  const todayCheckinEntries = habit.checkins
-    .filter(c => c.date === today)
-    .sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+  // Today's completions, oldest first — each is its own occurrence, so the
+  // dot indices, the "undo one" target and the times list all read from here.
+  const todayCheckinEntries = habitCompletionsOn(habit, today);
 
+  // Record ONE more completion. There is no ceiling: tapping + on a 3/3 habit
+  // records a 4th occurrence and the card reads "4 / 3". Exceeding the goal is
+  // data, not an error.
   const checkinMutation = useMutation<any, Error, void>({
-    mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
+    mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today, count: 1, source: "manual" }),
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
@@ -69,7 +89,7 @@ function HabitCard({ habit }: { habit: Habit }) {
       const streakBump = willCompleteToday && !wasCompleteAlready ? 1 : 0;
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
         (old || []).map((h: any) => h.id === habit.id
-          ? { ...h, checkins: [...(h.checkins || []), { date: today, id: 'temp-' + Date.now() }], currentStreak: (h.currentStreak || 0) + streakBump }
+          ? { ...h, checkins: [...(h.checkins || []), { date: today, id: 'temp-' + Date.now(), timestamp: new Date().toISOString() }], currentStreak: (h.currentStreak || 0) + streakBump }
           : h
         )
       );
@@ -78,7 +98,9 @@ function HabitCard({ habit }: { habit: Habit }) {
       // Toasting in onSuccess bound it to the roundtrip (8s+ on a cold
       // serverless write): "the notification comes 30 seconds later".
       const newCount = todayCheckins + 1;
-      if (newCount >= targetPerDay) {
+      if (newCount > targetPerDay) {
+        toast({ title: `${habit.name} — ${newCount} / ${targetPerDay}`, description: `Past your goal by ${newCount - targetPerDay}. Recorded.` });
+      } else if (newCount === targetPerDay) {
         toast({ title: `✨ ${habit.name} complete!`, description: targetPerDay > 1 ? `All ${targetPerDay} done for today.` : "Keep the streak going!" });
       } else {
         toast({ title: `${habit.name} — ${newCount} / ${targetPerDay}`, description: `${targetPerDay - newCount} more to go today` });
@@ -107,33 +129,33 @@ function HabitCard({ habit }: { habit: Habit }) {
     },
   });
 
-  // Undo a check-in by deleting the checkin entry
-  const uncheckinMutation = useMutation<any, Error, string>({
-    mutationFn: async (checkinId: string) => {
-      // Idempotent undo: 404 = the check-in is already gone (stale render or
-      // double tap). The desired state holds — not an error.
+  // Undo the MOST RECENT completion of the day — the "−" control. Removing the
+  // newest keeps an explicitly-timed earlier completion ("I did it at 8am")
+  // intact, which deleting an arbitrary row would not.
+  const undoLastMutation = useMutation<any, Error, void>({
+    mutationFn: async () => {
       try {
-        await apiRequest("DELETE", `/api/habits/${habit.id}/checkin/${checkinId}`);
+        return await apiRequest("POST", `/api/habits/${habit.id}/checkin/undo`, { date: today });
       } catch (e: any) {
+        // 404 = nothing recorded today (stale render / double tap). The
+        // desired state already holds.
         if (!String(e?.message || "").startsWith("404")) throw e;
       }
     },
-    onMutate: async (checkinId: string) => {
+    onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
-      // BUG-HAB-001: Only drop the streak when this undo actually pulls us
-      // back below today's target.
+      const newest = todayCheckinEntries[todayCheckinEntries.length - 1];
       const wasCompleteToday = todayCheckins >= targetPerDay;
       const stillCompleteToday = todayCheckins - 1 >= targetPerDay;
       const streakDrop = wasCompleteToday && !stillCompleteToday ? 1 : 0;
       queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
         (old || []).map((h: any) => h.id === habit.id
-          ? { ...h, checkins: (h.checkins || []).filter((c: any) => c.id !== checkinId), currentStreak: Math.max(0, (h.currentStreak || 0) - streakDrop) }
+          ? { ...h, checkins: (h.checkins || []).filter((c: any) => c.id !== newest?.id), currentStreak: Math.max(0, (h.currentStreak || 0) - streakDrop) }
           : h
         )
       );
-      // Instant confirmation (see checkinMutation note).
-      toast({ title: `${habit.name} check-in undone` });
+      toast({ title: `${habit.name} — ${Math.max(0, todayCheckins - 1)} / ${targetPerDay}`, description: "Removed one completion" });
       return { prev };
     },
     onError: (err: Error, _v: unknown, ctx: any) => {
@@ -144,6 +166,52 @@ function HabitCard({ habit }: { habit: Habit }) {
       invalidateDomain("habits");
       queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
     },
+  });
+
+  // Clear TODAY only. Previous days keep every completion they recorded.
+  const resetDayMutation = useMutation<any, Error, void>({
+    mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin/reset`, { date: today }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      const streakDrop = todayCheckins >= targetPerDay ? 1 : 0;
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+        (old || []).map((h: any) => h.id === habit.id
+          ? { ...h, checkins: (h.checkins || []).filter((c: any) => c.date !== today), currentStreak: Math.max(0, (h.currentStreak || 0) - streakDrop) }
+          : h
+        )
+      );
+      toast({ title: `${habit.name} reset`, description: `Cleared today's ${todayCheckins} completion${todayCheckins === 1 ? "" : "s"}` });
+      return { prev };
+    },
+    onError: (err: Error, _v: unknown, ctx: any) => {
+      if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      toast({ title: `Failed to reset ${habit.name}`, description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => {
+      invalidateDomain("habits");
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+    },
+  });
+
+  // Change the DAILY TARGET (1x, 2x, 3x, 5x, 8x, custom). Lowering it never
+  // deletes completions already recorded — a 4/3 day stays 4/3.
+  const targetMutation = useMutation<any, Error, number, { prev: any }>({
+    mutationFn: (n: number) => apiRequest("PATCH", `/api/habits/${habit.id}`, { targetPerDay: n }),
+    onMutate: async (n) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["/api/habits"] });
+      queryClient.setQueriesData({ queryKey: ["/api/habits"] }, (old: any) =>
+        Array.isArray(old) ? old.map((h: any) => h.id === habit.id ? { ...h, targetPerDay: n } : h) : old
+      );
+      return { prev };
+    },
+    onSuccess: (_d, n) => toast({ title: `${habit.name} — ${n}× per day`, description: todayCheckins > 0 ? `Today reads ${todayCheckins} / ${n}.` : undefined }),
+    onError: (err: Error, _v, context) => {
+      if (context?.prev) { for (const [key, value] of context.prev) queryClient.setQueryData(key, value); }
+      toast({ title: "Failed to change target", description: formatApiError(err), variant: "destructive" });
+    },
+    onSettled: () => { invalidateDomain("habits"); },
   });
 
   // Rename habit — optimistic so the new name shows instantly
@@ -249,6 +317,18 @@ function HabitCard({ habit }: { habit: Habit }) {
   }
   const completedDays = last14.filter(d => d.done).length;
 
+  const isBusy = checkinMutation.isPending || undoLastMutation.isPending || resetDayMutation.isPending;
+
+  const applyCustomTarget = () => {
+    const n = Math.floor(Number(customTarget));
+    if (!Number.isFinite(n) || n < 1 || n > HABIT_MAX_TARGET_PER_DAY) {
+      toast({ title: "Enter a target between 1 and " + HABIT_MAX_TARGET_PER_DAY, variant: "destructive" });
+      return;
+    }
+    setShowCustomTarget(false);
+    if (n !== targetPerDay) targetMutation.mutate(n);
+  };
+
   return (
     // SOLID COLOR card — full accentColor background, white text, Habituator style
     <div
@@ -263,12 +343,21 @@ function HabitCard({ habit }: { habit: Habit }) {
     >
       <div className="flex items-center gap-3 px-4 py-3.5">
 
-        {/* Icon in semi-transparent white circle */}
-        <div className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 bg-white/20">
+        {/* Icon — also the "tap the habit itself to record another completion"
+            target, so a multi-completion habit doesn't force the user to aim
+            for the small + button. */}
+        <button
+          type="button"
+          onClick={stopProp(() => { if (!isBusy) checkinMutation.mutate(); })}
+          disabled={isBusy}
+          data-testid={`button-habit-tap-${habit.id}`}
+          aria-label={`Record a completion of ${habit.name} (${todayCheckins} of ${targetPerDay} today)`}
+          className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 bg-white/20 hover:bg-white/30 active:scale-90 transition-all touch-manipulation disabled:opacity-60"
+        >
           {completedToday
             ? <Check className="h-5 w-5 text-white" strokeWidth={3} />
             : <Icon className="h-5 w-5 text-white" />}
-        </div>
+        </button>
 
         {/* Name + dots */}
         <div className="flex-1 min-w-0">
@@ -286,56 +375,144 @@ function HabitCard({ habit }: { habit: Habit }) {
             )}
           </div>
 
-          {/* Progress dots — white circles, tap to fill or tap filled to undo */}
-          <div className="flex items-center gap-2 mt-2">
-            {Array.from({ length: Math.min(targetPerDay, 10) }).map((_, idx) => {
-              const filled = idx < todayCheckins;
-              const isBusy = checkinMutation.isPending || uncheckinMutation.isPending;
-              return (
+          {/* TODAY'S PROGRESS.
+              A habit with a target of 1 stays a plain checkbox. Above 1 it
+              shows the real count against the target — "2 / 3 completed
+              today" — with − / + controls, because a single done/not-done
+              state cannot represent "walked the dog twice out of three". */}
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            {isMulti ? (
+              <>
                 <button
-                  key={idx}
-                  onClick={stopProp(() => {
-                    if (isBusy) return;
-                    if (filled) {
-                      // Undo: remove the checkin corresponding to this dot
-                      const checkinToRemove = todayCheckinEntries[idx];
-                      if (checkinToRemove && checkinToRemove.id && !checkinToRemove.id.startsWith('temp-')) {
-                        uncheckinMutation.mutate(checkinToRemove.id);
-                      }
-                    } else if (idx === todayCheckins) {
-                      // Fill: only the next empty dot is fillable
-                      checkinMutation.mutate();
-                    }
-                  })}
-                  data-testid={`button-seg-${habit.id}-${idx}`}
-                  className="relative active:scale-90 touch-manipulation transition-all duration-200"
-                  style={{ width: 26, height: 26, minWidth: 26, cursor: (filled || idx === todayCheckins) ? 'pointer' : 'default' }}
-                  title={filled ? 'Tap to undo' : (idx === todayCheckins ? 'Tap to check in' : '')}
-                  aria-label={filled ? `Undo check-in ${idx + 1} for ${habit.name}` : `Check in ${idx + 1} of ${targetPerDay} for ${habit.name}`}
+                  type="button"
+                  onClick={stopProp(() => { if (!isBusy && todayCheckins > 0) undoLastMutation.mutate(); })}
+                  disabled={isBusy || todayCheckins === 0}
+                  data-testid={`button-habit-minus-${habit.id}`}
+                  aria-label={`Remove one completion of ${habit.name}`}
+                  className="w-7 h-7 rounded-full bg-white/20 hover:bg-white/30 disabled:opacity-30 flex items-center justify-center active:scale-90 transition-all touch-manipulation"
                 >
-                  <div
-                    className="w-full h-full rounded-full border-2 flex items-center justify-center transition-all duration-150"
-                    style={{
-                      backgroundColor: filled ? 'rgba(255,255,255,0.9)' : 'transparent',
-                      borderColor: filled ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.5)',
-                    }}
-                  >
-                    {filled && (
-                      <Check className="h-3.5 w-3.5" style={{ color: accentColor }} strokeWidth={3} />
-                    )}
-                    {!filled && checkinMutation.isPending && idx === todayCheckins && (
-                      <div className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                    )}
-                  </div>
+                  <Minus className="h-3.5 w-3.5 text-white" strokeWidth={3} />
                 </button>
-              );
-            })}
+
+                <span
+                  className="text-white font-bold text-sm tabular-nums min-w-[3.25rem] text-center"
+                  data-testid={`text-habit-progress-${habit.id}`}
+                >
+                  {todayCheckins} / {targetPerDay}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={stopProp(() => { if (!isBusy) checkinMutation.mutate(); })}
+                  disabled={isBusy}
+                  data-testid={`button-habit-plus-${habit.id}`}
+                  aria-label={`Record another completion of ${habit.name}`}
+                  className="w-7 h-7 rounded-full bg-white/25 hover:bg-white/40 disabled:opacity-40 flex items-center justify-center active:scale-90 transition-all touch-manipulation"
+                >
+                  <Plus className="h-3.5 w-3.5 text-white" strokeWidth={3} />
+                </button>
+
+                {/* Segments: one per target, plus an "over" chip when the user
+                    went past the goal. Exceeding is shown, never hidden. */}
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.min(targetPerDay, 12) }).map((_, idx) => (
+                    <div
+                      key={idx}
+                      data-testid={`seg-habit-${habit.id}-${idx}`}
+                      className="rounded-full transition-all duration-200"
+                      style={{
+                        width: 14, height: 5,
+                        backgroundColor: idx < todayCheckins ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.28)',
+                      }}
+                    />
+                  ))}
+                  {progress.exceeded && (
+                    <span className="text-[11px] font-bold text-white/90 ml-0.5" data-testid={`text-habit-exceeded-${habit.id}`}>
+                      +{todayCheckins - targetPerDay}
+                    </span>
+                  )}
+                </div>
+              </>
+            ) : (
+              /* Target of 1 — the familiar single checkbox. */
+              <button
+                type="button"
+                onClick={stopProp(() => {
+                  if (isBusy) return;
+                  if (todayCheckins > 0) undoLastMutation.mutate(); else checkinMutation.mutate();
+                })}
+                data-testid={`button-seg-${habit.id}-0`}
+                className="relative active:scale-90 touch-manipulation transition-all duration-200"
+                style={{ width: 26, height: 26, minWidth: 26 }}
+                title={completedToday ? 'Tap to undo' : 'Tap to check in'}
+                aria-label={completedToday ? `Undo check-in for ${habit.name}` : `Check in ${habit.name}`}
+              >
+                <div
+                  className="w-full h-full rounded-full border-2 flex items-center justify-center transition-all duration-150"
+                  style={{
+                    backgroundColor: completedToday ? 'rgba(255,255,255,0.9)' : 'transparent',
+                    borderColor: completedToday ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.5)',
+                  }}
+                >
+                  {completedToday && <Check className="h-3.5 w-3.5" style={{ color: accentColor }} strokeWidth={3} />}
+                  {!completedToday && checkinMutation.isPending && (
+                    <div className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                  )}
+                </div>
+              </button>
+            )}
+
+            {/* DAILY TARGET selector — 1x/2x/3x/5x/8x or a custom number. */}
+            <Select
+              value={showCustomTarget ? "custom" : String(targetPerDay)}
+              onValueChange={(v) => {
+                if (v === "custom") { setShowCustomTarget(true); setCustomTarget(String(targetPerDay)); return; }
+                setShowCustomTarget(false);
+                const n = Number(v);
+                if (n >= 1 && n !== targetPerDay) targetMutation.mutate(n);
+              }}
+            >
+              <SelectTrigger className="h-5 w-auto min-w-0 border-0 bg-white/15 text-white/80 text-[11px] font-semibold px-1.5 py-0 gap-0.5 hover:bg-white/25 focus:ring-0 focus:ring-offset-0 [&>svg]:h-2.5 [&>svg]:w-2.5 [&>svg]:text-white/60" data-testid={`select-target-${habit.id}`}>
+                <span>{targetPerDay}× daily</span>
+              </SelectTrigger>
+              <SelectContent>
+                {HABIT_TARGET_PRESETS.map(n => (
+                  <SelectItem key={n} value={String(n)}>{n}× daily</SelectItem>
+                ))}
+                <SelectItem value="custom">Custom…</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {showCustomTarget && (
+              <span className="flex items-center gap-1" onClick={stopProp()}>
+                <Input
+                  type="number"
+                  min={1}
+                  max={HABIT_MAX_TARGET_PER_DAY}
+                  value={customTarget}
+                  onChange={e => setCustomTarget(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") applyCustomTarget(); }}
+                  data-testid={`input-custom-target-${habit.id}`}
+                  className="h-5 w-14 px-1 text-[11px] bg-white/20 border-white/30 text-white"
+                  aria-label={`Custom daily target for ${habit.name}`}
+                />
+                <button
+                  type="button"
+                  onClick={stopProp(applyCustomTarget)}
+                  data-testid={`button-custom-target-${habit.id}`}
+                  className="text-[11px] font-semibold text-white/90 bg-white/20 hover:bg-white/30 rounded px-1.5 h-5"
+                >
+                  Set
+                </button>
+              </span>
+            )}
+
             <Select
               value={habit.frequency}
               onValueChange={(v) => frequencyMutation.mutate(v)}
             >
               <SelectTrigger className="h-5 w-auto min-w-0 border-0 bg-white/15 text-white/80 text-[11px] font-semibold px-1.5 py-0 gap-0.5 hover:bg-white/25 focus:ring-0 focus:ring-offset-0 [&>svg]:h-2.5 [&>svg]:w-2.5 [&>svg]:text-white/60" data-testid={`select-freq-${habit.id}`}>
-                <span>{completedToday ? '✓ Done' : todayCheckins > 0 ? `${todayCheckins}/${targetPerDay}` : habit.frequency}</span>
+                <span>{habit.frequency}</span>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="daily">Daily</SelectItem>
@@ -343,7 +520,44 @@ function HabitCard({ habit }: { habit: Habit }) {
                 <SelectItem value="monthly">Monthly</SelectItem>
               </SelectContent>
             </Select>
+
+            {todayCheckins > 0 && (
+              <>
+                {/* Previous completion times for today — each completion is a
+                    real occurrence with its own timestamp, so they can be
+                    listed instead of collapsing into one "done". */}
+                <button
+                  type="button"
+                  onClick={stopProp(() => setShowTimes(v => !v))}
+                  data-testid={`button-habit-times-${habit.id}`}
+                  aria-expanded={showTimes}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded px-1.5 h-5"
+                >
+                  <Clock className="h-2.5 w-2.5" /> {showTimes ? "Hide" : "Times"}
+                </button>
+                <button
+                  type="button"
+                  onClick={stopProp(() => { if (!isBusy) resetDayMutation.mutate(); })}
+                  disabled={isBusy}
+                  data-testid={`button-habit-reset-${habit.id}`}
+                  aria-label={`Reset today's completions for ${habit.name}`}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded px-1.5 h-5 disabled:opacity-40"
+                >
+                  <RotateCcw className="h-2.5 w-2.5" /> Reset
+                </button>
+              </>
+            )}
           </div>
+
+          {showTimes && todayCheckins > 0 && (
+            <div className="flex flex-wrap items-center gap-1 mt-1.5" data-testid={`list-habit-times-${habit.id}`}>
+              {todayCheckinEntries.map((c, i) => (
+                <span key={c.id || i} className="text-[11px] text-white/80 bg-white/15 rounded px-1.5 py-0.5 tabular-nums">
+                  {formatCompletionTime(c.timestamp)}
+                </span>
+              ))}
+            </div>
+          )}
 
           {/* 7-day dots */}
           <div className="flex items-center gap-1.5 mt-1.5">
@@ -404,6 +618,9 @@ export default function HabitsPage() {
     }
   }, []);
   const [newName, setNewName] = useState("");
+  // New habits pick a daily target up front — "walk the dog 3x a day" should
+  // be creatable in one step, not created as 1x and edited afterwards.
+  const [newTarget, setNewTarget] = useState<number>(1);
   const [selectedProfileId, setSelectedProfileId] = useState<string>("");
   const [dupWarning, setDupWarning] = useState<string | null>(null);
 
@@ -453,9 +670,10 @@ export default function HabitsPage() {
     mutationFn: (name: string) => apiRequest("POST", "/api/habits", {
       name,
       frequency: "daily",
+      targetPerDay: newTarget,
       ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
     }),
-    onSuccess: () => { invalidateDomain("habits"); queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] }); const saved = newName.trim(); setNewName(""); setSelectedProfileId(activeCreateProfileId || ""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: "Check in daily to build your streak" }); },
+    onSuccess: () => { invalidateDomain("habits"); queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] }); const saved = newName.trim(); const savedTarget = newTarget; setNewName(""); setNewTarget(1); setSelectedProfileId(activeCreateProfileId || ""); setShowCreate(false); toast({ title: `"${saved}" habit created`, description: savedTarget > 1 ? `${savedTarget}× per day — check in each time` : "Check in daily to build your streak" }); },
     onError: (err: Error) => toast({ title: "Failed to create habit", description: formatApiError(err), variant: "destructive" }),
   });
 
@@ -508,6 +726,16 @@ export default function HabitsPage() {
               data-testid="input-habit-name"
               className="flex-1"
             />
+            <Select value={String(newTarget)} onValueChange={(v) => setNewTarget(Math.max(1, Number(v) || 1))}>
+              <SelectTrigger className="w-[110px] h-9 text-xs" data-testid="select-new-habit-target">
+                <SelectValue placeholder="1× daily" />
+              </SelectTrigger>
+              <SelectContent>
+                {HABIT_TARGET_PRESETS.map(n => (
+                  <SelectItem key={n} value={String(n)}>{n}× daily</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
               <SelectTrigger className="w-[120px] h-9 text-xs" data-testid="select-habit-profile">
                 <SelectValue placeholder="Profile" />

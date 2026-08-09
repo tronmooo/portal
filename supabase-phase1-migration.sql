@@ -30,15 +30,13 @@ DO $$ BEGIN
   END IF;
 END $$;
 
--- 4. Add UNIQUE constraint on habit_checkins (prevents duplicate check-ins per day)
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'habit_checkins_unique_day') THEN
-    -- Remove exact duplicates first (keep the earliest)
-    DELETE FROM habit_checkins a USING habit_checkins b
-    WHERE a.habit_id = b.habit_id AND a.date = b.date AND a.id > b.id;
-    ALTER TABLE habit_checkins ADD CONSTRAINT habit_checkins_unique_day UNIQUE (habit_id, date);
-  END IF;
-END $$;
+-- 4. WITHDRAWN (migrations/20260809_habit_multi_completion.sql): this used to
+-- add UNIQUE (habit_id, date) to habit_checkins to "prevent duplicate check-ins
+-- per day". Habits now support multiple completions per day — "drink water 8x",
+-- "medication twice", "walk the dog 3x" — where each completion is its own row
+-- with its own timestamp. The constraint would make that impossible and delete
+-- real history on the way in, so it must never be created. The later migration
+-- drops it defensively for any environment that already ran this file.
 
 -- 5. Add UNIQUE constraint on memories (prevents duplicate keys per user)
 DO $$ BEGIN

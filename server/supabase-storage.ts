@@ -46,6 +46,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
   return _sharedClient;
 }
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
+import { buildHabitCompletionRows, type HabitCheckinOptions } from "./habit-completions";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromProfiles, seriesFromEvents } from "../shared/calendar-adapters";
@@ -1058,8 +1059,14 @@ export class SupabaseStorage implements IStorage {
 
   private rowToHabitCheckin(r: any): HabitCheckin {
     return {
-      id: r.id, date: r.date, value: r.value ?? undefined,
+      // `date` is a Postgres date column — normalize to YYYY-MM-DD so a driver
+      // that hands back a full timestamp can't break same-day grouping.
+      id: r.id, date: String(r.date ?? "").slice(0, 10), value: r.value ?? undefined,
       notes: r.notes || undefined, timestamp: r.timestamp,
+      // `source`/`created_at` arrived with the multi-completion migration;
+      // pre-migration rows read back as manual, which is what they were.
+      source: r.source || "manual",
+      createdAt: r.created_at || r.timestamp,
     };
   }
 
@@ -1077,6 +1084,7 @@ export class SupabaseStorage implements IStorage {
       id: r.id, name: r.name, icon: r.icon || undefined, color: r.color || undefined,
       frequency: r.frequency, targetDays: r.target_days || undefined,
       targetPerDay: r.target_per_day || 1,
+      unitLabel: r.unit_label || undefined,
       timeOfDay: r.time_of_day || undefined,
       scheduledTime: r.scheduled_time || undefined,
       currentStreak: live.current, longestStreak: Math.max(live.longest, r.longest_streak || 0),
@@ -4476,6 +4484,7 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, name: data.name, icon: data.icon || null,
       color: data.color || null, frequency: data.frequency || "daily",
       target_days: data.targetDays || null, target_per_day: data.targetPerDay || 1,
+      unit_label: (data as any).unitLabel || null,
       time_of_day: (data as any).timeOfDay || null,
       scheduled_time: (data as any).scheduledTime || null,
       current_streak: 0, longest_streak: 0,
@@ -4490,32 +4499,112 @@ export class SupabaseStorage implements IStorage {
     return (await this.getHabit(id))!;
   }
 
-  async checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined> {
+  /** Re-derive and persist the habit's streak columns after any completion write. */
+  private async _resyncHabitStreak(habitId: string, targetPerDay: number, priorLongest: number): Promise<void> {
+    const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
+    const { current, longest } = calculateStreak(allCheckins || [], targetPerDay || 1, this._timezone);
+    await this.supabase.from("habits").update({
+      current_streak: current, longest_streak: Math.max(longest, priorLongest || 0),
+    }).eq("id", habitId).eq("user_id", this.userId);
+  }
+
+  /**
+   * Record one or more completions of a habit.
+   *
+   * MULTI-COMPLETION: every completion is its OWN row with its own timestamp.
+   * A habit done three times today has three rows — nothing is overwritten,
+   * and nothing is refused for going past the daily target. "I walked the dog
+   * 4 times" on a target of 3 records 4/3, because that is what happened.
+   *
+   * The old behavior (silently returning the last existing row once
+   * targetPerDay was reached) made every extra tap a no-op and is gone.
+   *
+   * Legacy call shape `checkinHabit(id, "2026-08-09", value, notes)` still
+   * works; the options object is the way to pass count/source/time.
+   */
+  async checkinHabit(
+    habitId: string,
+    dateOrOptions?: string | HabitCheckinOptions,
+    value?: number,
+    notes?: string,
+  ): Promise<HabitCheckin | undefined> {
     const habit = await this.getHabit(habitId);
     if (!habit) return undefined;
-    const checkinDate = date || getUserToday(this._timezone);
-    // Allow multiple check-ins per day up to targetPerDay
-    const todayCheckins = habit.checkins.filter(c => c.date === checkinDate);
-    const maxPerDay = habit.targetPerDay || 1;
-    if (todayCheckins.length >= maxPerDay) {
-      // Already at max for today
-      return todayCheckins[todayCheckins.length - 1];
-    }
-    const id = randomUUID();
-    const ts = new Date().toISOString();
-    const { error } = await this.supabase.from("habit_checkins").insert({
-      id, user_id: this.userId, habit_id: habitId, date: checkinDate,
-      value: value ?? null, notes: notes || null, timestamp: ts,
+    const opts: HabitCheckinOptions = typeof dateOrOptions === "string" || dateOrOptions == null
+      ? { date: dateOrOptions as string | undefined, value, notes }
+      : dateOrOptions;
+    const checkinDate = opts.date || getUserToday(this._timezone);
+    const count = Math.max(1, Math.floor(opts.count ?? 1));
+    const rows = buildHabitCompletionRows({
+      habitId, userId: this.userId, date: checkinDate, count,
+      at: opts.at, value: opts.value, notes: opts.notes, source: opts.source,
+      timezone: this._timezone,
     });
+    const { error } = await this.supabase.from("habit_checkins").insert(rows);
     if (error) throw error;
-    // Recalculate streaks (with targetPerDay support)
-    const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
-    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1, this._timezone);
-    await this.supabase.from("habits").update({
-      current_streak: current, longest_streak: Math.max(longest, habit.longestStreak),
-    }).eq("id", habitId).eq("user_id", this.userId);
-    this.logActivity("habit", `Checked in: ${habit.name}`);
-    return { id, date: checkinDate, value, notes, timestamp: ts };
+    await this._resyncHabitStreak(habitId, habit.targetPerDay || 1, habit.longestStreak);
+    this.logActivity("habit", `Checked in: ${habit.name}${count > 1 ? ` ×${count}` : ""}`);
+    const last = rows[rows.length - 1];
+    return this.rowToHabitCheckin(last);
+  }
+
+  /**
+   * Make `date` hold EXACTLY `total` completions — the "I've only walked the
+   * dog twice today" correction. Adds rows when short, removes the most
+   * recent ones when over. Returns the resulting count.
+   */
+  async setHabitDayCount(habitId: string, date: string, total: number, opts?: HabitCheckinOptions): Promise<number | undefined> {
+    const habit = await this.getHabit(habitId);
+    if (!habit) return undefined;
+    const target = Math.max(0, Math.floor(total));
+    const existing = (habit.checkins || [])
+      .filter(c => c.date === date)
+      .sort((a, b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
+    if (existing.length > target) {
+      // Drop the newest first so an explicitly-timed earlier completion
+      // ("I did it at 8am") survives the correction.
+      const doomed = existing.slice(target).map(c => c.id);
+      const { error } = await this.supabase.from("habit_checkins").delete().in("id", doomed).eq("habit_id", habitId).eq("user_id", this.userId);
+      if (error) throw error;
+    } else if (existing.length < target) {
+      const rows = buildHabitCompletionRows({
+        habitId, userId: this.userId, date, count: target - existing.length,
+        at: opts?.at, value: opts?.value, notes: opts?.notes, source: opts?.source,
+        timezone: this._timezone,
+      });
+      const { error } = await this.supabase.from("habit_checkins").insert(rows);
+      if (error) throw error;
+    }
+    await this._resyncHabitStreak(habitId, habit.targetPerDay || 1, habit.longestStreak);
+    this.logActivity("habit", `Set ${habit.name} to ${target} for ${date}`);
+    return target;
+  }
+
+  /** Delete the most recent completion on `date` — the "undo one" action. */
+  async undoLastHabitCheckin(habitId: string, date: string): Promise<HabitCheckin | undefined> {
+    const habit = await this.getHabit(habitId);
+    if (!habit) return undefined;
+    const onDay = (habit.checkins || [])
+      .filter(c => c.date === date)
+      .sort((a, b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
+    const last = onDay[onDay.length - 1];
+    if (!last) return undefined;
+    const ok = await this.deleteHabitCheckin(habitId, last.id);
+    return ok ? last : undefined;
+  }
+
+  /** Remove every completion on `date` — "reset today". Returns rows removed. */
+  async resetHabitDay(habitId: string, date: string): Promise<number | undefined> {
+    const habit = await this.getHabit(habitId);
+    if (!habit) return undefined;
+    const removed = (habit.checkins || []).filter(c => c.date === date).length;
+    if (removed > 0) {
+      const { error } = await this.supabase.from("habit_checkins").delete().eq("habit_id", habitId).eq("user_id", this.userId).eq("date", date);
+      if (error) throw error;
+      await this._resyncHabitStreak(habitId, habit.targetPerDay || 1, habit.longestStreak);
+      this.logActivity("habit", `Reset ${habit.name} for ${date}`);
+    }
+    return removed;
   }
 
   async deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean> {
@@ -4523,7 +4612,8 @@ export class SupabaseStorage implements IStorage {
     if (!habit) return false;
     const { error } = await this.supabase.from("habit_checkins").delete().eq("id", checkinId).eq("habit_id", habitId).eq("user_id", this.userId);
     if (error) return false;
-    // Recalculate streaks after deletion
+    // Recalculate streaks after deletion. Unlike the check-in path this may
+    // legitimately LOWER longest_streak, so it doesn't clamp to the old value.
     const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
     const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1, this._timezone);
     await this.supabase.from("habits").update({
@@ -4543,6 +4633,7 @@ export class SupabaseStorage implements IStorage {
       name: merged.name, icon: merged.icon || null, color: merged.color || null,
       frequency: merged.frequency, target_days: merged.targetDays || null,
       target_per_day: merged.targetPerDay || existing.targetPerDay || 1,
+      unit_label: merged.unitLabel || null,
       time_of_day: merged.timeOfDay || null,
       scheduled_time: merged.scheduledTime || null,
     }).eq("id", id).eq("user_id", this.userId);

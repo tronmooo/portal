@@ -17,7 +17,7 @@
 // score = urgency (shared curve) + impact. Higher surfaces sooner.
 
 import { dayLabel, urgencyScore } from "./now-rank";
-import { isHabitDueOn, isHabitDoneOn, type HabitScheduleShape } from "./habit-schedule";
+import { isHabitDueOn, isHabitDoneOn, habitDayProgress, type HabitScheduleShape } from "./habit-schedule";
 
 export type AttentionKind =
   | "task" | "bill" | "document" | "habit" | "reminder" | "event" | "goal" | "alert";
@@ -333,7 +333,9 @@ export function computeAttention(
         sourceKey: `habit:${h.id}`,
         kind: "habit",
         title: h.name || "Habit",
-        reason: `${streak}-day streak breaks today`,
+        reason: habitDayProgress(h as HabitScheduleShape, today).target > 1
+          ? `${streak}-day streak breaks today — ${habitDayProgress(h as HabitScheduleShape, today).count}/${habitDayProgress(h as HabitScheduleShape, today).target} done`
+          : `${streak}-day streak breaks today`,
         tier: "immediate",
         daysUntil: 0,
         score: urgencyScore(0) + 140,
@@ -348,7 +350,10 @@ export function computeAttention(
         sourceKey: `habit:${h.id}`,
         kind: "habit" as const,
         title: h.name || "Habit",
-        reason: "Not checked in yet",
+        // A partly-done multi-completion habit must not read as untouched.
+        reason: habitDayProgress(h as HabitScheduleShape, today).count > 0
+          ? `${habitDayProgress(h as HabitScheduleShape, today).count}/${habitDayProgress(h as HabitScheduleShape, today).target} done today`
+          : "Not checked in yet",
         tier: "soon" as const,
         daysUntil: 0,
         score: urgencyScore(0),

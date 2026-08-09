@@ -47,8 +47,12 @@ export const PARITY_MATRIX: ParityRow[] = [
 
   // ── Habits ─────────────────────────────────────────────────────────────────
   { entity: "Habit", operation: "Create", ui: "Wellness → Habits popup", aiTools: ["create_habit"], status: "covered" },
-  { entity: "Habit", operation: "Check in", ui: "Habits popup toggle", aiTools: ["checkin_habit"], status: "covered" },
-  { entity: "Habit", operation: "Un-check (remove check-in)", ui: "Habits popup toggle", aiTools: ["uncomplete_habit"], status: "covered" },
+  { entity: "Habit", operation: "Record one completion", ui: "Habits card + button / tap", aiTools: ["checkin_habit"], status: "covered" },
+  { entity: "Habit", operation: "Record several completions at once (\"twice\")", ui: "Habits card + button, tapped repeatedly", aiTools: ["checkin_habit"], status: "added" },
+  { entity: "Habit", operation: "Set today's total (\"I've only done it twice\")", ui: "Habits card − / + to the desired count", aiTools: ["checkin_habit"], status: "added" },
+  { entity: "Habit", operation: "Undo one completion", ui: "Habits card − button", aiTools: ["uncomplete_habit"], status: "covered" },
+  { entity: "Habit", operation: "Reset today's completions", ui: "Habits card row menu → Reset today", aiTools: ["uncomplete_habit"], status: "added" },
+  { entity: "Habit", operation: "Change the daily target", ui: "Habits card target selector", aiTools: ["update_habit"], status: "added" },
   { entity: "Habit", operation: "Edit (rename/frequency/schedule)", ui: "Habits popup editor", aiTools: ["update_habit"], status: "covered" },
   { entity: "Habit", operation: "Delete", ui: "Habits popup row menu", aiTools: ["delete_habit"], status: "covered" },
   { entity: "Habit", operation: "Restore soft-deleted", ui: "Habits popup undo toast", aiTools: ["restore_habit"], status: "added" },

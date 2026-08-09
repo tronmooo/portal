@@ -88,7 +88,7 @@ describe("buildExtractionSystemPrompt", () => {
     expect(prompt.toLowerCase()).toContain("bathroom");
   });
 
-  it("pins detail preservation and explicit-habit-only routing", () => {
+  it("pins detail preservation and count-aware habit routing", () => {
     const prompt = buildExtractionSystemPrompt({
       nowISO: "2026-07-15T12:00:00Z",
       trackerNames: [],
@@ -98,9 +98,13 @@ describe("buildExtractionSystemPrompt", () => {
     // "I smoked a blunt" must keep method:"blunt"; times must ride in at.
     expect(prompt).toContain('method:"blunt"');
     expect(prompt).toContain("8:15 AM");
-    // Activity reports never become habit check-ins.
-    expect(prompt).toContain("explicit habit language");
-    expect(prompt).toContain("ALWAYS log_tracker_entry");
+    // Habits are counted, not binary — "twice" must survive extraction.
+    expect(prompt).toContain("count:2");
+    expect(prompt).toContain('at:"HH:MM"');
+    // An activity with no matching habit is still a tracker log, and an
+    // activity report NEVER creates a habit.
+    expect(prompt).toContain("otherwise the activity is ALWAYS log_tracker_entry");
+    expect(prompt).toContain("Never create a habit from an activity report");
     // Profiles come only from the current message.
     expect(prompt).toContain("ONLY when THIS message names someone else");
   });
