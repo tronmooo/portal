@@ -4250,6 +4250,17 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
   {
+    name: "repair_profile_types",
+    description: "Find and fix profiles that are objects but got filed as PEOPLE — 'why is my MacBook a person', 'fix my profile types', 'there are fake people in my profile list', 'clean up the duplicate profiles'. Detects person/pet profiles whose name starts with a determiner ('my MacBook Pro m4', 'our house'), which a human name never does. Call with confirm:false (or omit) FIRST to show the user what was found, then confirm:true only after they say to fix it. Duplicates are soft-deleted (recoverable) and the rest are retyped as assets with the determiner removed.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        confirm: { type: "boolean", description: "false/omitted = preview only (read-only). true = apply the repair, ONLY after the user has seen the list and asked for it." },
+      },
+      required: [],
+    },
+  },
+  {
     name: "validate_profile_isolation",
     description: "Verify every record's profile links point only at the user's own profiles — 'is my data isolated correctly?', 'check profile links', 'validate my data'. Read-only.",
     input_schema: { type: "object" as const, properties: {}, required: [] },
@@ -5113,6 +5124,7 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - DOCUMENT FIELD LOOKUPS: "what's my license plate / VIN / policy number / registration expiry / license number" → the answer usually lives in a DOCUMENT's extracted fields, not profile fields. Check in order: (1) get_profile_data(profile) — its documents[] include each doc's extracted "fields"; (2) search_documents(forProfile) for that profile's docs; (3) search_documents WITHOUT forProfile — searches EVERY document's name, type, AND field contents, including documents not linked to any profile. A vehicle registration's licenseNumber/plate field IS the license plate. NEVER say a value isn't stored until you've searched all documents. If a document exists but lacks the field, say which document you checked.
 - DOCUMENTS ARE KNOWLEDGE: documents are first-class sources for answering questions and inferring context. When an unlinked document's contents clearly describe an existing profile (a registration whose make/model matches the user's vehicle, an insurance card naming a family member), USE it to answer, then offer to link_document it to that profile. When several documents could answer, ask a smart follow-up naming the candidates instead of guessing or failing.
 - INDIRECT VEHICLE/ASSET REFERENCES: "my car" / "my truck" / "my Honda" → resolve against existing VEHICLE/asset profiles: exactly one candidate → use it; several → ask which one ("Do you mean your Honda CR-V or the Tacoma?"); none → say so. Prefer the vehicle profile over look-alike liability/subscription profiles that merely contain the vehicle's name (e.g. "Progressive Auto Insurance - Honda CR-V" is NOT the vehicle).
+- FAKE PEOPLE IN THE PROFILE LIST: "why is my MacBook a person" / "there are fake people in my profiles" / "fix my profile types" / "my truck shows up as a person" → repair_profile_types (no confirm) to SHOW what it found, relay the list, then repair_profile_types(confirm:true) only after the user says to fix it. Duplicates are soft-deleted and recoverable; say so.
 - DATA HEALTH: "is my data healthy" / "check for orphans" → find_orphans; "fix/repair them" (after seeing issues) → repair_relations(confirm:true); "duplicate expenses?" → find_duplicates; "are my dashboard numbers right" → validate_dashboard_counts; "refresh my dashboard" / "counts look stale" → refresh_dashboard; "why is X on my dashboard / in today's agenda" → explain_dashboard_item(name). Relay these tools' message fields — never invent health results.
 
 TOOL CHOICE RULES — CRITICAL:
@@ -10990,6 +11002,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return repairRelations(storage);
     }
 
+    case "repair_profile_types": {
+      const mod = await import("./ai-system-tools");
+      // Preview by default — the user sees the list before anything moves.
+      if (input.confirm !== true) return mod.findMisclassifiedProfiles(storage);
+      return mod.repairMisclassifiedProfiles(storage);
+    }
+
     case "validate_profile_isolation": {
       const { validateProfileIsolation } = await import("./ai-system-tools");
       return validateProfileIsolation(storage);
@@ -14896,6 +14915,7 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   preview_bulk_action: "update_entity",
   execute_bulk_action: "delete_entity",
   repair_relations: "update_entity",
+  repair_profile_types: "update_entity",
   merge_profiles: "update_profile",
   configure_dashboard_sections: "update_entity",
   create_notification: "update_entity",

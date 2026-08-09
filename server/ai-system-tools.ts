@@ -47,6 +47,145 @@ export async function repairRelations(storage: IStorage): Promise<any> {
   };
 }
 
+// ── Misclassified profiles: objects filed as people ─────────────────────────
+//
+// Cleanup for damage the create_profile type fallback did before it was fixed
+// (2026-08-09). An absent/invalid `type` on create_profile silently defaulted
+// to "person", so "Create a profile for my MacBook Pro m4" left a PERSON row
+// named "my MacBook Pro m4" sitting in the profile picker next to real people,
+// in owner badges, and in ownership attribution.
+//
+// The guard stops new ones. These two functions clean up the rows already
+// written — no user should have to hand-delete them.
+//
+// DETECTION IS DELIBERATELY NARROW. The only signal used is a leading
+// first-person determiner ("my ", "our ") on a person/pet-typed profile. No
+// human is named "my MacBook Pro m4", so this cannot mistake a real person for
+// an object — which is the failure that would actually hurt. Objects filed as
+// people under an ordinary name are NOT touched; guessing which names are
+// people is exactly the kind of inference that caused this mess.
+
+const DETERMINER_PREFIX = /^(?:my|our)['’ʼ]?\s+/i;
+
+/** Identity types an object should never carry. "self" is excluded from the
+ *  scan entirely — the user's own profile is never touched. */
+const MISFILED_AS = new Set(["person", "pet"]);
+
+/** Fields that only ever belong to a real human — a safety brake. */
+const HUMAN_FIELD_KEYS = ["phone", "email", "relationship", "birthday", "dateOfBirth", "ssn"];
+
+export interface MisclassifiedProfile {
+  id: string;
+  name: string;
+  type: string;
+  /** Name with the determiner removed — what it should have been called. */
+  suggestedName: string;
+  /** "delete_duplicate" when the real asset already exists; "retype" otherwise. */
+  action: "delete_duplicate" | "retype";
+  duplicateOfId?: string;
+  duplicateOfName?: string;
+}
+
+function scanMisclassified(profiles: any[]): MisclassifiedProfile[] {
+  const out: MisclassifiedProfile[] = [];
+  const byName = new Map<string, any>();
+  for (const p of profiles) {
+    if (MISFILED_AS.has(String(p.type)) || String(p.type) === "self") continue;
+    byName.set(norm(p.name), p);
+  }
+
+  for (const p of profiles) {
+    const type = String(p.type || "");
+    // Only person/pet rows can be this bug, and never the self profile.
+    if (!MISFILED_AS.has(type)) continue;
+    const name = String(p.name || "");
+    if (!DETERMINER_PREFIX.test(name)) continue;
+
+    // Safety brake: a row carrying real human fields is a person the user
+    // named oddly, not an object. Leave it alone.
+    const fields = (p.fields && typeof p.fields === "object") ? p.fields : {};
+    if (HUMAN_FIELD_KEYS.some((k) => fields[k] != null && fields[k] !== "")) continue;
+
+    const suggestedName = name.replace(DETERMINER_PREFIX, "").trim();
+    if (suggestedName.length < 2) continue;
+
+    // Is the real asset already there? Then this row is the twin the fan-out
+    // bug created, and the right repair is to remove it, not rename it.
+    const twin = byName.get(norm(suggestedName));
+    // A row with children can't be deleted without orphaning them — retype it.
+    const hasChildren = profiles.some((c: any) => c.parentProfileId === p.id);
+
+    out.push(
+      twin && !hasChildren
+        ? {
+            id: p.id, name, type, suggestedName,
+            action: "delete_duplicate", duplicateOfId: twin.id, duplicateOfName: String(twin.name),
+          }
+        : { id: p.id, name, type, suggestedName, action: "retype" },
+    );
+  }
+  return out;
+}
+
+/** Read-only report. Safe to run at any time. */
+export async function findMisclassifiedProfiles(storage: IStorage): Promise<any> {
+  const profiles = await storage.getProfiles();
+  const issues = scanMisclassified(profiles);
+  return {
+    scanned: profiles.length,
+    issue_count: issues.length,
+    issues: issues.slice(0, 25),
+    message: issues.length === 0
+      ? "No misclassified profiles — nothing of yours is filed as a person by mistake."
+      : `Found ${issues.length} profile${issues.length === 1 ? "" : "s"} filed as a person that ${issues.length === 1 ? "is" : "are"} actually ${issues.length === 1 ? "an object" : "objects"}: ${issues.slice(0, 5).map((i) => `"${i.name}"`).join(", ")}. Say "fix them" and I'll ${issues.some((i) => i.action === "delete_duplicate") ? "remove the duplicates and retype the rest" : "retype them as assets"}.`,
+  };
+}
+
+/**
+ * Execute the repair. Deletes are SOFT (profiles are in SOFT_DELETE_TYPES), so
+ * every change here is recoverable if the scan got something wrong.
+ */
+export async function repairMisclassifiedProfiles(storage: IStorage): Promise<any> {
+  const profiles = await storage.getProfiles();
+  const issues = scanMisclassified(profiles);
+  const repaired: Array<{ name: string; action: string; detail: string }> = [];
+  const failed: Array<{ name: string; error: string }> = [];
+
+  for (const issue of issues) {
+    try {
+      if (issue.action === "delete_duplicate") {
+        await storage.deleteProfile(issue.id);
+        repaired.push({
+          name: issue.name,
+          action: "removed duplicate",
+          detail: `merged into the existing "${issue.duplicateOfName}"`,
+        });
+      } else {
+        await storage.updateProfile(issue.id, { type: "asset", name: issue.suggestedName } as any);
+        repaired.push({
+          name: issue.name,
+          action: "retyped as asset",
+          detail: `renamed to "${issue.suggestedName}"`,
+        });
+      }
+    } catch (e: any) {
+      failed.push({ name: issue.name, error: e?.message || "unknown error" });
+    }
+  }
+
+  return {
+    scanned: profiles.length,
+    repaired_count: repaired.length,
+    repaired,
+    ...(failed.length > 0 ? { failed } : {}),
+    message: repaired.length === 0
+      ? (failed.length > 0
+          ? `Couldn't repair ${failed.length} profile(s).`
+          : "Nothing to repair — no profiles are misclassified.")
+      : `Cleaned up ${repaired.length} profile${repaired.length === 1 ? "" : "s"}: ${repaired.map((r) => `"${r.name}" ${r.action}`).join(", ")}. Deletes are recoverable if any of that was wrong.`,
+  };
+}
+
 export async function validateProfileIsolation(storage: IStorage): Promise<any> {
   const profiles = await storage.getProfiles();
   const ids = new Set(profiles.map((p: any) => p.id));

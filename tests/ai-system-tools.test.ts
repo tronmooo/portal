@@ -1,6 +1,9 @@
 // ── System validate/repair/refresh unit tests (server/ai-system-tools.ts) ────
 import { describe, it, expect } from "vitest";
-import { validateProfileIsolation, findDuplicates, validateDashboardCounts } from "../server/ai-system-tools";
+import {
+  validateProfileIsolation, findDuplicates, validateDashboardCounts,
+  findMisclassifiedProfiles, repairMisclassifiedProfiles,
+} from "../server/ai-system-tools";
 import { explainDashboardItem } from "../server/dashboard-explain";
 
 const PROFILES = [
@@ -150,5 +153,93 @@ describe("explainDashboardItem", () => {
     const res = await explainDashboardItem(stubStorage(), "nonexistent thing");
     expect(res.matches).toEqual([]);
     expect(res.message).toMatch(/couldn't find/i);
+  });
+});
+
+
+// ── Objects filed as people (2026-08-09 cleanup) ────────────────────────────
+// "Create a profile for my MacBook Pro m4" left a PERSON row named "my MacBook
+// Pro m4" in the profile picker next to real people. create_profile no longer
+// defaults an invalid type to "person", but the rows already written need
+// removing. Detection keys ONLY on a leading "my"/"our" on a person/pet row —
+// no human is named that, so a real person can never be caught by it.
+describe("misclassified profile repair", () => {
+  const SELF = { id: "self-1", type: "self", name: "Poop", fields: {} };
+  const REAL_PERSON = { id: "p-mike", type: "person", name: "Mike", fields: { phone: "555-0100" } };
+  const REAL_ASSET = { id: "a-mac", type: "asset", name: "MacBook Pro M4", fields: {} };
+  const TWIN = { id: "x-mac", type: "person", name: "my MacBook Pro m4", fields: {} };
+  const LONE = { id: "x-ram", type: "person", name: "my 2025 Dodge ram", fields: {} };
+
+  const withProfiles = (rows: any[]) => stubStorage({
+    getProfiles: async () => rows,
+    updateProfile: async (id: string, data: any) => ({ id, ...data }),
+    deleteProfile: async () => true,
+  });
+
+  it("finds the bogus person rows and leaves real people alone", async () => {
+    const res = await findMisclassifiedProfiles(withProfiles([SELF, REAL_PERSON, REAL_ASSET, TWIN, LONE]));
+    expect(res.issue_count).toBe(2);
+    const names = res.issues.map((i: any) => i.name);
+    expect(names).toEqual(expect.arrayContaining(["my MacBook Pro m4", "my 2025 Dodge ram"]));
+    expect(names).not.toContain("Mike");
+    expect(names).not.toContain("Poop");
+    expect(names).not.toContain("MacBook Pro M4");
+  });
+
+  it("removes the twin when the real asset already exists, retypes when it doesn't", async () => {
+    const res = await findMisclassifiedProfiles(withProfiles([SELF, REAL_ASSET, TWIN, LONE]));
+    const byName = Object.fromEntries(res.issues.map((i: any) => [i.name, i]));
+    expect(byName["my MacBook Pro m4"].action).toBe("delete_duplicate");
+    expect(byName["my MacBook Pro m4"].duplicateOfId).toBe("a-mac");
+    expect(byName["my 2025 Dodge ram"].action).toBe("retype");
+    expect(byName["my 2025 Dodge ram"].suggestedName).toBe("2025 Dodge ram");
+  });
+
+  it("never touches a person carrying real human fields", async () => {
+    const oddlyNamed = { id: "p-odd", type: "person", name: "my Brother Dave", fields: { phone: "555-0199" } };
+    const res = await findMisclassifiedProfiles(withProfiles([SELF, oddlyNamed]));
+    expect(res.issue_count).toBe(0);
+  });
+
+  it("retypes rather than deletes when the row has children", async () => {
+    const child = { id: "c-1", type: "asset", name: "Charger", parentProfileId: "x-mac", fields: {} };
+    const res = await findMisclassifiedProfiles(withProfiles([SELF, REAL_ASSET, TWIN, child]));
+    expect(res.issues.find((i: any) => i.id === "x-mac").action).toBe("retype");
+  });
+
+  it("reports a clean bill when nothing is misclassified", async () => {
+    const res = await findMisclassifiedProfiles(withProfiles([SELF, REAL_PERSON, REAL_ASSET]));
+    expect(res.issue_count).toBe(0);
+    expect(res.message).toMatch(/No misclassified profiles/i);
+  });
+
+  it("applies both repairs and reports what it did", async () => {
+    const deleted: string[] = [];
+    const updated: Array<{ id: string; data: any }> = [];
+    const storage = stubStorage({
+      getProfiles: async () => [SELF, REAL_ASSET, TWIN, LONE],
+      deleteProfile: async (id: string) => { deleted.push(id); return true; },
+      updateProfile: async (id: string, data: any) => { updated.push({ id, data }); return { id, ...data }; },
+    });
+    const res = await repairMisclassifiedProfiles(storage);
+    expect(res.repaired_count).toBe(2);
+    expect(deleted).toEqual(["x-mac"]);
+    expect(updated).toHaveLength(1);
+    expect(updated[0].id).toBe("x-ram");
+    expect(updated[0].data.type).toBe("asset");
+    expect(updated[0].data.name).toBe("2025 Dodge ram");
+    expect(res.message).toMatch(/recoverable/i);
+  });
+
+  it("is a no-op on clean data", async () => {
+    const deleted: string[] = [];
+    const storage = stubStorage({
+      getProfiles: async () => [SELF, REAL_PERSON, REAL_ASSET],
+      deleteProfile: async (id: string) => { deleted.push(id); return true; },
+      updateProfile: async () => ({}),
+    });
+    const res = await repairMisclassifiedProfiles(storage);
+    expect(res.repaired_count).toBe(0);
+    expect(deleted).toEqual([]);
   });
 });

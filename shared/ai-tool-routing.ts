@@ -37,6 +37,7 @@ export const TOOL_INTENT_ENTITY: Record<string, IntentEntity> = {
   // treats them as interchangeable.
   create_profile: "asset", update_profile: "asset", delete_profile: "asset",
   revalue_asset: "asset", convert_expense_to_asset: "asset",
+  repair_profile_types: "asset",
   link_asset_owner: "asset", split_ownership: "asset", merge_profiles: "asset",
 
   // Habits
