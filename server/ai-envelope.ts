@@ -133,10 +133,15 @@ const TOOL_ENTITY: Record<string, string> = {
   create_reminder: "reminder", update_reminder: "reminder", delete_reminder: "reminder",
   create_document: "document",
   log_expected_paycheck: "paycheck", update_paycheck: "paycheck", confirm_paycheck_received: "paycheck", delete_paycheck: "paycheck",
+  add_investment_holding: "profile", update_investment_holding: "profile", remove_investment_holding: "profile",
 };
 
 /** Operation class drives which verification checks run. */
 export function classifyOperation(toolName: string): "create" | "update" | "delete" {
+  // Holding tools UPDATE their account profile — the row must still exist
+  // after "remove_investment_holding" (it deletes a position, not the
+  // account), so the delete read-back would falsely fail.
+  if (/^(add|update|remove)_investment_holding$/.test(toolName)) return "update";
   if (/^(delete_|remove_)/.test(toolName)) return "delete";
   if (/^(create_|log_|add_|duplicate_|journal_entry$|save_memory$|upload_)/.test(toolName)) return "create";
   return "update"; // complete/checkin/pay/restore/toggle/link/set/copy/etc.

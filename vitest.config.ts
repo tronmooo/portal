@@ -114,6 +114,7 @@ export default defineConfig({
       'tests/ai-chat-loop-sweep.test.ts',
       'tests/chat-history-replay.test.ts',
       'tests/recurring-paycheck.test.ts',
+      'tests/investments.test.ts',
       'tests/ai-envelope.test.ts',
       'tests/bulk-actions.test.ts',
       'tests/ai-system-tools.test.ts',

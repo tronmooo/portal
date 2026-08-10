@@ -100,6 +100,12 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Paycheck", operation: "Confirm received (actual amount)", ui: "Paycheck row → Confirm", aiTools: ["confirm_paycheck_received"], status: "covered" },
   { entity: "Paycheck", operation: "Delete", ui: "Paycheck row menu", aiTools: ["delete_paycheck"], status: "added" },
   { entity: "Net worth", operation: "Full financial overview (income/expenses/cash flow/upcoming/invested/net worth)", ui: "Finance tab hero + popups", aiTools: ["get_financial_overview"], status: "added" },
+  // ── Investments (Roth IRA / 401k / brokerage / crypto — stock & coin holdings)
+  { entity: "Investment", operation: "Create account (Roth IRA/401k/brokerage/crypto wallet)", ui: "Finance → Investments / auto-created on first holding", aiTools: ["create_profile", "add_investment_holding"], status: "added" },
+  { entity: "Investment", operation: "Add holding (stock/ETF/crypto/bond)", ui: "Finance → Investments → Add holding", aiTools: ["add_investment_holding"], status: "added" },
+  { entity: "Investment", operation: "Update holding (price/quantity/partial sale)", ui: "Finance → Investments row", aiTools: ["update_investment_holding"], status: "added" },
+  { entity: "Investment", operation: "Remove holding (sold all)", ui: "Finance → Investments row", aiTools: ["remove_investment_holding"], status: "added" },
+  { entity: "Investment", operation: "Portfolio summary (value/cost/gain/allocation)", ui: "Finance → Investments totals", aiTools: ["get_investment_summary"], status: "added" },
 
   // ── Budgets ────────────────────────────────────────────────────────────────
   { entity: "Budget", operation: "Set / create category budget", ui: "Budget popup", aiTools: ["set_budget", "create_budget"], status: "covered" },

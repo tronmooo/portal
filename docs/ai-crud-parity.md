@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**128 operations** — ✅ 82 covered · 🆕 36 added · 🔜 0 planned · 🚫 10 excluded by design.
+**133 operations** — ✅ 82 covered · 🆕 41 added · 🔜 0 planned · 🚫 10 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -113,6 +113,16 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 |---|---|---|---|---|
 | Full financial overview (income/expenses/cash flow/upcoming/invested/net worth) | Finance tab hero + popups | `get_financial_overview` | 🆕 added |  |
 | Read history / cashflow | Hero KPIs + popups | `query_net_worth_history`, `get_cashflow` | ✅ covered |  |
+
+### Investment
+
+| Operation | UI surface | AI tool(s) | Status | Notes |
+|---|---|---|---|---|
+| Create account (Roth IRA/401k/brokerage/crypto wallet) | Finance → Investments / auto-created on first holding | `create_profile`, `add_investment_holding` | 🆕 added |  |
+| Add holding (stock/ETF/crypto/bond) | Finance → Investments → Add holding | `add_investment_holding` | 🆕 added |  |
+| Update holding (price/quantity/partial sale) | Finance → Investments row | `update_investment_holding` | 🆕 added |  |
+| Remove holding (sold all) | Finance → Investments row | `remove_investment_holding` | 🆕 added |  |
+| Portfolio summary (value/cost/gain/allocation) | Finance → Investments totals | `get_investment_summary` | 🆕 added |  |
 
 ### Budget
 

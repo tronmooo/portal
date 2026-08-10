@@ -42,6 +42,7 @@ import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { useToast } from "@/hooks/use-toast";
+import { InvestmentsSection } from "@/components/finance/InvestmentsSection";
 import type { Expense } from "@shared/schema";
 import {
   BarChart,
@@ -1456,7 +1457,7 @@ export default function FinancePage() {
         data-testid="finance-toggle-more"
       >
         <ChevronDown className={`h-4 w-4 transition-transform ${showMore ? "rotate-180" : ""}`} />
-        {showMore ? "Hide" : "More"} — paychecks, income, loan schedules, cash flow
+        {showMore ? "Hide" : "More"} — paychecks, income, investments, loan schedules, cash flow
       </button>
       {showMore && (<>
       {/* ── Paychecks Section ── */}
@@ -1831,6 +1832,9 @@ export default function FinancePage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── Investments Section ── Roth IRA / 401k / brokerage / crypto holdings */}
+      <InvestmentsSection />
 
       {/* ── Loan Amortization Section ── */}
       <div className="space-y-2">

@@ -59,6 +59,13 @@ import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
+import {
+  detectAccountType, normalizeHolding, mergeHolding, holdingsOf,
+  holdingValue, holdingsValue, holdingsInvested, allocationByClass, accountFieldsPatch,
+} from "@shared/investments";
+
+/** $1,234.56 — investment tool messages. */
+const fmtUsd = (n: number) => `$${(Math.round(n * 100) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, parseLocalDate, getUserToday } from "@shared/timezone";
 import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
@@ -3539,6 +3546,68 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       required: []
     }
   },
+  {
+    name: "add_investment_holding",
+    description: "Record buying a stock, ETF, crypto, bond, or cash position in an investment account — 'I bought 10 shares of AAPL at $180 in my Roth IRA', 'added 0.05 BTC to my Coinbase wallet', 'my 401k has 40 shares of VOO'. If the named account doesn't exist it is CREATED automatically (Roth IRA / Traditional IRA / 401k / HSA / brokerage / crypto wallet detected from the name). Buying more of an existing symbol merges into the position (adds quantity + cost). The account's total value and net worth update automatically.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        account: { type: "string", description: "Investment account name: 'Roth IRA', 'Fidelity brokerage', 'Coinbase', '401k'. Created if missing." },
+        symbol: { type: "string", description: "Ticker or coin symbol: AAPL, VOO, BTC, ETH" },
+        quantity: { type: "number", description: "Shares or coins bought (fractional fine: 0.05)" },
+        price: { type: "number", description: "Per-unit price paid ('at $180' → 180). Also sets the position's current price." },
+        costBasis: { type: "number", description: "TOTAL paid for this purchase, if the user gives a total instead of a per-unit price ('put $500 into BTC')" },
+        assetClass: { type: "string", enum: ["stock", "etf", "crypto", "bond", "cash", "other"], description: "Omit to auto-detect from the symbol" },
+        name: { type: "string", description: "Display name: 'Apple', 'Bitcoin'" },
+        forProfile: { type: "string", description: "Owner's name when the account belongs to someone else ('Bob's Roth IRA')" },
+      },
+      required: ["account", "symbol", "quantity"],
+    }
+  },
+  {
+    name: "update_investment_holding",
+    description: "Update an existing position — new price ('TSLA is at $250 now'), corrected quantity ('actually I have 12 shares'), or record a PARTIAL sale ('sold 5 of my 10 AAPL shares' → quantity: 5 remaining). Finds the symbol across all investment accounts unless account narrows it. Selling ALL of a position is remove_investment_holding.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        symbol: { type: "string", description: "Ticker/coin to update" },
+        account: { type: "string", description: "Narrow to one account when the symbol is held in several" },
+        changes: {
+          type: "object",
+          properties: {
+            quantity: { type: "number", description: "New TOTAL quantity held (not a delta)" },
+            price: { type: "number", description: "New per-unit current price" },
+            costBasis: { type: "number", description: "Corrected total cost basis" },
+            name: { type: "string" },
+          },
+        },
+      },
+      required: ["symbol", "changes"],
+    }
+  },
+  {
+    name: "remove_investment_holding",
+    description: "Remove a position entirely — 'I sold all my TSLA', 'closed out my BTC'. Finds the symbol across investment accounts unless account narrows it. For a partial sale use update_investment_holding with the remaining quantity.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        symbol: { type: "string", description: "Ticker/coin to remove" },
+        account: { type: "string", description: "Narrow to one account" },
+      },
+      required: ["symbol"],
+    }
+  },
+  {
+    name: "get_investment_summary",
+    description: "Read-only portfolio summary: every investment account (Roth IRA, 401k, brokerage, crypto wallet…) with its holdings, current value, cost basis, gain/loss, and allocation by asset class (stock/etf/crypto/bond/cash). Use for 'how are my investments', 'what's in my Roth IRA', 'show my portfolio', 'how much crypto do I have'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        account: { type: "string", description: "Limit to one account (partial match). Omit for the whole portfolio." },
+      },
+      required: [],
+    }
+  },
 
   // --- CRUD: Expenses ---
   {
@@ -5066,6 +5135,7 @@ NEVER substitute a create_task when the user explicitly asks for a journal entry
 - delete income: delete_income(description, amount?) — "remove that $500 income"
 - expected paycheck: log_expected_paycheck; confirm: confirm_paycheck_received; delete: delete_paycheck(source, expected_date?)
 - RECURRING PAY ("my paycheck is $2000 a month for the next year", "I get paid $800 biweekly"): handle it in ONE turn, no clarifying question — call log_income(amount, source, frequency:'monthly'|'biweekly'|…) so it counts as an income source, AND log_expected_paycheck(source, amount, expected_date: next payday, frequency, count — e.g. monthly count:12 for a year) so every future check is on the cash-flow calendar. NEVER say "I can only log one at a time" and NEVER log occurrences individually.
+- INVESTMENTS ("I bought 10 shares of AAPL at $180 in my Roth IRA", "added 0.05 BTC on Coinbase", "my 401k holds 40 VOO"): add_investment_holding(account, symbol, quantity, price or costBasis). The account (Roth IRA / 401k / brokerage / crypto wallet) is auto-created if missing — do NOT call create_profile first. Price change → update_investment_holding(symbol, changes.price); partial sale → changes.quantity (remaining); sold all → remove_investment_holding. Portfolio questions → get_investment_summary. Buying stock/crypto is NEVER create_expense.
 - budgets: set_budget/create_budget to set, update_budget to change, delete_budget to remove
 - "copy last month's budgets" / "same budgets as last month" → copy_budgets_previous_month(month?)
 - correct a saved fact: update_memory(query, newValue) — "actually my gate code is 4321". NEVER save a second memory for a correction; update the existing one.
@@ -9337,9 +9407,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         .sort((a: any, b: any) => String(a.nextDueDate).localeCompare(String(b.nextDueDate)))
         .map((o: any) => ({ name: o.name, amount: Number(o.amount) || 0, dueDate: o.nextDueDate, frequency: o.frequency }));
 
-      // Investments + net worth from profile rows.
-      const valueOf = (p: any) => Number(p.fields?.currentValue ?? p.fields?.value ?? p.fields?.balance ?? p.fields?.purchasePrice ?? 0) || 0;
-      const investedOf = (p: any) => Number(p.fields?.totalInvested ?? p.fields?.costBasis ?? p.fields?.purchasePrice ?? 0) || 0;
+      // Investments + net worth from profile rows. Accounts with a holdings
+      // array (stocks/ETFs/crypto — shared/investments) are valued from their
+      // positions; others fall back to their stamped value fields.
+      const valueOf = (p: any) => {
+        const held = holdingsOf(p);
+        if (held.length > 0) return holdingsValue(held);
+        return Number(p.fields?.currentValue ?? p.fields?.value ?? p.fields?.balance ?? p.fields?.purchasePrice ?? 0) || 0;
+      };
+      const investedOf = (p: any) => {
+        const held = holdingsOf(p);
+        if (held.length > 0) return holdingsInvested(held);
+        return Number(p.fields?.totalInvested ?? p.fields?.costBasis ?? p.fields?.purchasePrice ?? 0) || 0;
+      };
       const investmentProfiles = profiles.filter((p: any) => ["investment", "account", "banking"].includes(p.type));
       const assetProfiles = profiles.filter((p: any) => ["vehicle", "property", "asset", "investment", "account", "banking"].includes(p.type));
       const liabilityProfiles = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
@@ -9365,6 +9445,143 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         investments: { total_invested: r2(totalInvested), current_value: r2(investmentValue), count: investmentProfiles.length },
         net_worth: { assets: r2(totalAssets), liabilities: r2(totalLiabilities), net: r2(totalAssets - totalLiabilities) },
         message: `${month}: $${r2(incomeThisMonth)} income vs $${r2(expensesThisMonth)} expenses → ${netCashFlow >= 0 ? "+" : ""}$${netCashFlow}/mo net. ${upcomingBills.length} bill(s) and ${upcomingIncome.length} paycheck(s) in the next 30 days. Net worth $${r2(totalAssets - totalLiabilities)}.`,
+      };
+    }
+
+    // ── Investment holdings (stocks / ETFs / crypto in Roth IRA, 401k, …) ──
+    case "add_investment_holding": {
+      const accountName = String(input.account || "").trim();
+      if (!accountName) return { error: "Which account? e.g. 'Roth IRA', 'Coinbase', 'Fidelity brokerage'." };
+      const allProfilesInv = await storage.getProfiles();
+      const nameLC = accountName.toLowerCase();
+      let account = allProfilesInv.find((p: any) => p.type === "investment" && p.name.toLowerCase() === nameLC)
+        || allProfilesInv.find((p: any) => p.type === "investment" && p.name.toLowerCase().includes(nameLC))
+        || allProfilesInv.find((p: any) => p.type === "investment" && nameLC.includes(p.name.toLowerCase()));
+      let accountCreated = false;
+      if (!account) {
+        let parentProfileId: string | undefined;
+        if (input.forProfile) {
+          const owner = matchProfileByName(allProfilesInv, input.forProfile);
+          if (owner) parentProfileId = owner.id;
+        }
+        account = await storage.createProfile({
+          type: "investment",
+          name: accountName,
+          fields: { accountType: detectAccountType(accountName), holdings: [] },
+          ...(parentProfileId ? { parentProfileId } : {}),
+        } as any);
+        accountCreated = true;
+      }
+      let incomingHolding;
+      try {
+        incomingHolding = normalizeHolding({
+          symbol: input.symbol, quantity: input.quantity, assetClass: input.assetClass,
+          price: input.price, costBasis: input.costBasis, name: input.name,
+        });
+      } catch (e: any) {
+        return { error: e?.message || "Invalid holding" };
+      }
+      const mergedHoldings = mergeHolding(holdingsOf(account), incomingHolding);
+      const patchedFields = { ...(account as any).fields, ...accountFieldsPatch(mergedHoldings) };
+      const updatedAccount = await storage.updateProfile(account.id, { fields: patchedFields } as any);
+      const position = mergedHoldings.find(h => h.symbol === incomingHolding.symbol)!;
+      return {
+        added: true,
+        account: account.name,
+        accountCreated,
+        holding: position,
+        accountValue: holdingsValue(mergedHoldings),
+        id: account.id,
+        message: `${accountCreated ? `Created ${account.name} and a` : "A"}dded ${incomingHolding.quantity} ${incomingHolding.symbol} — position now ${position.quantity} ${position.symbol} (${fmtUsd(holdingValue(position))}); ${account.name} total ${fmtUsd(holdingsValue(mergedHoldings))}.`,
+        _verify: { type: "profile", id: account.id },
+        _updatedProfile: updatedAccount,
+      };
+    }
+
+    case "update_investment_holding":
+    case "remove_investment_holding": {
+      const symbolLC = String(input.symbol || "").toUpperCase().trim();
+      if (!symbolLC) return { error: "Which symbol? e.g. AAPL, VOO, BTC." };
+      const invProfiles = (await storage.getProfiles()).filter((p: any) => p.type === "investment");
+      const accountFilter = String(input.account || "").toLowerCase().trim();
+      const candidates = invProfiles
+        .filter((p: any) => !accountFilter || p.name.toLowerCase().includes(accountFilter))
+        .map((p: any) => ({ profile: p, holdings: holdingsOf(p) }))
+        .filter(({ holdings }) => holdings.some(h => h.symbol === symbolLC));
+      if (candidates.length === 0) {
+        const everywhere = invProfiles.flatMap((p: any) => holdingsOf(p).map(h => `${h.symbol} (${p.name})`));
+        return { error: `No ${symbolLC} position found${accountFilter ? ` in an account matching "${input.account}"` : ""}.`, candidates: [...new Set(everywhere)].slice(0, 10) };
+      }
+      if (candidates.length > 1) {
+        return { error: `${symbolLC} is held in ${candidates.length} accounts — say which one.`, candidates: candidates.map(c => c.profile.name) };
+      }
+      const { profile: invAccount, holdings } = candidates[0];
+      if (name === "remove_investment_holding") {
+        const removed = holdings.find(h => h.symbol === symbolLC)!;
+        const remaining = holdings.filter(h => h.symbol !== symbolLC);
+        await storage.updateProfile(invAccount.id, { fields: { ...(invAccount as any).fields, ...accountFieldsPatch(remaining) } } as any);
+        return {
+          removed: true, account: invAccount.name, symbol: symbolLC,
+          soldQuantity: removed.quantity, lastValue: holdingValue(removed),
+          accountValue: holdingsValue(remaining), id: invAccount.id,
+          message: `Removed ${removed.quantity} ${symbolLC} from ${invAccount.name} — account now ${fmtUsd(holdingsValue(remaining))}.`,
+          _verify: { type: "profile", id: invAccount.id },
+        };
+      }
+      const ch = input.changes || {};
+      const nextHoldings = holdings.map(h => {
+        if (h.symbol !== symbolLC) return h;
+        const quantity = ch.quantity != null && isFinite(Number(ch.quantity)) && Number(ch.quantity) > 0 ? Number(ch.quantity) : h.quantity;
+        const currentPrice = ch.price != null && isFinite(Number(ch.price)) && Number(ch.price) > 0 ? Number(ch.price) : h.currentPrice;
+        const costBasis = ch.costBasis != null && isFinite(Number(ch.costBasis)) && Number(ch.costBasis) >= 0 ? Number(ch.costBasis) : h.costBasis;
+        return { ...h, quantity, currentPrice, costBasis, name: ch.name ? String(ch.name) : h.name, lastPricedAt: ch.price != null ? new Date().toISOString() : h.lastPricedAt };
+      });
+      await storage.updateProfile(invAccount.id, { fields: { ...(invAccount as any).fields, ...accountFieldsPatch(nextHoldings) } } as any);
+      const updatedPos = nextHoldings.find(h => h.symbol === symbolLC)!;
+      return {
+        updated: true, account: invAccount.name, holding: updatedPos,
+        accountValue: holdingsValue(nextHoldings), id: invAccount.id,
+        message: `${symbolLC} in ${invAccount.name}: ${updatedPos.quantity} @ ${fmtUsd(updatedPos.currentPrice)} = ${fmtUsd(holdingValue(updatedPos))}. Account total ${fmtUsd(holdingsValue(nextHoldings))}.`,
+        _verify: { type: "profile", id: invAccount.id },
+      };
+    }
+
+    case "get_investment_summary": {
+      const invAll = (await storage.getProfiles()).filter((p: any) => p.type === "investment");
+      const filterLC = String(input.account || "").toLowerCase().trim();
+      const accounts = invAll
+        .filter((p: any) => !filterLC || p.name.toLowerCase().includes(filterLC))
+        .map((p: any) => {
+          const holdings = holdingsOf(p);
+          const value = holdings.length > 0 ? holdingsValue(holdings) : Number(p.fields?.currentValue || 0) || 0;
+          const invested = holdings.length > 0 ? holdingsInvested(holdings) : Number(p.fields?.totalInvested || 0) || 0;
+          return {
+            account: p.name,
+            accountType: p.fields?.accountType || detectAccountType(p.name),
+            value, invested,
+            gain: Math.round((value - invested) * 100) / 100,
+            holdings: holdings.map(h => ({
+              symbol: h.symbol, name: h.name, assetClass: h.assetClass,
+              quantity: h.quantity, price: h.currentPrice,
+              value: holdingValue(h), costBasis: h.costBasis,
+              gain: Math.round((holdingValue(h) - h.costBasis) * 100) / 100,
+            })),
+          };
+        });
+      if (accounts.length === 0) {
+        return { accounts: [], message: filterLC ? `No investment account matching "${input.account}".` : "No investment accounts yet — say e.g. 'I bought 10 shares of VOO at $520 in my Roth IRA' and I'll set one up." };
+      }
+      const totalValue = Math.round(accounts.reduce((s, a) => s + a.value, 0) * 100) / 100;
+      const totalInvestedAll = Math.round(accounts.reduce((s, a) => s + a.invested, 0) * 100) / 100;
+      const filteredProfiles = invAll.filter((p: any) => !filterLC || p.name.toLowerCase().includes(filterLC));
+      const allocation = allocationByClass(filteredProfiles.flatMap((p: any) => holdingsOf(p)));
+      return {
+        accounts,
+        total_value: totalValue,
+        total_invested: totalInvestedAll,
+        total_gain: Math.round((totalValue - totalInvestedAll) * 100) / 100,
+        allocation_by_class: allocation,
+        message: `${accounts.length} account(s) · ${fmtUsd(totalValue)} value on ${fmtUsd(totalInvestedAll)} invested (${totalValue >= totalInvestedAll ? "+" : ""}${fmtUsd(totalValue - totalInvestedAll)}).`,
       };
     }
 
@@ -14976,7 +15193,7 @@ export function detectCrossTurnReplay(
 export const READ_ONLY_TOOLS = new Set<string>([
   "search", "get_summary", "get_profile_data", "recall_actions", "get_goal_progress",
   "get_related", "get_relationships", "get_liability_summary", "get_cashflow",
-  "get_budget_summary", "query_net_worth_history", "get_loan_schedule", "query_calendar", "get_financial_overview",
+  "get_budget_summary", "query_net_worth_history", "get_loan_schedule", "query_calendar", "get_financial_overview", "get_investment_summary",
   "query_expenses", "query_tasks", "spending_analytics", "get_asset_rollup",
   "search_documents", "retrieve_document", "open_document", "navigate", "set_dashboard_scope",
   "generate_chart", "generate_table", "generate_report", "refresh_ai_summary",
@@ -15047,6 +15264,9 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   delete_income: "delete_entity",
   log_expected_paycheck: "log_paycheck",
   update_paycheck: "update_entity",
+  add_investment_holding: "update_entity",
+  update_investment_holding: "update_entity",
+  remove_investment_holding: "update_entity",
   confirm_paycheck_received: "log_paycheck",
   delete_paycheck: "delete_entity",
   // Budgets
