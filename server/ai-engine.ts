@@ -59,7 +59,7 @@ import { stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
-import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime } from "@shared/timezone";
+import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, parseLocalDate, getUserToday } from "@shared/timezone";
 import { deleteReminderMirrors, syncReminderMirrors } from "./reminder-mirror";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries } from "@shared/series-detect";
@@ -3183,13 +3183,16 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Paychecks, Loans, Cashflow ---
   {
     name: "log_expected_paycheck",
-    description: "Log an expected paycheck with source, amount, and expected date",
+    description: "Log expected paycheck(s). ONE call handles a whole recurring series — 'paid $2000 monthly for the next year' → frequency:'monthly', count:12. NEVER log occurrences one at a time and NEVER ask the user whether to; pass frequency+count (or until) and the server writes every occurrence. For an ongoing salary also call log_income with the same frequency so it counts as an income source.",
     input_schema: {
       type: "object" as const,
       properties: {
         source: { type: "string", description: "Paycheck source (employer name, freelance client, etc.)" },
-        amount: { type: "number", description: "Expected amount" },
-        expected_date: { type: "string", description: "Expected date (YYYY-MM-DD)" },
+        amount: { type: "number", description: "Expected amount per paycheck" },
+        expected_date: { type: "string", description: "First (or only) expected date (YYYY-MM-DD)" },
+        frequency: { type: "string", enum: ["weekly", "biweekly", "semimonthly", "monthly"], description: "Repeat cadence for a recurring paycheck series. Omit for a single paycheck." },
+        count: { type: "number", description: "How many occurrences to write for a recurring series (e.g. 12 for 'monthly for the next year'). Max 52." },
+        until: { type: "string", description: "Alternative to count: write occurrences through this date (YYYY-MM-DD)." },
         notes: { type: "string", description: "Optional notes" }
       },
       required: ["source", "amount", "expected_date"]
@@ -4459,14 +4462,15 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Income logging ---
   {
     name: "log_income",
-    description: "Log an income entry. Use when user says 'I got paid $X', 'received $X from freelance', 'paycheck of $X', or mentions any incoming money.",
+    description: "Log an income entry — one-time OR a RECURRING income source. Use when user says 'I got paid $X', 'received $X from freelance', or describes ongoing pay: 'my paycheck is $2000 a month', 'I make $500/week from tutoring' → ONE call with frequency:'monthly'/'weekly'. A recurring income source shows up in the Income tile and cash-flow projections immediately — do NOT log 12 separate entries and do NOT ask whether to; one recurring entry IS the answer.",
     input_schema: {
       type: "object" as const,
       properties: {
-        amount: { type: "number", description: "Income amount in dollars" },
+        amount: { type: "number", description: "Income amount in dollars (per occurrence for recurring income)" },
         source: { type: "string", description: "Income source (employer, client, freelance, etc.)" },
-        date: { type: "string", description: "Date received (YYYY-MM-DD). Defaults to today." },
+        date: { type: "string", description: "Date received / first payment date (YYYY-MM-DD). Defaults to today." },
         category: { type: "string", description: "Category: salary, freelance, investment, gift, refund, other" },
+        frequency: { type: "string", enum: ["once", "weekly", "biweekly", "semimonthly", "monthly", "quarterly", "yearly"], description: "How often this income repeats. Default 'once' for a single payment; 'monthly' for 'my paycheck is $X a month'." },
         notes: { type: "string", description: "Optional notes" },
       },
       required: ["amount", "source"],
@@ -4840,6 +4844,7 @@ BEHAVIOR:
   * DOCUMENT-SPECIFIC FIELD QUESTIONS — RETRIEVAL ORDER (CRITICAL): when the user names a document type ("driver's license number", "passport expiration", "registration expiry", "insurance policy number"), the answer MUST come from a document of THAT type. Order: (1) the "DOCUMENT FIELD LOOKUP" block at the top of EXISTING DATA, when present — it already ran the type-scoped structured-field search, trust it over everything else; (2) that document's own extracted fields via retrieve_document; (3) recall_memory / search_documents as the LAST resort. Field labels COLLIDE across document types: a vehicle registration's "License Number" is the license PLATE — NOT a driver's license number — and a registration's "Expiration Date" is the registration's, not the license's. NEVER answer with a same-named field from the wrong document type; if the right document/field isn't stored, say exactly that instead.
   * FOLLOW-UPS KEEP THE SUBJECT: when the user corrects you ("that's my license plate — I want my driver's license number") or sends a short follow-up ("so what is it?"), resolve what they mean from the conversation history. NEVER reply "What specific information are you referring to?" when the history already names the subject — re-run the lookup for the corrected subject and answer.
 - NEVER ASSUME PAST ACTIONS STILL EXIST: If conversation history shows you previously created something but it's NOT in the data snapshot above, it was DELETED. ALWAYS call the tool again. The dedup check inside the tool will prevent actual duplicates. You must call create_profile/create_task/etc. every time the user asks, regardless of what conversation history shows.
+- ONLY THE NEWEST USER MESSAGE IS ACTIONABLE: earlier user turns are context, not pending work. NEVER fire tool calls for a request that appears only in an earlier turn — even when the assistant reply to it reported an error, a timeout, or "the connection dropped… changes may still have been applied" (those writes DID complete server-side; the RECENT COMPLETED ACTIONS ledger above is the authority). Re-doing an earlier request requires the user to repeat it in their newest message.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
 - When creating tasks from reminders, extract the due date if mentioned.
 - BIAS TO ACTION: When the user asks to create, schedule, add, mark off, complete, or check in something, DO IT immediately. NEVER ask clarifying questions for simple CRUD. Just execute.
@@ -5027,6 +5032,7 @@ NEVER substitute a create_task when the user explicitly asks for a journal entry
 - edit income: update_income(description, changes) — "change my freelance income to $250/mo"
 - delete income: delete_income(description, amount?) — "remove that $500 income"
 - expected paycheck: log_expected_paycheck; confirm: confirm_paycheck_received; delete: delete_paycheck(source, expected_date?)
+- RECURRING PAY ("my paycheck is $2000 a month for the next year", "I get paid $800 biweekly"): handle it in ONE turn, no clarifying question — call log_income(amount, source, frequency:'monthly'|'biweekly'|…) so it counts as an income source, AND log_expected_paycheck(source, amount, expected_date: next payday, frequency, count — e.g. monthly count:12 for a year) so every future check is on the cash-flow calendar. NEVER say "I can only log one at a time" and NEVER log occurrences individually.
 - budgets: set_budget/create_budget to set, update_budget to change, delete_budget to remove
 - "copy last month's budgets" / "same budgets as last month" → copy_budgets_previous_month(month?)
 - correct a saved fact: update_memory(query, newValue) — "actually my gate code is 4321". NEVER save a second memory for a correction; update the existing one.
@@ -8121,8 +8127,59 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "log_expected_paycheck": {
-      const r = await storage.createPaycheck({ source: input.source, amount: input.amount, expected_date: input.expected_date, notes: input.notes });
-      return { result: r, actions: [{ type: "create", category: "paycheck", data: r }] };
+      // Recurring series in ONE call ("$2000 a month for the next year") — the
+      // old single-row shape forced the model into "I can only log one at a
+      // time — want me to log all 12?" conversations (user screenshot,
+      // 2026-08-09). Occurrences step by calendar frequency with day-of-month
+      // clamping (a 31st paycheck lands on the 30th/28th, not in the next
+      // month).
+      const PAYCHECK_FREQUENCIES = ["weekly", "biweekly", "semimonthly", "monthly"] as const;
+      const freq = PAYCHECK_FREQUENCIES.includes(String(input.frequency || "").toLowerCase() as any)
+        ? String(input.frequency).toLowerCase() as (typeof PAYCHECK_FREQUENCIES)[number]
+        : null;
+      const firstDate = String(input.expected_date || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(firstDate)) {
+        return { error: `Couldn't read the expected date "${input.expected_date}" — use YYYY-MM-DD.` };
+      }
+      const MAX_OCCURRENCES = 52;
+      let dates: string[] = [firstDate];
+      if (freq) {
+        const until = /^\d{4}-\d{2}-\d{2}$/.test(String(input.until || "").slice(0, 10))
+          ? String(input.until).slice(0, 10) : null;
+        const defaultCount = freq === "weekly" ? 52 : freq === "biweekly" ? 26 : freq === "semimonthly" ? 24 : 12;
+        const count = Math.min(MAX_OCCURRENCES, Math.max(1, Number(input.count) || (until ? MAX_OCCURRENCES : defaultCount)));
+        const anchor = parseLocalDate(firstDate);
+        const anchorDay = anchor.getDate();
+        dates = [];
+        for (let i = 0; i < count; i++) {
+          let d: Date;
+          if (freq === "weekly") { d = new Date(anchor); d.setDate(d.getDate() + 7 * i); }
+          else if (freq === "biweekly") { d = new Date(anchor); d.setDate(d.getDate() + 14 * i); }
+          else if (freq === "semimonthly") {
+            // Two checks a month: anchor day and anchor+15 days, alternating.
+            d = addMonthsClamped(anchor, Math.floor(i / 2));
+            if (i % 2 === 1) { d = new Date(d); d.setDate(d.getDate() + 15); }
+          } else { d = addMonthsClamped(anchor, i, anchorDay); }
+          const iso = d.toLocaleDateString("en-CA");
+          if (until && iso > until) break;
+          dates.push(iso);
+        }
+        if (dates.length === 0) dates = [firstDate];
+      }
+      const rows = [];
+      for (const expected_date of dates) {
+        rows.push(await storage.createPaycheck({ source: input.source, amount: input.amount, expected_date, notes: input.notes }));
+      }
+      const first = rows[0];
+      if (rows.length === 1) {
+        return { result: first, actions: [{ type: "create", category: "paycheck", data: first }] };
+      }
+      return {
+        result: first,
+        series: { count: rows.length, frequency: freq, first: dates[0], last: dates[dates.length - 1] },
+        actions: [{ type: "create", category: "paycheck", data: { ...first, seriesCount: rows.length } }],
+        message: `Logged ${rows.length} expected ${freq} paychecks from ${input.source} ($${input.amount} each), ${dates[0]} through ${dates[dates.length - 1]}.`,
+      };
     }
     case "confirm_paycheck_received": {
       // The model often passes the SOURCE NAME ("my Acme paycheck") rather than
@@ -10513,13 +10570,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       const habit = matchHabitByName(eligible, input.name || "") ?? matchHabitByName(habits, input.name || "");
       if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
-      const targetDate = input.date || new Date().toLocaleDateString('en-CA');
+      // "Today" in the USER'S timezone — a bare toLocaleDateString here used
+      // the server's clock (UTC on Vercel), so every evening Pacific time the
+      // lookup targeted tomorrow's date and found no check-in to remove.
+      const targetDate = input.date || getUserToday((storage as any)._timezone || DEFAULT_TIMEZONE);
       // Find and delete today's checkin
       const fullHabit = await storage.getHabit(habit.id);
       const checkin = (fullHabit?.checkins || []).find((c: any) => c.date === targetDate);
       if (!checkin) return { error: `No check-in found for "${habit.name}" on ${targetDate}` };
-      await storage.deleteHabitCheckin(habit.id, checkin.id);
-      return { uncompleted: true, habitName: habit.name, date: targetDate };
+      const removed = await storage.deleteHabitCheckin(habit.id, checkin.id);
+      if (!removed) return { error: `Couldn't remove the "${habit.name}" check-in for ${targetDate}` };
+      return { uncompleted: true, habitName: habit.name, date: targetDate, _verify: { type: "habit", id: habit.id } };
     }
 
     case "complete_event": {
@@ -11356,16 +11417,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!input.amount || !input.source) return { error: "amount and source are required" };
       const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
       // P0.3a: validate with the shared insert schema before writing.
+      // Recurring income is a first-class thing ("my paycheck is $2000 a
+      // month") — frequency was previously hardcoded to "once", which forced
+      // the model into "want me to log all 12?" conversations instead of just
+      // creating the income source.
+      const INCOME_FREQUENCIES = ["once", "weekly", "biweekly", "semimonthly", "monthly", "quarterly", "yearly"];
+      const incomeFrequency = INCOME_FREQUENCIES.includes(String(input.frequency || "").toLowerCase())
+        ? String(input.frequency).toLowerCase()
+        : "once";
       const incomePayload = validateAiPayload(insertIncomeSchema, {
         description: input.source,
         amount: typeof input.amount === "number" ? input.amount : parseFloat(input.amount),
         category: input.category || "salary",
-        frequency: "once",
+        frequency: incomeFrequency,
         date: input.date || todayDate,
       }, "income");
       if (!incomePayload.ok) return { error: incomePayload.error };
       const created = await storage.createIncome(incomePayload.data);
-      return { success: true, income: created, message: `Logged $${input.amount} income from ${input.source}` };
+      const freqLabel = incomeFrequency === "once" ? "" : ` (${incomeFrequency} recurring)`;
+      return { success: true, income: created, message: `Logged $${input.amount} income from ${input.source}${freqLabel}` };
     }
 
     case "update_income": {
@@ -13737,13 +13807,35 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     ? `ACTIVE PROFILE SCOPE: the user is currently working in ${scopeNames.join(", ")}'s view. Any NEW record they ask to create WITHOUT naming a person (expense, task, habit, event, reminder, tracker entry) MUST be linked to ${scopeNames[0]} — pass forProfile: "${scopeNames[0]}". NEVER attribute an unnamed record to any other profile; if genuinely unsure who a record belongs to, ask one short question instead of guessing.`
     : `ACTIVE PROFILE SCOPE: the user is in the "Everyone" (household) view. Unnamed new records default to the Self profile. NEVER attribute a record to another person's profile unless the user names that person.`;
 
+  // Anti-replay context (BUG-20260809-history-reexec, user screenshots): after
+  // a dropped stream the client appends "…the connection dropped. Some of the
+  // changes may still have been applied" — which the model reads as "the
+  // previous request FAILED", so the NEXT turn re-executed the entire prior
+  // message (duplicate expense/nutrition/hydration cards under an unrelated
+  // reply). History text is hearsay; the action ledger is the record. Feed the
+  // model the ledger's recent completed writes so it KNOWS the earlier turns
+  // landed, whatever the visible replies claimed.
+  let recentActionsBlock = "";
+  try {
+    const ledgerRows = await storage.listAiActionLog({ limit: 12 });
+    const cutoff = Date.now() - 24 * 3600 * 1000;
+    const done = (ledgerRows || []).filter(r => r.source !== "undo" && !r.undoneAt
+      && new Date(r.createdAt as any).getTime() >= cutoff);
+    if (done.length > 0) {
+      recentActionsBlock =
+        `\nRECENT COMPLETED ACTIONS (database ledger — every row below ALREADY SUCCEEDED and is saved, even where an earlier reply reported a timeout or dropped connection. NEVER re-execute these from conversation history; only redo one if the user's NEWEST message explicitly asks again):\n` +
+        done.map(r => `- ${String(r.createdAt).slice(0, 16).replace("T", " ")} ${r.tool}${r.entityName ? `: ${r.entityName}` : ""}`).join("\n") +
+        "\n";
+    }
+  } catch { /* ledger unavailable — context degrades gracefully */ }
+
   // (selfProfileId was computed above from the UNFILTERED profile list, so the
   // system prompt keeps a valid self id even when the profile filter is active.)
   // A4 fix: scrub the assembled context once at the boundary before injection
   // into the system prompt — defense-in-depth against prompt-injection vectors
   // hiding in profile names, memory keys/values, tracker names, etc. Stripping
   // happens at the top level so per-row mistakes elsewhere can't leak through.
-  const safeContext = sanitize(`${scopeNote}\n\n${context}`).replace(/```/g, "'''");
+  const safeContext = sanitize(`${scopeNote}\n${recentActionsBlock}\n${context}`).replace(/```/g, "'''");
   const systemPrompt = buildSystemPrompt(safeContext, selfProfileId, (storage as any)._timezone);
 
   // ─── Model selection: Sonnet 4.5 ALWAYS ───

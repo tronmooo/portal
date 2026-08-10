@@ -2390,7 +2390,17 @@ export class MemStorage implements IStorage {
     }
     return n;
   }
-  async deleteHabitCheckin(_habitId: string, _checkinId: string): Promise<boolean> { return false; }
+  async deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean> {
+    const habit = this.habits.get(habitId);
+    if (!habit) return false;
+    const idx = (habit.checkins || []).findIndex(c => c.id === checkinId);
+    if (idx === -1) return false;
+    habit.checkins.splice(idx, 1);
+    const { current, longest } = calculateStreak(habit.checkins, habit.targetPerDay || 1);
+    habit.currentStreak = current;
+    habit.longestStreak = Math.max(longest, 0);
+    return true;
+  }
   async migrateDocumentsToStorage(): Promise<{ migrated: number; errors: string[] }> { return { migrated: 0, errors: ["Not supported in MemStorage"] }; }
 
   // Budget stubs
