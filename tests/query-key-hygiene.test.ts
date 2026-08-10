@@ -53,6 +53,10 @@ const ALLOWLIST = new Set<string>([
   // (events/journal/documents were profile-scoped 2026-07-21 — PERF: the
   // global payloads dominated large accounts — so they left this list.)
   "pages/profile-detail.tsx::trackers",
+  // Expected paychecks are self-owned finance rows with NO profile links —
+  // there is nothing to scope by; the calendar shows them in every selection
+  // (same rule the server timeline applies).
+  "hooks/useCalendarOccurrences.ts::paychecks",
   // Account / settings pages — global, not rendered under the profile filter.
   "pages/profile-info.tsx::memories",
   "pages/settings.tsx::stats",

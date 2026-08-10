@@ -8207,11 +8207,34 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (rows.length === 1) {
         return { result: first, actions: [{ type: "create", category: "paycheck", data: first }] };
       }
+      // A recurring paycheck IS an income source. The Income tile and savings
+      // rate read the incomes table, not paychecks — leaving this to a second
+      // model tool call meant "Income $0 · No income sources yet" right after
+      // logging a salary (user screenshots 2026-08-09). Upsert it here so ONE
+      // tool call keeps both surfaces true. Matching income (same source name)
+      // is updated, never duplicated.
+      let incomeNote = "";
+      try {
+        const existingIncomes = await storage.getIncomes();
+        const srcLC = safeLC(input.source).trim();
+        const matchIncome = existingIncomes.find((i: any) => safeLC(i.description).trim() === srcLC)
+          || existingIncomes.find((i: any) => i.frequency !== "once" && (safeLC(i.description).includes(srcLC) || srcLC.includes(safeLC(i.description).trim())));
+        if (matchIncome) {
+          await storage.updateIncome(matchIncome.id, { amount: Number(input.amount), frequency: freq } as any);
+          incomeNote = ` Updated the recurring "${matchIncome.description}" income source to $${input.amount}/${freq}.`;
+        } else {
+          await storage.createIncome({
+            description: input.source, amount: Number(input.amount),
+            category: "salary", frequency: freq!, date: dates[0],
+          } as any);
+          incomeNote = ` Also created the recurring income source ($${input.amount} ${freq}) so income totals and savings rate reflect it.`;
+        }
+      } catch { /* income upsert is best-effort — the paychecks themselves are saved */ }
       return {
         result: first,
         series: { count: rows.length, frequency: freq, first: dates[0], last: dates[dates.length - 1] },
         actions: [{ type: "create", category: "paycheck", data: { ...first, seriesCount: rows.length } }],
-        message: `Logged ${rows.length} expected ${freq} paychecks from ${input.source} ($${input.amount} each), ${dates[0]} through ${dates[dates.length - 1]}.`,
+        message: `Logged ${rows.length} expected ${freq} paychecks from ${input.source} ($${input.amount} each), ${dates[0]} through ${dates[dates.length - 1]}.${incomeNote}`,
       };
     }
     case "update_paycheck": {

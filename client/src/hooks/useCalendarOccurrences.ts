@@ -106,6 +106,12 @@ export function useCalendarOccurrences(
     queryKey: [...scopedKey("/api/documents", mode, kIds)],
     queryFn: () => get(`/api/documents${profileParam}`),
   });
+  // Paychecks carry no profile links (self-owned finance rows), so they are
+  // fetched unscoped like events.
+  const paychecks = useQuery<any[]>({
+    queryKey: ["/api/paychecks"],
+    queryFn: () => get("/api/paychecks"),
+  });
 
   const profileList: any[] = Array.isArray(profiles.data)
     ? profiles.data
@@ -126,8 +132,9 @@ export function useCalendarOccurrences(
         tasks: Array.isArray(tasks.data) ? tasks.data : [],
         reminders: Array.isArray(reminders.data) ? reminders.data : [],
         documents: Array.isArray(documents.data) ? documents.data : [],
+        paychecks: Array.isArray(paychecks.data) ? paychecks.data : [],
       }),
-    [profileList, eventList, obligations.data, tasks.data, reminders.data, documents.data],
+    [profileList, eventList, obligations.data, tasks.data, reminders.data, documents.data, paychecks.data],
   );
 
   // Self ids drive the soft-orphan rule: an unassigned record belongs to the

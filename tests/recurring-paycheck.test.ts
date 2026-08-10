@@ -21,13 +21,19 @@ const USER = "recurring-paycheck-user";
 const run = <T,>(storage: MemStorage, fn: () => Promise<T>) => requestStorageContext.run(storage, fn);
 
 describe("log_expected_paycheck — recurring series", () => {
-  it("writes 12 monthly occurrences in one call", async () => {
+  it("writes 12 monthly occurrences in one call AND creates the income source", async () => {
     const storage = new MemStorage();
     const res = await run(storage, () => executeTool("log_expected_paycheck", {
       source: "Acme Corp", amount: 2000, expected_date: "2026-08-25", frequency: "monthly", count: 12,
     }, USER));
     expect(res.error).toBeUndefined();
     expect(res.series).toMatchObject({ count: 12, frequency: "monthly", first: "2026-08-25", last: "2027-07-25" });
+    // The Income tile reads incomes, not paychecks — a recurring paycheck must
+    // create the recurring income source too ("Income $0 · No income sources
+    // yet" right after logging a salary, user screenshots 2026-08-09).
+    const incomes = await run(storage, () => storage.getIncomes());
+    expect(incomes).toHaveLength(1);
+    expect(incomes[0]).toMatchObject({ description: "Acme Corp", amount: 2000, frequency: "monthly" });
     const rows = await run(storage, () => storage.getPaychecks());
     expect(rows).toHaveLength(12);
     expect(rows.map((r: any) => r.expected_date.slice(0, 7))).toEqual([
@@ -36,6 +42,14 @@ describe("log_expected_paycheck — recurring series", () => {
     ]);
     // Every occurrence keeps the anchor day.
     expect(new Set(rows.map((r: any) => r.expected_date.slice(8)))).toEqual(new Set(["25"]));
+    // Re-logging the same salary UPDATES the income source instead of
+    // duplicating it (the new occurrences themselves are extra rows, fine).
+    await run(storage, () => executeTool("log_expected_paycheck", {
+      source: "Acme Corp", amount: 2100, expected_date: "2027-08-25", frequency: "monthly", count: 2,
+    }, USER));
+    const after = await run(storage, () => storage.getIncomes());
+    expect(after).toHaveLength(1);
+    expect(after[0].amount).toBe(2100);
   });
 
   it("clamps a month-end anchor instead of drifting into the next month", async () => {

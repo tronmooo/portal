@@ -600,6 +600,7 @@ export interface CalendarInputs {
   tasks?: readonly any[];
   reminders?: readonly any[];
   documents?: readonly any[];
+  paychecks?: readonly any[];
 }
 
 /**
@@ -608,6 +609,70 @@ export interface CalendarInputs {
  * Order matters: profiles are adapted FIRST so their birthday/anniversary
  * ownership is known before events are adapted and can be flagged as shadows.
  */
+// ─── Expected paychecks ──────────────────────────────────────────────────────
+
+/**
+ * Paychecks are MATERIALIZED — a "monthly for a year" series is 12 dated rows,
+ * not one rule row. The Recurring Dates screen shows RULES, so rows are
+ * grouped by source and the cadence is recovered from the gaps between
+ * consecutive dates. A single row is a one-off (recurrence "none") and lives
+ * on the calendar grid, not the recurring list.
+ */
+export function seriesFromPaychecks(paychecks: readonly any[]): CalendarSeries[] {
+  const bySource = new Map<string, any[]>();
+  for (const p of paychecks || []) {
+    if (!p?.id || !isISO(String(p.expected_date || "").slice(0, 10))) continue;
+    const key = String(p.source || "Paycheck").trim().toLowerCase();
+    (bySource.get(key) ?? bySource.set(key, []).get(key)!).push(p);
+  }
+  const out: CalendarSeries[] = [];
+  for (const rows of bySource.values()) {
+    rows.sort((a, b) => String(a.expected_date).localeCompare(String(b.expected_date)));
+    const first = rows[0];
+    const last = rows[rows.length - 1];
+    // Cadence from the median gap between consecutive dates.
+    let recurrence = "none";
+    if (rows.length > 1) {
+      const gaps: number[] = [];
+      for (let i = 1; i < rows.length; i++) {
+        gaps.push(Math.round(
+          (new Date(`${String(rows[i].expected_date).slice(0, 10)}T12:00:00`).getTime()
+            - new Date(`${String(rows[i - 1].expected_date).slice(0, 10)}T12:00:00`).getTime()) / 86400000));
+      }
+      gaps.sort((a, b) => a - b);
+      const gap = gaps[Math.floor(gaps.length / 2)];
+      recurrence = gap <= 9 ? "weekly"
+        : gap <= 17 ? (gap >= 15 ? "semimonthly" : "biweekly")
+          : gap <= 45 ? "monthly"
+            : "custom";
+    }
+    const sourceName = humanizeTitle(first.source, "Paycheck");
+    out.push({
+      id: `paycheck:${first.id}`,
+      kind: "income",
+      title: `${sourceName} paycheck`,
+      subtitle: "income",
+      source: {
+        system: "paycheck",
+        id: first.id,
+        ownerIds: [],
+        // RAW source name — calendar-mutations resolves individual rows by
+        // matching this against /api/paychecks `source`.
+        label: sourceName,
+        href: sourceHref("paycheck", first.id),
+      },
+      baseDate: clip(first.expected_date),
+      recurrence,
+      // Materialized rows are FINITE — the series genuinely ends at its last
+      // logged occurrence, so the engine never invents dates past it.
+      recurrenceEnd: rows.length > 1 ? clip(last.expected_date) : undefined,
+      amount: typeof first.amount === "number" ? first.amount : Number(first.amount) || undefined,
+      completedDates: rows.filter((r) => r.confirmed).map((r) => clip(r.expected_date)),
+    });
+  }
+  return out;
+}
+
 export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
   const profileSeries = seriesFromProfiles(input.profiles || []);
   const knownBirthdayProfiles = new Set(
@@ -624,6 +689,7 @@ export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
     ...seriesFromTasks(input.tasks || []),
     ...seriesFromReminders(input.reminders || []),
     ...seriesFromDocuments(input.documents || []),
+    ...seriesFromPaychecks(input.paychecks || []),
   ];
 }
 

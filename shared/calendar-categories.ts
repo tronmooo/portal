@@ -39,6 +39,7 @@ export type CalendarCategory =
   | "bills"
   | "subscriptions"
   | "liabilities"
+  | "income"
   | "documents"
   | "tasks"
   | "reminders"
@@ -63,6 +64,7 @@ export const CALENDAR_CATEGORIES: CalendarCategoryDef[] = [
   { id: "bills", label: "Bills", short: "Bills" },
   { id: "subscriptions", label: "Subscriptions", short: "Subs" },
   { id: "liabilities", label: "Liabilities", short: "Liabilities" },
+  { id: "income", label: "Paychecks & Income", short: "Paychecks" },
   { id: "documents", label: "Document Expirations", short: "Documents" },
   { id: "tasks", label: "Tasks", short: "Tasks" },
   { id: "reminders", label: "Reminders", short: "Reminders" },
@@ -90,6 +92,7 @@ const KIND_TO_CATEGORY: Record<OccurrenceKind, SourceCategory> = {
   bill: "bills",
   subscription: "subscriptions",
   liability: "liabilities",
+  income: "income",
   document: "documents",
   task: "tasks",
   habit: "tasks",
@@ -194,7 +197,7 @@ export function countRules(
 ): CalendarCategoryCounts {
   const counts: CalendarCategoryCounts = {
     all: 0, important: 0, birthdays: 0, anniversaries: 0, bills: 0,
-    subscriptions: 0, liabilities: 0, documents: 0, tasks: 0,
+    subscriptions: 0, liabilities: 0, income: 0, documents: 0, tasks: 0,
     reminders: 0, events: 0, other: 0,
   };
   const seen = new Set<string>();

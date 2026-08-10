@@ -67,7 +67,7 @@ describe("every kind lands in exactly one chip", () => {
   it("offers the chips in the specified order", () => {
     expect(CALENDAR_CATEGORIES.map((c) => c.id)).toEqual([
       "all", "important", "birthdays", "anniversaries", "bills",
-      "subscriptions", "liabilities", "documents", "tasks",
+      "subscriptions", "liabilities", "income", "documents", "tasks",
       "reminders", "events", "other",
     ]);
   });

@@ -472,3 +472,67 @@ describe("a recurring money event is the same thing as its obligation", () => {
     expect(dedupeSeries(differentDay)).toHaveLength(2);
   });
 });
+
+// ── Expected paychecks: materialized rows become ONE income rule ─────────────
+//
+// "Reoccurring paychecks… can show up in the calendar and recurring ones and
+// one time only" (user, 2026-08-09). A monthly-for-a-year series is 12 dated
+// paycheck rows; the Recurring Dates screen shows RULES, so the adapter groups
+// rows by source and recovers the cadence from the gaps between dates.
+import { seriesFromPaychecks } from "@shared/calendar-adapters";
+
+describe("seriesFromPaychecks", () => {
+  const row = (id: string, date: string, extra: any = {}) =>
+    ({ id, source: "Acme Corp", amount: 2000, expected_date: date, confirmed: false, ...extra });
+
+  it("groups a monthly series into one income rule with a finite end", () => {
+    const series = seriesFromPaychecks([
+      row("a", "2026-09-25"), row("b", "2026-10-25"), row("c", "2026-11-25"),
+    ]);
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({
+      kind: "income",
+      title: "Acme Corp paycheck",
+      recurrence: "monthly",
+      baseDate: "2026-09-25",
+      recurrenceEnd: "2026-11-25",
+      amount: 2000,
+    });
+    expect(series[0].source).toMatchObject({ system: "paycheck", label: "Acme Corp" });
+  });
+
+  it("detects weekly / biweekly / semimonthly cadences", () => {
+    const weekly = seriesFromPaychecks([row("a", "2026-08-07"), row("b", "2026-08-14"), row("c", "2026-08-21")]);
+    expect(weekly[0].recurrence).toBe("weekly");
+    const biweekly = seriesFromPaychecks([row("a", "2026-08-07"), row("b", "2026-08-21"), row("c", "2026-09-04")]);
+    expect(biweekly[0].recurrence).toBe("biweekly");
+    const semimonthly = seriesFromPaychecks([row("a", "2026-08-01"), row("b", "2026-08-16"), row("c", "2026-09-01")]);
+    expect(semimonthly[0].recurrence).toBe("semimonthly");
+  });
+
+  it("a single row is a one-off (recurrence none) — calendar grid, not a rule", () => {
+    const series = seriesFromPaychecks([row("solo", "2026-08-25")]);
+    expect(series).toHaveLength(1);
+    expect(series[0].recurrence).toBe("none");
+    expect(series[0].recurrenceEnd).toBeUndefined();
+  });
+
+  it("confirmed rows surface as completed dates", () => {
+    const series = seriesFromPaychecks([
+      row("a", "2026-08-25", { confirmed: true }), row("b", "2026-09-25"),
+    ]);
+    expect(series[0].completedDates).toEqual(["2026-08-25"]);
+  });
+
+  it("different sources are different rules", () => {
+    const series = seriesFromPaychecks([
+      row("a", "2026-08-25"), { id: "x", source: "Side Gig", amount: 500, expected_date: "2026-08-28" },
+    ]);
+    expect(series.map((s) => s.title).sort()).toEqual(["Acme Corp paycheck", "Side Gig paycheck"]);
+  });
+
+  it("rides through seriesFromAll", () => {
+    const all = seriesFromAll({ paychecks: [row("a", "2026-09-25"), row("b", "2026-10-25")] });
+    expect(all.filter((s) => s.kind === "income")).toHaveLength(1);
+  });
+});

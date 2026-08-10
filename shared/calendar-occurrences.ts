@@ -49,6 +49,7 @@ export type OccurrenceKind =
   | "renewal"
   | "maintenance"
   | "appointment"
+  | "income"
   | "reminder"
   | "task"
   | "habit"
@@ -66,7 +67,8 @@ export type SourceSystem =
   | "reminder"
   | "habit"
   | "document"
-  | "goal";
+  | "goal"
+  | "paycheck";
 
 export const KIND_LABELS: Record<OccurrenceKind, string> = {
   birthday: "Birthday",
@@ -77,6 +79,7 @@ export const KIND_LABELS: Record<OccurrenceKind, string> = {
   renewal: "Renewal",
   maintenance: "Maintenance",
   appointment: "Appointment",
+  income: "Paycheck",
   reminder: "Reminder",
   task: "Task",
   habit: "Habit",
@@ -103,6 +106,7 @@ export const HORIZON_DAYS: Record<OccurrenceKind, number> = {
   renewal: 366,
   maintenance: 366,
   appointment: 366,
+  income: 366,
   reminder: 366,
   task: 366,
   habit: 366,
@@ -301,7 +305,7 @@ const SINGLETON_KINDS = new Set<OccurrenceKind>(["birthday", "anniversary"]);
  *   Liability · ChatGPT Pro · $20.00      Jul 30
  *   Subscription · ChatGPT Pro · $20.00   Jul 30
  */
-const PAYMENT_KINDS = new Set<OccurrenceKind>(["subscription", "liability", "bill", "renewal"]);
+const PAYMENT_KINDS = new Set<OccurrenceKind>(["subscription", "liability", "bill", "renewal", "income"]);
 
 /** True when this series represents a recurring payment. */
 export function isPaymentKind(kind: OccurrenceKind): boolean {
@@ -882,6 +886,7 @@ export function sourceHref(
     case "task": return recordId ? `#/tasks?focus=${recordId}` : "#/tasks";
     case "document": return recordId ? `#/documents/${recordId}` : "#/documents";
     case "goal": return recordId ? `#/goals?focus=${recordId}` : "#/goals";
+    case "paycheck": return "#/dashboard?tab=finance";
     case "habit": return recordId ? `#/habits?focus=${recordId}` : "#/habits";
     case "reminder": return "#/calendar";
     case "event": return recordId ? `#/calendar?event=${recordId}` : "#/calendar";

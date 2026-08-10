@@ -30,6 +30,8 @@ import type { CalendarSeries, CalendarOccurrence } from "@shared/calendar-occurr
 const CALENDAR_DOMAINS: Domain[] = [
   "events", "obligations", "liabilities", "profiles", "tasks",
   "notifications", "dashboard",
+  // Paycheck occurrences live under the incomes domain (/api/paychecks).
+  "incomes",
 ];
 
 export async function refreshCalendarSurfaces(): Promise<void> {
@@ -67,11 +69,73 @@ export interface ApplyActionInput {
  * Throws `UnsupportedCalendarAction` when the capability matrix says no — the
  * panel disables those controls, so reaching here means a caller bypassed it.
  */
+/**
+ * Paychecks are materialized rows (one per date), addressed by (source, date).
+ * Resolve the concrete rows behind a paycheck series/occurrence live so the
+ * mutation always targets what is in the database now.
+ */
+async function paycheckRowsFor(series: CalendarSeries): Promise<any[]> {
+  const res = await apiRequest("GET", "/api/paychecks");
+  const rows: any[] = await res.json();
+  const key = String(series.source.label || "").trim().toLowerCase();
+  return (Array.isArray(rows) ? rows : [])
+    .filter((r) => String(r.source || "").trim().toLowerCase() === key)
+    .sort((a, b) => String(a.expected_date).localeCompare(String(b.expected_date)));
+}
+
 export async function applyCalendarAction(input: ApplyActionInput): Promise<void> {
   const { action, series, occurrence, newDate, todayISO } = input;
   if (!can(series, action)) throw new UnsupportedCalendarAction(action, series);
 
   const { system, id } = series.source;
+
+  // ── Paychecks: every action targets real dated rows ─────────────────────
+  if (system === "paycheck") {
+    const rows = await paycheckRowsFor(series);
+    const forDate = (d?: string) => rows.find((r) => String(r.expected_date).slice(0, 10) === String(d || "").slice(0, 10));
+    switch (action) {
+      case "complete": {
+        const row = forDate(occurrence?.date);
+        if (!row) throw new Error("That paycheck occurrence no longer exists.");
+        await apiRequest("PATCH", `/api/paychecks/${row.id}/confirm`, {});
+        break;
+      }
+      case "skip":
+      case "deleteOccurrence": {
+        const row = forDate(occurrence?.date);
+        if (!row) throw new Error("That paycheck occurrence no longer exists.");
+        await apiRequest("DELETE", `/api/paychecks/${row.id}`);
+        break;
+      }
+      case "move": {
+        const row = forDate(occurrence?.date);
+        if (!row) throw new Error("That paycheck occurrence no longer exists.");
+        if (!newDate) throw new Error("Move needs a target date.");
+        await apiRequest("PATCH", `/api/paychecks/${row.id}`, { expected_date: newDate });
+        break;
+      }
+      case "deleteFuture": {
+        if (!occurrence) throw new Error("Delete-future needs an occurrence.");
+        const cutoffDate = String(occurrence.date).slice(0, 10);
+        for (const r of rows) {
+          if (String(r.expected_date).slice(0, 10) >= cutoffDate && !r.confirmed) {
+            await apiRequest("DELETE", `/api/paychecks/${r.id}`);
+          }
+        }
+        break;
+      }
+      case "deleteSeries": {
+        for (const r of rows) await apiRequest("DELETE", `/api/paychecks/${r.id}`);
+        break;
+      }
+      case "edit":
+        return; // navigation via series.source.href
+      default:
+        throw new UnsupportedCalendarAction(action, series);
+    }
+    await refreshCalendarSurfaces();
+    return;
+  }
 
   switch (action) {
     // ── Per-occurrence state ────────────────────────────────────────────────

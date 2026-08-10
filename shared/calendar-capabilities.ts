@@ -46,6 +46,7 @@ export const ACTION_LABELS: Record<CalendarAction, string> = {
  */
 export function actionLabelFor(action: CalendarAction, kind: OccurrenceKind): string {
   if (action === "complete") {
+    if (kind === "income") return "Mark received";
     if (isPaymentKind(kind)) return "Mark paid";
     if (kind === "task" || kind === "habit") return "Complete";
     if (kind === "reminder") return "Dismiss";
@@ -93,7 +94,7 @@ export interface ActionCapability {
  * A profile's birthday field, a one-shot reminder and a document expiry have
  * no per-occurrence storage, so those actions are disabled rather than faked.
  */
-const PER_OCCURRENCE_SYSTEMS = new Set<SourceSystem>(["event", "obligation", "liability"]);
+const PER_OCCURRENCE_SYSTEMS = new Set<SourceSystem>(["event", "obligation", "liability", "paycheck"]);
 
 /** Where to manage a date whose system doesn't support an action. */
 const MANAGE_AT: Record<SourceSystem, string> = {
@@ -106,6 +107,7 @@ const MANAGE_AT: Record<SourceSystem, string> = {
   habit: "the habit",
   document: "the document",
   goal: "the goal",
+  paycheck: "the Finance tab",
 };
 
 /**
