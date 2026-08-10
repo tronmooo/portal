@@ -46,6 +46,9 @@ export type OccurrenceKind =
   | "subscription"
   | "liability"
   | "bill"
+  // Money coming IN. Same engine, opposite direction of cash — a paycheck
+  // every other Friday recurs exactly the way a bill on the 1st does.
+  | "income"
   | "renewal"
   | "maintenance"
   | "appointment"
@@ -61,6 +64,7 @@ export type SourceSystem =
   | "profile"
   | "obligation"
   | "liability"
+  | "income"
   | "task"
   | "habit"
   | "document"
@@ -72,6 +76,7 @@ export const KIND_LABELS: Record<OccurrenceKind, string> = {
   subscription: "Subscription",
   liability: "Liability",
   bill: "Bill",
+  income: "Income",
   renewal: "Renewal",
   maintenance: "Maintenance",
   appointment: "Appointment",
@@ -97,6 +102,7 @@ export const HORIZON_DAYS: Record<OccurrenceKind, number> = {
   subscription: 366,
   liability: 366,
   bill: 366,
+  income: 366,
   renewal: 366,
   maintenance: 366,
   appointment: 366,
@@ -874,6 +880,7 @@ export function sourceHref(
     case "profile": return recordId ? `#/profiles/${recordId}` : "#/profiles";
     case "liability": return recordId ? `#/profiles/${recordId}` : "#/liabilities";
     case "obligation": return recordId ? `#/obligations?focus=${recordId}` : "#/obligations";
+    case "income": return recordId ? `#/dashboard/finance?income=${recordId}` : "#/dashboard/finance";
     case "task": return recordId ? `#/tasks?focus=${recordId}` : "#/tasks";
     case "document": return recordId ? `#/documents/${recordId}` : "#/documents";
     case "goal": return recordId ? `#/goals?focus=${recordId}` : "#/goals";

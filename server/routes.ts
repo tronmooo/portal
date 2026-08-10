@@ -7986,6 +7986,18 @@ No emojis. No prose outside the JSON.`,
 
   app.delete("/api/incomes/:id", asyncHandler(async (req, res) => {
     const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+    // Scoped delete, the way a calendar deletes a repeating event:
+    //   ?scope=occurrence&from=YYYY-MM-DD  → skip that one pay date
+    //   ?scope=future&from=YYYY-MM-DD      → end the series, keep the history
+    //   ?scope=series (default)            → remove the whole thing
+    const scope = String(req.query.scope || req.body?.scope || "series");
+    const from = String(req.query.from || req.body?.from || "").slice(0, 10) || undefined;
+    if (scope !== "series" && (storage as any).deleteIncomeScoped) {
+      const result = await (storage as any).deleteIncomeScoped(req.params.id, scope, from);
+      bustIncomeCaches(uid);
+      if (!result?.ok) return res.status(404).json({ error: result?.error || "Income not found" });
+      return res.json({ success: true, ...result });
+    }
     const ok = await storage.deleteIncome(req.params.id);
     bustIncomeCaches(uid);
     // Was `res.json({ success: ok })` — HTTP 200 carrying `success: false`.
@@ -7995,6 +8007,163 @@ No emojis. No prose outside the JSON.`,
     // A failed delete has to fail loudly. Pinned by tests/crud-coverage.test.ts.
     if (!ok) return res.status(404).json({ error: "Income not found" });
     res.json({ success: true });
+  }));
+
+  // ─── Income schedule & per-occurrence operations ──────────────────────────
+  // The positive mirror of /api/liabilities/:id/occurrences/*. An income series
+  // derives its pay dates from shared/income-schedule.ts; these endpoints edit
+  // ONE of them without touching the rest of the series.
+
+  const parseOccDate = (raw: string): string | null => {
+    const d = String(raw || "").slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+  };
+
+  app.get("/api/incomes/:id/schedule", asyncHandler(async (req, res) => {
+    const months = Math.min(Math.max(parseInt(String(req.query.months || "12"), 10) || 12, 1), 60);
+    const schedule = await (storage as any).getIncomeSchedule?.(req.params.id, months);
+    if (!schedule) return res.status(404).json({ error: "Income not found" });
+    res.json(schedule);
+  }));
+
+  /** Every income occurrence across every series in a window — the calendar's
+   *  money-in feed and the income tab's list read this. */
+  app.get("/api/income-occurrences", asyncHandler(async (req, res) => {
+    const tz = getTimezone(req);
+    const today = getUserToday(tz);
+    const start = isValidDateStr(req.query.start as string) ? (req.query.start as string) : today;
+    const end = isValidDateStr(req.query.end as string)
+      ? (req.query.end as string)
+      : toLocalDateStr(new Date(Date.now() + 90 * 86400000), tz);
+    const fps = req.query.profileIds as string | undefined;
+    const profileIds = fps ? fps.split(",").filter(Boolean) : undefined;
+    const rows = await (storage as any).getIncomeOccurrences?.(start, end, profileIds);
+    res.json(rows || []);
+  }));
+
+  /** "Mark today's paycheck received" — expected money becomes actual money. */
+  app.post("/api/incomes/:id/occurrences/:date/receive", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+    const date = parseOccDate(req.params.date);
+    if (!date) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const { amount, receivedDate, depositAccount, method, notes } = req.body || {};
+    if (amount !== undefined && amount !== null) {
+      const amountError = validateTransactionAmount(Number(amount));
+      if (amountError) return res.status(400).json({ error: amountError });
+    }
+    const result = await (storage as any).receiveIncomeOccurrence?.(req.params.id, date, {
+      amount: amount == null ? undefined : Number(amount),
+      receivedDate, depositAccount, method, notes,
+    });
+    bustIncomeCaches(uid);
+    if (!result) return res.status(404).json({ error: "Income not found" });
+    res.json(result);
+  }));
+
+  /** Undo a received mark — the deposit never actually landed. */
+  app.post("/api/incomes/:id/occurrences/:date/unreceive", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+    const date = parseOccDate(req.params.date);
+    if (!date) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const result = await (storage as any).unreceiveIncomeOccurrence?.(req.params.id, date);
+    bustIncomeCaches(uid);
+    if (!result) return res.status(404).json({ error: "Income not found" });
+    res.json(result);
+  }));
+
+  /** "Skip December's rent income" — the date stays, the money doesn't. */
+  app.post("/api/incomes/:id/occurrences/:date/skip", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+    const date = parseOccDate(req.params.date);
+    if (!date) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const result = await (storage as any).skipIncomeOccurrence?.(req.params.id, date);
+    bustIncomeCaches(uid);
+    if (!result) return res.status(404).json({ error: "Income not found" });
+    res.json(result);
+  }));
+
+  /** Reschedule or re-price ONE occurrence: { movedTo?, amount?, notes? }. */
+  app.patch("/api/incomes/:id/occurrences/:date", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+    const date = parseOccDate(req.params.date);
+    if (!date) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const { movedTo, amount, notes } = req.body || {};
+    let result: any = null;
+    if (movedTo) {
+      const target = parseOccDate(movedTo);
+      if (!target) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
+      result = await (storage as any).rescheduleIncomeOccurrence?.(req.params.id, date, target);
+    }
+    if (amount !== undefined || notes !== undefined) {
+      if (amount !== undefined && amount !== null) {
+        const amountError = validateTransactionAmount(Number(amount));
+        if (amountError) return res.status(400).json({ error: amountError });
+      }
+      result = await (storage as any).setIncomeOccurrenceFields?.(req.params.id, date, {
+        amount: amount == null ? undefined : Number(amount), notes,
+      });
+    }
+    bustIncomeCaches(uid);
+    if (!result) return res.status(404).json({ error: "Income not found, or nothing to change" });
+    res.json(result);
+  }));
+
+  app.post("/api/incomes/:id/pause", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+    const until = req.body?.until ? parseOccDate(req.body.until) : undefined;
+    const result = await (storage as any).pauseIncome?.(req.params.id, until || undefined);
+    bustIncomeCaches(uid);
+    if (!result) return res.status(404).json({ error: "Income not found" });
+    res.json(result);
+  }));
+
+  app.post("/api/incomes/:id/resume", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+    const result = await (storage as any).resumeIncome?.(req.params.id);
+    bustIncomeCaches(uid);
+    if (!result) return res.status(404).json({ error: "Income not found" });
+    res.json(result);
+  }));
+
+  /**
+   * Scoped series edit — "change my paycheck to $2,600 starting next month".
+   * body: { changes: {...}, scope: "occurrence"|"future"|"series", from: "YYYY-MM-DD" }
+   */
+  app.post("/api/incomes/:id/scoped-update", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
+    const changes = (req.body?.changes && typeof req.body.changes === "object") ? { ...req.body.changes } : {};
+    if (changes.amount !== undefined) {
+      const amt = Number(changes.amount);
+      const amountError = validateTransactionAmount(amt);
+      if (amountError) return res.status(400).json({ error: amountError });
+      changes.amount = amt;
+    }
+    if (changes.description !== undefined) {
+      if (typeof changes.description !== "string" || !changes.description.trim()) {
+        return res.status(400).json({ error: "description must be a non-empty string" });
+      }
+      changes.description = sanitize(changes.description);
+    }
+    const scope = String(req.body?.scope || "series");
+    const from = req.body?.from ? parseOccDate(req.body.from) : undefined;
+    const result = await (storage as any).updateIncomeScoped?.(req.params.id, changes, scope, from || undefined);
+    bustIncomeCaches(uid);
+    if (!result?.ok) return res.status(404).json({ error: result?.error || "Income not found" });
+    res.json(result);
+  }));
+
+  /**
+   * Net cash flow for a month — BOTH sides of the ledger, projected vs actual.
+   * ?month=YYYY-MM (defaults to the current month), ?profileIds=a,b
+   */
+  app.get("/api/cash-flow", asyncHandler(async (req, res) => {
+    const month = typeof req.query.month === "string" && /^\d{4}-\d{2}/.test(req.query.month)
+      ? req.query.month.slice(0, 7) : undefined;
+    const fps = req.query.profileIds as string | undefined;
+    const profileIds = fps ? fps.split(",").filter(Boolean) : undefined;
+    const summary = await (storage as any).getCashFlowSummary?.(month, profileIds);
+    if (!summary) return res.status(503).json({ error: "Cash flow unavailable" });
+    res.json(summary);
   }));
 
   // ---- Audit Log ----

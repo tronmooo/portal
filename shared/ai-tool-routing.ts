@@ -63,7 +63,10 @@ export const TOOL_INTENT_ENTITY: Record<string, IntentEntity> = {
   // Money
   create_expense: "expense", update_expense: "expense", delete_expense: "expense",
   refund_expense: "expense",
-  log_income: "income", update_income: "income", delete_income: "income",
+  create_income: "income", log_income: "income", update_income: "income",
+  delete_income: "income", receive_income: "income",
+  skip_income_occurrence: "income", reschedule_income_occurrence: "income",
+  get_income_schedule: "income", get_cash_flow: "income",
   log_expected_paycheck: "income", confirm_paycheck_received: "income",
   delete_paycheck: "income",
 
@@ -153,7 +156,7 @@ const CREATE_TOOL_FOR: Partial<Record<IntentEntity, string>> = {
   event: "create_event",
   tracker: "create_tracker",
   expense: "create_expense",
-  income: "log_income",
+  income: "create_income",
   obligation: "create_obligation",
   liability: "create_liability",
   goal: "create_goal",

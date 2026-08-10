@@ -544,3 +544,63 @@ describe("health, activity and insights", () => {
     expect(isBirthdayText("Team offsite")).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe("Income Expected — the positive mirror of Bills", () => {
+  const occ = (over: any = {}) => ({
+    occurrenceId: `inc-1:${over.effectiveDate || day(3)}`,
+    incomeId: "inc-1",
+    description: "Acme paycheck",
+    amount: 2400,
+    status: "expected",
+    ...over,
+  });
+
+  it("lists expected pay dates in their own section, never under Bills", () => {
+    const secs = run({ incomeOccurrences: [occ({ effectiveDate: day(3) })] });
+    expect(titles(secs, "income")).toEqual(["Acme paycheck"]);
+    expect(titles(secs, "bills")).toEqual([]);
+  });
+
+  it("says a passed pay date was NOT received rather than counting it as money in", () => {
+    const secs = run({
+      incomeOccurrences: [occ({ effectiveDate: day(-3), status: "overdue" })],
+    });
+    const all = secs.flatMap((s: any) => s.items);
+    const item = all.find((i: any) => i.kind === "income")!;
+    expect(item.reason).toContain("not received");
+    expect(item.tier).toBe("immediate");
+  });
+
+  it("keeps already-received money out of the action list but in the headline", () => {
+    const secs = run({
+      incomeOccurrences: [
+        occ({ effectiveDate: day(-2), status: "received", receivedAmount: 2400 }),
+        occ({ occurrenceId: "inc-1:x", effectiveDate: day(4), amount: 1000 }),
+      ],
+    });
+    const income = byId(secs).income;
+    // Only the outstanding one is actionable…
+    expect(income.items).toHaveLength(1);
+    expect(income.items[0].amount).toBe(1000);
+    // …and the section says what has already landed.
+    expect(income.subtitle).toContain("received so far");
+  });
+
+  it("ignores skipped occurrences entirely", () => {
+    const secs = run({
+      incomeOccurrences: [occ({ effectiveDate: day(3), status: "skipped" })],
+    });
+    expect(titles(secs, "income")).toEqual([]);
+  });
+
+  it("offers a Received action, not Pay", () => {
+    const secs = run({ incomeOccurrences: [occ({ effectiveDate: day(2) })] });
+    expect(byId(secs).income.items[0].action).toEqual({ kind: "received", label: "Received" });
+  });
+
+  it("reads immediately after Bills, so the month's two halves sit together", () => {
+    const order = SECTION_DISPLAY_ORDER;
+    expect(order[order.indexOf("bills") + 1]).toBe("income");
+  });
+});

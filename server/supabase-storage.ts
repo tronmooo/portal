@@ -46,7 +46,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
   return _sharedClient;
 }
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
-import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
+import { addMonthsClamped, addYearsClamped, weekdaySetFor, addMonthsISO, addDaysISO } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromProfiles, seriesFromEvents } from "../shared/calendar-adapters";
 import { deleteProfileFields } from "../shared/profile-field-identity";
@@ -68,6 +68,14 @@ import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequenc
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
+import {
+  generateIncomeSchedule, nextExpectedOccurrence, lastReceivedOccurrence,
+  incomeOccurrenceDates, incomeBaseAmount, incomeFrequencyOf, incomeAnchorDate,
+  normalizeIncomeFrequency, isRecurringIncome, incomePeriodsPerYear,
+  describeIncomeSchedule, totalIncomeOccurrences, normalizeEditScope,
+  type IncomeOccurrence, type IncomeEditScope,
+} from "../shared/income-schedule";
+import { computeCashFlow, monthBounds, type OutflowLine, type CashFlowSummary } from "../shared/cash-flow";
 import { parseRecurringMeta } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
@@ -78,7 +86,7 @@ import {
   type Task, type InsertTask,
   type Expense, type InsertExpense,
   type CalendarEvent, type InsertEvent, type CalendarTimelineItem,
-  type EventCategory, EVENT_CATEGORY_COLORS,
+  type EventCategory, EVENT_CATEGORY_COLORS, CASH_DIRECTION_COLORS,
   type Document, type DashboardStats,
   type ProfileDetail, type TimelineEntry, type Insight,
   type Habit, type InsertHabit, type HabitCheckin,
@@ -86,6 +94,7 @@ import {
   type Artifact, type InsertArtifact, type ChecklistItem,
   type JournalEntry, type InsertJournalEntry,
   type Income, type InsertIncome,
+  type IncomeReceipt, type InsertIncomeReceipt,
   type MemoryItem, type InsertMemory,
   type Domain, type InsertDomain, type DomainEntry,
   type MoodLevel,
@@ -1294,7 +1303,7 @@ export class SupabaseStorage implements IStorage {
     const [
       allProfiles,
       trackersRes, expensesRes, tasksRes, eventsRes, documentsRes, obligationsRes,
-      journalRows, habitsRes,
+      journalRows, habitsRes, incomeRows,
     ] = await Promise.all([
       this.getProfiles(),
       // FIX: linked_profiles is jsonb on these 6 tables. supabase-js .contains()
@@ -1333,6 +1342,23 @@ export class SupabaseStorage implements IStorage {
       this.supabase.from("habits").select("*")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
+      // Income attributed to this profile. `incomes.linked_profiles` is a PG
+      // ARRAY (text[]), not jsonb — so it takes the bare array form, like
+      // journal_entries. The row is ALSO this profile's income when the profile
+      // is the payer / deposit account / producing asset, which is how an
+      // employer or a rental property shows the money it generates.
+      this.supabase.from("incomes").select("*")
+        .eq("user_id", this.userId).is("deleted_at", null)
+        .or(`linked_profiles.cs.{${id}},payer_profile_id.eq.${id},linked_account_id.eq.${id},linked_asset_id.eq.${id}`)
+        .then(r => (r.error ? null : r.data || []))
+        // The payer/account/asset columns arrive with migration 20260810. On an
+        // instance where it hasn't run yet the OR filter errors, and letting
+        // that reject would take the WHOLE profile page down over one section.
+        // Fall back to the ownership filter, which has always existed.
+        .then(async (rows) => rows ?? this.supabase.from("incomes").select("*")
+          .eq("user_id", this.userId).is("deleted_at", null)
+          .contains("linked_profiles", [id])
+          .then(r => r.data || [])),
     ]);
 
     const trackerIds = (trackersRes as any[]).map((r: any) => r.id);
@@ -1388,6 +1414,23 @@ export class SupabaseStorage implements IStorage {
     const relatedObligations = (obligationsRes as any[]).map((r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p))));
     const relatedJournal = (journalRows as any[]).map((r: any) => this.rowToJournalEntry(r));
     const relatedHabits = (habitsRes as any[]).map((r: any) => this.rowToHabit(r, (checkinsByHabit.get(r.id) || []).map((c: any) => this.rowToHabitCheckin(c))));
+    const relatedIncomes = (incomeRows as any[]).map((r: any) => this.incomeRowToIncome(r));
+    // This profile's income for the CURRENT month, from the generated pay
+    // dates — projected and received kept apart, exactly as everywhere else.
+    const incomeTodayISO = getUserToday(this._timezone);
+    const incomeMonth = monthBounds(incomeTodayISO);
+    const incomeReceiptMap = await this.receiptsByIncome(relatedIncomes.map(i => i.id));
+    let relatedIncomeMonthlyProjected = 0;
+    let relatedIncomeMonthlyReceived = 0;
+    for (const inc of relatedIncomes) {
+      const totals = totalIncomeOccurrences(generateIncomeSchedule(inc, incomeReceiptMap.get(inc.id) || [], {
+        todayISO: incomeTodayISO, windowStart: incomeMonth.start, windowEnd: incomeMonth.end,
+      }));
+      relatedIncomeMonthlyProjected += totals.projected;
+      relatedIncomeMonthlyReceived += totals.received;
+    }
+    relatedIncomeMonthlyProjected = Math.round(relatedIncomeMonthlyProjected * 100) / 100;
+    relatedIncomeMonthlyReceived = Math.round(relatedIncomeMonthlyReceived * 100) / 100;
 
     // Child profiles: profiles whose parentProfileId points to this profile.
     // PLUS: assets/liabilities where this profile is a CO-OWNER via the link
@@ -1455,6 +1498,15 @@ export class SupabaseStorage implements IStorage {
     for (const e of relatedEvents) timeline.push({ id: e.id, type: "event", title: e.title, description: e.description, timestamp: e.date });
     for (const d of relatedDocuments) timeline.push({ id: d.id, type: "document", title: d.name, description: d.type, timestamp: d.createdAt });
     for (const o of relatedObligations) timeline.push({ id: o.id, type: "obligation", title: o.name, description: `$${o.amount}/${o.frequency}`, timestamp: o.createdAt });
+    // Income on the timeline reads as money IN, with the sign spelled out so it
+    // can never be mistaken for a bill of the same size.
+    for (const i of relatedIncomes) {
+      timeline.push({
+        id: i.id, type: "income", title: i.description,
+        description: `+$${i.amount} · ${i.frequency}`,
+        timestamp: i.startDate || i.date || i.createdAt,
+      });
+    }
     for (const j of relatedJournal) timeline.push({ id: j.id, type: "journal", title: j.content?.slice(0, 80) || "Journal entry", description: j.mood ? `Mood: ${j.mood}` : undefined, timestamp: j.date || (j as any).createdAt });
     timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
@@ -1533,7 +1585,11 @@ export class SupabaseStorage implements IStorage {
       profileId: id,
       trackerEntriesExactTotal: trackerEntriesExactTotal as number,
     });
-    return { ...profile, ...capped, relatedTasks, relatedObligations, relatedHabits, childProfiles, ownedAssetExpenses } as any;
+    return {
+      ...profile, ...capped, relatedTasks, relatedObligations, relatedHabits,
+      relatedIncomes, relatedIncomeMonthlyProjected, relatedIncomeMonthlyReceived,
+      childProfiles, ownedAssetExpenses,
+    } as any;
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {
@@ -3344,8 +3400,45 @@ export class SupabaseStorage implements IStorage {
   }
 
   // ============================================================
-  // INCOME
+  // INCOME — first-class money-in, the positive mirror of a liability.
+  //
+  // ONE row per income SERIES (recurring paycheck, rent received, dividend) or
+  // one-time item (bonus, refund, sale). Individual pay dates are generated on
+  // the fly by shared/income-schedule.ts and adjusted by `fields.occurrences`,
+  // exactly the way recurring liabilities work — no occurrence table, so
+  // "skip December", "move this one to the 18th" and "mark it received" need
+  // no migration. Money that actually landed lives in `income_receipts`, the
+  // mirror of `liability_payments`.
   // ============================================================
+
+  private incomeRowToIncome(r: any): Income {
+    return {
+      id: r.id,
+      description: r.description,
+      amount: Number(r.amount) || 0,
+      category: r.category || "salary",
+      frequency: normalizeIncomeFrequency(r.frequency),
+      // `date` stays the legacy single-date field; start_date is the series
+      // anchor and falls back to it so pre-existing rows keep working.
+      date: r.date || undefined,
+      startDate: r.start_date || r.date || null,
+      recurrenceEnd: r.recurrence_end || null,
+      sourceType: r.source_type || undefined,
+      status: r.status || "active",
+      currency: (r.currency || "usd").toLowerCase(),
+      notes: r.notes ?? null,
+      linkedProfiles: r.linked_profiles || [],
+      payerProfileId: r.payer_profile_id ?? null,
+      linkedAccountId: r.linked_account_id ?? null,
+      linkedAssetId: r.linked_asset_id ?? null,
+      fields: r.fields && typeof r.fields === "object" ? r.fields : {},
+      tags: r.tags || [],
+      deletedAt: r.deleted_at,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at ?? undefined,
+    };
+  }
+
   async getIncomes(profileIds?: string[]): Promise<Income[]> {
     return this.memo(`getIncomes${this._fk(profileIds)}`, async () => {
       // PERF (durable-fix-phase1): DB pushdown via idx_incomes_linked_profiles_gin.
@@ -3355,13 +3448,15 @@ export class SupabaseStorage implements IStorage {
       q = this._applyProfileFilter(q, profileIds, "array");
       const { data, error } = await q;
       if (error) throw error;
-      return (data || []).map(r => ({
-        id: r.id, description: r.description, amount: Number(r.amount),
-        category: r.category || "salary", frequency: r.frequency || "monthly",
-        date: r.date || undefined, linkedProfiles: r.linked_profiles || [],
-        tags: r.tags || [], deletedAt: r.deleted_at, createdAt: r.created_at,
-      }));
+      return (data || []).map(r => this.incomeRowToIncome(r));
     });
+  }
+
+  async getIncome(id: string): Promise<Income | undefined> {
+    const { data, error } = await this.supabase.from("incomes").select("*")
+      .eq("id", id).eq("user_id", this.userId).is("deleted_at", null).maybeSingle();
+    if (error || !data) return undefined;
+    return this.incomeRowToIncome(data);
   }
 
   async createIncome(data: InsertIncome): Promise<Income> {
@@ -3372,18 +3467,33 @@ export class SupabaseStorage implements IStorage {
       const selfProfile = await this.getSelfProfile();
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
-    const { error } = await this.supabase.from("incomes").insert({
+    const frequency = normalizeIncomeFrequency((data as any).frequency);
+    // The series anchor is explicit when given, else the supplied date, else
+    // today — an income with no date would generate no occurrences at all.
+    const anchor = String(
+      (data as any).startDate || data.date || getUserToday(this._timezone),
+    ).slice(0, 10);
+    const row: any = {
       id, user_id: this.userId, description: data.description,
       amount: data.amount, category: data.category || "salary",
-      frequency: data.frequency || "monthly", date: data.date || null,
+      frequency, date: anchor,
+      start_date: anchor,
+      recurrence_end: (data as any).recurrenceEnd ? String((data as any).recurrenceEnd).slice(0, 10) : null,
+      source_type: (data as any).sourceType || null,
+      status: (data as any).status || "active",
+      currency: ((data as any).currency || "usd").toLowerCase(),
+      notes: (data as any).notes ?? null,
+      payer_profile_id: (data as any).payerProfileId ?? null,
+      linked_account_id: (data as any).linkedAccountId ?? null,
+      linked_asset_id: (data as any).linkedAssetId ?? null,
+      fields: (data as any).fields && typeof (data as any).fields === "object" ? (data as any).fields : {},
       linked_profiles: linkedProfiles, tags: data.tags || [],
       source: "manual", created_at: now,
-    });
+    };
+    const { error } = await this.supabase.from("incomes").insert(row);
     if (error) throw error;
     this.logActivity("income", `Created income: ${data.description} $${data.amount}`, "create", id);
-    return { id, ...data, amount: data.amount, category: data.category || "salary",
-      frequency: data.frequency || "monthly", linkedProfiles,
-      tags: data.tags || [], createdAt: now };
+    return this.incomeRowToIncome({ ...row, deleted_at: null });
   }
 
   async updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined> {
@@ -3391,26 +3501,544 @@ export class SupabaseStorage implements IStorage {
     if (data.description !== undefined) updates.description = data.description;
     if (data.amount !== undefined) updates.amount = data.amount;
     if (data.category !== undefined) updates.category = data.category;
-    if (data.frequency !== undefined) updates.frequency = data.frequency;
-    if (data.date !== undefined) updates.date = data.date;
+    if (data.frequency !== undefined) updates.frequency = normalizeIncomeFrequency(data.frequency);
+    // `date` and `startDate` are the same anchor from two field names; moving
+    // one without the other would leave the series generating from a date the
+    // user can no longer see.
+    if (data.date !== undefined) {
+      updates.date = data.date ? String(data.date).slice(0, 10) : null;
+      updates.start_date = updates.date;
+    }
+    if (data.startDate !== undefined) {
+      updates.start_date = data.startDate ? String(data.startDate).slice(0, 10) : null;
+      updates.date = updates.start_date;
+    }
+    if (data.recurrenceEnd !== undefined) {
+      updates.recurrence_end = data.recurrenceEnd ? String(data.recurrenceEnd).slice(0, 10) : null;
+    }
+    if (data.sourceType !== undefined) updates.source_type = data.sourceType;
+    if (data.status !== undefined) updates.status = data.status;
+    if (data.currency !== undefined) updates.currency = String(data.currency).toLowerCase();
+    if (data.notes !== undefined) updates.notes = data.notes;
+    if (data.payerProfileId !== undefined) updates.payer_profile_id = data.payerProfileId;
+    if (data.linkedAccountId !== undefined) updates.linked_account_id = data.linkedAccountId;
+    if (data.linkedAssetId !== undefined) updates.linked_asset_id = data.linkedAssetId;
+    // fields is MERGED, never replaced: a caller patching `paused` must not
+    // wipe the per-occurrence exception map living beside it.
+    if (data.fields !== undefined) {
+      const existing = await this.getIncome(id);
+      updates.fields = { ...(existing?.fields || {}), ...(data.fields || {}) };
+    }
     // Bug #4: linkedProfiles and tags were silently dropped on update, so any
     // edit (manual or via AI updateEntityLinkedProfiles → updateIncome path,
     // bug #12) would wipe the income's profile attribution. The PATCH route
     // accepts these fields and returns 200 — but they never reached the DB.
     if (data.tags !== undefined) updates.tags = data.tags;
-    const { error } = await this.supabase.from("incomes").update(updates).eq("id", id).eq("user_id", this.userId);
-    if (error) throw error;
+    if (Object.keys(updates).length > 0) {
+      const { error } = await this.supabase.from("incomes").update(updates).eq("id", id).eq("user_id", this.userId);
+      if (error) throw error;
+    }
     // [P2.2] Ownership patches go through the single writer (setOwners).
     if (data.linkedProfiles !== undefined) {
       await this.applyOwnershipPatch("income", id, data.linkedProfiles);
     }
-    const all = await this.getIncomes();
-    return all.find(i => i.id === id);
+    this.clearRequestMemo();
+    return this.getIncome(id);
   }
 
   async deleteIncome(id: string): Promise<boolean> {
     const { error } = await this.supabase.from("incomes").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
+    this.clearRequestMemo();
     return !error;
+  }
+
+  // ─── Income receipts (money that actually landed) ──────────────────────────
+
+  private receiptRow(r: any): IncomeReceipt {
+    return {
+      id: r.id,
+      incomeId: r.income_id,
+      occurrenceDate: r.occurrence_date ?? null,
+      receivedDate: r.received_date,
+      amount: Number(r.amount) || 0,
+      depositAccount: r.deposit_account ?? null,
+      method: r.method ?? null,
+      notes: r.notes ?? null,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at ?? undefined,
+    };
+  }
+
+  async getIncomeReceipts(incomeId?: string): Promise<IncomeReceipt[]> {
+    let q = this.supabase.from("income_receipts").select("*").eq("user_id", this.userId);
+    if (incomeId) q = q.eq("income_id", incomeId);
+    const { data, error } = await q.order("received_date", { ascending: false });
+    if (error) return [];
+    return (data || []).map(r => this.receiptRow(r));
+  }
+
+  /** Receipts for many series at once, grouped by income id. */
+  private async receiptsByIncome(incomeIds: string[]): Promise<Map<string, IncomeReceipt[]>> {
+    const out = new Map<string, IncomeReceipt[]>();
+    if (incomeIds.length === 0) return out;
+    const { data } = await this.supabase.from("income_receipts").select("*")
+      .eq("user_id", this.userId).in("income_id", incomeIds);
+    for (const r of data || []) {
+      const arr = out.get(r.income_id) || [];
+      arr.push(this.receiptRow(r));
+      out.set(r.income_id, arr);
+    }
+    return out;
+  }
+
+  async createIncomeReceipt(data: InsertIncomeReceipt): Promise<IncomeReceipt> {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const row = {
+      id, user_id: this.userId, income_id: data.incomeId,
+      occurrence_date: data.occurrenceDate ? String(data.occurrenceDate).slice(0, 10) : null,
+      received_date: String(data.receivedDate).slice(0, 10),
+      amount: Number(data.amount) || 0,
+      deposit_account: data.depositAccount ?? null,
+      method: data.method ?? null,
+      notes: data.notes ?? null,
+      created_at: now,
+    };
+    const { error } = await this.supabase.from("income_receipts").insert(row);
+    if (error) throw error;
+    this.clearRequestMemo();
+    return this.receiptRow(row);
+  }
+
+  async deleteIncomeReceipt(id: string): Promise<boolean> {
+    const { error } = await this.supabase.from("income_receipts")
+      .delete().eq("id", id).eq("user_id", this.userId);
+    this.clearRequestMemo();
+    return !error;
+  }
+
+  // ─── Income schedule + per-occurrence operations ──────────────────────────
+
+  /** Full schedule for one income series: occurrences window + receipt history. */
+  async getIncomeSchedule(id: string, months = 12): Promise<any | null> {
+    const income = await this.getIncome(id);
+    if (!income) return null;
+    const todayISO = getUserToday(this._timezone);
+    const receipts = await this.getIncomeReceipts(id);
+    // Look two months back so recently received/skipped dates stay visible.
+    const fromISO = addMonthsISO(todayISO, -2);
+    const toISO = addMonthsISO(todayISO, months);
+    const occurrences = generateIncomeSchedule(income, receipts, {
+      todayISO, windowStart: fromISO, windowEnd: toISO,
+    });
+    const next = nextExpectedOccurrence(income, receipts, todayISO);
+    const last = lastReceivedOccurrence(income, receipts, todayISO);
+    const amount = incomeBaseAmount(income);
+    const frequency = incomeFrequencyOf(income);
+    const totals = totalIncomeOccurrences(occurrences);
+    const f = income.fields || {};
+    return {
+      id: income.id,
+      description: income.description,
+      name: income.description,
+      amount,
+      currency: income.currency || "usd",
+      category: income.category,
+      sourceType: income.sourceType || null,
+      frequency,
+      scheduleLabel: describeIncomeSchedule(income),
+      isRecurring: isRecurringIncome(frequency),
+      startDate: incomeAnchorDate(income),
+      recurrenceEnd: income.recurrenceEnd || null,
+      status: income.status || "active",
+      paused: f.paused === true,
+      pausedUntil: f.pausedUntil ?? null,
+      nextExpected: next
+        ? { date: next.date, effectiveDate: next.effectiveDate, amount: next.amount, occurrenceId: next.occurrenceId }
+        : null,
+      lastReceived: last
+        ? { date: last.date, receivedDate: last.receivedDate, amount: last.receivedAmount ?? last.amount }
+        : null,
+      annualTotal: Math.round(amount * incomePeriodsPerYear(frequency) * 100) / 100,
+      linkedProfiles: income.linkedProfiles,
+      payerProfileId: income.payerProfileId ?? null,
+      linkedAccountId: income.linkedAccountId ?? null,
+      linkedAssetId: income.linkedAssetId ?? null,
+      windowTotals: totals,
+      occurrences,
+      receipts,
+    };
+  }
+
+  /**
+   * Every income occurrence across every series in an arbitrary window.
+   *
+   * Deliberately NOT a loop over getIncomeSchedule: that builds a fixed
+   * today-anchored window per series, so a caller asking about a month outside
+   * it would silently get nothing back, and N series meant N receipt queries.
+   */
+  async getIncomeOccurrences(
+    start: string,
+    end: string,
+    profileIds?: string[],
+  ): Promise<any[]> {
+    const todayISO = getUserToday(this._timezone);
+    const incomes = await this.getIncomes(profileIds);
+    if (incomes.length === 0) return [];
+    const receiptMap = await this.receiptsByIncome(incomes.map(i => i.id));
+    const out: any[] = [];
+    for (const inc of incomes) {
+      const occ = generateIncomeSchedule(inc, receiptMap.get(inc.id) || [], {
+        todayISO, windowStart: String(start).slice(0, 10), windowEnd: String(end).slice(0, 10),
+      });
+      for (const o of occ) {
+        out.push({
+          ...o,
+          incomeId: inc.id,
+          description: inc.description,
+          category: inc.category,
+          sourceType: inc.sourceType || null,
+          currency: inc.currency || "usd",
+          linkedProfiles: inc.linkedProfiles,
+          direction: "in",
+        });
+      }
+    }
+    out.sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate));
+    return out;
+  }
+
+  /** Merge a per-occurrence override into fields.occurrences (shallow-replaced). */
+  private async _patchIncomeOccurrence(id: string, date: string, patch: Record<string, any>): Promise<any> {
+    const income = await this.getIncome(id);
+    if (!income) return null;
+    const f: any = income.fields || {};
+    const occ: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
+    const merged = { ...(occ[date] || {}), ...patch };
+    // Drop keys explicitly nulled so an override can be cleared.
+    for (const k of Object.keys(merged)) if (merged[k] === null) delete merged[k];
+    if (Object.keys(merged).length === 0) delete occ[date];
+    else occ[date] = merged;
+    await this.updateIncome(id, { fields: { occurrences: occ } } as any);
+    return this.getIncomeSchedule(id);
+  }
+
+  /**
+   * Mark one occurrence received: writes a receipt row + stamps the override.
+   * `amount` defaults to the occurrence's expected amount, so "mark today's
+   * paycheck received" needs nothing else. A different actual amount is the
+   * whole point of expected-vs-received, so it's accepted and recorded.
+   */
+  async receiveIncomeOccurrence(
+    id: string,
+    date: string,
+    opts: { amount?: number; receivedDate?: string; depositAccount?: string; method?: string; notes?: string } = {},
+  ): Promise<any> {
+    const income = await this.getIncome(id);
+    if (!income) return null;
+    const occDate = String(date).slice(0, 10);
+    const f: any = income.fields || {};
+    const override = f.occurrences?.[occDate] || {};
+    const expected = override.amount != null ? Number(override.amount) : incomeBaseAmount(income);
+    const amount = opts.amount != null ? Number(opts.amount) : expected;
+    const receivedDate = String(opts.receivedDate || override.movedTo || occDate).slice(0, 10);
+
+    // Idempotent: receiving the same occurrence twice must not double-count.
+    const existing = await this.getIncomeReceipts(id);
+    const dupe = existing.find(r => (r.occurrenceDate || r.receivedDate) === occDate);
+    if (dupe) await this.deleteIncomeReceipt(dupe.id);
+
+    const receipt = await this.createIncomeReceipt({
+      incomeId: id, occurrenceDate: occDate, receivedDate, amount,
+      depositAccount: opts.depositAccount ?? null,
+      method: opts.method ?? null,
+      notes: opts.notes ?? null,
+    });
+    await this._patchIncomeOccurrence(id, occDate, {
+      status: "received", receiptId: receipt.id, receivedAmount: amount, receivedDate,
+      ...(opts.notes ? { notes: opts.notes } : {}),
+    });
+    this.logActivity("income", `Received ${income.description} ${occDate}: $${amount}`, "update", id);
+    return this.getIncomeSchedule(id);
+  }
+
+  /** Undo a received mark — the money did not actually land after all. */
+  async unreceiveIncomeOccurrence(id: string, date: string): Promise<any> {
+    const occDate = String(date).slice(0, 10);
+    const receipts = await this.getIncomeReceipts(id);
+    for (const r of receipts) {
+      if ((r.occurrenceDate || r.receivedDate) === occDate) await this.deleteIncomeReceipt(r.id);
+    }
+    return this._patchIncomeOccurrence(id, occDate, {
+      status: null, receiptId: null, receivedAmount: null, receivedDate: null,
+    });
+  }
+
+  /** "Skip December's rent income" — the occurrence exists but is not expected. */
+  async skipIncomeOccurrence(id: string, date: string): Promise<any> {
+    const occDate = String(date).slice(0, 10);
+    const income = await this.getIncome(id);
+    if (!income) return null;
+    // A skipped occurrence must not leave a receipt behind claiming it landed.
+    const receipts = await this.getIncomeReceipts(id);
+    for (const r of receipts) {
+      if ((r.occurrenceDate || r.receivedDate) === occDate) await this.deleteIncomeReceipt(r.id);
+    }
+    this.logActivity("income", `Skipped ${income.description} ${occDate}`, "update", id);
+    return this._patchIncomeOccurrence(id, occDate, {
+      status: "skipped", receiptId: null, receivedAmount: null, receivedDate: null,
+    });
+  }
+
+  async rescheduleIncomeOccurrence(id: string, date: string, newDate: string): Promise<any> {
+    return this._patchIncomeOccurrence(id, String(date).slice(0, 10), {
+      movedTo: String(newDate).slice(0, 10),
+    });
+  }
+
+  async setIncomeOccurrenceFields(id: string, date: string, patch: { amount?: number; notes?: string }): Promise<any> {
+    const clean: Record<string, any> = {};
+    if (patch.amount != null) clean.amount = Number(patch.amount);
+    if (patch.notes !== undefined) clean.notes = patch.notes || null;
+    return this._patchIncomeOccurrence(id, String(date).slice(0, 10), clean);
+  }
+
+  async pauseIncome(id: string, until?: string): Promise<any> {
+    const income = await this.getIncome(id);
+    if (!income) return null;
+    await this.updateIncome(id, {
+      status: "paused",
+      fields: { paused: true, pausedUntil: until ? String(until).slice(0, 10) : null },
+    } as any);
+    this.logActivity("income", `Paused ${income.description}${until ? ` until ${until}` : ""}`, "update", id);
+    return this.getIncomeSchedule(id);
+  }
+
+  async resumeIncome(id: string): Promise<any> {
+    const income = await this.getIncome(id);
+    if (!income) return null;
+    await this.updateIncome(id, {
+      status: "active", fields: { paused: false, pausedUntil: null },
+    } as any);
+    return this.getIncomeSchedule(id);
+  }
+
+  /**
+   * Edit a series with a SCOPE, the way a calendar edits a repeating event.
+   *
+   *   occurrence — override just this pay date (amount/notes/date)
+   *   future     — "change my paycheck to $2,600 starting next month": end the
+   *                current series the day before `fromDate` and start a new one
+   *                carrying the new values. Past occurrences keep their history
+   *                and their receipts, which a plain in-place edit would rewrite.
+   *   series     — edit the row itself; every occurrence follows.
+   */
+  async updateIncomeScoped(
+    id: string,
+    changes: Partial<Income> & { amount?: number },
+    scope: IncomeEditScope | string = "series",
+    fromDate?: string,
+  ): Promise<{ ok: boolean; income?: Income; newIncomeId?: string; scope: IncomeEditScope; error?: string }> {
+    const s = normalizeEditScope(scope);
+    const income = await this.getIncome(id);
+    if (!income) return { ok: false, scope: s, error: "Income not found" };
+    const todayISO = getUserToday(this._timezone);
+
+    if (s === "occurrence") {
+      const date = String(fromDate || incomeAnchorDate(income) || todayISO).slice(0, 10);
+      const patch: Record<string, any> = {};
+      if (changes.amount != null) patch.amount = Number(changes.amount);
+      if ((changes as any).notes !== undefined) patch.notes = (changes as any).notes;
+      if ((changes as any).date) patch.movedTo = String((changes as any).date).slice(0, 10);
+      await this._patchIncomeOccurrence(id, date, patch);
+      return { ok: true, income: await this.getIncome(id), scope: s };
+    }
+
+    if (s === "future") {
+      const splitAt = String(fromDate || todayISO).slice(0, 10);
+      const anchor = incomeAnchorDate(income);
+      // Splitting at or before the anchor changes nothing historical — the
+      // whole series is "future", so edit in place instead of leaving an empty
+      // stub behind.
+      if (!anchor || splitAt <= anchor) {
+        const updated = await this.updateIncome(id, changes as any);
+        return { ok: true, income: updated, scope: s };
+      }
+      // The new series starts on the first canonical occurrence >= splitAt, so
+      // an every-other-Friday paycheck keeps landing on Fridays after a raise.
+      const upcoming = incomeOccurrenceDates(income, splitAt, addMonthsISO(splitAt, 24), 60);
+      const newAnchor = upcoming[0] || splitAt;
+      // Old series stops the day before the split.
+      await this.updateIncome(id, { recurrenceEnd: addDaysISO(newAnchor, -1) } as any);
+      const created = await this.createIncome({
+        description: (changes.description ?? income.description) as string,
+        amount: Number(changes.amount ?? income.amount),
+        category: (changes.category ?? income.category) as string,
+        frequency: (changes.frequency ?? income.frequency) as string,
+        date: newAnchor,
+        startDate: newAnchor,
+        recurrenceEnd: (changes.recurrenceEnd ?? income.recurrenceEnd) as any,
+        sourceType: (changes.sourceType ?? income.sourceType) as any,
+        currency: (changes.currency ?? income.currency) as any,
+        notes: (changes.notes ?? income.notes) as any,
+        linkedProfiles: (changes.linkedProfiles ?? income.linkedProfiles) as string[],
+        payerProfileId: (changes.payerProfileId ?? income.payerProfileId) as any,
+        linkedAccountId: (changes.linkedAccountId ?? income.linkedAccountId) as any,
+        linkedAssetId: (changes.linkedAssetId ?? income.linkedAssetId) as any,
+        tags: (changes.tags ?? income.tags) as string[],
+        // Per-occurrence exceptions belong to dates in the OLD series; the new
+        // one starts clean apart from settings that describe the cadence.
+        fields: (() => {
+          const f: any = { ...(income.fields || {}) };
+          delete f.occurrences;
+          return f;
+        })(),
+      } as any);
+      this.logActivity("income", `Changed ${income.description} from ${newAnchor}`, "update", created.id);
+      return { ok: true, income: created, newIncomeId: created.id, scope: s };
+    }
+
+    const updated = await this.updateIncome(id, changes as any);
+    return { ok: true, income: updated, scope: s };
+  }
+
+  /**
+   * Delete with a SCOPE — one occurrence, this and everything after, or the
+   * whole series. "Delete all future payments" must not erase the paychecks the
+   * user already received, so `future` ends the series instead of dropping it.
+   */
+  async deleteIncomeScoped(
+    id: string,
+    scope: IncomeEditScope | string = "series",
+    fromDate?: string,
+  ): Promise<{ ok: boolean; scope: IncomeEditScope; deleted: boolean; endedAt?: string; error?: string }> {
+    const s = normalizeEditScope(scope);
+    const income = await this.getIncome(id);
+    if (!income) return { ok: false, scope: s, deleted: false, error: "Income not found" };
+    const todayISO = getUserToday(this._timezone);
+
+    if (s === "occurrence") {
+      const date = String(fromDate || todayISO).slice(0, 10);
+      await this.skipIncomeOccurrence(id, date);
+      return { ok: true, scope: s, deleted: false, endedAt: date };
+    }
+
+    if (s === "future") {
+      const from = String(fromDate || todayISO).slice(0, 10);
+      const anchor = incomeAnchorDate(income);
+      // Nothing of the series is in the past → it's a plain delete.
+      if (!anchor || from <= anchor) {
+        const ok = await this.deleteIncome(id);
+        return { ok, scope: s, deleted: true };
+      }
+      await this.updateIncome(id, { recurrenceEnd: addDaysISO(from, -1), status: "ended" } as any);
+      this.logActivity("income", `Ended ${income.description} after ${from}`, "update", id);
+      return { ok: true, scope: s, deleted: false, endedAt: addDaysISO(from, -1) };
+    }
+
+    const ok = await this.deleteIncome(id);
+    if (ok) this.logActivity("income", `Deleted income: ${income.description}`, "delete", id);
+    return { ok, scope: s, deleted: ok };
+  }
+
+  // ─── Cash flow — both sides of the ledger ─────────────────────────────────
+
+  /**
+   * Net cash flow for a month (or any window): income vs everything going out,
+   * split into PROJECTED (the whole month's plan) and ACTUAL (what has really
+   * moved). See shared/cash-flow.ts for why both numbers exist.
+   */
+  async getCashFlowSummary(
+    month?: string,
+    profileIds?: string[],
+  ): Promise<CashFlowSummary & { incomeLines: any[]; outflowLines: OutflowLine[] }> {
+    const todayISO = getUserToday(this._timezone);
+    const { start, end } = monthBounds(month ? `${String(month).slice(0, 7)}-01` : todayISO);
+
+    const [incomes, expenses, profiles] = await Promise.all([
+      this.getIncomes(profileIds),
+      this.getExpenses(profileIds),
+      this.getProfiles(),
+    ]);
+
+    // ── Money out: logged expenses + every liability payment due in the window
+    const outflows: OutflowLine[] = [];
+    for (const e of expenses) {
+      const d = String(e.date || "").slice(0, 10);
+      if (!d || d < start || d > end) continue;
+      // A logged expense is money that already left.
+      outflows.push({
+        date: d, amount: Number(e.amount) || 0, settled: true,
+        label: e.description, category: e.category, sourceId: e.id, kind: "expense",
+      });
+    }
+
+    const scopeSet = profileIds && profileIds.length > 0 ? new Set(profileIds) : null;
+    const liabProfiles = (profiles as any[]).filter(p =>
+      (p.type === "liability" || p.type === "loan") &&
+      (!scopeSet || scopeSet.has(p.id) || (p.parentProfileId && scopeSet.has(p.parentProfileId))));
+    const liabPayments = await (async () => {
+      const ids = liabProfiles.map(p => p.id);
+      const byLiab = new Map<string, Array<{ id?: string; paymentDate?: string }>>();
+      if (ids.length === 0) return byLiab;
+      const { data } = await this.supabase.from("liability_payments")
+        .select("id,payment_date,liability_profile_id")
+        .eq("user_id", this.userId).in("liability_profile_id", ids);
+      for (const r of data || []) {
+        const arr = byLiab.get(r.liability_profile_id) || [];
+        arr.push({ id: r.id, paymentDate: r.payment_date });
+        byLiab.set(r.liability_profile_id, arr);
+      }
+      return byLiab;
+    })();
+
+    for (const p of liabProfiles) {
+      const sf = deriveScheduleFields(p.fields || {}, p.type_key ?? p.typeKey, todayISO);
+      const occ = generateSchedule({ id: p.id, fields: sf }, liabPayments.get(p.id) || [], {
+        todayISO, windowStart: start, windowEnd: end,
+      });
+      for (const o of occ) {
+        outflows.push({
+          date: o.effectiveDate,
+          amount: Number(o.amount) || 0,
+          settled: o.status === "paid",
+          skipped: o.status === "skipped",
+          label: p.name,
+          category: (p.fields || {}).category || "bill",
+          sourceId: p.id,
+          kind: "bill",
+        });
+      }
+    }
+
+    // ── Money in: every income series' occurrences in the window
+    const receiptMap = await this.receiptsByIncome(incomes.map(i => i.id));
+    const summary = computeCashFlow({
+      start, end, todayISO,
+      incomes,
+      receiptsFor: (incomeId) => receiptMap.get(incomeId) || [],
+      outflows,
+    });
+
+    const incomeLines: any[] = [];
+    for (const inc of incomes) {
+      const occ = generateIncomeSchedule(inc, receiptMap.get(inc.id) || [], {
+        todayISO, windowStart: start, windowEnd: end,
+      });
+      for (const o of occ) {
+        incomeLines.push({
+          incomeId: inc.id, description: inc.description, category: inc.category,
+          sourceType: inc.sourceType || null,
+          date: o.effectiveDate, canonicalDate: o.date,
+          amount: o.amount, receivedAmount: o.receivedAmount ?? null,
+          status: o.status, occurrenceId: o.occurrenceId,
+        });
+      }
+    }
+    incomeLines.sort((a, b) => a.date.localeCompare(b.date));
+    outflows.sort((a, b) => a.date.localeCompare(b.date));
+
+    return { ...summary, incomeLines, outflowLines: outflows };
   }
 
   // ============================================================
@@ -3757,8 +4385,11 @@ export class SupabaseStorage implements IStorage {
             title: p.name,
             date: o.effectiveDate,
             allDay: true,
-            color: "#C75B5B",
+            color: CASH_DIRECTION_COLORS.out,
             category: "bill",
+            direction: "out",
+            // Signed: outflow is negative, so a day's items sum to its net.
+            amount: -(Number(o.amount) || 0),
             linkedProfiles: owner,
             sourceId: p.id,
             completed: o.status === "paid",
@@ -3769,6 +4400,53 @@ export class SupabaseStorage implements IStorage {
               recurrence: freq,
               occurrenceId: o.occurrenceId,
               liabilityId: p.id,
+              notes: o.notes,
+            },
+          } as any);
+        }
+      }
+    }
+
+    // Income as first-class calendar objects — the positive mirror of the bill
+    // block above. Every income series generates its pay dates through the same
+    // kind of occurrence engine (shared/income-schedule.ts), so a paycheck
+    // every other Friday lands on the calendar exactly the way a bill does.
+    // `direction: "in"` is what lets a surface tell money arriving from money
+    // leaving without pattern-matching on colour.
+    {
+      const incomes = await this.getIncomes();
+      const scoped = incomes.filter((i: any) => matchesProfile(i.linkedProfiles || []));
+      const receiptMap = await this.receiptsByIncome(scoped.map((i: any) => i.id));
+      const todayISO = getUserToday(this._timezone);
+      for (const inc of scoped as any[]) {
+        const occ = generateIncomeSchedule(inc, receiptMap.get(inc.id) || [], {
+          todayISO, windowStart: startDate, windowEnd: endDate,
+        });
+        for (const o of occ) {
+          items.push({
+            id: `income-${inc.id}-${o.date}`,
+            type: "income",
+            title: inc.description,
+            date: o.effectiveDate,
+            allDay: true,
+            color: CASH_DIRECTION_COLORS.in,
+            category: "income",
+            direction: "in",
+            // Signed so a day's net is a plain sum over the day's items.
+            amount: o.status === "received" ? (o.receivedAmount ?? o.amount) : o.amount,
+            linkedProfiles: inc.linkedProfiles || [],
+            sourceId: inc.id,
+            completed: o.status === "received",
+            meta: {
+              kind: "income",
+              status: o.status,
+              amount: o.amount,
+              receivedAmount: o.receivedAmount ?? null,
+              expected: o.status !== "received",
+              recurrence: incomeFrequencyOf(inc),
+              occurrenceId: o.occurrenceId,
+              incomeId: inc.id,
+              sourceType: inc.sourceType || null,
               notes: o.notes,
             },
           } as any);
@@ -6889,7 +7567,7 @@ export class SupabaseStorage implements IStorage {
     const tables = [
       // Child tables
       "tracker_entries", "habit_checkins", "obligation_payments", "domain_entries",
-      "entity_links", "audit_log",
+      "entity_links", "audit_log", "income_receipts",
       // Standalone data tables
       "expenses", "tasks", "events", "documents", "trackers", "habits",
       "obligations", "artifacts", "journal_entries", "memories", "goals",

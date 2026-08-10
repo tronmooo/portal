@@ -88,11 +88,12 @@ export interface ActionCapability {
  *   event      — rd:done:/rd:skip: tags on the event row
  *   obligation — real occurrence rows (/api/obligation-occurrences)
  *   liability  — an occurrences map on the liability profile
+ *   income     — an occurrences map on the income row (the same shape)
  *
  * A profile's birthday field, a task and a document expiry have
  * no per-occurrence storage, so those actions are disabled rather than faked.
  */
-const PER_OCCURRENCE_SYSTEMS = new Set<SourceSystem>(["event", "obligation", "liability"]);
+const PER_OCCURRENCE_SYSTEMS = new Set<SourceSystem>(["event", "obligation", "liability", "income"]);
 
 /** Where to manage a date whose system doesn't support an action. */
 const MANAGE_AT: Record<SourceSystem, string> = {
@@ -100,6 +101,7 @@ const MANAGE_AT: Record<SourceSystem, string> = {
   event: "the calendar",
   obligation: "its bill",
   liability: "its liability page",
+  income: "the Finance tab",
   task: "the task",
   habit: "the habit",
   document: "the document",

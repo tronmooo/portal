@@ -25,6 +25,11 @@ import {
   insertMemorySchema,
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
+import {
+  normalizeIncomeFrequency, isRecurringIncome, normalizeEditScope,
+} from "@shared/income-schedule";
+import { describeCashFlow } from "@shared/cash-flow";
+import { INCOME_SOURCE_TYPES, type IncomeSourceType } from "@shared/schema";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
@@ -4460,10 +4465,40 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     },
   },
 
-  // --- Income logging ---
+  // --- Income: the positive mirror of a liability ---
+  // An income is a SERIES (recurring paycheck, rent received, dividend) or a
+  // one-time item (bonus, refund, sale). Recurring income generates future pay
+  // dates on the calendar exactly the way a recurring bill does, and every one
+  // of those dates can be received, skipped, moved, re-priced or deleted.
+  {
+    name: "create_income",
+    description: "Create an income the user EXPECTS to receive — recurring or one-time. Use for 'add a $2,400 paycheck every other Friday', 'I get $1,800 rent on the 1st', 'my pension pays $900 monthly', 'I'm expecting a $5,000 bonus on Dec 15'. Recurring income generates future pay dates on the calendar automatically. For money that ALREADY arrived, use log_income instead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        description: { type: "string", description: "What this income is, e.g. 'Acme paycheck', 'Rent from 12 Oak St', 'Vanguard dividend'" },
+        amount: { type: "number", description: "Amount per occurrence in dollars" },
+        frequency: {
+          type: "string",
+          description: "Cadence: once | weekly | biweekly (every other week) | semimonthly (twice a month) | monthly | quarterly | semiannual | yearly, or every-N-days / every-N-weeks / every-N-months. 'every other Friday' = biweekly with startDate on a Friday.",
+        },
+        startDate: { type: "string", description: "First pay date (YYYY-MM-DD). For 'every other Friday' this MUST be an actual Friday — it anchors the whole series. Defaults to today." },
+        sourceType: { type: "string", description: "paycheck | freelance | rental | investment | pension | benefit | bonus | refund | sale | gift | reimbursement | other" },
+        category: { type: "string", description: "Category label, e.g. salary, freelance, investment" },
+        recurrenceEnd: { type: "string", description: "Optional last date of the series (YYYY-MM-DD), e.g. a contract that ends." },
+        count: { type: "number", description: "Optional fixed number of payments, e.g. 6 remaining instalments." },
+        forProfile: { type: "string", description: "Person this income belongs to. Defaults to the user." },
+        payer: { type: "string", description: "Employer / client / tenant paying it — matched to an existing profile when one exists." },
+        account: { type: "string", description: "Account profile the money lands in." },
+        asset: { type: "string", description: "Asset or investment producing it (rental property, brokerage account)." },
+        notes: { type: "string", description: "Optional notes" },
+      },
+      required: ["description", "amount"],
+    },
+  },
   {
     name: "log_income",
-    description: "Log an income entry. Use when user says 'I got paid $X', 'received $X from freelance', 'paycheck of $X', or mentions any incoming money.",
+    description: "Log income that ALREADY ARRIVED. Use when the user says 'I got paid $X', 'received $X from freelance', 'sold my bike for $200', 'got a $340 tax refund'. Creates a one-time income already marked received, so it counts toward ACTUAL cash flow immediately. For money still expected in the future, use create_income.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -4471,6 +4506,8 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         source: { type: "string", description: "Income source (employer, client, freelance, etc.)" },
         date: { type: "string", description: "Date received (YYYY-MM-DD). Defaults to today." },
         category: { type: "string", description: "Category: salary, freelance, investment, gift, refund, other" },
+        sourceType: { type: "string", description: "paycheck | freelance | rental | investment | pension | benefit | bonus | refund | sale | gift | reimbursement | other" },
+        forProfile: { type: "string", description: "Person this income belongs to. Defaults to the user." },
         notes: { type: "string", description: "Optional notes" },
       },
       required: ["amount", "source"],
@@ -4478,26 +4515,94 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "update_income",
-    description: "Update an EXISTING income entry (amount, source/description, frequency, category, date). Find it by its description/source (partial match). Use for 'change my freelance income to $250', 'my paycheck income is actually monthly'. Do NOT use for paychecks (confirm_paycheck_received) or expenses (update_expense).",
+    description: "Update an EXISTING income. SCOPE MATTERS: 'change my paycheck to $2,600 starting next month' is scope='future' with from=<first of next month> — that keeps every paycheck already received at its old amount. scope='series' rewrites the whole thing including history; scope='occurrence' changes ONE pay date only. Do NOT use for expenses (update_expense).",
     input_schema: {
       type: "object" as const,
       properties: {
-        description: { type: "string", description: "Description/source of the income to update (partial match, e.g. 'freelance')" },
-        changes: { type: "object", description: "Fields to update — any of 'description', 'amount' (number), 'frequency' (once|weekly|biweekly|monthly|yearly), 'category', 'date' (YYYY-MM-DD)" },
+        description: { type: "string", description: "Description/source of the income to update (partial match, e.g. 'paycheck')" },
+        changes: { type: "object", description: "Fields to update — any of 'description', 'amount' (number), 'frequency', 'category', 'sourceType', 'startDate' (YYYY-MM-DD), 'recurrenceEnd' (YYYY-MM-DD), 'notes'" },
+        scope: { type: "string", enum: ["occurrence", "future", "series"], description: "Which pay dates the change applies to. Default 'series'. Use 'future' whenever the user says 'starting <date>' / 'from now on'." },
+        from: { type: "string", description: "YYYY-MM-DD the change takes effect (required for scope 'future' and 'occurrence')." },
       },
       required: ["description", "changes"],
     },
   },
   {
     name: "delete_income",
-    description: "Delete an income entry by its description/source (partial match). Use for 'delete the freelance income', 'remove that $500 income I logged'.",
+    description: "Delete income. 'delete all future payments' / 'stop my paycheck after this month' is scope='future' (ends the series but KEEPS what was already received). 'delete the freelance income entirely' is scope='series'. 'skip December's rent income' should use skip_income_occurrence instead.",
     input_schema: {
       type: "object" as const,
       properties: {
         description: { type: "string", description: "Description/source of the income to delete (partial match)" },
         amount: { type: "number", description: "Optional amount to disambiguate when several incomes share a description" },
+        scope: { type: "string", enum: ["occurrence", "future", "series"], description: "Default 'series'. Use 'future' for 'delete all future payments'." },
+        from: { type: "string", description: "YYYY-MM-DD the deletion starts from (for scope 'future' / 'occurrence'). Defaults to today." },
       },
       required: ["description"],
+    },
+  },
+  {
+    name: "receive_income",
+    description: "Mark ONE expected income occurrence as actually received — 'mark today's paycheck received', 'the rent came in', 'I got the August 15 paycheck, it was $2,380'. Turns projected money into actual money for cash flow. Pass the real amount when it differs from what was expected.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        description: { type: "string", description: "Which income (partial match, e.g. 'paycheck')" },
+        date: { type: "string", description: "The scheduled pay date (YYYY-MM-DD). Defaults to the nearest expected occurrence — today's if there is one, otherwise the most recent one that hasn't been received." },
+        amount: { type: "number", description: "Actual amount received, when it differs from the expected amount." },
+        receivedDate: { type: "string", description: "The day the money actually landed, if different from the scheduled date." },
+        notes: { type: "string", description: "Optional notes" },
+      },
+      required: ["description"],
+    },
+  },
+  {
+    name: "skip_income_occurrence",
+    description: "Skip ONE occurrence of a recurring income — 'skip December's rent income', 'no paycheck on the 25th, the office is closed'. The date stays on the calendar as skipped and counts toward neither projected nor actual cash flow. Use delete_income(scope:'future') to end the series instead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        description: { type: "string", description: "Which income (partial match)" },
+        date: { type: "string", description: "The scheduled pay date to skip (YYYY-MM-DD). For 'skip December' pass that month's occurrence date." },
+        month: { type: "string", description: "Alternative to date: 'YYYY-MM' to skip every occurrence in that month." },
+      },
+      required: ["description"],
+    },
+  },
+  {
+    name: "reschedule_income_occurrence",
+    description: "Move ONE income occurrence to a different date — 'my paycheck landed a day late', 'push the March rent to the 5th'. Only that occurrence moves; the rest of the series keeps its cadence.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        description: { type: "string", description: "Which income (partial match)" },
+        date: { type: "string", description: "The current scheduled date (YYYY-MM-DD)" },
+        newDate: { type: "string", description: "The new date (YYYY-MM-DD)" },
+      },
+      required: ["description", "date", "newDate"],
+    },
+  },
+  {
+    name: "get_income_schedule",
+    description: "Read the upcoming pay dates for an income series — 'when do I get paid next?', 'show me my paycheck schedule', 'how many rent payments are left this year?'. Returns each occurrence with its expected/received status.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        description: { type: "string", description: "Which income (partial match). Omit to list every income series." },
+        months: { type: "number", description: "How many months ahead to project. Default 6." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_cash_flow",
+    description: "Net cash flow for a month — income MINUS everything going out, reported as PROJECTED (the whole month's plan) and ACTUAL (what has really moved so far). Use for 'how much am I making this month?', 'am I positive in August?', 'what's my net cash flow?', 'how much is left after bills?'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        month: { type: "string", description: "YYYY-MM. Defaults to the current month." },
+      },
+      required: [],
     },
   },
 
@@ -5029,10 +5134,24 @@ NEVER substitute a create_task when the user explicitly asks for a journal entry
 - "create/add a notification" / "notify me that X" (no specific time, nothing to do) → create_notification. If there IS something to do at a time ("remind me Friday at 3 to call the vet") → create_task(dueDate, dueTime).
 - "mark my notifications read" → mark_notifications_read; "mute info notifications" / "stop showing streak alerts" → set_notification_preferences; "unmute everything" → set_notification_preferences(clear:true)
 
-━━━ INCOME / PAYCHECK / BUDGET / MEMORY CRUD ━━━
-- log income: log_income(amount, source) — "I got paid $X", "received $X from Y"
-- edit income: update_income(description, changes) — "change my freelance income to $250/mo"
-- delete income: delete_income(description, amount?) — "remove that $500 income"
+━━━ INCOME — THE POSITIVE MIRROR OF A LIABILITY ━━━
+Income is a first-class object, not a note. A recurring income generates future pay dates on the calendar exactly the way a recurring bill does, and EVERY generated date can be received, skipped, moved or deleted on its own.
+- EXPECTED money (future) → create_income(description, amount, frequency, startDate). "Add a $2,400 paycheck every other Friday" → frequency:'biweekly', startDate: the next actual FRIDAY. "twice a month" → 'semimonthly'. "on the 1st" → 'monthly' with startDate on the 1st.
+- money that ALREADY ARRIVED → log_income(amount, source) — "I got paid $X", "sold my bike for $200", "got a $340 refund". It is created already marked received.
+- "mark today's paycheck received" / "the rent came in" → receive_income(description, date?, amount?). Pass 'amount' when the real deposit differed from what was expected.
+- "skip December's rent income" → skip_income_occurrence(description, month:'YYYY-12' or date). NOT delete_income.
+- "my paycheck came a day late" → reschedule_income_occurrence(description, date, newDate)
+- "change my paycheck to $2,600 STARTING NEXT MONTH" → update_income(description, changes:{amount:2600}, scope:'future', from:'<first of next month>'). scope:'future' is REQUIRED whenever the user says "starting"/"from now on" — a plain edit would rewrite paychecks they already received.
+- "delete all future payments" → delete_income(description, scope:'future'). The whole series including history → scope:'series'.
+- "when do I get paid next?" / "show my paycheck schedule" → get_income_schedule(description?)
+- EXPECTED vs RECEIVED: an upcoming paycheck is PROJECTED money until it is received. Never describe projected money as if it already arrived.
+
+━━━ NET CASH FLOW — BOTH SIDES OF THE LEDGER ━━━
+- "how much am I making this month?", "am I positive in August?", "what's left after bills?" → get_cash_flow(month?)
+- Net cash flow = total income − total expenses/liability payments. When outgoing exceeds income, report the NEGATIVE number plainly; never flip the sign or hide it.
+- ALWAYS report both numbers the tool returns: the PROJECTED net (the whole month's plan) AND the ACTUAL net so far. Quoting only the projected figure makes a user with an unpaid future paycheck look richer than they are. Phrase it like: "Projected August net: +$1,650 · Actual so far: +$820".
+
+━━━ PAYCHECK / BUDGET / MEMORY CRUD ━━━
 - expected paycheck: log_expected_paycheck; confirm: confirm_paycheck_received; delete: delete_paycheck(source, expected_date?)
 - budgets: set_budget/create_budget to set, update_budget to change, delete_budget to remove
 - "copy last month's budgets" / "same budgets as last month" → copy_budgets_previous_month(month?)
@@ -5892,6 +6011,87 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
 /** Safe lowercase — returns "" for null/undefined/non-string values */
 function safeLC(val: any): string {
   return (typeof val === "string" ? val : "").toLowerCase();
+}
+
+// ── INCOME HELPERS ───────────────────────────────────────────────────────────
+// Income is the positive mirror of a liability, so its tools need the same
+// name→profile resolution and fuzzy-match behaviour the money tools already use.
+
+/**
+ * Resolve a profile by the name the user said. Exact (case-insensitive) match
+ * first, then a WORD-BOUNDARY match — "Bob" matches "Bob Smith" but not
+ * "Bobcat", the same rule create_expense uses.
+ */
+async function resolveProfileIdByName(store: any, name: unknown): Promise<string | null> {
+  const search = safeLC(name).trim();
+  if (!search) return null;
+  try {
+    const profiles = await store.getProfiles();
+    const wordRe = new RegExp(`(^|\\b)${search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\b|$)`);
+    const target = profiles.find((p: any) => p.name.toLowerCase() === search)
+      || profiles.find((p: any) => wordRe.test(p.name.toLowerCase()));
+    return target?.id ?? null;
+  } catch { return null; }
+}
+
+/** Whose income this is. Empty means "the user" — storage fills in self. */
+async function resolveIncomeProfileIds(store: any, forProfile: unknown): Promise<string[]> {
+  const id = await resolveProfileIdByName(store, forProfile);
+  return id ? [id] : [];
+}
+
+/** Find exactly one income series by a partial description. */
+async function findIncomeByDescription(
+  store: any,
+  description: unknown,
+): Promise<{ income: any } | { error: string; candidates?: string[] }> {
+  const needle = safeLC(description).trim();
+  const incomes = await store.getIncomes();
+  if (!needle) {
+    if (incomes.length === 1) return { income: incomes[0] };
+    return { error: "Which income? Pass its description.", candidates: incomes.slice(0, 5).map((i: any) => i.description) };
+  }
+  const matches = incomes.filter((i: any) => safeLC(i.description).includes(needle));
+  if (matches.length === 0) {
+    return { error: `No income found matching "${description}"`, candidates: incomes.slice(0, 5).map((i: any) => i.description) };
+  }
+  if (matches.length > 1) {
+    // An exact name match beats several partial ones ("paycheck" vs "Acme paycheck").
+    const exact = matches.find((i: any) => safeLC(i.description) === needle);
+    if (exact) return { income: exact };
+    return {
+      error: `Multiple incomes match "${description}" — be more specific`,
+      candidates: matches.slice(0, 5).map((i: any) => `${i.description} ($${i.amount})`),
+    };
+  }
+  return { income: matches[0] };
+}
+
+/** Canonicalize a source type, inferring one from the description when absent. */
+function normalizeIncomeSourceType(raw: unknown, description?: unknown): IncomeSourceType | undefined {
+  const s = safeLC(raw).trim().replace(/\s+/g, "_");
+  if ((INCOME_SOURCE_TYPES as readonly string[]).includes(s)) return s as IncomeSourceType;
+  const text = `${safeLC(raw)} ${safeLC(description)}`;
+  if (/\bpaycheck|payroll|salary|wages|direct deposit\b/.test(text)) return "paycheck";
+  if (/\bfreelance|contract|invoice|consult|gig\b/.test(text)) return "freelance";
+  if (/\brent\b|\btenant\b|\blease\b/.test(text)) return "rental";
+  if (/\bdividend|interest|distribution|capital gain|brokerage\b/.test(text)) return "investment";
+  if (/\bpension|annuity|social security|retirement\b/.test(text)) return "pension";
+  if (/\bunemployment|disability|child support|benefit\b/.test(text)) return "benefit";
+  if (/\bbonus|commission|tips?\b/.test(text)) return "bonus";
+  if (/\brefund|rebate|return\b/.test(text)) return "refund";
+  if (/\bsold|sale\b/.test(text)) return "sale";
+  if (/\bgift\b/.test(text)) return "gift";
+  if (/\breimburse/.test(text)) return "reimbursement";
+  return undefined;
+}
+
+/** A sensible category label when the model didn't supply one. */
+function defaultIncomeCategory(sourceType: unknown, frequency: string): string {
+  const st = normalizeIncomeSourceType(sourceType);
+  if (st === "paycheck") return "salary";
+  if (st) return st;
+  return frequency === "once" ? "other" : "salary";
 }
 
 // ── LEARNED CATEGORY MAPPINGS (classification layer, 2026-07-20) ──────────────
@@ -11392,21 +11592,97 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       return result;
     }
 
-    // --- Income logging ---
+    // --- Income: full CRUD over the series AND its individual pay dates ---
+    case "create_income": {
+      const amt = typeof input.amount === "number" ? input.amount : parseFloat(input.amount);
+      if (!isFinite(amt) || amt <= 0) return { error: `Invalid income amount: ${input.amount}` };
+      if (!input.description?.trim()) return { error: "description is required" };
+      // The user's tz, via the one canonical helper — never a hardcoded zone.
+      const incToday = getUserToday(aiUserTimezone());
+      const frequency = normalizeIncomeFrequency(input.frequency);
+      const startDate = /^\d{4}-\d{2}-\d{2}/.test(String(input.startDate || ""))
+        ? String(input.startDate).slice(0, 10)
+        : incToday;
+
+      // Duplicate guard: the same series created twice in a message would
+      // double every future paycheck on the calendar.
+      const incDedupKey = `income:${safeLC(input.description)}:${amt}:${frequency}:${startDate}`;
+      if (isDuplicateCreation(dedupUser, incDedupKey)) {
+        return { error: "Duplicate income detected — skipped" };
+      }
+
+      const linked = await resolveIncomeProfileIds(storage, input.forProfile);
+      const payerId = await resolveProfileIdByName(storage, input.payer);
+      const accountId = await resolveProfileIdByName(storage, input.account);
+      const assetId = await resolveProfileIdByName(storage, input.asset);
+
+      const fields: Record<string, any> = {};
+      if (input.count != null) {
+        const n = parseInt(String(input.count), 10);
+        if (n > 0) fields.count = n;
+      }
+      const payload = validateAiPayload(insertIncomeSchema, {
+        description: String(input.description).trim(),
+        amount: Math.round(amt * 100) / 100,
+        category: input.category || defaultIncomeCategory(input.sourceType, frequency),
+        frequency,
+        date: startDate,
+        startDate,
+        recurrenceEnd: /^\d{4}-\d{2}-\d{2}/.test(String(input.recurrenceEnd || ""))
+          ? String(input.recurrenceEnd).slice(0, 10) : undefined,
+        sourceType: normalizeIncomeSourceType(input.sourceType, input.description),
+        notes: input.notes,
+        linkedProfiles: linked,
+        payerProfileId: payerId ?? undefined,
+        linkedAccountId: accountId ?? undefined,
+        linkedAssetId: assetId ?? undefined,
+        ...(Object.keys(fields).length > 0 ? { fields } : {}),
+      }, "income");
+      if (!payload.ok) return { error: payload.error };
+      const created = await storage.createIncome(payload.data);
+      markCreation(dedupUser, incDedupKey);
+      const schedule = await (storage as any).getIncomeSchedule?.(created.id, 3);
+      const next = schedule?.nextExpected?.effectiveDate;
+      return {
+        success: true, income: created,
+        schedule: schedule?.scheduleLabel,
+        nextPayDate: next || startDate,
+        upcoming: (schedule?.occurrences || []).slice(0, 4).map((o: any) => `${o.effectiveDate} $${o.amount}`),
+        message: isRecurringIncome(frequency)
+          ? `Added ${input.description} — $${amt} ${schedule?.scheduleLabel || frequency}, next on ${next || startDate}`
+          : `Added one-time income ${input.description} — $${amt} on ${startDate}`,
+      };
+    }
+
     case "log_income": {
       if (!input.amount || !input.source) return { error: "amount and source are required" };
-      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const todayDate = getUserToday(aiUserTimezone());
+      const when = /^\d{4}-\d{2}-\d{2}/.test(String(input.date || ""))
+        ? String(input.date).slice(0, 10) : todayDate;
+      const linkedLog = await resolveIncomeProfileIds(storage, input.forProfile);
       // P0.3a: validate with the shared insert schema before writing.
       const incomePayload = validateAiPayload(insertIncomeSchema, {
         description: input.source,
         amount: typeof input.amount === "number" ? input.amount : parseFloat(input.amount),
         category: input.category || "salary",
         frequency: "once",
-        date: input.date || todayDate,
+        date: when,
+        startDate: when,
+        sourceType: normalizeIncomeSourceType(input.sourceType, input.source),
+        notes: input.notes,
+        linkedProfiles: linkedLog,
       }, "income");
       if (!incomePayload.ok) return { error: incomePayload.error };
       const created = await storage.createIncome(incomePayload.data);
-      return { success: true, income: created, message: `Logged $${input.amount} income from ${input.source}` };
+      // Money the user says they ALREADY got is actual, not projected — mark
+      // the single occurrence received so it lands in actual cash flow now.
+      await (storage as any).receiveIncomeOccurrence?.(created.id, when, {
+        amount: incomePayload.data.amount, receivedDate: when, notes: input.notes,
+      });
+      return {
+        success: true, income: created, received: true, date: when,
+        message: `Logged $${input.amount} received from ${input.source} on ${when}`,
+      };
     }
 
     case "update_income": {
@@ -11414,17 +11690,40 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const needle = safeLC(input.description);
       const match = incomes.find(i => safeLC(i.description).includes(needle));
       if (!match) return { error: `No income found matching "${input.description}"`, candidates: incomes.slice(0, 5).map(i => i.description) };
-      const allowed = ["description", "amount", "frequency", "category", "date"] as const;
+      const allowed = ["description", "amount", "frequency", "category", "date", "startDate", "recurrenceEnd", "sourceType", "notes"] as const;
       const changes: Record<string, any> = {};
       for (const k of allowed) if (input.changes?.[k] !== undefined) changes[k] = input.changes[k];
-      if (Object.keys(changes).length === 0) return { error: "No valid fields to update — supported: description, amount, frequency, category, date" };
+      if (Object.keys(changes).length === 0) {
+        return { error: "No valid fields to update — supported: description, amount, frequency, category, startDate, recurrenceEnd, sourceType, notes" };
+      }
       if (changes.amount !== undefined) {
         const amt = typeof changes.amount === "number" ? changes.amount : parseFloat(changes.amount);
         if (!isFinite(amt) || amt < 0) return { error: `Invalid amount: ${input.changes.amount}` };
         changes.amount = amt;
       }
-      const updated = await storage.updateIncome(match.id, changes);
-      return { updated: true, income: updated, message: `Updated income "${match.description}"` };
+      if (changes.frequency !== undefined) changes.frequency = normalizeIncomeFrequency(changes.frequency);
+      if (changes.sourceType !== undefined) changes.sourceType = normalizeIncomeSourceType(changes.sourceType, match.description);
+
+      const scope = normalizeEditScope(input.scope);
+      const from = /^\d{4}-\d{2}-\d{2}/.test(String(input.from || "")) ? String(input.from).slice(0, 10) : undefined;
+      // "starting next month" without a date can't be honoured silently — a
+      // future-scoped edit needs the date it takes effect.
+      if (scope === "future" && !from) {
+        return { error: "scope 'future' needs `from` (YYYY-MM-DD) — the date the change takes effect." };
+      }
+      const result = await (storage as any).updateIncomeScoped?.(match.id, changes, scope, from);
+      if (!result?.ok) {
+        // Storage without scoped support still applies a plain series edit.
+        const updated = await storage.updateIncome(match.id, changes as any);
+        return { updated: true, income: updated, scope: "series", message: `Updated income "${match.description}"` };
+      }
+      const suffix = scope === "future" ? ` from ${from} onward (earlier payments keep their old values)`
+        : scope === "occurrence" ? ` for ${from || "that occurrence"} only` : "";
+      return {
+        updated: true, income: result.income, scope, from,
+        newIncomeId: result.newIncomeId,
+        message: `Updated "${match.description}"${suffix}`,
+      };
     }
 
     case "delete_income": {
@@ -11438,9 +11737,174 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       if (matches.length === 0) return { error: `No income found matching "${input.description}"`, candidates: incomes.slice(0, 5).map(i => i.description) };
       if (matches.length > 1) return { error: `Multiple incomes match "${input.description}" — be more specific`, candidates: matches.slice(0, 5).map(i => `${i.description} ($${i.amount})`) };
-      const ok = await storage.deleteIncome(matches[0].id);
-      if (!ok) return { error: `Failed to delete income "${matches[0].description}"` };
-      return { deleted: true, description: matches[0].description, amount: matches[0].amount, id: matches[0].id };
+      const target = matches[0];
+      const scope = normalizeEditScope(input.scope);
+      const from = /^\d{4}-\d{2}-\d{2}/.test(String(input.from || "")) ? String(input.from).slice(0, 10) : undefined;
+      if (scope !== "series" && (storage as any).deleteIncomeScoped) {
+        const result = await (storage as any).deleteIncomeScoped(target.id, scope, from);
+        if (!result?.ok) return { error: result?.error || `Failed to delete income "${target.description}"` };
+        return {
+          deleted: result.deleted, scope, id: target.id, description: target.description,
+          endedAt: result.endedAt,
+          message: scope === "future"
+            ? `Stopped "${target.description}" after ${result.endedAt} — payments already received are untouched`
+            : `Skipped the ${result.endedAt} occurrence of "${target.description}"`,
+        };
+      }
+      const ok = await storage.deleteIncome(target.id);
+      if (!ok) return { error: `Failed to delete income "${target.description}"` };
+      return { deleted: true, scope: "series", description: target.description, amount: target.amount, id: target.id };
+    }
+
+    case "receive_income": {
+      const found = await findIncomeByDescription(storage, input.description);
+      if ("error" in found) return found;
+      const inc = found.income;
+      const schedule = await (storage as any).getIncomeSchedule?.(inc.id, 12);
+      const occurrences: any[] = schedule?.occurrences || [];
+      const recvToday = getUserToday(aiUserTimezone());
+
+      let date = /^\d{4}-\d{2}-\d{2}/.test(String(input.date || "")) ? String(input.date).slice(0, 10) : null;
+      if (!date) {
+        // "mark today's paycheck received" — prefer today's occurrence, else the
+        // most recent one still outstanding. Never silently pick a future date:
+        // money that hasn't been due yet can't have arrived.
+        const outstanding = occurrences.filter(o => o.status !== "received" && o.status !== "skipped");
+        const todays = outstanding.find(o => o.effectiveDate === recvToday);
+        const past = outstanding.filter(o => o.effectiveDate <= recvToday).pop();
+        const chosen = todays || past;
+        if (!chosen) {
+          return {
+            error: `No outstanding "${inc.description}" occurrence on or before ${recvToday} — pass the pay date explicitly.`,
+            upcoming: outstanding.slice(0, 3).map(o => o.effectiveDate),
+          };
+        }
+        date = chosen.date;
+      }
+      const known = occurrences.find(o => o.date === date || o.effectiveDate === date);
+      if (!known) {
+        return {
+          error: `"${inc.description}" has no pay date on ${date}.`,
+          nearby: occurrences.slice(0, 6).map(o => o.effectiveDate),
+        };
+      }
+      if (known.status === "received") {
+        return { alreadyReceived: true, income: inc.description, date: known.effectiveDate, amount: known.receivedAmount ?? known.amount,
+          message: `The ${known.effectiveDate} ${inc.description} was already marked received.` };
+      }
+      const amount = input.amount != null ? Number(input.amount) : undefined;
+      if (amount != null && (!isFinite(amount) || amount < 0)) return { error: `Invalid amount: ${input.amount}` };
+      const result = await (storage as any).receiveIncomeOccurrence?.(inc.id, known.date, {
+        amount, receivedDate: input.receivedDate, notes: input.notes,
+      });
+      const got = amount ?? known.amount;
+      return {
+        received: true, income: inc.description, date: known.date,
+        amount: got,
+        differsFromExpected: amount != null && Math.abs(amount - known.amount) > 0.005 ? known.amount : undefined,
+        nextExpected: result?.nextExpected?.effectiveDate ?? null,
+        message: `Marked ${inc.description} received: $${got} on ${input.receivedDate || known.effectiveDate}`,
+      };
+    }
+
+    case "skip_income_occurrence": {
+      const found = await findIncomeByDescription(storage, input.description);
+      if ("error" in found) return found;
+      const inc = found.income;
+      const schedule = await (storage as any).getIncomeSchedule?.(inc.id, 18);
+      const occurrences: any[] = schedule?.occurrences || [];
+
+      // "skip December" → every occurrence in that month; "skip the 25th" → one.
+      let targets: string[] = [];
+      if (/^\d{4}-\d{2}-\d{2}/.test(String(input.date || ""))) {
+        const d = String(input.date).slice(0, 10);
+        const hit = occurrences.find(o => o.date === d || o.effectiveDate === d);
+        if (!hit) return { error: `"${inc.description}" has no pay date on ${d}.`, nearby: occurrences.slice(0, 6).map(o => o.effectiveDate) };
+        targets = [hit.date];
+      } else if (/^\d{4}-\d{2}$/.test(String(input.month || ""))) {
+        const ym = String(input.month);
+        targets = occurrences.filter(o => o.effectiveDate.slice(0, 7) === ym && o.status !== "received").map(o => o.date);
+        if (targets.length === 0) return { error: `"${inc.description}" has no unpaid occurrences in ${ym}.` };
+      } else {
+        return { error: "Pass either `date` (YYYY-MM-DD) or `month` (YYYY-MM) for the occurrence to skip." };
+      }
+      for (const t of targets) await (storage as any).skipIncomeOccurrence?.(inc.id, t);
+      return {
+        skipped: true, income: inc.description, dates: targets,
+        message: `Skipped ${targets.length === 1 ? targets[0] : `${targets.length} occurrences`} of ${inc.description} — it won't count toward that month's income.`,
+      };
+    }
+
+    case "reschedule_income_occurrence": {
+      const found = await findIncomeByDescription(storage, input.description);
+      if ("error" in found) return found;
+      const inc = found.income;
+      const date = String(input.date || "").slice(0, 10);
+      const newDate = String(input.newDate || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+        return { error: "date and newDate must both be YYYY-MM-DD" };
+      }
+      const schedule = await (storage as any).getIncomeSchedule?.(inc.id, 18);
+      const hit = (schedule?.occurrences || []).find((o: any) => o.date === date || o.effectiveDate === date);
+      if (!hit) return { error: `"${inc.description}" has no pay date on ${date}.`, nearby: (schedule?.occurrences || []).slice(0, 6).map((o: any) => o.effectiveDate) };
+      await (storage as any).rescheduleIncomeOccurrence?.(inc.id, hit.date, newDate);
+      return {
+        rescheduled: true, income: inc.description, from: hit.effectiveDate, to: newDate,
+        message: `Moved the ${hit.effectiveDate} ${inc.description} to ${newDate} — the rest of the series is unchanged.`,
+      };
+    }
+
+    case "get_income_schedule": {
+      const months = Math.min(Math.max(parseInt(String(input.months ?? 6), 10) || 6, 1), 36);
+      const incomes = await storage.getIncomes();
+      if (incomes.length === 0) return { incomes: [], message: "No income is set up yet." };
+      let list = incomes;
+      if (input.description) {
+        const needle = safeLC(input.description);
+        const filtered = incomes.filter(i => safeLC(i.description).includes(needle));
+        if (filtered.length === 0) {
+          return { error: `No income found matching "${input.description}"`, candidates: incomes.slice(0, 5).map(i => i.description) };
+        }
+        list = filtered;
+      }
+      const out = [];
+      for (const inc of list.slice(0, 10)) {
+        const schedule = await (storage as any).getIncomeSchedule?.(inc.id, months);
+        out.push({
+          description: inc.description,
+          amount: inc.amount,
+          schedule: schedule?.scheduleLabel,
+          frequency: schedule?.frequency ?? inc.frequency,
+          nextExpected: schedule?.nextExpected?.effectiveDate ?? null,
+          lastReceived: schedule?.lastReceived?.receivedDate ?? null,
+          annualTotal: schedule?.annualTotal ?? null,
+          upcoming: (schedule?.occurrences || [])
+            .filter((o: any) => o.status !== "received")
+            .slice(0, 8)
+            .map((o: any) => ({ date: o.effectiveDate, amount: o.amount, status: o.status })),
+        });
+      }
+      return { incomes: out };
+    }
+
+    case "get_cash_flow": {
+      const month = /^\d{4}-\d{2}/.test(String(input.month || "")) ? String(input.month).slice(0, 7) : undefined;
+      const summary = await (storage as any).getCashFlowSummary?.(month);
+      if (!summary) return { error: "Cash flow is unavailable on this storage backend." };
+      const label = new Date(`${summary.start}T00:00:00`).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+      return {
+        month: summary.start.slice(0, 7),
+        monthLabel: label,
+        income: summary.income,
+        outgoing: summary.outgoing,
+        projectedNet: summary.projectedNet,
+        actualNet: summary.actualNet,
+        remainingToReceive: summary.remainingToReceive,
+        remainingToPay: summary.remainingToPay,
+        // Both numbers, always — reporting only the projected one would let an
+        // unpaid future paycheck make the user look richer than they are.
+        message: describeCashFlow(summary, label),
+      };
     }
 
     // --- Document management ---
@@ -14216,7 +14680,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const rawResult = await executeTool(toolUse.name, inputWithCtx, userId);
 
           // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
+          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item", "get_income_schedule", "get_cash_flow"];
           if (!readOnlyToolNames.includes(toolUse.name)) {
             invalidateContextCache(userId);
           }
@@ -14321,7 +14785,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
           // Log the action to in-memory history
           const entityName = inp.name || inp.title || inp.description || inp.key || inp.query || inp.trackerName || toolUse.name;
-          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
+          const readOnlyTools = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item", "get_income_schedule", "get_cash_flow"];
           if (!readOnlyTools.includes(toolUse.name) && result && !result.error) {
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
@@ -14844,6 +15308,9 @@ export const READ_ONLY_TOOLS = new Set<string>([
   "search_documents", "retrieve_document", "open_document", "navigate", "set_dashboard_scope",
   "generate_chart", "generate_table", "generate_report", "refresh_ai_summary",
   "get_entity_history",
+  // Income reads: the upcoming pay dates for a series, and the month's net
+  // cash flow (both sides of the ledger). Neither writes anything.
+  "get_income_schedule", "get_cash_flow",
   // System diagnostics (Batch 4) — find/validate/explain are pure reads;
   // refresh_dashboard mutates only server caches (no user data), so it is
   // deliberately here too: no envelope, no undo-ledger row to trip "undo that".
@@ -14907,9 +15374,15 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   update_expense: "update_entity",
   delete_expense: "delete_entity",
   refund_expense: "log_expense",
+  create_income: "create_income",
   log_income: "log_income",
   update_income: "update_entity",
   delete_income: "delete_entity",
+  receive_income: "receive_income",
+  skip_income_occurrence: "skip_income",
+  reschedule_income_occurrence: "update_entity",
+  get_income_schedule: "retrieve",
+  get_cash_flow: "retrieve",
   log_expected_paycheck: "log_paycheck",
   confirm_paycheck_received: "log_paycheck",
   delete_paycheck: "delete_entity",

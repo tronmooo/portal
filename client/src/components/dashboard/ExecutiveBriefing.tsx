@@ -239,6 +239,18 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   });
   // (Removed 2026-08-09: a /api/reminders query. A "remind me at 9am" is a TASK
   // with a due time now, and `tasksRaw` already carries it.)
+  // This month's income pay dates. The Income Expected section reads these, so
+  // the dashboard shows money coming IN beside the bills going out instead of
+  // presenting only one side of the month.
+  const { data: incomeOccurrences = [] } = useQuery<any[]>({
+    queryKey: ["/api/income-occurrences", timelineWindow.start, timelineWindow.end, mode, ...ids],
+    enabled: ready,
+    queryFn: () => apiRequest(
+      "GET",
+      `/api/income-occurrences?start=${timelineWindow.start}&end=${timelineWindow.end}${param ? `&${param.slice(1)}` : ""}`,
+    ).then(r => r.json()),
+    staleTime: 60_000,
+  });
   const { data: goalsRaw = [], isPending: goalsPending } = useQuery<any[]>({
     queryKey: ["/api/goals", mode, ...ids],
     enabled: ready,
@@ -394,8 +406,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     snoozedDocumentIds,
     recentActivity: stats?.recentActivity || [],
     insights, obligations, trackers,
+    incomeOccurrences,
     recommendations: recommendations || [],
-  }), [todayStr, tasks, allBills, allExpiringDocs, habits, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, stats, insights, obligations, trackers, recommendations]);
+  }), [todayStr, tasks, allBills, allExpiringDocs, habits, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, stats, insights, obligations, trackers, incomeOccurrences, recommendations]);
 
   const sections = useMemo(
     () => buildExecutiveSections(sectionInput, prefs),
@@ -503,6 +516,25 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     setTimeout(() => setLeavingKeys(prev => { const n = new Set(prev); n.delete(key); return n; }), 400);
   };
 
+  // Marking ONE income occurrence received — the mirror of paying a bill. The
+  // item key carries the synthetic occurrence id `<incomeId>:<YYYY-MM-DD>`, so
+  // no lookup is needed to know which pay date settled.
+  const receiveIncome = useMutation({
+    mutationFn: async (occurrenceId: string) => {
+      const i = String(occurrenceId).indexOf(":");
+      const incomeId = i < 0 ? occurrenceId : occurrenceId.slice(0, i);
+      const date = i < 0 ? todayStr : occurrenceId.slice(i + 1).slice(0, 10);
+      await apiRequest("POST", `/api/incomes/${incomeId}/occurrences/${date}/receive`, {});
+    },
+    onSuccess: () => {
+      toast({ title: "Income received" });
+      invalidateDomain("incomes");
+      for (const key of ["/api/income-occurrences", "/api/cash-flow", "/api/calendar/timeline"]) {
+        queryClient.invalidateQueries({ queryKey: [key] });
+      }
+    },
+    onError: () => toast({ title: "Couldn't mark it received", variant: "destructive" }),
+  });
   const payBill = useMutation({
     mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
     onSuccess: () => {
@@ -585,6 +617,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         }
         setArmedKey(null);
         run(payBill.mutateAsync(idOf(item)));
+        return;
+      case "received":
+        // No two-tap arming: this records money the user already has, and it is
+        // reversible from the calendar / Finance tab — unlike `pay`, which
+        // moves money out.
+        run(receiveIncome.mutateAsync(item.key.replace(/^income:/, "")));
         return;
       case "complete": run(completeTask.mutateAsync(idOf(item))); return;
       // No two-tap arming: logging a dose is trivially undone from Wellness,

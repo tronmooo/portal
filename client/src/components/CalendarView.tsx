@@ -47,13 +47,14 @@ import {
   Clock, MapPin, Repeat, Trash2, Pencil, X,
   ListTodo, Flame, CreditCard, Users, FileText,
   CheckSquare, ChevronDown, RefreshCw, CheckCircle2, Settings2,
+  Wallet, ArrowDownLeft, ArrowUpRight,
 } from "lucide-react";
 import CalendarManagerPanel from "@/components/CalendarManagerPanel";
 import { WeekdayPicker, isCustomDaySet, seedDaySet, CUSTOM_DAYS_VALUE } from "@/components/recurring/WeekdayPicker";
 import type {
   CalendarTimelineItem, CalendarEvent, EventCategory, Profile,
 } from "@shared/schema";
-import { EVENT_CATEGORY_COLORS } from "@shared/schema";
+import { EVENT_CATEGORY_COLORS, CASH_DIRECTION_COLORS } from "@shared/schema";
 import { isInScope, selfIdsFrom } from "@shared/scope";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { addDaysISO } from "@shared/date-math";
@@ -142,6 +143,8 @@ const TYPE_ICONS: Record<string, any> = {
   task: ListTodo,
   habit: Flame,
   obligation: CreditCard,
+  // Money coming IN gets its own icon so a glance separates it from a bill.
+  income: Wallet,
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -149,6 +152,7 @@ const TYPE_LABELS: Record<string, string> = {
   task: "Task",
   habit: "Habit",
   obligation: "Bill Due",
+  income: "Income",
 };
 
 const CATEGORY_LABELS: Record<EventCategory, string> = {
@@ -167,6 +171,8 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const TYPE_COLORS: Record<string, string> = {
   event: "#4F98A3", task: "#E5A545", obligation: "#C75B5B",
   habit: "#8B5CF6", goal: "#10B981", tracker: "#6366F1",
+  // Green in / red out — the one distinction every money surface makes.
+  income: CASH_DIRECTION_COLORS.in,
 };
 
 // ─── Event Create/Edit Dialog ──────────────────────────────────────────────────
@@ -612,7 +618,14 @@ export function EventDetailDialog({
   const Icon = TYPE_ICONS[item.type] || CalendarIcon;
   // A single dated occurrence of a recurring bill — deleting it skips that date
   // rather than destroying the whole series.
-  const isOccurrence = item.type === "obligation" && !!item.meta?.occurrenceId;
+  const isOccurrence = (item.type === "obligation" || item.type === "income") && !!item.meta?.occurrenceId;
+  // Money direction — "in" for income, "out" for a bill. The server stamps it
+  // on every money-bearing item; fall back to the type so an older cached
+  // timeline still renders the right sign.
+  const direction: "in" | "out" | undefined =
+    (item as any).direction ?? (item.type === "income" ? "in" : item.type === "obligation" ? "out" : undefined);
+  const isIncome = item.type === "income";
+  const incomeReceived = isIncome && item.meta?.status === "received";
 
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -638,6 +651,32 @@ export function EventDetailDialog({
     }
   };
 
+  /**
+   * Receive / skip ONE income occurrence straight from the calendar. Mirrors
+   * billOccurrenceAction: same shape, opposite direction of money. Receiving
+   * turns projected money into actual money, so every cash-flow surface has to
+   * resync — not just the calendar.
+   */
+  const incomeOccurrenceAction = async (action: "receive" | "skip" | "unreceive") => {
+    const occDate = String(item.meta?.occurrenceId || "").split(":")[1] || String(item.date || "").slice(0, 10);
+    try {
+      await apiRequest("POST", `/api/incomes/${item.sourceId}/occurrences/${occDate}/${action}`, {});
+      for (const key of ["/api/calendar/timeline", "/api/incomes", "/api/income-occurrences", "/api/cash-flow", "/api/dashboard-enhanced", "/api/stats"]) {
+        queryClient.invalidateQueries({ queryKey: [key] });
+      }
+      void invalidateDomains("incomes", "dashboard");
+      toast({
+        title: action === "receive" ? "Marked received"
+          : action === "skip" ? "Income skipped"
+          : "Marked not received",
+        description: item.title,
+      });
+      onClose();
+    } catch (e: any) {
+      toast({ title: "Couldn't update the income", description: e?.message || "Please try again.", variant: "destructive" });
+    }
+  };
+
   const linkedProfileNames = item.linkedProfiles
     .map(id => profiles.find(p => p.id === id)?.name)
     .filter(Boolean);
@@ -647,6 +686,12 @@ export function EventDetailDialog({
   // deleting one week's Lawn Care silently destroyed the entire series
   // (2026-07-29 tester report).
   const isRecurringEvent = item.type === "event" && !!item.meta?.recurrence && item.meta.recurrence !== "none";
+  // A recurring INCOME needs the same three-way delete scope a repeating event
+  // does — "just this pay date", "this and future", "the whole series" — so
+  // deleting one paycheck can never wipe the ones already received.
+  const isRecurringIncomeItem = item.type === "income"
+    && !!item.meta?.recurrence && item.meta.recurrence !== "once" && item.meta.recurrence !== "none";
+  const needsDeleteScope = isRecurringEvent || isRecurringIncomeItem;
   type DeleteScope = "one" | "future" | "all";
   const deleteMutation = useMutation<void, Error, DeleteScope, { prevTimeline: [readonly unknown[], unknown][]; prevEntity: [readonly unknown[], unknown][]; entityKey: string }>({
     mutationFn: async (scope) => {
@@ -677,12 +722,27 @@ export function EventDetailDialog({
         } else {
           await apiRequest("DELETE", `/api/obligations/${item.sourceId}`);
         }
+      } else if (item.type === "income") {
+        // An income occurrence is ONE pay date in a series. "This date" skips
+        // it, "this and future" ends the series (keeping what was already
+        // received), "all" removes the series outright.
+        const occDate = String(item.date || "").slice(0, 10);
+        if (scope === "one" && item.meta?.occurrenceId) {
+          await apiRequest("POST", `/api/incomes/${item.sourceId}/occurrences/${occDate}/skip`, {});
+        } else if (scope === "future") {
+          await apiRequest("DELETE", `/api/incomes/${item.sourceId}?scope=future&from=${occDate}`);
+        } else {
+          await apiRequest("DELETE", `/api/incomes/${item.sourceId}`);
+        }
       }
     },
     onMutate: async (scope) => {
       // Optimistically remove from the timeline + the underlying entity list so
       // the dialog can close and the row vanishes instantly.
-      const entityKey = item.type === "event" ? "/api/events" : item.type === "task" ? "/api/tasks" : "/api/obligations";
+      const entityKey = item.type === "event" ? "/api/events"
+        : item.type === "task" ? "/api/tasks"
+        : item.type === "income" ? "/api/incomes"
+        : "/api/obligations";
       await queryClient.cancelQueries({ queryKey: ["/api/calendar/timeline"] });
       await queryClient.cancelQueries({ queryKey: [entityKey] });
       const prevTimeline = queryClient.getQueriesData({ queryKey: ["/api/calendar/timeline"] });
@@ -690,7 +750,8 @@ export function EventDetailDialog({
       // For a single occurrence, drop only that dated entry; scoped recurring-
       // event deletes drop this date / this date forward; otherwise drop every
       // timeline row sourced from the deleted entity.
-      const occId = item.type === "obligation" ? item.meta?.occurrenceId : undefined;
+      const occId = (item.type === "obligation" || (item.type === "income" && scope === "one"))
+        ? item.meta?.occurrenceId : undefined;
       const occDate = String(item.date || "").slice(0, 10);
       const dropFromTimeline = (it: any) => {
         if (!it) return false;
@@ -719,8 +780,9 @@ export function EventDetailDialog({
       // Cache bus (not bare queryClient calls) so the dashboard's Upcoming
       // section — and every OTHER open tab, via the bus's BroadcastChannel —
       // refreshes from this delete without a hard reload.
-      void invalidateDomains("events", "tasks", "obligations", "liabilities", "dashboard");
+      void invalidateDomains("events", "tasks", "obligations", "liabilities", "incomes", "dashboard");
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash-flow"] });
       toast({
         title: item.type === "obligation" && item.meta?.occurrenceId
           ? `Removed ${item?.title || "occurrence"} on ${fmtDateFull(item.date)}`
@@ -901,6 +963,48 @@ export function EventDetailDialog({
             </div>
           )}
 
+          {/* Income occurrence — money coming IN. Expected vs received is the
+              distinction that matters here: an upcoming paycheck is projected
+              money, not money you have. */}
+          {isIncome && (
+            <div className="flex items-center gap-2 text-sm flex-wrap">
+              <ArrowDownLeft className="h-3.5 w-3.5" style={{ color: CASH_DIRECTION_COLORS.in }} />
+              <span className="font-medium" style={{ color: CASH_DIRECTION_COLORS.in }}>
+                +${Number(item.meta?.receivedAmount ?? item.meta?.amount ?? 0).toLocaleString()}
+              </span>
+              {item.meta?.recurrence && item.meta.recurrence !== "once" && (
+                <span className="text-muted-foreground">— {item.meta.recurrence}</span>
+              )}
+              {item.meta?.sourceType && (
+                <Badge variant="outline" className="text-xs h-5">{String(item.meta.sourceType).replace(/_/g, " ")}</Badge>
+              )}
+              <Badge
+                variant="outline"
+                className={`text-xs h-5 ${
+                  item.meta?.status === "received" ? "text-emerald-600 border-emerald-600"
+                  : item.meta?.status === "overdue" ? "text-red-600 border-red-600"
+                  : item.meta?.status === "due_today" ? "text-amber-600 border-amber-600"
+                  : item.meta?.status === "skipped" ? "text-muted-foreground"
+                  : ""
+                }`}
+              >
+                {item.meta?.status === "received" ? "Received"
+                  : item.meta?.status === "overdue" ? "Not received"
+                  : item.meta?.status === "due_today" ? "Expected today"
+                  : item.meta?.status === "skipped" ? "Skipped"
+                  : "Expected"}
+              </Badge>
+              {/* An amount that differs from the expected one is worth showing
+                  plainly rather than quietly overwriting the plan. */}
+              {item.meta?.receivedAmount != null
+                && Math.abs(Number(item.meta.receivedAmount) - Number(item.meta.amount)) > 0.005 && (
+                <span className="text-xs text-muted-foreground">
+                  (expected ${Number(item.meta.amount).toLocaleString()})
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Linked profiles */}
           {linkedProfileNames.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap">
@@ -942,6 +1046,29 @@ export function EventDetailDialog({
               <Button variant="ghost" size="sm" onClick={() => billOccurrenceAction("skipped")} data-testid="btn-occ-skip">Skip</Button>
             </>
           )}
+          {isIncome && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setLocation("/dashboard/finance"); onClose(); }}
+              data-testid="btn-occ-open-income"
+            >
+              <Wallet className="h-3.5 w-3.5 mr-1" />Open income
+            </Button>
+          )}
+          {isIncome && item.meta?.occurrenceId && !incomeReceived && item.meta?.status !== "skipped" && (
+            <>
+              <Button variant="outline" size="sm" onClick={() => incomeOccurrenceAction("receive")} data-testid="btn-income-received">
+                <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Mark received
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => incomeOccurrenceAction("skip")} data-testid="btn-income-skip">Skip</Button>
+            </>
+          )}
+          {isIncome && incomeReceived && (
+            <Button variant="ghost" size="sm" onClick={() => incomeOccurrenceAction("unreceive")} data-testid="btn-income-unreceive">
+              Mark not received
+            </Button>
+          )}
           {(item.type === "event" || item.type === "task" || item.type === "obligation") && (
             <Button
               type="button"
@@ -957,7 +1084,7 @@ export function EventDetailDialog({
               <Pencil className="h-3.5 w-3.5 mr-1" />Edit
             </Button>
           )}
-          {(item.type === "event" || item.type === "task" || item.type === "obligation") && (
+          {(item.type === "event" || item.type === "task" || item.type === "obligation" || item.type === "income") && (
             <Button
               type="button"
               variant="destructive"
@@ -983,30 +1110,32 @@ export function EventDetailDialog({
         <AlertDialogContent data-testid="dialog-confirm-delete-event">
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {isRecurringEvent
+              {needsDeleteScope
                 ? `Delete "${item.title}"?`
                 : isOccurrence ? "Remove this date?" : `Delete "${item.title}"?`}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {isRecurringEvent
+              {isRecurringIncomeItem
+                ? `This income repeats (${item.meta?.recurrence}). Choose what to delete — income you've already received is never removed.`
+                : isRecurringEvent
                 ? `This event repeats (${item.meta?.recurrence}). Choose what to delete — removing one date never touches the rest of the series.`
                 : isOccurrence
                   ? "This skips this single occurrence. The rest of the series stays on your calendar."
                   : "This permanently removes it from your calendar and can't be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {isRecurringEvent ? (
+          {needsDeleteScope ? (
             <div className="flex flex-col gap-2">
               <Button
                 variant="outline"
                 onClick={() => { setConfirmDelete(false); deleteMutation.mutate("one"); onClose(); }}
                 data-testid="btn-delete-scope-one"
-              >Just this date ({fmtDateFull(item.date)})</Button>
+              >{isRecurringIncomeItem ? "Just this payment" : "Just this date"} ({fmtDateFull(item.date)})</Button>
               <Button
                 variant="outline"
                 onClick={() => { setConfirmDelete(false); deleteMutation.mutate("future"); onClose(); }}
                 data-testid="btn-delete-scope-future"
-              >This and following dates</Button>
+              >{isRecurringIncomeItem ? "This and all future payments" : "This and following dates"}</Button>
               <Button
                 variant="destructive"
                 onClick={() => { setConfirmDelete(false); deleteMutation.mutate("all"); onClose(); }}
@@ -1098,6 +1227,24 @@ function DayAgenda({
                 {item.location && (
                   <span className="text-xs text-muted-foreground flex items-center gap-0.5">
                     <MapPin className="h-2 w-2" />{item.location}
+                  </span>
+                )}
+                {/* Money items read their direction from the signed `amount`
+                    the server stamps: +$2,400 arriving vs -$120 leaving. The
+                    sign is the whole point — a bare "$2,400" on a calendar
+                    doesn't say which way the money went. */}
+                {typeof (item as any).amount === "number" && (item as any).amount !== 0 && (
+                  <span
+                    className="text-xs font-medium tabular-nums"
+                    style={{ color: (item as any).amount > 0 ? CASH_DIRECTION_COLORS.in : CASH_DIRECTION_COLORS.out }}
+                    data-testid={`agenda-amount-${item.id}`}
+                  >
+                    {(item as any).amount > 0 ? "+" : "-"}${Math.abs((item as any).amount).toLocaleString()}
+                  </span>
+                )}
+                {item.type === "income" && item.meta?.status && item.meta.status !== "received" && (
+                  <span className="text-2xs text-muted-foreground">
+                    {item.meta.status === "overdue" ? "not received" : "expected"}
                   </span>
                 )}
               </div>
@@ -1484,6 +1631,9 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
           // (user decision 2026-07-01); manage them in the obligations tab.
           { key: "event", label: "Events", activeClass: "bg-blue-500/20 text-blue-400 border-blue-500/40" },
           { key: "task", label: "Tasks", activeClass: "bg-purple-500/20 text-purple-400 border-purple-500/40" },
+          // Income is first-class on the calendar, so it gets its own pill —
+          // green, matching the money-in colour used everywhere else.
+          { key: "income", label: "Income", activeClass: "bg-emerald-500/20 text-emerald-400 border-emerald-500/40" },
         ].map(f => (
           <button
             key={f.key}
@@ -1634,12 +1784,16 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                           task: '#8b5cf6',
                           obligation: '#f59e0b',
                           habit: '#10b981',
+                          income: CASH_DIRECTION_COLORS.in,
                         };
                         const typesSeen = new Set<string>();
                         return (
                           <div className="hidden sm:flex gap-0.5 justify-center mt-auto pt-0.5">
                             {dayItems.map((ev: any, i: number) => {
-                              const type = ev.category === 'finance' ? 'obligation' : ev.type === 'task' ? 'task' : ev.type === 'habit' ? 'habit' : ev.type === 'obligation' ? 'obligation' : 'event';
+                              // Income is checked FIRST: an income item also
+                              // carries a finance-ish category, and the old
+                              // chain would have painted it as a bill.
+                              const type = ev.type === 'income' ? 'income' : ev.category === 'finance' ? 'obligation' : ev.type === 'task' ? 'task' : ev.type === 'habit' ? 'habit' : ev.type === 'obligation' ? 'obligation' : 'event';
                               if (typesSeen.has(type)) return null;
                               typesSeen.add(type);
                               return <div key={i} className="w-1 h-1 rounded-full" style={{ background: categoryDotColors[type] || '#6b7280' }} />;
@@ -1661,7 +1815,8 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             {[
               { label: "Event", color: "#3b82f6" },
               { label: "Task", color: "#8b5cf6" },
-              { label: "Bill", color: "#f59e0b" },
+              { label: "Bill (out)", color: "#f59e0b" },
+              { label: "Income (in)", color: CASH_DIRECTION_COLORS.in },
               { label: "Habit", color: "#10b981" },
             ].map((l) => (
               <span key={l.label} className="inline-flex items-center gap-1.5">
@@ -1890,7 +2045,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                 </div>
                 <div className="space-y-1">
                   {events.map((ev: any, i: number) => {
-                    const typeColor = ev.type === 'task' ? '#8b5cf6' : ev.type === 'obligation' ? '#f59e0b' : ev.type === 'habit' ? '#10b981' : '#3b82f6';
+                    const typeColor = ev.type === 'income' ? CASH_DIRECTION_COLORS.in : ev.type === 'task' ? '#8b5cf6' : ev.type === 'obligation' ? '#f59e0b' : ev.type === 'habit' ? '#10b981' : '#3b82f6';
                     return (
                       <div key={`${ev.id}-${i}`}
                         className={`flex items-start gap-3 p-3 rounded-xl bg-card border border-border/40 cursor-pointer pressable hover:bg-muted/40 transition-all ${ev.completed ? "opacity-60" : ""}`}

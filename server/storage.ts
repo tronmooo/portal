@@ -32,9 +32,16 @@ import {
   type Goal, type InsertGoal,
   type EntityLink, type InsertEntityLink,
   type Income, type InsertIncome,
+  type IncomeReceipt, type InsertIncomeReceipt,
   MOOD_SCORES,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
+import {
+  generateIncomeSchedule, nextExpectedOccurrence, incomeOccurrenceDates,
+  normalizeIncomeFrequency, isRecurringIncome, describeIncomeSchedule,
+  totalIncomeOccurrences, normalizeEditScope,
+} from "@shared/income-schedule";
+import { addMonthsISO, addDaysISO } from "@shared/date-math";
 
 // NOTE: the `Reminder` entity was retired on 2026-08-09. Portol models
 // scheduled life with EVENTS (things that happen) and TASKS (things you do),
@@ -202,11 +209,28 @@ export interface IStorage {
   getPreference(key: string): Promise<string | null>;
   setPreference(key: string, value: string): Promise<void>;
 
-  // Income
+  // Income — first-class money-in. A series row plus derived occurrences
+  // (shared/income-schedule.ts) and receipts, mirroring liabilities/payments.
   getIncomes(profileIds?: string[]): Promise<Income[]>;
+  getIncome?(id: string): Promise<Income | undefined>;
   createIncome(data: InsertIncome): Promise<Income>;
   updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined>;
   deleteIncome(id: string): Promise<boolean>;
+  getIncomeSchedule?(id: string, months?: number): Promise<any | null>;
+  getIncomeOccurrences?(start: string, end: string, profileIds?: string[]): Promise<any[]>;
+  getIncomeReceipts?(incomeId?: string): Promise<IncomeReceipt[]>;
+  createIncomeReceipt?(data: InsertIncomeReceipt): Promise<IncomeReceipt>;
+  deleteIncomeReceipt?(id: string): Promise<boolean>;
+  receiveIncomeOccurrence?(id: string, date: string, opts?: { amount?: number; receivedDate?: string; depositAccount?: string; method?: string; notes?: string }): Promise<any>;
+  unreceiveIncomeOccurrence?(id: string, date: string): Promise<any>;
+  skipIncomeOccurrence?(id: string, date: string): Promise<any>;
+  rescheduleIncomeOccurrence?(id: string, date: string, newDate: string): Promise<any>;
+  setIncomeOccurrenceFields?(id: string, date: string, patch: { amount?: number; notes?: string }): Promise<any>;
+  pauseIncome?(id: string, until?: string): Promise<any>;
+  resumeIncome?(id: string): Promise<any>;
+  updateIncomeScoped?(id: string, changes: Partial<Income>, scope?: string, fromDate?: string): Promise<any>;
+  deleteIncomeScoped?(id: string, scope?: string, fromDate?: string): Promise<any>;
+  getCashFlowSummary?(month?: string, profileIds?: string[]): Promise<any>;
 
   // Soft-delete restore & misc
   restoreTask(id: string): Promise<boolean>;
@@ -2247,22 +2271,234 @@ export class MemStorage implements IStorage {
     this.preferences.set(key, value);
   }
 
-  // Income stubs (in-memory)
+  // Income (in-memory) — same contract as SupabaseStorage: a series row whose
+  // occurrences are derived by shared/income-schedule.ts, plus receipts.
   private incomes = new Map<string, Income>();
+  private incomeReceipts = new Map<string, IncomeReceipt>();
+  private memToday(): string { return new Date().toLocaleDateString("en-CA"); }
+
   async getIncomes(): Promise<Income[]> { return Array.from(this.incomes.values()); }
+  async getIncome(id: string): Promise<Income | undefined> { return this.incomes.get(id); }
   async createIncome(data: InsertIncome): Promise<Income> {
-    const income: Income = { ...data, id: randomUUID(), createdAt: new Date().toISOString() } as Income;
+    const anchor = String((data as any).startDate || data.date || this.memToday()).slice(0, 10);
+    const income: Income = {
+      ...data,
+      id: randomUUID(),
+      frequency: normalizeIncomeFrequency((data as any).frequency),
+      date: anchor,
+      startDate: anchor,
+      status: (data as any).status || "active",
+      currency: (data as any).currency || "usd",
+      linkedProfiles: (data as any).linkedProfiles || [],
+      tags: (data as any).tags || [],
+      fields: (data as any).fields || {},
+      createdAt: new Date().toISOString(),
+    } as Income;
     this.incomes.set(income.id, income);
     return income;
   }
   async updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined> {
     const existing = this.incomes.get(id);
     if (!existing) return undefined;
-    const updated = { ...existing, ...data };
+    const updated: Income = { ...existing, ...data };
+    // fields merges (per-occurrence exceptions must survive a settings patch).
+    if (data.fields !== undefined) updated.fields = { ...(existing.fields || {}), ...(data.fields || {}) };
+    if (data.date !== undefined) updated.startDate = data.date;
+    if (data.startDate !== undefined) updated.date = data.startDate ?? undefined;
+    if (data.frequency !== undefined) updated.frequency = normalizeIncomeFrequency(data.frequency);
     this.incomes.set(id, updated);
     return updated;
   }
   async deleteIncome(id: string): Promise<boolean> { return this.incomes.delete(id); }
+
+  async getIncomeReceipts(incomeId?: string): Promise<IncomeReceipt[]> {
+    const all = Array.from(this.incomeReceipts.values());
+    return incomeId ? all.filter(r => r.incomeId === incomeId) : all;
+  }
+  async createIncomeReceipt(data: InsertIncomeReceipt): Promise<IncomeReceipt> {
+    const receipt: IncomeReceipt = {
+      id: randomUUID(),
+      incomeId: data.incomeId,
+      occurrenceDate: data.occurrenceDate ?? null,
+      receivedDate: String(data.receivedDate).slice(0, 10),
+      amount: Number(data.amount) || 0,
+      depositAccount: data.depositAccount ?? null,
+      method: data.method ?? null,
+      notes: data.notes ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    this.incomeReceipts.set(receipt.id, receipt);
+    return receipt;
+  }
+  async deleteIncomeReceipt(id: string): Promise<boolean> { return this.incomeReceipts.delete(id); }
+
+  private async patchIncomeOccurrence(id: string, date: string, patch: Record<string, any>): Promise<any> {
+    const income = this.incomes.get(id);
+    if (!income) return null;
+    const occ: Record<string, any> = { ...((income.fields || {}).occurrences || {}) };
+    const merged = { ...(occ[date] || {}), ...patch };
+    for (const k of Object.keys(merged)) if (merged[k] === null) delete merged[k];
+    if (Object.keys(merged).length === 0) delete occ[date];
+    else occ[date] = merged;
+    await this.updateIncome(id, { fields: { occurrences: occ } } as any);
+    return this.getIncomeSchedule(id);
+  }
+
+  async getIncomeSchedule(id: string, months = 12): Promise<any | null> {
+    const income = this.incomes.get(id);
+    if (!income) return null;
+    const todayISO = this.memToday();
+    const receipts = await this.getIncomeReceipts(id);
+    const occurrences = generateIncomeSchedule(income, receipts, {
+      todayISO, windowStart: addMonthsISO(todayISO, -2), windowEnd: addMonthsISO(todayISO, months),
+    });
+    const next = nextExpectedOccurrence(income, receipts, todayISO);
+    return {
+      id: income.id, description: income.description, name: income.description,
+      amount: income.amount, frequency: income.frequency,
+      isRecurring: isRecurringIncome(income.frequency),
+      scheduleLabel: describeIncomeSchedule(income),
+      startDate: income.startDate ?? income.date ?? null,
+      recurrenceEnd: income.recurrenceEnd ?? null,
+      status: income.status || "active",
+      nextExpected: next ? { date: next.date, effectiveDate: next.effectiveDate, amount: next.amount, occurrenceId: next.occurrenceId } : null,
+      windowTotals: totalIncomeOccurrences(occurrences),
+      occurrences, receipts,
+    };
+  }
+
+  async getIncomeOccurrences(start: string, end: string): Promise<any[]> {
+    const todayISO = this.memToday();
+    const out: any[] = [];
+    for (const inc of this.incomes.values()) {
+      const receipts = await this.getIncomeReceipts(inc.id);
+      for (const o of generateIncomeSchedule(inc, receipts, {
+        todayISO, windowStart: String(start).slice(0, 10), windowEnd: String(end).slice(0, 10),
+      })) {
+        out.push({ ...o, incomeId: inc.id, description: inc.description, category: inc.category, direction: "in" });
+      }
+    }
+    out.sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate));
+    return out;
+  }
+
+  async receiveIncomeOccurrence(id: string, date: string, opts: { amount?: number; receivedDate?: string; depositAccount?: string; method?: string; notes?: string } = {}): Promise<any> {
+    const income = this.incomes.get(id);
+    if (!income) return null;
+    const occDate = String(date).slice(0, 10);
+    const override = ((income.fields || {}).occurrences || {})[occDate] || {};
+    const amount = opts.amount != null ? Number(opts.amount)
+      : (override.amount != null ? Number(override.amount) : Number(income.amount) || 0);
+    const receivedDate = String(opts.receivedDate || override.movedTo || occDate).slice(0, 10);
+    for (const r of await this.getIncomeReceipts(id)) {
+      if ((r.occurrenceDate || r.receivedDate) === occDate) this.incomeReceipts.delete(r.id);
+    }
+    const receipt = await this.createIncomeReceipt({
+      incomeId: id, occurrenceDate: occDate, receivedDate, amount,
+      depositAccount: opts.depositAccount ?? null, method: opts.method ?? null, notes: opts.notes ?? null,
+    });
+    return this.patchIncomeOccurrence(id, occDate, {
+      status: "received", receiptId: receipt.id, receivedAmount: amount, receivedDate,
+    });
+  }
+
+  async unreceiveIncomeOccurrence(id: string, date: string): Promise<any> {
+    const occDate = String(date).slice(0, 10);
+    for (const r of await this.getIncomeReceipts(id)) {
+      if ((r.occurrenceDate || r.receivedDate) === occDate) this.incomeReceipts.delete(r.id);
+    }
+    return this.patchIncomeOccurrence(id, occDate, { status: null, receiptId: null, receivedAmount: null, receivedDate: null });
+  }
+
+  async skipIncomeOccurrence(id: string, date: string): Promise<any> {
+    const occDate = String(date).slice(0, 10);
+    for (const r of await this.getIncomeReceipts(id)) {
+      if ((r.occurrenceDate || r.receivedDate) === occDate) this.incomeReceipts.delete(r.id);
+    }
+    return this.patchIncomeOccurrence(id, occDate, { status: "skipped", receiptId: null, receivedAmount: null, receivedDate: null });
+  }
+
+  async rescheduleIncomeOccurrence(id: string, date: string, newDate: string): Promise<any> {
+    return this.patchIncomeOccurrence(id, String(date).slice(0, 10), { movedTo: String(newDate).slice(0, 10) });
+  }
+
+  async setIncomeOccurrenceFields(id: string, date: string, patch: { amount?: number; notes?: string }): Promise<any> {
+    const clean: Record<string, any> = {};
+    if (patch.amount != null) clean.amount = Number(patch.amount);
+    if (patch.notes !== undefined) clean.notes = patch.notes || null;
+    return this.patchIncomeOccurrence(id, String(date).slice(0, 10), clean);
+  }
+
+  async pauseIncome(id: string, until?: string): Promise<any> {
+    await this.updateIncome(id, { status: "paused", fields: { paused: true, pausedUntil: until ?? null } } as any);
+    return this.getIncomeSchedule(id);
+  }
+
+  async resumeIncome(id: string): Promise<any> {
+    await this.updateIncome(id, { status: "active", fields: { paused: false, pausedUntil: null } } as any);
+    return this.getIncomeSchedule(id);
+  }
+
+  async updateIncomeScoped(id: string, changes: Partial<Income>, scope: string = "series", fromDate?: string): Promise<any> {
+    const s = normalizeEditScope(scope);
+    const income = this.incomes.get(id);
+    if (!income) return { ok: false, scope: s, error: "Income not found" };
+    const todayISO = this.memToday();
+    if (s === "occurrence") {
+      const date = String(fromDate || income.startDate || income.date || todayISO).slice(0, 10);
+      const patch: Record<string, any> = {};
+      if (changes.amount != null) patch.amount = Number(changes.amount);
+      if ((changes as any).notes !== undefined) patch.notes = (changes as any).notes;
+      if ((changes as any).date) patch.movedTo = String((changes as any).date).slice(0, 10);
+      await this.patchIncomeOccurrence(id, date, patch);
+      return { ok: true, income: this.incomes.get(id), scope: s };
+    }
+    if (s === "future") {
+      const splitAt = String(fromDate || todayISO).slice(0, 10);
+      const anchor = String(income.startDate || income.date || "").slice(0, 10);
+      if (!anchor || splitAt <= anchor) {
+        return { ok: true, income: await this.updateIncome(id, changes), scope: s };
+      }
+      const upcoming = incomeOccurrenceDates(income, splitAt, addMonthsISO(splitAt, 24), 60);
+      const newAnchor = upcoming[0] || splitAt;
+      await this.updateIncome(id, { recurrenceEnd: addDaysISO(newAnchor, -1) } as any);
+      const fields = { ...(income.fields || {}) } as any;
+      delete fields.occurrences;
+      const created = await this.createIncome({
+        description: (changes.description ?? income.description) as string,
+        amount: Number(changes.amount ?? income.amount),
+        category: (changes.category ?? income.category) as string,
+        frequency: (changes.frequency ?? income.frequency) as string,
+        date: newAnchor, startDate: newAnchor,
+        sourceType: (changes.sourceType ?? income.sourceType) as any,
+        linkedProfiles: (changes.linkedProfiles ?? income.linkedProfiles) as string[],
+        tags: (changes.tags ?? income.tags) as string[],
+        fields,
+      } as any);
+      return { ok: true, income: created, newIncomeId: created.id, scope: s };
+    }
+    return { ok: true, income: await this.updateIncome(id, changes), scope: s };
+  }
+
+  async deleteIncomeScoped(id: string, scope: string = "series", fromDate?: string): Promise<any> {
+    const s = normalizeEditScope(scope);
+    const income = this.incomes.get(id);
+    if (!income) return { ok: false, scope: s, deleted: false, error: "Income not found" };
+    const todayISO = this.memToday();
+    if (s === "occurrence") {
+      const date = String(fromDate || todayISO).slice(0, 10);
+      await this.skipIncomeOccurrence(id, date);
+      return { ok: true, scope: s, deleted: false, endedAt: date };
+    }
+    if (s === "future") {
+      const from = String(fromDate || todayISO).slice(0, 10);
+      const anchor = String(income.startDate || income.date || "").slice(0, 10);
+      if (!anchor || from <= anchor) return { ok: this.incomes.delete(id), scope: s, deleted: true };
+      await this.updateIncome(id, { recurrenceEnd: addDaysISO(from, -1), status: "ended" } as any);
+      return { ok: true, scope: s, deleted: false, endedAt: addDaysISO(from, -1) };
+    }
+    return { ok: this.incomes.delete(id), scope: s, deleted: true };
+  }
 
   // Soft-delete restore stubs
   async restoreTask(_id: string): Promise<boolean> { return false; }

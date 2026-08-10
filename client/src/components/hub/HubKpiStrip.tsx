@@ -125,6 +125,12 @@ export function HubKpiStrip() {
     staleTime: 60_000,
     placeholderData: undefined,
   });
+  const { data: cashFlowSummary } = useQuery<any>({
+    queryKey: ["/api/cash-flow", mode, ...ids],
+    queryFn: () => apiRequest("GET", `/api/cash-flow${param}`).then(r => r.json()),
+    staleTime: 60_000,
+    placeholderData: undefined,
+  });
   const { data: trackers, isPending: trackersPending } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", mode, ...ids],
     queryFn: () => apiRequest("GET", `/api/trackers${param}`).then(r => r.json()),
@@ -138,14 +144,21 @@ export function HubKpiStrip() {
   const snap = enhanced?.financeSnapshot;
   const netWorth = snap != null ? (snap.totalAssetValue ?? 0) - (snap.totalLiabilities ?? 0) : null;
 
-  // CASH FLOW — mirrors HeroKPISection's definition exactly: monthly incomes
-  // minus (month expenses + monthlyized active obligations).
+  // CASH FLOW — income MINUS everything going out, from the server's
+  // occurrence-based totals: this month's real pay dates against this month's
+  // real bills. The chip shows the PROJECTED net (the whole month's plan);
+  // the popup breaks out actual-so-far. The old client-side sum of raw income
+  // amounts is kept only as a fallback for a stale/failed fetch.
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
-  const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
+  const monthlyIncome = cashFlowSummary?.income
+    ? Number(cashFlowSummary.income.projected || 0)
+    : incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
   const monthlySpend = snap?.totalMonthlySpend ?? stats?.monthlySpend;
-  const cashFlow = monthlySpend != null
-    ? monthlyIncome - (monthlySpend + (snap?.monthlyObligationTotal ?? 0))
-    : null;
+  const cashFlow = cashFlowSummary
+    ? Number(cashFlowSummary.projectedNet || 0)
+    : monthlySpend != null
+      ? monthlyIncome - (monthlySpend + (snap?.monthlyObligationTotal ?? 0))
+      : null;
 
   // computeHealthScore returns null for BOTH "still loading" and "this scope
   // has no health/fitness readings to score" — and the chip rendered "—" for

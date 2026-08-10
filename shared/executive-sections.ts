@@ -32,7 +32,7 @@ import { isMedicationTracker, computeMissedDoses } from "./medication-doses";
 import { parseRecurringMeta, kindDef, type RecurringKind } from "./recurring-dates";
 
 export type ExecSectionId =
-  | "immediate" | "today" | "habits" | "bills" | "upcoming"
+  | "immediate" | "today" | "habits" | "bills" | "income" | "upcoming"
   | "importantDates" | "documents" | "health" | "activity" | "insights"
   | "recommendations";
 
@@ -59,7 +59,9 @@ export interface ExecSection {
 
 /** The order the user reads them in. */
 export const SECTION_DISPLAY_ORDER: ExecSectionId[] = [
-  "immediate", "today", "habits", "bills", "upcoming",
+  // Income reads directly after Bills: the two halves of the month's money
+  // sit together, so "what's going out" and "what's coming in" are one glance.
+  "immediate", "today", "habits", "bills", "income", "upcoming",
   "importantDates", "documents", "health", "activity", "insights",
   "recommendations",
 ];
@@ -67,7 +69,7 @@ export const SECTION_DISPLAY_ORDER: ExecSectionId[] = [
 /** The order they get to claim a record. Most specific first. */
 const SECTION_CLAIM_ORDER: ExecSectionId[] = [
   "immediate", "health", "importantDates", "habits", "documents",
-  "bills", "today", "upcoming", "activity", "insights",
+  "bills", "income", "today", "upcoming", "activity", "insights",
   // Last: AI recommendations are generated text about the rest of the tab,
   // never a record another section wants.
   "recommendations",
@@ -78,6 +80,7 @@ const TITLES: Record<ExecSectionId, string> = {
   today: "Today's Agenda",
   habits: "Habits Due Today",
   bills: "Bills & Financial Obligations",
+  income: "Income Expected",
   upcoming: "Upcoming · Next 7 Days",
   importantDates: "Important Dates",
   documents: "Documents & Expirations",
@@ -92,6 +95,7 @@ const ACCENTS: Record<ExecSectionId, string> = {
   today:     "199 89% 60%",  // sky
   habits:    "155 65% 45%",  // emerald
   bills:     "48 96% 53%",   // yellow
+  income:    "155 65% 45%",  // emerald — money in, the mirror of bills
   upcoming:  "239 84% 67%",  // indigo
   importantDates: "330 80% 62%", // pink
   documents: "205 90% 58%",  // blue
@@ -264,7 +268,7 @@ export function buildExecutiveSections(
 
   // Candidates per section, before claiming.
   const cand: Record<ExecSectionId, AttentionItem[]> = {
-    immediate: [], today: [], habits: [], bills: [], upcoming: [],
+    immediate: [], today: [], habits: [], bills: [], income: [], upcoming: [],
     importantDates: [], documents: [], health: [], activity: [], insights: [],
     recommendations: [],
   };
@@ -534,6 +538,41 @@ export function buildExecutiveSections(
     });
   }
 
+  // ── §5 Income Expected ─────────────────────────────────────────────────────
+  // The positive mirror of the Bills section. An occurrence whose date has
+  // passed with nothing received is the income equivalent of an overdue bill —
+  // it is money the user is counting on that has not arrived, which is worth
+  // saying out loud rather than quietly folding into a projected total.
+  let overdueIncome = 0;
+  let receivedIncome = 0;
+  for (const o of input.incomeOccurrences || []) {
+    if (!o?.occurrenceId) continue;
+    if (o.status === "skipped") continue;
+    const date = String(o.effectiveDate || o.date || "").slice(0, 10);
+    const du = daysBetween(today, date);
+    if (du == null || du > (config?.billsWithinDays ?? 30)) continue;
+    const amt = Number(o.receivedAmount ?? o.amount) || 0;
+    if (o.status === "received") {
+      // Already-received money is not something to act on; it is counted in the
+      // section's headline figure and otherwise stays out of the list.
+      receivedIncome += amt;
+      continue;
+    }
+    if (du < 0) overdueIncome++;
+    cand.income.push({
+      key: `income:${o.occurrenceId}`,
+      sourceKey: `income:${o.incomeId || o.occurrenceId}`,
+      kind: "income",
+      title: o.description || "Income",
+      reason: du < 0 ? `${money(amt)} expected ${dayLabel(du)} — not received`
+        : du === 0 ? `${money(amt)} expected today`
+        : `${money(amt)} expected ${dayLabel(du)}`,
+      tier: du <= 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
+      daysUntil: du, amount: amt, score: 0, href: "/dashboard/finance",
+      action: { kind: "received", label: "Received" },
+    });
+  }
+
   // ── §2 Today's Agenda ──────────────────────────────────────────────────────
   // Everything actually scheduled today: events and tasks due today. Health and
   // birthdays have already claimed theirs.
@@ -664,7 +703,7 @@ export function buildExecutiveSections(
   // ── Claim: one record, one section ─────────────────────────────────────────
   const claimed = new Set<string>();
   const owned: Record<ExecSectionId, AttentionItem[]> = {
-    immediate: [], today: [], habits: [], bills: [], upcoming: [],
+    immediate: [], today: [], habits: [], bills: [], income: [], upcoming: [],
     importantDates: [], documents: [], health: [], activity: [], insights: [],
     recommendations: [],
   };
@@ -694,7 +733,7 @@ export function buildExecutiveSections(
       total: all.length,
       subtitle: subtitleFor(id, {
         habitsDue, habitsDone, overdueBills, immediate: owned.immediate,
-        items: all, medsDue, abnormalReadings,
+        items: all, medsDue, abnormalReadings, incomeReceived: receivedIncome,
       }),
       // Birthdays is reference material right up until one lands inside the
       // week, at which point folding it away is the wrong call.
@@ -707,7 +746,7 @@ export function buildExecutiveSections(
       // with tasks, documents and alerts, so a headline figure summed from the
       // bills alone reads as the total for everything under it.
       progress: id === "habits" && habitsDue > 0 ? { done: habitsDone, total: habitsDue } : undefined,
-      amount: id === "bills" && amount > 0 ? amount : undefined,
+      amount: (id === "bills" || id === "income") && amount > 0 ? amount : undefined,
     });
   }
   return out;
@@ -719,6 +758,8 @@ function subtitleFor(
   ctx: {
     habitsDue: number; habitsDone: number; overdueBills: number;
     immediate: AttentionItem[];
+    /** Income already received in the window, for the section's context line. */
+    incomeReceived: number;
     /** The section's own claimed rows, for counts drawn from what actually renders. */
     items: AttentionItem[];
     medsDue: number; abnormalReadings: number;
@@ -751,6 +792,16 @@ function subtitleFor(
   if (id === "bills") {
     const n = ctx.immediate.filter(i => i.kind === "bill").length;
     if (n > 0) return `${n} overdue — see Immediate Attention`;
+  }
+  // Income says what has ALREADY landed next to what is still expected —
+  // showing only the expected total is what makes an unpaid paycheck read as
+  // money in hand.
+  if (id === "income") {
+    const late = ctx.items.filter(i => (i.daysUntil ?? 0) < 0).length;
+    const parts: string[] = [];
+    if (ctx.incomeReceived > 0) parts.push(`${money(ctx.incomeReceived)} received so far`);
+    if (late > 0) parts.push(`${late} not received yet`);
+    if (parts.length > 0) return parts.join(" · ");
   }
   if (id === "documents") {
     const n = ctx.immediate.filter(i => i.kind === "document").length;

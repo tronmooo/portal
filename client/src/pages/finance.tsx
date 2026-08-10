@@ -553,6 +553,60 @@ export default function FinancePage() {
     queryFn: () => apiRequest("GET", `/api/incomes${profileParam}`).then(r => r.json()),
   });
 
+  // This month's generated pay dates, so the Income popup lists the REAL
+  // occurrences (and can act on each one) instead of an averaged monthly figure.
+  const monthBoundsNow = (() => {
+    const ym = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+    const [y, m] = ym.split("-").map(Number);
+    const last = new Date(y, m, 0).getDate();
+    return { start: `${ym}-01`, end: `${ym}-${String(last).padStart(2, "0")}` };
+  })();
+  const { data: incomeOccurrences = [] } = useQuery<any[]>({
+    queryKey: ["/api/income-occurrences", monthBoundsNow.start, monthBoundsNow.end, filterMode, ...filterIds],
+    queryFn: () => apiRequest(
+      "GET",
+      `/api/income-occurrences?start=${monthBoundsNow.start}&end=${monthBoundsNow.end}${profileParam ? `&${profileParam.slice(1)}` : ""}`,
+    ).then(r => r.json()),
+    staleTime: 30_000,
+  });
+
+  // Receiving / skipping ONE pay date. Every cash-flow surface has to resync:
+  // marking a paycheck received moves money from projected to actual.
+  const [busyOccurrenceId, setBusyOccurrenceId] = useState<string | null>(null);
+  const occurrenceActionMut = useMutation<void, Error, { occ: any; action: "receive" | "skip" }>({
+    mutationFn: async ({ occ, action }) => {
+      await apiRequest("POST", `/api/incomes/${occ.incomeId}/occurrences/${occ.date}/${action}`, {});
+    },
+    onMutate: ({ occ }) => { setBusyOccurrenceId(occ.occurrenceId); },
+    onSettled: () => { setBusyOccurrenceId(null); },
+    onSuccess: (_d, { occ, action }) => {
+      invalidateDomain("incomes");
+      for (const key of ["/api/income-occurrences", "/api/cash-flow", "/api/incomes", "/api/calendar/timeline"]) {
+        queryClient.invalidateQueries({ queryKey: [key] });
+      }
+      toast({
+        title: action === "receive" ? "Marked received" : "Income skipped",
+        description: `${occ.description} · ${occ.effectiveDate}`,
+      });
+    },
+    onError: (err) => {
+      toast({ title: "Couldn't update the income", description: formatApiError(err), variant: "destructive" });
+    },
+  });
+
+  // ── Net cash flow: BOTH sides of the ledger, projected AND actual ─────────
+  // The month's income total comes from the server's generated occurrences —
+  // the real pay dates in THIS month — not from annualizing a frequency string.
+  // A twice-a-month paycheck in a month that holds three of them is counted
+  // three times, which the old `toMonthlyAmount` approximation could never do.
+  // `actual` counts only money that was actually received / actually paid, so an
+  // unpaid future paycheck can't inflate what the user really has.
+  const { data: cashFlow } = useQuery<any>({
+    queryKey: ["/api/cash-flow", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/cash-flow${profileParam}`).then(r => r.json()),
+    staleTime: 30_000,
+  });
+
   // RACE FIX: payload passed as variables — see addExpenseMutation comment.
   type NewIncomeVars = { description: string; amount: number; category: string; frequency: string; date?: string; profileId?: string };
   const addIncomeMut = useMutation<{ description: string; amount: number }, Error, NewIncomeVars, { prev: [readonly unknown[], unknown][]; tempId: string }>({
@@ -1120,11 +1174,20 @@ export default function FinancePage() {
           ? ((nwSeries[nwSeries.length - 1] - nwSeries[0]) / Math.abs(nwSeries[0])) * 100
           : (typeof snap.spendTrend === "number" ? null : null);
 
-        // Cash flow: monthly income vs (month spend + monthlyized bills).
-        const monthlyIncome = (incomes || []).reduce(
-          (s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
+        // Cash flow: THIS month's actual pay dates vs this month's outgoing.
+        // Prefer the server's occurrence-based totals (/api/cash-flow); the
+        // frequency-annualized fallback only covers a stale/failed fetch.
+        const monthlyIncome = cashFlow?.income
+          ? Number(cashFlow.income.projected || 0)
+          : (incomes || []).reduce((s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
+        const incomeReceived = Number(cashFlow?.income?.actual ?? 0);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
-        const cashOut = spendMtd + Number(snap.monthlyObligationTotal || 0);
+        const cashOut = cashFlow?.outgoing
+          ? Number(cashFlow.outgoing.projected || 0)
+          : spendMtd + Number(snap.monthlyObligationTotal || 0);
+        const cashOutActual = Number(cashFlow?.outgoing?.actual ?? spendMtd);
+        const projectedNet = cashFlow ? Number(cashFlow.projectedNet || 0) : monthlyIncome - cashOut;
+        const actualNet = cashFlow ? Number(cashFlow.actualNet || 0) : incomeReceived - cashOutActual;
         const savingsRate = monthlyIncome > 0 ? Math.round(((monthlyIncome - spendMtd) / monthlyIncome) * 100) : null;
 
         // Budgets: limit from /api/budgets, spent from snapshot.spendByCategory.
@@ -1170,6 +1233,9 @@ export default function FinancePage() {
             nwSeries={nwSeries}
             cashIn={monthlyIncome}
             cashOut={cashOut}
+            projectedNet={projectedNet}
+            actualNet={actualNet}
+            incomeReceived={incomeReceived}
             spendMtd={spendMtd}
             spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
             incomeMtd={monthlyIncome}
@@ -1208,7 +1274,9 @@ export default function FinancePage() {
       {(() => {
         const fc: "all" | "selected" | "everyone" = (filterMode === "selected" ? "selected" : "everyone");
         const snap = enhanced?.financeSnapshot || {};
-        const monthlyIncome = (incomes || []).reduce((s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
+        const monthlyIncome = cashFlow?.income
+          ? Number(cashFlow.income.projected || 0)
+          : (incomes || []).reduce((s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const recurringOut = Number(snap.monthlyObligationTotal || 0);
         const spendByCat: Record<string, number> = snap.spendByCategory || {};
@@ -1230,7 +1298,12 @@ export default function FinancePage() {
               spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
               spendByCategory={spendByCat} monthExpenses={monthExpenses} />
             <IncomePopup open={financePopup === "income"} onOpenChange={closer}
-              incomes={incomes || []} monthlyIncome={monthlyIncome} />
+              incomes={incomes || []} monthlyIncome={monthlyIncome}
+              occurrences={(incomeOccurrences || []) as any}
+              receivedThisMonth={cashFlow?.income ? Number(cashFlow.income.actual || 0) : undefined}
+              onReceive={(occ) => occurrenceActionMut.mutate({ occ, action: "receive" })}
+              onSkip={(occ) => occurrenceActionMut.mutate({ occ, action: "skip" })}
+              busyOccurrenceId={busyOccurrenceId} />
             <BillsDuePopup open={financePopup === "bills"} onOpenChange={closer}
               bills={upcomingBills}
               onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
@@ -1645,7 +1718,12 @@ export default function FinancePage() {
                   data-testid="input-income-amount" />
               </div>
               <div>
-                <Label className="text-xs">Date</Label>
+                {/* For a recurring income this date ANCHORS the series: every
+                    future pay date is generated from it, so "every other
+                    Friday" needs an actual Friday here. */}
+                <Label className="text-xs">
+                  {newIncome.frequency === "once" ? "Date received" : "First pay date"}
+                </Label>
                 <Input type="date" value={newIncome.date}
                   onChange={e => setNewIncome(p => ({ ...p, date: e.target.value }))}
                   data-testid="input-income-date" />
@@ -1672,11 +1750,13 @@ export default function FinancePage() {
                 <Select value={newIncome.frequency} onValueChange={v => setNewIncome(p => ({ ...p, frequency: v }))}>
                   <SelectTrigger data-testid="select-income-frequency"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="one_time">One-time</SelectItem>
+                    <SelectItem value="once">One-time</SelectItem>
                     <SelectItem value="weekly">Weekly</SelectItem>
-                    <SelectItem value="biweekly">Biweekly</SelectItem>
+                    <SelectItem value="biweekly">Every 2 weeks</SelectItem>
+                    <SelectItem value="semimonthly">Twice a month</SelectItem>
                     <SelectItem value="monthly">Monthly</SelectItem>
                     <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="semiannual">Twice a year</SelectItem>
                     <SelectItem value="yearly">Yearly</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1769,11 +1849,13 @@ export default function FinancePage() {
                 <Select value={editIncomeForm.frequency} onValueChange={v => setEditIncomeForm(p => ({ ...p, frequency: v }))}>
                   <SelectTrigger data-testid="select-edit-income-frequency"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="one_time">One-time</SelectItem>
+                    <SelectItem value="once">One-time</SelectItem>
                     <SelectItem value="weekly">Weekly</SelectItem>
-                    <SelectItem value="biweekly">Biweekly</SelectItem>
+                    <SelectItem value="biweekly">Every 2 weeks</SelectItem>
+                    <SelectItem value="semimonthly">Twice a month</SelectItem>
                     <SelectItem value="monthly">Monthly</SelectItem>
                     <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="semiannual">Twice a year</SelectItem>
                     <SelectItem value="yearly">Yearly</SelectItem>
                   </SelectContent>
                 </Select>

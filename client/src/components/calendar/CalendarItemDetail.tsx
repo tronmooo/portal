@@ -32,7 +32,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Cake, CalendarHeart, CreditCard, Receipt, Wallet, RefreshCw, Wrench,
   Stethoscope, Bell, CheckSquare, FileText, CalendarDays, Repeat,
-  Check, SkipForward, Trash2, CalendarClock, Pencil, ExternalLink, ChevronRight,
+  Check, SkipForward, Trash2, CalendarClock, Pencil, ExternalLink, ChevronRight, TrendingUp,
 } from "lucide-react";
 import {
   KIND_LABELS, relativeDayLabel,
@@ -50,6 +50,9 @@ const KIND_ICONS: Record<OccurrenceKind, any> = {
   subscription: CreditCard,
   liability: Wallet,
   bill: Receipt,
+  // Money IN — deliberately not the bill/wallet icon, so a glance separates
+  // an arriving paycheck from a leaving payment.
+  income: TrendingUp,
   renewal: RefreshCw,
   maintenance: Wrench,
   appointment: Stethoscope,
@@ -66,6 +69,7 @@ const KIND_HSL: Record<OccurrenceKind, string> = {
   subscription: "220 80% 62%",
   liability: "270 70% 62%",
   bill: "0 72% 58%",
+  income: "155 65% 45%",
   renewal: "38 92% 52%",
   maintenance: "199 85% 55%",
   appointment: "155 62% 44%",

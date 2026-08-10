@@ -90,9 +90,17 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Expense", operation: "Convert to asset", ui: "Expense row → Convert", aiTools: ["convert_expense_to_asset"], status: "covered" },
 
   // ── Incomes ────────────────────────────────────────────────────────────────
-  { entity: "Income", operation: "Create", ui: "Finance → Income / Cash-flow popup", aiTools: ["log_income"], status: "covered" },
-  { entity: "Income", operation: "Edit", ui: "Finance income row", aiTools: ["update_income"], status: "added" },
-  { entity: "Income", operation: "Delete", ui: "Finance income row", aiTools: ["delete_income"], status: "added" },
+  // Income is the positive mirror of a liability: a series with generated pay
+  // dates, each one receivable / skippable / movable / deletable on its own.
+  { entity: "Income", operation: "Create recurring", ui: "Finance → Income → Add", aiTools: ["create_income"], status: "added" },
+  { entity: "Income", operation: "Create one-time (already received)", ui: "Finance → Income / Cash-flow popup", aiTools: ["log_income"], status: "covered" },
+  { entity: "Income", operation: "Edit (occurrence / future / series)", ui: "Income row → Edit", aiTools: ["update_income"], status: "added" },
+  { entity: "Income", operation: "Delete (occurrence / future / series)", ui: "Income row → Delete", aiTools: ["delete_income"], status: "added" },
+  { entity: "Income", operation: "Mark occurrence received", ui: "Calendar income chip → Received", aiTools: ["receive_income"], status: "added" },
+  { entity: "Income", operation: "Skip occurrence", ui: "Calendar income chip → Skip", aiTools: ["skip_income_occurrence"], status: "added" },
+  { entity: "Income", operation: "Reschedule occurrence", ui: "Calendar income chip → Move", aiTools: ["reschedule_income_occurrence"], status: "added" },
+  { entity: "Income", operation: "Query schedule", ui: "Income detail → Schedule", aiTools: ["get_income_schedule"], status: "added" },
+  { entity: "Income", operation: "Net cash flow (projected vs actual)", ui: "Finance → Cash Flow", aiTools: ["get_cash_flow"], status: "added" },
 
   // ── Paychecks ──────────────────────────────────────────────────────────────
   { entity: "Paycheck", operation: "Log expected", ui: "Finance → Paychecks", aiTools: ["log_expected_paycheck"], status: "covered" },

@@ -328,11 +328,31 @@ export function SpendPopup({
 
 const STREAM_COLORS = ["155 65% 45%", "173 60% 44%", "199 89% 60%", "262 80% 66%", "38 96% 54%", "330 80% 62%", "0 72% 58%", "240 10% 60%"];
 
+/** One generated pay date, as returned by /api/income-occurrences. */
+export interface IncomeOccurrenceRow {
+  occurrenceId: string;
+  incomeId: string;
+  description: string;
+  date: string;            // canonical series date (the action key)
+  effectiveDate: string;   // after any reschedule
+  amount: number;
+  receivedAmount?: number | null;
+  status: "expected" | "due_today" | "overdue" | "received" | "skipped";
+}
+
 export function IncomePopup({
   open, onOpenChange, incomes, monthlyIncome,
+  occurrences = [], receivedThisMonth, onReceive, onSkip, busyOccurrenceId,
 }: {
   open: boolean; onOpenChange: (o: boolean) => void;
   incomes: any[]; monthlyIncome: number;
+  /** This month's generated pay dates. Empty renders the sources view alone. */
+  occurrences?: IncomeOccurrenceRow[];
+  /** Of `monthlyIncome`, how much has actually landed. */
+  receivedThisMonth?: number;
+  onReceive?: (o: IncomeOccurrenceRow) => void;
+  onSkip?: (o: IncomeOccurrenceRow) => void;
+  busyOccurrenceId?: string | null;
 }) {
   const emerald = "hsl(155 65% 45%)";
   const sources = useMemo(() => (incomes || [])
@@ -386,6 +406,57 @@ export function IncomePopup({
             </div>
           ))}
         </div>
+
+        {/* THIS MONTH'S PAY DATES — the real occurrences, not an average.
+            Expected money and received money are labelled differently on
+            purpose: an upcoming paycheck is not money you have. */}
+        {occurrences.length > 0 && (
+          <div>
+            <div className="flex items-baseline justify-between mb-1.5">
+              <p className="micro-label text-muted-foreground">Pay dates this month</p>
+              {receivedThisMonth != null && (
+                <p className="text-[11px] text-muted-foreground tabular-nums" data-testid="income-received-summary">
+                  ${fmt(receivedThisMonth)} received · ${fmt(Math.max(0, monthlyIncome - receivedThisMonth))} expected
+                </p>
+              )}
+            </div>
+            <div className="bubble divide-y divide-border/60">
+              {occurrences.map((o) => {
+                const received = o.status === "received";
+                const skipped = o.status === "skipped";
+                const late = o.status === "overdue";
+                return (
+                  <div key={o.occurrenceId} className="flex items-center gap-2.5 px-3 py-2" data-testid={`income-occurrence-${o.occurrenceId}`}>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-xs font-semibold truncate ${skipped ? "line-through text-muted-foreground" : ""}`}>{o.description}</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {new Date(o.effectiveDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        {received ? " · received" : skipped ? " · skipped" : late ? " · not received" : " · expected"}
+                      </p>
+                    </div>
+                    <p className={`text-xs font-bold tabular-nums shrink-0 ${received ? "text-emerald-500" : late ? "text-red-500" : "text-muted-foreground"}`}>
+                      +${fmt(o.receivedAmount ?? o.amount)}
+                    </p>
+                    {!received && !skipped && onReceive && (
+                      <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] shrink-0"
+                        disabled={busyOccurrenceId === o.occurrenceId}
+                        onClick={() => onReceive(o)}
+                        data-testid={`btn-receive-${o.occurrenceId}`}>
+                        {busyOccurrenceId === o.occurrenceId ? "…" : "Received"}
+                      </Button>
+                    )}
+                    {!received && !skipped && onSkip && (
+                      <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] shrink-0"
+                        disabled={busyOccurrenceId === o.occurrenceId}
+                        onClick={() => onSkip(o)}
+                        data-testid={`btn-skip-${o.occurrenceId}`}>Skip</Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {sources.length === 0 ? (
           <p className="text-xs text-muted-foreground text-center py-6">No income sources yet — add income from the Finance tab.</p>

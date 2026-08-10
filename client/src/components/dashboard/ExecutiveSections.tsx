@@ -28,7 +28,7 @@ import { useLocation } from "wouter";
 import {
   ChevronDown, ChevronRight, Check, CreditCard, ArrowRight, X, Clock,
   TriangleAlert, CalendarDays, Flame, DollarSign, CalendarClock, Cake,
-  FolderOpen, Heart, History, Sparkles, PartyPopper, Lightbulb, type LucideIcon,
+  FolderOpen, Heart, History, Sparkles, PartyPopper, Lightbulb, type LucideIcon, TrendingUp,
 } from "lucide-react";
 import type { AttentionItem } from "@shared/attention";
 import { DISPLAY_CAP } from "@shared/executive-sections";
@@ -38,6 +38,7 @@ import { Medallion, ProgressRing, CountUp, Pill, toneForDays, tonePalette, type 
 const ACTION_ICON = {
   complete: Check,
   pay: CreditCard,
+  received: Check,
   checkin: Check,
   dismiss: X,
   snooze: Clock,
@@ -52,6 +53,7 @@ const SECTION_ICON: Record<ExecSectionId, LucideIcon> = {
   today: CalendarDays,
   habits: Flame,
   bills: DollarSign,
+  income: TrendingUp,
   upcoming: CalendarClock,
   importantDates: Cake,
   documents: FolderOpen,
@@ -68,6 +70,7 @@ const EMPHASIS: Record<ExecSectionId, Emphasis> = {
   today: "working",
   habits: "working",
   bills: "working",
+  income: "working",
   upcoming: "working",
   documents: "working",
   health: "working",

@@ -65,8 +65,11 @@ describe("every kind lands in exactly one chip", () => {
 
   it("offers the chips in the specified order", () => {
     expect(CALENDAR_CATEGORIES.map((c) => c.id)).toEqual([
+      // "income" sits next to the money-OUT chips: income is a first-class
+      // finance object with its own recurring dates, so it needs its own chip
+      // rather than being folded into "other".
       "all", "important", "birthdays", "anniversaries", "bills",
-      "subscriptions", "liabilities", "documents", "tasks",
+      "subscriptions", "liabilities", "income", "documents", "tasks",
       "events", "other",
     ]);
   });

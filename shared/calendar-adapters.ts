@@ -313,6 +313,94 @@ export function seriesFromObligations(obligations: readonly any[]): CalendarSeri
   return out;
 }
 
+// ─── Income ──────────────────────────────────────────────────────────────────
+
+/**
+ * Income series → calendar series. The positive mirror of
+ * `seriesFromObligations`: same normalized shape, same recurrence engine, money
+ * moving the other way.
+ *
+ * Per-occurrence exceptions come straight off `fields.occurrences` (the map
+ * shared/income-schedule.ts owns), so a paycheck already marked received shows
+ * as completed here and a skipped one shows as skipped — without this adapter
+ * re-deriving any of that state itself.
+ */
+export function seriesFromIncomes(incomes: readonly any[]): CalendarSeries[] {
+  const out: CalendarSeries[] = [];
+  for (const i of incomes || []) {
+    const base = clip(i?.startDate ?? i?.start_date ?? i?.date);
+    if (!i?.id || !isISO(base)) continue;
+    if (i.status === "ended" || i.deletedAt) continue;
+
+    // Per-occurrence exceptions, split into the three lists the manager reads.
+    const overrides = (i.fields && typeof i.fields === "object" && i.fields.occurrences
+      && typeof i.fields.occurrences === "object") ? i.fields.occurrences : {};
+    const completedDates: string[] = [];
+    const skippedDates: string[] = [];
+    const movedDates: Record<string, string> = {};
+    for (const [date, ov] of Object.entries(overrides as Record<string, any>)) {
+      if (!isISO(date) || !ov) continue;
+      if (ov.status === "received") completedDates.push(date);
+      if (ov.status === "skipped") skippedDates.push(date);
+      if (isISO(ov.movedTo)) movedDates[date] = clip(ov.movedTo);
+    }
+
+    const owners = uniq([
+      ...(Array.isArray(i.linkedProfiles) ? i.linkedProfiles : []),
+      i.payerProfileId, i.linkedAccountId, i.linkedAssetId,
+    ]);
+    out.push({
+      id: `income:${i.id}`,
+      kind: "income",
+      title: i.description || "Income",
+      subtitle: i.sourceType || i.category || "income",
+      source: {
+        system: "income",
+        id: i.id,
+        profileId: Array.isArray(i.linkedProfiles) ? i.linkedProfiles[0] : undefined,
+        ownerIds: owners,
+        label: i.description,
+        href: sourceHref("income", i.id),
+      },
+      baseDate: base,
+      recurrence: incomeFrequencyToRecurrence(i.frequency),
+      recurrenceEnd: isISO(i.recurrenceEnd ?? i.recurrence_end)
+        ? clip(i.recurrenceEnd ?? i.recurrence_end) : undefined,
+      amount: typeof i.amount === "number" ? i.amount : undefined,
+      paused: i.status === "paused" || i.fields?.paused === true,
+      completedDates,
+      skippedDates,
+      movedDates,
+    });
+  }
+  return out;
+}
+
+/**
+ * Income cadence → the token the shared recurrence expander understands.
+ *
+ * `semimonthly` has no native step in that engine, so it is expanded as
+ * monthly here and the exact two-days-a-month dates come from
+ * shared/income-schedule.ts, which the calendar timeline and every total
+ * already read. Labelling it "monthly" outright would understate the income.
+ */
+export function incomeFrequencyToRecurrence(frequency: unknown): string {
+  const f = String(frequency ?? "").toLowerCase().trim();
+  switch (f) {
+    case "once": case "one-time": case "one_time": case "": return "none";
+    case "daily": return "daily";
+    case "weekly": return "weekly";
+    case "biweekly": case "bi-weekly": return "biweekly";
+    case "semimonthly": case "semi-monthly": return "semimonthly";
+    case "monthly": return "monthly";
+    case "bimonthly": return "bimonthly";
+    case "quarterly": return "quarterly";
+    case "semiannual": case "semi-annual": return "semiannual";
+    case "yearly": case "annual": case "annually": return "yearly";
+    default: return "monthly";
+  }
+}
+
 // ─── Liability profiles ──────────────────────────────────────────────────────
 
 /**
@@ -572,6 +660,7 @@ export interface CalendarInputs {
   obligations?: readonly any[];
   tasks?: readonly any[];
   documents?: readonly any[];
+  incomes?: readonly any[];
 }
 
 /**
@@ -593,6 +682,7 @@ export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
     ...seriesFromLiabilityProfiles(input.profiles || []),
     ...seriesFromEvents(input.events || [], { knownBirthdayProfiles, knownAnniversaryProfiles }),
     ...seriesFromObligations(input.obligations || []),
+    ...seriesFromIncomes(input.incomes || []),
     ...seriesFromTasks(input.tasks || []),
     ...seriesFromDocuments(input.documents || []),
   ];

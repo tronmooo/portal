@@ -36,7 +36,7 @@ import {
   CalendarHeart, Cake, Receipt, RefreshCw, Wrench, Stethoscope, CreditCard,
   Repeat, Plus, Check, ChevronDown, ChevronRight, MoreHorizontal, Pause, Play,
   Archive, ArchiveRestore, Pencil, CalendarClock, SkipForward, Trash2, Users, Bell,
-  Wallet, CheckSquare, FileText,
+  Wallet, CheckSquare, FileText, TrendingUp,
 } from "lucide-react";
 import {
   RECURRING_KINDS, kindDef, parseRecurringMeta, metaToTags, markOccurrence,
@@ -57,13 +57,13 @@ import { useLocation } from "wouter";
 // a birthday looks identical wherever it appears.
 const OCC_ICONS: Record<OccurrenceKind, any> = {
   birthday: Cake, anniversary: CalendarHeart, subscription: CreditCard,
-  liability: Wallet, bill: Receipt, renewal: RefreshCw, maintenance: Wrench,
+  liability: Wallet, bill: Receipt, income: TrendingUp, renewal: RefreshCw, maintenance: Wrench,
   appointment: Stethoscope, task: CheckSquare, habit: Repeat,
   document: FileText, event: CalendarClock, custom: Repeat,
 };
 const KIND_HSL: Record<OccurrenceKind, string> = {
   birthday: "262 75% 64%", anniversary: "330 75% 60%", subscription: "220 80% 62%",
-  liability: "270 70% 62%", bill: "0 72% 58%", renewal: "38 92% 52%",
+  liability: "270 70% 62%", bill: "0 72% 58%", income: "155 65% 45%", renewal: "38 92% 52%",
   maintenance: "199 85% 55%", appointment: "155 62% 44%",
   task: "210 80% 60%", habit: "170 60% 45%", document: "215 15% 60%",
   event: "240 8% 60%", custom: "240 8% 60%",

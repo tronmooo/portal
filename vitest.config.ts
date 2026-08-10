@@ -188,6 +188,11 @@ export default defineConfig({
       // (2026-08-09 report): habit daily targets, create-vs-update safety,
       // per-turn action isolation, no internal evaluator text in the UI.
       'tests/ai-turn-integrity.test.ts',
+      // Income as a first-class finance object: the occurrence engine (the
+      // positive mirror of liability-schedule) and net cash flow's
+      // projected-vs-actual split.
+      'tests/income-schedule.test.ts',
+      'tests/cash-flow.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

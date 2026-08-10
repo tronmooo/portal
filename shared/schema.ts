@@ -60,6 +60,8 @@ export interface ParsedAction {
     | "create_event" | "create_goal" | "create_habit" | "create_obligation"
     | "journal_entry" | "create_artifact" | "save_memory" | "create_liability"
     | "add_liability_payment" | "log_income" | "log_paycheck"
+    // Income series — the positive mirror of a liability (see shared/income-schedule)
+    | "create_income" | "receive_income" | "skip_income"
     // State changes
     | "complete_task" | "delete_task" | "complete_event" | "checkin_habit" | "uncomplete_habit"
     | "delete_habit" | "pay_obligation" | "update_profile" | "delete_tracker_entry"
@@ -894,17 +896,106 @@ export type EventCategory = "personal" | "work" | "health" | "finance" | "family
 // INCOME
 // ============================================================
 
+/**
+ * What KIND of money-in this is. Drives the icon, the label, and which detail
+ * fields a form asks for — the positive mirror of a liability's type_key.
+ */
+export type IncomeSourceType =
+  | "paycheck"      // employment salary/wages
+  | "freelance"     // contract / invoice work
+  | "rental"        // rent received
+  | "investment"    // dividends, interest, distributions
+  | "pension"       // pension, annuity, social security
+  | "benefit"       // unemployment, disability, child support
+  | "bonus"         // bonus, commission, tips
+  | "refund"        // tax refund, returned purchase, rebate
+  | "sale"          // sold an asset or item
+  | "gift"          // cash gift
+  | "reimbursement" // expense reimbursement
+  | "other";
+
+export const INCOME_SOURCE_TYPES = [
+  "paycheck", "freelance", "rental", "investment", "pension", "benefit",
+  "bonus", "refund", "sale", "gift", "reimbursement", "other",
+] as const;
+
+export const INCOME_SOURCE_META: Record<IncomeSourceType, { label: string; icon: string; color: string; recurringByDefault: boolean }> = {
+  paycheck:      { label: "Paycheck",       icon: "Wallet",        color: "#2E9E63", recurringByDefault: true },
+  freelance:     { label: "Freelance",      icon: "Briefcase",     color: "#4F98A3", recurringByDefault: false },
+  rental:        { label: "Rent received",  icon: "Home",          color: "#5591C7", recurringByDefault: true },
+  investment:    { label: "Investment",     icon: "TrendingUp",    color: "#20808D", recurringByDefault: true },
+  pension:       { label: "Pension",        icon: "Landmark",      color: "#6B7280", recurringByDefault: true },
+  benefit:       { label: "Benefit",        icon: "ShieldCheck",   color: "#6DAA45", recurringByDefault: true },
+  bonus:         { label: "Bonus",          icon: "Sparkles",      color: "#D19900", recurringByDefault: false },
+  refund:        { label: "Refund",         icon: "RotateCcw",     color: "#A86FDF", recurringByDefault: false },
+  sale:          { label: "Sale",           icon: "Tag",           color: "#BB653B", recurringByDefault: false },
+  gift:          { label: "Gift",           icon: "Gift",          color: "#C75B8A", recurringByDefault: false },
+  reimbursement: { label: "Reimbursement",  icon: "Receipt",       color: "#797876", recurringByDefault: false },
+  other:         { label: "Other income",   icon: "PlusCircle",    color: "#797876", recurringByDefault: false },
+};
+
+/** Series-level lifecycle. Individual pay dates carry their own status. */
+export type IncomeStatus = "active" | "paused" | "ended";
+
+/**
+ * An income series — recurring (paycheck, pension, rent received, dividends) or
+ * one-time (bonus, refund, sale). ONE row describes the whole series; the
+ * individual pay dates are derived by shared/income-schedule.ts and adjusted by
+ * `fields.occurrences`, exactly the way a recurring liability works.
+ */
 export interface Income {
   id: string;
   description: string;
+  /** Expected amount per occurrence. */
   amount: number;
   category: string;
+  /** Cadence token — "once" for one-time income. See shared/income-schedule. */
   frequency: string;
+  /** First (or only) pay date, YYYY-MM-DD. Alias of startDate for legacy rows. */
   date?: string;
+  /** Series anchor. Defaults to `date` when absent. */
+  startDate?: string | null;
+  /** Stop generating occurrences after this date. */
+  recurrenceEnd?: string | null;
+  sourceType?: IncomeSourceType;
+  status?: IncomeStatus;
+  currency?: string;
+  notes?: string | null;
+  /** People this income belongs to (profile scope). */
   linkedProfiles: string[];
+  /** The employer / client / tenant / payer profile, when there is one. */
+  payerProfileId?: string | null;
+  /** Deposit destination — an account profile. */
+  linkedAccountId?: string | null;
+  /** The asset or investment throwing off this income (rental, dividends). */
+  linkedAssetId?: string | null;
+  /**
+   * Per-occurrence exceptions + series settings:
+   *   occurrences: { "YYYY-MM-DD": { status?, amount?, movedTo?, notes?, receiptId?, receivedAmount?, receivedDate? } }
+   *   paused, pausedUntil, count, secondDay
+   */
+  fields?: Record<string, any> | null;
   tags: string[];
   deletedAt?: string | null;
   createdAt: string;
+  updatedAt?: string;
+}
+
+/** Money that actually landed — the positive mirror of LiabilityPayment. */
+export interface IncomeReceipt {
+  id: string;
+  incomeId: string;
+  /** Canonical series date this receipt settles (null for ad-hoc deposits). */
+  occurrenceDate?: string | null;
+  /** The date the money actually arrived. */
+  receivedDate: string;
+  amount: number;
+  /** Where it landed — free text or an account profile name. */
+  depositAccount?: string | null;
+  method?: string | null;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export const insertIncomeSchema = z.object({
@@ -913,11 +1004,33 @@ export const insertIncomeSchema = z.object({
   category: z.string().default("salary"),
   frequency: z.string().default("monthly"),
   date: z.string().optional(),
+  startDate: z.string().nullable().optional(),
+  recurrenceEnd: z.string().nullable().optional(),
+  sourceType: z.enum(INCOME_SOURCE_TYPES).optional(),
+  status: z.enum(["active", "paused", "ended"]).optional(),
+  currency: z.string().optional(),
+  notes: z.string().nullable().optional(),
   linkedProfiles: z.array(z.string()).optional().default([]),
+  payerProfileId: z.string().uuid().nullable().optional(),
+  linkedAccountId: z.string().uuid().nullable().optional(),
+  linkedAssetId: z.string().uuid().nullable().optional(),
+  fields: z.record(z.any()).optional(),
   tags: z.array(z.string()).optional().default([]),
 });
 
 export type InsertIncome = z.input<typeof insertIncomeSchema>;
+
+export const insertIncomeReceiptSchema = z.object({
+  incomeId: z.string().uuid(),
+  occurrenceDate: z.string().nullable().optional(),
+  receivedDate: z.string(),
+  amount: z.number().nonnegative().max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE),
+  depositAccount: z.string().nullable().optional(),
+  method: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+});
+
+export type InsertIncomeReceipt = z.input<typeof insertIncomeReceiptSchema>;
 
 export type ExpenseCategory = "general" | "food" | "transport" | "health" | "pet" | "vehicle" | "entertainment" | "shopping" | "utilities" | "housing" | "insurance" | "subscription" | "education" | "personal" | "automotive" | "travel";
 export type ObligationCategory = "housing" | "utilities" | "insurance" | "subscription" | "loan" | "medical" | "education" | "transportation" | "communication" | "general";
@@ -980,7 +1093,20 @@ export type InsertEvent = z.input<typeof insertEventSchema>;
 // UNIFIED CALENDAR TIMELINE ITEM (virtual, not stored)
 // ============================================================
 
-export type CalendarItemType = "event" | "task" | "habit" | "obligation";
+export type CalendarItemType = "event" | "task" | "habit" | "obligation" | "income";
+
+/**
+ * Which way money moves on a dated item. Set on every money-bearing calendar
+ * item so a surface can tell "$2,400 arriving" from "$2,400 leaving" without
+ * pattern-matching on type or colour. Undefined = not a money item.
+ */
+export type CashDirection = "in" | "out";
+
+/** The one green/red the whole app uses for money coming in vs going out. */
+export const CASH_DIRECTION_COLORS: Record<CashDirection, string> = {
+  in: "#2E9E63",
+  out: "#C75B5B",
+};
 
 export interface CalendarTimelineItem {
   id: string;
@@ -995,6 +1121,10 @@ export interface CalendarTimelineItem {
   description?: string;
   location?: string;
   completed?: boolean;
+  /** Money direction for income/bill items — "in" for income, "out" for bills. */
+  direction?: CashDirection;
+  /** Signed money value of this item: positive for inflow, negative for outflow. */
+  amount?: number;
   linkedProfiles: string[];
   sourceId: string; // ID of the original entity
   meta?: Record<string, any>;
@@ -1152,6 +1282,14 @@ export interface ProfileDetail extends Profile {
   relatedDocuments: Document[];
   relatedObligations: Obligation[];
   relatedHabits: Habit[];
+  // Income attributed to this profile — the positive mirror of the bills and
+  // liabilities already on the page. Present for every profile type; empty
+  // when nothing is attributed.
+  relatedIncomes?: Income[];
+  /** Sum of THIS MONTH's expected income occurrences for this profile. */
+  relatedIncomeMonthlyProjected?: number;
+  /** Of that, how much has actually been received. */
+  relatedIncomeMonthlyReceived?: number;
   childProfiles: Profile[];  // Nested profiles (assets, subscriptions, loans, etc.)
   timeline: TimelineEntry[];
   // Cost of ownership: expenses that belong to the assets this person owns,
@@ -1180,7 +1318,7 @@ export interface ProfileDetail extends Profile {
 
 export interface TimelineEntry {
   id: string;
-  type: "tracker" | "expense" | "task" | "event" | "document" | "note" | "habit" | "obligation" | "journal";
+  type: "tracker" | "expense" | "task" | "event" | "document" | "note" | "habit" | "obligation" | "journal" | "income";
   title: string;
   description?: string;
   data?: Record<string, any>;

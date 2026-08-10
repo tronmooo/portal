@@ -10,6 +10,8 @@ import {
   seriesFromProfiles,
   seriesFromEvents,
   seriesFromObligations,
+  seriesFromIncomes,
+  incomeFrequencyToRecurrence,
   seriesFromLiabilityProfiles,
   seriesFromTasks,
   seriesFromDocuments,
@@ -470,5 +472,72 @@ describe("a recurring money event is the same thing as its obligation", () => {
       ],
     });
     expect(dedupeSeries(differentDay)).toHaveLength(2);
+  });
+});
+
+// ─── Income: the positive mirror of the obligation adapter ───────────────────
+describe("income series", () => {
+  const paycheck = {
+    id: "inc-1",
+    description: "Acme paycheck",
+    amount: 2400,
+    frequency: "biweekly",
+    startDate: "2026-08-07",
+    sourceType: "paycheck",
+    linkedProfiles: [JOE],
+    status: "active",
+  };
+
+  it("adapts an income row into the one calendar shape", () => {
+    const [s] = seriesFromIncomes([paycheck]);
+    expect(s.id).toBe("income:inc-1");
+    expect(s.kind).toBe("income");
+    expect(s.title).toBe("Acme paycheck");
+    expect(s.source.system).toBe("income");
+    expect(s.baseDate).toBe("2026-08-07");
+    expect(s.recurrence).toBe("biweekly");
+    expect(s.amount).toBe(2400);
+    expect(s.source.ownerIds).toContain(JOE);
+  });
+
+  it("carries per-occurrence exceptions through to the manager's lists", () => {
+    const [s] = seriesFromIncomes([{
+      ...paycheck,
+      fields: {
+        occurrences: {
+          "2026-08-07": { status: "received" },
+          "2026-08-21": { status: "skipped" },
+          "2026-09-04": { movedTo: "2026-09-07" },
+        },
+      },
+    }]);
+    expect(s.completedDates).toEqual(["2026-08-07"]);
+    expect(s.skippedDates).toEqual(["2026-08-21"]);
+    expect(s.movedDates).toEqual({ "2026-09-04": "2026-09-07" });
+  });
+
+  it("attributes income to the payer, the account and the producing asset", () => {
+    const [s] = seriesFromIncomes([{
+      ...paycheck, linkedProfiles: [JOE],
+      payerProfileId: "employer", linkedAccountId: "checking", linkedAssetId: "rental",
+    }]);
+    expect(s.source.ownerIds).toEqual([JOE, "employer", "checking", "rental"]);
+  });
+
+  it("skips rows with no usable date, and ended series", () => {
+    expect(seriesFromIncomes([{ ...paycheck, startDate: undefined, date: undefined }])).toHaveLength(0);
+    expect(seriesFromIncomes([{ ...paycheck, status: "ended" }])).toHaveLength(0);
+  });
+
+  it("maps cadences to recurrence tokens, one-time included", () => {
+    expect(incomeFrequencyToRecurrence("once")).toBe("none");
+    expect(incomeFrequencyToRecurrence("bi-weekly")).toBe("biweekly");
+    expect(incomeFrequencyToRecurrence("semimonthly")).toBe("semimonthly");
+    expect(incomeFrequencyToRecurrence("annual")).toBe("yearly");
+  });
+
+  it("joins the whole-calendar aggregate", () => {
+    const all = seriesFromAll({ incomes: [paycheck] });
+    expect(all.some((s) => s.id === "income:inc-1")).toBe(true);
   });
 });

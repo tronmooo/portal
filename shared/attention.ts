@@ -21,7 +21,10 @@ import { isHabitDueOn, isHabitDoneOn, type HabitScheduleShape } from "./habit-sc
 import { habitDayProgress } from "./habit-progress";
 
 export type AttentionKind =
-  | "task" | "bill" | "document" | "habit" | "reminder" | "event" | "goal" | "alert";
+  // "income" is money coming IN — the positive mirror of "bill". Same shape,
+  // opposite direction of cash, so every renderer can size and sort them
+  // together while still telling them apart.
+  | "task" | "bill" | "income" | "document" | "habit" | "reminder" | "event" | "goal" | "alert";
 
 /** 🔴 now · 🟠 this week · 🟡 further out but consequential. */
 export type AttentionTier = "immediate" | "soon" | "upcoming";
@@ -31,7 +34,9 @@ export type AttentionActionKind =
   // each other: completing routes to PATCH /api/tasks/:id, a medication dose is
   // an obligation payment, and checking off one occurrence of a recurring date
   // is an edit to that event's tags. Same word to a user, three different writes.
-  | "complete" | "pay" | "checkin" | "dismiss" | "snooze" | "open" | "taken" | "markdone";
+  // `received` is to income what `pay` is to a bill: it settles ONE occurrence,
+  // moving it from projected money to actual money.
+  | "complete" | "pay" | "received" | "checkin" | "dismiss" | "snooze" | "open" | "taken" | "markdone";
 
 export interface AttentionItem {
   /** Stable React key. */
@@ -99,6 +104,8 @@ export interface AttentionInputs {
   tasks?: any[];
   /** enhanced.financeSnapshot.upcomingBills. */
   bills?: any[];
+  /** Generated income occurrences (/api/income-occurrences). Money coming in. */
+  incomeOccurrences?: any[];
   /** enhanced.expiringDocuments. */
   documents?: any[];
   /** /api/habits rows (with `checkins`). */

@@ -133,6 +133,12 @@ export function MoneyOverview(props: {
   nwSeries: number[];             // oldest→newest net-worth points
   cashIn: number;
   cashOut: number;
+  /** Projected income − projected outgoing for the month (the whole plan). */
+  projectedNet?: number;
+  /** Received income − settled outgoing (what has really moved so far). */
+  actualNet?: number;
+  /** Of `cashIn`, how much has actually landed. */
+  incomeReceived?: number;
   spendMtd: number;
   spendTrendPct?: number | null;  // spend vs last month %
   incomeMtd?: number;
@@ -166,7 +172,8 @@ export function MoneyOverview(props: {
   onCategoryClick?: (category: string) => void;
 }) {
   const {
-    netWorth, assets, liabilities, momPct, nwSeries, cashIn, cashOut, spendMtd,
+    netWorth, assets, liabilities, momPct, nwSeries, cashIn, cashOut,
+    projectedNet, actualNet, incomeReceived, spendMtd,
     spendTrendPct, incomeMtd = 0, budgets, bills, spendByCategory = {}, alerts = [],
     assetBreakdown, liabilityBreakdown, monthLabel,
     cashTrend = [], spendSeries, incomeSeries, billsSeries,
@@ -174,7 +181,12 @@ export function MoneyOverview(props: {
     onOpenNetWorth, onOpenCashFlow, onOpenBudget, onCategoryClick,
     onOpenSpend, onOpenIncome, onOpenBills, onOpenSavings, onOpenOverview,
   } = props;
-  const cashFlow = cashIn - cashOut;
+  // Projected = the month's whole plan. Actual = what has really moved. They
+  // are reported side by side on purpose: showing only the projected number
+  // makes a user with an unpaid future paycheck look richer than they are.
+  const cashFlow = projectedNet ?? (cashIn - cashOut);
+  const actualCashFlow = actualNet;
+  const hasActualSplit = actualNet != null && Math.abs(actualNet - cashFlow) > 0.005;
   const worstBudget = budgets.slice().sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1)))[0];
   const worstPct = worstBudget ? Math.round((worstBudget.spent / (worstBudget.limit || 1)) * 100) : 0;
   const savingsRate = incomeMtd > 0 ? Math.round(((incomeMtd - spendMtd) / incomeMtd) * 100) : null;
@@ -196,14 +208,20 @@ export function MoneyOverview(props: {
           trend={momPct != null ? `${momPct >= 0 ? "▲" : "▼"} ${Math.abs(momPct).toFixed(1)}% mo` : undefined}
           series={nwSeries} onClick={() => onOpenNetWorth?.()} testId="money-networth" />
         <KpiCard label={`Cash Flow · ${monthLabel}`} icon={ArrowLeftRight} value={`${cashFlow >= 0 ? "+" : "-"}${money(Math.abs(cashFlow))}`}
-          tone={cashFlow >= 0 ? "pos" : "neg"} sub={`IN ${money(cashIn)} · OUT ${money(cashOut)}`}
+          tone={cashFlow >= 0 ? "pos" : "neg"}
+          sub={hasActualSplit
+            ? `projected · actual ${actualCashFlow! >= 0 ? "+" : "-"}${money(Math.abs(actualCashFlow!))}`
+            : `IN ${money(cashIn)} · OUT ${money(cashOut)}`}
           onClick={() => onOpenCashFlow?.()} testId="money-cashflow" />
         <KpiCard label="Spend · MTD" icon={ShoppingCart} value={money(spendMtd)} tone="warn"
           trend={spendTrendPct != null ? `${spendTrendPct >= 0 ? "▲" : "▼"} ${Math.abs(spendTrendPct).toFixed(0)}% mo` : undefined}
           sub={worstBudget ? `${worstBudget.category} ${worstPct}%` : undefined}
           series={spendSeries} chartKind="bars"
           onClick={() => (onOpenSpend ? onOpenSpend() : onCategoryClick?.("all"))} testId="money-spend" />
-        <KpiCard label="Income · MTD" icon={TrendingUp} value={money(incomeMtd)} tone="pos" sub="this month"
+        <KpiCard label="Income · MTD" icon={TrendingUp} value={money(incomeMtd)} tone="pos"
+          sub={incomeReceived != null && incomeReceived < incomeMtd
+            ? `${money(incomeReceived)} received · ${money(incomeMtd - incomeReceived)} expected`
+            : "this month"}
           series={incomeSeries} chartKind="bars"
           onClick={() => (onOpenIncome ?? onOpenCashFlow)?.()} testId="money-income" />
         <KpiCard label="Bills Due" icon={Receipt} value={String(bills.length)} tone={bills.some(b => b.status === "overdue") ? "neg" : "warn"}
@@ -227,7 +245,10 @@ export function MoneyOverview(props: {
             <div className="space-y-1.5 text-sm">
               <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500" /><span className="text-muted-foreground">Inflow</span><span className="ml-auto tabular-nums font-semibold">{money(cashIn)}</span></div>
               <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-500" /><span className="text-muted-foreground">Outflow</span><span className="ml-auto tabular-nums font-semibold text-red-500">{money(cashOut)}</span></div>
-              <div className="flex items-center gap-2 border-t border-border/50 pt-1.5"><span className="text-muted-foreground">Net</span><span className={`ml-auto tabular-nums font-bold ${cashFlow >= 0 ? "text-emerald-500" : "text-red-500"}`}>{cashFlow >= 0 ? "+" : "-"}{money(Math.abs(cashFlow))}</span></div>
+              <div className="flex items-center gap-2 border-t border-border/50 pt-1.5"><span className="text-muted-foreground">{hasActualSplit ? "Projected net" : "Net"}</span><span className={`ml-auto tabular-nums font-bold ${cashFlow >= 0 ? "text-emerald-500" : "text-red-500"}`} data-testid="money-projected-net">{cashFlow >= 0 ? "+" : "-"}{money(Math.abs(cashFlow))}</span></div>
+              {hasActualSplit && (
+                <div className="flex items-center gap-2"><span className="text-muted-foreground">Actual so far</span><span className={`ml-auto tabular-nums font-semibold ${actualCashFlow! >= 0 ? "text-emerald-500" : "text-red-500"}`} data-testid="money-actual-net">{actualCashFlow! >= 0 ? "+" : "-"}{money(Math.abs(actualCashFlow!))}</span></div>
+              )}
             </div>
           </div>
         </Card>
