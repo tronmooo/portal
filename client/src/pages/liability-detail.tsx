@@ -53,6 +53,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { BillScheduleSection } from "@/components/liability/BillScheduleSection";
@@ -186,6 +187,12 @@ const fmtPct = (decimal: number) => {
 const fmtDate = (iso?: string | null) => formatFullDate(iso);
 
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+// Cadences the bill editor offers. Deliberately only the tokens
+// shared/recurrence freqToUnit() maps to a real unit — anything it doesn't
+// recognize returns unit:"" and the "series" quietly becomes one occurrence,
+// which is a worse outcome than not offering the option at all.
+const BILL_FREQUENCIES = ["weekly", "biweekly", "monthly", "yearly"];
 
 // Read a liability term consistently — data lives across many key shapes:
 //   * camelCase keys written by LiabilityProfilePage / older flows
@@ -502,6 +509,97 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     setTFirstPayment(terms.firstPaymentDate || "");
     setTLender(terms.lender || "");
     setEditingTerms(true);
+  };
+
+  // ── Inline edit for a recurring bill (Details tab) ─────────────────────────
+  // "Bill details" was a read-only list: the page would state the amount, the
+  // frequency, the due date, the term, the reminder and autopay, and give the
+  // user no way to change a single one of them — while a loan, one subtype
+  // over, had an Edit button on the very same card. Same card, same
+  // affordance now.
+  //
+  // Writes go to the canonical field names that shared/liability-schedule
+  // generates the series from, so the hero, the Payments tab, and the calendar
+  // all move together instead of one surface disagreeing with the next.
+  const [editingBill, setEditingBill] = useState(false);
+  const [bAmount, setBAmount] = useState("");
+  const [bFrequency, setBFrequency] = useState("monthly");
+  const [bDueDate, setBDueDate] = useState("");
+  const [bCount, setBCount] = useState("");
+  const [bEnd, setBEnd] = useState("");
+  const [bReminder, setBReminder] = useState("");
+  const [bAutopay, setBAutopay] = useState(false);
+  const saveBillMutation = useMutation({
+    mutationFn: async () => {
+      const isoDay = (s: string) => (/^\d{4}-\d{2}-\d{2}$/.test(s.trim()) ? s.trim() : null);
+      const num = (s: string) => {
+        if (s.trim() === "") return null;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : null;
+      };
+      const fields: Record<string, any> = {};
+
+      const amt = num(bAmount);
+      if (amt != null && amt >= 0) {
+        // liabilityAmount() reads monthlyAmount ?? amount ?? cost — write the
+        // first two so no stale alias outranks the edit.
+        fields.monthlyAmount = amt;
+        fields.amount = amt;
+      }
+      if (bFrequency) {
+        fields.frequency = bFrequency;
+        fields.billingFrequency = bFrequency;
+      }
+      const due = isoDay(bDueDate);
+      if (due) {
+        // One input, three keys, deliberately: the occurrence series is
+        // generated from `firstPaymentDate ?? dueDate ?? nextDueDate`, so
+        // writing dueDate alone on a bill that carries a firstPaymentDate
+        // moves nothing the user can see. This field moves the SERIES —
+        // shifting one occurrence is the pencil in the Payments tab.
+        fields.firstPaymentDate = due;
+        fields.dueDate = due;
+        fields.nextDueDate = due;
+      }
+      // A null clears the key server-side (mergeAndApplyDeletes drops nulled
+      // fields), which is how "ongoing", "no end date" and "no reminder" are
+      // said — blanking the input has to actually remove the bound, not leave
+      // the old one standing.
+      const count = num(bCount);
+      fields.count = count != null && count >= 1 ? Math.floor(count) : null;
+      fields.recurrenceEnd = isoDay(bEnd);
+      const lead = num(bReminder);
+      fields.reminderLeadDays = lead != null && lead >= 0 ? Math.floor(lead) : null;
+      // Three spellings reach the two surfaces that render this (the schedule
+      // reads autopay/autoPay, the Details row also honours autoRenew), so the
+      // toggle has to set every one it could be read through — otherwise
+      // turning autopay off leaves the row still reading "On".
+      fields.autopay = bAutopay;
+      fields.autoPay = bAutopay;
+      if (f2.autoRenew !== undefined) fields.autoRenew = bAutopay;
+
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
+    },
+    onSuccess: () => {
+      toast({ title: "Bill updated", description: "Schedule and calendar refreshed." });
+      setEditingBill(false);
+      // The schedule key is ["/api/liabilities", id, "schedule"] — the domain
+      // bus predicate matches "/api/liabilities/" (with the slash), so this one
+      // has to be invalidated by hand or the card keeps the pre-edit series.
+      qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "schedule"] });
+      invalidateDomains("liabilities", "events");
+    },
+    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
+  });
+  const openBillEditor = () => {
+    setBAmount(String(schedule?.amount ?? billMonthly ?? ""));
+    setBFrequency(billFrequencyLabel || "monthly");
+    setBDueDate((schedule?.firstPayment || billNextDueEff || billDueRaw || "").slice(0, 10));
+    setBCount(billTotalTerm != null ? String(billTotalTerm) : "");
+    setBEnd((schedule?.recurrenceEnd || "").slice(0, 10));
+    setBReminder(billReminderLead != null ? String(billReminderLead) : "");
+    setBAutopay(!!(f2.autopay || f2.autoPay || f2.autoRenew));
+    setEditingBill(true);
   };
 
   const deleteProfileMutation = useMutation({
@@ -1210,18 +1308,98 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <NestedLiabilitiesCard liabilityId={profile.id} />
             </section>
 
-            {/* EVERY liability gets a Schedule & Calendar (bills, loans, cards
-                all look the same) — payment dates on a month calendar plus the
-                per-payment list. Placed at the bottom, below the AI summary. */}
-            <BillScheduleSection liabilityId={profile.id} />
+            {/* Schedule & Calendar used to sit here. It's a list of PAYMENTS —
+                every future due date with Pay / Skip / Reschedule on it — so it
+                lives in the Payments tab next to the payment history, not at the
+                bottom of an overview the user has to scroll past to reach it. */}
           </TabsContent>
 
           {/* DETAILS */}
           <TabsContent value="details" className="mt-4">
-            {recurringBill ? (
+            {recurringBill && editingBill ? (
+              <Card data-testid="bill-details-edit-card">
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <CardTitle className="text-base">Edit bill details</CardTitle>
+                  <Button size="sm" variant="ghost" onClick={() => setEditingBill(false)} data-testid="button-cancel-bill-edit">
+                    Cancel
+                  </Button>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid md:grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Recurring amount ($)</Label>
+                      <Input type="number" inputMode="decimal" step="0.01" min="0" value={bAmount}
+                        onChange={(e) => setBAmount(e.target.value)} placeholder="e.g. 14.99" data-testid="input-bill-amount" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Frequency</Label>
+                      {/* Only cadences the recurrence engine actually understands
+                          (shared/recurrence freqToUnit). An unsupported token
+                          silently collapses the series to a single occurrence,
+                          so it must not be offered — except the bill's own
+                          current value, which stays selectable so opening the
+                          editor can never rewrite a cadence by itself. */}
+                      <Select value={bFrequency} onValueChange={setBFrequency}>
+                        <SelectTrigger data-testid="select-bill-frequency"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Array.from(new Set([...BILL_FREQUENCIES, bFrequency].filter(Boolean))).map((fr) => (
+                            <SelectItem key={fr} value={fr} className="capitalize">{cap(fr)}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Payment date</Label>
+                      <Input type="date" value={bDueDate} onChange={(e) => setBDueDate(e.target.value)} data-testid="input-bill-due-date" />
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        Moves the whole series. To move one payment only, use the pencil on that date in Payments.
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Number of payments</Label>
+                      <Input type="number" inputMode="numeric" min={1} value={bCount}
+                        onChange={(e) => setBCount(e.target.value)} placeholder="Blank = ongoing" data-testid="input-bill-count" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Ends on</Label>
+                      <Input type="date" value={bEnd} onChange={(e) => setBEnd(e.target.value)} data-testid="input-bill-end" />
+                      <p className="text-[11px] text-muted-foreground mt-1">Blank = no end date.</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Reminder (days before)</Label>
+                      <Input type="number" inputMode="numeric" min={0} value={bReminder}
+                        onChange={(e) => setBReminder(e.target.value)} placeholder="Blank = none" data-testid="input-bill-reminder" />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border px-3 py-2">
+                    <div>
+                      <Label className="text-xs">Autopay</Label>
+                      <p className="text-[11px] text-muted-foreground">This bill is paid automatically.</p>
+                    </div>
+                    <Switch checked={bAutopay} onCheckedChange={setBAutopay} data-testid="switch-bill-autopay" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => saveBillMutation.mutate()}
+                      disabled={saveBillMutation.isPending}
+                      data-testid="button-save-bill"
+                    >
+                      {saveBillMutation.isPending ? "Saving…" : "Save bill"}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingBill(false)} data-testid="button-cancel-bill-edit-2">
+                      Cancel
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : recurringBill ? (
               <Card data-testid="bill-details-card">
-                <CardHeader className="pb-2">
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Bill details</CardTitle>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={openBillEditor} data-testid="button-edit-bill">
+                    <Edit className="h-3 w-3" /> Edit
+                  </Button>
                 </CardHeader>
                 <CardContent className="grid md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
                   <Row label="Type" value={subtypeLabel} />
@@ -1247,7 +1425,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                   {missedCount > 0 && <Row label="Missed" value={`${missedCount}`} />}
                   <Row label="Annual total" value={schedule?.annualTotal != null ? fmtUSD(schedule.annualTotal) : "—"} />
                   <Row label="Reminder" value={billReminderLead != null ? `${billReminderLead} day${billReminderLead === 1 ? "" : "s"} before` : "None"} />
-                  <Row label="Autopay" value={(f2.autopay || f2.autoRenew) ? "On" : "Off"} />
+                  <Row label="Autopay" value={(f2.autopay || f2.autoPay || f2.autoRenew) ? "On" : "Off"} />
                 </CardContent>
               </Card>
             ) : editingTerms ? (
@@ -1344,9 +1522,18 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             )}
           </TabsContent>
 
-          {/* PAYMENTS — unified tab: payment history + payoff calculator + amortization schedule */}
+          {/* PAYMENTS — unified tab: upcoming schedule + payment history +
+              payoff calculator + amortization schedule. Every payment surface
+              for this liability, past and future, in one place. */}
           <TabsContent value="payments" className="mt-4 space-y-6">
-            {/* Section 1: Payment history */}
+            {/* Section 1: upcoming / scheduled payments. First, because the
+                question a bill's Payments tab answers is "what do I still owe
+                and when" — history is the record, the schedule is the plan.
+                No micro-label above it: the card carries its own title, and
+                stacking a second heading on top just says it twice. */}
+            <BillScheduleSection liabilityId={profile.id} />
+
+            {/* Section 2: Payment history */}
             <div className="space-y-3">
               <p className="micro-label text-muted-foreground px-0.5">Payment History</p>
               <div className="flex items-center justify-between">
@@ -1387,7 +1574,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               </Card>
             </div>
 
-            {/* Section 2: Payoff Calculator — only for amortizing/revolving debt.
+            {/* Section 3: Payoff Calculator — only for amortizing/revolving debt.
                 Recurring bills + generic one-time debt don't have a payoff
                 schedule; showing one produced the $0.17/360-month nonsense. */}
             {amortize && (
@@ -1397,7 +1584,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             </div>
             )}
 
-            {/* Section 3: Amortization Schedule (amortizing debt only) */}
+            {/* Section 4: Amortization Schedule (amortizing debt only) */}
             {amortize && (
             <div>
               <p className="micro-label text-muted-foreground mb-3 px-0.5">Amortization Schedule</p>

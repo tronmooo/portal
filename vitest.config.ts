@@ -188,6 +188,10 @@ export default defineConfig({
       // (2026-08-09 report): habit daily targets, create-vs-update safety,
       // per-turn action isolation, no internal evaluator text in the UI.
       'tests/ai-turn-integrity.test.ts',
+      // Bill screenshots 2026-08-10: editable Bill details, the pay schedule
+      // living in the Payments tab, and no "you already have a similar entry"
+      // note (whose date the model invented) after a logged expense.
+      'tests/bill-payments-tab.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
