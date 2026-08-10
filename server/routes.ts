@@ -5327,6 +5327,26 @@ Rules:
     res.json(created);
   }));
 
+  app.patch("/api/paychecks/:id", asyncHandler(async (req, res) => {
+    // General paycheck edit (closes the recorded crud-coverage gap: fixing a
+    // wrong amount or date used to mean delete + re-add).
+    const patch: any = {};
+    for (const k of ["source", "amount", "expected_date", "notes"]) {
+      if (req.body?.[k] !== undefined) patch[k] = req.body[k];
+    }
+    if (patch.amount !== undefined && (!isFinite(Number(patch.amount)) || Number(patch.amount) <= 0)) {
+      return res.status(400).json({ error: "amount must be a positive number" });
+    }
+    if (patch.expected_date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(patch.expected_date))) {
+      return res.status(400).json({ error: "expected_date must be YYYY-MM-DD" });
+    }
+    const updated = await storage.updatePaycheck(req.params.id, patch);
+    if (!updated) return res.status(404).json({ error: "Paycheck not found" });
+    const uid_pc1b = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`paychecks:${uid_pc1b}`); bustCache(`stats:${uid_pc1b}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc1b}`);
+    res.json(updated);
+  }));
+
   app.patch("/api/paychecks/:id/confirm", asyncHandler(async (req, res) => {
     const { actual_amount } = req.body;
     const updated = await storage.confirmPaycheck(req.params.id, actual_amount);

@@ -37,7 +37,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "test-key-mocked-sdk";
 
 import { MemStorage, requestStorageContext } from "../server/storage";
-import { processMessage, executeTool } from "../server/ai-engine";
+import { processMessage, executeTool, detectCrossTurnReplay } from "../server/ai-engine";
 import { finalizeToolResult, buildTurnVerifyContext, recordActionLog } from "../server/ai-envelope";
 
 const USER = "history-replay-user";
@@ -111,6 +111,79 @@ describe("dropped-stream history must not re-execute earlier turns", () => {
     // the BUG-20260529 shape (merged user turns) must not come back.
     expect(msgs.map((m: any) => m.role)).toEqual(["user", "assistant", "user"]);
     expect(String(msgs[2].content)).toContain("call the dentist");
+  });
+
+  it("HARD-BLOCKS the replayed tool call and lets the new request through", async () => {
+    // The exact screenshot scenario, end to end: the model (scripted) re-fires
+    // the old Chili's expense from history ALONGSIDE the new paycheck request.
+    // The guard must refuse the replay before it writes, while the paycheck
+    // still lands.
+    modelCalls.length = 0;
+    modelScript.length = 0;
+    modelScript.push(
+      {
+        content: [
+          { type: "tool_use", id: "tu_replay", name: "create_expense", input: { amount: 100, description: "Dinner at Chili's", category: "Food" } },
+          { type: "tool_use", id: "tu_new", name: "log_expected_paycheck", input: { source: "Acme Corp", amount: 2000, expected_date: "2026-08-25", frequency: "monthly", count: 12 } },
+        ],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { content: [{ type: "text", text: "Logged the paycheck series." }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } },
+    );
+
+    const before = await requestStorageContext.run(storage, () => storage.getExpenses());
+    const resp = await requestStorageContext.run(storage, () =>
+      processMessage(
+        "My paycheck is about $2000 a month for the next year",
+        [
+          { role: "user", content: "I had dinner at Chili's for $100 with baby back ribs and some water" },
+          { role: "assistant", content: DROPPED_NOTICE },
+        ],
+        USER,
+      ));
+
+    // No duplicate expense row was written…
+    const after = await requestStorageContext.run(storage, () => storage.getExpenses());
+    expect(after.filter(e => e.description === "Dinner at Chili's")).toHaveLength(
+      before.filter(e => e.description === "Dinner at Chili's").length);
+    // …the replay is reported as skipped, not silently dropped…
+    const replayOp = (resp.operations || []).find(o => o.tool === "create_expense");
+    expect(replayOp?.status).toBe("skipped");
+    expect(replayOp?.error).toMatch(/earlier turn/i);
+    // …and the genuinely-new paycheck request executed.
+    const paycheckOp = (resp.operations || []).find(o => o.tool === "log_expected_paycheck");
+    expect(paycheckOp?.status).toBe("ok");
+    expect(await requestStorageContext.run(storage, () => storage.getPaychecks())).toHaveLength(12);
+  });
+
+  it("guard escape hatches keep legitimate repeats working", () => {
+    const prior = [{
+      tool: "create_expense", entityName: "Dinner at Chili's",
+      input: { amount: 100, description: "Dinner at Chili's" },
+      createdAt: new Date().toISOString(), undoneAt: null, source: "chat",
+    }];
+    const hist = "I had dinner at Chili's for $100";
+    const block = (msg: string, input: any = { amount: 100, description: "Dinner at Chili's" }) =>
+      detectCrossTurnReplay("create_expense", input, prior as any, msg, hist);
+
+    // The replay shape blocks…
+    expect(block("My paycheck is $2000 a month")).toMatch(/REPLAY BLOCKED/);
+    // …but naming the thing allows it,
+    expect(block("add another dinner at Chili's")).toBeNull();
+    // …re-do language allows it,
+    expect(block("do that last one twice")).toBeNull();
+    // …stating the amount allows it,
+    expect(block("log 100 for dinner like before")).toBeNull();
+    // …a different amount is not a replay,
+    expect(block("my paycheck is $2000 a month", { amount: 55, description: "Dinner at Chili's" })).toBeNull();
+    // …and an entity with no history source is left to per-tool dedup.
+    expect(detectCrossTurnReplay("create_expense", { amount: 100, description: "Dinner at Chili's" }, prior as any, "paycheck stuff", "unrelated history")).toBeNull();
+    // Stale ledger rows (>24h) never block.
+    const old = [{ ...prior[0], createdAt: new Date(Date.now() - 25 * 3600 * 1000).toISOString() }];
+    expect(detectCrossTurnReplay("create_expense", { amount: 100, description: "Dinner at Chili's" }, old as any, "my paycheck is $2000", hist)).toBeNull();
+    // Read/update/delete tools are never guarded.
+    expect(detectCrossTurnReplay("update_expense", { description: "Dinner at Chili's" }, prior as any, "paycheck", hist)).toBeNull();
   });
 
   it("undone actions stay out of the completed-actions block", async () => {

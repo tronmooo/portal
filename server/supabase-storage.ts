@@ -4030,6 +4030,32 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
+    // ── Expected paychecks — income on the calendar alongside bills, so a
+    // recurring pay series is visible (and editable via the paychecks CRUD)
+    // like everything else. Paychecks carry no profile links; they surface in
+    // every scope like other self-owned finance rows.
+    try {
+      const paychecks = await this.getPaychecks();
+      for (const pc of paychecks || []) {
+        const d = String(pc.expected_date || "").slice(0, 10);
+        if (d < startDate || d > endDate) continue;
+        items.push({
+          id: `paycheck-${pc.id}`,
+          type: "paycheck",
+          title: `${pc.source} paycheck — $${pc.amount}`,
+          date: d,
+          allDay: true,
+          color: "#10B981",
+          category: "income" as any,
+          description: pc.confirmed ? "Received" : "Expected",
+          completed: !!pc.confirmed,
+          linkedProfiles: [],
+          sourceId: pc.id,
+          meta: { amount: pc.amount, source: pc.source, confirmed: !!pc.confirmed },
+        });
+      }
+    } catch { /* paychecks table unavailable — calendar degrades gracefully */ }
+
     items.sort((a, b) => {
       const cmp = a.date.localeCompare(b.date);
       if (cmp !== 0) return cmp;
@@ -6823,6 +6849,19 @@ export class SupabaseStorage implements IStorage {
 
   async createPaycheck(paycheck: { source: string; amount: number; expected_date: string; notes?: string }): Promise<any> {
     const { data, error } = await this.supabase.from('paychecks').insert({ ...paycheck, user_id: this.userId }).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async updatePaycheck(id: string, patch: { source?: string; amount?: number; expected_date?: string; notes?: string }): Promise<any | undefined> {
+    const update: any = {};
+    if (patch.source !== undefined) update.source = patch.source;
+    if (patch.amount !== undefined) update.amount = patch.amount;
+    if (patch.expected_date !== undefined) update.expected_date = patch.expected_date;
+    if (patch.notes !== undefined) update.notes = patch.notes;
+    if (Object.keys(update).length === 0) return this.getPaychecks().then(rows => rows.find((r: any) => r.id === id));
+    const { data, error } = await this.supabase.from('paychecks').update(update)
+      .eq('id', id).eq('user_id', this.userId).select().single();
     if (error) throw error;
     return data;
   }

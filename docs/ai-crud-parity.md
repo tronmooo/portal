@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**126 operations** — ✅ 82 covered · 🆕 34 added · 🔜 0 planned · 🚫 10 excluded by design.
+**128 operations** — ✅ 82 covered · 🆕 36 added · 🔜 0 planned · 🚫 10 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -102,9 +102,17 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 
 | Operation | UI surface | AI tool(s) | Status | Notes |
 |---|---|---|---|---|
-| Log expected | Finance → Paychecks | `log_expected_paycheck` | ✅ covered |  |
+| Log expected (single or recurring series) | Finance → Paychecks | `log_expected_paycheck` | ✅ covered |  |
+| Edit (amount/date/source, single or all-future) | PATCH /api/paychecks/:id (chat-first) | `update_paycheck` | 🆕 added |  |
 | Confirm received (actual amount) | Paycheck row → Confirm | `confirm_paycheck_received` | ✅ covered |  |
 | Delete | Paycheck row menu | `delete_paycheck` | 🆕 added |  |
+
+### Net worth
+
+| Operation | UI surface | AI tool(s) | Status | Notes |
+|---|---|---|---|---|
+| Full financial overview (income/expenses/cash flow/upcoming/invested/net worth) | Finance tab hero + popups | `get_financial_overview` | 🆕 added |  |
+| Read history / cashflow | Hero KPIs + popups | `query_net_worth_history`, `get_cashflow` | ✅ covered |  |
 
 ### Budget
 
@@ -170,12 +178,6 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Move liability to another asset | Liability detail → Move | `move_liability_to_asset` | ✅ covered |  |
 | Read rollup / relationships | Assets tab / Net-worth popup | `get_asset_rollup`, `get_relationships`, `get_related` | ✅ covered |  |
 | Generic entity link | Profile → Link entity | `link_entities` | ✅ covered |  |
-
-### Net worth
-
-| Operation | UI surface | AI tool(s) | Status | Notes |
-|---|---|---|---|---|
-| Read history / cashflow | Hero KPIs + popups | `query_net_worth_history`, `get_cashflow` | ✅ covered |  |
 
 ### Document
 

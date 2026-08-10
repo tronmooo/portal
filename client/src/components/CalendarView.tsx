@@ -46,7 +46,7 @@ import {
   Calendar as CalendarIcon, CalendarDays, ChevronLeft, ChevronRight, Plus,
   Clock, MapPin, Repeat, Trash2, Pencil, X,
   ListTodo, Flame, CreditCard, Users, FileText,
-  CheckSquare, ChevronDown, RefreshCw, CheckCircle2, Settings2,
+  CheckSquare, ChevronDown, RefreshCw, CheckCircle2, Settings2, Banknote,
 } from "lucide-react";
 import CalendarManagerPanel from "@/components/CalendarManagerPanel";
 import { WeekdayPicker, isCustomDaySet, seedDaySet, CUSTOM_DAYS_VALUE } from "@/components/recurring/WeekdayPicker";
@@ -142,6 +142,7 @@ const TYPE_ICONS: Record<string, any> = {
   task: ListTodo,
   habit: Flame,
   obligation: CreditCard,
+  paycheck: Banknote,
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -149,6 +150,7 @@ const TYPE_LABELS: Record<string, string> = {
   task: "Task",
   habit: "Habit",
   obligation: "Bill Due",
+  paycheck: "Paycheck",
 };
 
 const CATEGORY_LABELS: Record<EventCategory, string> = {
@@ -898,6 +900,20 @@ export function EventDetailDialog({
                   {item.meta.status}
                 </Badge>
               )}
+            </div>
+          )}
+
+          {/* Expected paycheck — income info; managed from the Finance tab */}
+          {item.type === "paycheck" && (
+            <div className="flex items-center gap-2 text-sm flex-wrap">
+              <Banknote className="h-3.5 w-3.5 text-muted-foreground" />
+              <span>${item.meta?.amount} from {item.meta?.source}</span>
+              <Badge
+                variant="outline"
+                className={`text-xs h-5 ${item.meta?.confirmed ? "text-green-600 border-green-600" : "text-muted-foreground"}`}
+              >
+                {item.meta?.confirmed ? "received" : "expected"}
+              </Badge>
             </div>
           )}
 

@@ -85,6 +85,109 @@ describe("log_expected_paycheck — recurring series", () => {
   });
 });
 
+describe("update_paycheck — recurring series is editable, not append-only", () => {
+  async function seedSeries(storage: MemStorage) {
+    await run(storage, () => executeTool("log_expected_paycheck", {
+      source: "Acme Corp", amount: 2000, expected_date: "2026-09-25", frequency: "monthly", count: 3,
+    }, USER));
+  }
+
+  it("edits one occurrence's amount", async () => {
+    const storage = new MemStorage();
+    await seedSeries(storage);
+    const res = await run(storage, () => executeTool("update_paycheck", {
+      source: "Acme", expected_date: "2026-10-25", changes: { amount: 2200 },
+    }, USER));
+    expect(res.error).toBeUndefined();
+    expect(res.count).toBe(1);
+    const rows = await run(storage, () => storage.getPaychecks());
+    expect(rows.find((r: any) => r.expected_date === "2026-10-25")!.amount).toBe(2200);
+    expect(rows.find((r: any) => r.expected_date === "2026-09-25")!.amount).toBe(2000);
+  });
+
+  it("all_future applies a raise from a date forward", async () => {
+    const storage = new MemStorage();
+    await seedSeries(storage);
+    const res = await run(storage, () => executeTool("update_paycheck", {
+      source: "Acme", expected_date: "2026-10-25", all_future: true, changes: { amount: 2200 },
+    }, USER));
+    expect(res.count).toBe(2);
+    const amounts = Object.fromEntries((await run(storage, () => storage.getPaychecks()))
+      .map((r: any) => [r.expected_date, r.amount]));
+    expect(amounts).toEqual({ "2026-09-25": 2000, "2026-10-25": 2200, "2026-11-25": 2200 });
+  });
+
+  it("all_future date change shifts the whole series by the same delta", async () => {
+    const storage = new MemStorage();
+    await seedSeries(storage);
+    // Move the Sep 25 check (and everything after) to the 1st-of-next-month
+    // pattern: Sep 25 → Oct 1 is +6 days.
+    const res = await run(storage, () => executeTool("update_paycheck", {
+      source: "Acme", expected_date: "2026-09-25", all_future: true, changes: { expected_date: "2026-10-01" },
+    }, USER));
+    expect(res.count).toBe(3);
+    const dates = (await run(storage, () => storage.getPaychecks())).map((r: any) => r.expected_date).sort();
+    expect(dates).toEqual(["2026-10-01", "2026-10-31", "2026-12-01"]);
+  });
+
+  it("errors honestly on an unknown source", async () => {
+    const storage = new MemStorage();
+    await seedSeries(storage);
+    const res = await run(storage, () => executeTool("update_paycheck", {
+      source: "Globex", changes: { amount: 1 },
+    }, USER));
+    expect(res.error).toMatch(/no paycheck/i);
+  });
+});
+
+describe("get_financial_overview — the Finance-tab picture in one call", () => {
+  it("computes income, expenses, cash flow, upcoming, investments, net worth", async () => {
+    const storage = new MemStorage();
+    const month = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" }).slice(0, 7);
+    const soon = (() => { const d = new Date(); d.setDate(d.getDate() + 10); return d.toLocaleDateString("en-CA"); })();
+    const overview = await run(storage, async () => {
+      await executeTool("log_income", { amount: 2000, source: "Acme salary", frequency: "monthly" }, USER);
+      await executeTool("log_income", { amount: 300, source: "Garage sale" }, USER);
+      await executeTool("create_expense", { amount: 500, description: "Rent share", category: "housing" }, USER);
+      await executeTool("log_expected_paycheck", { source: "Acme Corp", amount: 2000, expected_date: soon }, USER);
+      await executeTool("create_obligation", { name: "Netflix", amount: 20, frequency: "monthly", nextDueDate: soon }, USER);
+      await executeTool("create_profile", { type: "investment", name: "Brokerage", fields: { currentValue: 12000, totalInvested: 10000 } }, USER);
+      await executeTool("create_liability", { name: "Car Loan", subtype: "auto_loan", currentBalance: 8000 }, USER);
+      return executeTool("get_financial_overview", {}, USER);
+    });
+
+    expect(overview.error).toBeUndefined();
+    expect(overview.month).toBe(month);
+    expect(overview.income.monthly_recurring).toBe(2000);
+    expect(overview.income.one_time_this_month).toBe(300);
+    expect(overview.income.total_this_month).toBe(2300);
+    expect(overview.expenses.total_this_month).toBe(500);
+    expect(overview.net_monthly_cash_flow).toBe(1800);
+    expect(overview.upcoming_income.next_30_days).toEqual([{ source: "Acme Corp", amount: 2000, date: soon }]);
+    expect(overview.upcoming_bills.next_30_days.map((b: any) => b.name)).toContain("Netflix");
+    expect(overview.investments).toMatchObject({ total_invested: 10000, current_value: 12000, count: 1 });
+    expect(overview.net_worth.assets).toBeGreaterThanOrEqual(12000);
+    expect(overview.net_worth.liabilities).toBe(8000);
+    expect(overview.net_worth.net).toBe(overview.net_worth.assets - 8000);
+  });
+});
+
+describe("paychecks appear on the calendar timeline", () => {
+  it("query_calendar returns the series as paycheck items", async () => {
+    const storage = new MemStorage();
+    const items = await run(storage, async () => {
+      await executeTool("log_expected_paycheck", {
+        source: "Acme Corp", amount: 2000, expected_date: "2026-09-25", frequency: "monthly", count: 3,
+      }, USER);
+      const res = await executeTool("query_calendar", { startDate: "2026-09-01", endDate: "2026-12-31" }, USER);
+      return (res.items || []).filter((i: any) => i.type === "paycheck");
+    });
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({ type: "paycheck", title: "Acme Corp paycheck — $2000", allDay: true });
+    expect(items.map((i: any) => i.date)).toEqual(["2026-09-25", "2026-10-25", "2026-11-25"]);
+  });
+});
+
 describe("log_income — recurring income source", () => {
   it("stores the requested frequency ('my paycheck is $2000 a month')", async () => {
     const storage = new MemStorage();

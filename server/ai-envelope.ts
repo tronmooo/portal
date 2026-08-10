@@ -132,7 +132,7 @@ const TOOL_ENTITY: Record<string, string> = {
   duplicate_artifact: "artifact", toggle_artifact_item: "artifact",
   create_reminder: "reminder", update_reminder: "reminder", delete_reminder: "reminder",
   create_document: "document",
-  log_expected_paycheck: "paycheck", confirm_paycheck_received: "paycheck", delete_paycheck: "paycheck",
+  log_expected_paycheck: "paycheck", update_paycheck: "paycheck", confirm_paycheck_received: "paycheck", delete_paycheck: "paycheck",
 };
 
 /** Operation class drives which verification checks run. */

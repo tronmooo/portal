@@ -3199,6 +3199,28 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     }
   },
   {
+    name: "update_paycheck",
+    description: "Edit expected paycheck(s) — amount, expected date, source name, or notes. Finds by source (partial match); expected_date narrows to one occurrence. Set all_future:true to apply the change to EVERY unconfirmed occurrence of that source from the target date forward ('my paycheck went up to $2200 from now on', 'move my Acme paychecks to the 1st'). Not for marking received (confirm_paycheck_received) or removing (delete_paycheck).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        source: { type: "string", description: "Paycheck source to find (partial match)" },
+        expected_date: { type: "string", description: "Narrow to the occurrence on this date (YYYY-MM-DD). Without it, targets the next upcoming occurrence." },
+        all_future: { type: "boolean", description: "Apply changes to every unconfirmed occurrence from the target date forward" },
+        changes: {
+          type: "object",
+          properties: {
+            amount: { type: "number", description: "New expected amount" },
+            expected_date: { type: "string", description: "New date (YYYY-MM-DD). With all_future, shifts each occurrence by the same day-delta." },
+            source: { type: "string", description: "Rename the source" },
+            notes: { type: "string" },
+          },
+        },
+      },
+      required: ["source", "changes"],
+    }
+  },
+  {
     name: "confirm_paycheck_received",
     description: "Confirm a paycheck was received. Marks it as confirmed with the actual received date and amount.",
     input_schema: {
@@ -3498,6 +3520,17 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   {
     name: "get_cashflow",
     description: "Get weekly cash flow projections vs actuals for a given month. Shows projected and actual income/expenses by week.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        month: { type: "string", description: "Month in YYYY-MM format (defaults to current month)" }
+      },
+      required: []
+    }
+  },
+  {
+    name: "get_financial_overview",
+    description: "ONE clean financial overview — the Finance-tab picture in a single call: current monthly income (recurring + one-time), monthly expenses, net monthly cash flow, upcoming income (expected paychecks + recurring income), upcoming bills/payments (next 30 days), total invested + current investment value, and net worth (assets − liabilities). Use for 'financial overview', 'how are my finances', 'money summary', 'am I cash-flow positive', 'what's coming up financially'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -8181,6 +8214,70 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         message: `Logged ${rows.length} expected ${freq} paychecks from ${input.source} ($${input.amount} each), ${dates[0]} through ${dates[dates.length - 1]}.`,
       };
     }
+    case "update_paycheck": {
+      const paychecksAll = await storage.getPaychecks();
+      const needlePc = safeLC(input.source).trim();
+      let seriesRows = paychecksAll.filter((p: any) => safeLC(p.source).includes(needlePc));
+      if (seriesRows.length === 0) {
+        return { error: `No paycheck found matching "${input.source}"`, candidates: [...new Set(paychecksAll.map((p: any) => p.source))].slice(0, 5) };
+      }
+      const todayPc = getUserToday((storage as any)._timezone || DEFAULT_TIMEZONE);
+      const wantDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.expected_date || "")) ? String(input.expected_date) : null;
+      // Target: the named occurrence, else the next upcoming (or latest past) one.
+      const sorted = seriesRows.slice().sort((a: any, b: any) => String(a.expected_date).localeCompare(String(b.expected_date)));
+      const target = wantDate
+        ? sorted.find((p: any) => String(p.expected_date).slice(0, 10) === wantDate)
+        : (sorted.find((p: any) => !p.confirmed && String(p.expected_date) >= todayPc) || sorted[sorted.length - 1]);
+      if (!target) return { error: `No ${input.source} paycheck on ${wantDate}`, candidates: sorted.slice(0, 6).map((p: any) => p.expected_date) };
+
+      const ch = input.changes || {};
+      // Snapshot BEFORE any write: storage rows are live objects on the dev
+      // backend, so updating the target first would zero the day-delta used
+      // to shift the rest of the series.
+      const targetOriginalDate = String(target.expected_date).slice(0, 10);
+      const originalDates = new Map(sorted.map((p: any) => [p.id, String(p.expected_date).slice(0, 10)]));
+      const patchOf = (row: any): Record<string, any> => {
+        const patch: Record<string, any> = {};
+        if (ch.amount !== undefined) patch.amount = Number(ch.amount);
+        if (ch.source !== undefined) patch.source = String(ch.source);
+        if (ch.notes !== undefined) patch.notes = String(ch.notes);
+        if (ch.expected_date !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(String(ch.expected_date))) {
+          if (input.all_future && row.id !== target.id) {
+            // Shift the rest of the series by the same day-delta as the target.
+            const delta = Math.round((parseLocalDate(String(ch.expected_date)).getTime() - parseLocalDate(targetOriginalDate).getTime()) / 86400000);
+            const d = parseLocalDate(originalDates.get(row.id) || String(row.expected_date).slice(0, 10));
+            d.setDate(d.getDate() + delta);
+            patch.expected_date = d.toLocaleDateString("en-CA");
+          } else {
+            patch.expected_date = String(ch.expected_date);
+          }
+        }
+        return patch;
+      };
+      if (patchOf(target).amount !== undefined && !(Number(ch.amount) > 0)) {
+        return { error: `Invalid amount: ${ch.amount}` };
+      }
+
+      const rowsToUpdate = input.all_future
+        ? sorted.filter((p: any) => !p.confirmed && String(p.expected_date) >= targetOriginalDate)
+        : [target];
+      const updatedRows = [];
+      for (const row of rowsToUpdate) {
+        const u = await storage.updatePaycheck(row.id, patchOf(row));
+        if (u) updatedRows.push(u);
+      }
+      if (updatedRows.length === 0) return { error: `Couldn't update the ${input.source} paycheck` };
+      return {
+        updated: true,
+        count: updatedRows.length,
+        paycheck: updatedRows[0],
+        message: updatedRows.length === 1
+          ? `Updated the ${updatedRows[0].source} paycheck (${updatedRows[0].expected_date}).`
+          : `Updated ${updatedRows.length} upcoming ${updatedRows[0].source} paychecks.`,
+        actions: [{ type: "update", category: "paycheck", data: updatedRows[0] }],
+      };
+    }
+
     case "confirm_paycheck_received": {
       // The model often passes the SOURCE NAME ("my Acme paycheck") rather than
       // a row id — resolve either. Unconfirmed rows win; earliest expected first.
@@ -9183,6 +9280,69 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "get_cashflow": {
       const cf = await storage.getCashflow(input.month);
       return { result: { month: input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7), weeks: cf } };
+    }
+
+    case "get_financial_overview": {
+      const tzOv = (storage as any)._timezone || DEFAULT_TIMEZONE;
+      const todayOv = getUserToday(tzOv);
+      const month = /^\d{4}-\d{2}$/.test(String(input.month || "")) ? String(input.month) : todayOv.slice(0, 7);
+      const horizon = (() => { const d = parseLocalDate(todayOv); d.setDate(d.getDate() + 30); return d.toLocaleDateString("en-CA"); })();
+      const [incomes, expenses, paychecks, obligations, profiles] = await Promise.all([
+        storage.getIncomes(), storage.getExpenses(), storage.getPaychecks(), storage.getObligations(), storage.getProfiles(),
+      ]);
+
+      // Income: recurring sources normalized to $/month + one-time entries dated in the month.
+      const recurringIncomes = incomes.filter((i: any) => i.frequency && i.frequency !== "once");
+      const recurringMonthly = recurringIncomes.reduce((s: number, i: any) => s + toMonthlyAmount(i.amount, i.frequency), 0);
+      const oneTimeThisMonth = incomes
+        .filter((i: any) => (!i.frequency || i.frequency === "once") && String(i.date || i.createdAt || "").startsWith(month))
+        .reduce((s: number, i: any) => s + (Number(i.amount) || 0), 0);
+      const incomeThisMonth = recurringMonthly + oneTimeThisMonth;
+
+      // Expenses this month.
+      const expensesThisMonth = expenses
+        .filter((e: any) => String(e.date || e.createdAt || "").startsWith(month))
+        .reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
+
+      // Upcoming (next 30 days): unconfirmed expected paychecks + bills due.
+      const upcomingIncome = paychecks
+        .filter((p: any) => !p.confirmed && String(p.expected_date || "") >= todayOv && String(p.expected_date || "") <= horizon)
+        .sort((a: any, b: any) => String(a.expected_date).localeCompare(String(b.expected_date)))
+        .map((p: any) => ({ source: p.source, amount: Number(p.amount) || 0, date: p.expected_date }));
+      const upcomingBills = obligations
+        .filter((o: any) => o.status !== "cancelled" && String(o.nextDueDate || "") >= todayOv && String(o.nextDueDate || "") <= horizon)
+        .sort((a: any, b: any) => String(a.nextDueDate).localeCompare(String(b.nextDueDate)))
+        .map((o: any) => ({ name: o.name, amount: Number(o.amount) || 0, dueDate: o.nextDueDate, frequency: o.frequency }));
+
+      // Investments + net worth from profile rows.
+      const valueOf = (p: any) => Number(p.fields?.currentValue ?? p.fields?.value ?? p.fields?.balance ?? p.fields?.purchasePrice ?? 0) || 0;
+      const investedOf = (p: any) => Number(p.fields?.totalInvested ?? p.fields?.costBasis ?? p.fields?.purchasePrice ?? 0) || 0;
+      const investmentProfiles = profiles.filter((p: any) => ["investment", "account", "banking"].includes(p.type));
+      const assetProfiles = profiles.filter((p: any) => ["vehicle", "property", "asset", "investment", "account", "banking"].includes(p.type));
+      const liabilityProfiles = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
+      const totalAssets = assetProfiles.reduce((s: number, p: any) => s + valueOf(p), 0);
+      const totalLiabilities = liabilityProfiles.reduce((s: number, p: any) => s + (Number(p.fields?.currentBalance ?? p.fields?.balance ?? 0) || 0), 0);
+      const investmentValue = investmentProfiles.reduce((s: number, p: any) => s + valueOf(p), 0);
+      const totalInvested = investmentProfiles.reduce((s: number, p: any) => s + investedOf(p), 0);
+
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const netCashFlow = r2(incomeThisMonth - expensesThisMonth);
+      return {
+        month,
+        income: {
+          monthly_recurring: r2(recurringMonthly),
+          one_time_this_month: r2(oneTimeThisMonth),
+          total_this_month: r2(incomeThisMonth),
+          recurring_sources: recurringIncomes.map((i: any) => ({ source: i.description, amount: Number(i.amount) || 0, frequency: i.frequency })),
+        },
+        expenses: { total_this_month: r2(expensesThisMonth) },
+        net_monthly_cash_flow: netCashFlow,
+        upcoming_income: { next_30_days: upcomingIncome.slice(0, 12), total: r2(upcomingIncome.reduce((s, p) => s + p.amount, 0)) },
+        upcoming_bills: { next_30_days: upcomingBills.slice(0, 12), total: r2(upcomingBills.reduce((s, b) => s + b.amount, 0)) },
+        investments: { total_invested: r2(totalInvested), current_value: r2(investmentValue), count: investmentProfiles.length },
+        net_worth: { assets: r2(totalAssets), liabilities: r2(totalLiabilities), net: r2(totalAssets - totalLiabilities) },
+        message: `${month}: $${r2(incomeThisMonth)} income vs $${r2(expensesThisMonth)} expenses → ${netCashFlow >= 0 ? "+" : ""}$${netCashFlow}/mo net. ${upcomingBills.length} bill(s) and ${upcomingIncome.length} paycheck(s) in the next 30 days. Net worth $${r2(totalAssets - totalLiabilities)}.`,
+      };
     }
 
     case "create_expense": {
@@ -14015,6 +14175,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // profile-id set across all tool calls in the turn (see server/ai-envelope).
     const turnVerifyCtx = buildTurnVerifyContext(storage);
 
+    // Replay-guard snapshot: ledger rows that existed BEFORE this turn, so
+    // same-turn writes (legitimate batches, duplicates included by design)
+    // can never trip the cross-turn guard. History user text is the guard's
+    // "did this come from an earlier turn?" evidence.
+    const priorTurnLedger = await storage.listAiActionLog({ limit: 50 }).catch(() => [] as any[]);
+    const historyUserText = (conversationHistory || [])
+      .filter(m => m?.role === "user" && typeof m.content === "string")
+      .map(m => m.content)
+      .join("\n");
+
     // ── Prompt caching (speed/cost) ──
     // The system prompt and the full tool schema (~40 tools) are identical on
     // every one of the up-to-15 round-trips in this loop (and across turns
@@ -14173,6 +14343,22 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           }
           if (validation.warnings.length > 0) {
             logger.info("ai", `Validation warnings for ${toolUse.name}: ${validation.warnings.join(", ")}`);
+          }
+          // Hard cross-turn replay guard (layer 2 of BUG-20260809-history-
+          // reexec): refuse to re-write something an EARLIER turn already
+          // completed when only the conversation history — not the user's
+          // newest message — asked for it. The refusal is a tool_result the
+          // model reads, so its recap stays honest ("already logged").
+          const replayReason = detectCrossTurnReplay(
+            toolUse.name, validation.normalized, priorTurnLedger, userMessage, historyUserText);
+          if (replayReason) {
+            logger.warn("ai", `Replay guard blocked ${toolUse.name}: ${replayReason.slice(0, 140)}`);
+            toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify({ error: replayReason, code: "CROSS_TURN_REPLAY" }), is_error: true });
+            if (!READ_ONLY_TOOLS.has(toolUse.name)) {
+              allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Already done in an earlier turn — not re-executed" });
+            }
+            emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: "Already done in an earlier turn" });
+            continue;
           }
           // A2 fix: thread userId so dedup map is scoped per-user.
           // Round-5 fabrication guard: thread the original user message so
@@ -14696,10 +14882,78 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 // Kept in lockstep with the readOnlyToolNames lists in processMessage; the
 // tests/ai-tool-registry.test.ts guard fails if any WRITE tool is missing from
 // TOOL_ACTION_MAP below (i.e. would fall through to "retrieve").
+// ── Cross-turn replay guard (BUG-20260809-history-reexec, layer 2) ──────────
+// Layer 1 (the RECENT COMPLETED ACTIONS ledger block + system rule) TELLS the
+// model not to re-execute earlier turns. This layer ENFORCES it: a create/log
+// tool call that exactly matches a prior-turn ledger row — when the newest
+// user message never mentions the thing and only the conversation history
+// does — is refused before it writes. That is precisely the dropped-stream
+// replay shape (old Chili's/ribs/hydration cards re-executing under a new
+// paycheck request) and never a legitimate repeat, which either names the
+// item, states the amount, or uses re-do language.
+const REPLAY_GUARDED_PREFIXES = ["create_", "log_"];
+const REPLAY_GUARDED_TOOLS = new Set(["journal_entry", "checkin_habit", "add_liability_payment", "pay_obligation", "refund_expense"]);
+const REPLAY_WINDOW_MS = 24 * 3600 * 1000;
+const REDO_LANGUAGE = /\b(again|another|one more|more of|same as|redo|re-log|relog|twice|second|duplicate|repeat)\b/i;
+
+const replayNorm = (s: any) => String(s ?? "").toLowerCase().replace(/[^a-z0-9$.\s]/g, " ").replace(/\s+/g, " ").trim();
+const entityKeyOf = (input: Record<string, any>): string =>
+  replayNorm(input?.title ?? input?.name ?? input?.description ?? input?.source ?? input?.trackerName ?? input?.medicationName ?? input?.liabilityName ?? "");
+const significantTokens = (s: string) => replayNorm(s).split(" ").filter(w => w.length >= 3 && !["the", "and", "for", "with"].includes(w));
+
+/**
+ * Returns a human-readable block reason when this tool call is a replay of an
+ * earlier turn's already-completed action, or null to let it through.
+ * Exported for tests (tests/chat-history-replay.test.ts).
+ */
+export function detectCrossTurnReplay(
+  toolName: string,
+  input: Record<string, any>,
+  priorLedgerRows: Array<{ tool: string; entityName?: string | null; input?: any; createdAt: any; undoneAt?: any; source?: string | null }>,
+  newestUserMessage: string,
+  historyUserText: string,
+): string | null {
+  if (!REPLAY_GUARDED_TOOLS.has(toolName) && !REPLAY_GUARDED_PREFIXES.some(p => toolName.startsWith(p))) return null;
+  const key = entityKeyOf(input);
+  if (!key) return null;
+  const amount = input?.amount != null && isFinite(Number(input.amount)) ? Number(input.amount) : null;
+
+  const cutoff = Date.now() - REPLAY_WINDOW_MS;
+  const match = (priorLedgerRows || []).find(r => {
+    if (r.tool !== toolName || r.undoneAt || r.source === "undo") return false;
+    if (new Date(r.createdAt as any).getTime() < cutoff) return false;
+    const rowKey = replayNorm(r.entityName) || entityKeyOf(r.input || {});
+    if (!rowKey || rowKey !== key) return false;
+    if (amount != null) {
+      const rowAmount = Number((r.input || {})?.amount);
+      if (isFinite(rowAmount) && Math.abs(rowAmount - amount) > 0.005) return false;
+    }
+    return true;
+  });
+  if (!match) return null;
+
+  const msg = replayNorm(newestUserMessage);
+  // Legitimate-repeat escape hatches: the newest message names the thing,
+  // states its amount, or carries explicit re-do language.
+  if (REDO_LANGUAGE.test(newestUserMessage)) return null;
+  const tokens = significantTokens(key);
+  if (tokens.some(t => msg.includes(t))) return null;
+  if (amount != null && (msg.includes(String(amount)) || msg.includes(amount.toFixed(2)))) return null;
+  // Only block when the entity demonstrably came from HISTORY — the exact
+  // replay shape. A model-invented duplicate with no history source is left
+  // to the per-tool dedup guards.
+  const hist = replayNorm(historyUserText);
+  const cameFromHistory = tokens.some(t => hist.includes(t))
+    || (amount != null && (hist.includes(String(amount)) || hist.includes(amount.toFixed(2))));
+  if (!cameFromHistory) return null;
+
+  return `REPLAY BLOCKED: ${toolName} "${key}" already completed at ${String(match.createdAt).slice(0, 16).replace("T", " ")} (see RECENT COMPLETED ACTIONS). This request comes from an EARLIER conversation turn, not the user's newest message — it was NOT re-executed and no duplicate was written. Do not retry it; only redo it if the user explicitly asks again.`;
+}
+
 export const READ_ONLY_TOOLS = new Set<string>([
   "search", "get_summary", "get_profile_data", "recall_actions", "get_goal_progress",
   "get_related", "get_relationships", "get_liability_summary", "get_cashflow",
-  "get_budget_summary", "query_net_worth_history", "get_loan_schedule", "query_calendar",
+  "get_budget_summary", "query_net_worth_history", "get_loan_schedule", "query_calendar", "get_financial_overview",
   "query_expenses", "query_tasks", "spending_analytics", "get_asset_rollup",
   "search_documents", "retrieve_document", "open_document", "navigate", "set_dashboard_scope",
   "generate_chart", "generate_table", "generate_report", "refresh_ai_summary",
@@ -14769,6 +15023,7 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   update_income: "update_entity",
   delete_income: "delete_entity",
   log_expected_paycheck: "log_paycheck",
+  update_paycheck: "update_entity",
   confirm_paycheck_received: "log_paycheck",
   delete_paycheck: "delete_entity",
   // Budgets

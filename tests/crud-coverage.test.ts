@@ -66,9 +66,6 @@ const EXEMPT: Record<string, { verb: "UPDATE" | "DELETE"; why: string }[]> = {
   "entity-links": [
     { verb: "UPDATE", why: "a link has no editable body; changing one means deleting it and making another" },
   ],
-  paychecks: [
-    { verb: "UPDATE", why: "PATCH /api/paychecks/:id/confirm is the only supported edit; storage has no general updatePaycheck. Correcting a wrong amount or date still means delete + re-add — a real gap, recorded here rather than hidden" },
-  ],
 };
 
 function exempt(resource: string, verb: "UPDATE" | "DELETE"): boolean {

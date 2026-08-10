@@ -259,6 +259,7 @@ export interface IStorage {
   // Paychecks
   getPaychecks(): Promise<any[]>;
   createPaycheck(paycheck: { source: string; amount: number; expected_date: string; notes?: string }): Promise<any>;
+  updatePaycheck(id: string, patch: { source?: string; amount?: number; expected_date?: string; notes?: string }): Promise<any | undefined>;
   confirmPaycheck(id: string, actual_amount?: number): Promise<any>;
   deletePaycheck(id: string): Promise<void>;
 
@@ -1423,6 +1424,28 @@ export class MemStorage implements IStorage {
       }
     }
 
+    // 3b. Expected paychecks — income lands on the calendar alongside bills,
+    // so a recurring pay series is visible and editable like everything else.
+    for (const pc of this.paycheckStore) {
+      const d = String(pc.expected_date || "").slice(0, 10);
+      if (d >= startDate && d <= endDate) {
+        items.push({
+          id: `paycheck-${pc.id}`,
+          type: "paycheck",
+          title: `${pc.source} paycheck — $${pc.amount}`,
+          date: d,
+          allDay: true,
+          color: "#10B981",
+          category: "income",
+          description: pc.confirmed ? "Received" : "Expected",
+          completed: !!pc.confirmed,
+          linkedProfiles: [],
+          sourceId: pc.id,
+          meta: { amount: pc.amount, source: pc.source, confirmed: !!pc.confirmed },
+        });
+      }
+    }
+
     // 4. Habits — show on each applicable day in the range (daily, weekly, custom)
     for (const habit of this.habits.values()) {
       const start = parseLocalDate(startDate);
@@ -2526,6 +2549,14 @@ export class MemStorage implements IStorage {
   async createPaycheck(p: any) {
     const row = { id: crypto.randomUUID(), confirmed: false, createdAt: new Date().toISOString(), ...p };
     this.paycheckStore.push(row);
+    return row;
+  }
+  async updatePaycheck(id: string, patch: { source?: string; amount?: number; expected_date?: string; notes?: string }) {
+    const row = this.paycheckStore.find(p => p.id === id);
+    if (!row) return undefined;
+    for (const k of ["source", "amount", "expected_date", "notes"] as const) {
+      if (patch[k] !== undefined) (row as any)[k] = patch[k];
+    }
     return row;
   }
   async confirmPaycheck(id: string, actual_amount?: number) {

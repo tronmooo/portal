@@ -74,6 +74,8 @@ export const SCENARIOS: Scenario[] = [
   { tool: "set_budget", input: { category: "Transport", amount: 200 } },
   { tool: "log_income", input: { amount: 3200, source: "Acme salary", category: "salary" } },
   { tool: "log_expected_paycheck", input: { source: "Acme Corp", amount: 3200, expected_date: "2026-08-25" } },
+  { tool: "update_paycheck", input: { source: "Acme Corp", changes: { amount: 3250 } } },
+  { tool: "get_financial_overview", input: {} },
   { tool: "journal_entry", input: { content: "Great day today.", mood: "happy" } },
   { tool: "save_memory", input: { key: "seat-preference", value: "prefers window seats" } },
   { tool: "create_notification", input: { title: "Insurance renewal", message: "Policy renews soon", severity: "info" } },

@@ -932,7 +932,7 @@ export type InsertEvent = z.input<typeof insertEventSchema>;
 // UNIFIED CALENDAR TIMELINE ITEM (virtual, not stored)
 // ============================================================
 
-export type CalendarItemType = "event" | "task" | "habit" | "obligation";
+export type CalendarItemType = "event" | "task" | "habit" | "obligation" | "paycheck";
 
 export interface CalendarTimelineItem {
   id: string;

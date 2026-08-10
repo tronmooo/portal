@@ -95,9 +95,11 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Income", operation: "Delete", ui: "Finance income row", aiTools: ["delete_income"], status: "added" },
 
   // ── Paychecks ──────────────────────────────────────────────────────────────
-  { entity: "Paycheck", operation: "Log expected", ui: "Finance → Paychecks", aiTools: ["log_expected_paycheck"], status: "covered" },
+  { entity: "Paycheck", operation: "Log expected (single or recurring series)", ui: "Finance → Paychecks", aiTools: ["log_expected_paycheck"], status: "covered" },
+  { entity: "Paycheck", operation: "Edit (amount/date/source, single or all-future)", ui: "PATCH /api/paychecks/:id (chat-first)", aiTools: ["update_paycheck"], status: "added" },
   { entity: "Paycheck", operation: "Confirm received (actual amount)", ui: "Paycheck row → Confirm", aiTools: ["confirm_paycheck_received"], status: "covered" },
   { entity: "Paycheck", operation: "Delete", ui: "Paycheck row menu", aiTools: ["delete_paycheck"], status: "added" },
+  { entity: "Net worth", operation: "Full financial overview (income/expenses/cash flow/upcoming/invested/net worth)", ui: "Finance tab hero + popups", aiTools: ["get_financial_overview"], status: "added" },
 
   // ── Budgets ────────────────────────────────────────────────────────────────
   { entity: "Budget", operation: "Set / create category budget", ui: "Budget popup", aiTools: ["set_budget", "create_budget"], status: "covered" },
