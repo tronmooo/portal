@@ -7,6 +7,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { captureError } from "./sentry";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { detectMoodFromText } from "@shared/mood-detect";
@@ -9069,8 +9070,10 @@ No emojis. No prose outside the JSON.`,
   registerFinanceRoutes(app);
 
   // Global async error handler — catches unhandled promise rejections from route handlers
-  app.use((err: any, _req: any, res: any, _next: any) => {
-    console.error(`[API Error]`, err?.message || err);
+  app.use((err: any, req: any, res: any, _next: any) => {
+    captureError(err instanceof Error ? err : new Error(String(err?.message || err)), {
+      method: req?.method, path: req?.path,
+    });
     if (!res.headersSent) {
       res.status(500).json({ error: err?.message || "Internal server error" });
     }

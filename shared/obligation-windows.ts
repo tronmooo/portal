@@ -40,6 +40,14 @@ export function toMonthlyAmount(amount: number | string, frequency?: string | nu
   if (!Number.isFinite(n) || n === 0) return 0;
   const freq = String(frequency || "monthly").toLowerCase();
   switch (freq) {
+    // One-time items contribute nothing to a recurring-monthly figure. Without
+    // this case they fell into the treat-as-monthly default, so a single
+    // $2,000 bill inflated "monthly bills" by $2,000/mo forever.
+    case "once":
+    case "one-time":
+    case "onetime":
+    case "one time":
+      return 0;
     case "weekly":
     case "week":
       return n * (52 / 12);

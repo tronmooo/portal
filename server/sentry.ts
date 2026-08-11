@@ -1,10 +1,12 @@
 /**
  * Sentry Error Tracking — Stub
  * 
- * To activate:
+ * Already wired: initSentry() runs in server/index.ts and server/vercel-entry.ts,
+ * and the global error handler in server/routes.ts reports through captureError().
+ * To activate real reporting:
  * 1. npm install @sentry/node
  * 2. Set SENTRY_DSN environment variable
- * 3. Import and call initSentry() in server/index.ts before app setup
+ * 3. Uncomment the @sentry/node lines below
  */
 
 export function initSentry() {

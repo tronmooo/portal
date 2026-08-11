@@ -396,6 +396,7 @@ function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1,
 function generateInsights(
   profiles: Profile[], trackers: Tracker[], tasks: Task[], expenses: Expense[],
   habits: Habit[], obligations: Obligation[], journal: JournalEntry[],
+  userTz?: string,
 ): Insight[] {
   const insights: Insight[] = [];
   const now = new Date();
@@ -416,9 +417,9 @@ function generateInsights(
     const allFE = fitnessTrackers.flatMap(t => t.entries);
     // Bug #23: bucket entries into local YYYY-MM-DD and walk backwards with
     // addDays() (noon UTC anchor) so day arithmetic never drifts on DST days.
-    // generateInsights() doesn't have access to the user's timezone, so we
-    // fall back to America/Los_Angeles — same default the rest of the app uses.
-    const fitTz = 'America/Los_Angeles';
+    // Caller threads the per-request user timezone through; fall back to
+    // America/Los_Angeles — same default the rest of the app uses.
+    const fitTz = userTz || 'America/Los_Angeles';
     const fitDays = new Set<string>();
     for (const e of allFE) {
       try { fitDays.add(toLocalDateStr(new Date(e.timestamp), fitTz)); }
@@ -6529,7 +6530,7 @@ export class SupabaseStorage implements IStorage {
       const trend = values.length >= 2 ? (values[values.length - 1] - values[0]) : 0;
       // For hydration trackers, calculate today's total
       const isHydration = t.name.toLowerCase().includes('hydration') || t.name.toLowerCase().includes('water');
-      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const todayStr = getUserToday(this._timezone);
       let dailyTotal: number | undefined;
       if (isHydration) {
         dailyTotal = t.entries
@@ -6777,7 +6778,7 @@ export class SupabaseStorage implements IStorage {
     const expenses = allExpenses.filter(e => matchFp(e.linkedProfiles));
     const habits = allHabits.filter(h => matchFp(h.linkedProfiles || []));
     const obligations = allObligations.filter(o => matchFp(o.linkedProfiles));
-    const insights = generateInsights(profiles, trackers, tasks, expenses, habits, obligations, journal);
+    const insights = generateInsights(profiles, trackers, tasks, expenses, habits, obligations, journal, this._timezone);
     // Bound the map so a many-user warm instance can't grow it unboundedly.
     if (insightsCache.size > 1000) insightsCache.clear();
     insightsCache.set(cacheKey, { at: Date.now(), insights });

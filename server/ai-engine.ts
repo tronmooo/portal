@@ -2328,7 +2328,7 @@ Return ONLY the JSON object, nothing else.`;
           : ["bank", "loan", "statement"].some(t => docType.includes(t)) ? "general"
           : "general");
         const desc = parsed.label || parsed.summary || fileName;
-        const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || getUserToday((storage as any)._timezone);
         // OWNERSHIP MODEL (shared/cost-of-ownership.ts): the expense belongs
         // to the ASSET only — one row, one link. Owner-scoped views derive it
         // via ownedAssetIds, so it counts toward the owner exactly once.
@@ -2341,7 +2341,7 @@ Return ONLY the JSON object, nothing else.`;
           amount: numAmount,
           category,
           description: String(desc),
-          date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : getUserToday((storage as any)._timezone),
           tags: ["from-document"],
           linkedProfiles: expenseLinks,
         }, "expense");
@@ -2701,7 +2701,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
           amount,
           category,
           vendor: vendor || undefined,
-          date: fieldLookup['transactiondate'] || fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          date: fieldLookup['transactiondate'] || fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || getUserToday((storage as any)._timezone),
         },
       };
 
@@ -14068,7 +14068,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         .reduce((s, c) => s + Number(c.fields?.remainingBalance || c.fields?.loanBalance || 0), 0);
       const monthlySubs = obligations.filter((o: any) => o.status !== "cancelled")
         .reduce((s, o) => s + toMonthlyAmount(Number(o.amount || 0), o.frequency), 0);
-      const thisMonthSpend = expenses.filter(e => e.date?.startsWith(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0,7)))
+      const thisMonthSpend = expenses.filter(e => e.date?.startsWith(getUserToday((storage as any)._timezone).slice(0,7)))
         .reduce((s, e) => s + Number(e.amount || 0), 0);
       return `Financial Snapshot: Net Worth ~$${(totalAssets - totalLiabs).toLocaleString()}, Assets $${totalAssets.toLocaleString()}, Liabilities $${totalLiabs.toLocaleString()}, Monthly subscriptions $${Math.round(monthlySubs)}/mo, This month's spending $${Math.round(thisMonthSpend)}`;
     })(),

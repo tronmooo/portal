@@ -133,6 +133,12 @@ describe("contract: shared calculation parity", () => {
       expect(toMonthlyAmount(1200, "annual")).toBe(100);
     });
 
+    it("once/one-time contributes $0/mo — a one-time bill must never inflate recurring monthly totals", () => {
+      for (const f of ["once", "one-time", "onetime", "one time"]) {
+        expect(toMonthlyAmount(2000, f)).toBe(0);
+      }
+    });
+
     it("string amounts, unknown/missing frequency (treated as monthly), and junk", () => {
       expect(toMonthlyAmount("100", "weekly")).toBe(100 * (52 / 12));
       expect(toMonthlyAmount(100, "custom")).toBe(100);

@@ -14,21 +14,28 @@ export const DEFAULT_TIMEZONE = 'America/Los_Angeles';
  * This is the canonical "what day is it for the user?" function.
  */
 export function getUserToday(timezone: string = DEFAULT_TIMEZONE): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: timezone });
+  return toLocalDateStr(new Date(), timezone);
 }
 
 /**
  * Returns YYYY-MM for the current month in the given timezone.
  */
 export function getUserCurrentMonth(timezone: string = DEFAULT_TIMEZONE): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: timezone }).slice(0, 7);
+  return toLocalDateStr(new Date(), timezone).slice(0, 7);
 }
 
 /**
  * Formats a Date object to YYYY-MM-DD in the given timezone.
  */
 export function toLocalDateStr(date: Date, timezone: string = DEFAULT_TIMEZONE): string {
-  return date.toLocaleDateString('en-CA', { timeZone: timezone });
+  // An unrecognized IANA name (e.g. a garbled x-timezone header) makes
+  // toLocaleDateString throw RangeError; fall back to the default zone
+  // rather than turning the whole request into a 500.
+  try {
+    return date.toLocaleDateString('en-CA', { timeZone: timezone });
+  } catch {
+    return date.toLocaleDateString('en-CA', { timeZone: DEFAULT_TIMEZONE });
+  }
 }
 
 /**

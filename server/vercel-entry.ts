@@ -8,6 +8,9 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { createServer } from "http";
 import { authMiddleware, registerAuthRoutes } from "./auth";
+import { initSentry } from "./sentry";
+
+initSentry();
 
 const app = express();
 const httpServer = createServer(app);

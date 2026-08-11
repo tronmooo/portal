@@ -20,3 +20,4 @@ api/_bundle.mjs
 .vercel
 .vercel-tmp/
 api/chunks/
+backups/
