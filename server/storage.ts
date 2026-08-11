@@ -7,6 +7,7 @@ import { parseRecurringMeta } from "@shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
+import { isPrimaryProfile } from "@shared/profile-protection";
 
 // Per-request storage context — eliminates the global userId race condition (C-1)
 // Auth middleware runs storage within this context so all downstream code
@@ -913,6 +914,20 @@ export class MemStorage implements IStorage {
   async deleteProfile(id: string): Promise<boolean> {
     const profile = this.profiles.get(id);
     if (!profile) return false;
+    // The primary account owner is never deletable — see
+    // shared/profile-protection.ts. Guarded here as well as at the route so
+    // no other caller (bulk actions, chat tools, imports) can route around it.
+    if (isPrimaryProfile(profile)) return false;
+
+    // ── RECURSIVE: child profiles first ──────────────────────────────────────
+    // Parity with SupabaseStorage.deleteProfile. Without this, deleting a
+    // person left their vehicles, assets and liabilities behind pointing at a
+    // parentProfileId that no longer resolved — orphans in the exact shape the
+    // 2026-08-11 report asked us to rule out. Each child's own cascade runs, so
+    // a nested asset three levels down goes too.
+    for (const child of Array.from(this.profiles.values())) {
+      if (child.parentProfileId === id) await this.deleteProfile(child.id);
+    }
 
     // Cascade delete: for each entity type, if sole owner → delete; if shared → remove profile ID from linkedProfiles
 

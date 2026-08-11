@@ -162,3 +162,46 @@ export function detectPossessiveOwner(name: string): { name: string; owner: stri
   if (remaining.length < 2) return null;
   return { name: remaining, owner: token };
 }
+
+// ── Is this the name of a HUMAN, or a description of a thing? ────────────────
+//
+// Production report 2026-08-11: "create an asset profile for tires for my
+// Dodge Ram 2025" produced the asset AND a person profile called "tires for my
+// Dodge ram". Two earlier turns had done the same to a laptop ("my MacBook Pro
+// m4") and a truck ("my 2025 Dodge ram"). Every one of those bogus rows has the
+// same tell: the "name" is a phrase describing an object and its owner, not
+// something anyone is called.
+//
+// This is the last line of defence, under the intent gate. It only ever says NO
+// to a `person` write, and it says it on syntax alone — a preposition phrase, a
+// possessive determiner, or a sentence's worth of words. Real names never have
+// those, so a false positive would need a person genuinely called "Tires For My
+// Dodge Ram".
+
+/** Prepositional / relational glue that belongs in a description, not a name. */
+const DESCRIPTIVE_CONNECTOR =
+  /\s(?:for|under|inside|within|belonging\s+to|attached\s+to|on|onto|off\s+of|from|in|into|with|that\s+goes\s+(?:on|with))\s+(?:my|our|the|his|her|their|a|an)\s/i;
+
+/** "my …", "our …" — the speaker's word, never part of a person's name. */
+const POSSESSIVE_DETERMINER = /(?:^|\s)(?:my|our|your|his|her|its|their)\s/i;
+
+/**
+ * True when `name` reads as a description of an object rather than a person's
+ * name, so writing it as a `person` profile would be a filing error.
+ *
+ * Returns false for anything it is not sure about — an unusual name must
+ * always be creatable.
+ */
+export function looksLikeThingNotPerson(name: string): boolean {
+  const raw = String(name ?? "").trim();
+  if (!raw) return false;
+  // "Tires for my Dodge Ram", "Screen cover for the MacBook".
+  if (DESCRIPTIVE_CONNECTOR.test(raw)) return true;
+  // "my MacBook Pro m4", "our 2025 Dodge ram". A person's name never contains
+  // a possessive determiner as a standalone word.
+  if (POSSESSIVE_DETERMINER.test(raw)) return true;
+  // A name that is really a sentence. Six words is generous — the longest
+  // realistic human name in this app ("Maria del Carmen de la Cruz") is six.
+  if (raw.split(/\s+/).filter(Boolean).length > 6) return true;
+  return false;
+}

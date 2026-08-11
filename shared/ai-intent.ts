@@ -35,6 +35,11 @@ export type IntentEntity =
   | "liability"
   | "goal"
   | "asset"
+  // A HUMAN. Deliberately distinct from `asset` and from the ambiguous
+  // `profile`: "asset profile" and "person profile" are the same table but
+  // they are NOT the same request, and conflating them is what filed a set of
+  // truck tyres as a person (production report 2026-08-11).
+  | "person"
   | "profile"
   | "document"
   | "journal"
@@ -198,6 +203,23 @@ export function detectOperation(message: string): IntentOperation {
 // Ordered: the FIRST matching rule wins, so more specific nouns are listed
 // before the generic ones they'd otherwise be swallowed by.
 
+/**
+ * Words that name a HUMAN. Two tiers, because they carry different weight:
+ * the explicit noun ("person", "people") is near-certain, a relationship word
+ * ("my brother", "her husband") is strong but can appear incidentally.
+ *
+ * Pets are NOT here. A pet is its own profile type; it is not a person and it
+ * is not an asset, and nothing in this module needs to decide between them.
+ */
+const PERSON_NOUN =
+  /\bpersons?\b|\bpeople\b|\bfamily\s+members?\b|\bhousehold\s+members?\b|\bcontacts?\b/;
+
+const PERSON_RELATION =
+  /\b(wife|husband|spouse|partner|fianc[eé]e?|girlfriend|boyfriend|son|daughter|kids?|child|children|mom|mother|dad|father|parents?|brother|sister|sibling|friend|roommate|boss|co-?worker|colleague|neighbou?rs?|grandma|grandmother|grandpa|grandfather|aunt|uncle|cousin|nephew|niece|tenant|landlord|employee)\b/;
+
+/** Any cue at all that a human is being talked about. */
+const PERSON_CUE = new RegExp(`${PERSON_NOUN.source}|${PERSON_RELATION.source}`);
+
 const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number }> = [
   { entity: "habit", re: /\bhabits?\b|\broutines?\b|\bstreaks?\b/, weight: 0.98 },
   { entity: "liability", re: /\bliabilit(?:y|ies)\b|\bdebts?\b|\bloans?\b|\bmortgages?\b|\bcredit\s+cards?\b/, weight: 0.9 },
@@ -217,6 +239,10 @@ const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number }> 
   { entity: "journal", re: /\bjournals?\b|\bdiary\b/, weight: 0.9 },
   { entity: "memory", re: /\bremember\s+that\b|\bmemor(?:y|ies)\b/, weight: 0.85 },
   { entity: "artifact", re: /\bartifacts?\b|\bchecklists?\b/, weight: 0.85 },
+  // A HUMAN, named as such. Must come before the generic `profile` rule so
+  // "add a person" doesn't degrade to the ambiguous reading.
+  { entity: "person", re: PERSON_NOUN, weight: 0.95 },
+  { entity: "person", re: PERSON_RELATION, weight: 0.85 },
   { entity: "profile", re: /\bprofiles?\b/, weight: 0.9 },
 ];
 
@@ -227,6 +253,32 @@ const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number }> 
  */
 const ASSET_NOUNS =
   /\b(car|truck|suv|vehicle|motorcycle|boat|trailer|rv|house|home|condo|apartment|property|land|laptop|computer|phone|tv|television|watch|jewelry|bike|bicycle|tractor|mower)\b/;
+
+/** Does this message talk about a human at all? */
+export function mentionsPerson(message: string): boolean {
+  return PERSON_CUE.test(lc(message));
+}
+
+/** Does this message name a thing-you-own — the word "asset" or an object noun? */
+export function mentionsAsset(message: string): boolean {
+  const m = lc(message);
+  return /\bassets?\b/.test(m) || ASSET_NOUNS.test(m);
+}
+
+/**
+ * True when ONE message legitimately talks about both a person and a thing —
+ * "create a person profile for Bob and an asset profile for his truck".
+ *
+ * The person-vs-asset routing gate is switched off for these. Clause splitting
+ * is deliberately conservative (it only splits on a connective followed by a
+ * write verb), so a message like that parses as a single intent and whichever
+ * noun came first would blocklist the other one's tool. Refusing to gate is
+ * the right call: the gate exists to catch a tool NOBODY asked for, and here
+ * both were asked for.
+ */
+export function personAssetAmbiguous(message: string): boolean {
+  return mentionsPerson(message) && mentionsAsset(message);
+}
 
 export function detectEntity(message: string): { entity: IntentEntity; confidence: number } {
   const m = lc(message);
@@ -279,8 +331,11 @@ export function extractEntityName(message: string): string | null {
     String.raw`\b(?:create|add|make|new|register|set\s+up|start)\b` +
       String.raw`\s+(?:an?|the|some)?\s*` +
       String.raw`(?:new\s+)?` +
-      // optional entity noun, optionally followed by a connector
-      String.raw`(?:asset|profile|vehicle|car|truck|habit|task|event|tracker|goal|obligation|liability|document|artifact)?` +
+      // Up to two stacked entity nouns, optionally followed by a connector.
+      // Two, not one, because "create an ASSET PROFILE for my tires" stacks
+      // them — with a single slot "profile" stayed in the captured name and
+      // the record came out called "profile for my tires".
+      String.raw`(?:(?:asset|person|profile|vehicle|car|truck|habit|task|event|tracker|goal|obligation|liability|document|artifact)\s+){0,2}` +
       String.raw`\s*(?:for|called|named|titled|to\s+track|entry\s+for)?\s*` +
       // The determiner is optional AND so is the space after it. Requiring the
       // space meant "Add Robert's truck" — no determiner — matched nothing at
@@ -327,7 +382,7 @@ export function extractFields(message: string, entity: IntentEntity): Record<str
     if (target != null) fields.dailyTarget = target;
   }
 
-  if (entity === "asset" || entity === "profile" || entity === "unknown") {
+  if (entity === "asset" || entity === "profile" || entity === "person" || entity === "unknown") {
     const color = m.match(COLORS);
     if (color) fields.color = color[1] === "grey" ? "gray" : color[1];
     for (const [re, value] of DRIVE_TYPES) {

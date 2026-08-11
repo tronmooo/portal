@@ -31,7 +31,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag } from "lucide-react";
+import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag, Trash2, ShieldCheck } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { invalidateDomains } from "@/lib/cache-bus";
+import { reconcileProfileFilter } from "@/lib/profileFilter";
+import { isPrimaryProfile, PRIMARY_PROFILE_DELETE_ERROR } from "@shared/profile-protection";
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { stringifyField, previewUnrenderable } from "@/lib/field-display";
 import { SectionHeading } from "@/components/ui/section-heading";
@@ -290,6 +297,42 @@ function SingleProfileInfo({ id }: { id: string }) {
     })();
   };
 
+  // ── Delete this person ────────────────────────────────────────────────────
+  // People (self/person/pet) never reach profile-detail.tsx — the route
+  // dispatcher sends them here instead (profile-route-dispatch.tsx), and this
+  // page had no delete control of any kind. So the delete button that DOES
+  // exist on the detail page was unreachable for exactly the profiles a user
+  // most wants to remove: the stray "person" rows chat used to invent for
+  // assets. User, 2026-08-11: "Why won't it allow me to delete any of these
+  // profiles?" — because for a person there was no button anywhere.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const deletePerson = useMutation({
+    mutationFn: async () => { await apiRequest("DELETE", `/api/profiles/${id}`); },
+    onSuccess: () => {
+      // Drop the row from every cached list FIRST, so nothing re-renders a
+      // profile that no longer exists while the refetches land.
+      queryClient.setQueryData(["/api/profiles"], (old: any) =>
+        Array.isArray(old) ? old.filter((p: any) => p?.id !== id) : old);
+      queryClient.setQueryData(["/api/profiles", "lite"], (old: any) =>
+        Array.isArray(old) ? old.filter((p: any) => p?.id !== id) : old);
+      queryClient.removeQueries({ queryKey: ["/api/profiles", id, "detail"] });
+      // If the dashboard was scoped to this person, move the scope off them —
+      // otherwise every scoped query keeps asking for a dead id.
+      try {
+        reconcileProfileFilter(queryClient.getQueryData<any[]>(["/api/profiles", "lite"])
+          ?? queryClient.getQueryData<any[]>(["/api/profiles"]) ?? []);
+      } catch { /* scope reconciliation is best-effort */ }
+      // The cascade reaches tasks, habits, events, trackers, expenses,
+      // incomes, documents, goals, journal and ownership links.
+      invalidateDomains("profiles", "people", "assets", "liabilities", "tasks",
+        "habits", "events", "trackers", "expenses", "incomes", "documents",
+        "goals", "journal", "dashboard");
+      toast({ title: `${profile?.name || "Profile"} deleted`, description: "Their linked data has been removed." });
+      navigate("/profiles");
+    },
+    onError: (err: Error) => toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
+  });
+
   const avatarMutation = useMutation({
     mutationFn: async (payload: { fileData: string; mimeType: string }) => {
       await apiRequest("POST", `/api/profiles/${id}/photo`, payload);
@@ -376,7 +419,8 @@ function SingleProfileInfo({ id }: { id: string }) {
   const latestJournal = journal[0];
   const documents: any[] = Array.isArray(profile.relatedDocuments) ? profile.relatedDocuments : [];
   const initial = (profile.name || "?").charAt(0).toUpperCase();
-  const isSelf = profile.type === "self";
+  // The account owner: shown their own Info page, but never a delete control.
+  const isSelf = isPrimaryProfile(profile);
 
   return (
     <div className="p-4 md:p-6 space-y-5 overflow-y-auto h-full pb-24" data-testid="page-profile-info">
@@ -537,6 +581,72 @@ function SingleProfileInfo({ id }: { id: string }) {
           </div>
         </Card>
       </div>
+
+      {/* ── Danger zone ────────────────────────────────────────────────────
+          Last on the page, and only ever one of two things: the delete
+          control, or the reason there isn't one. The primary account owner
+          is never deletable (shared/profile-protection.ts) — saying so
+          plainly beats a button that fails. */}
+      {isSelf ? (
+        <Card className="p-4 flex items-start gap-3" data-testid="info-primary-owner">
+          <ShieldCheck className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-sm font-medium">Primary account owner</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              This is your own profile, so it can't be deleted. Everyone else you add can be
+              removed from their own Info tab.
+            </p>
+          </div>
+        </Card>
+      ) : (
+        <Card className="p-4 border-destructive/30" data-testid="info-danger-zone">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-destructive">Delete {profile.name}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Permanently removes this {profile.type === "pet" ? "pet" : "person"} and everything linked to
+                them — tasks, habits, calendar items, trackers, finances, documents, notes and
+                nested assets. This can't be undone.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 text-xs text-destructive border-destructive/50 hover:bg-destructive/10 hover:text-destructive shrink-0"
+              onClick={() => setConfirmingDelete(true)}
+              data-testid="info-delete-profile"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete {profile.type === "pet" ? "pet" : "person"}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <AlertDialogContent data-testid="info-dialog-confirm-delete">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{profile.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes {profile.name} and all of their data: tasks, habits,
+              calendar events, trackers and their entries, expenses and income, documents,
+              journal entries, goals, notes, and any assets or liabilities nested under them.
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="info-cancel-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => { setConfirmingDelete(false); deletePerson.mutate(); }}
+              disabled={deletePerson.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="info-confirm-delete"
+            >
+              {deletePerson.isPending ? "Deleting…" : "Delete permanently"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

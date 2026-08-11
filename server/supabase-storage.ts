@@ -104,6 +104,7 @@ import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } fro
 import { setOwners } from "./ownership-writer";
 import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
 import { shareForParty, shareForParties, validateOwnership, roundPct, type OwnershipLink } from "../shared/ownership-model";
+import { isPrimaryProfile } from "../shared/profile-protection";
 
 const DOCUMENTS_BUCKET = "documents";
 
@@ -1876,6 +1877,15 @@ export class SupabaseStorage implements IStorage {
   async deleteProfile(id: string): Promise<boolean> {
     const profile = await this.getProfile(id);
     if (!profile) return false;
+    // The primary account owner is never deletable — see
+    // shared/profile-protection.ts. The route refuses it with a 403 before we
+    // get here; this guard is what stops every OTHER caller (bulk actions,
+    // chat's delete_profile, an import cleanup) from taking the anchor out
+    // from under the profile tree.
+    if (isPrimaryProfile(profile)) {
+      console.warn(`[deleteProfile] refused: ${id} is the primary account owner`);
+      return false;
+    }
 
     // ── RECURSIVE: Delete all child profiles first (vehicles, assets, subscriptions, etc.) ──
     // Each child profile deletion triggers its own cascade, so their data goes away too.
@@ -2030,6 +2040,18 @@ export class SupabaseStorage implements IStorage {
       } catch (e) { errors.push("trackers"); }
     };
 
+    // 10b. Chat artifacts scoped to this profile. `chat_artifacts.profile_id`
+    // is a bare text column with no FK, so nothing in the database removes
+    // these — without this step a deleted person leaves their charts and
+    // tables behind, pointing at an id that no longer resolves.
+    const cascadeChatArtifacts = async (): Promise<void> => {
+      try {
+        const { error } = await this.supabase.from("chat_artifacts").delete()
+          .eq("profile_id", id).eq("user_id", this.userId);
+        if (error) throw error;
+      } catch (e) { errors.push("chat_artifacts"); }
+    };
+
     // 11. Entity_links junction rows referencing this profile.
     const cascadeEntityLinks = async (): Promise<void> => {
       try {
@@ -2089,6 +2111,7 @@ export class SupabaseStorage implements IStorage {
       cascadeSharedTable("incomes", "incomes", allIncomes as any, { softDelete: true }),
       cascadeSharedTable("journal_entries", "journal",
         journalRows ? (journalRows as any[]).map(r => ({ id: r.id, linkedProfiles: r.linked_profiles || [] })) : null),
+      cascadeChatArtifacts(),
       cascadeEntityLinks(),
       cascadeOwnershipLinks(),
     ]);

@@ -192,6 +192,12 @@ export default defineConfig({
       // living in the Payments tab, and no "you already have a similar entry"
       // note (whose date the model invented) after a logged expense.
       'tests/bill-payments-tab.test.ts',
+      // "Asset profile" vs "person profile" (2026-08-11 screenshots): an
+      // asset request must never also produce a human, and the primary
+      // account owner must never be deletable.
+      'tests/person-vs-asset-profile.test.ts',
+      'tests/profile-delete-reachability.test.ts',
+      'tests/profile-lifecycle-e2e.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

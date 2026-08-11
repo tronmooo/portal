@@ -46,6 +46,7 @@ import {
   duplicateCreateViolation,
   recordTurnCreate,
   toolTargetLabel,
+  IDENTITY_PROFILE_TYPES,
   type RoutingViolation,
   type TurnCreate,
 } from "@shared/ai-tool-routing";
@@ -70,7 +71,8 @@ import {
   summarizeEnrichment,
   type Enrichment,
 } from "@shared/estimation-engine";
-import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossessive, detectPossessiveOwner } from "@shared/entity-naming";
+import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossessive, detectPossessiveOwner, looksLikeThingNotPerson } from "@shared/entity-naming";
+import { isPrimaryProfile, PRIMARY_PROFILE_DELETE_ERROR } from "@shared/profile-protection";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -5113,6 +5115,15 @@ Before every write, settle four things from THE CURRENT MESSAGE and pick the too
   4. FIELDS — every attribute the user stated.
 Example: "Create an asset for my Dodge Ram 2025. It's white, four-wheel-drive." → entity=asset, operation=create, target=none, fields={name:"Dodge Ram 2025", color:"white", driveType:"4WD"} → create_profile(type:"vehicle", name:"Dodge Ram 2025", fields:{color:"white", driveType:"4WD", year:2025}). NOT update_profile. NOT create_tracker. NOT create_habit.
 
+"ASSET PROFILE" IS AN ASSET. "PERSON PROFILE" IS A HUMAN. (NEVER VIOLATE — the server blocks the wrong one):
+create_profile writes both, and its "type" argument is the ONLY thing that decides which. Read the noun the user put in front of the word "profile":
+- "create an asset profile", "make a profile for my truck", "add a profile for the tires" → an ASSET. type is "asset" / "vehicle" / "property" / "account" / "subscription" — whichever fits what the thing IS. The word "profile" here means "a record with its own details page", nothing more. It NEVER means a human.
+- "create a person profile", "add a person", "add my brother Dave", "make a profile for my wife" → a HUMAN. type:"person".
+- A NESTED ASSET is an asset under another asset: "add tires for my Dodge Ram", "add a screen cover for my MacBook", "put a fridge in my house" → create_profile(type:"asset", name:"<the item>", forProfile:"<the parent asset>"). ONE call. The parent goes in forProfile; it is NOT a person and it is NOT created for you.
+- A LIABILITY is a debt → create_liability. A recurring bill → create_obligation. Neither is a person.
+- NEVER create a person profile unless the user explicitly asked for a person or named a human being. If you just created an asset, you are DONE — do not follow it with a person profile named after that asset, its owner phrase, or the user's whole sentence. "Tires" the asset plus "tires for my Dodge ram" the person is ONE request answered TWICE, and the second record is a bug.
+- A person's name is what someone is CALLED. If the name you are about to write contains "for", "under", "my", "our", or reads like a sentence, it is not a person — it is the thing you already created.
+
 CREATE VS UPDATE SAFETY (NEVER VIOLATE):
 - "Create/add/make/register a <thing>" is a CREATE. The default operation is CREATE and it does not change because a record with a similar name already exists.
 - Switch to update ONLY when the user's own words ask for one: "update", "change", "edit", "modify", "set", "correct", "my existing X", "the X I already have", "the X I just made".
@@ -6267,6 +6278,31 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
 
+      // PERSON PROFILES ARE FOR PEOPLE (2026-08-11 report). The intent gate in
+      // shared/ai-tool-routing.ts refuses a `person` write on an asset request,
+      // and the same-turn shadow rule refuses a person mirroring a thing this
+      // turn already created. This is the third layer, and the only one that
+      // still holds when create_profile is reached from somewhere other than
+      // the chat turn loop: a name that DESCRIBES an object ("tires for my
+      // Dodge ram", "my MacBook Pro m4") is never a human, whatever `type`
+      // says. Refuse rather than silently retype — a wrong type here pollutes
+      // the people list, the owner badges and every ownership rollup.
+      if (
+        input.name &&
+        IDENTITY_PROFILE_TYPES.has(String(input.type || "").toLowerCase()) &&
+        looksLikeThingNotPerson(input.name)
+      ) {
+        logger.warn("ai", `create_profile refused person type for thing-shaped name "${input.name}"`);
+        return {
+          error:
+            `"${input.name}" describes a thing, not a person, so it cannot be created as a ${input.type} profile. ` +
+            `If this is an item the user owns, call create_profile with the asset type ` +
+            `(type:"asset" / "vehicle" / "property") and put the owner or container in forProfile — ` +
+            `and if you already created that asset in this turn, the work is done: do not create anything else.`,
+          code: "PERSON_TYPE_FOR_THING",
+        };
+      }
+
       // DEDUP: Check if profile with same name already exists
       const existingProfiles = await storage.getProfiles();
       const childTypes = ["vehicle", "asset", "subscription", "loan", "investment", "account", "property"];
@@ -6712,7 +6748,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const dpResult = safeMatchEntity(profiles, input.name || "", p => p.name, { isDestructive: true });
       if (!dpResult.match) return { error: dpResult.error || "Profile not found", candidates: dpResult.candidates };
       const profile = dpResult.match;
-      await storage.deleteProfile(profile.id);
+      if (isPrimaryProfile(profile)) {
+        return { error: PRIMARY_PROFILE_DELETE_ERROR, code: "PRIMARY_PROFILE_PROTECTED" };
+      }
+      // deleteProfile returns false when the cascade had partial failures —
+      // reporting "deleted" on that leaves the user believing data is gone
+      // when linked rows are still there.
+      const dpOk = await storage.deleteProfile(profile.id);
+      if (!dpOk) {
+        return { error: `I couldn't fully delete "${profile.name}" — some of its linked records refused to go. Nothing was reported as removed.` };
+      }
       return { deleted: true, name: profile.name, id: profile.id };
     }
 
@@ -14142,7 +14187,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // name this turn is fan-out, not work.
             const dupCreate = findDuplicateCreateInTurn(toolUse.name, input, turnCreates);
             if (dupCreate) return duplicateCreateViolation(toolUse.name, label, dupCreate);
-            return checkToolAgainstIntent(toolUse.name, turnPlan);
+            // Input, not just the tool name: create_profile writes a HUMAN
+            // when its `type` says person, and that has to be checked against
+            // an asset request (2026-08-11 report — "Tires" the asset arrived
+            // with "tires for my Dodge ram" the person beside it).
+            return checkToolAgainstIntent(toolUse.name, turnPlan, input);
           })();
           if (routingViolation) {
             logger.warn("ai", `[turn ${turnId.slice(0, 8)}] BLOCKED ${toolUse.name}: ${routingViolation.mismatchType}`);

@@ -520,6 +520,8 @@ function getMaintenanceCost(fields: any): number {
 // removed 2026-05-27.
 import { computeAssetRollup as sharedComputeAssetRollup } from "@shared/asset-rollup";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
+import { isPrimaryProfile } from "@shared/profile-protection";
+import { reconcileProfileFilter } from "@/lib/profileFilter";
 import { isRecurringBill } from "@shared/liability-types";
 function computeAssetRollup(profile: any, descendants: TreeNode[]): AssetRollup {
   // The shared function ignores everything except `fields` and
@@ -12877,6 +12879,16 @@ export default function ProfileDetailPage() {
       queryClient.setQueryData(["/api/profiles"], (old: any[]) =>
         old?.filter((p: any) => p.id !== id) || []
       );
+      queryClient.setQueryData(["/api/profiles", "lite"], (old: any) =>
+        Array.isArray(old) ? old.filter((p: any) => p?.id !== id) : old
+      );
+      queryClient.removeQueries({ queryKey: ["/api/profiles", id, "detail"] });
+      // A scope pinned to the deleted profile would keep every scoped query
+      // asking for an id the server no longer knows.
+      try {
+        reconcileProfileFilter(queryClient.getQueryData<any[]>(["/api/profiles"])
+          ?? queryClient.getQueryData<any[]>(["/api/profiles", "lite"]) ?? []);
+      } catch { /* best-effort */ }
       toast({ title: `Profile deleted`, description: "All linked data has been removed" });
       // Cascade: profile delete also removes linked obligations, events, expenses, etc.
       invalidateDomains("profiles", "obligations", "events", "expenses", "tasks", "trackers");
@@ -13197,15 +13209,20 @@ export default function ProfileDetailPage() {
             >
               <Edit className="h-3.5 w-3.5" /> Edit
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-[13px] gap-1 text-destructive hover:text-destructive"
-              onClick={() => setShowDeleteDialog(true)}
-              data-testid="button-delete-profile"
-            >
-              <Trash2 className="h-3.5 w-3.5" /> Delete
-            </Button>
+            {/* The primary account owner is never deletable — the API refuses
+                it with a 403, so rendering the button would only produce a
+                failing dialog. See shared/profile-protection.ts. */}
+            {!isPrimaryProfile(profile) && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-[13px] gap-1 text-destructive hover:text-destructive"
+                onClick={() => setShowDeleteDialog(true)}
+                data-testid="button-delete-profile"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Delete
+              </Button>
+            )}
           </>}
           stats={heroStats}
         />

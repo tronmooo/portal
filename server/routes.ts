@@ -22,6 +22,7 @@ import { isRecurringBill as isRecurringBillType } from "@shared/liability-types"
 import { selfIdsFrom } from "@shared/scope";
 import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
+import { isPrimaryProfile, PRIMARY_PROFILE_DELETE_ERROR } from "@shared/profile-protection";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { registerCacheBuster } from "./cache-bus";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -3854,6 +3855,12 @@ ${JSON.stringify(ctx, null, 2)}`;
     const uid_p3 = cacheUserKey(req as AuthenticatedRequest);
     const existing = await storage.getProfile(req.params.id);
     if (!existing) return res.status(404).json({ error: "Profile not found" });
+    // The primary account owner anchors the whole profile tree — every
+    // ownerless asset parents to it and the profile filter falls back to it.
+    // Refuse before the cascade runs, not after.
+    if (isPrimaryProfile(existing)) {
+      return res.status(403).json({ error: PRIMARY_PROFILE_DELETE_ERROR, code: "PRIMARY_PROFILE_PROTECTED" });
+    }
     const ok = await storage.deleteProfile(req.params.id);
     bustCache(`profiles:${uid_p3}`); bustCache(`stats:${uid_p3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
     if (!ok) {
