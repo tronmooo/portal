@@ -1095,8 +1095,12 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             inputRef: avatarInputRef,
             onChange: handleAvatarChange,
           }}
-          onBack={() => navigate("/profiles")}
-          backLabel="Back"
+          // Back goes to the listing this liability came FROM — the Liabilities
+          // tab — not the generic Profiles page, and the label says so. Same
+          // treatment assets got (QA report 2026-08-05); a query-carrying
+          // backHref keeps the tab param inside the hash route.
+          backHref="/linked?tab=liabilities"
+          backLabel="Back to Liabilities"
           actions={<>
             {/* Owner picker deliberately absent — the single source of truth for
                 owners is the Linked People / Linked Profiles section. */}
