@@ -39,10 +39,12 @@ import {
   type CalendarOccurrence, type CalendarSeries, type OccurrenceKind,
 } from "@shared/calendar-occurrences";
 import {
-  capabilitiesFor, ACTION_LABELS, type CalendarAction,
+  capabilitiesFor, ACTION_LABELS, hasPerOccurrenceMoney,
+  MONEY_ACTIONS, MONEY_ACTION_LABELS,
+  type CalendarAction, type CalendarMoneyAction,
 } from "@shared/calendar-capabilities";
 import { humanRecurrenceLabel } from "@shared/recurring-dates";
-import { applyCalendarAction } from "@/lib/calendar-mutations";
+import { applyCalendarAction, applyCalendarMoneyAction } from "@/lib/calendar-mutations";
 
 const KIND_ICONS: Record<OccurrenceKind, any> = {
   birthday: Cake,
@@ -140,9 +142,13 @@ export function CalendarItemDetail({
     { action: CalendarAction; occ: CalendarOccurrence } | null
   >(null);
 
+  const [moneyAction, setMoneyAction] = useState<CalendarMoneyAction>("addCharge");
+  const [moneyAmount, setMoneyAmount] = useState("");
+
   const series: CalendarSeries | null = occurrence?.series ?? null;
   const capabilities = useMemo(() => (series ? capabilitiesFor(series) : []), [series]);
   const capOf = (a: CalendarAction) => capabilities.find((c) => c.action === a);
+  const showMoney = !!series && hasPerOccurrenceMoney(series);
 
   const future = useMemo(
     () => seriesOccurrences.filter((o) => o.effectiveDate >= todayISO),
@@ -187,6 +193,26 @@ export function CalendarItemDetail({
     onClose();
     const href = String(series.source.href || "").replace(/^#/, "");
     if (href) navigate(href);
+  };
+
+  const runMoney = async (occ: CalendarOccurrence) => {
+    const amount = Number(moneyAmount);
+    if (!Number.isFinite(amount)) {
+      toast({ title: "Enter an amount first", variant: "destructive" });
+      return;
+    }
+    setBusy(`${moneyAction}:${occ.id}`);
+    try {
+      await applyCalendarMoneyAction({
+        action: moneyAction, series, occurrence: occ, amount, chargeKind: "usage",
+      });
+      toast({ title: MONEY_SUCCESS[moneyAction](occ.date) });
+      setMoneyAmount("");
+    } catch (e: any) {
+      toast({ title: "Couldn't update the amount", description: e?.message || "Try again", variant: "destructive" });
+    } finally {
+      setBusy(null);
+    }
   };
 
   /** An action button that is either live or disabled with its reason. */
@@ -280,7 +306,19 @@ export function CalendarItemDetail({
                 <span className="text-muted-foreground font-normal">No upcoming occurrence</span>
               )}
             </Field>
-            {series.amount != null && <Field label="Amount">{fmtMoney(series.amount)}</Field>}
+            {/* The amount shown is THIS occurrence's, not the series'. For a
+                variable bill those differ, and the one the user tapped is the
+                one they mean. */}
+            {occurrence.amount != null && (
+              <Field label={occurrence.amountIsEstimate ? (occurrence.amount !== series.amount ? "Current" : "Estimated") : "Amount"}>
+                {fmtMoney(occurrence.amount)}
+                {occurrence.amountIsEstimate && (
+                  <span className="block text-[11px] text-muted-foreground font-normal">
+                    estimate — updates as charges are added
+                  </span>
+                )}
+              </Field>
+            )}
             {duplicateNote && (
               <p className="pt-2 text-[11px] text-muted-foreground" data-testid="cal-detail-duplicate-note">
                 {duplicateNote}
@@ -305,6 +343,57 @@ export function CalendarItemDetail({
               <ActionButton action="deleteSeries" occ={occurrence} />
             </div>
           </div>
+
+          {/* ── What THIS period costs ───────────────────────────────────
+              Only rendered for a bill whose amount genuinely moves. Every
+              control here writes to this occurrence alone — adding August's
+              usage cannot touch July's total or next month's estimate. */}
+          {showMoney && (
+            <div className="px-4 py-3 border-b border-border/60" data-testid="cal-detail-money">
+              <p className="micro-label text-muted-foreground mb-2">
+                Amount for {fmtShort(occurrence.effectiveDate)}
+              </p>
+              <div className="flex items-baseline gap-2 mb-2">
+                <span className="text-xl font-bold tabular-nums">{fmtMoney(occurrence.amount ?? 0)}</span>
+                <span className="text-[11px] text-muted-foreground">
+                  {occurrence.amountIsEstimate ? "estimated so far" : "posted"}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Input
+                  type="number" step="0.01" inputMode="decimal"
+                  value={moneyAmount}
+                  onChange={(e) => setMoneyAmount(e.target.value)}
+                  placeholder="0.00"
+                  className="h-8 text-xs"
+                  data-testid="cal-money-input"
+                />
+                <select
+                  value={moneyAction}
+                  onChange={(e) => setMoneyAction(e.target.value as CalendarMoneyAction)}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-[11px]"
+                  data-testid="cal-money-action"
+                >
+                  {MONEY_ACTIONS.map((a) => (
+                    <option key={a} value={a}>{MONEY_ACTION_LABELS[a]}</option>
+                  ))}
+                </select>
+                <Button
+                  size="sm" className="h-8 text-[11px]"
+                  disabled={busy != null || !moneyAmount}
+                  onClick={() => void runMoney(occurrence)}
+                  data-testid="cal-money-apply"
+                >
+                  Apply
+                </Button>
+              </div>
+              {occurrence.amountIsEstimate && (
+                <p className="text-[11px] text-muted-foreground mt-1.5">
+                  Recording the actual amount freezes this month — later edits to the bill won't change it.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* ── Every future occurrence, individually actionable ─────────── */}
           <div className="px-4 py-3">
@@ -439,6 +528,14 @@ const SUCCESS_MESSAGE: Record<CalendarAction, (date: string) => string> = {
   deleteOccurrence: (d) => `Removed ${fmtShort(d)}`,
   deleteFuture: (d) => `Series ends before ${fmtShort(d)}`,
   deleteSeries: () => "Series deleted",
+};
+
+// Every message names the MONTH the change landed on, because the one thing a
+// user must be able to trust here is that only that month moved.
+const MONEY_SUCCESS: Record<CalendarMoneyAction, (date: string) => string> = {
+  addCharge: (d) => `Charge added to the ${fmtShort(d)} bill`,
+  setEstimate: (d) => `Estimate updated for ${fmtShort(d)}`,
+  setActual: (d) => `${fmtShort(d)} recorded as the actual amount`,
 };
 
 const CONFIRM_TITLE: Record<CalendarAction, (title: string) => string> = {

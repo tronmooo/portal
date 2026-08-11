@@ -90,6 +90,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   ],
   profiles: [
     ["/api/profiles"],
+    ["/api/accounts"], // accounts ARE profiles (type: "account")
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/activity"],
@@ -112,6 +113,9 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/obligations"],
     ["/api/loans/schedule"],
     ["/api/cashflow"],
+    // Paying a bill from an account moves that account's balance, so the
+    // Accounts list is stale the moment a liability write lands.
+    ["/api/accounts"],
   ],
   people: [
     ["/api/profiles"],

@@ -14,6 +14,7 @@ import { computeKeyFindings } from "@shared/tracker-insights";
 import { ownedAssetIds } from "@shared/cost-of-ownership";
 import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "@shared/ownership-model";
 import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
+import { summarizeAccounts } from "@shared/finance-accounts";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill } from "@shared/liability-types";
 import { advanceLiabilityDueDate, readDueDate } from "@shared/liability-recurrence";
@@ -6256,9 +6257,9 @@ Rules:
   app.post("/api/liabilities/:id/occurrences/:date/pay", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
-    const { amount, method, paymentDate } = req.body || {};
+    const { amount, method, paymentDate, accountId } = req.body || {};
     if (amount !== undefined && (typeof amount !== "number" || amount < 0)) return res.status(400).json({ error: "amount must be a non-negative number" });
-    const result = await (storage as any).payOccurrence(req.params.id, req.params.date, { amount, method, paymentDate });
+    const result = await (storage as any).payOccurrence(req.params.id, req.params.date, { amount, method, paymentDate, accountId });
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -6276,7 +6277,7 @@ Rules:
   app.patch("/api/liabilities/:id/occurrences/:date", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
-    const { movedTo, amount, notes } = req.body || {};
+    const { movedTo, amount, notes, estimatedAmount, actualAmount } = req.body || {};
     let result;
     if (movedTo !== undefined) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(movedTo))) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
@@ -6285,7 +6286,47 @@ Rules:
     if (amount !== undefined || notes !== undefined) {
       result = await (storage as any).setOccurrenceFields(req.params.id, req.params.date, { amount, notes });
     }
+    // Estimated vs actual are separate, on purpose. Writing the estimate must
+    // never masquerade as the bill having posted, and writing the actual must
+    // freeze the period rather than nudge a forecast.
+    if (estimatedAmount !== undefined) {
+      const n = estimatedAmount === null ? null : Number(estimatedAmount);
+      if (n !== null && (!Number.isFinite(n) || n < 0)) return res.status(400).json({ error: "estimatedAmount must be a non-negative number or null" });
+      result = await (storage as any).setOccurrenceEstimate(req.params.id, req.params.date, n);
+    }
+    if (actualAmount !== undefined) {
+      const n = actualAmount === null ? null : Number(actualAmount);
+      if (n !== null && (!Number.isFinite(n) || n < 0)) return res.status(400).json({ error: "actualAmount must be a non-negative number or null" });
+      result = await (storage as any).setOccurrenceActual(req.params.id, req.params.date, n);
+    }
     if (!result) return res.status(404).json({ error: "Recurring liability not found (or nothing to change)" });
+    bustBillCaches(uid);
+    res.json(result);
+  }));
+
+  // ---- Usage / credits / fee charges on ONE billing period ----
+  // The charge lands on the occurrence for that period and nowhere else, which
+  // is what keeps "another $30 of credits this month" from rewriting last
+  // month's bill or inflating next month's estimate.
+  app.post("/api/liabilities/:id/occurrences/:date/charges", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const { amount, kind, label, date, notes } = req.body || {};
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n === 0) return res.status(400).json({ error: "amount must be a non-zero number" });
+    const result = await (storage as any).addOccurrenceCharge(req.params.id, req.params.date, {
+      amount: n, kind, label, date, notes, source: "user",
+    });
+    if (!result) return res.status(404).json({ error: "Liability not found" });
+    bustBillCaches(uid);
+    res.json(result);
+  }));
+
+  app.delete("/api/liabilities/:id/occurrences/:date/charges/:chargeId", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    const result = await (storage as any).removeOccurrenceCharge(req.params.id, req.params.date, req.params.chargeId);
+    if (!result) return res.status(404).json({ error: "Liability not found" });
     bustBillCaches(uid);
     res.json(result);
   }));
@@ -6306,6 +6347,70 @@ Rules:
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
     res.json(result);
+  }));
+
+  // ---- Financial accounts (manual) ----
+  //
+  // Accounts ARE profiles (`type: "account"`), so read/delete deliberately go
+  // through the profile endpoints — there is one account record, not an account
+  // record plus a profile shadow of it. These routes add only the shaping and
+  // the balance ledger that the generic profile endpoints don't know about.
+  app.get("/api/accounts", asyncHandler(async (req, res) => {
+    const accounts = await (storage as any).getAccounts();
+    const summary = summarizeAccounts(accounts.map((a: any) => a.profile));
+    res.json({ accounts, summary });
+  }));
+
+  app.post("/api/accounts", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const { name, accountKind, institution, balance, availableBalance, creditLimit,
+      accountNumberLast4, balanceAsOf, currency, notes, ownerProfileId } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "name is required" });
+    if (balance !== undefined && balance !== null && !Number.isFinite(Number(balance))) {
+      return res.status(400).json({ error: "balance must be a number" });
+    }
+    const created = await (storage as any).createAccount({
+      name, accountKind, institution, balance, availableBalance, creditLimit,
+      accountNumberLast4, balanceAsOf, currency, notes, ownerProfileId,
+    });
+    bustBillCaches(uid);
+    res.status(201).json(created);
+  }));
+
+  app.patch("/api/accounts/:id", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const updated = await (storage as any).updateAccount(req.params.id, req.body || {});
+    if (!updated) return res.status(404).json({ error: "Account not found" });
+    bustBillCaches(uid);
+    res.json(updated);
+  }));
+
+  app.delete("/api/accounts/:id", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const existing = await storage.getProfile(req.params.id);
+    if (!existing || existing.type !== "account") return res.status(404).json({ error: "Account not found" });
+    const ok = await storage.deleteProfile(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Account not found" });
+    bustBillCaches(uid);
+    res.json({ success: true });
+  }));
+
+  // A balance CHANGE is an event with a reason, not a field overwrite: the
+  // before/after pair is kept so "why is this $40 lower" stays answerable.
+  app.post("/api/accounts/:id/adjust", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const { newBalance, delta, date, reason } = req.body || {};
+    if (newBalance == null && delta == null) {
+      return res.status(400).json({ error: "Pass newBalance (set to) or delta (move by)" });
+    }
+    if (newBalance != null && !Number.isFinite(Number(newBalance))) return res.status(400).json({ error: "newBalance must be a number" });
+    if (delta != null && !Number.isFinite(Number(delta))) return res.status(400).json({ error: "delta must be a number" });
+    const updated = await (storage as any).adjustAccountBalance(req.params.id, {
+      newBalance, delta, date, reason, source: "user",
+    });
+    if (!updated) return res.status(404).json({ error: "Account not found" });
+    bustBillCaches(uid);
+    res.json(updated);
   }));
 
   // ---- Artifacts ----

@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**126 operations** — ✅ 82 covered · 🆕 34 added · 🔜 0 planned · 🚫 10 excluded by design.
+**134 operations** — ✅ 83 covered · 🆕 41 added · 🔜 0 planned · 🚫 10 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -22,6 +22,8 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Restore soft-deleted | Tasks popup undo toast | `restore_task` | 🆕 added |  |
 | Subtasks / recurrence / critical priority (tag-encoded) | Tasks popup composer + row editor | `update_task` | 🆕 added |  |
 | List / query | Tasks popup tabs | `query_tasks` | ✅ covered |  |
+| Create with a clock time | Quick-add → Task (datetime) | `create_task` | ✅ covered |  |
+| Move time / reschedule | Tasks popup row editor | `update_task` | ✅ covered |  |
 
 ### Habit
 
@@ -70,14 +72,6 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Query timeline | Calendar views / agenda | `query_calendar` | ✅ covered |  |
 | Sync external calendar | Settings → Calendar sync | `sync_calendar` | ✅ covered |  |
 | Export .ics file | Calendar item → Export | — | 🚫 excluded | Browser file download — nothing for chat to return. |
-
-### Reminder
-
-| Operation | UI surface | AI tool(s) | Status | Notes |
-|---|---|---|---|---|
-| Create | Quick-add → Reminder | `create_reminder` | ✅ covered |  |
-| Edit / move time | (no UI surface — chat only) | `update_reminder` | 🆕 added |  |
-| Delete | (no UI surface — chat only) | `delete_reminder` | 🆕 added |  |
 
 ### Expense
 
@@ -129,6 +123,20 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 | Skip an occurrence | Bill schedule occurrence row → Skip | `update_obligation` | ✅ covered |  |
 | Pause / resume schedule | Bill schedule header toggle | `update_obligation` | ✅ covered |  |
 | Reschedule an occurrence / override its amount | Bill schedule occurrence row → Edit | `update_obligation` | 🆕 added |  |
+| Create with a billing model (fixed / variable / usage-based) | Bill schedule header shows the model | `create_obligation` | 🆕 added |  |
+| Add a usage / credits / fee charge to one period | Bill schedule occurrence → Edit → Add a charge; calendar detail → Add a usage charge | `add_liability_charge` | 🆕 added |  |
+| Set one period's estimated or actual amount | Bill schedule occurrence → Edit → Estimate / Actual; calendar detail money block | `set_liability_amount` | 🆕 added |  |
+| Pay an occurrence from a specific account | Bill schedule occurrence row → Pay | `pay_obligation` | 🆕 added |  |
+
+### Account
+
+| Operation | UI surface | AI tool(s) | Status | Notes |
+|---|---|---|---|---|
+| Create | Finance → Accounts → Add account | `create_account` | 🆕 added |  |
+| Adjust balance | Finance → Accounts → row → Add / Subtract | `update_account_balance` | 🆕 added |  |
+| Edit (name / type / institution / limit) | Finance → Accounts → row → Edit | `update_profile` | 🆕 added |  |
+| Delete | Finance → Accounts → row → Remove | `delete_profile` | 🆕 added |  |
+| Read balances / available credit | Finance → Accounts summary | `get_accounts` | 🆕 added |  |
 
 ### Liability
 

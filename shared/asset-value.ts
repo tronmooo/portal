@@ -19,6 +19,10 @@
 // so there is no cycle. Used by isNetWorthLiabilityProfile below to exclude
 // recurring service bills from balance-sheet debt.
 import { isRecurringBill } from "./liability-types";
+// account-kinds is pure + dependency-free (it imports nothing), so this is a
+// leaf edge, not a cycle. It answers ONE question here: is a `type: "account"`
+// profile's balance money held or money owed?
+import { accountKindOf, isDebtAccountKind } from "./account-kinds";
 
 // ---------- parseMoney ----------
 // Mirrors client/src/lib/utils.ts parseMoney and the inline server copy.
@@ -163,12 +167,22 @@ export const LIABILITY_PROFILE_TYPES = new Set([
   "investment",
 ]);
 
+/**
+ * An `account` profile appears in BOTH type sets, because "account" says where
+ * the money lives, not which way it points. Its KIND decides the side: a
+ * checking account is an asset, a credit card is a debt. Without this split the
+ * same `fields.balance` is added to assets and subtracted as debt from one row.
+ */
 export function isAssetProfile(p: any): boolean {
-  return !!p && ASSET_PROFILE_TYPES.has(String(p.type));
+  if (!p || !ASSET_PROFILE_TYPES.has(String(p.type))) return false;
+  if (String(p.type) === "account") return !isDebtAccountKind(accountKindOf(p));
+  return true;
 }
 
 export function isLiabilityProfile(p: any): boolean {
-  return !!p && LIABILITY_PROFILE_TYPES.has(String(p.type));
+  if (!p || !LIABILITY_PROFILE_TYPES.has(String(p.type))) return false;
+  if (String(p.type) === "account") return isDebtAccountKind(accountKindOf(p));
+  return true;
 }
 
 // ---------- Net-worth liability filter ----------

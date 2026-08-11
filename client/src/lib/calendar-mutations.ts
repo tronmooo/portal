@@ -22,7 +22,7 @@ import {
   setSeriesFlag,
 } from "@shared/recurring-dates";
 import { addDaysISO } from "@shared/date-math";
-import { can, type CalendarAction } from "@shared/calendar-capabilities";
+import { can, canEditMoney, type CalendarAction, type CalendarMoneyAction } from "@shared/calendar-capabilities";
 import type { CalendarSeries, CalendarOccurrence } from "@shared/calendar-occurrences";
 
 /** Domains a calendar write can ripple into. Kept wide on purpose: a bill is a
@@ -177,6 +177,51 @@ export async function applyCalendarAction(input: ApplyActionInput): Promise<void
       throw new UnsupportedCalendarAction(action, series);
   }
 
+  await refreshCalendarSurfaces();
+}
+
+// ─── Per-occurrence money ────────────────────────────────────────────────────
+
+export interface ApplyMoneyActionInput {
+  action: CalendarMoneyAction;
+  series: CalendarSeries;
+  occurrence: CalendarOccurrence;
+  /** Dollars. For `addCharge` a discount may be negative. */
+  amount: number;
+  /** `addCharge` only: usage | credits | fee | tax | discount | adjustment. */
+  chargeKind?: string;
+  /** `addCharge` only: what the charge was for. */
+  label?: string;
+}
+
+/**
+ * Change what ONE billing period costs.
+ *
+ * Every route here is addressed by `<liabilityId>/occurrences/<canonical date>`,
+ * so the write cannot reach the definition or any other period — August's
+ * usage charge lands on August and nowhere else. That containment is the
+ * point, not an implementation detail.
+ */
+export async function applyCalendarMoneyAction(input: ApplyMoneyActionInput): Promise<void> {
+  const { action, series, occurrence, amount } = input;
+  if (!canEditMoney(series, action)) throw new UnsupportedCalendarAction(action as any, series);
+
+  const base = `/api/liabilities/${series.source.id}/occurrences/${occurrence.date}`;
+  switch (action) {
+    case "addCharge":
+      await apiRequest("POST", `${base}/charges`, {
+        amount, kind: input.chargeKind || "usage", label: input.label,
+      });
+      break;
+    case "setEstimate":
+      await apiRequest("PATCH", base, { estimatedAmount: amount });
+      break;
+    case "setActual":
+      await apiRequest("PATCH", base, { actualAmount: amount });
+      break;
+    default:
+      throw new UnsupportedCalendarAction(action as any, series);
+  }
   await refreshCalendarSurfaces();
 }
 

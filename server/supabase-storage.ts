@@ -60,9 +60,19 @@ import {
   resolveLiabilityBalance as _sharedResolveLiabilityBalance,
   ASSET_PROFILE_TYPES,
   LIABILITY_PROFILE_TYPES,
+  isAssetProfile,
+  isLiabilityProfile,
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
 import { isRecurringBill } from "../shared/liability-types";
+import {
+  addCharge, removeCharge, setEstimate, setActual, normalizeBillingModel,
+  resolveBillingModel, resolveOccurrenceAmount, billingModelMeta,
+} from "../shared/liability-billing";
+import {
+  accountViews, accountKindMeta, applyBalanceAdjustment, isAccountProfile,
+  isDebtAccount, normalizeAccountKind,
+} from "../shared/finance-accounts";
 import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-ownership";
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
@@ -1424,7 +1434,7 @@ export class SupabaseStorage implements IStorage {
           // Only assets surface as co-owned children, per the rule. Use the
           // canonical ASSET_PROFILE_TYPES set so co-owned accounts/loans/etc.
           // surface too (the old hardcoded list dropped `account` and `loan`).
-          if (!ASSET_PROFILE_TYPES.has(a.type)) continue;
+          if (!isAssetProfile(a)) continue;
           seen.add(aid);
           childProfiles.push({ ...a, _coOwner: true, _ownershipPercentage: (l as any).ownershipPercentage });
         }
@@ -1433,7 +1443,7 @@ export class SupabaseStorage implements IStorage {
           if (!lid || seen.has(lid)) continue;
           const x = allProfiles.find(p => p.id === lid);
           if (!x) continue;
-          if (!LIABILITY_PROFILE_TYPES.has(x.type) && x.type !== "subscription") continue;
+          if (!isLiabilityProfile(x) && x.type !== "subscription") continue;
           seen.add(lid);
           childProfiles.push({ ...x, _coOwner: true, _ownershipPercentage: (l as any).ownershipPercentage });
         }
@@ -1502,7 +1512,7 @@ export class SupabaseStorage implements IStorage {
     let ownedAssetExpenses: any[] = [];
     if (isPersonLike && childProfiles.length > 0) {
       try {
-        const ownedAssets = childProfiles.filter((c: any) => ASSET_PROFILE_TYPES.has(c.type));
+        const ownedAssets = childProfiles.filter((c: any) => isAssetProfile(c));
         if (ownedAssets.length > 0) {
           const allExpenses = await this.getExpenses();
           const directIds = new Set(relatedExpenses.map((e: any) => e.id));
@@ -4644,16 +4654,30 @@ export class SupabaseStorage implements IStorage {
 
   private liabilityToObligation(p: Profile, payments: ObligationPayment[] = []): Obligation {
     const f: any = p.fields || {};
-    const amount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? f.balance ?? 0) || 0;
+    const baseAmount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? f.balance ?? 0) || 0;
     const frequency = String(f.frequency ?? f.billingFrequency ?? "monthly");
     const nextDueDate = String(
       f.dueDate ?? f.due_date ?? f.nextDueDate ?? f.next_due_date ?? f.renewalDate ?? "",
     ).slice(0, 10);
+    // `amount` is what the NEXT BILLING PERIOD actually costs, not the
+    // definition's figure. For a fixed bill those are identical; for a
+    // usage-based one the definition says $20 while August says $62, and every
+    // downstream consumer (upcoming bills, cash flow, the dashboard total)
+    // reads this single field. Resolving it here is what keeps them all in
+    // agreement instead of each surface picking a different number.
+    const billingModel = resolveBillingModel(p as any);
+    const money = resolveOccurrenceAmount(
+      baseAmount,
+      (f.occurrences && typeof f.occurrences === "object") ? f.occurrences[nextDueDate] : null,
+      billingModel,
+    );
+    const amount = money.current;
     const tk = String((p as any).type_key ?? (p as any).typeKey ?? "").toLowerCase();
     const kind = tk === "subscription" ? "subscription" : "bill";
     const parent = (p as any).parentProfileId;
     return {
       id: p.id, name: p.name, amount, frequency,
+      billingModel, baseAmount, amountIsEstimate: money.isEstimate,
       category: String(f.category ?? "general"),
       nextDueDate: nextDueDate || "",
       autopay: f.autopay === true || f.autoPay === true,
@@ -4755,6 +4779,13 @@ export class SupabaseStorage implements IStorage {
       category,
       status: "upcoming",
       source: "obligation",
+      // The billing model decides whether `amount` is THE amount or merely a
+      // starting point. A usage-based bill's $20 is a base price; each month's
+      // real total is assembled from that month's charges. Stored on the
+      // definition, read per-occurrence (shared/liability-billing.ts).
+      ...(normalizeBillingModel((data as any).billingModel)
+        ? { billingModel: normalizeBillingModel((data as any).billingModel) }
+        : {}),
       // Finite terms — only when explicitly provided (never invented).
       ...((data as any).count != null ? { count: Math.max(1, parseInt(String((data as any).count), 10) || 0) } : {}),
       ...((data as any).reminderLeadDays != null ? { reminderLeadDays: Math.max(0, parseInt(String((data as any).reminderLeadDays), 10) || 0) } : {}),
@@ -4880,8 +4911,12 @@ export class SupabaseStorage implements IStorage {
     const payments = await this._liabilityPayments(id);
     const fromISO = new Date(new Date(todayISO + "T00:00:00").setMonth(new Date(todayISO + "T00:00:00").getMonth() - 2)).toLocaleDateString("en-CA");
     const toISO = new Date(new Date(todayISO + "T00:00:00").setMonth(new Date(todayISO + "T00:00:00").getMonth() + months)).toLocaleDateString("en-CA");
-    const occurrences = generateSchedule({ id: p.id, fields: f }, payments, { todayISO, windowStart: fromISO, windowEnd: toISO });
-    const next = nextDueOccurrence({ id: p.id, fields: f }, payments, todayISO);
+    // The billing model is read from the ORIGINAL profile: deriveScheduleFields
+    // drops `type_key`, so resolving it off the normalized fields would fall
+    // back to the wrong family for loans and cards.
+    const billingModel = resolveBillingModel(p as any);
+    const occurrences = generateSchedule({ id: p.id, fields: f }, payments, { todayISO, windowStart: fromISO, windowEnd: toISO, billingModel });
+    const next = nextDueOccurrence({ id: p.id, fields: f }, payments, todayISO, billingModel);
     const paidPayRows = await this.supabase
       .from("liability_payments").select("*")
       .eq("user_id", this.userId).eq("liability_profile_id", id)
@@ -4894,11 +4929,18 @@ export class SupabaseStorage implements IStorage {
       name: p.name,
       typeKey,
       family: liabilityFamily(typeKey),
+      billingModel,
+      billingModelMeta: billingModelMeta(billingModel),
       isRecurring: isBill,
       amount,
       frequency: liabilityFrequency({ id: p.id, fields: f }),
       firstPayment: String(f.firstPaymentDate ?? f.dueDate ?? f.nextDueDate ?? "").slice(0, 10) || null,
-      nextDue: next ? { date: next.date, effectiveDate: next.effectiveDate, amount: next.amount } : null,
+      nextDue: next ? {
+        date: next.date, effectiveDate: next.effectiveDate, amount: next.amount,
+        estimatedAmount: next.estimatedAmount, actualAmount: next.actualAmount,
+        isEstimate: next.isEstimate, amountLabel: next.amountLabel,
+        chargeTotal: next.chargeTotal, charges: next.charges,
+      } : null,
       lastPaid: history[0]?.date ?? f.lastPaidDate ?? null,
       autopay: f.autopay === true || f.autoPay === true,
       paused: f.paused === true,
@@ -4933,25 +4975,114 @@ export class SupabaseStorage implements IStorage {
     return this.getLiabilitySchedule(id);
   }
 
+  /** The stored override for ONE billing period, or null. */
+  private _occurrenceOverride(p: any, date: string): any {
+    const occ = p?.fields?.occurrences;
+    return (occ && typeof occ === "object" ? occ[String(date).slice(0, 10)] : null) || null;
+  }
+
+  /** The definition's per-period base amount, normalized across families. */
+  private _definitionAmount(p: any): number {
+    const df = deriveScheduleFields(p.fields || {}, (p as any).type_key ?? (p as any).typeKey, getUserToday(this._timezone));
+    return liabilityAmount({ id: p.id, fields: df });
+  }
+
+  /**
+   * File a usage / credits / fee charge against ONE billing period.
+   *
+   * This is the operation that makes a usage-based liability work: the charge
+   * lands on that period's occurrence and nowhere else, so August's total moves
+   * and July's and September's do not.
+   */
+  async addOccurrenceCharge(
+    id: string,
+    date: string,
+    charge: { amount: number; kind?: string; label?: string; date?: string; notes?: string; source?: any },
+  ): Promise<any> {
+    const p = await this.getProfile(id);
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
+    const occDate = String(date).slice(0, 10);
+    const next = addCharge(this._occurrenceOverride(p, occDate), charge as any);
+    const result = await this._patchOccurrence(id, occDate, { charges: next.charges });
+    this.logActivity("obligation", `Added ${charge.kind || "charge"} of $${charge.amount} to ${p.name} ${occDate}`);
+    return result;
+  }
+
+  async removeOccurrenceCharge(id: string, date: string, chargeId: string): Promise<any> {
+    const p = await this.getProfile(id);
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
+    const occDate = String(date).slice(0, 10);
+    const next = removeCharge(this._occurrenceOverride(p, occDate), chargeId);
+    return this._patchOccurrence(id, occDate, { charges: next.charges });
+  }
+
+  /** What we EXPECT this period to cost. Never touches other periods. */
+  async setOccurrenceEstimate(id: string, date: string, amount: number | null): Promise<any> {
+    const p = await this.getProfile(id);
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
+    const occDate = String(date).slice(0, 10);
+    const next = setEstimate(this._occurrenceOverride(p, occDate), amount);
+    return this._patchOccurrence(id, occDate, {
+      estimatedAmount: next.estimatedAmount ?? null,
+    });
+  }
+
+  /**
+   * What ACTUALLY posted. Freezes the period as history — later definition
+   * edits and stray charges can no longer move it.
+   */
+  async setOccurrenceActual(id: string, date: string, amount: number | null): Promise<any> {
+    const p = await this.getProfile(id);
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
+    const occDate = String(date).slice(0, 10);
+    const next = setActual(this._occurrenceOverride(p, occDate), amount);
+    const result = await this._patchOccurrence(id, occDate, {
+      actualAmount: next.actualAmount ?? null,
+      postedAt: next.postedAt ?? null,
+    });
+    if (amount != null) this.logActivity("obligation", `${p.name} ${occDate} posted at $${amount}`);
+    return result;
+  }
+
   /** Mark one occurrence paid: writes a payment row + stamps the override. */
-  async payOccurrence(id: string, date: string, opts: { amount?: number; method?: string; paymentDate?: string } = {}): Promise<any> {
+  async payOccurrence(
+    id: string,
+    date: string,
+    opts: { amount?: number; method?: string; paymentDate?: string; accountId?: string } = {},
+  ): Promise<any> {
     const p = await this.getProfile(id);
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const f: any = p.fields || {};
     const occDate = String(date).slice(0, 10);
     const payDate = opts.paymentDate || occDate;
-    // Derived fields carry the per-occurrence amount for loans/cards too.
-    const df = deriveScheduleFields(f, (p as any).type_key ?? (p as any).typeKey, getUserToday(this._timezone));
-    const amount = opts.amount != null ? Number(opts.amount)
-      : (f.occurrences?.[occDate]?.amount != null ? Number(f.occurrences[occDate].amount) : liabilityAmount({ id, fields: df }));
+    // The amount owed for THIS period, resolved through the billing model —
+    // base + this period's charges, or the posted actual if the bill landed.
+    // A usage-based bill paid without an explicit amount must settle its real
+    // total ($42), not the definition's base ($20).
+    const money = resolveOccurrenceAmount(
+      this._definitionAmount(p),
+      this._occurrenceOverride(p, occDate),
+      resolveBillingModel(p as any),
+    );
+    const amount = opts.amount != null ? Number(opts.amount) : money.current;
+    const account = opts.accountId ? await this.getProfile(opts.accountId) : null;
     const payment: any = await this.createLiabilityPayment({
       liabilityProfileId: id, paymentDate: payDate, amount,
       principalPortion: amount, interestPortion: 0, fees: 0,
-      paymentType: "standard", sourceAccount: opts.method || null,
+      paymentType: "standard",
+      sourceAccount: account?.name || opts.method || null,
     } as any);
     // Stamp the override AND, if this was the current due date, advance the series.
+    // `actualAmount` is set here because a paid bill IS a posted bill: this is
+    // the moment the period stops being a forecast and becomes history.
     const occ: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
-    occ[occDate] = { ...(occ[occDate] || {}), status: "paid", paymentId: payment?.id, amount };
+    occ[occDate] = {
+      ...(occ[occDate] || {}),
+      status: "paid", paymentId: payment?.id, amount,
+      actualAmount: amount, paidAmount: amount,
+      postedAt: new Date().toISOString(),
+      ...(account ? { accountId: account.id } : {}),
+    };
     const patch: any = { occurrences: occ };
     const curDue = String(f.dueDate ?? f.nextDueDate ?? "").slice(0, 10);
     if (curDue === occDate) {
@@ -4960,6 +5091,18 @@ export class SupabaseStorage implements IStorage {
     }
     patch.lastPaidDate = payDate;
     await this.updateProfile(id, { fields: patch } as any);
+    // Money paid from an account leaves that account. Without this the bill is
+    // "paid" while the balance it was paid from never moves, and the Finance
+    // tab shows two numbers that disagree about the same event.
+    if (account && isAccountProfile(account)) {
+      await this.adjustAccountBalance(account.id, {
+        delta: isDebtAccount(account) ? amount : -amount,
+        date: payDate,
+        reason: `Payment — ${p.name} ${occDate}`,
+        source: "payment",
+        linkedRecordId: payment?.id || id,
+      });
+    }
     this.logActivity("obligation", `Paid ${p.name} occurrence ${occDate}: $${amount}`);
     return this.getLiabilitySchedule(id);
   }
@@ -5003,6 +5146,141 @@ export class SupabaseStorage implements IStorage {
     await this.updateProfile(id, { fields: { paused: false, pausedUntil: null, status: "upcoming" } } as any);
     this.logActivity("obligation", `Resumed ${p.name}`);
     return this.getLiabilitySchedule(id);
+  }
+
+  // ============================================================
+  // FINANCIAL ACCOUNTS — manually-tracked checking / savings / cash /
+  // credit / investment / loan accounts.
+  //
+  // An account is a `type: "account"` PROFILE, so it inherits net worth,
+  // profile filtering, ownership links, nesting, linked expenses/incomes and
+  // document attachment from machinery that already exists. These methods add
+  // only what is account-specific: the canonical field layout and the balance
+  // adjustment ledger. Everything else goes through createProfile /
+  // updateProfile / deleteProfile like any other profile.
+  // ============================================================
+
+  /** Every account profile, as the display-ready view shape. */
+  async getAccounts(): Promise<any[]> {
+    const profiles = await this.getProfiles();
+    return accountViews(profiles);
+  }
+
+  /**
+   * Create a manual account. `balance` is written to BOTH `balance` and
+   * `currentBalance` because an account can sit on either side of the balance
+   * sheet and the two resolvers read different keys.
+   */
+  async createAccount(input: {
+    name: string;
+    accountKind?: string;
+    institution?: string;
+    balance?: number;
+    availableBalance?: number;
+    creditLimit?: number;
+    accountNumberLast4?: string;
+    balanceAsOf?: string;
+    currency?: string;
+    notes?: string;
+    ownerProfileId?: string;
+  }): Promise<any> {
+    const kind = normalizeAccountKind(input.accountKind);
+    const meta = accountKindMeta(kind);
+    const today = getUserToday(this._timezone);
+    const balance = Math.abs(Number(input.balance ?? 0)) || 0;
+    const fields: Record<string, any> = {
+      accountKind: kind,
+      balance,
+      currentBalance: balance,
+      balanceAsOf: /^\d{4}-\d{2}-\d{2}$/.test(String(input.balanceAsOf ?? "")) ? String(input.balanceAsOf).slice(0, 10) : today,
+      currency: (input.currency || "usd").toLowerCase(),
+      balanceHistory: [],
+    };
+    if (input.institution) fields.institution = String(input.institution);
+    if (input.accountNumberLast4) fields.accountNumberLast4 = String(input.accountNumberLast4).slice(-4);
+    // Only store the fields the kind actually supports, so a checking account
+    // never renders an empty "credit limit" row.
+    if (meta.supportsAvailable && input.availableBalance != null) {
+      fields.availableBalance = Math.abs(Number(input.availableBalance)) || 0;
+    }
+    if (meta.supportsCreditLimit && input.creditLimit != null) {
+      fields.creditLimit = Math.abs(Number(input.creditLimit)) || 0;
+    }
+
+    const created = await this.createProfile({
+      type: "account" as any,
+      type_key: kind,
+      name: String(input.name || "Account").trim(),
+      fields,
+      notes: input.notes || "",
+      ...(input.ownerProfileId ? { parentProfileId: input.ownerProfileId } : {}),
+    } as any);
+    this.logActivity("profile", `Added ${meta.label.toLowerCase()} account ${created.name}`);
+    return created;
+  }
+
+  async updateAccount(id: string, changes: Record<string, any>): Promise<any | undefined> {
+    const p = await this.getProfile(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    const patch: any = { fields: {} };
+    if (changes.name) patch.name = String(changes.name);
+    if (changes.notes !== undefined) patch.notes = String(changes.notes ?? "");
+    if (changes.ownerProfileId !== undefined) patch.parentProfileId = changes.ownerProfileId || null;
+    const f = patch.fields;
+    if (changes.accountKind !== undefined) {
+      const kind = normalizeAccountKind(changes.accountKind);
+      f.accountKind = kind;
+      patch.type_key = kind;
+    }
+    for (const key of ["institution", "accountNumberLast4", "currency", "status"]) {
+      if (changes[key] !== undefined) f[key] = changes[key] == null ? null : String(changes[key]);
+    }
+    for (const key of ["availableBalance", "creditLimit"]) {
+      if (changes[key] !== undefined) f[key] = changes[key] == null ? null : Math.abs(Number(changes[key])) || 0;
+    }
+    if (changes.includeInNetWorth !== undefined) f.includeInNetWorth = changes.includeInNetWorth !== false;
+    // A balance change is an ADJUSTMENT, never a silent overwrite — it goes
+    // through the ledger so the history survives.
+    if (changes.balance !== undefined && changes.balance !== null) {
+      await this.adjustAccountBalance(id, {
+        newBalance: Number(changes.balance),
+        date: changes.balanceAsOf,
+        reason: changes.reason || "Manual update",
+        source: "user",
+      });
+    } else if (changes.balanceAsOf) {
+      f.balanceAsOf = String(changes.balanceAsOf).slice(0, 10);
+    }
+    if (Object.keys(f).length === 0) delete patch.fields;
+    if (Object.keys(patch).length === 0) return this.getProfile(id);
+    return this.updateProfile(id, patch as any);
+  }
+
+  /**
+   * Move an account's balance and record why.
+   *
+   * `newBalance` sets it outright ("my checking is $2,410 now"); `delta` moves
+   * it ("I spent $40"). Either way the before/after pair is appended to
+   * `fields.balanceHistory`, so a balance that changed can always be explained.
+   */
+  async adjustAccountBalance(id: string, input: {
+    newBalance?: number | null;
+    delta?: number | null;
+    date?: string | null;
+    reason?: string | null;
+    source?: any;
+    linkedRecordId?: string | null;
+  }): Promise<any | undefined> {
+    const p = await this.getProfile(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    const today = getUserToday(this._timezone);
+    const { fields, adjustment } = applyBalanceAdjustment(p, input, today);
+    const updated = await this.updateProfile(id, { fields } as any);
+    this.logActivity(
+      "profile",
+      `${p.name} balance ${adjustment.delta >= 0 ? "+" : "-"}$${Math.abs(adjustment.delta)} → $${adjustment.newBalance}`,
+    );
+    return updated;
   }
 
   // ============================================================
@@ -6304,7 +6582,6 @@ export class SupabaseStorage implements IStorage {
     // `subscription` is intentionally excluded from assetBreakdown.
     // Source of truth: shared/asset-value.ts. Do NOT inline a local copy of
     // these type sets — drift here silently desyncs dashboard net worth.
-    const assetChildTypes = ASSET_PROFILE_TYPES;
     const noFilterBreak = !fpIds || fpIds.length === 0;
     // Ownership share for the selected filter, via the shared model. An item
     // with explicit owner links is attributed to those owners; an item with NO
@@ -6325,7 +6602,7 @@ export class SupabaseStorage implements IStorage {
     };
     const assetBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
-      if (!assetChildTypes.has(p.type)) continue;
+      if (!isAssetProfile(p)) continue;
       const gross = resolveAssetValue(p.fields);
       if (gross <= 0) continue;
       const share = shareForAsset(p);
@@ -6363,11 +6640,10 @@ export class SupabaseStorage implements IStorage {
           // BUG-NW-1 fix (2026-06-03): `subscription` removed — subscriptions are recurring expenses,
           // never balance-sheet items. They were leaking $cost into Net Worth via resolveAssetValue's
           // fields.cost candidate path.
-          const childTypes = ASSET_PROFILE_TYPES;
           // Same ownership-share rule as assetBreakdown (shared model) — keep
           // the total and the per-row breakdown in lockstep.
           return allProfiles.reduce((s, p) => {
-            if (!childTypes.has(p.type)) return s;
+            if (!isAssetProfile(p)) return s;
             const share = shareForAsset(p);
             if (share <= 0) return s;
             return s + (resolveAssetValue(p.fields) * share / 100);
@@ -7319,7 +7595,6 @@ export class SupabaseStorage implements IStorage {
     }
     // Source of truth: shared/asset-value.ts. Do NOT inline a local copy of
     // these type sets — drift here silently desyncs dashboard net worth.
-    const assetChildTypes = ASSET_PROFILE_TYPES;
     // This profile's ownership share of an item: the item itself = 100%; else
     // the profile's explicit ownership %, or 100% if it's Self and the item has
     // no explicit owners.
@@ -7329,7 +7604,7 @@ export class SupabaseStorage implements IStorage {
     };
     const assets: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
-      if (!assetChildTypes.has(p.type)) continue;
+      if (!isAssetProfile(p)) continue;
       const gross = resolveAssetValue(p.fields);
       if (gross <= 0) continue;
       const share = shareForItem(p, assetLinksByAsset);

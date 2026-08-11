@@ -70,6 +70,10 @@ export const TOOL_INTENT_ENTITY: Record<string, IntentEntity> = {
   create_obligation: "obligation", update_obligation: "obligation",
   delete_obligation: "obligation", pay_obligation: "obligation",
   undo_last_payment: "obligation",
+  // Per-occurrence money on a variable/usage-based bill. These edit ONE
+  // billing period of an existing obligation — never the series, never a new
+  // record — so they route to the obligation entity like the rest.
+  add_liability_charge: "obligation", set_liability_amount: "obligation",
 
   create_liability: "liability", update_liability: "liability",
   add_liability_payment: "liability", update_liability_payment: "liability",
@@ -77,6 +81,9 @@ export const TOOL_INTENT_ENTITY: Record<string, IntentEntity> = {
   link_liability_asset: "liability", link_liability_owner: "liability",
   link_asset_to_liability: "liability", unlink_asset_from_liability: "liability",
   move_liability_to_asset: "liability",
+
+  // Financial accounts are `type: "account"` profiles.
+  create_account: "profile", update_account_balance: "profile",
 
   // Goals / journal / memory / artifacts / documents
   create_goal: "goal", update_goal: "goal", delete_goal: "goal",

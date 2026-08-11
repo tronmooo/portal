@@ -558,6 +558,19 @@ export interface Obligation {
   payments: ObligationPayment[];
   notes?: string;
   fields?: Record<string, any>;
+  /**
+   * How the amount behaves each cycle — see shared/liability-billing.
+   * "fixed" (the default) means `amount` IS the amount. For "variable" and
+   * "usage_based", `amount` is the CURRENT total of the next due billing
+   * period (base + that period's charges, or its posted actual), while
+   * `baseAmount` is the definition's figure. Every consumer — upcoming bills,
+   * cash flow, the calendar — reads `amount` and is therefore right for both.
+   */
+  billingModel?: string;
+  /** The definition's per-period amount, before this period's charges. */
+  baseAmount?: number;
+  /** True when `amount` is still a forecast rather than a posted charge. */
+  amountIsEstimate?: boolean;
   createdAt: string;
   updatedAt?: string;
 }
@@ -610,6 +623,13 @@ export const insertObligationSchema = z.object({
   recurrenceEnd: z.string().optional(),
   currency: z.string().optional(),
   icon: z.string().optional(),
+  /**
+   * How this bill's amount behaves each cycle — see shared/liability-billing.
+   * "fixed" is the same amount every period; "variable" recurs but the amount
+   * changes; "usage_based" is a base price plus charges accrued in the period.
+   * Defaults to "fixed" so existing bills keep their exact behaviour.
+   */
+  billingModel: z.enum(["fixed", "variable", "usage_based", "one_time", "installment"]).optional(),
 });
 
 export type InsertObligation = z.input<typeof insertObligationSchema>;

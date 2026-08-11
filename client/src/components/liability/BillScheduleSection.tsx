@@ -10,16 +10,32 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarClock, CheckCircle2, SkipForward, Pause, Play, Pencil, Clock, ChevronDown, ChevronRight, ChevronLeft, Bell } from "lucide-react";
 import { BILL_STATUS_META, type BillStatus } from "@shared/liability-status";
+import {
+  billingModelMeta, CHARGE_KINDS,
+  type BillingModel, type OccurrenceCharge,
+} from "@shared/liability-billing";
 import { formatFullDate, formatMoneyCents, parseLocalDate } from "@/lib/format";
 
 type OccStatus = BillStatus | "skipped";
 interface Occ {
   date: string; effectiveDate: string; amount: number; status: OccStatus;
   notes?: string; occurrenceId: string; paymentId?: string;
+  // Per-occurrence money (shared/liability-billing.ts). `amount` is already the
+  // resolved total for the period — these break it down and say whether it has
+  // posted yet.
+  billingModel?: BillingModel;
+  baseAmount?: number;
+  estimatedAmount?: number | null;
+  actualAmount?: number | null;
+  charges?: OccurrenceCharge[];
+  chargeTotal?: number;
+  isEstimate?: boolean;
+  amountLabel?: "Estimated" | "Current" | "Actual";
 }
 interface Schedule {
   id: string; name: string; amount: number; frequency: string;
   family?: string; isRecurring?: boolean;
+  billingModel?: BillingModel;
   firstPayment: string | null; nextDue: { date: string; effectiveDate: string; amount: number } | null;
   lastPaid: string | null; autopay: boolean; paused: boolean; pausedUntil: string | null;
   gracePeriodDays: number | null; lateFee: number | null; reminderLeadDays: number | null;
@@ -89,6 +105,11 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
   }
 
   const occ = data.occurrences || [];
+  // A variable or usage-based bill has a per-period amount; a fixed one does
+  // not. That single fact decides what this card is allowed to offer, so it is
+  // read once here from the definition rather than guessed per row.
+  const modelMeta = billingModelMeta(data.billingModel ?? "fixed");
+  const isVariable = modelMeta.perOccurrenceAmount;
   const filtered = occ.filter((o) => {
     if (filter === "all") return true;
     if (filter === "upcoming") return o.status === "upcoming" || o.status === "due_today";
@@ -112,7 +133,10 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
     { label: "Payments made", value: paidCount > 0 ? String(paidCount) : null },
     { label: "Last paid", value: data.lastPaid ? dt(data.lastPaid) : null },
     { label: "First payment", value: data.firstPayment ? dt(data.firstPayment) : null },
-    { label: "Paid per year", value: data.annualTotal ? usd(data.annualTotal) : null },
+    // "Paid per year" is `amount x periods`, which is only true for a FIXED
+    // bill. For a variable one it would be a fabricated number, so it is
+    // omitted rather than shown with false precision.
+    { label: "Paid per year", value: !isVariable && data.annualTotal ? usd(data.annualTotal) : null },
     { label: "Grace period", value: data.gracePeriodDays != null ? `${data.gracePeriodDays} days` : null },
     { label: "Late fee", value: data.lateFee != null ? usd(data.lateFee) : null },
     { label: "Reminder", value: data.reminderLeadDays != null ? `${data.reminderLeadDays}d before` : null },
@@ -123,7 +147,14 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
     <Card data-testid="bill-schedule-section">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <CardTitle className="text-base flex items-center gap-2"><CalendarClock className="w-4 h-4" />Schedule &amp; Calendar</CardTitle>
+          <CardTitle className="text-base flex items-center gap-2">
+            <CalendarClock className="w-4 h-4" />Schedule &amp; Calendar
+            {isVariable && (
+              <Badge variant="outline" className="h-5 text-[11px] font-normal" data-testid="billing-model-badge">
+                {modelMeta.label}
+              </Badge>
+            )}
+          </CardTitle>
           {data.isRecurring && (
           <div className="flex items-center gap-2">
             {data.paused ? (
@@ -214,7 +245,7 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
         <div className="space-y-1.5">
           {filtered.length === 0 && <p className="text-sm text-muted-foreground py-2">No {filter} payments.</p>}
           {filtered.map((o) => (
-            <OccurrenceRow key={o.occurrenceId} liabilityId={liabilityId} occ={o} defaultAmount={data.amount} onAct={act} busy={run.isPending} />
+            <OccurrenceRow key={o.occurrenceId} liabilityId={liabilityId} occ={o} defaultAmount={data.amount} onAct={act} busy={run.isPending} variable={isVariable} />
           ))}
         </div>
       </CardContent>
@@ -223,67 +254,185 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
 }
 
 function OccurrenceRow({
-  liabilityId, occ, defaultAmount, onAct, busy,
+  liabilityId, occ, defaultAmount, onAct, busy, variable,
 }: {
   liabilityId: string; occ: Occ; defaultAmount: number;
   onAct: (fn: () => Promise<Response>, ok: string) => void; busy: boolean;
+  /** True when this liability's occurrences carry their own amounts. */
+  variable: boolean;
 }) {
   const [moveTo, setMoveTo] = useState(occ.effectiveDate);
   const [amt, setAmt] = useState(String(occ.amount ?? defaultAmount));
   const [notes, setNotes] = useState(occ.notes || "");
+  const [chargeAmt, setChargeAmt] = useState("");
+  const [chargeKind, setChargeKind] = useState("usage");
+  const [chargeLabel, setChargeLabel] = useState("");
+  const [showBreakdown, setShowBreakdown] = useState(false);
   const open = occ.status !== "paid" && occ.status !== "skipped";
   const base = `/api/liabilities/${liabilityId}/occurrences/${occ.date}`;
+  const charges = occ.charges || [];
+  const hasBreakdown = variable && (charges.length > 0 || (occ.chargeTotal ?? 0) !== 0);
+
+  const addCharge = () => {
+    const n = Number(chargeAmt);
+    if (!Number.isFinite(n) || n === 0) return;
+    onAct(
+      () => apiRequest("POST", `${base}/charges`, { amount: n, kind: chargeKind, label: chargeLabel || undefined }),
+      `Added ${usd(Math.abs(n))} to this month's bill`,
+    );
+    setChargeAmt(""); setChargeLabel("");
+  };
 
   return (
-    <div className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2" data-testid={`occ-${occ.date}`}>
-      <div className="flex items-center gap-2 min-w-0">
-        <Clock className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-[14px] font-semibold tabular-nums">{dt(occ.effectiveDate)}</span>
-            <StatusBadge status={occ.status} />
+    <div className="rounded-lg border" data-testid={`occ-${occ.date}`}>
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Clock className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-[14px] font-semibold tabular-nums">{dt(occ.effectiveDate)}</span>
+              <StatusBadge status={occ.status} />
+              {/* The word beside the money is the honest one: a forecast is
+                  never rendered as though the bill had posted. */}
+              {variable && occ.isEstimate && (
+                <Badge variant="outline" className="h-5 text-[11px] text-amber-600 border-amber-600">
+                  {occ.amountLabel ?? "Estimated"}
+                </Badge>
+              )}
+            </div>
+            <span className="text-[13px] text-muted-foreground tabular-nums">
+              {usd(occ.amount)}
+              {hasBreakdown && (
+                <button type="button" onClick={() => setShowBreakdown((v) => !v)}
+                  className="ml-1.5 underline decoration-dotted hover:text-foreground"
+                  data-testid={`occ-breakdown-${occ.date}`}>
+                  {usd(occ.baseAmount ?? 0)} base + {usd(occ.chargeTotal ?? 0)} charges
+                </button>
+              )}
+              {occ.notes ? ` · ${occ.notes}` : ""}
+            </span>
           </div>
-          <span className="text-[13px] text-muted-foreground tabular-nums">{usd(occ.amount)}{occ.notes ? ` · ${occ.notes}` : ""}</span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          {open && (
+            <>
+              <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={busy}
+                onClick={() => onAct(() => apiRequest("POST", `${base}/pay`, { amount: Number(amt) || occ.amount }), "Marked paid")}
+                data-testid={`occ-pay-${occ.date}`}><CheckCircle2 className="w-3.5 h-3.5 mr-1" />Pay</Button>
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={busy}
+                onClick={() => onAct(() => apiRequest("POST", `${base}/skip`), "Skipped")}
+                data-testid={`occ-skip-${occ.date}`}><SkipForward className="w-3.5 h-3.5" /></Button>
+            </>
+          )}
+          <Popover>
+            <PopoverTrigger asChild><Button size="sm" variant="ghost" className="h-7 px-2 text-xs" data-testid={`occ-edit-${occ.date}`}><Pencil className="w-3.5 h-3.5" /></Button></PopoverTrigger>
+            <PopoverContent className="w-72 space-y-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Reschedule this occurrence</Label>
+                <div className="flex gap-1">
+                  <Input type="date" value={moveTo} onChange={(e) => setMoveTo(e.target.value)} className="h-8" />
+                  <Button size="sm" className="h-8" onClick={() => onAct(() => apiRequest("PATCH", base, { movedTo: moveTo }), "Rescheduled")}>Move</Button>
+                </div>
+              </div>
+
+              {variable ? (
+                <>
+                  {/* Estimate and actual are two different statements about the
+                      same month, so they get two different controls. Setting the
+                      actual is what turns this period into history. */}
+                  <div className="space-y-1">
+                    <Label className="text-xs">Estimate for this month</Label>
+                    <div className="flex gap-1">
+                      <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8" />
+                      <Button size="sm" variant="outline" className="h-8"
+                        onClick={() => onAct(() => apiRequest("PATCH", base, { estimatedAmount: Number(amt) }), "Estimate updated")}
+                        data-testid={`occ-estimate-${occ.date}`}>Estimate</Button>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Actual charged</Label>
+                    <div className="flex gap-1">
+                      <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8" />
+                      <Button size="sm" className="h-8"
+                        onClick={() => onAct(() => apiRequest("PATCH", base, { actualAmount: Number(amt) }), "Actual amount recorded")}
+                        data-testid={`occ-actual-${occ.date}`}>Actual</Button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Recording the actual freezes this month — it stops changing when charges are added.
+                    </p>
+                  </div>
+                  <div className="space-y-1 border-t pt-2">
+                    <Label className="text-xs">Add a charge to this month</Label>
+                    <div className="flex gap-1">
+                      <Input type="number" step="0.01" value={chargeAmt} onChange={(e) => setChargeAmt(e.target.value)}
+                        placeholder="0.00" className="h-8" data-testid={`occ-charge-amount-${occ.date}`} />
+                      <select value={chargeKind} onChange={(e) => setChargeKind(e.target.value)}
+                        className="h-8 rounded-md border border-input bg-background px-1.5 text-[11px]"
+                        data-testid={`occ-charge-kind-${occ.date}`}>
+                        {CHARGE_KINDS.filter((c) => c.key !== "base").map((c) => (
+                          <option key={c.key} value={c.key}>{c.label}</option>
+                        ))}
+                      </select>
+                      <Button size="sm" className="h-8" onClick={addCharge} data-testid={`occ-charge-add-${occ.date}`}>Add</Button>
+                    </div>
+                    <Input value={chargeLabel} onChange={(e) => setChargeLabel(e.target.value)}
+                      className="h-8" placeholder="What was it for? (optional)" />
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-1">
+                  <Label className="text-xs">Amount for this occurrence</Label>
+                  <div className="flex gap-1">
+                    <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8" />
+                    <Button size="sm" className="h-8" onClick={() => onAct(() => apiRequest("PATCH", base, { amount: Number(amt) }), "Amount updated")}>Save</Button>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <Label className="text-xs">Notes</Label>
+                <div className="flex gap-1">
+                  <Input value={notes} onChange={(e) => setNotes(e.target.value)} className="h-8" placeholder="e.g. paid early" />
+                  <Button size="sm" className="h-8" onClick={() => onAct(() => apiRequest("PATCH", base, { notes }), "Note saved")}>Save</Button>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
-        {open && (
-          <>
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={busy}
-              onClick={() => onAct(() => apiRequest("POST", `${base}/pay`, { amount: Number(amt) || occ.amount }), "Marked paid")}
-              data-testid={`occ-pay-${occ.date}`}><CheckCircle2 className="w-3.5 h-3.5 mr-1" />Pay</Button>
-            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={busy}
-              onClick={() => onAct(() => apiRequest("POST", `${base}/skip`), "Skipped")}
-              data-testid={`occ-skip-${occ.date}`}><SkipForward className="w-3.5 h-3.5" /></Button>
-          </>
-        )}
-        <Popover>
-          <PopoverTrigger asChild><Button size="sm" variant="ghost" className="h-7 px-2 text-xs" data-testid={`occ-edit-${occ.date}`}><Pencil className="w-3.5 h-3.5" /></Button></PopoverTrigger>
-          <PopoverContent className="w-64 space-y-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Reschedule this occurrence</Label>
-              <div className="flex gap-1">
-                <Input type="date" value={moveTo} onChange={(e) => setMoveTo(e.target.value)} className="h-8" />
-                <Button size="sm" className="h-8" onClick={() => onAct(() => apiRequest("PATCH", base, { movedTo: moveTo }), "Rescheduled")}>Move</Button>
-              </div>
+
+      {/* Line items — what this month is actually made of. */}
+      {showBreakdown && hasBreakdown && (
+        <div className="border-t px-3 py-2 space-y-1 bg-muted/20" data-testid={`occ-charges-${occ.date}`}>
+          <div className="flex items-center justify-between text-[12px]">
+            <span className="text-muted-foreground">Base</span>
+            <span className="tabular-nums">{usd(occ.baseAmount ?? 0)}</span>
+          </div>
+          {charges.map((c) => (
+            <div key={c.id} className="flex items-center justify-between text-[12px] gap-2">
+              <span className="text-muted-foreground truncate">
+                {CHARGE_KINDS.find((k) => k.key === c.kind)?.label ?? c.kind}
+                {c.label ? ` · ${c.label}` : ""}
+              </span>
+              <span className="flex items-center gap-1.5 shrink-0">
+                <span className="tabular-nums">{c.amount < 0 ? "−" : "+"}{usd(Math.abs(c.amount))}</span>
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-red-500"
+                  disabled={busy}
+                  onClick={() => onAct(() => apiRequest("DELETE", `${base}/charges/${c.id}`), "Charge removed")}
+                  data-testid={`occ-charge-remove-${c.id}`}
+                  aria-label="Remove charge"
+                >×</button>
+              </span>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Amount for this occurrence</Label>
-              <div className="flex gap-1">
-                <Input type="number" step="0.01" value={amt} onChange={(e) => setAmt(e.target.value)} className="h-8" />
-                <Button size="sm" className="h-8" onClick={() => onAct(() => apiRequest("PATCH", base, { amount: Number(amt) }), "Amount updated")}>Save</Button>
-              </div>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Notes</Label>
-              <div className="flex gap-1">
-                <Input value={notes} onChange={(e) => setNotes(e.target.value)} className="h-8" placeholder="e.g. paid early" />
-                <Button size="sm" className="h-8" onClick={() => onAct(() => apiRequest("PATCH", base, { notes }), "Note saved")}>Save</Button>
-              </div>
-            </div>
-          </PopoverContent>
-        </Popover>
-      </div>
+          ))}
+          <div className="flex items-center justify-between text-[12px] font-semibold border-t pt-1">
+            <span>{occ.isEstimate ? "Estimated total" : "Total"}</span>
+            <span className="tabular-nums">{usd(occ.amount)}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

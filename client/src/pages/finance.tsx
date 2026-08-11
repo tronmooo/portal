@@ -19,6 +19,8 @@ import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { MoneyOverview } from "@/components/finance/MoneyOverview";
 import { ConnectedFinance } from "@/components/finance/ConnectedFinance";
+import { AccountsSection } from "@/components/finance/AccountsSection";
+import { accountViews } from "@shared/finance-accounts";
 import { NetWorthPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
 import {
   CashFlowWaterfallPopup, SpendPopup, IncomePopup, BillsDuePopup,
@@ -150,6 +152,9 @@ export default function FinancePage() {
   // showing the previous profile's numbers until you tabbed away and back.
   const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  // Accounts, for the "Paid from" picker. Derived from the profile list that is
+  // already loaded — one fetch, one source of truth, no second account list.
+  const accountOptions = useMemo(() => accountViews(profiles || []), [profiles]);
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   // CRITICAL: each filtered query MUST set its own queryFn that appends
   // ?profileIds=... to the URL. Without an explicit queryFn the default fetcher
@@ -201,6 +206,8 @@ export default function FinancePage() {
   // red borders on empty required fields instead of just a quiet inline hint.
   const [addAttempt, setAddAttempt] = useState(false);
   const [expenseProfileId, setExpenseProfileId] = useState<string>("");
+  /** Which account the expense was paid from. "" = don't touch any balance. */
+  const [expenseAccountId, setExpenseAccountId] = useState<string>("");
   const selfProfile = (profiles || []).find((p: any) => p.type === "self");
   useEffect(() => {
     if (selfProfile && !expenseProfileId) setExpenseProfileId(selfProfile.id);
@@ -295,7 +302,7 @@ export default function FinancePage() {
   // EMPTIED form (parseFloat("") = NaN → 400). The payload is now built in the
   // click handler and passed as mutation VARIABLES — captured at call time and
   // immune to re-renders. Same fix applied to paycheck + income below.
-  type NewExpenseVars = { description: string; amount: number; category: string; vendor?: string; date: string; profileId?: string };
+  type NewExpenseVars = { description: string; amount: number; category: string; vendor?: string; date: string; profileId?: string; accountId?: string };
   const addExpenseMutation = useMutation<{ amount: number; description: string; created: any }, Error, NewExpenseVars, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async (vars) => {
       // Defense-in-depth: validate amount before sending. The submit button
@@ -319,12 +326,27 @@ export default function FinancePage() {
         vendor: vars.vendor || undefined,
         date: expenseDate,
         tags: [],
-        ...(vars.profileId ? { linkedProfiles: [vars.profileId] } : {}),
+        // The account is linked ALONGSIDE the person, never instead of them:
+        // the person link is what the profile filter scopes on, and replacing
+        // it would hide the expense from its owner's view.
+        ...(vars.profileId || vars.accountId
+          ? { linkedProfiles: [vars.profileId, vars.accountId].filter(Boolean) as string[] }
+          : {}),
       });
       // Parse the created row so onSuccess can swap the optimistic temp id for
       // the real server id (otherwise edit/delete on the fresh row 404s until
       // the background refetch lands).
       const created = await res.json().catch(() => null);
+      // Money spent from an account leaves that account. Without this the
+      // expense is recorded while the balance it came out of never moves, and
+      // Finance shows two numbers that disagree about the same event.
+      if (vars.accountId) {
+        await apiRequest("POST", `/api/accounts/${vars.accountId}/adjust`, {
+          delta: -vars.amount,
+          date: expenseDate,
+          reason: desc,
+        }).catch(() => { /* the expense is saved either way — never lose it over a balance nudge */ });
+      }
       return { amount: vars.amount, description: desc, created };
     },
     onMutate: async (vars) => {
@@ -346,7 +368,7 @@ export default function FinancePage() {
         vendor: vars.vendor || undefined,
         date: expenseDate,
         tags: [],
-        linkedProfiles: vars.profileId ? [vars.profileId] : [],
+        linkedProfiles: [vars.profileId, vars.accountId].filter(Boolean) as string[],
         createdAt: new Date().toISOString(),
         _optimistic: true,
       };
@@ -374,6 +396,8 @@ export default function FinancePage() {
       // Cache bus: one call ripples to every surface that reads expense data
       // (dashboard KPIs, stats, budgets, cashflow, activity, insights).
       invalidateDomain("expenses");
+      // A spend from an account also moved that account's balance.
+      if (_vars.accountId) invalidateDomains("profiles", "assets", "liabilities");
       toast({ title: `$${result.amount.toFixed(2)} expense added`, description: result.description });
     },
     onError: (err: Error, _v, ctx) => {
@@ -1032,6 +1056,24 @@ export default function FinancePage() {
                         ))}
                       </SelectContent>
                     </Select></div>
+                  {/* Paid from — optional. Choosing an account links the expense
+                      to it AND moves that account's balance, so the ledger and
+                      the balance can't drift apart. Only rendered once the user
+                      actually has accounts. */}
+                  {accountOptions.length > 0 && (
+                    <div><Label className="text-xs">Paid from (optional)</Label>
+                      <Select value={expenseAccountId || "__none"} onValueChange={v => setExpenseAccountId(v === "__none" ? "" : v)}>
+                        <SelectTrigger data-testid="select-expense-account"><SelectValue placeholder="No account" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none">Don't track an account</SelectItem>
+                          {accountOptions.map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {a.name} — {formatMoney(a.balance)}{a.isDebt ? " owed" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select></div>
+                  )}
                   {/* BUG-023: validation feedback. Before submit attempt: show
                       a muted hint. After submit attempt with errors: show a
                       prominent destructive-colour message AND highlight the
@@ -1076,10 +1118,12 @@ export default function FinancePage() {
                         vendor: newExpense.vendor || undefined,
                         date: newExpense.date,
                         profileId: expenseProfileId || undefined,
+                        accountId: expenseAccountId || undefined,
                       });
                       // Close immediately — optimistic insert already populated the list.
                       setAddOpen(false);
                       setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+                      setExpenseAccountId("");
                       setAddAttempt(false);
                     }}
                     disabled={!newExpense.description.trim() || !newExpense.amount || !Number.isFinite(parseFloat(newExpense.amount)) || parseFloat(newExpense.amount) <= 0 || addExpenseMutation.isPending}
@@ -1101,6 +1145,13 @@ export default function FinancePage() {
           linked, so it never crowds out the manual view below. All totals come
           from the server's shared/finance-calc.ts module. */}
       <ConnectedFinance />
+
+      {/* ── Accounts ── Manually-tracked checking / savings / cash / cards /
+          brokerage / loans. These are `type: "account"` profiles, so the
+          balances here are the same rows that feed Net Worth, the balance
+          sheet and cash flow below — one record per account, never a second
+          copy of the same money. */}
+      <AccountsSection profiles={(profiles as any[]) || []} />
 
       {/* ── Money overview (2026-07 redesign) ── replaces the two ad-hoc KPI
           grids with the mockup snapshot/budgets/bills/balance-sheet/breakdown

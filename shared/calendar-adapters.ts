@@ -24,6 +24,7 @@ import {
 import { parseRecurringMeta, expandRecurrenceDates } from "./recurring-dates";
 import { addYearsISO } from "./date-math";
 import { canonicalObligationCategory } from "./category-canon";
+import { resolveBillingModel, resolveOccurrenceAmount } from "./liability-billing";
 import { groupMaterializedSeries } from "./series-detect";
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
@@ -379,6 +380,11 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
     const amount = Number(f.monthlyPayment ?? f.monthly_payment ?? f.amount);
     const end = f.payoffDate ?? f.payoff_date ?? f.endDate ?? f.end_date ?? f.recurrenceEnd;
     const kind = kindForLiabilityProfile(p);
+    // Per-occurrence state lives in `fields.occurrences`, keyed by canonical
+    // date. Reading it here is what puts THIS month's variable amount on the
+    // calendar — and what keeps a paid or skipped month from rendering as still
+    // due — without the series itself carrying anything month-specific.
+    const occState = liabilityOccurrenceState(p, Number.isFinite(amount) && amount > 0 ? amount : 0);
     out.push({
       id: `liability:${p.id}`,
       kind,
@@ -403,9 +409,58 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
       recurrenceEnd: isISO(end) ? clip(end) : undefined,
       amount: Number.isFinite(amount) && amount > 0 ? amount : undefined,
       paused: f.paused === true,
+      ...occState,
     });
   }
   return out;
+}
+
+/**
+ * The per-occurrence state a liability profile carries in `fields.occurrences`,
+ * shaped for a CalendarSeries.
+ *
+ * Every month with its own money — an estimate, a usage charge, a posted actual
+ * — contributes ONE entry to `amountByDate`. Months with nothing of their own
+ * are absent, so they fall through to the series amount. Editing one month
+ * therefore cannot reach any other month, which is the guarantee the whole
+ * variable-liability model rests on.
+ */
+function liabilityOccurrenceState(p: any, definitionAmount: number): Partial<CalendarSeries> {
+  const billingModel = resolveBillingModel(p);
+  const raw = p?.fields?.occurrences;
+  if (!raw || typeof raw !== "object") return { billingModel };
+  const amountByDate: Record<string, number> = {};
+  const estimatedDates: string[] = [];
+  const completedDates: string[] = [];
+  const skippedDates: string[] = [];
+  const movedDates: Record<string, string> = {};
+
+  for (const [date, ov] of Object.entries(raw as Record<string, any>)) {
+    if (!isISO(date) || !ov || typeof ov !== "object") continue;
+    if (ov.status === "paid") completedDates.push(date);
+    if (ov.status === "skipped") skippedDates.push(date);
+    if (isISO(ov.movedTo)) movedDates[date] = clip(ov.movedTo);
+
+    const money = resolveOccurrenceAmount(definitionAmount, ov, billingModel);
+    // Only record an amount when this period genuinely says something of its
+    // own; otherwise the series amount is the right answer and duplicating it
+    // per-date would make every month look overridden.
+    const hasOwnMoney = ov.amount != null || ov.estimatedAmount != null
+      || ov.actualAmount != null || (Array.isArray(ov.charges) && ov.charges.length > 0);
+    if (hasOwnMoney) {
+      amountByDate[date] = money.current;
+      if (money.isEstimate && ov.status !== "paid") estimatedDates.push(date);
+    }
+  }
+
+  return {
+    billingModel,
+    ...(Object.keys(amountByDate).length ? { amountByDate } : {}),
+    ...(estimatedDates.length ? { estimatedDates } : {}),
+    ...(completedDates.length ? { completedDates } : {}),
+    ...(skippedDates.length ? { skippedDates } : {}),
+    ...(Object.keys(movedDates).length ? { movedDates } : {}),
+  };
 }
 
 // ─── Tasks ───────────────────────────────────────────────────────────────────

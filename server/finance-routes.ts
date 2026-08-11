@@ -42,7 +42,8 @@ import {
 import { majorToMinor } from "@shared/money";
 import { financeErrorMessage, isDebtAccount } from "@shared/finance-connections";
 import {
-  ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveAssetValue, resolveLiabilityBalance,
+  ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, isAssetProfile, isLiabilityProfile,
+  resolveAssetValue, resolveLiabilityBalance,
 } from "@shared/asset-value";
 import { storage } from "./storage";
 
@@ -112,10 +113,10 @@ async function loadManualHoldings(): Promise<ManualHolding[]> {
   const profiles: any[] = await (storage as any).getProfiles();
   const out: ManualHolding[] = [];
   for (const p of profiles ?? []) {
-    if (ASSET_PROFILE_TYPES.has(p.type)) {
+    if (isAssetProfile(p)) {
       const value = resolveAssetValue(p);
       if (value) out.push({ id: p.id, name: p.name, amount: majorToMinor(value), currency: "usd", kind: "asset" });
-    } else if (LIABILITY_PROFILE_TYPES.has(p.type)) {
+    } else if (isLiabilityProfile(p)) {
       const balance = resolveLiabilityBalance(p);
       if (balance) out.push({ id: p.id, name: p.name, amount: majorToMinor(balance), currency: "usd", kind: "liability" });
     }
@@ -421,7 +422,7 @@ export function registerFinanceRoutes(app: Express): void {
       const wantLiability = isDebtAccount(account.accountType);
       const pool = (profiles ?? []).filter((p) =>
         !alreadyMatched.has(p.id) &&
-        (wantLiability ? LIABILITY_PROFILE_TYPES.has(p.type) : ASSET_PROFILE_TYPES.has(p.type)));
+        (wantLiability ? isLiabilityProfile(p) : isAssetProfile(p)));
 
       const scored = pool.map((p) => {
         const name = String(p.name ?? "").toLowerCase();

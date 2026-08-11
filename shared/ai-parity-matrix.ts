@@ -119,6 +119,20 @@ export const PARITY_MATRIX: ParityRow[] = [
   // occurrenceAmount/occurrenceNotes params wired to rescheduleOccurrence and
   // setOccurrenceFields.
   { entity: "Bill", operation: "Reschedule an occurrence / override its amount", ui: "Bill schedule occurrence row → Edit", aiTools: ["update_obligation"], status: "added" },
+  // Variable / usage-based billing. These edit ONE billing period; the
+  // definition and every other period are untouched, which is why they are
+  // separate operations rather than parameters on update_obligation.
+  { entity: "Bill", operation: "Create with a billing model (fixed / variable / usage-based)", ui: "Bill schedule header shows the model", aiTools: ["create_obligation"], status: "added" },
+  { entity: "Bill", operation: "Add a usage / credits / fee charge to one period", ui: "Bill schedule occurrence → Edit → Add a charge; calendar detail → Add a usage charge", aiTools: ["add_liability_charge"], status: "added" },
+  { entity: "Bill", operation: "Set one period's estimated or actual amount", ui: "Bill schedule occurrence → Edit → Estimate / Actual; calendar detail money block", aiTools: ["set_liability_amount"], status: "added" },
+  { entity: "Bill", operation: "Pay an occurrence from a specific account", ui: "Bill schedule occurrence row → Pay", aiTools: ["pay_obligation"], status: "added" },
+
+  // ── Financial accounts ─────────────────────────────────────────────────────
+  { entity: "Account", operation: "Create", ui: "Finance → Accounts → Add account", aiTools: ["create_account"], status: "added" },
+  { entity: "Account", operation: "Adjust balance", ui: "Finance → Accounts → row → Add / Subtract", aiTools: ["update_account_balance"], status: "added" },
+  { entity: "Account", operation: "Edit (name / type / institution / limit)", ui: "Finance → Accounts → row → Edit", aiTools: ["update_profile"], status: "added" },
+  { entity: "Account", operation: "Delete", ui: "Finance → Accounts → row → Remove", aiTools: ["delete_profile"], status: "added" },
+  { entity: "Account", operation: "Read balances / available credit", ui: "Finance → Accounts summary", aiTools: ["get_accounts"], status: "added" },
 
   // ── Liabilities (loans / mortgages) ────────────────────────────────────────
   { entity: "Liability", operation: "Create", ui: "Liabilities tab / Net-worth popup", aiTools: ["create_liability"], status: "covered" },

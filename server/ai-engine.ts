@@ -31,6 +31,11 @@ import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderV
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { findOccurrenceForPeriod, normalizeBillingModel } from "@shared/liability-billing";
+import {
+  accountViews, findAccount, isAccountProfile, normalizeAccountKind,
+  summarizeAccounts, toAccountView,
+} from "@shared/finance-accounts";
 import { createHash, randomUUID } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
@@ -144,6 +149,36 @@ const REDACTED = "[REDACTED]";
  */
 function aiUserTimezone(): string {
   try { return (storage as any)._timezone || DEFAULT_TIMEZONE; } catch { return DEFAULT_TIMEZONE; }
+}
+
+/**
+ * Find an EXISTING bill by name and load its schedule.
+ *
+ * The per-occurrence money tools all start here, and none of them will create
+ * anything. "I spent another $30 on ChatGPT credits" has exactly one correct
+ * outcome — August's ChatGPT bill goes up — and the failure mode to design
+ * against is a second "ChatGPT" liability appearing beside the first. So a miss
+ * returns an error naming what DOES exist, and the model asks, rather than
+ * falling back to a create.
+ */
+async function resolveBillByName(
+  rawName: string,
+): Promise<{ bill: any; schedule: any } | { error: string }> {
+  const needle = safeLC(String(rawName || "")).trim();
+  if (!needle) return { error: "Which bill did you mean?" };
+  const obligations = await storage.getObligations();
+  const exact = obligations.find(o => o.name.toLowerCase() === needle);
+  const partial = obligations.filter(o => o.name.toLowerCase().includes(needle));
+  const bill = exact ?? (partial.length === 1 ? partial[0] : partial[0]);
+  if (!bill) {
+    const names = obligations.map(o => o.name).slice(0, 12);
+    return {
+      error: `I couldn't find a bill matching "${rawName}".${names.length ? ` Your bills: ${names.join(", ")}.` : " You haven't added any recurring bills yet."} Tell me which one, or ask me to add it first — I won't create a duplicate on a guess.`,
+    };
+  }
+  const schedule = await (storage as any).getLiabilitySchedule(bill.id, 24);
+  if (!schedule) return { error: `"${bill.name}" doesn't have a billing schedule to attach charges to.` };
+  return { bill, schedule };
 }
 
 // ─── P0.3a: AI write-path validation ───────────────────────────────────────────
@@ -3608,20 +3643,98 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         reminderLeadDays: { type: "integer", description: "Days before each due date to remind the user, ONLY when they explicitly ask ('remind me 3 days before' → 3). NEVER invent this — omit it entirely if the user did not request a reminder." },
         category: { type: "string", description: "Category (rent, utilities, insurance, subscription, loan, phone, internet, etc.)" },
         autopay: { type: "boolean", description: "Whether this is on autopay" },
+        billingModel: { type: "string", enum: ["fixed", "variable", "usage_based", "one_time", "installment"], description: "HOW the amount behaves each cycle — get this right, it decides whether history is preserved.\n\n'fixed' (default): the same amount every cycle. '$86.50 phone bill every month', 'Netflix $15.49/mo'.\n\n'variable': recurs on schedule but the amount CHANGES each cycle. Utilities are almost always this: electricity, gas, water, and any bill the user describes as 'it varies', 'depends on the month', or where they quote different amounts for different months. `amount` becomes the typical/expected figure and each month records its own actual.\n\n'usage_based': a base price PLUS charges accrued during the period. AI/API services, cloud hosting, prepaid credits, metered plans. 'ChatGPT $20/month plus credits', 'AWS', 'OpenAI API'. Pass the BASE price as `amount` — additional credits and usage are added later per month with add_liability_charge and must never be baked into `amount`.\n\n'one_time': a single bill owed once, no recurrence (also set frequency:'once').\n\n'installment': a loan-style balance paid down on a schedule — prefer create_liability for real debt." },
         forProfile: { type: "string", description: "Name of the person/pet this obligation belongs to (e.g. 'Max', 'Mom', 'Luna'). The auto-created subscription profile will be nested under this person/pet. ALWAYS set this when the user mentions a specific person or pet." },
       },
       required: ["name", "amount", "frequency"],
     },
   },
   {
+    name: "add_liability_charge",
+    description: "Add an ADDITIONAL charge — usage, credits, a fee, a tax, or a discount — to ONE billing period of an existing variable or usage-based bill. This is the tool for 'I spent another $30 on ChatGPT credits this month', 'add $17.42 of additional usage to my August ChatGPT bill', 'there was a $12 overage on the phone bill', 'they charged me a $25 late fee on the electric bill'.\n\nCRITICAL: this NEVER creates a new liability and NEVER changes the recurring amount. It attaches the charge to the specific month's occurrence, so that month's total goes up and every other month is untouched. If the user is describing extra spend on a service they already have, this tool is always the right answer — do NOT call create_obligation or create_expense for it, which would duplicate the bill.\n\nIf no matching bill exists, the tool returns an error listing what does exist; ask the user rather than inventing a liability.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "The existing bill / subscription / liability name (partial match). e.g. 'ChatGPT', 'electric', 'AWS', 'phone bill'." },
+        amount: { type: "number", description: "The charge amount in dollars. Positive for anything that INCREASES the bill (usage, credits, fees, tax). For a discount or credit back, pass a positive number and set kind:'discount' — the sign is handled for you." },
+        kind: { type: "string", enum: ["usage", "credits", "fee", "tax", "discount", "adjustment", "base"], description: "What kind of charge. 'credits' for prepaid credits / top-ups ('bought $30 of credits'), 'usage' for metered consumption ('another $8 of API usage'), 'fee' for late/overage/service fees, 'tax' for taxes and surcharges, 'discount' for a credit against the bill, 'base' ONLY to record the base subscription price as an explicit line item. Default 'usage'." },
+        period: { type: "string", description: "Which billing period the charge belongs to: 'this month' (default), 'next month', 'last month', a YYYY-MM month, or a YYYY-MM-DD due date. Map the user's words: 'this month' → 'this month', 'my August bill' → the YYYY-MM for August." },
+        label: { type: "string", description: "Short description of what the charge was for, e.g. 'API credits', 'extra data'." },
+      },
+      required: ["name", "amount"],
+    },
+  },
+  {
+    name: "set_liability_amount",
+    description: "Set what ONE billing period of a variable bill costs — either the ESTIMATE (what we expect) or the ACTUAL (what was really charged).\n\nUse mode:'actual' when the user reports a bill that already posted, in the past tense: 'my electric bill this month was $143.82', 'the water bill came in at $61', 'August's gas bill was $88'. Recording an actual FREEZES that month as history — later changes to the bill can no longer move it.\n\nUse mode:'estimate' when the user is forecasting: 'estimate next month's electricity at $120', 'I expect the AI bill to be about $50 this month', 'budget $90 for the gas bill'.\n\nThis changes ONE month only. It never rewrites the recurring amount and never touches other months. To change the recurring amount permanently, use update_obligation with changes.amount instead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "The existing bill name (partial match). e.g. 'electric', 'ChatGPT', 'water'." },
+        amount: { type: "number", description: "The dollar amount for that month." },
+        mode: { type: "string", enum: ["actual", "estimate"], description: "'actual' = what was really charged (past tense, freezes the month as history). 'estimate' = what we expect (a forecast that can still change). Default 'actual' for past/present-tense reports, 'estimate' for anything about a future month." },
+        period: { type: "string", description: "Which billing period: 'this month' (default), 'next month', 'last month', a YYYY-MM month, or a YYYY-MM-DD due date." },
+      },
+      required: ["name", "amount"],
+    },
+  },
+
+  // ─── FINANCIAL ACCOUNTS ──────────────────────────────────────────────────
+  {
+    name: "create_account",
+    description: "Add a financial ACCOUNT the user holds — checking, savings, cash, credit card, investment/brokerage, loan account, or line of credit. Use for 'I have a checking account at Chase with $2,400', 'add my Amex with a $10,000 limit', 'my Fidelity brokerage has $45k', 'I keep about $300 in cash'.\n\nAn account is WHERE money sits. Do NOT use this for a debt with an amortization schedule the user wants to track payoff on (use create_liability) or for a recurring bill (use create_obligation). Balances entered here feed net worth, cash flow and the Accounts section directly.\n\nAlways pass the balance as a POSITIVE number, even for a credit card — the sign is applied from the account type.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Display name, e.g. 'Chase Checking', 'Amex Gold', 'Fidelity Brokerage'." },
+        accountKind: { type: "string", enum: ["checking", "savings", "cash", "credit_card", "investment", "loan", "line_of_credit", "other"], description: "Account type. REQUIRED — pick the closest match." },
+        institution: { type: "string", description: "Bank / brokerage / issuer name, e.g. 'Chase', 'Fidelity', 'American Express'." },
+        balance: { type: "number", description: "Current balance as a POSITIVE number. For a credit card this is the amount OWED." },
+        availableBalance: { type: "number", description: "Available balance — spendable cash for a checking account, remaining credit for a card. Omit if not stated (for cards it's derived from the limit)." },
+        creditLimit: { type: "number", description: "Credit limit. credit_card / line_of_credit only." },
+        accountNumberLast4: { type: "string", description: "Last 4 digits only. NEVER store a full account number." },
+        balanceAsOf: { type: "string", description: "YYYY-MM-DD the balance was accurate. Defaults to today." },
+        forProfile: { type: "string", description: "Owner's profile name, when the account belongs to someone other than the user (e.g. 'Mom', 'Sarah')." },
+      },
+      required: ["name", "accountKind"],
+    },
+  },
+  {
+    name: "update_account_balance",
+    description: "Change an existing account's balance and record WHY. Use for 'my checking is down to $1,850', 'I moved $500 into savings', 'the Amex balance is now $612', 'took $40 out of cash'.\n\nPass newBalance to set it outright, or delta to move it (positive = up, negative = down). The before/after pair is kept as history so the change is always explainable. Find the account by name — do not create a new one.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Account name (partial match), e.g. 'checking', 'Amex', 'savings'." },
+        newBalance: { type: "number", description: "Set the balance to this exact figure. Always positive." },
+        delta: { type: "number", description: "Move the balance by this much instead: positive to increase, negative to decrease. Use when the user gives a change rather than a total ('spent $40' → -40)." },
+        date: { type: "string", description: "YYYY-MM-DD the change happened. Defaults to today." },
+        reason: { type: "string", description: "Why the balance moved, e.g. 'transfer to savings', 'paycheck deposit'." },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "get_accounts",
+    description: "List the user's financial accounts with balances, available balances, credit limits and utilization, plus the rolled-up cash / investment / debt totals. Use when the user asks 'what's in my accounts', 'how much cash do I have', 'what's my credit card balance', 'how much credit do I have left'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        kind: { type: "string", description: "Optional filter to one account type (checking, savings, cash, credit_card, investment, loan, line_of_credit)." },
+      },
+      required: [],
+    },
+  },
+  {
     name: "pay_obligation",
-    description: "Record a payment for an obligation. Find by name. By default pays the oldest open occurrence. To pay a SPECIFIC month, pass forMonth (YYYY-MM) or dueDate (YYYY-MM-DD) — e.g. 'mark Bob's phone bill paid for June 2026' → forMonth: '2026-06'.",
+    description: "Record a payment for an obligation. Find by name. By default pays the oldest open occurrence. To pay a SPECIFIC month, pass forMonth (YYYY-MM) or dueDate (YYYY-MM-DD) — e.g. 'mark Bob's phone bill paid for June 2026' → forMonth: '2026-06'.\n\nWhen the user names the account the money came from ('mark the August bill paid from my checking account'), pass fromAccount — the account balance is reduced by the same amount, so the bill and the account cannot disagree about the payment.\n\nOmit `amount` for a variable or usage-based bill: the month's real total (base + that month's charges) is settled automatically, which is almost always what the user means.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Obligation name (partial match)" },
-        amount: { type: "number", description: "Amount paid (defaults to obligation amount)" },
+        amount: { type: "number", description: "Amount paid. OMIT to settle the targeted month's actual total (base + that month's usage/credits) — only pass it when the user states a different figure." },
         method: { type: "string", description: "Payment method" },
+        fromAccount: { type: "string", description: "Name of the ACCOUNT the payment came from ('checking', 'Amex', 'Chase Savings'). When given, that account's balance moves by the payment amount." },
         confirmationNumber: { type: "string", description: "Confirmation number" },
         forMonth: { type: "string", description: "Target a specific month's occurrence, YYYY-MM (e.g. '2026-06'). Use when the user names a month/year." },
         dueDate: { type: "string", description: "Target the exact occurrence due on this date, YYYY-MM-DD." },
@@ -4717,6 +4830,29 @@ Whenever the user mentions ANY actual debt, loan, credit card, mortgage, auto lo
 - User asks about totals/payoff → get_liability_summary
 
 The legacy create_profile(type:"loan") is forbidden for new entries — it skips subtype, structured fields, and the liability detail UI. The full LIABILITIES section below has subtype recognition tables, payment phrasing, ownership rules, and multi-action examples — follow it strictly.
+
+*** TOP-PRIORITY ROUTING RULE — BILLS WHOSE AMOUNT CHANGES ***
+Not every recurring bill costs the same every month, and getting this wrong destroys the user's financial history. There are three shapes, and you must pick one when creating a bill:
+- FIXED (billingModel:"fixed", the default) — same amount every cycle. "$86.50 phone bill every month", "Netflix $15.49".
+- VARIABLE (billingModel:"variable") — recurs on schedule, amount differs each cycle. Utilities are nearly always this: electricity, gas, water. Any bill the user describes with "it varies", "depends", "usually around", or by quoting different amounts for different months.
+- USAGE-BASED (billingModel:"usage_based") — a base price PLUS charges accrued during the period: AI/API services, cloud hosting, prepaid credits, metered plans. "Add ChatGPT as a monthly variable liability with a $20 base price" → create_obligation(name:"ChatGPT", amount:20, frequency:"monthly", billingModel:"usage_based"). The $20 is the BASE, not the total.
+
+Once a variable/usage bill EXISTS, extra money spent on it is never a new bill and never a plain expense:
+- "I spent another $30 on ChatGPT credits this month" → add_liability_charge(name:"ChatGPT", amount:30, kind:"credits", period:"this month")
+- "Add $17.42 of additional usage to my August ChatGPT bill" → add_liability_charge(name:"ChatGPT", amount:17.42, kind:"usage", period:"2026-08")
+- "My electric bill this month was $143.82" → set_liability_amount(name:"electric", amount:143.82, mode:"actual", period:"this month")
+- "Estimate next month's electricity bill at $120" → set_liability_amount(name:"electricity", amount:120, mode:"estimate", period:"next month")
+- "Mark the August bill paid from my checking account" → pay_obligation(name:<the bill>, forMonth:"2026-08", fromAccount:"checking") — OMIT amount so the month's real total settles.
+
+NEVER call create_obligation for a service the user already has — that produces two bills for one service, which is the single worst failure mode in this area. NEVER call update_obligation with changes.amount to record one month's actual: that rewrites EVERY month including history. One month's amount is always add_liability_charge or set_liability_amount.
+
+*** FINANCIAL ACCOUNTS ***
+An ACCOUNT is where money sits: checking, savings, cash, credit card, investment/brokerage, loan account, line of credit.
+- "I have a checking account at Chase with $2,400" → create_account(name:"Chase Checking", accountKind:"checking", institution:"Chase", balance:2400)
+- "my checking is down to $1,850" → update_account_balance(name:"checking", newBalance:1850)
+- "I spent $40 out of cash" → update_account_balance(name:"cash", delta:-40)
+- "how much cash do I have?" / "what's my Amex balance?" → get_accounts
+Balances are ALWAYS positive numbers — a credit card balance is what is OWED, and the sign comes from the account type. Never create a second account for one the user already has; update its balance instead.
 
 ${FINANCE_TOOL_SYSTEM_GUIDANCE}
 
@@ -9774,6 +9910,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         nextDueDate: resolvedDue,
         autopay: input.autopay ?? false,
         recurrenceEnd: derivedEnd,
+        // Only forward a billing model the model actually recognized; an
+        // unparseable value must not silently become "fixed" on a bill the
+        // user described as varying.
+        ...(normalizeBillingModel(input.billingModel) ? { billingModel: normalizeBillingModel(input.billingModel)! } : {}),
         linkedProfiles: preResolvedTargetProfileId ? [preResolvedTargetProfileId] : [],
       }, "obligation");
       if (!obligationPayload.ok) return { error: obligationPayload.error };
@@ -9810,34 +9950,203 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const obligations = await storage.getObligations();
       const ob = obligations.find(o => o.name.toLowerCase().includes((input.name || "").toLowerCase()));
       if (!ob) return { error: "Obligation not found: " + (input.name || "unknown") };
-      const payAmount = parseFloat(input.amount) || ob.amount;
+      // An explicit amount wins; otherwise leave it undefined so payOccurrence
+      // settles the month's REAL total (base + that month's usage charges). For
+      // a usage-based bill `ob.amount` is only the base price, so defaulting to
+      // it here would under-pay a $42 bill by $22.
+      const statedAmount = input.amount != null && Number.isFinite(parseFloat(input.amount))
+        ? parseFloat(input.amount) : undefined;
+      // "paid from my checking account" — resolve it before writing anything so
+      // a wrong account name fails loudly instead of paying from nowhere.
+      let sourceAccount: any = null;
+      if (input.fromAccount) {
+        const profiles = await storage.getProfiles();
+        sourceAccount = findAccount(profiles, String(input.fromAccount));
+        if (!sourceAccount) {
+          const names = profiles.filter(isAccountProfile).map((a: any) => a.name);
+          return { error: `I couldn't find an account matching "${input.fromAccount}".${names.length ? ` You have: ${names.join(", ")}.` : " You haven't added any accounts yet."}` };
+        }
+      }
       // W4-2: target a specific month/date occurrence when requested. Without
       // forMonth/dueDate, keep the default behavior (oldest open occurrence).
       const forMonth = input.forMonth ? String(input.forMonth).trim() : undefined;
       const dueDate = input.dueDate ? String(input.dueDate).trim() : undefined;
-      if (forMonth || dueDate) {
+      if (forMonth || dueDate || sourceAccount) {
         // Pay a SPECIFIC occurrence (generated on the fly — no occurrence table).
         const sched = await (storage as any).getLiabilitySchedule(ob.id, 24);
-        if (!sched) return storage.payObligation(ob.id, payAmount, input.method, input.confirmationNumber);
+        if (!sched) return storage.payObligation(ob.id, statedAmount ?? ob.amount, input.method, input.confirmationNumber);
         const occs: any[] = sched.occurrences || [];
+        const open = occs.filter(o => o.status !== "paid" && o.status !== "skipped");
         let target: any; let label: string;
         if (dueDate && /^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
           label = dueDate;
-          target = occs.find(o => (o.date === dueDate || o.effectiveDate === dueDate) && o.status !== "paid" && o.status !== "skipped");
+          target = open.find(o => o.date === dueDate || o.effectiveDate === dueDate);
         } else if (forMonth && /^\d{4}-\d{2}$/.test(forMonth)) {
           label = forMonth;
-          target = occs.find(o => o.date.slice(0, 7) === forMonth && o.status !== "paid" && o.status !== "skipped");
+          target = open.find(o => o.date.slice(0, 7) === forMonth);
+        } else if (!forMonth && !dueDate) {
+          // No month named, but an account was: pay the oldest open occurrence
+          // through the occurrence path so the account is actually debited.
+          target = open[0];
+          label = target?.date ?? "next";
         } else {
           return { error: `Couldn't read the target date "${forMonth || dueDate}". Use YYYY-MM (month) or YYYY-MM-DD (exact day).` };
         }
         if (!target) {
-          const open = occs.filter(o => o.status !== "paid" && o.status !== "skipped").map(o => o.date);
-          return { error: `No unpaid occurrence found for ${ob.name} in ${label}. Open occurrences: ${open.length ? open.join(", ") : "none"}.` };
+          return { error: `No unpaid occurrence found for ${ob.name} in ${label}. Open occurrences: ${open.length ? open.map(o => o.date).join(", ") : "none"}.` };
         }
-        const result = await (storage as any).payOccurrence(ob.id, target.date, { amount: payAmount, method: input.method });
-        return { ...(result || {}), _paidMonth: label };
+        const result = await (storage as any).payOccurrence(ob.id, target.date, {
+          amount: statedAmount, method: input.method,
+          ...(sourceAccount ? { accountId: sourceAccount.id } : {}),
+        });
+        return {
+          ...(result || {}), _paidMonth: label,
+          ...(sourceAccount ? { paidFrom: sourceAccount.name } : {}),
+        };
       }
-      return storage.payObligation(ob.id, payAmount, input.method, input.confirmationNumber);
+      return storage.payObligation(ob.id, statedAmount ?? ob.amount, input.method, input.confirmationNumber);
+    }
+
+    // ── Variable / usage-based liabilities ──────────────────────────────────
+    //
+    // Both of these resolve an EXISTING liability and an EXISTING occurrence,
+    // then write to that occurrence alone. Neither can create a liability, and
+    // neither can touch the recurring definition — which is exactly what stops
+    // "I spent another $30 on ChatGPT credits" from spawning a second ChatGPT
+    // bill or rewriting last month's total.
+    case "add_liability_charge": {
+      const found = await resolveBillByName(input.name);
+      if ("error" in found) return found;
+      const { bill, schedule } = found;
+      const today = getUserToday(aiUserTimezone());
+      const target = findOccurrenceForPeriod(schedule.occurrences || [], input.period, today);
+      if (!target) {
+        return {
+          error: `I couldn't find a ${bill.name} billing period matching "${input.period || "this month"}". Periods available: ${(schedule.occurrences || []).slice(0, 6).map((o: any) => o.date).join(", ") || "none"}.`,
+        };
+      }
+      const amount = Number(input.amount);
+      if (!Number.isFinite(amount) || amount === 0) return { error: "Charge amount must be a non-zero number." };
+      const result = await (storage as any).addOccurrenceCharge(bill.id, target.date, {
+        amount, kind: input.kind || "usage", label: input.label, source: "ai",
+      });
+      const after = (result?.occurrences || []).find((o: any) => o.date === target.date);
+      return {
+        added: true, liability: bill.name, liabilityId: bill.id,
+        period: target.date.slice(0, 7), dueDate: target.effectiveDate,
+        charge: { amount, kind: input.kind || "usage", label: input.label || null },
+        periodTotal: after?.amount ?? null,
+        periodBase: after?.baseAmount ?? null,
+        isEstimate: after?.isEstimate ?? null,
+        note: "Only this billing period changed — other months are untouched.",
+      };
+    }
+
+    case "set_liability_amount": {
+      const found = await resolveBillByName(input.name);
+      if ("error" in found) return found;
+      const { bill, schedule } = found;
+      const today = getUserToday(aiUserTimezone());
+      const target = findOccurrenceForPeriod(schedule.occurrences || [], input.period, today);
+      if (!target) {
+        return {
+          error: `I couldn't find a ${bill.name} billing period matching "${input.period || "this month"}". Periods available: ${(schedule.occurrences || []).slice(0, 6).map((o: any) => o.date).join(", ") || "none"}.`,
+        };
+      }
+      const amount = Number(input.amount);
+      if (!Number.isFinite(amount) || amount < 0) return { error: "Amount must be a non-negative number." };
+      const mode = String(input.mode || "actual").toLowerCase() === "estimate" ? "estimate" : "actual";
+      const result = mode === "estimate"
+        ? await (storage as any).setOccurrenceEstimate(bill.id, target.date, amount)
+        : await (storage as any).setOccurrenceActual(bill.id, target.date, amount);
+      return {
+        updated: true, liability: bill.name, liabilityId: bill.id,
+        period: target.date.slice(0, 7), dueDate: target.effectiveDate,
+        mode, amount,
+        note: mode === "actual"
+          ? "Recorded as the actual charge for that month — it's now history and won't change."
+          : "Recorded as an estimate for that month — it updates as charges are added.",
+        schedule: result ? { nextDue: result.nextDue } : null,
+      };
+    }
+
+    // ── Financial accounts ──────────────────────────────────────────────────
+    case "create_account": {
+      const name = String(input.name || "").trim();
+      if (!name) return { error: "An account needs a name." };
+      const profiles = await storage.getProfiles();
+      // Never spawn a second "Chase Checking". If one already exists, move its
+      // balance instead — that is what the user meant.
+      const existing = findAccount(profiles, name);
+      if (existing && String(existing.name).toLowerCase() === name.toLowerCase()) {
+        if (input.balance != null) {
+          const moved = await (storage as any).adjustAccountBalance(existing.id, {
+            newBalance: Number(input.balance), source: "ai", reason: "Balance from chat",
+          });
+          return { updated: true, existing: true, account: moved, note: `${existing.name} already exists — updated its balance instead of creating a duplicate.` };
+        }
+        return { existing: true, account: existing, note: `${existing.name} already exists.` };
+      }
+      let ownerProfileId: string | undefined;
+      if (input.forProfile) {
+        const fpLC = safeLC(String(input.forProfile)).trim();
+        const owner = profiles.find(p => p.name.toLowerCase() === fpLC)
+          || profiles.find(p => p.name.toLowerCase().includes(fpLC));
+        if (!owner) return { error: `I couldn't find a profile named "${input.forProfile}". Who does this account belong to?` };
+        ownerProfileId = owner.id;
+      }
+      const created = await (storage as any).createAccount({
+        name,
+        accountKind: input.accountKind,
+        institution: input.institution,
+        balance: input.balance,
+        availableBalance: input.availableBalance,
+        creditLimit: input.creditLimit,
+        accountNumberLast4: input.accountNumberLast4,
+        balanceAsOf: input.balanceAsOf,
+        ownerProfileId,
+      });
+      return { created: true, account: created, view: toAccountView(created) };
+    }
+
+    case "update_account_balance": {
+      const profiles = await storage.getProfiles();
+      const account = findAccount(profiles, String(input.name || ""));
+      if (!account) {
+        const names = profiles.filter(isAccountProfile).map((a: any) => a.name);
+        return { error: `I couldn't find an account matching "${input.name}".${names.length ? ` You have: ${names.join(", ")}.` : " You haven't added any accounts yet."}` };
+      }
+      if (input.newBalance == null && input.delta == null) {
+        return { error: "Tell me the new balance, or how much it changed by." };
+      }
+      const updated = await (storage as any).adjustAccountBalance(account.id, {
+        newBalance: input.newBalance, delta: input.delta,
+        date: input.date, reason: input.reason, source: "ai",
+      });
+      const view = toAccountView(updated);
+      return {
+        updated: true, account: account.name, accountId: account.id,
+        balance: view.balance, availableBalance: view.availableBalance,
+        utilization: view.utilization,
+      };
+    }
+
+    case "get_accounts": {
+      const profiles = await storage.getProfiles();
+      let views = accountViews(profiles);
+      if (input.kind) {
+        const want = normalizeAccountKind(String(input.kind));
+        views = views.filter(v => v.kind === want);
+      }
+      return {
+        accounts: views.map(v => ({
+          id: v.id, name: v.name, kind: v.kindLabel, institution: v.institution,
+          balance: v.balance, isDebt: v.isDebt,
+          availableBalance: v.availableBalance, creditLimit: v.creditLimit,
+          utilization: v.utilization, lastUpdated: v.balanceAsOf,
+        })),
+        summary: summarizeAccounts(profiles),
+      };
     }
 
     case "journal_entry": {
@@ -14856,6 +15165,8 @@ export const READ_ONLY_TOOLS = new Set<string>([
   // calls out to the institution, so it carries a typed action below.
   "get_financial_summary", "search_financial_transactions",
   "get_spending_breakdown", "get_account_balances",
+  // Manual accounts — a pure read over the user's own account profiles.
+  "get_accounts",
 ]);
 
 // Every WRITE tool → a typed ParsedAction so the chat UI shows it as a real
@@ -14947,6 +15258,13 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   // Obligations
   create_obligation: "create_obligation",
   pay_obligation: "pay_obligation",
+  // Per-occurrence money on a variable/usage-based bill. Both edit an existing
+  // obligation (one billing period of it), so they surface as bill updates.
+  add_liability_charge: "update_entity",
+  set_liability_amount: "update_entity",
+  // Financial accounts are profiles.
+  create_account: "create_profile",
+  update_account_balance: "update_profile",
   update_obligation: "update_entity",
   undo_last_payment: "delete_entity",
   update_liability_payment: "update_entity",

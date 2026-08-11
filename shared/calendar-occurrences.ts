@@ -190,6 +190,25 @@ export interface CalendarSeries {
   /** Money amount, for bills/subscriptions/liabilities. */
   amount?: number;
   /**
+   * Per-occurrence amounts, keyed by canonical date, for a series whose amount
+   * genuinely differs per period (a variable or usage-based liability).
+   *
+   * This is the calendar half of the variable-billing model: a bill whose
+   * August total is $62 and whose September total is $20 is ONE series with two
+   * different occurrence amounts, NOT two series and NOT a series whose amount
+   * was rewritten. Overriding one month here cannot touch any other month.
+   */
+  amountByDate?: Record<string, number>;
+  /** Canonical dates whose amount is still a forecast rather than a posted charge. */
+  estimatedDates?: string[];
+  /**
+   * How this series is billed — "fixed" | "variable" | "usage_based" |
+   * "one_time" | "installment" (see shared/liability-billing). Drives whether
+   * the detail panel offers per-occurrence money edits at all. Typed loosely
+   * here so this module stays dependency-free.
+   */
+  billingModel?: string;
+  /**
    * Set when this series is a SHADOW of a record that another system owns —
    * e.g. a manually-created "Joe's Birthday" event when Joe's profile already
    * carries his date of birth. Shadows lose deduplication to the canonical
@@ -606,7 +625,10 @@ export interface CalendarOccurrence {
   effectiveDate: string;
   moved: boolean;
   status: OccurrenceStatus;
+  /** This occurrence's own amount when the series carries one, else the series amount. */
   amount?: number;
+  /** True when `amount` is a forecast (a variable bill that hasn't posted yet). */
+  amountIsEstimate?: boolean;
   /** The series this came from, for the detail panel. */
   series: CalendarSeries;
 }
@@ -731,8 +753,14 @@ export function generateSeriesOccurrences(
     cap: opts.cap ?? 400,
   });
 
+  const perDate = series.amountByDate || {};
+  const estimated = new Set(series.estimatedDates || []);
+
   return dates.map((date) => {
     const effectiveDate = moved[date] || date;
+    // A per-occurrence amount always wins over the series amount. That is the
+    // whole point of a variable bill: August's $62 belongs to August.
+    const own = perDate[date];
     return {
       id: `${series.id}@${date}`,
       seriesId: series.id,
@@ -745,7 +773,8 @@ export function generateSeriesOccurrences(
       effectiveDate,
       moved: effectiveDate !== date,
       status: statusFor(series, date, today, !!opts.requireComplete),
-      amount: series.amount,
+      amount: typeof own === "number" ? own : series.amount,
+      amountIsEstimate: estimated.has(date) || undefined,
       series,
     };
   });

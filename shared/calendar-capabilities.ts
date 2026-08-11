@@ -193,3 +193,75 @@ export function reasonFor(series: CalendarSeries, action: CalendarAction): strin
   const c = capabilitiesFor(series).find((x) => x.action === action);
   return c && !c.enabled ? c.reason : undefined;
 }
+
+// ─── Per-occurrence MONEY actions ────────────────────────────────────────────
+//
+// Kept separate from CALENDAR_ACTIONS on purpose. The seven above are about a
+// date; these three are about the AMOUNT of one billing period, and they only
+// mean anything for a liability whose amount genuinely moves.
+//
+// The distinction they encode is the product requirement itself: changing what
+// ONE month costs must never be the same operation as changing the series.
+// `setEstimate` and `addCharge` touch a single occurrence's forecast;
+// `setActual` posts that occurrence as history. None of them can reach the
+// definition, so no edit here can rewrite a month that already happened.
+
+export const MONEY_ACTIONS = ["addCharge", "setEstimate", "setActual"] as const;
+export type CalendarMoneyAction = (typeof MONEY_ACTIONS)[number];
+
+export const MONEY_ACTION_LABELS: Record<CalendarMoneyAction, string> = {
+  addCharge: "Add a usage charge",
+  setEstimate: "Change the estimate",
+  setActual: "Record the actual amount",
+};
+
+export interface MoneyActionCapability {
+  action: CalendarMoneyAction;
+  enabled: boolean;
+  reason?: string;
+}
+
+/** Billing models whose occurrences carry their own, editable amount. */
+const PER_OCCURRENCE_MONEY = new Set(["variable", "usage_based", "one_time"]);
+
+/**
+ * Which per-occurrence money edits are live for this series.
+ *
+ * Only a liability-backed series can carry per-occurrence money (that is where
+ * the occurrence override map lives), and only a variable / usage-based /
+ * one-time one has a per-period amount to edit. A fixed $86.50 phone bill and
+ * an amortizing loan payment are defined by the series, so editing them
+ * one month at a time would be a lie — those get a reason instead of a button.
+ */
+export function moneyCapabilitiesFor(series: CalendarSeries): MoneyActionCapability[] {
+  const system = series.source.system;
+  const model = String(series.billingModel ?? "");
+
+  const cap = (action: CalendarMoneyAction, enabled: boolean, reason?: string): MoneyActionCapability =>
+    enabled ? { action, enabled } : { action, enabled, reason };
+
+  return MONEY_ACTIONS.map((action) => {
+    if (system !== "liability") {
+      return cap(action, false, "Per-period amounts are tracked on the liability that owns this bill.");
+    }
+    if (!PER_OCCURRENCE_MONEY.has(model)) {
+      return cap(
+        action, false,
+        model === "installment"
+          ? "This is a scheduled loan payment — change the payment on the loan itself."
+          : "This bill is the same amount every cycle. Switch it to a variable or usage-based bill to track per-month amounts.",
+      );
+    }
+    return cap(action, true);
+  });
+}
+
+/** Convenience: is one money action live for this series? */
+export function canEditMoney(series: CalendarSeries, action: CalendarMoneyAction): boolean {
+  return moneyCapabilitiesFor(series).find((c) => c.action === action)?.enabled ?? false;
+}
+
+/** True when this series shows a per-period money block at all. */
+export function hasPerOccurrenceMoney(series: CalendarSeries): boolean {
+  return canEditMoney(series, "addCharge");
+}

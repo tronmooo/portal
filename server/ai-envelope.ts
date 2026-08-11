@@ -145,6 +145,8 @@ const TOOL_ENTITY: Record<string, string> = {
   create_liability: "profile", update_liability: "profile", revalue_asset: "profile",
   create_obligation: "obligation", update_obligation: "obligation", delete_obligation: "obligation",
   pay_obligation: "obligation", undo_last_payment: "obligation",
+  add_liability_charge: "obligation", set_liability_amount: "obligation",
+  create_account: "profile", update_account_balance: "profile",
   journal_entry: "journal", update_journal: "journal", delete_journal: "journal",
   save_memory: "memory", update_memory: "memory", delete_memory: "memory",
   create_artifact: "artifact", update_artifact: "artifact", delete_artifact: "artifact",

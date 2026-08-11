@@ -15,6 +15,10 @@
 import { freqToUnit, advance, type RecurrenceRule } from "./recurrence";
 import { liabilityBillStatus, type BillStatus } from "./liability-status";
 import { liabilityFamily } from "./liability-types";
+import {
+  resolveBillingModel, resolveOccurrenceAmount,
+  type BillingModel, type OccurrenceCharge, type OccurrenceOverride,
+} from "./liability-billing";
 
 export type OccurrenceStatus = BillStatus | "skipped";
 
@@ -23,6 +27,7 @@ export interface ScheduleOccurrence {
   date: string;
   /** Date after any per-occurrence reschedule (`movedTo`); equals `date` otherwise. */
   effectiveDate: string;
+  /** The number to display and to sum: actual if posted, else base + charges. */
   amount: number;
   status: OccurrenceStatus;
   notes?: string;
@@ -32,6 +37,26 @@ export interface ScheduleOccurrence {
   paymentId?: string;
   /** True when a per-occurrence exception was applied (skipped/moved/amount/notes). */
   overridden: boolean;
+
+  // ── Variable / usage-based billing (shared/liability-billing.ts) ──
+  /** The billing model this occurrence was priced under. */
+  billingModel: BillingModel;
+  /** The base/expected portion of `amount`, before charges. */
+  baseAmount: number;
+  /** What we expect this period to cost, while it has not posted. */
+  estimatedAmount: number | null;
+  /** What actually posted. Once set, this period is frozen history. */
+  actualAmount: number | null;
+  /** Charge line items filed against THIS period only. */
+  charges: OccurrenceCharge[];
+  /** Sum of `charges` (discounts subtract). */
+  chargeTotal: number;
+  /** True while `amount` is still a forecast. */
+  isEstimate: boolean;
+  /** "Estimated" | "Current" | "Actual" — the word to render beside `amount`. */
+  amountLabel: "Estimated" | "Current" | "Actual";
+  /** Account the payment came from, when recorded. */
+  accountId?: string;
 }
 
 export interface Liabilityish {
@@ -57,6 +82,12 @@ export interface ScheduleOptions {
   months?: number;
   /** Hard safety cap on generated occurrences. Default 500. */
   cap?: number;
+  /**
+   * Billing model override. Normally resolved from the liability itself; pass
+   * it when the caller already normalized the fields (deriveScheduleFields
+   * strips the type_key the resolver would otherwise read).
+   */
+  billingModel?: BillingModel;
 }
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
@@ -147,6 +178,7 @@ export function generateSchedule(
   opts: ScheduleOptions,
 ): ScheduleOccurrence[] {
   const f = liability.fields || {};
+  const billingModel = opts.billingModel ?? resolveBillingModel(liability as any);
   const anchor = seriesAnchor(liability);
   if (!anchor) return [];
 
@@ -217,15 +249,28 @@ export function generateSchedule(
       const status: OccurrenceStatus = isSkipped
         ? "skipped"
         : liabilityBillStatus(effectiveDate, today, isPaid);
+      // The per-occurrence money model. `amount` is whatever THIS period costs —
+      // the definition's amount is only the starting point, never the answer.
+      const money = resolveOccurrenceAmount(baseAmount, ov as OccurrenceOverride | null, billingModel);
       out.push({
         date: cur,
         effectiveDate,
-        amount: ov && ov.amount != null ? Number(ov.amount) : baseAmount,
+        amount: money.current,
         status,
         notes: ov?.notes || undefined,
         occurrenceId: `${liability.id}:${cur}`,
         paymentId,
         overridden: !!ov,
+        billingModel,
+        baseAmount: money.base,
+        estimatedAmount: money.estimated,
+        actualAmount: money.actual,
+        charges: money.charges,
+        chargeTotal: money.chargeTotal,
+        // A paid occurrence is history even before an actual is stamped on it.
+        isEstimate: money.isEstimate && !isPaid,
+        amountLabel: isPaid ? "Actual" : money.label,
+        accountId: ov?.accountId || undefined,
       });
       if (out.length >= cap) break;
     }
@@ -244,8 +289,9 @@ export function nextDueOccurrence(
   liability: Liabilityish,
   payments: Paymentish[],
   todayISO: string,
+  billingModel?: BillingModel,
 ): ScheduleOccurrence | null {
-  const sched = generateSchedule(liability, payments, { todayISO, windowStart: todayISO, months: 18 });
+  const sched = generateSchedule(liability, payments, { todayISO, windowStart: todayISO, months: 18, billingModel });
   for (const o of sched) {
     if (o.status !== "paid" && o.status !== "skipped") return o;
   }
@@ -276,4 +322,67 @@ export function periodsPerYear(liability: Liabilityish): number {
   const perYear: Record<string, number> = { day: 365, week: 52, weekday: 260, month: 12, year: 1 };
   const base = perYear[unit] ?? 12;
   return interval > 0 ? base / interval : base;
+}
+
+// ─── Period rollups ──────────────────────────────────────────────────────────
+//
+// `definitionAmount × periodsPerYear` is only true for a FIXED bill. For a
+// variable or usage-based one it is fiction: the electric bill that averaged
+// $82 across Jan/Feb/Mar has no single monthly amount to multiply. Every
+// rollup — annual total, cash flow, monthly expenses — must sum the actual
+// occurrences instead, which is what these do.
+
+export interface PeriodTotal {
+  /** YYYY-MM. */
+  period: string;
+  /** Sum of every occurrence amount in the period (estimates included). */
+  total: number;
+  /** Sum of the occurrences that have actually posted. */
+  actual: number;
+  /** Sum of the occurrences still forecast. */
+  estimated: number;
+  /** True when any part of `total` is still a forecast. */
+  hasEstimate: boolean;
+  count: number;
+}
+
+const round2s = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+/** Occurrence amounts bucketed by calendar month of their EFFECTIVE date. */
+export function monthlyTotals(occurrences: readonly ScheduleOccurrence[]): PeriodTotal[] {
+  const byPeriod = new Map<string, PeriodTotal>();
+  for (const o of occurrences || []) {
+    if (o.status === "skipped") continue;
+    const period = String(o.effectiveDate || o.date).slice(0, 7);
+    if (!period) continue;
+    const row = byPeriod.get(period) ?? {
+      period, total: 0, actual: 0, estimated: 0, hasEstimate: false, count: 0,
+    };
+    row.total += o.amount;
+    if (o.isEstimate) { row.estimated += o.amount; row.hasEstimate = true; }
+    else row.actual += o.amount;
+    row.count++;
+    byPeriod.set(period, row);
+  }
+  return [...byPeriod.values()]
+    .map((r) => ({ ...r, total: round2s(r.total), actual: round2s(r.actual), estimated: round2s(r.estimated) }))
+    .sort((a, b) => a.period.localeCompare(b.period));
+}
+
+/** Sum of the occurrence amounts falling inside an inclusive date window. */
+export function totalForWindow(
+  occurrences: readonly ScheduleOccurrence[],
+  startISO: string,
+  endISO: string,
+): { total: number; actual: number; estimated: number; count: number } {
+  let total = 0, actual = 0, estimated = 0, count = 0;
+  for (const o of occurrences || []) {
+    if (o.status === "skipped") continue;
+    const d = o.effectiveDate || o.date;
+    if (d < startISO || d > endISO) continue;
+    total += o.amount;
+    if (o.isEstimate) estimated += o.amount; else actual += o.amount;
+    count++;
+  }
+  return { total: round2s(total), actual: round2s(actual), estimated: round2s(estimated), count };
 }
