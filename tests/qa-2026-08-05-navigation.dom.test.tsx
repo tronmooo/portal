@@ -160,6 +160,21 @@ describe("profile back link", () => {
   });
 });
 
+// ── Liabilities get the same treatment assets did ────────────────────────────
+describe("liability back link", () => {
+  const src = read("client/src/pages/liability-detail.tsx");
+
+  it("sends a liability to the Liabilities listing, not the Profiles page", () => {
+    expect(/backHref="\/linked\?tab=liabilities"/.test(src)).toBe(true);
+    expect(/onBack=\{\(\) => navigate\("\/profiles"\)\}/.test(src)).toBe(false);
+  });
+
+  it("labels it for the place it actually goes", () => {
+    expect(src.includes('backLabel="Back to Liabilities"')).toBe(true);
+    expect(src.includes('backLabel="Back"')).toBe(false);
+  });
+});
+
 // ── #3 — a bill notification opens the bills ─────────────────────────────────
 describe("notification rows", () => {
   it("send a bill to the Bills page, not to expenses", () => {
