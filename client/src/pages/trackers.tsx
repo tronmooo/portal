@@ -14,6 +14,11 @@ import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { liabilityFamily } from "@shared/liability-types";
 import { passesProfileFilter } from "@shared/profile-filter";
 import {
+  ASSET_TAB_TYPES, assetTypeLabel, isAssetTabProfile, isLiabilityTabProfile,
+  resolveAssetValue,
+} from "@shared/asset-value";
+import { accountKindMeta, accountKindOf } from "@shared/finance-accounts";
+import {
   type TrackerMetricDefinition,
   getDefaultMetricDefinition,
 } from "@shared/tracker-metric-definition";
@@ -26,6 +31,7 @@ import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
 import { CreateProfileDialog } from "@/components/CreateProfileDialog";
+import { AddAccountDialog } from "@/components/finance/AccountsSection";
 // One card shape and one heading treatment for every hub tab — the Executive
 // tab's, so Assets / Liabilities / Documents stop reading as three products.
 import { EntityCard } from "@/components/ui/entity-card";
@@ -98,6 +104,7 @@ import {
   PawPrint,
   Car,
   Building2,
+  Wallet,
   CreditCard,
   Stethoscope,
   Star,
@@ -5648,6 +5655,9 @@ export default function TrackersPage() {
   // Profile creation dialog (used for Asset/Loan/Subscription tabs)
   const [createProfileOpen, setCreateProfileOpen] = useState(false);
   const [createProfileFilter, setCreateProfileFilter] = useState<string | string[] | undefined>(undefined);
+  // Accounts are created through the accounts dialog, not the profile-type
+  // registry — same dialog the Finance tab uses, so there is one create path.
+  const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [createProfileTitle, setCreateProfileTitle] = useState<string | undefined>(undefined);
   const [, navigate] = useLocation();
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
@@ -5903,10 +5913,9 @@ export default function TrackersPage() {
 
   // Asset/vehicle/property type list (after profile filter) for the Assets tab chip row.
   const assetTypeOptions = useMemo(() => {
-    const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
     const isShowAll = filterMode === "everyone";
     const visible = (profiles || []).filter(p => {
-      if (!childTypeSet.has(p.type)) return false;
+      if (!isAssetTabProfile(p)) return false;
       if (isShowAll) return true;
       const pParent = (p as any).parentProfileId;
       // Visible if directly selected, parented to selected profile, OR
@@ -5914,10 +5923,9 @@ export default function TrackersPage() {
       // it's parented to Test).
       return isAssetVisible(p.id, pParent);
     });
-    const labelFor = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
     const counts: Record<string, number> = {};
     for (const p of visible) {
-      const lab = labelFor(p.type);
+      const lab = assetTypeLabel(p.type);
       counts[lab] = (counts[lab] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
@@ -5928,9 +5936,14 @@ export default function TrackersPage() {
   // mortgages, and credit cards. Anything in this set shows up in the
   // Liabilities chip count, the Liabilities cards section, and the unified
   // table view.
-  const isLiabilityLikeProfile = (p: any) => p?.type === "liability" || p?.type === "loan" || p?.type === "subscription";
+  // Canonical tab membership (shared/asset-value.ts). A credit card, line of
+  // credit or loan ACCOUNT is money owed, so it lists here rather than beside
+  // the car in Assets — the two predicates partition every row into exactly
+  // one tab.
+  const isLiabilityLikeProfile = (p: any) => isLiabilityTabProfile(p);
   const liabilitySubcategoryOf = (p: any): string => {
     const f = (p?.fields as any) || {};
+    if (p?.type === "account") return accountKindMeta(accountKindOf(p)).label;
     if (p?.type === "subscription") {
       const c = (f.subtype || f.kind || f.category || "Subscription") as string;
       return String(c).trim().replace(/_/g, " ") || "Subscription";
@@ -6020,10 +6033,12 @@ export default function TrackersPage() {
     filteredLiabilityCount,
     allItemsCount,
   } = useMemo(() => {
-    const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
     const isShowAll = filterMode === "everyone";
     const byId = new Map<string, any>();
     (profiles || []).forEach(p => byId.set(p.id, p));
+    // Ancestry asks "is this nested inside a container", so it tests the TYPE
+    // set rather than the tab predicate — a credit card can still hold a
+    // nested record even though it lists under Liabilities.
     const hasAssetAncestor = (p: any): boolean => {
       let cur: any = p;
       for (let i = 0; i < 32 && cur; i++) {
@@ -6031,24 +6046,23 @@ export default function TrackersPage() {
         if (!pid) return false;
         const par = byId.get(pid);
         if (!par) return false;
-        if (childTypeSet.has(par.type)) return true;
+        if (ASSET_TAB_TYPES.has(par.type)) return true;
         cur = par;
       }
       return false;
     };
-    const labelForType = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
     const assets = (profiles || []).filter(p => {
-      if (!childTypeSet.has(p.type)) return false;
+      if (!isAssetTabProfile(p)) return false;
       const pParent = p.parentProfileId;
       const parentIsAsset = hasAssetAncestor(p);
       const inScope = isShowAll || isAssetVisible(p.id, pParent as string | null | undefined);
       if (!inScope) return false;
-      if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForType(p.type) !== assetTypeFilter) return false;
+      if (sectionFilter === "profiles" && assetTypeFilter !== "all" && assetTypeLabel(p.type) !== assetTypeFilter) return false;
       const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
       if (nestingFilter === "all" || nestingFilter === "topLevel") {
         if (parentIsAsset) return false;
       } else if (nestingFilter === "hasChildren") {
-        const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.parentProfileId) === p.id);
+        const hasAssetChild = (profiles || []).some(x => x.id !== p.id && ASSET_TAB_TYPES.has(x.type) && (x.parentProfileId) === p.id);
         if (!hasAssetChild) return false;
       } else if (nestingFilter === "nested") {
         if (!parentIsAsset) return false;
@@ -6128,9 +6142,14 @@ export default function TrackersPage() {
             // Direct routes for tab-specific filters
             if (sectionFilter === "profiles") {
               return (
-                <Button onClick={openAssetDialog} size="icon" className="h-7 w-7" data-testid="button-create-asset" aria-label="Add Asset">
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button onClick={() => setAddAccountOpen(true)} size="icon" variant="outline" className="h-7 w-7" data-testid="button-create-account" aria-label="Add Account">
+                    <Wallet className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button onClick={openAssetDialog} size="icon" className="h-7 w-7" data-testid="button-create-asset" aria-label="Add Asset">
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               );
             }
             if (sectionFilter === "liabilities") {
@@ -6165,6 +6184,9 @@ export default function TrackersPage() {
                 <DropdownMenuContent align="end" className="w-44">
                   <DropdownMenuItem onClick={openAssetDialog} data-testid="menu-add-asset">
                     <Building2 className="h-3.5 w-3.5 mr-2" /> Asset
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setAddAccountOpen(true)} data-testid="menu-add-account">
+                    <Wallet className="h-3.5 w-3.5 mr-2" /> Account
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={openLiabilityDialog} data-testid="menu-add-liability">
                     <TrendingDown className="h-3.5 w-3.5 mr-2" /> Liability
@@ -6393,7 +6415,7 @@ export default function TrackersPage() {
           return `${Math.floor(d / 365)}y`;
         };
         const rows: Row[] = [];
-        const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
+        const childTypeSet = ASSET_TAB_TYPES;
         const isShowAll = filterMode === "everyone";
         // NESTED-HIDE (2026-05-25): walk the parent chain (up to 32 levels — far
         // beyond any realistic nesting depth) and return true if any ancestor
@@ -6451,12 +6473,11 @@ export default function TrackersPage() {
         // this the highlighted "Properties"/"Vehicles" chip did nothing in
         // list view — the chip lit up but the list still showed every asset
         // (2026-06-25 user report).
-        const labelForAssetType = (t: string) =>
-          t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
+        const labelForAssetType = assetTypeLabel;
         // Assets
         if (sectionFilter === "all" || sectionFilter === "profiles") {
           (profiles || []).forEach(p => {
-            if (!childTypeSet.has(p.type)) return;
+            if (!isAssetTabProfile(p)) return;
             // Honor the asset-type sub-filter (Properties / Vehicles / …) — only
             // active on the Assets section, mirroring the card view exactly.
             if (sectionFilter === "profiles" && assetTypeFilter !== "all" && labelForAssetType(p.type) !== assetTypeFilter) return;
@@ -6474,9 +6495,15 @@ export default function TrackersPage() {
               const hasChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.parentProfileId) === p.id);
               if (!hasChild) return;
             }
-            const f = p.fields || {}; const fin = f.finance || {}; const housing = f.housing || {}; const other = f.other || {};
-            const cv = toNum(f.currentValue) ?? toNum(housing.currentValue) ?? toNum(other.currentValue) ?? toNum(other.value) ?? toNum(fin.balance) ?? toNum(f.value);
-            const sub = p.type.charAt(0).toUpperCase() + p.type.slice(1);
+            // Canonical resolver (shared/asset-value.ts). The inline reducer
+            // this replaces never looked at top-level `fields.balance`, which
+            // is where an account keeps its money — so every account rendered
+            // its value as "—".
+            const resolved = resolveAssetValue(p);
+            const cv = resolved > 0 ? resolved : null;
+            const sub = p.type === "account"
+              ? accountKindMeta(accountKindOf(p)).label
+              : p.type.charAt(0).toUpperCase() + p.type.slice(1);
             const owner = resolveOwnerFromProfile(p);
             rows.push({ id: p.id, kind: "asset", name: p.name, subtitle: sub, meta: cv != null ? `$${cv.toLocaleString()}` : "—", href: `/profiles/${p.id}`, ownerIds: owner ? [owner] : [] });
           });
@@ -6735,10 +6762,12 @@ export default function TrackersPage() {
 
       {/* Assets & Vehicles — grouped by type */}
       {viewMode === "cards" && (sectionFilter === "all" || sectionFilter === "profiles") && (() => {
-        // Only show actual assets and vehicles here — NOT loans/obligations (those belong in Bills)
-        const childTypeSet = new Set(["vehicle", "asset", "investment", "property"]);
+        // Owned things only — a `loan` profile is a debt and lists under
+        // Liabilities, as does a credit-card / line-of-credit / loan ACCOUNT.
+        // isAssetTabProfile is the one place that decision is made.
+        const childTypeSet = ASSET_TAB_TYPES;
         const isShowAll = filterMode === "everyone";
-        const labelForType = (t: string) => t === "vehicle" ? "Vehicles" : t === "property" ? "Properties" : t === "investment" ? "Investments" : t === "asset" ? "Assets" : t;
+        const labelForType = assetTypeLabel;
         // Walk full parent chain (up to 32 levels) so an asset nested at ANY
         // depth — Home → Furniture → Couch → Screws — is hidden from the
         // top-level Linked page. Previously only the direct parent was checked,
@@ -6758,7 +6787,7 @@ export default function TrackersPage() {
           return false;
         };
         const childProfiles = (profiles || []).filter(p => {
-          if (!childTypeSet.has(p.type)) return false;
+          if (!isAssetTabProfile(p)) return false;
           // Visible if (a) no filter, (b) directly selected, (c) parented to
           // selected profile, OR (d) co-owned via asset_party_links. Route
           // through the canonical isAssetVisible helper so this cards view
@@ -6805,11 +6834,11 @@ export default function TrackersPage() {
         const typeGroups: Record<string, typeof childProfiles> = {};
         for (const p of childProfiles) {
           // Phase 1 Liabilities: liabilities/loans intentionally excluded from Trackers — they live inside asset/person profile pages only.
-          const group = p.type === "vehicle" ? "Vehicles" : p.type === "asset" ? "Assets" : p.type === "property" ? "Properties" : p.type === "investment" ? "Investments" : "Other";
+          const group = ASSET_TAB_TYPES.has(p.type) ? assetTypeLabel(p.type) : "Other";
           (typeGroups[group] = typeGroups[group] || []).push(p);
         }
         const sortedGroups = Object.entries(typeGroups).sort(([a], [b]) => a.localeCompare(b));
-        const typeIcons: Record<string, any> = { vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2, account: CreditCard };
+        const typeIcons: Record<string, any> = { vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2, account: Wallet };
 
         return (
           <div className="space-y-1.5">
@@ -6954,7 +6983,7 @@ export default function TrackersPage() {
       {/* Liabilities Section (replaces Subscriptions) */}
       {viewMode === "cards" && (sectionFilter === "all" || sectionFilter === "liabilities") && (() => {
         const isShowAll = filterMode === "everyone";
-        const _assetTypes = new Set(["vehicle", "asset", "investment", "property"]);
+        const _assetTypes = ASSET_TAB_TYPES;
         const _profileByIdLiab = new Map<string, any>();
         (profiles || []).forEach(p => _profileByIdLiab.set(p.id, p));
         const _liabHasAssetAncestor = (p: any): boolean => {
@@ -7762,6 +7791,11 @@ export default function TrackersPage() {
 
       {/* Create tracker dialog */}
       <CreateTrackerDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <AddAccountDialog
+        open={addAccountOpen}
+        onOpenChange={setAddAccountOpen}
+        profiles={(profiles as any[]) || []}
+      />
       <CreateProfileDialog
         open={createProfileOpen}
         onClose={() => setCreateProfileOpen(false)}

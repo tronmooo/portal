@@ -24,7 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SectionHeading } from "@/components/ui/section-heading";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -84,26 +84,26 @@ const num = (s: string): number | undefined => {
   return Number.isFinite(n) ? n : undefined;
 };
 
-export function AccountsSection({ profiles }: { profiles: any[] }) {
+/**
+ * The "add an account" dialog on its own, so the Assets tab can offer it too.
+ *
+ * A financial account IS an owned thing, so it belongs in Assets as much as in
+ * Finance — and a user looking at their accounts under Assets should be able to
+ * add one there without being sent to another tab. Both entry points open THIS
+ * dialog and hit the same endpoint, so there is one create path, not two.
+ */
+export function AddAccountDialog({ open, onOpenChange, profiles, onCreated }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  profiles: any[];
+  onCreated?: (account: any) => void;
+}) {
   const { toast } = useToast();
-  const [addOpen, setAddOpen] = useState(false);
-  const [editing, setEditing] = useState<AccountView | null>(null);
-  const [deleting, setDeleting] = useState<AccountView | null>(null);
-  const [expanded, setExpanded] = useState<string | null>(null);
   const [form, setForm] = useState<AccountForm>(emptyForm());
-
-  // Accounts come from the profile list the Finance page already loaded, so
-  // this section never disagrees with Net Worth about what exists. The
-  // dedicated endpoint stays available for the AI and for other clients.
-  const accounts = useMemo(() => accountViews(profiles || []), [profiles]);
-  const summary = useMemo(() => summarizeAccounts(profiles || []), [profiles]);
-
   const people = useMemo(
     () => (profiles || []).filter((p: any) => p.type === "self" || p.type === "person"),
     [profiles],
   );
-
-  const refresh = () => invalidateDomains("profiles", "assets", "liabilities", "dashboard");
 
   const createMut = useMutation({
     mutationFn: async (f: AccountForm) => (await apiRequest("POST", "/api/accounts", {
@@ -117,14 +117,53 @@ export function AccountsSection({ profiles }: { profiles: any[] }) {
       balanceAsOf: f.balanceAsOf || undefined,
       ownerProfileId: f.ownerProfileId || undefined,
     })).json(),
-    onSuccess: async () => {
-      await refresh();
-      setAddOpen(false);
+    onSuccess: async (created) => {
+      await invalidateDomains("profiles", "assets", "liabilities", "dashboard");
+      onOpenChange(false);
       setForm(emptyForm());
       toast({ title: "Account added" });
+      onCreated?.(created);
     },
     onError: (e: any) => toast({ title: "Couldn't add the account", description: e?.message, variant: "destructive" }),
   });
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (o) setForm(emptyForm()); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Add a financial account</DialogTitle></DialogHeader>
+        <AccountFields form={form} setForm={setForm} people={people} />
+        <Button
+          className="w-full"
+          disabled={!form.name.trim() || createMut.isPending}
+          onClick={() => createMut.mutate(form)}
+          data-testid="btn-save-account"
+        >
+          {createMut.isPending ? "Adding…" : "Add account"}
+        </Button>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function AccountsSection({ profiles }: { profiles: any[] }) {
+  const { toast } = useToast();
+  const [addOpen, setAddOpen] = useState(false);
+  const [editing, setEditing] = useState<AccountView | null>(null);
+  const [deleting, setDeleting] = useState<AccountView | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  // Accounts come from the profile list the Finance page already loaded, so
+  // this section never disagrees with Net Worth about what exists. The
+  // dedicated endpoint stays available for the AI and for other clients.
+  const accounts = useMemo(() => accountViews(profiles || []), [profiles]);
+  const summary = useMemo(() => summarizeAccounts(profiles || []), [profiles]);
+
+  const people = useMemo(
+    () => (profiles || []).filter((p: any) => p.type === "self" || p.type === "person"),
+    [profiles],
+  );
+
+  const refresh = () => invalidateDomains("profiles", "assets", "liabilities", "dashboard");
 
   const updateMut = useMutation({
     mutationFn: async ({ id, changes }: { id: string; changes: Record<string, any> }) =>
@@ -158,25 +197,13 @@ export function AccountsSection({ profiles }: { profiles: any[] }) {
   }, [accounts]);
 
   const AddDialog = (
-    <Dialog open={addOpen} onOpenChange={(o) => { setAddOpen(o); if (o) setForm(emptyForm()); }}>
-      <DialogTrigger asChild>
-        <Button size="sm" variant="outline" className="h-8 text-xs" data-testid="btn-add-account">
-          <Plus className="w-3.5 h-3.5 mr-1" />Add account
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>Add a financial account</DialogTitle></DialogHeader>
-        <AccountFields form={form} setForm={setForm} people={people} />
-        <Button
-          className="w-full"
-          disabled={!form.name.trim() || createMut.isPending}
-          onClick={() => createMut.mutate(form)}
-          data-testid="btn-save-account"
-        >
-          {createMut.isPending ? "Adding…" : "Add account"}
-        </Button>
-      </DialogContent>
-    </Dialog>
+    <>
+      <Button size="sm" variant="outline" className="h-8 text-xs"
+        onClick={() => setAddOpen(true)} data-testid="btn-add-account">
+        <Plus className="w-3.5 h-3.5 mr-1" />Add account
+      </Button>
+      <AddAccountDialog open={addOpen} onOpenChange={setAddOpen} profiles={profiles} />
+    </>
   );
 
   return (

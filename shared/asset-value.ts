@@ -203,3 +203,62 @@ export function isNetWorthLiabilityProfile(p: any): boolean {
   if (isRecurringBill(p?.type_key ?? p?.typeKey)) return false;
   return true;
 }
+
+// ---------- Assets / Liabilities TAB membership ----------
+//
+// The Assets tab lists OWNED THINGS. That is a narrower question than
+// "does this count toward net worth": a `loan` profile can carry an asset's
+// market value (so it's in ASSET_PROFILE_TYPES) but it is a debt on screen and
+// belongs under Liabilities, not beside the car it financed.
+//
+// These two predicates are the single answer to "which tab does this row live
+// in", replacing the hand-maintained `new Set(["vehicle","asset",...])` copies
+// that each screen carried. Those copies are why a financial account — which
+// IS an owned thing, and which net worth has always counted — never appeared in
+// the Assets tab: five separate literal sets, none of them listing "account".
+
+/** Profile types the Assets tab can list. */
+export const ASSET_TAB_TYPES: ReadonlySet<string> = new Set([
+  "vehicle", "asset", "investment", "property", "account",
+]);
+
+/** Profile types the Liabilities tab can list. */
+export const LIABILITY_TAB_TYPES: ReadonlySet<string> = new Set([
+  "liability", "loan", "subscription", "account",
+]);
+
+/**
+ * True when a profile belongs in the Assets tab.
+ *
+ * An `account` is included only when its kind is cash-side. A checking account
+ * and a brokerage account are things you own; a credit card is money you owe,
+ * and it appears under Liabilities instead. Exactly one tab claims each row.
+ */
+export function isAssetTabProfile(p: any): boolean {
+  if (!p || !ASSET_TAB_TYPES.has(String(p.type))) return false;
+  if (String(p.type) === "account") return !isDebtAccountKind(accountKindOf(p));
+  return true;
+}
+
+/**
+ * True when a profile belongs in the Liabilities tab — real debt, recurring
+ * bills and subscriptions, plus the debt-side accounts (credit cards, lines of
+ * credit, loan accounts) that the Assets tab deliberately leaves out.
+ */
+export function isLiabilityTabProfile(p: any): boolean {
+  if (!p || !LIABILITY_TAB_TYPES.has(String(p.type))) return false;
+  if (String(p.type) === "account") return isDebtAccountKind(accountKindOf(p));
+  return true;
+}
+
+/** The Assets-tab chip label for a profile type. */
+export function assetTypeLabel(type: string | null | undefined): string {
+  switch (String(type ?? "")) {
+    case "vehicle": return "Vehicles";
+    case "property": return "Properties";
+    case "investment": return "Investments";
+    case "account": return "Accounts";
+    case "asset": return "Assets";
+    default: return String(type ?? "");
+  }
+}

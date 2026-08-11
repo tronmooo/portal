@@ -9,7 +9,10 @@ import {
   applyBalanceAdjustment, balanceHistory, summarizeAccounts, accountViews,
   findAccount, accountIsExcluded,
 } from "@shared/finance-accounts";
-import { isAssetProfile, isLiabilityProfile, isNetWorthLiabilityProfile } from "@shared/asset-value";
+import {
+  isAssetProfile, isLiabilityProfile, isNetWorthLiabilityProfile,
+  isAssetTabProfile, isLiabilityTabProfile, assetTypeLabel, ASSET_TAB_TYPES,
+} from "@shared/asset-value";
 import { computeNetWorth } from "@shared/net-worth";
 
 const TODAY = "2026-08-11";
@@ -231,5 +234,76 @@ describe("findAccount — resolving what the user said to one account", () => {
     expect(findAccount(all, "")).toBeNull();
     expect(findAccount(all, "wells fargo")).toBeNull();
     expect(findAccount([], "checking")).toBeNull();
+  });
+});
+
+describe("Assets / Liabilities tab membership", () => {
+  // The Assets tab used to carry five hand-written copies of
+  // `new Set(["vehicle","asset","investment","property"])`. None listed
+  // "account", so financial accounts — which net worth had always counted —
+  // were invisible there. These tests pin the shared rule so that can't recur.
+
+  it("lists cash-side accounts in the Assets tab", () => {
+    for (const a of [checking, savings, cash, brokerage]) {
+      expect(isAssetTabProfile(a)).toBe(true);
+      expect(isLiabilityTabProfile(a)).toBe(false);
+    }
+  });
+
+  it("lists debt-side accounts in the Liabilities tab instead", () => {
+    const heloc = account("HELOC", "line_of_credit", { balance: 5000 });
+    const carLoan = account("Car loan", "loan", { balance: 18000 });
+    for (const a of [amex, heloc, carLoan]) {
+      expect(isAssetTabProfile(a)).toBe(false);
+      expect(isLiabilityTabProfile(a)).toBe(true);
+    }
+  });
+
+  it("puts every row in exactly one tab", () => {
+    const everything = [
+      checking, savings, cash, brokerage, amex,
+      { id: "v", type: "vehicle", name: "Civic", fields: {} },
+      { id: "h", type: "property", name: "House", fields: {} },
+      { id: "i", type: "investment", name: "401k", fields: {} },
+      { id: "a", type: "asset", name: "Guitar", fields: {} },
+      { id: "l", type: "liability", type_key: "mortgage", name: "Mortgage", fields: {} },
+      { id: "s", type: "subscription", name: "Netflix", fields: {} },
+      { id: "ln", type: "loan", name: "Legacy loan", fields: {} },
+    ];
+    for (const p of everything) {
+      const inAssets = isAssetTabProfile(p);
+      const inLiabilities = isLiabilityTabProfile(p);
+      expect(
+        inAssets !== inLiabilities,
+        `${p.name} (${p.type}) is in ${inAssets && inLiabilities ? "BOTH tabs" : "NEITHER tab"}`,
+      ).toBe(true);
+    }
+  });
+
+  it("keeps people, pets and trackers out of both tabs", () => {
+    for (const p of [
+      { id: "p", type: "person", name: "Joe", fields: {} },
+      { id: "s", type: "self", name: "Me", fields: {} },
+      { id: "pet", type: "pet", name: "Luna", fields: {} },
+    ]) {
+      expect(isAssetTabProfile(p)).toBe(false);
+      expect(isLiabilityTabProfile(p)).toBe(false);
+    }
+  });
+
+  it("labels the account chip group", () => {
+    expect(assetTypeLabel("account")).toBe("Accounts");
+    expect(assetTypeLabel("vehicle")).toBe("Vehicles");
+    expect(assetTypeLabel("property")).toBe("Properties");
+    expect(assetTypeLabel("investment")).toBe("Investments");
+    expect(assetTypeLabel("asset")).toBe("Assets");
+  });
+
+  it("keeps the Assets tab set narrower than the net-worth asset set", () => {
+    // A `loan` profile can carry an asset's market value, so net worth counts
+    // it — but on screen it is a debt and belongs under Liabilities.
+    expect(ASSET_TAB_TYPES.has("loan")).toBe(false);
+    expect(isAssetProfile({ type: "loan", fields: { currentValue: 1000 } })).toBe(true);
+    expect(isAssetTabProfile({ type: "loan", fields: { currentValue: 1000 } })).toBe(false);
   });
 });
