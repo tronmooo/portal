@@ -21,6 +21,8 @@ import {
 } from "@/components/asset/asset-overview";
 import { DetailHero, type HeroStat } from "@/components/profile/DetailHero";
 import { profileVisual } from "@/lib/profile-visuals";
+import { AccountOverview, accountHeroStats } from "@/components/finance/AccountOverview";
+import { isAccountProfile, accountKindMeta, accountKindOf } from "@shared/finance-accounts";
 import { Pill } from "@/components/dashboard/visuals";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
@@ -13120,7 +13122,10 @@ export default function ProfileDetailPage() {
   const backHref = listedUnderAssets ? "/linked?tab=assets" : isLinkedType ? "/linked" : "/profiles";
   const backLabel = listedUnderAssets ? "Back to Assets" : isLinkedType ? "Back to Linked" : "Back to Profiles";
 
-  const visual = profileVisual(profile.type);
+  // The whole profile, not just its type: an account's KIND picks its glyph
+  // and colour, so a credit card doesn't wear the same green bank icon as a
+  // savings account.
+  const visual = profileVisual(profile);
 
   // Type-aware header stats. Counts only — DetailHero drops any tile whose
   // count is 0, because "0 DOCS / 0 TASKS" was a quarter of a phone screen
@@ -13128,6 +13133,14 @@ export default function ProfileDetailPage() {
   const heroStats: HeroStat[] = (() => {
     const ptype = profile.type;
     const out: HeroStat[] = [];
+    // An account leads with its money. The generic Docs/Expenses/Tasks counts
+    // below are all zero on a freshly-added account, and DetailHero drops zero
+    // tiles — so an account page showed no stats at all.
+    if (isAccountProfile(profile)) {
+      for (const st of accountHeroStats(profile)) {
+        out.push({ label: st.label, value: st.value, icon: Wallet, testId: st.testId });
+      }
+    }
     const tabSet = new Set(getTabsForType(ptype, profile).map(t => t.value));
     if (tabSet.has("health")) out.push({
       label: "Health",
@@ -13153,7 +13166,7 @@ export default function ProfileDetailPage() {
           accent={visual.accent}
           icon={visual.icon}
           title={<span data-testid="text-profile-detail-name">{profile.name}</span>}
-          typeLabel={profile.type}
+          typeLabel={isAccountProfile(profile) ? accountKindMeta(accountKindOf(profile)).label : profile.type}
           badges={(profile.tags ?? []).slice().sort((a, b) => a.localeCompare(b)).map(tag => (
             <Pill key={tag} accent="240 20% 60%">
               <Tag className="h-2.5 w-2.5" />{tag}
@@ -13279,6 +13292,15 @@ export default function ProfileDetailPage() {
                       itself (mileage, weight, value-over-time, etc.). */}
                   {!(["person", "self"].includes(profile.type)) && ["asset","vehicle","property","investment","account"].includes(profile.type) && (
                     <div className="mt-4 space-y-3" data-testid="asset-overview-identity-only">
+                      {/* "What is this thing?" for an account is its balance,
+                          what's available, its limit and how stale the figure
+                          is — none of which the generic asset Overview can
+                          say. Every number comes from the shared account
+                          helpers, so this page and the Finance tab cannot
+                          disagree. */}
+                      {isAccountProfile(profile) && (
+                        <AccountOverview profile={profile} />
+                      )}
                       {ownTrackers.length > 0 && (
                         <Card>
                           <CardContent className="p-3">

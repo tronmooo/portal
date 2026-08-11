@@ -33,9 +33,10 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Link } from "wouter";
 import {
   Wallet, Plus, Pencil, Trash2, CreditCard, Landmark, PiggyBank, Banknote,
-  TrendingUp, CircleDollarSign, History, ChevronDown, ChevronRight,
+  TrendingUp, CircleDollarSign, History, ChevronDown, ChevronRight, ExternalLink,
 } from "lucide-react";
 import { formatMoney, formatListDate } from "@/lib/format";
 import {
@@ -423,6 +424,15 @@ function AccountRow({ account, expanded, onToggle, onEdit, onDelete, onAdjust }:
           )}
 
           <div className="flex items-center gap-1.5">
+            {/* The account IS a profile, so its full page — balance history,
+                linked expenses, owner, documents — is one tap away rather than
+                a second place the same record is maintained. */}
+            <Link href={`/profiles/${account.id}`}>
+              <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                data-testid={`acct-open-${account.id}`}>
+                <ExternalLink className="w-3 h-3 mr-1" />Open
+              </Button>
+            </Link>
             <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={onEdit}
               data-testid={`acct-edit-${account.id}`}><Pencil className="w-3 h-3 mr-1" />Edit</Button>
             <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-red-500 hover:text-red-500"
