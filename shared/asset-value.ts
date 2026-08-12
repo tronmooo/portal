@@ -182,6 +182,12 @@ export function isAssetProfile(p: any): boolean {
 export function isLiabilityProfile(p: any): boolean {
   if (!p || !LIABILITY_PROFILE_TYPES.has(String(p.type))) return false;
   if (String(p.type) === "account") return isDebtAccountKind(accountKindOf(p));
+  // An `investment` profile is money you HOLD. It sits in both type sets, and
+  // both resolvers read `fields.balance` — so a brokerage that stored its
+  // value under `balance` was added to assets AND subtracted as debt, a
+  // double error from one row. Same hazard the account split closed; a margin
+  // loan against a brokerage is its own liability profile, not this one.
+  if (String(p.type) === "investment") return false;
   return true;
 }
 

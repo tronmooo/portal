@@ -2827,6 +2827,42 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
       { key: "warranty", label: "Warranty Until" },
     ]},
   ],
+  // Investment / brokerage / retirement. Previously had NO entry, so a Roth
+  // IRA's fields all fell into the collapsed "Other" bucket and its Overview
+  // showed nothing about the account.
+  investment: [
+    { title: "Account", fields: [
+      { key: "institution", label: "Institution" }, { key: "accountType", label: "Account Type" },
+      { key: "accountNumberLast4", label: "Account #", hideWhenEmpty: true },
+      { key: "balance", label: "Balance" }, { key: "currentValue", label: "Current Value" },
+    ]},
+    { title: "Holdings", fields: [
+      { key: "ticker", label: "Ticker", hideWhenEmpty: true },
+      { key: "shares", label: "Shares", hideWhenEmpty: true },
+      { key: "costBasis", label: "Cost Basis", hideWhenEmpty: true },
+      { key: "assetAllocation", label: "Allocation", hideWhenEmpty: true },
+    ]},
+    { title: "Contributions", fields: [
+      { key: "annualContribution", label: "Annual Contribution", hideWhenEmpty: true },
+      { key: "contributionLimit", label: "Contribution Limit", hideWhenEmpty: true },
+      { key: "employerMatch", label: "Employer Match", hideWhenEmpty: true },
+      { key: "vestedBalance", label: "Vested Balance", hideWhenEmpty: true },
+      { key: "beneficiary", label: "Beneficiary", hideWhenEmpty: true },
+    ]},
+  ],
+  // Financial account. The BALANCE side deliberately lives in AccountOverview
+  // (kind-aware: a checking account has no credit limit), so this covers only
+  // what that card does not — otherwise the same number renders twice on one
+  // screen, which is exactly the redundancy this page is being cleaned of.
+  account: [
+    { title: "Account", fields: [
+      { key: "accountType", label: "Account Type", hideWhenEmpty: true },
+      { key: "routingNumber", label: "Routing #", hideWhenEmpty: true },
+      { key: "interestRate", label: "APY / APR", hideWhenEmpty: true },
+      { key: "openedDate", label: "Opened", hideWhenEmpty: true },
+      { key: "minimumBalance", label: "Minimum Balance", hideWhenEmpty: true },
+    ]},
+  ],
   // Asset subtype overrides
   bank_account: [
     { title: "Account", fields: [
@@ -2898,13 +2934,23 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
     { title: "Location", fields: [
       { key: "address", label: "Address" }, { key: "city", label: "City" },
       { key: "state", label: "State" }, { key: "zip", label: "ZIP" },
+      { key: "parcelNumber", label: "Parcel #", hideWhenEmpty: true },
     ]},
     { title: "Details", fields: [
+      { key: "propertyType", label: "Property Type", hideWhenEmpty: true },
       { key: "bedrooms", label: "Bedrooms" }, { key: "bathrooms", label: "Bathrooms" },
       { key: "sqFt", label: "Sq Ft" }, { key: "yearBuilt", label: "Year Built" },
+      { key: "lotSize", label: "Lot Size", hideWhenEmpty: true },
     ]},
     { title: "Value", fields: [
+      { key: "purchaseDate", label: "Purchase Date", hideWhenEmpty: true },
       { key: "purchasePrice", label: "Purchase Price" }, { key: "currentValue", label: "Current Value" },
+      { key: "propertyTaxes", label: "Property Taxes", hideWhenEmpty: true },
+      { key: "hoaFees", label: "HOA Fees", hideWhenEmpty: true },
+    ]},
+    { title: "Coverage", fields: [
+      { key: "insuranceProvider", label: "Insurer", hideWhenEmpty: true },
+      { key: "insurancePolicyNumber", label: "Policy #", hideWhenEmpty: true },
     ]},
   ],
 };
@@ -3091,8 +3137,22 @@ function InfoTab({
     "valuation_confidence", "valuation_method", "valuation_date", "valuation_range",
     "assetSubtype", "asset_subtype",
   ]);
+  // Keys the ACCOUNT card above already renders (balance, limit, available,
+  // institution, as-of, history). Repeating them in the field list below is
+  // the redundancy this page is being cleaned of, so they are dropped from
+  // both the curated groups and the "Other" catch-all — for accounts only.
+  const ACCOUNT_CARD_KEYS = new Set([
+    "accountKind", "account_kind", "balance", "currentBalance", "current_balance",
+    "availableBalance", "available_balance", "creditLimit", "credit_limit",
+    "institution", "institutionName", "accountNumberLast4", "account_number_last4",
+    "balanceAsOf", "balance_as_of", "balanceHistory", "balance_history",
+    "currency", "includeInNetWorth",
+  ]);
+  const hiddenByAccountCard = (k: string) =>
+    isAccountProfile(profile) && ACCOUNT_CARD_KEYS.has(k);
   const extraFields = Object.entries(profile.fields).filter(
-    ([k, v]) => !groupedKeys.has(k) && !ALWAYS_HIDDEN_FROM_OTHER.has(k) && !k.startsWith("_") && v != null && v !== "" && typeof v !== "object"
+    ([k, v]) => !groupedKeys.has(k) && !ALWAYS_HIDDEN_FROM_OTHER.has(k) && !hiddenByAccountCard(k)
+      && !k.startsWith("_") && v != null && v !== "" && typeof v !== "object"
   );
 
   const handleSaved = () => {
@@ -3114,10 +3174,10 @@ function InfoTab({
     <div className="space-y-3">
       {/* ── Header summary row (no name repetition — hero already shows that) ── */}
       {/* Show subtitle details + key value if relevant */}
-      {(subtitleParts.length > 0 || keyValueEntry) && (
+      {(subtitleParts.length > 0 || (keyValueEntry && !isAccountProfile(profile))) && (
         <div className="flex items-center justify-between gap-3 px-1 pb-1 border-b border-border/30">
           <p className="text-[13px] text-muted-foreground min-w-0 truncate">{subtitleParts.join(" · ")}</p>
-          {keyValueEntry && (
+          {keyValueEntry && !isAccountProfile(profile) && (
             <div className="text-right shrink-0">
               <p className="micro-label text-muted-foreground">{keyValueEntry.label}</p>
               <p className="metric-value text-[17px] leading-tight">{keyValueEntry.value}</p>

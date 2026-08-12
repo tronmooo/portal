@@ -78,7 +78,12 @@ export function accountKindOf(input: any): AccountKind {
     fields?.accountType ?? fields?.account_type ??
     input?.type_key ?? input?.typeKey ??
     fields?.subtype ?? fields?.kind;
-  return normalizeAccountKind(raw);
+  const resolved = normalizeAccountKind(raw);
+  // A `type: "investment"` profile IS an investment account, whatever its
+  // fields say. "Roth IRA" in accountType normalizes to "other" on its own —
+  // the profile TYPE is the more reliable signal, so it wins over a miss.
+  if (resolved === "other" && String(input?.type ?? "") === "investment") return "investment";
+  return resolved;
 }
 
 /** True when this account's balance is money OWED rather than money HELD. */

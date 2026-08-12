@@ -24,6 +24,7 @@ import {
   totalScheduledOccurrences,
 } from "@shared/habit-progress";
 import { isHabitDueOn } from "@shared/habit-schedule";
+import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { calculateStreak } from "@shared/streak";
 import { parseCompletionCount, parseOccurrencePosition, hasExplicitHabitCheckinIntent } from "@shared/habit-intent";
 import { parseDurationDays, parseDailyTarget } from "@shared/ai-intent";
@@ -300,7 +301,12 @@ describe("chat check-ins fill one occurrence at a time", () => {
   let storage: MemStorage;
   let USER: string;
   let habitId: string;
-  const today = new Date().toLocaleDateString("en-CA");
+  // The runner's clock is UTC; storage stamps check-ins in the app's default
+  // timezone. Computing "today" locally made these assertions disagree with
+  // the stored rows for the ~7 hours a day when the two dates differ — the
+  // test passed all morning and failed all evening. Ask the same clock the
+  // code under test uses.
+  const today = getUserToday(DEFAULT_TIMEZONE);
 
   beforeEach(async () => {
     storage = new MemStorage();

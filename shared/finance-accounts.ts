@@ -39,8 +39,24 @@ export {
   normalizeAccountKind, type AccountKind, type AccountKindMeta,
 };
 
-/** True when this profile is a financial account. */
+/**
+ * True when this profile is a financial account.
+ *
+ * `type: "investment"` counts. A Roth IRA, a 401(k) and a brokerage ARE
+ * accounts — the user says "I have a Roth IRA with $50,000 in it" and expects
+ * it under Accounts. The app has always had a separate `investment` type and
+ * the AI reaches for it, so an accounts list that only accepted
+ * `type: "account"` reported "No accounts yet" while the account sat one tab
+ * away. Both types are cash-side assets, so nothing about the balance sheet
+ * changes — this only decides which list shows the row.
+ */
 export function isAccountProfile(p: any): boolean {
+  const t = String(p?.type ?? "");
+  return !!p && (t === "account" || t === "investment");
+}
+
+/** Strictly `type: "account"` — for code that must not sweep in investments. */
+export function isAccountTypeProfile(p: any): boolean {
   return !!p && String(p.type) === "account";
 }
 
@@ -62,8 +78,16 @@ function fieldsOf(input: any): Record<string, any> {
 export function resolveAccountBalance(input: any): number {
   const f = fieldsOf(input);
   const candidates = [
+    // Account-canonical first: `balance` is what createAccount writes.
     f.balance, f.currentBalance, f.current_balance,
-    f.accountBalance, f.account_balance, f.amount, f.value,
+    f.accountBalance, f.account_balance,
+    // Then the asset-value keys. An investment/brokerage profile created
+    // outside the accounts form (the AI's create_profile path, an import)
+    // keeps its money in `currentValue` — reading only the account keys
+    // showed a $50,000 Roth IRA as $0.
+    f.currentValue, f.current_value, f.marketValue, f.market_value,
+    f.estimatedValue, f.estimated_value,
+    f.amount, f.value,
   ];
   for (const c of candidates) {
     const n = numOrNull(c);

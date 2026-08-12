@@ -1146,13 +1146,6 @@ export default function FinancePage() {
           from the server's shared/finance-calc.ts module. */}
       <ConnectedFinance />
 
-      {/* ── Accounts ── Manually-tracked checking / savings / cash / cards /
-          brokerage / loans. These are `type: "account"` profiles, so the
-          balances here are the same rows that feed Net Worth, the balance
-          sheet and cash flow below — one record per account, never a second
-          copy of the same money. */}
-      <AccountsSection profiles={(profiles as any[]) || []} />
-
       {/* ── Money overview (2026-07 redesign) ── replaces the two ad-hoc KPI
           grids with the mockup snapshot/budgets/bills/balance-sheet/breakdown
           cards. All values derive from data already fetched above. */}
@@ -1360,6 +1353,15 @@ export default function FinancePage() {
           </CardContent>
         </Card>
       )}
+
+      {/* ── Accounts ──
+          Sits down here rather than at the top: the KPIs and cash flow above
+          are what you check daily, while account balances are reference data
+          you maintain occasionally. These are profiles (`type: "account"`, and
+          investment/brokerage profiles too), so the balances here are the same
+          rows that feed Net Worth, the balance sheet and cash flow above —
+          one record per account, never a second copy of the same money. */}
+      <AccountsSection profiles={(profiles as any[]) || []} />
 
       <Card>
         <CardHeader className="pb-2">

@@ -7,7 +7,7 @@ import {
   resolveAccountBalance, accountSignedBalance, accountAvailableBalance,
   accountCreditLimit, accountUtilization, accountBalanceAsOf,
   applyBalanceAdjustment, balanceHistory, summarizeAccounts, accountViews,
-  findAccount, accountIsExcluded,
+  findAccount, accountIsExcluded, isAccountTypeProfile,
 } from "@shared/finance-accounts";
 import {
   isAssetProfile, isLiabilityProfile, isNetWorthLiabilityProfile,
@@ -305,5 +305,71 @@ describe("Assets / Liabilities tab membership", () => {
     expect(ASSET_TAB_TYPES.has("loan")).toBe(false);
     expect(isAssetProfile({ type: "loan", fields: { currentValue: 1000 } })).toBe(true);
     expect(isAssetTabProfile({ type: "loan", fields: { currentValue: 1000 } })).toBe(false);
+  });
+});
+
+describe("investment / brokerage profiles are accounts", () => {
+  // Reported from the live app: "I have a Roth IRA that has $50,000 in it" ->
+  // the AI created a `type: "investment"` profile, the Assets tab showed it,
+  // and Finance -> Accounts said "No accounts yet" with the account one tab
+  // away. An accounts list that only accepts `type: "account"` is wrong about
+  // what a Roth IRA is.
+  const rothIra = {
+    id: "p-roth", type: "investment", name: "Roth IRA",
+    fields: { accountType: "Roth IRA", currentValue: 50000 },
+  };
+  const brokerage = {
+    id: "p-brk", type: "investment", name: "Fidelity Brokerage",
+    fields: { institution: "Fidelity", balance: 45000 },
+  };
+
+  it("counts an investment profile as an account", () => {
+    expect(isAccountProfile(rothIra)).toBe(true);
+    expect(isAccountProfile(brokerage)).toBe(true);
+    expect(isAccountProfile({ type: "vehicle", name: "Civic", fields: {} })).toBe(false);
+  });
+
+  it("resolves its kind from the profile TYPE when the fields don't say", () => {
+    // "Roth IRA" in accountType normalizes to "other" on its own; the type is
+    // the reliable signal.
+    expect(accountKindOf(rothIra)).toBe("investment");
+    expect(accountKindOf(brokerage)).toBe("investment");
+  });
+
+  it("shows up in the Accounts list and the investments total", () => {
+    const views = accountViews([rothIra, brokerage, checking]);
+    expect(views.map(v => v.name).sort()).toEqual(["Chase Checking", "Fidelity Brokerage", "Roth IRA"]);
+    const s = summarizeAccounts([rothIra, brokerage, checking]);
+    expect(s.investments).toBe(95000);
+    expect(s.cash).toBe(2400);
+    expect(s.count).toBe(3);
+  });
+
+  it("reads the balance from currentValue as well as balance", () => {
+    expect(resolveAccountBalance(rothIra)).toBe(50000);
+    expect(resolveAccountBalance(brokerage)).toBe(45000);
+  });
+
+  it("is an asset only — never counted as debt from the same field", () => {
+    // `investment` sits in both type sets and BOTH resolvers read
+    // `fields.balance`, so a brokerage storing its value there was added to
+    // assets AND subtracted as debt: one row, two errors.
+    expect(isAssetProfile(brokerage)).toBe(true);
+    expect(isLiabilityProfile(brokerage)).toBe(false);
+    expect(isNetWorthLiabilityProfile(brokerage)).toBe(false);
+    const nw = computeNetWorth([brokerage], { mode: "everyone", selectedIds: [] });
+    expect(nw.assets).toBe(45000);
+    expect(nw.liabilities).toBe(0);
+    expect(nw.netWorth).toBe(45000);
+  });
+
+  it("stays on the Assets tab, not the Liabilities tab", () => {
+    expect(isAssetTabProfile(rothIra)).toBe(true);
+    expect(isLiabilityTabProfile(rothIra)).toBe(false);
+  });
+
+  it("still lets a strict check exclude investments when one is needed", () => {
+    expect(isAccountTypeProfile(rothIra)).toBe(false);
+    expect(isAccountTypeProfile(checking)).toBe(true);
   });
 });

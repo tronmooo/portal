@@ -14,7 +14,7 @@ import { computeKeyFindings } from "@shared/tracker-insights";
 import { ownedAssetIds } from "@shared/cost-of-ownership";
 import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "@shared/ownership-model";
 import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
-import { summarizeAccounts } from "@shared/finance-accounts";
+import { summarizeAccounts, isAccountProfile } from "@shared/finance-accounts";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill } from "@shared/liability-types";
 import { advanceLiabilityDueDate, readDueDate } from "@shared/liability-recurrence";
@@ -6388,7 +6388,10 @@ Rules:
   app.delete("/api/accounts/:id", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const existing = await storage.getProfile(req.params.id);
-    if (!existing || existing.type !== "account") return res.status(404).json({ error: "Account not found" });
+    // isAccountProfile, not a bare type check: an investment/brokerage profile
+    // is an account too, and it appears in the Accounts list — so it has to be
+    // deletable from there.
+    if (!existing || !isAccountProfile(existing)) return res.status(404).json({ error: "Account not found" });
     const ok = await storage.deleteProfile(req.params.id);
     if (!ok) return res.status(404).json({ error: "Account not found" });
     bustBillCaches(uid);
