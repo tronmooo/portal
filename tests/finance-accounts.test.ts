@@ -7,11 +7,13 @@ import {
   resolveAccountBalance, accountSignedBalance, accountAvailableBalance,
   accountCreditLimit, accountUtilization, accountBalanceAsOf,
   applyBalanceAdjustment, balanceHistory, summarizeAccounts, accountViews,
-  findAccount, accountIsExcluded, isAccountTypeProfile,
+  findAccount, accountIsExcluded, isAccountTypeProfile, balanceFieldsFor,
+  reconcileAccountBalanceFields,
 } from "@shared/finance-accounts";
 import {
   isAssetProfile, isLiabilityProfile, isNetWorthLiabilityProfile,
   isAssetTabProfile, isLiabilityTabProfile, assetTypeLabel, ASSET_TAB_TYPES,
+  resolveAssetValue, resolveLiabilityBalance,
 } from "@shared/asset-value";
 import { computeNetWorth } from "@shared/net-worth";
 
@@ -371,5 +373,152 @@ describe("investment / brokerage profiles are accounts", () => {
   it("still lets a strict check exclude investments when one is needed", () => {
     expect(isAccountTypeProfile(rothIra)).toBe(false);
     expect(isAccountTypeProfile(checking)).toBe(true);
+  });
+});
+
+describe("one balance, every surface — the write reaches every reader", () => {
+  // Reported from the live app with screenshots: the Roth IRA was adjusted to
+  // $53,000. Finance -> Accounts showed $53,000. The Assets card still showed
+  // $50,000 and Net Worth never moved.
+  //
+  // Cause: applyBalanceAdjustment wrote `balance`, but resolveAssetValue reads
+  // `fields.currentValue` FIRST — and an investment profile created by chat
+  // keeps its money there. The two numbers could never converge.
+  //
+  // These tests run the REAL round trip: take the fields patch the adjustment
+  // produces, merge it into the profile the way updateProfile does, then ask
+  // the canonical resolvers what every surface would render.
+
+  const merge = (profile: any, patch: Record<string, any>) => ({
+    ...profile, fields: { ...profile.fields, ...patch },
+  });
+
+  const rothIra = {
+    id: "p-roth", type: "investment", name: "Roth IRA",
+    // Exactly what the chat wrote: value in currentValue, no `balance` at all.
+    fields: { accountType: "Roth IRA", currentValue: 50000 },
+  };
+
+  it("moves the Assets card and Net Worth, not just the Accounts list", () => {
+    const { fields } = applyBalanceAdjustment(rothIra, { delta: 3000 }, TODAY);
+    const after = merge(rothIra, fields);
+
+    // The Accounts list.
+    expect(resolveAccountBalance(after)).toBe(53000);
+    expect(summarizeAccounts([after]).investments).toBe(53000);
+    // The Assets grid card — this is the one that was stuck at $50,000.
+    expect(resolveAssetValue(after)).toBe(53000);
+    // Net Worth.
+    const nw = computeNetWorth([after], { mode: "everyone", selectedIds: [] });
+    expect(nw.assets).toBe(53000);
+    expect(nw.netWorth).toBe(53000);
+  });
+
+  it("leaves no stale alias behind that could shadow the new number", () => {
+    // resolveAssetValue walks currentValue -> marketValue -> value -> balance.
+    // Any one of them still holding the old figure wins over the new one.
+    const messy = {
+      ...rothIra,
+      fields: { ...rothIra.fields, marketValue: 50000, value: 50000, balance: 50000 },
+    };
+    const { fields } = applyBalanceAdjustment(messy, { newBalance: 53000 }, TODAY);
+    const after = merge(messy, fields);
+    expect(resolveAssetValue(after)).toBe(53000);
+    expect(resolveAccountBalance(after)).toBe(53000);
+  });
+
+  it("keeps a checking account's four surfaces in agreement", () => {
+    const { fields } = applyBalanceAdjustment(checking, { newBalance: 1850 }, TODAY);
+    const after = merge(checking, fields);
+    expect(resolveAccountBalance(after)).toBe(1850);
+    expect(resolveAssetValue(after)).toBe(1850);
+    expect(summarizeAccounts([after]).cash).toBe(1850);
+    expect(computeNetWorth([after], { mode: "everyone", selectedIds: [] }).assets).toBe(1850);
+  });
+
+  it("moves a credit card's DEBT total, and never calls it an asset", () => {
+    const { fields } = applyBalanceAdjustment(amex, { delta: 500 }, TODAY);
+    const after = merge(amex, fields);
+    expect(resolveAccountBalance(after)).toBe(2500);
+    expect(resolveLiabilityBalance(after)).toBe(2500);
+    // `currentValue` means "what this is worth" — a card balance is not that.
+    expect(fields.currentValue).toBeUndefined();
+    const nw = computeNetWorth([after], { mode: "everyone", selectedIds: [] });
+    expect(nw.liabilities).toBe(2500);
+    expect(nw.assets).toBe(0);
+  });
+
+  it("gives a newly created account the same agreement from the first render", () => {
+    // balanceFieldsFor is what createAccount writes.
+    const fresh = {
+      id: "new", type: "account", name: "Ally Savings",
+      fields: { accountKind: "savings", ...balanceFieldsFor({ type: "account", fields: { accountKind: "savings" } }, 10000) },
+    };
+    expect(resolveAccountBalance(fresh)).toBe(10000);
+    expect(resolveAssetValue(fresh)).toBe(10000);
+    expect(computeNetWorth([fresh], { mode: "everyone", selectedIds: [] }).assets).toBe(10000);
+  });
+});
+
+describe("healing accounts that already drifted", () => {
+  // The fix above stops new drift; this repairs the row the user is staring at
+  // right now — $53,000 in Finance, $50,000 in Assets, and no reason for them
+  // to edit it again just to make two screens agree.
+  const drifted = {
+    id: "p-roth", type: "investment", name: "Roth IRA",
+    fields: {
+      accountType: "Roth IRA",
+      balance: 53000, currentBalance: 53000,
+      currentValue: 50000, // stale — and what resolveAssetValue reads FIRST
+      balanceHistory: [
+        { id: "a1", date: TODAY, previousBalance: 50000, newBalance: 53000, delta: 3000, createdAt: "" },
+      ],
+    },
+  };
+
+  it("copies the authoritative balance into the keys the resolvers read", () => {
+    expect(resolveAssetValue(drifted)).toBe(50000); // the bug, before repair
+    const patch = reconcileAccountBalanceFields(drifted)!;
+    expect(patch).toBeTruthy();
+    const healed = { ...drifted, fields: { ...drifted.fields, ...patch } };
+    expect(resolveAssetValue(healed)).toBe(53000);
+    expect(resolveAccountBalance(healed)).toBe(53000);
+    expect(computeNetWorth([healed], { mode: "everyone", selectedIds: [] }).assets).toBe(53000);
+  });
+
+  it("is a no-op on a healthy account, so it never writes for nothing", () => {
+    const healthy = {
+      ...drifted, fields: { ...drifted.fields, currentValue: 53000 },
+    };
+    expect(reconcileAccountBalanceFields(healthy)).toBeNull();
+  });
+
+  it("leaves alone a profile that never recorded an adjustment", () => {
+    // Without a balanceHistory, `balance` was never authoritative — whatever
+    // the writer put in currentValue is the truth, and overwriting it would be
+    // this repair inventing a number.
+    const untouched = {
+      id: "x", type: "investment", name: "Brokerage",
+      fields: { currentValue: 50000, balance: 1 },
+    };
+    expect(reconcileAccountBalanceFields(untouched)).toBeNull();
+  });
+
+  it("ignores anything that is not an account", () => {
+    expect(reconcileAccountBalanceFields({ type: "vehicle", fields: { balance: 5 } })).toBeNull();
+    expect(reconcileAccountBalanceFields(null)).toBeNull();
+  });
+
+  it("never writes currentValue onto a debt account while healing", () => {
+    const card = {
+      id: "c", type: "account", name: "Amex",
+      fields: {
+        accountKind: "credit_card", balance: 2500, currentBalance: 1,
+        balanceHistory: [{ id: "a", date: TODAY, previousBalance: 2000, newBalance: 2500, delta: 500, createdAt: "" }],
+      },
+    };
+    const patch = reconcileAccountBalanceFields(card)!;
+    expect(patch.currentValue).toBeUndefined();
+    expect(patch.currentBalance).toBe(2500);
   });
 });

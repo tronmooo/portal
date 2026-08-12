@@ -153,9 +153,17 @@ export function AccountsSection({ profiles }: { profiles: any[] }) {
   const [deleting, setDeleting] = useState<AccountView | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  // Accounts come from the profile list the Finance page already loaded, so
-  // this section never disagrees with Net Worth about what exists. The
-  // dedicated endpoint stays available for the AI and for other clients.
+  // Accounts derive from the profile list the Finance page already loaded, so
+  // this section never disagrees with Net Worth about what EXISTS.
+  //
+  // The /api/accounts query runs alongside it for one reason: the server
+  // repairs rows whose balance keys drifted apart before balanceFieldsFor
+  // existed (a fresh `balance` beside a stale `currentValue` renders as two
+  // different numbers for one account). Reading the endpoint is what triggers
+  // that repair; the rows below still come from `profiles`, which the repair
+  // then agrees with on the next invalidation.
+  useQuery<any>({ queryKey: ["/api/accounts"], staleTime: 60_000 });
+
   const accounts = useMemo(() => accountViews(profiles || []), [profiles]);
   const summary = useMemo(() => summarizeAccounts(profiles || []), [profiles]);
 

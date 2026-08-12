@@ -70,8 +70,9 @@ import {
   resolveBillingModel, resolveOccurrenceAmount, billingModelMeta,
 } from "../shared/liability-billing";
 import {
-  accountViews, accountKindMeta, applyBalanceAdjustment, isAccountProfile,
-  isDebtAccount, normalizeAccountKind,
+  accountViews, accountKindMeta, applyBalanceAdjustment, balanceFieldsFor,
+  isAccountProfile, isDebtAccount, normalizeAccountKind,
+  reconcileAccountBalanceFields,
 } from "../shared/finance-accounts";
 import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-ownership";
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
@@ -5162,7 +5163,23 @@ export class SupabaseStorage implements IStorage {
 
   /** Every account profile, as the display-ready view shape. */
   async getAccounts(): Promise<any[]> {
-    const profiles = await this.getProfiles();
+    let profiles = await this.getProfiles();
+    // Self-heal rows written before balanceFieldsFor existed: a fresh
+    // `balance` beside a stale `currentValue` renders as two different numbers
+    // for one account (Finance says $53,000, Assets says $50,000). The repair
+    // only copies the authoritative balance into the keys the resolvers read,
+    // and only for rows that actually disagree — a no-op on healthy data.
+    const repairs: Array<{ id: string; patch: Record<string, any> }> = [];
+    for (const p of profiles) {
+      const patch = reconcileAccountBalanceFields(p);
+      if (patch) repairs.push({ id: p.id, patch });
+    }
+    if (repairs.length > 0) {
+      for (const r of repairs) {
+        await this.updateProfile(r.id, { fields: r.patch } as any).catch(() => null);
+      }
+      profiles = await this.getProfiles();
+    }
     return accountViews(profiles);
   }
 
@@ -5190,8 +5207,10 @@ export class SupabaseStorage implements IStorage {
     const balance = Math.abs(Number(input.balance ?? 0)) || 0;
     const fields: Record<string, any> = {
       accountKind: kind,
-      balance,
-      currentBalance: balance,
+      // Every key the canonical resolvers read, not just `balance` — otherwise
+      // a new account lists its balance in Finance while the Assets card and
+      // Net Worth read a different (or absent) number. See balanceFieldsFor.
+      ...balanceFieldsFor({ type: "account", fields: { accountKind: kind } }, balance),
       balanceAsOf: /^\d{4}-\d{2}-\d{2}$/.test(String(input.balanceAsOf ?? "")) ? String(input.balanceAsOf).slice(0, 10) : today,
       currency: (input.currency || "usd").toLowerCase(),
       balanceHistory: [],

@@ -258,16 +258,41 @@ export function applyBalanceAdjustment(
   const history = [...balanceHistory(profile), adjustment].slice(-200);
   return {
     fields: {
-      // Both keys, always: `balance` is what resolveAssetValue reads and
-      // `currentBalance` is what resolveLiabilityBalance reads. An account can
-      // be either side of the sheet, so it must satisfy both resolvers or its
-      // balance silently disappears from one of them.
-      balance: next,
-      currentBalance: next,
+      ...balanceFieldsFor(profile, next),
       balanceAsOf: date,
       balanceHistory: history,
     },
     adjustment,
+  };
+}
+
+/**
+ * The `fields` patch that sets an account's balance EVERYWHERE it is read.
+ *
+ * This exists because writing one key is not enough, and getting that wrong is
+ * invisible until the numbers disagree on screen:
+ *
+ *   resolveAssetValue     reads `fields.currentValue` FIRST, then marketValue,
+ *                         then value, and only then `fields.balance`.
+ *   resolveLiabilityBalance reads `fields.currentBalance` FIRST, then balance.
+ *
+ * An investment profile created outside the accounts form keeps its money in
+ * `currentValue`. Writing only `balance` therefore updated the Accounts list
+ * while the Assets card and Net Worth went on reading the stale `currentValue`
+ * — the same account showing $53,000 in one tab and $50,000 in another, for
+ * good. Setting the FIRST candidate of each resolver is what makes the write
+ * reach every reader.
+ *
+ * A debt account deliberately gets no `currentValue`: that key means "what this
+ * is worth", and a credit card balance is not an asset.
+ */
+export function balanceFieldsFor(profile: any, amount: number): Record<string, any> {
+  const value = round2(Math.abs(Number(amount) || 0));
+  const isDebt = isDebtAccountKind(accountKindOf(profile));
+  return {
+    balance: value,
+    currentBalance: value,
+    ...(isDebt ? {} : { currentValue: value }),
   };
 }
 
@@ -424,4 +449,35 @@ export function findAccount(profiles: readonly any[], query: string | null | und
     if (byKind.length === 1) return byKind[0];
   }
   return contains[0] ?? null;
+}
+
+/**
+ * Repair an account whose balance keys have already drifted apart.
+ *
+ * The fix above stops NEW drift, but a row written before it still carries a
+ * fresh `balance` beside a stale `currentValue` — and the user is looking at
+ * that row right now, seeing $53,000 in Finance and $50,000 in Assets. Telling
+ * them to edit it again to heal it is not an answer.
+ *
+ * `balance` is authoritative here, and only when `balanceHistory` proves it was
+ * deliberately set (an adjustment ran). Returns the patch to write, or null
+ * when nothing is wrong — so the caller writes only for genuinely broken rows
+ * and this is a no-op on every healthy one.
+ */
+export function reconcileAccountBalanceFields(profile: any): Record<string, any> | null {
+  if (!isAccountProfile(profile)) return null;
+  const f = fieldsOf(profile);
+  // No recorded adjustment means `balance` was never authoritative — leave the
+  // profile exactly as its writer intended.
+  if (balanceHistory(profile).length === 0) return null;
+  const authoritative = numOrNull(f.balance);
+  if (authoritative == null) return null;
+
+  const patch = balanceFieldsFor(profile, authoritative);
+  // Only report a repair when a key the RESOLVERS read actually disagrees.
+  const drifted = Object.entries(patch).some(([k, v]) => {
+    const cur = numOrNull((f as any)[k]);
+    return cur == null ? v != null : Math.abs(cur - Number(v)) > 0.005;
+  });
+  return drifted ? patch : null;
 }
