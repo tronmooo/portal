@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 import {
   rollupOccurrences, bucketsForKind, bucketsForKinds, breakdownLabel,
+  timelineItemToOccurrence,
 } from "@shared/dated-items";
 import type { CalendarOccurrence, OccurrenceKind, OccurrenceStatus } from "@shared/calendar-occurrences";
 
@@ -142,5 +143,57 @@ describe("breakdownLabel", () => {
   it("omits empty buckets rather than printing zeros", () => {
     expect(breakdownLabel({ overdue: 0, today: 2, next7: 2, next30: 2, attention: 2 })).toBe("Today 2");
     expect(breakdownLabel({ overdue: 0, today: 0, next7: 0, next30: 0, attention: 0 })).toBe("");
+  });
+});
+
+// ── A completed task must not keep reporting as overdue ──────────────────────
+//
+// Reported 2026-08-13: the Executive tab's Tasks tile read "1 needs action ·
+// Overdue 1" while the header's Tasks Due chip and the Attention tile both read
+// 0 — for a single task the user had already completed.
+//
+// The row was UNDATED. The Supabase timeline parked undated tasks on their
+// CREATED date so "every task appears on the calendar", and set the
+// per-occurrence `completed` flag by comparing that date against the task's due
+// date — which is null on an undated task, so the flag was false forever.
+// Anything reading only that flag therefore counted a done task as overdue,
+// while /api/tasks-based surfaces (shared/attention: "undated tasks are a
+// backlog, not an alert") skipped it entirely.
+//
+// Two guarantees now. The builder no longer puts an undated task on the
+// calendar at all (server/supabase-storage.ts, matching MemStorage), and this
+// mapper settles an item on the SOURCE ROW's status as well as the flag, so a
+// stale or wrong `completed` can't resurrect the phantom.
+describe("timelineItemToOccurrence", () => {
+  it("settles an item whose source row is done, even when `completed` is false", () => {
+    const occurrence = timelineItemToOccurrence({
+      type: "task", date: "2026-08-09", completed: false, meta: { status: "done" },
+    });
+    expect(occurrence.status).toBe("done");
+    expect(rollupOccurrences([occurrence], TODAY).overdue).toBe(0);
+  });
+
+  it("still counts a genuinely open past-dated task as overdue", () => {
+    const occurrence = timelineItemToOccurrence({
+      type: "task", date: "2026-07-20", completed: false, meta: { status: "todo" },
+    });
+    expect(rollupOccurrences([occurrence], TODAY).overdue).toBe(1);
+  });
+
+  it("honours the per-occurrence flag on rows that carry no meta.status", () => {
+    expect(timelineItemToOccurrence({ type: "event", date: TODAY, completed: true }).status).toBe("done");
+    expect(timelineItemToOccurrence({ type: "event", date: TODAY }).status).toBe("upcoming");
+  });
+
+  it("treats a skipped or paid occurrence as settled too", () => {
+    expect(timelineItemToOccurrence({ type: "task", date: TODAY, meta: { status: "skipped" } }).status).toBe("skipped");
+    expect(timelineItemToOccurrence({ type: "obligation", date: TODAY, meta: { status: "paid" } }).status).toBe("done");
+    expect(rollupOccurrences([
+      timelineItemToOccurrence({ type: "obligation", date: "2026-07-01", meta: { status: "paid" } }),
+    ], TODAY).overdue).toBe(0);
+  });
+
+  it("defaults a typeless row to an event, the way the tiles always read it", () => {
+    expect(timelineItemToOccurrence({ date: TODAY }).kind).toBe("event");
   });
 });

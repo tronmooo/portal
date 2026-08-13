@@ -9,7 +9,7 @@
 // Liabilities, Goals or profile pages. The same record could appear three
 // times under three different labels.
 //
-// What's here now is six context tiles, a one-glance brief, and ten named
+// What's here now is seven context tiles and ten named
 // sections: Immediate Attention, Today's Agenda, Habits Due Today, Bills,
 // Upcoming (7d), Birthdays & Anniversaries, Documents & Expirations, Health,
 // Recent Activity, and Insights.
@@ -36,13 +36,9 @@ import { ExecutiveSections } from "@/components/dashboard/ExecutiveSections";
 import { Medallion, CountUp } from "@/components/dashboard/visuals";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
 import type { DashboardStats } from "@shared/schema";
-// One relative-due formatter for the whole app. Interpolating a raw `daysUntil`
-// here is what produced "Lawn care ($40) due in -29d".
-import { dueLabel } from "@shared/now-rank";
 import type { AttentionItem } from "@shared/attention";
 import { buildExecutiveSections } from "@shared/executive-sections";
-import { rollupOccurrences, bucketsForKinds, breakdownLabel } from "@shared/dated-items";
-import type { CalendarOccurrence, OccurrenceKind } from "@shared/calendar-occurrences";
+import { rollupOccurrences, bucketsForKinds, breakdownLabel, timelineItemToOccurrence } from "@shared/dated-items";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitsDayRollup } from "@shared/habit-progress";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
@@ -60,31 +56,6 @@ const ACCENTS: Record<string, string> = {
   calendar: "239 84% 67%",  // indigo
   alerts:   "280 75% 62%",  // purple
 };
-
-// The AI brief lives in its own bubble. Purple, per the colour system: purple
-// is what the app uses for AI everywhere else.
-function BriefBubble({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(true);
-  const accent = ACCENTS.alerts;
-  return (
-    <section
-      className="bubble bubble-enter mb-3 p-3.5 sm:p-4"
-      style={{ ["--accent-hsl" as any]: accent, ["--i" as any]: 6 }}
-      data-testid="brief-ai"
-    >
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 text-left touch-hit"
-        aria-expanded={open}
-      >
-        <Medallion icon={Sparkles} accent={accent} size="sm" />
-        <h3 className="flex-1 text-sm font-bold tracking-tight">Executive Brief</h3>
-        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
-      </button>
-      {open && children}
-    </section>
-  );
-}
 
 // Top stat tile — a bubble with a large icon medallion, a counting number and
 // a decision-oriented sub-line. `prominent` gives the Attention tile the
@@ -349,12 +320,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // today-onward `timeline` the feed uses, because a tile that cannot see
   // yesterday cannot report an overdue count.
   const datedRollup = useMemo(() => {
-    const rows = hideTest(Array.isArray(timelineRaw) ? timelineRaw : []).map((item: any) => ({
-      kind: (item?.type || "event") as OccurrenceKind,
-      date: String(item?.date || "").slice(0, 10),
-      effectiveDate: String(item?.date || "").slice(0, 10),
-      status: item?.completed ? "done" : "upcoming",
-    })) as unknown as CalendarOccurrence[];
+    const rows = hideTest(Array.isArray(timelineRaw) ? timelineRaw : [])
+      .map(timelineItemToOccurrence);
     return rollupOccurrences(rows, todayStr);
   }, [timelineRaw, todayStr, showTestData]);
   // Tasks and habit schedules share one card, exactly as they share one chip on
@@ -411,7 +378,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const nowClock = new Date().toTimeString().slice(0, 5);
 
   const pending = (tasks || []).filter((t: any) => t.status !== "done");
-  const overdueTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) < todayStr);
   const agendaTasks = pending.filter((t: any) => t.dueDate && t.dueDate.slice(0, 10) === todayStr);
   const highCount = pending.filter((t: any) => ["high", "urgent"].includes(String(t.priority || "").toLowerCase())).length;
   const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
@@ -479,20 +445,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const attnShown = attnParts.slice(0, 2);
   const attnMore = attnCount - attnShown.reduce((s, p) => s + p.n, 0);
   const attnSub = [...attnShown.map(p => p.label), attnMore > 0 ? `${attnMore} more` : null].filter(Boolean).join(" · ");
-
-  // AI Executive Brief — honest, instant bullets derived from the feed above
-  // (no per-load AI call). The AI chat can still create/modify any of the
-  // underlying records; these lines just reflect the current state.
-  const aiBrief: Array<{ text: string; tone?: "pos" | "neg" | "warn"; go?: () => void }> = [];
-  // Lead bullet covers tasks AND bills: opening with a green "No overdue
-  // tasks." while overdue bills sit two bullets down read as a contradiction.
-  if (overdueTasks.length > 0) aiBrief.push({ text: `${overdueTasks.length} task${overdueTasks.length > 1 ? "s" : ""} overdue — start with “${overdueTasks[0].title}”.`, tone: "neg", go: () => setPopup("tasks") });
-  else if (overdueBillCount > 0) aiBrief.push({ text: `No overdue to-do tasks, but ${plural(overdueBillCount, "overdue bill")} to pay.`, tone: "warn", go: () => setPopup("bills") });
-  else aiBrief.push({ text: "Nothing overdue — tasks and bills are clear.", tone: "pos" });
-  if (nextDoc) aiBrief.push({ text: `${nextDoc.documentName || nextDoc.name || nextDoc.fieldName || "A document"} ${docExpiryPhrase(nextDoc.daysUntil)}.`, tone: nextDoc.daysUntil <= 21 ? "neg" : "warn", go: () => setPopup("docs") });
-  if (missedCount > 0) aiBrief.push({ text: `${missedCount} habit${missedCount > 1 ? "s" : ""} still due today.`, tone: "warn", go: () => setPopup("habits") });
-  const soonestBill = bills.slice().sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9))[0];
-  if (soonestBill) aiBrief.push({ text: `${soonestBill.name} ($${Number(soonestBill.amount).toLocaleString()}) ${dueLabel(soonestBill.daysUntil)}.`, tone: soonestBill.daysUntil <= 1 ? "neg" : undefined, go: () => setPopup("bills") });
 
   // ── Actions ────────────────────────────────────────────────────────────────
   const markBusy = (key: string, on: boolean) =>
@@ -705,18 +657,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           accent="262 80% 66%" onClick={() => setPopup("tasks")} testId="brief-stat-today" />
       </div>
 
-      <BriefBubble>
-        <div className="mt-3 space-y-1.5">
-          {aiBrief.map((b, i) => (
-            <button key={i} onClick={b.go}
-              className="bubble-row w-full flex items-start gap-2.5 px-3 py-2.5 text-left"
-              style={{ ["--accent-hsl" as any]: ACCENTS.alerts }}>
-              <span className="mt-[3px] shrink-0" style={{ color: "hsl(280 75% 66%)" }} aria-hidden="true">✦</span>
-              <span className={`flex-1 text-[13px] leading-snug font-medium ${b.tone === "neg" ? "text-red-500" : b.tone === "warn" ? "text-amber-500" : b.tone === "pos" ? "text-emerald-500" : ""}`}>{b.text}</span>
-            </button>
-          ))}
-        </div>
-      </BriefBubble>
+      {/* (Removed 2026-08-13: the "Executive Brief" bubble. Every bullet it
+          could render was a sentence version of a tile sitting directly above
+          it — overdue tasks → the Tasks tile, overdue/next bill → Bills,
+          expiring document → Documents, habits still due → Habits — and it
+          opened the same popups on tap. Three restatements of one fact
+          ("Attention 0" · "Nothing overdue — tasks and bills are clear." ·
+          "Needs your attention") is what made the tab feel padded, and it is
+          exactly how the tab could be seen contradicting itself: the tiles and
+          the sentences were computed from different queries. The tiles stay:
+          they carry the same facts in fewer words and are the layer that
+          drills in.) */}
 
       {/* ── The feed ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-2 mb-1.5 mt-3">

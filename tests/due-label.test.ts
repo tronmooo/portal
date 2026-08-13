@@ -61,7 +61,14 @@ describe("the screens that had their own copy now share one", () => {
     "client/src/components/finance/MoneyOverview.tsx",
   ];
 
-  it.each(FILES)("%s imports the shared formatter", (f) => {
+  // ExecutiveBriefing dropped off this list on 2026-08-13 with the Executive
+  // Brief bubble: the bullet reading "Lawn care ($40) due in -29d" was the only
+  // place in that file that rendered a relative due label, and the bubble it
+  // lived in is gone. The interpolation guard below still covers the file, so
+  // the shape that caused the report cannot come back into it unnoticed.
+  const IMPORTERS = FILES.filter(f => !f.endsWith("ExecutiveBriefing.tsx"));
+
+  it.each(IMPORTERS)("%s imports the shared formatter", (f) => {
     expect(repo(f)).toMatch(/from "@shared\/now-rank"/);
   });
 

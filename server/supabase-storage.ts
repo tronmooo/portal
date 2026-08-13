@@ -3693,18 +3693,32 @@ export class SupabaseStorage implements IStorage {
     }
 
     for (const task of tasks) {
-      // Use dueDate if available, otherwise fall back to createdAt so every task appears on the calendar
-      const rawDate = task.dueDate || task.createdAt;
-      if (!rawDate) continue;
+      // A task with no due date is BACKLOG, not a dated commitment, so it does
+      // not go on the calendar at all.
+      //
+      // It used to be parked at its CREATED date ("so every task appears on the
+      // calendar"). That date is not a deadline, so the day after you wrote an
+      // undated task it started reporting as OVERDUE on every counter that
+      // buckets the timeline (shared/dated-items) — and it never stopped, because
+      // the `completed` flag below compares the occurrence date against the due
+      // date, which for an undated task is null: ticking the task off could not
+      // clear it. Meanwhile /api/tasks-based surfaces (the header's Tasks Due
+      // chip, shared/attention — "undated tasks are a backlog, not an alert")
+      // skipped the same row, so the dashboard reported 0 and 1 for one task.
+      //
+      // MemStorage has always skipped undated tasks here; the two backends now
+      // agree, and so do the counters that read them.
+      if (!task.dueDate) continue;
       const taskColor = task.priority === "high" ? "#A13544" : task.priority === "medium" ? "#BB653B" : "#797876";
       // A task carries its own clock time now (Portol has two entities, events
       // and tasks — see shared/schema.ts Task), and a repeating task is
       // projected across the window instead of appearing once on its stored due
       // date. Without the projection "every Tuesday at 9 AM" occupied one
       // Tuesday and the rest of the year was blank.
-      const taskDates = task.dueDate
-        ? taskOccurrenceDates({ dueDate: task.dueDate, tags: task.tags, status: task.status }, startDate, endDate, { todayISO: rdTodayISO })
-        : (rawDate.slice(0, 10) >= startDate && rawDate.slice(0, 10) <= endDate ? [rawDate.slice(0, 10)] : []);
+      const taskDates = taskOccurrenceDates(
+        { dueDate: task.dueDate, tags: task.tags, status: task.status },
+        startDate, endDate, { todayISO: rdTodayISO },
+      );
       const isSeries = taskRepeats(task as any);
       for (const d of taskDates) {
         items.push({

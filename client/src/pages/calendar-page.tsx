@@ -10,8 +10,7 @@ import { SeriesDialogHost } from "@/components/recurring/RecurringDatesManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
-import { rollupOccurrences } from "@shared/dated-items";
-import type { CalendarOccurrence, OccurrenceKind } from "@shared/calendar-occurrences";
+import { rollupOccurrences, timelineItemToOccurrence } from "@shared/dated-items";
 import { ArrowLeft, CalendarDays, Repeat } from "lucide-react";
 import { Link } from "wouter";
 
@@ -60,12 +59,7 @@ export default function CalendarPage() {
   // there can no longer disagree about one window. This loop used to live
   // inline, which is how three surfaces ended up with three answers.
   const evSummary = useMemo(() => {
-    const list = (Array.isArray(timeline) ? timeline : []).map((item: any) => ({
-      kind: (item?.type || "event") as OccurrenceKind,
-      date: String(item?.date || "").slice(0, 10),
-      effectiveDate: String(item?.date || "").slice(0, 10),
-      status: item?.completed ? "done" : "upcoming",
-    })) as unknown as CalendarOccurrence[];
+    const list = (Array.isArray(timeline) ? timeline : []).map(timelineItemToOccurrence);
     const r = rollupOccurrences(list, todayStr);
     return { today: r.today, week: r.next7, horizon: r.next30 };
   }, [timeline, todayStr]);

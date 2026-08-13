@@ -100,7 +100,7 @@ describe("ExecutiveBriefing", () => {
     });
   }
 
-  it("renders the tiles, the brief, and the sections — and none of the old board", async () => {
+  it("renders the tiles and the sections — and none of the old board", async () => {
     await mount(enhancedWith());
 
     // Context layer survives: six tiles, unchanged testids.
@@ -108,7 +108,6 @@ describe("ExecutiveBriefing", () => {
     for (const id of ["brief-stat-attention", "brief-stat-tasks", "brief-stat-events", "brief-stat-bills", "brief-stat-documents", "brief-stat-habits"]) {
       expect(screen.getByTestId(id), id).toBeTruthy();
     }
-    expect(screen.getByTestId("brief-ai")).toBeTruthy();
     expect(screen.getByTestId("exec-sections")).toBeTruthy();
 
     // The old board's sections are gone — each restated something that already
@@ -119,6 +118,11 @@ describe("ExecutiveBriefing", () => {
       "brief-docs", "brief-bills", "brief-calendar", "brief-notifications",
       "brief-projects", "brief-activity", "brief-notes", "brief-today-card",
       "attention-feed",
+      // Removed 2026-08-13: the Executive Brief bubble restated the tile row
+      // above it in sentences — and computed those sentences from a different
+      // query, which is how the tab could show "Attention 0" over "1 task
+      // overdue" for the same moment.
+      "brief-ai",
     ]) {
       expect(screen.queryByTestId(id), `${id} should no longer render`).toBeNull();
     }
@@ -198,19 +202,21 @@ describe("ExecutiveBriefing", () => {
     expect(screen.getByTestId("exec-section-bills").textContent).toContain("$300");
   });
 
-  it("keeps the lead brief bullet honest about bills, and never says 'due in -28d'", async () => {
+  it("keeps the Bills tile honest about an overdue bill, and never says 'due in -28d'", async () => {
+    // This guarantee used to be pinned on the Executive Brief's lead bullet.
+    // The bubble is gone; the tile is what states it now, so the test follows
+    // the fact rather than the deleted component.
     await mount(enhancedWith({
       financeSnapshot: { upcomingBills: [
         { id: "b4", name: "rent the 1st", amount: 2500, daysUntil: -28, status: "overdue" },
       ] },
       expiringDocuments: [],
     }));
-    const ai = screen.getByTestId("brief-ai").textContent || "";
-    // Lead bullet may not claim "No overdue tasks." while bills are overdue.
-    expect(ai).toContain("No overdue to-do tasks");
-    // The -28d bill reads as overdue, never "due in -28d".
-    expect(ai).toContain("28d overdue");
-    expect(ai).not.toMatch(/due in -/);
+    const tile = screen.getByTestId("brief-stat-bills").textContent || "";
+    expect(tile).toContain("1 overdue bill");
+    // A past date reads as overdue everywhere, never as "due in -28d".
+    expect(tile).not.toMatch(/due in -/);
+    expect(screen.getByTestId("exec-section-immediate").textContent).toContain("$2,500 overdue");
   });
 
   // ───────────────────────────────────────────────────────────────────────────

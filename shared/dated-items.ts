@@ -30,6 +30,36 @@
 
 import type { CalendarOccurrence, OccurrenceKind } from "./calendar-occurrences";
 
+/**
+ * Read one `/api/calendar/timeline` row as an occurrence this module can bucket.
+ *
+ * The Executive tab and the Calendar page each used to inline this mapping, and
+ * both read ONLY the per-occurrence `completed` flag. That flag is set by the
+ * timeline builder per DATE, so any row whose builder failed to line the date up
+ * with the source record — the case that shipped: an undated task parked on its
+ * created-at date, whose `completed` compared that date against a null due date
+ * and so was false forever — stayed "overdue" no matter how many times the user
+ * ticked it off, while every /api/tasks-based counter read it as done.
+ *
+ * So the source row's own state settles it too: `completed` OR a settled
+ * `meta.status` (tasks carry todo/in_progress/done, bills pending/late/done/
+ * skipped). Either one is enough to mean "this needs nothing from you".
+ */
+export function timelineItemToOccurrence(item: any): CalendarOccurrence {
+  const date = String(item?.date || "").slice(0, 10);
+  const metaStatus = String(item?.meta?.status || "").toLowerCase();
+  const status =
+    metaStatus === "skipped" ? "skipped"
+    : item?.completed || metaStatus === "done" || metaStatus === "completed" || metaStatus === "paid" ? "done"
+    : "upcoming";
+  return {
+    kind: (item?.type || "event") as OccurrenceKind,
+    date,
+    effectiveDate: date,
+    status,
+  } as CalendarOccurrence;
+}
+
 export interface DatedBuckets {
   /** Past its date and not done/skipped. */
   overdue: number;
