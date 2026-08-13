@@ -5687,8 +5687,14 @@ export default function TrackersPage() {
   // default if I want" (2026-06-25).
   const [viewMode, setViewModeRaw] = useState<"table" | "cards">(() => {
     if (typeof window === "undefined") return "cards";
-    const saved = window.localStorage.getItem("portol:linkedViewMode");
-    return saved === "table" || saved === "cards" ? saved : "cards";
+    // Guarded like the write below: localStorage READS also throw when storage
+    // is blocked (Safari private browsing, embedded webviews), and an
+    // unguarded one here runs inside useState's initializer — it would take the
+    // whole page down rather than just losing a preference.
+    try {
+      const saved = window.localStorage.getItem("portol:linkedViewMode");
+      return saved === "table" || saved === "cards" ? saved : "cards";
+    } catch { return "cards"; }
   });
   const setViewMode = (v: "table" | "cards") => {
     setViewModeRaw(v);
@@ -6122,14 +6128,30 @@ export default function TrackersPage() {
           </span>
         </div>
         <div className="flex items-center gap-1.5">
-          <div className="flex items-center border rounded-md p-0.5">
-            <button onClick={() => setViewMode("table")} title="Compact list — saved as your default" aria-label="Compact list view" className={`p-1 rounded ${viewMode === "table" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} data-testid="view-table">
-              <Table2 className="w-3.5 h-3.5" />
-            </button>
-            <button onClick={() => setViewMode("cards")} title="Card view — saved as your default" aria-label="Card view" className={`p-1 rounded ${viewMode === "cards" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} data-testid="view-cards">
-              <LayoutGrid className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          {/* ONE button, not two (2026-08-13). A two-chip segmented control
+              spent double the width telling the user which view they were
+              already looking at. This is a single toggle that shows the view it
+              will switch TO — the same convention as a play/pause button, or
+              Drive's grid/list toggle — and the choice is remembered across
+              sessions in localStorage, so reopening the page lands you back in
+              the view you left. */}
+          {(() => {
+            const next = viewMode === "cards" ? "table" : "cards";
+            const NextIcon = next === "table" ? Table2 : LayoutGrid;
+            const label = next === "table" ? "Switch to compact list" : "Switch to card view";
+            return (
+              <button
+                onClick={() => setViewMode(next)}
+                title={`${label} — your choice is remembered`}
+                aria-label={label}
+                className="inline-flex items-center justify-center h-8 w-8 rounded-md border hover:bg-muted active:scale-95 transition-all"
+                data-testid="view-toggle"
+                data-view={viewMode}
+              >
+                <NextIcon className="w-4 h-4" />
+              </button>
+            );
+          })()}
           {(() => {
             // ─── Smart + button: routes to the right creation flow based on the active section ───
             const openAssetDialog = () => { setCreateProfileFilter(["assets", "investments", "property"]); setCreateProfileTitle("Add Asset"); setCreateProfileOpen(true); };
