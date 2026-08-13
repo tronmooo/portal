@@ -78,12 +78,16 @@ describe("WeeklySummarySection", () => {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The Executive tab — ten sections, and a record only ever in one of them.
+// The Executive tab — the command center (2026-08-13 redesign).
 //
-// The tab is organised into named sections, but not the way the old board was:
-// every record is routed to exactly one section, so the duplication the
-// 2026-07-29 report showed (a task under both "Overdue tasks" and "Alerts",
-// bills under both "Bills" and "Alerts") cannot come back.
+// Overview bar (Net Worth · Cash Flow · Tasks Remaining · Next Important),
+// then the card grid (Needs Attention | Tasks | Schedule | Habits | Money |
+// Documents | Wellness | Upcoming) with Recent Activity full-width at the
+// bottom. Records are still routed by shared/executive-sections.ts, so the
+// duplication the 2026-07-29 report showed (a task under both "Overdue tasks"
+// and "Alerts") cannot come back — with ONE deliberate exception: an expiring
+// document appears under Needs Attention (urgency) AND Documents (inventory),
+// exactly as the reference mock draws it.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("ExecutiveBriefing", () => {
   const enhancedWith = (over: any = {}) => ({
@@ -95,25 +99,34 @@ describe("ExecutiveBriefing", () => {
   async function mount(enhanced: any, stats: any = {}) {
     const { ExecutiveBriefing } = await import("../client/src/components/dashboard/ExecutiveBriefing");
     wrap(<ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} />);
+    // The card grid replaces the skeletons once the feeding queries settle.
     await waitFor(() => {
-      expect(screen.getByTestId("brief-stat-attention").textContent).not.toContain("loading");
+      expect(screen.getByTestId("exec-card-attention")).toBeTruthy();
     });
   }
 
-  it("renders the tiles, the brief, and the sections — and none of the old board", async () => {
+  it("renders the overview bar, every card, and none of the old board", async () => {
     await mount(enhancedWith());
 
-    // Context layer survives: six tiles, unchanged testids.
-    expect(screen.getByTestId("brief-stat-row")).toBeTruthy();
-    for (const id of ["brief-stat-attention", "brief-stat-tasks", "brief-stat-events", "brief-stat-bills", "brief-stat-documents", "brief-stat-habits"]) {
+    // The overview bar: four KPIs.
+    expect(screen.getByTestId("exec-overview")).toBeTruthy();
+    for (const id of ["exec-kpi-networth", "exec-kpi-cashflow", "exec-kpi-tasks", "exec-kpi-next"]) {
       expect(screen.getByTestId(id), id).toBeTruthy();
     }
-    expect(screen.getByTestId("brief-ai")).toBeTruthy();
-    expect(screen.getByTestId("exec-sections")).toBeTruthy();
 
-    // The old board's sections are gone — each restated something that already
-    // lives on Calendar / Tasks / Habits / Documents / Bills / Goals / Journal.
+    // The card grid, with Recent Activity present at the bottom.
     for (const id of [
+      "exec-card-attention", "exec-card-tasks", "exec-card-schedule", "exec-card-habits",
+      "exec-card-money", "exec-card-documents", "exec-card-wellness", "exec-card-upcoming",
+      "exec-card-activity",
+    ]) {
+      expect(screen.getByTestId(id), id).toBeTruthy();
+    }
+
+    // The old surfaces are gone — the tile row, the AI brief bubble, the
+    // sections feed, and every section of the board before that.
+    for (const id of [
+      "brief-stat-row", "brief-stat-attention", "brief-ai", "exec-sections",
       "brief-agenda", "brief-overdue", "brief-tasks", "brief-priority", "brief-habits",
       "brief-reminders", "brief-birthdays", "brief-appointments", "brief-dates",
       "brief-docs", "brief-bills", "brief-calendar", "brief-notifications",
@@ -124,37 +137,21 @@ describe("ExecutiveBriefing", () => {
     }
   });
 
-  it("puts an overdue bill in Immediate Attention, and the tile agrees with it", async () => {
+  it("puts an overdue bill in Needs Attention with its amount", async () => {
     await mount(enhancedWith());
-    const attn = screen.getByTestId("brief-stat-attention").textContent || "";
-    expect(attn).toContain("1");
-    expect(attn).toContain("overdue bill");
-    const immediate = screen.getByTestId("exec-section-immediate");
-    expect(immediate.textContent).toContain("Phone");
-    expect(immediate.textContent).toContain("$87 overdue");
+    const attn = screen.getByTestId("exec-card-attention");
+    expect(attn.textContent).toContain("Phone");
+    expect(attn.textContent).toContain("$87 overdue");
   });
 
-  it("keeps an expiring document out of Immediate Attention and in its own section", async () => {
+  it("shows an expiring document under Needs Attention AND in the Documents card", async () => {
     await mount(enhancedWith());
-    expect(screen.getByTestId("exec-section-documents").textContent).toContain("Passport");
-    expect(screen.getByTestId("exec-section-immediate").textContent).not.toContain("Passport");
-  });
-
-  it("hides sections with nothing in them", async () => {
-    await mount(enhancedWith());
-    // No birthdays, health items or insights in this fixture.
-    expect(screen.queryByTestId("exec-section-birthdays")).toBeNull();
-    expect(screen.queryByTestId("exec-section-health")).toBeNull();
-    expect(screen.queryByTestId("exec-section-insights")).toBeNull();
-  });
-
-  it("gives every section a collapsible header", async () => {
-    await mount(enhancedWith());
-    const section = screen.getByTestId("exec-section-immediate");
-    const header = section.querySelector("button[aria-expanded]") as HTMLElement;
-    expect(header.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(header);
-    expect(header.getAttribute("aria-expanded")).toBe("false");
+    // Inventory: the Documents card, with its expiry countdown.
+    const docs = screen.getByTestId("exec-card-documents");
+    expect(docs.textContent).toContain("Passport");
+    expect(docs.textContent).toContain("Expires in 12 days");
+    // Urgency: the same document surfaces in Needs Attention, as in the mock.
+    expect(screen.getByTestId("exec-card-attention").textContent).toContain("Passport");
   });
 
   it("offers a one-tap action on a row, and arms a payment before taking it", async () => {
@@ -169,8 +166,7 @@ describe("ExecutiveBriefing", () => {
   it("shows a real all-clear when nothing needs attention", async () => {
     await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
     // Encouraging, not blank — the empty state is a designed surface.
-    expect(screen.getByTestId("exec-sections").textContent).toContain("You're all caught up");
-    expect(screen.getByTestId("brief-stat-attention").textContent).toContain("Nothing is overdue");
+    expect(screen.getByTestId("exec-attention-clear").textContent).toContain("You're all caught up");
   });
 
   it("hides QA bills and collapses the duplicate-bill pair (2026-07-29 report)", async () => {
@@ -184,7 +180,7 @@ describe("ExecutiveBriefing", () => {
       ] },
       expiringDocuments: [],
     }));
-    const all = screen.getByTestId("exec-sections").textContent || "";
+    const all = screen.getByTestId("executive-briefing").textContent || "";
     // Hide-test-data defaults ON — the QA subscription must not render.
     expect(all).not.toContain("QA Test Subscription");
     // Same-amount name-nested pair renders once, keeping the specific name.
@@ -193,41 +189,28 @@ describe("ExecutiveBriefing", () => {
     // Different amounts ($2,500 vs $300) are NOT collapsed — user must reconcile.
     expect(all).toContain("rent the 1st");
     expect(all).toContain("$300");
-    // Overdue ones sit in Immediate Attention; the merely-upcoming one in Bills.
-    expect(screen.getByTestId("exec-section-immediate").textContent).toContain("rent the 1st");
-    expect(screen.getByTestId("exec-section-bills").textContent).toContain("$300");
-  });
-
-  it("keeps the lead brief bullet honest about bills, and never says 'due in -28d'", async () => {
-    await mount(enhancedWith({
-      financeSnapshot: { upcomingBills: [
-        { id: "b4", name: "rent the 1st", amount: 2500, daysUntil: -28, status: "overdue" },
-      ] },
-      expiringDocuments: [],
-    }));
-    const ai = screen.getByTestId("brief-ai").textContent || "";
-    // Lead bullet may not claim "No overdue tasks." while bills are overdue.
-    expect(ai).toContain("No overdue to-do tasks");
-    // The -28d bill reads as overdue, never "due in -28d".
-    expect(ai).toContain("28d overdue");
-    expect(ai).not.toMatch(/due in -/);
+    // Overdue ones sit under Needs Attention; the merely-upcoming one under
+    // Money's "Bills Due Soon".
+    expect(screen.getByTestId("exec-card-attention").textContent).toContain("rent the 1st");
+    expect(screen.getByTestId("exec-card-money").textContent).toContain("$300");
   });
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Health and AI recommendations, mounted for real. `routes` lets a test
-  // answer specific endpoints while everything else stays an empty list.
+  // Mounted for real against stubbed endpoints. `routes` lets a test answer
+  // specific endpoints while everything else stays an empty list.
   function stubRoutes(routes: Record<string, any>) {
-    fetchStub.mockImplementation(async (url: any) => {
+    fetchStub.mockImplementation(async (url: any, opts?: any) => {
       const u = String(url);
       const hit = Object.keys(routes).find(k => u.includes(k));
-      return new Response(JSON.stringify(hit ? routes[hit] : []), {
+      const body = hit ? (typeof routes[hit] === "function" ? routes[hit](u, opts) : routes[hit]) : [];
+      return new Response(JSON.stringify(body), {
         status: 200, headers: { "Content-Type": "application/json" },
       });
     });
   }
   const today = () => new Date().toLocaleDateString("en-CA");
 
-  it("renders a medication under Health, with a Taken action rather than Pay", async () => {
+  it("renders a due medication under Needs Attention, with Taken rather than Pay", async () => {
     stubRoutes({
       "/api/obligations": [{
         id: "o1", name: "Lisinopril 10mg", kind: "medication",
@@ -235,12 +218,30 @@ describe("ExecutiveBriefing", () => {
       }],
     });
     await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
-    const health = await screen.findByTestId("exec-section-health");
-    expect(health.textContent).toContain("Lisinopril 10mg");
+    await waitFor(() => {
+      expect(screen.getByTestId("exec-card-attention").textContent).toContain("Lisinopril 10mg");
+    });
     expect(screen.getByTestId("exec-action-med:o1").textContent).toContain("Taken");
   });
 
-  it("shows a Done button on a managed recurring date, but not on a profile birthday", async () => {
+  it("completes a task from its circle in the Tasks card", async () => {
+    stubRoutes({
+      "/api/tasks": (u: string, opts: any) =>
+        opts?.method === "PATCH" ? {} : [{ id: "t1", title: "Call mechanic", status: "open", dueDate: today() }],
+    });
+    await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+    const circle = await screen.findByTestId("exec-task-complete-t1");
+    // The card counts it as remaining before the tap.
+    expect(screen.getByTestId("exec-card-tasks").textContent).toContain("Call mechanic");
+    fireEvent.click(circle);
+    await waitFor(() => {
+      const patched = fetchStub.mock.calls.some((c: any[]) =>
+        String(c[0]).includes("/api/tasks/t1") && c[1]?.method === "PATCH");
+      expect(patched).toBe(true);
+    });
+  });
+
+  it("shows a Done button on a managed recurring date, but none on a profile birthday", async () => {
     const soon = (n: number) => {
       const d = new Date(); d.setDate(d.getDate() + n);
       return d.toLocaleDateString("en-CA");
@@ -260,13 +261,15 @@ describe("ExecutiveBriefing", () => {
       ],
     });
     await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
-    const sec = await screen.findByTestId("exec-section-importantDates");
-    expect(sec.textContent).toContain("Maya's Graduation");
-    expect(sec.textContent).toContain("Custom");
-    // Writable occurrence → Done. Profile-derived date → read-only Open, because
-    // its sourceId is not an event id.
+    await waitFor(() => {
+      expect(screen.getByTestId("exec-card-upcoming").textContent).toContain("Maya's Graduation");
+    });
+    const upcoming = screen.getByTestId("exec-card-upcoming");
+    expect(upcoming.textContent).toContain("Mom's Birthday");
+    // Writable occurrence → Done. A profile-derived date is read-only — its
+    // sourceId is not an event id, so offering Done would PATCH into a 404.
     expect(screen.getByTestId("exec-action-event:ev-rd-1").textContent).toContain("Done");
-    expect(screen.getByTestId("exec-action-event:ev-bd-1").textContent).toContain("Open");
+    expect(screen.queryByTestId("exec-action-event:ev-bd-1")).toBeNull();
   });
 
   it("never asks for AI advice on mount, and renders it only once asked", async () => {
@@ -280,12 +283,21 @@ describe("ExecutiveBriefing", () => {
     // Generating advice is a model call — a dashboard open must not be one.
     const asked = () => fetchStub.mock.calls.filter((c: any[]) => String(c[0]).includes("ai-suggestions")).length;
     expect(asked()).toBe(0);
-    expect(screen.queryByTestId("exec-section-recommendations")).toBeNull();
+    expect(screen.queryByTestId("exec-card-recommendations")).toBeNull();
 
     fireEvent.click(screen.getByTestId("exec-recommendations-generate"));
-    const recs = await screen.findByTestId("exec-section-recommendations");
+    const recs = await screen.findByTestId("exec-card-recommendations");
     expect(recs.textContent).toContain("Link 3 documents");
     expect(asked()).toBe(1);
+  });
+
+  it("surfaces recent activity in the bottom card", async () => {
+    await mount(enhancedWith(), {
+      recentActivity: [
+        { id: "a1", type: "expense", description: "Logged $4 coffee", timestamp: new Date().toISOString() },
+      ],
+    });
+    expect(screen.getByTestId("exec-card-activity").textContent).toContain("Logged $4 coffee");
   });
 
   it("opens the filters and lets a whole source be switched off", async () => {

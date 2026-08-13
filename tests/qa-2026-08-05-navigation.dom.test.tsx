@@ -22,56 +22,44 @@ import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { readFileSync } from "fs";
 import { resolve as resolvePath } from "path";
-import { ExecutiveSections } from "../client/src/components/dashboard/ExecutiveSections";
-import { DISPLAY_CAP } from "../shared/executive-sections";
+import { ExpandableRows } from "../client/src/components/dashboard/ExecutiveBriefing";
 
 const read = (p: string) => readFileSync(resolvePath(__dirname, "..", p), "utf8");
 
 afterEach(cleanup);
 
 // ── #6 / #8 — an expander has to expand ──────────────────────────────────────
-describe("'+N more' reveals the rows it promises", () => {
-  const section = (n: number) => ({
-    id: "immediate" as const,
-    title: "Immediate Attention",
-    accent: "0 72% 58%",
-    items: Array.from({ length: n }, (_, i) => ({
-      key: `k${i}`, sourceKey: `s${i}`, kind: "task", title: `Item ${i}`,
-      tier: "immediate", daysUntil: -1,
-    })) as any[],
-    total: n,
-  });
-
-  const renderSections = (n: number) =>
+// ExpandableRows is the Executive tab's card expander ("View all (N)"). The
+// invariant it guards: the FULL list is in props and the collapsing happens in
+// the UI — the 2026-08-05 regression was a builder that truncated the list
+// first, leaving the button nothing to reveal.
+describe("'View all (N)' reveals the rows it promises", () => {
+  const CAP = 4;
+  const renderRows = (n: number) =>
     render(
-      <ExecutiveSections
-        sections={[section(n)] as any}
-        loading={false}
-        onAction={() => {}}
-        busyKeys={new Set()}
-        armedKey={null}
-        leavingKeys={new Set()}
-      />,
+      <ExpandableRows id="attention" count={n} cap={CAP}>
+        {Array.from({ length: n }, (_, i) => <p key={i}>{`Item ${i}`}</p>)}
+      </ExpandableRows>,
     );
 
   it("collapses to the display cap and offers the remainder", () => {
-    renderSections(DISPLAY_CAP + 5);
-    expect(screen.getAllByText(/^Item \d+$/).length).toBe(DISPLAY_CAP);
-    expect(screen.getByTestId("exec-more-immediate").textContent).toBe("+5 more");
+    renderRows(CAP + 5);
+    expect(screen.getAllByText(/^Item \d+$/).length).toBe(CAP);
+    expect(screen.getByTestId("exec-more-attention").textContent).toContain(`View all (${CAP + 5})`);
   });
 
   it("renders the hidden rows when pressed — the whole point of the button", () => {
     // THE regression: this used to hide the button and render nothing new,
     // because the builder had truncated the list before it ever got here.
-    renderSections(DISPLAY_CAP + 5);
-    fireEvent.click(screen.getByTestId("exec-more-immediate"));
-    expect(screen.getAllByText(/^Item \d+$/).length).toBe(DISPLAY_CAP + 5);
-    expect(screen.getByText("Item 12")).toBeTruthy();
+    renderRows(CAP + 5);
+    fireEvent.click(screen.getByTestId("exec-more-attention"));
+    expect(screen.getAllByText(/^Item \d+$/).length).toBe(CAP + 5);
+    expect(screen.getByText("Item 8")).toBeTruthy();
   });
 
   it("shows no button when everything already fits", () => {
-    renderSections(DISPLAY_CAP);
-    expect(screen.queryByTestId("exec-more-immediate")).toBeNull();
+    renderRows(CAP);
+    expect(screen.queryByTestId("exec-more-attention")).toBeNull();
   });
 });
 
