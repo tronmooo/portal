@@ -2,7 +2,7 @@ import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { warmProfileDetail } from "@/lib/scope-prefetch";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
-import { stopProp } from "@/lib/event-utils";
+import { stopProp, stopPropAndDefault } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -6713,11 +6713,13 @@ export default function TrackersPage() {
                   </span>
                 </div>
                 {/* Column headers — compact, spreadsheet-style. */}
-                <div className="micro-label grid grid-cols-[20px_1fr_auto_72px] items-center gap-2 px-2.5 py-1 border-b border-border/40 bg-muted/20 text-muted-foreground">
+                {/* Trailing 22px column is the row action (document delete). */}
+                <div className="micro-label grid grid-cols-[20px_1fr_auto_72px_22px] items-center gap-2 px-2.5 py-1 border-b border-border/40 bg-muted/20 text-muted-foreground">
                   <span />
                   <span>Name</span>
                   <span className="text-right">{trackerCols ? "Last" : "Type"}</span>
                   <span className="text-right">{trackerCols ? "Latest" : "Value"}</span>
+                  <span />
                 </div>
                 {group.rows.map((r, ri) => {
                   // Color the row by CATEGORY (trackers) / kind (everything
@@ -6729,7 +6731,7 @@ export default function TrackersPage() {
                   const { accent: ac, Icon, typeLabel } = rowVisual(r);
                   const rowInner = (
                     <div
-                      className={`grid grid-cols-[20px_1fr_auto_72px] items-center gap-2 pl-2.5 pr-2.5 py-1 border-b border-border/20 last:border-b-0 cursor-pointer hover:bg-muted/50 transition-colors ${ri % 2 === 1 ? "bg-muted/15" : ""}`}
+                      className={`group grid grid-cols-[20px_1fr_auto_72px_22px] items-center gap-2 pl-2.5 pr-2.5 py-1 border-b border-border/20 last:border-b-0 cursor-pointer hover:bg-muted/50 transition-colors ${ri % 2 === 1 ? "bg-muted/15" : ""}`}
                       style={{ boxShadow: `inset 2px 0 0 hsl(${ac} / 0.6)` }}
                       data-testid={`linked-list-row-${r.kind}-${r.id}`}
                     >
@@ -6743,6 +6745,33 @@ export default function TrackersPage() {
                         <span className="micro-label px-1.5 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: `hsl(${ac} / 0.14)`, color: `hsl(${ac})` }}>{typeLabel}</span>
                       )}
                       <span className="text-[13px] font-semibold tabular-nums text-foreground text-right truncate">{r.meta}</span>
+                      {/* Delete, in list view too (2026-08-13). The card view
+                          has had this; the list did not, so switching to the
+                          compact view quietly took the action away. Same
+                          confirm dialog and same optimistic mutation as the
+                          card — this only opens the confirm.
+                          stopPropAndDefault because the row is wrapped in a
+                          <Link>: without it the tap would navigate to the
+                          document instead of arming the delete.
+                          Documents only: assets, liabilities and trackers are
+                          deleted from their own detail pages, where the
+                          consequences are spelled out. */}
+                      {r.kind === "document" ? (
+                        <button
+                          onClick={stopPropAndDefault(() => setDocDeleteConfirmId(r.id))}
+                          // Always visible, not hover-only: a delete you have
+                          // to discover by hovering does not exist on a phone,
+                          // and this is the affordance the list view was
+                          // missing. Dimmed until touched, and the confirm
+                          // dialog is what actually protects the document.
+                          className="w-[22px] h-[22px] -mr-1 rounded flex items-center justify-center text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                          aria-label={`Delete ${r.name}`}
+                          title="Delete document"
+                          data-testid={`linked-list-delete-${r.id}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      ) : <span />}
                     </div>
                   );
                   // Trackers open in the detail dialog — there is no /trackers/:id
