@@ -20,6 +20,7 @@ import { groupWellnessCards, type WellnessCard } from "@/lib/wellness-dynamic";
 import { Medallion } from "@/components/dashboard/visuals";
 import { conceptIcon } from "@/lib/icon-map";
 import { SectionHeading } from "@/components/ui/section-heading";
+import type { ActivitySummary } from "@/lib/wellness-metrics";
 
 // ── shared bits ──────────────────────────────────────────────────────────────
 const T = {
@@ -267,7 +268,14 @@ export interface WellnessOverviewProps {
   sleep?: { hours: number | null; deep?: number; light?: number; rem?: number; efficiency?: number };
   nutrition?: { calories: number | null; caloriesGoal: number; protein?: number; carbs?: number; fats?: number };
   mood?: { value: number | null; series: number[] };
-  activity?: { workouts?: number; activeMin?: number; caloriesBurned?: number };
+  /** TODAY's movement however it was logged (lib/wellness-metrics readActivity).
+   *  Lets the Activity tile show a walk that carries minutes or distance but no
+   *  step count, instead of hiding it — the 2026-08-13 "I walked a mile, why is
+   *  it blank?" report. Replaces a `{workouts, activeMin, caloriesBurned}` prop
+   *  that no longer had a reader. */
+  activity?: ActivitySummary;
+  /** The same summary over a 7-day window, for the weekly Exercise card. */
+  activityWeek?: ActivitySummary;
 
   appointments: WellnessAppt[];
   reminders: string[];
@@ -295,11 +303,11 @@ export interface WellnessOverviewProps {
 
 export function WellnessOverview(props: WellnessOverviewProps) {
   const {
-    wellnessScore, wellnessScoreLabel, sleepHours, sleepSeries, steps, stepsSeries,
+    wellnessScore, wellnessScoreLabel, sleepHours, sleepSeries, steps, stepsSeries, activity,
     restingHr, restingHrSeries, hydrationOz, hydrationGoal, calories, caloriesGoal, streak,
     insights, habits, habitsCompleted, onToggleHabit, togglingHabitId,
     missedHabits = [], meditationMin, recoveryScore,
-    schedule, medications, onToggleMed, togglingMedId, vitals, sleep, nutrition, mood, activity,
+    schedule, medications, onToggleMed, togglingMedId, vitals, sleep, nutrition, mood, activityWeek,
     appointments, reminders, labs, supplements, documents, conditions, allergies,
     recentActivity, weightUnit = "lbs", onQuickLog,
     dynamicCards = [], onOpenPopup, onAiDeepDive, aiDeepDiveLoading, aiNarrative,
@@ -340,10 +348,20 @@ export function WellnessOverview(props: WellnessOverviewProps) {
           <KpiTile onClick={open("sleep")} testId="wellness-kpi-sleep" label="Sleep" tone={T.purple} icon={Moon}
             value={`${fmt(sleepHours, 1)}h`} sub="last night" series={sleepSeries} />
         )}
-        {steps != null && (
-          <KpiTile onClick={open("activity")} testId="wellness-kpi-activity" label="Activity" tone={T.blue} icon={Footprints}
-            value={fmt(steps)} unit="steps" series={stepsSeries} />
-        )}
+        {/* Steps when they were counted; otherwise whatever the movement WAS —
+            minutes, distance, or the fact that a session happened. */}
+        {(steps != null || (activity?.sessions ?? 0) > 0) && (() => {
+          const a = activity;
+          const [value, unit] =
+            steps != null ? [fmt(steps), "steps"] as const
+            : a?.minutes != null ? [fmt(a.minutes), "min"] as const
+            : a?.distance != null ? [fmt(a.distance, a.distance < 10 ? 1 : 0), a.distanceUnit] as const
+            : [String(a?.sessions ?? 0), (a?.sessions ?? 0) === 1 ? "session" : "sessions"] as const;
+          return (
+            <KpiTile onClick={open("activity")} testId="wellness-kpi-activity" label="Activity" tone={T.blue} icon={Footprints}
+              value={value} unit={unit} series={steps != null ? stepsSeries : undefined} />
+          );
+        })()}
         {restingHr != null && (
           <KpiTile onClick={open("hr")} testId="wellness-kpi-hr" label="Resting HR" tone={T.green} icon={conceptIcon("health")}
             value={String(restingHr)} unit="bpm" series={restingHrSeries} />

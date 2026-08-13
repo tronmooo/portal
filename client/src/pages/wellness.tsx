@@ -21,7 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import type { Tracker, Profile, Obligation, Document as Doc, CalendarEvent } from "@shared/schema";
 import {
-  extractVitals, readMetric, computeWellnessScore, countWellnessTrackers,
+  extractVitals, readMetric, readActivity, computeWellnessScore, countWellnessTrackers,
 } from "@/lib/wellness-metrics";
 import { getCanonicalGroup } from "@/lib/tracker-health";
 import { readField } from "@/lib/profile-fields";
@@ -347,25 +347,14 @@ export default function WellnessPage() {
     vitals.bmi.value != null && { label: "BMI", value: fmtVital(vitals.bmi, 1), change: null },
   ].filter(Boolean) as Array<{ label: string; value: string; change: number | null }>;
 
-  // Exercise & activity — count workouts logged this week across fitness
-  // trackers, plus any computed calories burned.
-  const weekAgo = Date.now() - 7 * 86400000;
-  const fitnessTrackers = (Array.isArray(trackers) ? trackers : []).filter((t: any) => getCanonicalGroup(t.category) === "Fitness");
-  let workouts = 0, caloriesBurned = 0, activeMin = 0;
-  for (const t of fitnessTrackers) {
-    for (const e of (t.entries || [])) {
-      if (new Date(e.timestamp).getTime() < weekAgo) continue;
-      workouts++;
-      caloriesBurned += Number(e.computed?.caloriesBurned) || 0;
-      const dur = Number(e.values?.duration ?? e.values?.minutes ?? e.computed?.durationMinutes);
-      if (Number.isFinite(dur)) activeMin += dur;
-    }
-  }
-  const activity = {
-    workouts: workouts || undefined,
-    activeMin: activeMin || undefined,
-    caloriesBurned: caloriesBurned ? Math.round(caloriesBurned) : undefined,
-  };
+  // Exercise & activity — ONE reader for the whole app (lib/wellness-metrics
+  // readActivity). This used to be a local loop over trackers whose CATEGORY
+  // resolved to the "Fitness" group, which silently dropped a tracker named
+  // "Walking" filed under anything else — the 2026-08-13 "I walked a mile, why
+  // is it blank?" report. The shared reader recognises activity by name and by
+  // the shape of its fields, so the Wellness tab, the Executive card and the
+  // trackers page all resolve the same walk.
+  const activityWeek = readActivity(trackers, { days: 7 });
 
   // Dynamic per-tracker cards — one for EVERY metric the user actually logs,
   // whatever it is. This is what makes Wellness reflect the user's real data
@@ -498,7 +487,8 @@ export default function WellnessPage() {
         sleep={{ hours: sleep.value ?? null }}
         nutrition={{ calories: calories.value, caloriesGoal: CALORIE_GOAL }}
         mood={{ value: vitals.mood.value, series: vitals.mood.series }}
-        activity={activity}
+        activity={vitals.activity}
+        activityWeek={activityWeek}
         appointments={appointments}
         reminders={reminders}
         labs={labs}

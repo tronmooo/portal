@@ -74,7 +74,7 @@ import { habitDayProgress } from "@shared/habit-progress";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
-import { extractVitals, readDailyTotal } from "@/lib/wellness-metrics";
+import { extractVitals } from "@/lib/wellness-metrics";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 
 /** Every drill-down this tab can open, each mapping to ONE canonical component.
@@ -725,13 +725,21 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     .sort((a: any, b: any) => a.daysUntil - b.daysUntil);
   const docsSoonCount = visibleDocs.filter((d: any) => d.daysUntil <= 30).length;
 
-  // Wellness — same extraction the Wellness tab uses, from the same trackers.
+  // Wellness — same extraction the Wellness tab uses, from the same trackers,
+  // so a walk logged anywhere shows up on both.
   const vitals = useMemo(() => extractVitals(trackers as any), [trackers]);
-  const exercise = useMemo(
-    () => readDailyTotal(trackers as any, [/exercise|workout|active\s*min/], { unit: "min" }),
-    [trackers]);
-  const hasWellness = [vitals.steps.value, vitals.sleep.value, exercise.value, vitals.calories.value, vitals.hydration.value]
-    .some(v => v != null);
+  const activity = vitals.activity;
+  // What the Exercise tile says, degrading honestly: minutes if a duration was
+  // logged, else the distance, else the fact that a session happened. A walk
+  // recorded with only a calorie field used to render "—", which read as "you
+  // did nothing today" (user report 2026-08-13).
+  const exerciseLabel =
+    activity.minutes != null ? `${Math.round(activity.minutes)} min`
+    : activity.distance != null ? `${Number(activity.distance.toFixed(activity.distance < 10 ? 1 : 0))} ${activity.distanceUnit}`
+    : activity.sessions > 0 ? `${activity.sessions} session${activity.sessions === 1 ? "" : "s"}`
+    : "—";
+  const hasWellness = [vitals.steps.value, vitals.sleep.value, vitals.calories.value, vitals.hydration.value]
+    .some(v => v != null) || activity.sessions > 0;
   // Feeds the Wellness tab's OWN popups (no second wellness UI is built here).
   // Series come from the same trackers the tiles read, so the popup's chart and
   // the tile's number can never disagree.
@@ -1327,7 +1335,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       value={vitals.sleep.value != null ? fmtSleep(vitals.sleep.value) : "—"}
                       onClick={() => setPopup("wellness:sleep")} testId="exec-well-sleep" />
                     <WellTile icon={ActivityIcon} accent="217 91% 65%" label="Exercise"
-                      value={exercise.value != null ? `${Math.round(exercise.value)} min` : "—"}
+                      value={exerciseLabel}
                       onClick={() => setPopup("wellness:activity")} testId="exec-well-exercise" />
                   </div>
                   <div className="grid grid-cols-2 gap-2 mt-2">
