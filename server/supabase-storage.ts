@@ -80,7 +80,7 @@ import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { parseRecurringMeta } from "../shared/recurring-dates";
-import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
+import { taskOccurrenceDates, taskRepeats, isTaskOccurrenceDone } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
@@ -3693,18 +3693,27 @@ export class SupabaseStorage implements IStorage {
     }
 
     for (const task of tasks) {
-      // Use dueDate if available, otherwise fall back to createdAt so every task appears on the calendar
-      const rawDate = task.dueDate || task.createdAt;
-      if (!rawDate) continue;
+      // NO DUE DATE, NO DATE ON THE CALENDAR (2026-08-13). This used to fall
+      // back to `createdAt` "so every task appears on the calendar" — but a
+      // creation timestamp is not a deadline. It put the task on a day the user
+      // never picked (in UTC, so often the day before their own), and from the
+      // next midnight on, every dated counter read it as OVERDUE: the Tasks tile
+      // said "Overdue 1" while the Attention tile on the same screen said
+      // "Nothing is overdue", because that tile reads the task rows, which have
+      // no due date to be late for. An undated task belongs to the task list,
+      // not the calendar — which is what MemStorage.getCalendarTimeline has
+      // always done, so this also ends a divergence between the two storages.
+      if (!task.dueDate) continue;
       const taskColor = task.priority === "high" ? "#A13544" : task.priority === "medium" ? "#BB653B" : "#797876";
       // A task carries its own clock time now (Portol has two entities, events
       // and tasks — see shared/schema.ts Task), and a repeating task is
       // projected across the window instead of appearing once on its stored due
       // date. Without the projection "every Tuesday at 9 AM" occupied one
       // Tuesday and the rest of the year was blank.
-      const taskDates = task.dueDate
-        ? taskOccurrenceDates({ dueDate: task.dueDate, tags: task.tags, status: task.status }, startDate, endDate, { todayISO: rdTodayISO })
-        : (rawDate.slice(0, 10) >= startDate && rawDate.slice(0, 10) <= endDate ? [rawDate.slice(0, 10)] : []);
+      const taskDates = taskOccurrenceDates(
+        { dueDate: task.dueDate, tags: task.tags, status: task.status },
+        startDate, endDate, { todayISO: rdTodayISO },
+      );
       const isSeries = taskRepeats(task as any);
       for (const d of taskDates) {
         items.push({
@@ -3716,8 +3725,9 @@ export class SupabaseStorage implements IStorage {
           allDay: !task.dueTime,
           color: taskColor, category: "task", description: task.description,
           // Only the stored occurrence can be complete; projected future ones
-          // are always still to do.
-          completed: task.status === "done" && d === String(task.dueDate || "").slice(0, 10),
+          // are always still to do (shared/task-occurrences owns the rule, so
+          // both storages answer it identically).
+          completed: isTaskOccurrenceDone(task as any, d),
           linkedProfiles: task.linkedProfiles, sourceId: task.id,
           meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries },
         });

@@ -4,7 +4,7 @@ import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEF
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
-import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
+import { taskOccurrenceDates, taskRepeats, isTaskOccurrenceDone } from "@shared/task-occurrences";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
 
@@ -1370,7 +1370,7 @@ export class MemStorage implements IStorage {
           color: task.priority === "high" ? "#A13544" : task.priority === "medium" ? "#BB653B" : "#797876",
           category: "task",
           description: task.description,
-          completed: task.status === "done" && d === String(task.dueDate || "").slice(0, 10),
+          completed: isTaskOccurrenceDone(task as any, d),
           linkedProfiles: task.linkedProfiles,
           sourceId: task.id,
           meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries },

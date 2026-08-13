@@ -148,6 +148,31 @@ export function taskOccurrenceDates(
 }
 
 /**
+ * Is the occurrence on `dateISO` already checked off?
+ *
+ * Reported 2026-08-13: the Tasks tile read "1 needs action · Overdue 1" for an
+ * account whose only task had been completed — while the Attention tile on the
+ * same screen said "Nothing is overdue" and the Today tile said 1 of 1 done.
+ * The tile counts the calendar timeline (shared/dated-items buckets whatever
+ * the calendar draws), and the timeline computed this flag inline as
+ * `status === "done" && d === dueDate`. For a task with NO due date — emitted
+ * on its creation date by the Supabase timeline's fallback — that comparison is
+ * `d === ""`, false forever, so a completed task stayed "needs action" and, one
+ * midnight later, "overdue".
+ *
+ * Only the STORED occurrence can be complete: a recurring task advances its due
+ * date when it is checked off (shared/recurrence), so a projected future date is
+ * always still to do.
+ */
+export function isTaskOccurrenceDone(task: TaskLike, dateISO: string): boolean {
+  if (String(task?.status || "") !== "done") return false;
+  const base = String(task?.dueDate || "").slice(0, 10);
+  // An undated task has one occurrence, whatever date the caller anchored it to.
+  if (!DATE_RE.test(base)) return true;
+  return String(dateISO || "").slice(0, 10) === base;
+}
+
+/**
  * Does this task repeat? Cheap enough to call per row; used to decide whether
  * a calendar item should be labelled as one of a series.
  */

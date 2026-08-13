@@ -81,6 +81,7 @@ export default defineConfig({
       'tests/recurring-dates.test.ts',
       'tests/series-detect.test.ts',
       'tests/dated-items.test.ts',
+      'tests/task-overdue-indicator.test.ts',
       'tests/task-one-time-vs-recurring.test.tsx',
       'tests/date-math.test.ts',
       'tests/calendar-window.test.ts',
