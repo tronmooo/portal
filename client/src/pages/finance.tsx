@@ -1001,12 +1001,14 @@ export default function FinancePage() {
                 <SelectItem value="name-asc">Name: A → Z</SelectItem>
               </SelectContent>
             </Select>
+            {/* ADD EXPENSE LIVES WITH THE EXPENSES (2026-08-13, user request).
+                Logging a spend was the first thing on the page — above net
+                worth, cash flow and every account — which made Finance read as
+                a data-entry form rather than a picture of your money. The
+                dialog stays here (it is a portal, and `addOpen` is also driven
+                by the ?new=expense deep link), but its trigger now sits in the
+                Recent Expenses header, where expenses are actually browsed. */}
             <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setAddAttempt(false); } }}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="h-8 text-xs" data-testid="button-add-expense">
-                  <Plus className="h-3.5 w-3.5 mr-1" /> Add Expense
-                </Button>
-              </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Add Expense</DialogTitle>
@@ -1228,7 +1230,6 @@ export default function FinancePage() {
             assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
             liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map((l: any) => ({ id: l.id, name: l.name, type: l.type, value: Number(l.value ?? l.grossValue ?? 0) })) : []}
             monthLabel={monthLabel}
-            onAddExpense={() => setAddOpen(true)}
             onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
             payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null}
             onOpenNetWorth={() => setFinancePopup("networth")}
@@ -1365,7 +1366,13 @@ export default function FinancePage() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-semibold">Recent Expenses</CardTitle>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="text-sm font-semibold">Recent Expenses</CardTitle>
+            {/* The one manual Add Expense affordance, next to the list it adds to. */}
+            <Button size="sm" className="h-8 text-xs" onClick={() => setAddOpen(true)} data-testid="button-add-expense">
+              <Plus className="h-3.5 w-3.5 mr-1" /> Add Expense
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {profileFiltered.length === 0 ? (

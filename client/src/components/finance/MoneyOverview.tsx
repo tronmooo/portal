@@ -149,7 +149,6 @@ export function MoneyOverview(props: {
   assetBreakdown: Breakdown[];
   liabilityBreakdown: Breakdown[];
   monthLabel: string;
-  onAddExpense: () => void;
   onPayBill: (bill: MoneyBill) => void;
   payingId?: string | null;
   onOpenNetWorth?: () => void;
@@ -170,7 +169,7 @@ export function MoneyOverview(props: {
     spendTrendPct, incomeMtd = 0, budgets, bills, spendByCategory = {}, alerts = [],
     assetBreakdown, liabilityBreakdown, monthLabel,
     cashTrend = [], spendSeries, incomeSeries, billsSeries,
-    onAddExpense, onPayBill, payingId,
+    onPayBill, payingId,
     onOpenNetWorth, onOpenCashFlow, onOpenBudget, onCategoryClick,
     onOpenSpend, onOpenIncome, onOpenBills, onOpenSavings, onOpenOverview,
   } = props;
@@ -294,9 +293,11 @@ export function MoneyOverview(props: {
           <div className="flex items-center justify-between mb-3">
             <SectionHeading title="Budgets · MTD vs limit" icon={Target} accent="38 96% 54%" count={budgets.length}
               onClick={() => onOpenBudget?.()} testId="money-budgets-header" />
+            {/* "+ Expense" removed 2026-08-13: adding a spend belongs with the
+                Expenses list, not inside the Budgets card. Budgets keeps its
+                own add. */}
             <div className="flex gap-1.5">
               {onOpenBudget && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onOpenBudget} data-testid="money-manage-budgets">+ Budget</Button>}
-              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onAddExpense} data-testid="money-add-expense">+ Expense</Button>
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">

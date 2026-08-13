@@ -320,6 +320,94 @@ describe("ExecutiveBriefing", () => {
     expect(screen.getByTestId("exec-card-activity").textContent).toContain("Logged $4 coffee");
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // THE ROUTING RULE (user report 2026-08-13): pressing a summary expands it
+  // over Executive in that category's ONE canonical panel. The label pressed
+  // must match the panel that opens — no Bills when pressing an important
+  // date, no Finance page when pressing Tasks — and closing it must leave the
+  // user on Executive.
+  describe("every press opens its own category's canonical panel, in place", () => {
+    const opened = () => document.querySelector('[role="dialog"]')?.textContent || "";
+
+    it("Tasks — the KPI and the card header open the Tasks panel, not the Finance page", async () => {
+      await mount(enhancedWith());
+      fireEvent.click(screen.getByTestId("exec-kpi-tasks"));
+      expect(opened()).toContain("Task");
+      // Still on Executive underneath — the tab was never navigated away.
+      expect(screen.getByTestId("executive-briefing")).toBeTruthy();
+      expect(screen.getByTestId("exec-card-tasks")).toBeTruthy();
+    });
+
+    it("Next Important — opens the Upcoming dates, never the Bills panel", async () => {
+      await mount(enhancedWith());
+      fireEvent.click(screen.getByTestId("exec-kpi-next"));
+      const dlg = await screen.findByTestId("upcoming-popup");
+      expect(dlg.textContent).toContain("Upcoming");
+      // The bill that used to hijack this press is not the panel's subject.
+      expect(screen.queryByTestId("bills-popup")).toBeNull();
+    });
+
+    it("View all upcoming — expands the same list the card previews", async () => {
+      await mount(enhancedWith());
+      fireEvent.click(screen.getByTestId("exec-view-upcoming"));
+      const dlg = await screen.findByTestId("upcoming-popup");
+      // Passport (12d out) is on the card and in the expansion — same dataset.
+      expect(dlg.textContent).toContain("Passport");
+      expect(screen.getByTestId("executive-briefing")).toBeTruthy();
+    });
+
+    it("View wellness — opens the Wellness panel over Executive, not the Wellness tab", async () => {
+      stubRoutes({
+        "/api/trackers": [{
+          id: "tr1", name: "Steps", category: "Fitness", unit: "steps",
+          fields: [{ name: "count", type: "number", isPrimary: true, unit: "steps" }],
+          entries: [{ timestamp: new Date().toISOString(), values: { count: 7420 } }],
+        }],
+      });
+      await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+      fireEvent.click(await screen.findByTestId("exec-view-wellness"));
+      expect(await screen.findByTestId("wellness-popup-score")).toBeTruthy();
+      expect(screen.getByTestId("executive-briefing")).toBeTruthy();
+    });
+
+    it("a wellness tile opens that metric's own Wellness popup", async () => {
+      stubRoutes({
+        "/api/trackers": [{
+          id: "tr2", name: "Sleep", category: "Health", unit: "h",
+          fields: [{ name: "hours", type: "number", isPrimary: true, unit: "h" }],
+          entries: [{ timestamp: new Date().toISOString(), values: { hours: 6.9 } }],
+        }],
+      });
+      await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+      fireEvent.click(await screen.findByTestId("exec-well-sleep"));
+      expect(await screen.findByTestId("wellness-popup-sleep")).toBeTruthy();
+    });
+
+    it("Documents — the card opens the Documents panel, not a document page", async () => {
+      await mount(enhancedWith());
+      fireEvent.click(screen.getByTestId("exec-view-documents"));
+      expect(opened()).toContain("Passport");
+      expect(screen.getByTestId("executive-briefing")).toBeTruthy();
+    });
+
+    it("Bills — a bill row opens Bills, and Bills only", async () => {
+      await mount(enhancedWith());
+      fireEvent.click(screen.getByTestId("exec-item-bill:b1"));
+      expect(await screen.findByTestId("bills-popup")).toBeTruthy();
+      expect(screen.queryByTestId("upcoming-popup")).toBeNull();
+    });
+
+    it("closing a panel returns to Executive with the tab intact", async () => {
+      await mount(enhancedWith());
+      fireEvent.click(screen.getByTestId("exec-view-upcoming"));
+      const dlg = await screen.findByTestId("upcoming-popup");
+      fireEvent.keyDown(dlg, { key: "Escape", code: "Escape" });
+      await waitFor(() => expect(screen.queryByTestId("upcoming-popup")).toBeNull());
+      expect(screen.getByTestId("exec-card-upcoming")).toBeTruthy();
+      expect(screen.getByTestId("exec-overview")).toBeTruthy();
+    });
+  });
+
   it("opens the filters and lets a whole source be switched off", async () => {
     await mount(enhancedWith());
     expect(screen.queryByTestId("attention-filters")).toBeNull();

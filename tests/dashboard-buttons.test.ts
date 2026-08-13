@@ -21,8 +21,15 @@ const REQUIRED: Record<string, string[]> = {
     "btn-customize",
   ],
   "client/src/components/finance/MoneyOverview.tsx": [
-    "money-networth", "money-cashflow", "money-spend", "money-add-expense",
+    // "money-add-expense" was here until 2026-08-13. Adding a spend now lives
+    // with the expenses (finance.tsx "button-add-expense", in the Recent
+    // Expenses header) rather than in the overview's Budgets card — the
+    // overview is for reading your money, not entering it.
+    "money-networth", "money-cashflow", "money-spend",
     "money-budgets-header", "money-asset-", "money-liability-", "money-pay-",
+  ],
+  "client/src/pages/finance.tsx": [
+    "button-add-expense", "button-save-expense",
   ],
   "client/src/components/wellness/WellnessOverview.tsx": [
     "wellness-kpi-score", "wellness-habit-", "wellness-med-toggle-",

@@ -37,19 +37,30 @@ import {
   Brain, Apple, Pill as PillIcon, type LucideIcon,
 } from "lucide-react";
 import { BubbleSkeleton } from "@/components/ui/skeleton";
-// One data type = one canonical UI (user rule 2026-08-13). The Executive tab
-// is a summary/navigation layer: pressing a Tasks number opens the Tasks
-// page, a Habit opens the Habits page, an event opens the Calendar — never a
-// miniature second version of those screens. The only in-place drill-downs
-// are the canonical ones shared with the rest of the app: BillsView (in its
-// popup frame), the Net Worth breakdown, and the Cash Flow waterfall.
-import { BillsPopup, dedupeBills } from "@/components/dashboard/BriefingPopups";
+// DRILL IN PLACE, WITH THE CANONICAL POPUP (user rule 2026-08-13).
+//
+// Two rules govern every pressable thing on this tab:
+//
+//  1. Pressing a summary EXPANDS it here, over the Executive tab — it does not
+//     throw the user somewhere else in the app. Only an explicit "Open X"
+//     action navigates. Closing a popup leaves the tab exactly where it was.
+//  2. The popup that opens is the app's ONE canonical component for that data
+//     type — the same Tasks popup the hub strip opens, the same Habits popup,
+//     the same Wellness popups the Wellness tab opens, the same Bills view the
+//     /dashboard/obligations page renders, the same Cash Flow waterfall the
+//     Finance tab opens. Nothing here is a second version of an existing
+//     screen, and a label never opens a different category's panel.
+import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
+import { BillsPopup, EventsPopup, DocsPopup, dedupeBills } from "@/components/dashboard/BriefingPopups";
 import { NetWorthPopup } from "@/components/dashboard/HeroKPIPopups";
 import { CashFlowView } from "@/components/finance/CashFlowView";
+import { WellnessPopup, type WellnessPopupKind, type WellnessPopupData } from "@/components/wellness/WellnessPopups";
+import { computeHealthScore } from "@/lib/tracker-health";
 // hashNavigate for query-carrying targets ("/trackers?open=x",
 // "/linked?tab=documents") — wouter's hash navigate hoists the query out of
 // the hash, landing on the bare page instead (the CommandSearch bug).
 import { hashNavigate } from "@/lib/hashNavigate";
+import { BubbleModal } from "@/components/ui/bubble-modal";
 import { ProgressRing, toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
 import type { DashboardStats } from "@shared/schema";
@@ -66,7 +77,13 @@ import { useShowTestData } from "@/lib/showTestData";
 import { extractVitals, readDailyTotal } from "@/lib/wellness-metrics";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 
-type PopupKind = "bills" | "networth" | "cashflow" | null;
+/** Every drill-down this tab can open, each mapping to ONE canonical component.
+ *  `wellness:<kind>` defers to the Wellness tab's own popup set. */
+type PopupKind =
+  | "tasks" | "habits" | "bills" | "events" | "docs"
+  | "networth" | "cashflow" | "upcoming"
+  | `wellness:${WellnessPopupKind}`
+  | null;
 
 // Card identity colours, matched to the reference mock and to the accents the
 // rest of the app already uses (red overdue, blue tasks, purple calendar,
@@ -310,6 +327,59 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
   );
 }
 
+// ── Upcoming popup ───────────────────────────────────────────────────────────
+// The canonical expansion of the Upcoming card: the SAME dated list the card
+// previews, in full, grouped by day. It is not the Bills panel, not the
+// Calendar and not the Tasks list — it is the card's own dataset, which is why
+// the two rows visible on the card are simply the first two rows here.
+//
+// The "Next Important" KPI opens this too, and for the same reason: that KPI
+// IS the first row of this list (soonest-first), so this is where its record
+// lives. Giving it a separate-but-identical panel would be exactly the
+// duplicate-interface problem this pass exists to remove.
+function UpcomingPopup({ open, onClose, items, onAction, onOpenItem, busyKeys, armedKey, leavingKeys }: {
+  open: boolean; onClose: () => void; items: AttentionItem[];
+  onAction: (i: AttentionItem) => void;
+  onOpenItem: (i: AttentionItem) => void;
+  busyKeys?: Set<string>; armedKey?: string | null; leavingKeys?: Set<string>;
+}) {
+  // Grouped by the day they fall on, so a week reads as a week.
+  const groups: Array<{ label: string; rows: AttentionItem[] }> = [];
+  for (const i of items) {
+    const du = i.daysUntil ?? 0;
+    const label = du === 1 ? "Tomorrow"
+      : du <= 7 ? "This week"
+      : du <= 14 ? "Next week"
+      : du <= 31 ? "This month"
+      : "Later";
+    const g = groups.find(x => x.label === label);
+    if (g) g.rows.push(i); else groups.push({ label, rows: [i] });
+  }
+  return (
+    <BubbleModal
+      open={open} onClose={onClose} title="Upcoming" icon={Clock}
+      accent={CARD_ACCENTS.upcoming} count={items.length}
+      subtitle="Everything coming up — dates, bills, renewals and deadlines"
+      testId="upcoming-popup" width="lg"
+    >
+      {items.length === 0 ? (
+        <p className="text-[13px] text-muted-foreground py-6 text-center">Nothing coming up.</p>
+      ) : groups.map(g => (
+        <div key={g.label}>
+          <p className="micro-label text-muted-foreground px-1 pt-2 pb-1">{g.label} · {g.rows.length}</p>
+          <div className="space-y-1.5">
+            {g.rows.map(i => (
+              <ItemRow key={i.key} item={i}
+                busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
+                onAction={onAction} onOpen={onOpenItem} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </BubbleModal>
+  );
+}
+
 // ── Overview bar cell ────────────────────────────────────────────────────────
 
 function OverviewCell({ icon: Icon, accent, label, value, sub, subClass, onClick, testId }: {
@@ -336,18 +406,25 @@ function OverviewCell({ icon: Icon, accent, label, value, sub, subClass, onClick
 
 // ── Wellness tile ────────────────────────────────────────────────────────────
 
-function WellTile({ icon: Icon, label, value, accent }: {
+/** A wellness metric tile. Pressing one opens the Wellness tab's own popup for
+ *  that metric — the 7-day chart with latest/average/best — rather than a
+ *  second version of it built here. */
+function WellTile({ icon: Icon, label, value, accent, onClick, testId }: {
   icon: LucideIcon; label: string; value: string; accent: string;
+  onClick?: () => void; testId?: string;
 }) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <div
-      className="bubble-row flex flex-col items-center justify-center text-center gap-1 px-2 py-2.5"
+    <Tag
+      {...(onClick ? { onClick, type: "button" as const, "aria-label": `${label} — view detail` } : {})}
+      data-testid={testId}
+      className={`bubble-row flex flex-col items-center justify-center text-center gap-1 px-2 py-2.5 w-full ${onClick ? "touch-hit" : ""}`}
       style={{ ["--accent-hsl" as any]: accent }}
     >
       <Icon className="h-4 w-4 shrink-0" style={{ color: `hsl(${accent})` }} aria-hidden="true" />
       <p className="text-[13px] font-bold leading-tight truncate max-w-full">{value}</p>
       <p className="text-[11px] text-muted-foreground truncate max-w-full">{label}</p>
-    </div>
+    </Tag>
   );
 }
 
@@ -655,6 +732,30 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     [trackers]);
   const hasWellness = [vitals.steps.value, vitals.sleep.value, exercise.value, vitals.calories.value, vitals.hydration.value]
     .some(v => v != null);
+  // Feeds the Wellness tab's OWN popups (no second wellness UI is built here).
+  // Series come from the same trackers the tiles read, so the popup's chart and
+  // the tile's number can never disagree.
+  const wellnessData: WellnessPopupData = useMemo(() => ({
+    wellnessScore: computeHealthScore(trackers as any),
+    wellnessScoreLabel: "Today, across your trackers",
+    sleepHours: vitals.sleep.value, sleepSeries: vitals.sleep.series,
+    steps: vitals.steps.value, stepsSeries: vitals.steps.series,
+    restingHr: vitals.restingHeartRate.value, restingHrSeries: vitals.restingHeartRate.series,
+    hydrationOz: vitals.hydration.value, hydrationGoal: 100,
+    calories: vitals.calories.value, caloriesGoal: 2200,
+    streak: Math.max(0, ...(stats?.streaks || []).map((s: any) => s.days || 0), stats?.journalStreak || 0),
+    insights: [],
+    habits: habitsDueToday.map((h: any) => ({ id: h.id, name: h.name || "Habit", done: isHabitDoneOn(h, todayStr) })),
+    missedHabits: habitsDueToday.filter((h: any) => !isHabitDoneOn(h, todayStr))
+      .map((h: any) => ({ id: h.id, name: h.name || "Habit", done: false })),
+    schedule: [], medications: [], appointments: [], reminders: [],
+    labs: [], supplements: [], documents: [], conditions: [], allergies: [],
+    recentActivity: [],
+    // Checking in from the popup writes through the same mutation the card does.
+    onToggleHabit: (id: string) => { checkinHabit.mutate(id); },
+    togglingHabitId: null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [trackers, vitals, habitsDueToday, todayStr, stats]);
 
   // ── Actions ────────────────────────────────────────────────────────────────
   const markBusy = (key: string, on: boolean) =>
@@ -762,17 +863,21 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         navigate(item.href);
     }
   };
-  // Where a tapped row goes — its data type's ONE canonical UI. Tasks land on
-  // the Tasks page, habits on Habits, events on the Calendar, bills open the
-  // canonical Bills view (the same component the /dashboard/obligations page
-  // renders), and everything else follows its record's home route (a document
-  // opens /documents/:id, a med opens its tracker) query-safely.
+  // A tapped row EXPANDS here, in that category's canonical popup — a task row
+  // opens Tasks, a bill row opens Bills, an event row opens the Calendar
+  // popup. The label pressed always matches the panel that opens.
+  //
+  // The fallthrough navigates because those kinds have no popup of their own
+  // and their record genuinely lives elsewhere: a medication reminder belongs
+  // to its tracker, a goal to the Goals page. Those go query-safely to the
+  // record itself, never to a generic page.
   const openItem = (item: AttentionItem) => {
     switch (item.kind) {
-      case "task": go("/dashboard/tasks"); return;
-      case "habit": go("/dashboard/habits"); return;
+      case "task": setPopup("tasks"); return;
+      case "habit": setPopup("habits"); return;
       case "bill": setPopup("bills"); return;
-      case "event": go("/calendar"); return;
+      case "event": setPopup("events"); return;
+      case "document": setPopup("docs"); return;
       default: go(item.href);
     }
   };
@@ -836,7 +941,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           value={tasksPending ? loadingDots : String(pending.length)}
           sub={tasksPending ? undefined : overdueTasks.length > 0 ? `${overdueTasks.length} overdue` : "none overdue"}
           subClass={overdueTasks.length > 0 ? "text-red-500" : undefined}
-          onClick={() => go("/dashboard/tasks")}
+          onClick={() => setPopup("tasks")}
           testId="exec-kpi-tasks"
         />
         <OverviewCell
@@ -847,7 +952,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           sub={nextImportant && nextDate
             ? `${fmtWeekdayDate(nextDate)} (${inDaysLabel(nextImportant.daysUntil!)})`
             : undefined}
-          onClick={() => nextImportant ? openItem(nextImportant) : navigate("/calendar")}
+          // The important-dates list, NOT the Bills panel — this KPI is the
+          // first row of Upcoming, so that list is where its record lives.
+          onClick={() => setPopup("upcoming")}
           testId="exec-kpi-next"
         />
       </div>
@@ -916,7 +1023,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="tasks" icon={CheckSquare} title="Tasks"
               accent={CARD_ACCENTS.tasks} index={2}
-              headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => go("/dashboard/tasks")} testId="exec-view-tasks" />}
+              headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="exec-view-tasks" />}
             >
               <div className="grid grid-cols-3 gap-2 mb-3 text-center">
                 <div>
@@ -961,7 +1068,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                           aria-label={`Complete ${t.title}`}
                           data-testid={`exec-task-complete-${t.id}`}
                         />
-                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => go("/dashboard/tasks")}>
+                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setPopup("tasks")}>
                           <p className="text-[13px] font-semibold leading-tight truncate">{t.title}</p>
                           <p className={`text-[11px] truncate mt-0.5 ${du != null && du < 0 ? "text-red-500" : "text-muted-foreground"}`}>{sub}</p>
                         </div>
@@ -976,7 +1083,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="schedule" icon={CalendarDays} title="Schedule"
               accent={CARD_ACCENTS.schedule} index={3}
-              headerRight={<ViewLink label="View calendar" accent={CARD_ACCENTS.schedule} onClick={() => navigate("/calendar")} testId="exec-view-calendar" />}
+              headerRight={<ViewLink label="View schedule" accent={CARD_ACCENTS.schedule} onClick={() => setPopup("events")} testId="exec-view-calendar" />}
             >
               <div className="flex items-start gap-3 mb-3">
                 <div className="shrink-0">
@@ -1000,8 +1107,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     return (
                       <div key={e.id}
                         role="button" tabIndex={0}
-                        onClick={() => navigate("/calendar")}
-                        onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); navigate("/calendar"); } }}
+                        onClick={() => setPopup("events")}
+                        onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPopup("events"); } }}
                         className={`bubble-row flex items-center gap-2.5 px-2.5 py-2 cursor-pointer ${past ? "opacity-60" : ""}`}
                         style={{ ["--accent-hsl" as any]: CARD_ACCENTS.schedule }}
                       >
@@ -1014,7 +1121,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     );
                   })}
                   <button
-                    onClick={() => go("/calendar")}
+                    onClick={() => setPopup("events")}
                     className="w-full flex items-center gap-1 pt-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
                     data-testid="exec-view-fullday"
                   >
@@ -1029,7 +1136,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="habits" icon={Flame} title="Habits"
               accent={CARD_ACCENTS.habits} index={4}
-              headerRight={<ViewLink label="View habits" accent={CARD_ACCENTS.habits} onClick={() => go("/dashboard/habits")} testId="exec-view-habits" />}
+              headerRight={<ViewLink label="View habits" accent={CARD_ACCENTS.habits} onClick={() => setPopup("habits")} testId="exec-view-habits" />}
             >
               {habitsDueToday.length === 0 ? (
                 <CardEmpty>No habits scheduled today.</CardEmpty>
@@ -1055,7 +1162,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       return (
                         <button key={h.id}
                           onClick={() => {
-                            if (done) { go("/dashboard/habits"); return; }
+                            if (done) { setPopup("habits"); return; }
                             markBusy(`habit:${h.id}`, true);
                             checkinHabit.mutateAsync(h.id).catch(() => {}).finally(() => markBusy(`habit:${h.id}`, false));
                           }}
@@ -1091,7 +1198,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="money" icon={DollarSign} title="Money"
               accent={CARD_ACCENTS.money} index={5}
-              headerRight={<ViewLink label="View finances" accent={CARD_ACCENTS.money} onClick={() => navigate("/dashboard/finance")} testId="exec-view-finances" />}
+              // Explicit navigation, and labelled as such: Finance is a tab,
+              // not an expansion of this card.
+              headerRight={<ViewLink label="Open finances" accent={CARD_ACCENTS.money} onClick={() => go("/dashboard/finance")} testId="exec-view-finances" />}
             >
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -1134,7 +1243,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     </div>
                   )}
                   <button
-                    onClick={() => go("/dashboard/obligations")}
+                    onClick={() => setPopup("bills")}
                     className="flex items-center gap-1 pt-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
                     data-testid="exec-view-bills"
                   >
@@ -1149,7 +1258,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="documents" icon={FolderOpen} title="Documents"
               accent={CARD_ACCENTS.documents} index={6}
-              headerRight={<ViewLink label="View documents" accent={CARD_ACCENTS.documents} onClick={() => go("/linked?tab=documents")} testId="exec-view-documents" />}
+              headerRight={<ViewLink label="View documents" accent={CARD_ACCENTS.documents} onClick={() => setPopup("docs")} testId="exec-view-documents" />}
             >
               {visibleDocs.length === 0 ? (
                 <CardEmpty>Nothing expiring soon.</CardEmpty>
@@ -1170,8 +1279,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       return (
                         <div key={d.documentId || d.id}
                           role="button" tabIndex={0}
-                          onClick={() => navigate(`/documents/${d.documentId || d.id}`)}
-                          onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); navigate(`/documents/${d.documentId || d.id}`); } }}
+                          onClick={() => setPopup("docs")}
+                          onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPopup("docs"); } }}
                           className="bubble-row flex items-center gap-2.5 px-2.5 py-2 cursor-pointer"
                           style={{ ["--accent-hsl" as any]: CARD_ACCENTS.documents }}
                         >
@@ -1188,7 +1297,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       );
                     })}
                     <button
-                      onClick={() => go("/linked?tab=documents")}
+                      onClick={() => setPopup("docs")}
                       className="w-full flex items-center gap-1 pt-1 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
                       data-testid="exec-view-all-documents"
                     >
@@ -1204,7 +1313,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="wellness" icon={Heart} title="Wellness"
               accent={CARD_ACCENTS.wellness} index={7}
-              headerRight={<ViewLink label="View wellness" accent={CARD_ACCENTS.wellness} onClick={() => navigate("/wellness")} testId="exec-view-wellness" />}
+              headerRight={<ViewLink label="View wellness" accent={CARD_ACCENTS.wellness} onClick={() => setPopup("wellness:score")} testId="exec-view-wellness" />}
             >
               {!hasWellness ? (
                 <CardEmpty>No wellness data logged yet — log steps, sleep or water on the Wellness tab.</CardEmpty>
@@ -1212,17 +1321,22 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <>
                   <div className="grid grid-cols-3 gap-2">
                     <WellTile icon={Footprints} accent={CARD_ACCENTS.wellness} label="Steps"
-                      value={vitals.steps.value != null ? Math.round(vitals.steps.value).toLocaleString() : "—"} />
+                      value={vitals.steps.value != null ? Math.round(vitals.steps.value).toLocaleString() : "—"}
+                      onClick={() => setPopup("wellness:activity")} testId="exec-well-steps" />
                     <WellTile icon={Moon} accent="262 70% 62%" label="Sleep"
-                      value={vitals.sleep.value != null ? fmtSleep(vitals.sleep.value) : "—"} />
+                      value={vitals.sleep.value != null ? fmtSleep(vitals.sleep.value) : "—"}
+                      onClick={() => setPopup("wellness:sleep")} testId="exec-well-sleep" />
                     <WellTile icon={ActivityIcon} accent="217 91% 65%" label="Exercise"
-                      value={exercise.value != null ? `${Math.round(exercise.value)} min` : "—"} />
+                      value={exercise.value != null ? `${Math.round(exercise.value)} min` : "—"}
+                      onClick={() => setPopup("wellness:activity")} testId="exec-well-exercise" />
                   </div>
                   <div className="grid grid-cols-2 gap-2 mt-2">
                     <WellTile icon={Flame} accent="25 95% 58%" label="Calories"
-                      value={vitals.calories.value != null ? `${Math.round(vitals.calories.value).toLocaleString()} kcal` : "—"} />
+                      value={vitals.calories.value != null ? `${Math.round(vitals.calories.value).toLocaleString()} kcal` : "—"}
+                      onClick={() => setPopup("wellness:calories")} testId="exec-well-calories" />
                     <WellTile icon={Droplets} accent="199 89% 60%" label="Water"
-                      value={vitals.hydration.value != null ? `${Math.round(vitals.hydration.value)} ${vitals.hydration.unit || "oz"}` : "—"} />
+                      value={vitals.hydration.value != null ? `${Math.round(vitals.hydration.value)} ${vitals.hydration.unit || "oz"}` : "—"}
+                      onClick={() => setPopup("wellness:hydration")} testId="exec-well-water" />
                   </div>
                 </>
               )}
@@ -1232,7 +1346,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="upcoming" icon={Clock} title="Upcoming"
               accent={CARD_ACCENTS.upcoming} index={8}
-              headerRight={<ViewLink label="View all upcoming" accent={CARD_ACCENTS.upcoming} onClick={() => navigate("/calendar")} testId="exec-view-upcoming" />}
+              headerRight={<ViewLink label="View all upcoming" accent={CARD_ACCENTS.upcoming} onClick={() => setPopup("upcoming")} testId="exec-view-upcoming" />}
             >
               {upcomingItems.length === 0 ? (
                 <CardEmpty>Nothing coming up in the next few weeks.</CardEmpty>
@@ -1297,13 +1411,33 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         </>
       )}
 
-      {/* The canonical drill-downs — the SAME components every other surface
-          opens for these data types (BillsView also renders the
-          /dashboard/obligations page; CashFlowView is the Finance tab's
-          waterfall). */}
+      {/* The canonical drill-downs. Each is the app's ONE component for that
+          data type — TasksPopup/HabitsPopup are the app's existing task and
+          habit panels, BillsView also renders the /dashboard/obligations page,
+          CashFlowView is the Finance tab's waterfall, and the wellness popups
+          are the Wellness tab's own. Nothing here is built twice, and closing
+          any of them leaves the tab exactly where it was. */}
+      {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
+      {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={allBills} />}
+      {popup === "events" && <EventsPopup open onClose={() => setPopup(null)} items={timeline} todayStr={todayStr} />}
+      {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={visibleDocs} />}
       {popup === "networth" && <NetWorthPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode as "all" | "selected" | "everyone"} filterIds={ids} />}
       {popup === "cashflow" && <CashFlowView open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
+      {popup === "upcoming" && (
+        <UpcomingPopup
+          open onClose={() => setPopup(null)} items={upcomingItems}
+          onAction={onAction} onOpenItem={openItem}
+          busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
+        />
+      )}
+      {popup?.startsWith("wellness:") && (
+        <WellnessPopup
+          kind={popup.slice("wellness:".length) as WellnessPopupKind}
+          onClose={() => setPopup(null)}
+          d={wellnessData}
+        />
+      )}
     </div>
   );
 }
