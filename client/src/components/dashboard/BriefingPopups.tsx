@@ -29,6 +29,9 @@ import {
 } from "lucide-react";
 import { QuickAddDialog } from "@/components/dashboard/quick-add/QuickAddDialog";
 import { formatMoney } from "@/lib/format";
+import { useProfileScope } from "@/hooks/useProfileScope";
+import { useShowTestData } from "@/lib/showTestData";
+import { isTestDataRow } from "@shared/test-data";
 
 // ── Shared date/format helpers ───────────────────────────────────────────────
 function fmtDate(d?: string | null): string {
@@ -254,11 +257,55 @@ function BillStatus({ status, daysUntil, paidDate }: { status: string; daysUntil
 
 type BillFilter = "all" | "soon" | "overdue" | "paid";
 
-export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: () => void; bills: any[] }) {
+const normName = (s: any) => String(s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+
+/** Display-level bill dedupe: "Verizon Phone Bill payment" and "Phone Bill
+ *  payment" at the same $86.50 are one bill entered twice. Collapses rows only
+ *  when the amounts match exactly AND the normalized names match or nest —
+ *  "rent the 1st" ($2,500) vs "rent" ($300) stays two rows for the user to
+ *  reconcile. The row with the more specific (longer) name survives. */
+export function dedupeBills(rows: any[]): any[] {
+  const out: any[] = [];
+  for (const b of rows || []) {
+    const n = normName(b.name);
+    const idx = out.findIndex(o => Number(o.amount) === Number(b.amount) && (() => {
+      const m = normName(o.name);
+      return m === n || (n && m && (m.includes(n) || n.includes(m)));
+    })());
+    if (idx === -1) out.push(b);
+    else if (n.length > normName(out[idx].name).length) out[idx] = b;
+  }
+  return out;
+}
+
+/**
+ * THE Bills UI (user rule 2026-08-13: one data type = one canonical UI).
+ * Rendered full-page on /dashboard/obligations and inside BillsPopup from the
+ * Executive tab — the same component, so there is exactly one Bills interface
+ * in the app. `bills` may be passed by a caller that already holds the
+ * (deduped, test-filtered) rows; without it the view fetches its own from the
+ * scoped finance snapshot.
+ */
+export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () => void }) {
   const { toast } = useToast();
-  const [, navigate] = useLocation();
   const owners = useOwnerNames();
-  const { data: obligationsRaw } = useQuery<any[]>({ queryKey: ["/api/obligations"], staleTime: 30_000, enabled: open });
+  // (navigation out of the view is the caller's business — see onViewAll)
+  const scope = useProfileScope();
+  const scopeParam = scope.mode === "selected" && scope.selectedIds.length > 0 ? `?profileIds=${scope.selectedIds.join(",")}` : "";
+  const showTestData = useShowTestData();
+  // Self-fetch fallback for the full-page route — same cache slot the
+  // dashboard fills, so on the happy path this is a cache hit.
+  const { data: enhanced } = useQuery<any>({
+    queryKey: ["/api/dashboard-enhanced", scope.mode, ...scope.selectedIds],
+    queryFn: async () => (await apiRequest("GET", `/api/dashboard-enhanced${scopeParam}`)).json(),
+    enabled: bills === undefined,
+    staleTime: 30_000,
+  });
+  const sourceBills = useMemo(
+    () => bills ?? dedupeBills((enhanced?.financeSnapshot?.upcomingBills || [])
+      .filter((b: any) => showTestData || !isTestDataRow(b?.name))),
+    [bills, enhanced, showTestData]);
+  const { data: obligationsRaw } = useQuery<any[]>({ queryKey: ["/api/obligations"], staleTime: 30_000 });
   const obById = useMemo(() => new Map((Array.isArray(obligationsRaw) ? obligationsRaw : []).map((o: any) => [o.id, o])), [obligationsRaw]);
   const [editId, setEditId] = useState<string | null>(null);
   const [editAmount, setEditAmount] = useState("");
@@ -295,7 +342,7 @@ export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: (
     onError: (e: any) => toast({ title: "Delete failed", description: e?.message, variant: "destructive" }),
   });
 
-  const rows = useMemo(() => (bills || []).slice().sort((a, b) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9)), [bills]);
+  const rows = useMemo(() => (sourceBills || []).slice().sort((a, b) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9)), [sourceBills]);
   const monthStr = new Date().toLocaleDateString("en-CA").slice(0, 7);
 
   // Paid this month — from obligation payments, the same ledger Mark-as-paid
@@ -426,32 +473,8 @@ export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: (
   };
 
   return (
-    <>
-      <BubbleModal
-        open={open} onClose={onClose} title="Bills" icon={Receipt}
-        accent="155 65% 45%" width="lg"
-        subtitle="Track and manage your bills"
-        testId="bills-popup"
-        footer={
-          <div className="flex items-center justify-between gap-2">
-            <button
-              onClick={() => setAddOpen(true)}
-              className="pressable inline-flex items-center gap-1.5 text-[13px] font-semibold text-emerald-500"
-              data-testid="bills-add"
-            >
-              <Plus className="h-4 w-4" /> Add Bill
-            </button>
-            <button
-              onClick={() => { onClose(); navigate("/dashboard/obligations"); }}
-              className="pressable inline-flex items-center gap-1.5 text-[13px] font-semibold text-muted-foreground hover:text-foreground"
-              data-testid="bills-view-all"
-            >
-              View All Bills <ArrowRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        }
-      >
-        {/* The four headline stats from the mock. */}
+    <div className="space-y-2" data-testid="bills-view">
+      {/* The four headline stats from the mock. */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <BillStat icon={CircleDollarSign} accent="155 65% 45%" label="Total Due" value={money(totalDue)} sub="This Month" testId="bills-stat-total" />
           <BillStat icon={CalendarDays} accent="262 70% 62%" label="Due Soon" value={money(sum(soonRows))} sub="Next 7 Days" testId="bills-stat-soon" />
@@ -526,9 +549,45 @@ export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: (
             })}
           </div>
         )}
-      </BubbleModal>
+
+      {/* Bottom actions — Add Bill everywhere; View All only when embedded
+          somewhere that isn't already the full Bills page. */}
+      <div className="flex items-center justify-between gap-2 pt-1">
+        <button
+          onClick={() => setAddOpen(true)}
+          className="pressable inline-flex items-center gap-1.5 text-[13px] font-semibold text-emerald-500"
+          data-testid="bills-add"
+        >
+          <Plus className="h-4 w-4" /> Add Bill
+        </button>
+        {onViewAll && (
+          <button
+            onClick={onViewAll}
+            className="pressable inline-flex items-center gap-1.5 text-[13px] font-semibold text-muted-foreground hover:text-foreground"
+            data-testid="bills-view-all"
+          >
+            View All Bills <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
       {addOpen && <QuickAddDialog open kind="bill" onClose={() => setAddOpen(false)} />}
-    </>
+    </div>
+  );
+}
+
+/** The Bills UI in a modal — the Executive tab's quick drill-down. Same
+ *  BillsView as the /dashboard/obligations page; only the frame differs. */
+export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: () => void; bills?: any[] }) {
+  const [, navigate] = useLocation();
+  return (
+    <BubbleModal
+      open={open} onClose={onClose} title="Bills" icon={Receipt}
+      accent="155 65% 45%" width="lg"
+      subtitle="Track and manage your bills"
+      testId="bills-popup"
+    >
+      <BillsView bills={bills} onViewAll={() => { onClose(); navigate("/dashboard/obligations"); }} />
+    </BubbleModal>
   );
 }
 

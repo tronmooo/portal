@@ -1,47 +1,44 @@
-// Standalone Obligations page — preserved for backward compat with existing
-// deep links. The full management UI lives in <ObligationsManager />, which
-// is also embedded as a tab on /calendar.
+// Bills page — /dashboard/obligations.
 //
-// Why this page owns its own filter state (and passes it down) instead of
-// just relying on the global filter store: the filter button used to be
-// wired with `onChange={() => {}}` AND ObligationsManager subscribed to the
-// global store. In theory that should have worked end-to-end via the event
-// bus — but the perceived behavior was \"clicking the filter does literally
-// nothing\". Now this page owns the local state and pushes it down via
-// externalFilter* props so there is exactly one source of truth and no
-// reliance on the global event bus for this view.
-import { useEffect, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+// Renders the SAME <BillsView /> the Executive tab's Bills popup shows
+// (user rule 2026-08-13: one data type = one canonical UI). The old
+// ObligationsManager interface that used to live here is deleted — deep links
+// (notifications, attention rows, "View All Bills") all land on this one
+// Bills interface now.
+import { useEffect } from "react";
+import { ArrowLeft, Receipt } from "lucide-react";
 import { Link } from "wouter";
-import ObligationsManager from "@/components/ObligationsManager";
+import { BillsView } from "@/components/dashboard/BriefingPopups";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { useProfileScope } from "@/hooks/useProfileScope";
 
 export default function ObligationsPage() {
   useEffect(() => { document.title = "Bills — Portol"; }, []);
 
-  // Single source of truth: the active scope is read reactively so it stays in
-  // lockstep with the rest of the app and survives navigation.
-  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
-
   return (
-    <div className="h-full overflow-y-auto pb-24 px-2 py-2 md:px-4 md:py-3" data-testid="obligations-page">
+    <div className="h-full overflow-y-auto pb-24 px-3 py-3 md:px-6 md:py-4" data-testid="obligations-page">
       <div className="flex items-center gap-2 mb-3">
         <Link href="/calendar" className="inline-flex items-center gap-1 rounded-md px-2 h-7 hover:bg-muted transition-colors text-xs text-muted-foreground" data-testid="button-back" aria-label="Back to Calendar">
           <ArrowLeft className="w-3.5 h-3.5" />
           <span>Calendar</span>
         </Link>
-        <MultiProfileFilter
-          compact
-          onChange={() => {}}
-        />
+        <MultiProfileFilter compact onChange={() => {}} />
       </div>
-      <ObligationsManager
-        showHeader
-        compact={false}
-        externalFilterMode={filterMode}
-        externalFilterIds={filterIds}
-      />
+      <div className="flex items-center gap-2.5 mb-3">
+        <span
+          className="h-9 w-9 rounded-xl flex items-center justify-center shrink-0"
+          style={{ background: "hsl(155 65% 45% / 0.15)", color: "hsl(155 65% 45%)" }}
+          aria-hidden="true"
+        >
+          <Receipt className="h-[18px] w-[18px]" strokeWidth={2.1} />
+        </span>
+        <div>
+          <h1 className="text-lg font-bold leading-tight">Bills</h1>
+          <p className="text-[12px] text-muted-foreground">Track and manage your bills</p>
+        </div>
+      </div>
+      <div className="max-w-2xl">
+        <BillsView />
+      </div>
     </div>
   );
 }

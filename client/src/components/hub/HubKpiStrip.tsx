@@ -42,9 +42,10 @@ function lazyPopup<T>(load: () => Promise<T>, pick: (m: T) => React.ComponentTyp
   );
 }
 const NetWorthPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopups"), m => m.NetWorthPopup, "/dashboard/finance");
-const CashFlowPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopups"), m => m.CashFlowPopup, "/dashboard/finance");
-const TasksPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.TasksPopup, "/tasks");
-const HabitsPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.HabitsPopup, "/habits");
+// One data type = one UI (2026-08-13): cash flow opens the canonical waterfall
+// (finance/CashFlowView); tasks and habits chips navigate to their real pages
+// rather than opening miniature popup versions of them.
+const CashFlowPopup = lazyPopup(() => import("@/components/finance/CashFlowView"), m => m.CashFlowView, "/dashboard/finance");
 
 // The strip shows whole dollars; the shared formatter does the grouping.
 const fmtMoney = (n: number) => formatMoneyRound(n).replace(/^-?\$/, "");
@@ -101,7 +102,7 @@ function StatChip({ label, value, icon, accent, tone, sub, subTone, onClick, tes
 
 export function HubKpiStrip() {
   const navigate = hashNavigate;
-  const [popup, setPopup] = useState<"networth" | "cashflow" | "tasks" | "habits" | null>(null);
+  const [popup, setPopup] = useState<"networth" | "cashflow" | null>(null);
   const scope = useProfileScope();
   const mode = scope.mode;
   const ids = scope.selectedIds;
@@ -224,7 +225,7 @@ export function HubKpiStrip() {
         value={streak == null ? "—" : `${streak}D`}
         sub={streak != null && streak > 0 ? "★" : undefined}
         subTone="warn"
-        onClick={() => setPopup("habits")}
+        onClick={() => navigate("/dashboard/habits")}
         testId="hub-kpi-streak"
       />
       <StatChip
@@ -234,7 +235,7 @@ export function HubKpiStrip() {
         value={tasksDue == null ? "—" : String(tasksDue)}
         sub={tasksLate > 0 ? `${tasksLate} late` : undefined}
         subTone="neg"
-        onClick={() => setPopup("tasks")}
+        onClick={() => navigate("/dashboard/tasks")}
         testId="hub-kpi-tasks"
       />
       <StatChip
@@ -253,8 +254,6 @@ export function HubKpiStrip() {
       <Suspense fallback={null}>
         {popup === "networth" && <NetWorthPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
         {popup === "cashflow" && <CashFlowPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
-        {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
-        {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       </Suspense>
     </div>
   );

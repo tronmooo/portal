@@ -101,7 +101,9 @@ import { DEFAULT_SECTION_DEFS, LAYOUT_VERSION } from "@shared/dashboard-layout";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
-import { NetWorthPopup, CashFlowPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
+import { NetWorthPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
+// One data type = one UI: every cash-flow press opens the canonical waterfall.
+import { CashFlowView } from "@/components/finance/CashFlowView";
 import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import { ExecutiveBriefing } from "@/components/dashboard/ExecutiveBriefing";
@@ -1058,10 +1060,10 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
         filterMode={(filterMode as "all" | "selected" | "everyone")}
         filterIds={filterIds}
       />
-      <CashFlowPopup
+      <CashFlowView
         open={heroPopup === "cashflow"}
-        onOpenChange={(o) => setHeroPopup(o ? "cashflow" : null)}
-        filterMode={(filterMode as "all" | "selected" | "everyone")}
+        onOpenChange={(o: boolean) => setHeroPopup(o ? "cashflow" : null)}
+        filterMode={filterMode}
         filterIds={filterIds}
       />
       <BudgetPopup

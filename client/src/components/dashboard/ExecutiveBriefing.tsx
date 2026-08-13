@@ -37,11 +37,19 @@ import {
   Brain, Apple, Pill as PillIcon, type LucideIcon,
 } from "lucide-react";
 import { BubbleSkeleton } from "@/components/ui/skeleton";
-import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
-import { BillsPopup, EventsPopup, DocsPopup } from "@/components/dashboard/BriefingPopups";
-// Already part of the dashboard chunk (dashboard.tsx imports them statically),
-// so pointing the overview KPIs at the real drill-downs costs no extra bytes.
-import { NetWorthPopup, CashFlowPopup } from "@/components/dashboard/HeroKPIPopups";
+// One data type = one canonical UI (user rule 2026-08-13). The Executive tab
+// is a summary/navigation layer: pressing a Tasks number opens the Tasks
+// page, a Habit opens the Habits page, an event opens the Calendar — never a
+// miniature second version of those screens. The only in-place drill-downs
+// are the canonical ones shared with the rest of the app: BillsView (in its
+// popup frame), the Net Worth breakdown, and the Cash Flow waterfall.
+import { BillsPopup, dedupeBills } from "@/components/dashboard/BriefingPopups";
+import { NetWorthPopup } from "@/components/dashboard/HeroKPIPopups";
+import { CashFlowView } from "@/components/finance/CashFlowView";
+// hashNavigate for query-carrying targets ("/trackers?open=x",
+// "/linked?tab=documents") — wouter's hash navigate hoists the query out of
+// the hash, landing on the bare page instead (the CommandSearch bug).
+import { hashNavigate } from "@/lib/hashNavigate";
 import { ProgressRing, toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
 import type { DashboardStats } from "@shared/schema";
@@ -58,7 +66,7 @@ import { useShowTestData } from "@/lib/showTestData";
 import { extractVitals, readDailyTotal } from "@/lib/wellness-metrics";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 
-type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | "networth" | "cashflow" | null;
+type PopupKind = "bills" | "networth" | "cashflow" | null;
 
 // Card identity colours, matched to the reference mock and to the accents the
 // rest of the app already uses (red overdue, blue tasks, purple calendar,
@@ -120,26 +128,8 @@ function fmtSleep(hours: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
-const normName = (s: any) => String(s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-
-// Display-level bill dedupe: "Verizon Phone Bill payment" and "Phone Bill
-// payment" at the same $86.50 are one bill entered twice. Collapses rows only
-// when the amounts match exactly AND the normalized names match or nest —
-// "rent the 1st" ($2,500) vs "rent" ($300) stays two rows for the user to
-// reconcile. The row with the more specific (longer) name survives.
-function dedupeBills(rows: any[]): any[] {
-  const out: any[] = [];
-  for (const b of rows || []) {
-    const n = normName(b.name);
-    const idx = out.findIndex(o => Number(o.amount) === Number(b.amount) && (() => {
-      const m = normName(o.name);
-      return m === n || (n && m && (m.includes(n) || n.includes(m)));
-    })());
-    if (idx === -1) out.push(b);
-    else if (n.length > normName(out[idx].name).length) out[idx] = b;
-  }
-  return out;
-}
+// (Bill dedupe lives with the canonical Bills UI — imported from
+// BriefingPopups — so this tab and the Bills view collapse the same rows.)
 
 // ── Shared card chrome ───────────────────────────────────────────────────────
 
@@ -391,6 +381,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   ready?: boolean;
 }) {
   const [, navigate] = useLocation();
+  // Query-safe navigation: wouter's hash navigate loses "?tab=…"/"?open=…"
+  // query strings, which is exactly "the link went to the wrong place".
+  const go = (path: string) => { if (path.includes("?")) hashNavigate(path); else navigate(path); };
   const { toast } = useToast();
   const [popup, setPopup] = useState<PopupKind>(null);
   // Which item's money-moving button is armed for the confirming second tap.
@@ -769,17 +762,18 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         navigate(item.href);
     }
   };
-  // Where a tapped row goes. Kinds with a rich drill-down open THEIR popup —
-  // the same one the cards' "View all" links open — instead of dumping the
-  // user onto a generic page; everything else navigates to its record's home
-  // (a document opens its own /documents/:id page, a med opens Wellness).
+  // Where a tapped row goes — its data type's ONE canonical UI. Tasks land on
+  // the Tasks page, habits on Habits, events on the Calendar, bills open the
+  // canonical Bills view (the same component the /dashboard/obligations page
+  // renders), and everything else follows its record's home route (a document
+  // opens /documents/:id, a med opens its tracker) query-safely.
   const openItem = (item: AttentionItem) => {
     switch (item.kind) {
-      case "task": setPopup("tasks"); return;
-      case "habit": setPopup("habits"); return;
+      case "task": go("/dashboard/tasks"); return;
+      case "habit": go("/dashboard/habits"); return;
       case "bill": setPopup("bills"); return;
-      case "event": setPopup("events"); return;
-      default: navigate(item.href);
+      case "event": go("/calendar"); return;
+      default: go(item.href);
     }
   };
 
@@ -842,7 +836,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           value={tasksPending ? loadingDots : String(pending.length)}
           sub={tasksPending ? undefined : overdueTasks.length > 0 ? `${overdueTasks.length} overdue` : "none overdue"}
           subClass={overdueTasks.length > 0 ? "text-red-500" : undefined}
-          onClick={() => setPopup("tasks")}
+          onClick={() => go("/dashboard/tasks")}
           testId="exec-kpi-tasks"
         />
         <OverviewCell
@@ -922,7 +916,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="tasks" icon={CheckSquare} title="Tasks"
               accent={CARD_ACCENTS.tasks} index={2}
-              headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="exec-view-tasks" />}
+              headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => go("/dashboard/tasks")} testId="exec-view-tasks" />}
             >
               <div className="grid grid-cols-3 gap-2 mb-3 text-center">
                 <div>
@@ -967,7 +961,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                           aria-label={`Complete ${t.title}`}
                           data-testid={`exec-task-complete-${t.id}`}
                         />
-                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setPopup("tasks")}>
+                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => go("/dashboard/tasks")}>
                           <p className="text-[13px] font-semibold leading-tight truncate">{t.title}</p>
                           <p className={`text-[11px] truncate mt-0.5 ${du != null && du < 0 ? "text-red-500" : "text-muted-foreground"}`}>{sub}</p>
                         </div>
@@ -1020,7 +1014,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     );
                   })}
                   <button
-                    onClick={() => setPopup("events")}
+                    onClick={() => go("/calendar")}
                     className="w-full flex items-center gap-1 pt-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
                     data-testid="exec-view-fullday"
                   >
@@ -1035,7 +1029,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="habits" icon={Flame} title="Habits"
               accent={CARD_ACCENTS.habits} index={4}
-              headerRight={<ViewLink label="View habits" accent={CARD_ACCENTS.habits} onClick={() => setPopup("habits")} testId="exec-view-habits" />}
+              headerRight={<ViewLink label="View habits" accent={CARD_ACCENTS.habits} onClick={() => go("/dashboard/habits")} testId="exec-view-habits" />}
             >
               {habitsDueToday.length === 0 ? (
                 <CardEmpty>No habits scheduled today.</CardEmpty>
@@ -1061,7 +1055,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       return (
                         <button key={h.id}
                           onClick={() => {
-                            if (done) { setPopup("habits"); return; }
+                            if (done) { go("/dashboard/habits"); return; }
                             markBusy(`habit:${h.id}`, true);
                             checkinHabit.mutateAsync(h.id).catch(() => {}).finally(() => markBusy(`habit:${h.id}`, false));
                           }}
@@ -1140,7 +1134,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     </div>
                   )}
                   <button
-                    onClick={() => setPopup("bills")}
+                    onClick={() => go("/dashboard/obligations")}
                     className="flex items-center gap-1 pt-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
                     data-testid="exec-view-bills"
                   >
@@ -1155,7 +1149,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="documents" icon={FolderOpen} title="Documents"
               accent={CARD_ACCENTS.documents} index={6}
-              headerRight={<ViewLink label="View documents" accent={CARD_ACCENTS.documents} onClick={() => navigate("/linked?tab=documents")} testId="exec-view-documents" />}
+              headerRight={<ViewLink label="View documents" accent={CARD_ACCENTS.documents} onClick={() => go("/linked?tab=documents")} testId="exec-view-documents" />}
             >
               {visibleDocs.length === 0 ? (
                 <CardEmpty>Nothing expiring soon.</CardEmpty>
@@ -1194,7 +1188,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       );
                     })}
                     <button
-                      onClick={() => setPopup("docs")}
+                      onClick={() => go("/linked?tab=documents")}
                       className="w-full flex items-center gap-1 pt-1 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
                       data-testid="exec-view-all-documents"
                     >
@@ -1286,8 +1280,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   {activityItems.map((i) => (
                     <div key={i.key}
                       role="button" tabIndex={0}
-                      onClick={() => navigate(i.href)}
-                      onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); navigate(i.href); } }}
+                      onClick={() => go(i.href)}
+                      onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(i.href); } }}
                       className="bubble-row flex items-center gap-2.5 px-2.5 py-2 cursor-pointer"
                       style={{ ["--accent-hsl" as any]: CARD_ACCENTS.activity }}
                     >
@@ -1303,16 +1297,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         </>
       )}
 
-      {/* The SAME popups the dashboard KPI tiles use — statically imported here
-          (part of the dashboard chunk), so a click always opens them even if a
-          lazy chunk fetch would have failed. */}
-      {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
-      {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
+      {/* The canonical drill-downs — the SAME components every other surface
+          opens for these data types (BillsView also renders the
+          /dashboard/obligations page; CashFlowView is the Finance tab's
+          waterfall). */}
       {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={allBills} />}
-      {popup === "events" && <EventsPopup open onClose={() => setPopup(null)} items={timeline} todayStr={todayStr} />}
-      {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={visibleDocs} />}
       {popup === "networth" && <NetWorthPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode as "all" | "selected" | "everyone"} filterIds={ids} />}
-      {popup === "cashflow" && <CashFlowPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode as "all" | "selected" | "everyone"} filterIds={ids} />}
+      {popup === "cashflow" && <CashFlowView open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
     </div>
   );
 }
