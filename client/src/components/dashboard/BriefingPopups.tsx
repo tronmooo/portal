@@ -23,7 +23,12 @@ import {
   AlertTriangle, ArrowRight, BellOff, CalendarDays, Check, ChevronDown,
   Clock, CreditCard, FileText, MapPin, Pencil, RefreshCw,
   Trash2, User,
+  Receipt, Wifi, Phone, Music, Tv, Droplets, Zap, Car, ShieldCheck, Home,
+  Flame, Dumbbell, Pill as PillIcon, Plus, CircleDollarSign, CheckCircle2,
+  type LucideIcon,
 } from "lucide-react";
+import { QuickAddDialog } from "@/components/dashboard/quick-add/QuickAddDialog";
+import { formatMoney } from "@/lib/format";
 
 // ── Shared date/format helpers ───────────────────────────────────────────────
 function fmtDate(d?: string | null): string {
@@ -167,12 +172,91 @@ const invalidateFinance = () => {
   queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
 };
 
-// ── Bills & Obligations ──────────────────────────────────────────────────────
-// Row source: enhanced.financeSnapshot.upcomingBills (30-day window). Each row
-// is enriched from /api/obligations (recurrence, owners, linked asset/liability,
-// payment history) and exposes Mark-paid / Skip / Edit / Delete in place.
+// ── Bills ────────────────────────────────────────────────────────────────────
+// Redesigned 2026-08-13 to the user's reference mock: a four-stat header
+// (Total Due · Due Soon · Overdue · Paid), filter chips, and icon rows with a
+// status badge — each row expands in place into the full detail card
+// (recurrence, owners, payment history, Mark-paid / Skip / Edit / Delete).
+//
+// Row source: enhanced.financeSnapshot.upcomingBills (30-day window), enriched
+// from /api/obligations. The Paid tab is derived from obligation payments
+// recorded this calendar month, so paying a bill anywhere moves it here.
+
+/** Icon + tint for a bill, recognised from its name/category the way the mock
+ *  draws them (wifi for internet, a droplet for water, …). Order matters:
+ *  "Car Insurance" is a car before it is an insurance. */
+const BILL_VISUALS: Array<[RegExp, LucideIcon, string]> = [
+  [/internet|wifi|comcast|broadband|fiber|isp/i, Wifi, "199 89% 60%"],
+  [/phone|mobile|verizon|t-?mobile|at&t|cellular/i, Phone, "155 65% 45%"],
+  [/spotify|music|audible|podcast/i, Music, "141 73% 45%"],
+  [/netflix|hulu|disney|hbo|stream|cable|tv/i, Tv, "262 70% 62%"],
+  [/water|sewer/i, Droplets, "199 89% 60%"],
+  [/electric|power|energy|pg&e|utilit/i, Zap, "48 96% 53%"],
+  [/car|auto|vehicle/i, Car, "217 91% 65%"],
+  [/insurance|coverage|policy/i, ShieldCheck, "217 91% 65%"],
+  [/rent|mortgage|hoa|home/i, Home, "25 95% 58%"],
+  [/gas|fuel|propane/i, Flame, "25 95% 58%"],
+  [/gym|fitness|club/i, Dumbbell, "155 65% 45%"],
+  [/medic|pharma|prescription|rx|health/i, PillIcon, "350 85% 62%"],
+  [/loan|credit|card|debt/i, CreditCard, "0 72% 58%"],
+];
+function billVisual(name: any, category: any): { Icon: LucideIcon; hsl: string } {
+  const hay = `${name || ""} ${category || ""}`;
+  const hit = BILL_VISUALS.find(([re]) => re.test(hay));
+  return hit ? { Icon: hit[1], hsl: hit[2] } : { Icon: Receipt, hsl: "155 65% 45%" };
+}
+
+/** One of the four headline tiles at the top of the popup. */
+function BillStat({ icon: Icon, accent, label, value, sub, testId }: {
+  icon: LucideIcon; accent: string; label: string; value: string; sub: string; testId?: string;
+}) {
+  return (
+    <div className="bubble px-2.5 py-2.5" style={{ ["--accent-hsl" as any]: accent }} data-testid={testId}>
+      <span
+        className="inline-flex h-8 w-8 items-center justify-center rounded-full mb-1.5"
+        style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}
+        aria-hidden="true"
+      >
+        <Icon className="h-4 w-4" strokeWidth={2.2} />
+      </span>
+      <p className="text-[11px] text-muted-foreground leading-tight">{label}</p>
+      <p className="text-[15px] font-extrabold tabular-nums leading-tight" style={{ color: `hsl(${accent})` }}>{value}</p>
+      <p className="text-[11px] text-muted-foreground leading-tight mt-0.5">{sub}</p>
+    </div>
+  );
+}
+
+/** The mock's right-hand status column: a tone badge over a small caption. */
+function BillStatus({ status, daysUntil, paidDate }: { status: string; daysUntil: number | null; paidDate?: string }) {
+  let label = "Upcoming", tone = "bg-muted text-muted-foreground", sub = "";
+  if (status === "paid") {
+    label = "Paid"; tone = "bg-emerald-500/15 text-emerald-500";
+    sub = paidDate ? fmtDate(paidDate) : "";
+  } else if (status === "overdue" || (daysUntil != null && daysUntil < 0)) {
+    label = "Overdue"; tone = "bg-red-500/15 text-red-500";
+    const ago = Math.abs(daysUntil ?? 0);
+    sub = ago === 1 ? "1 day overdue" : `${ago} days overdue`;
+  } else if (daysUntil === 0) {
+    label = "Due Today"; tone = "bg-amber-500/15 text-amber-500"; sub = "today";
+  } else if (daysUntil != null && daysUntil <= 7) {
+    label = "Due Soon"; tone = "bg-violet-500/15 text-violet-400";
+    sub = daysUntil === 1 ? "tomorrow" : `in ${daysUntil} days`;
+  } else if (daysUntil != null) {
+    sub = `in ${daysUntil} days`;
+  }
+  return (
+    <div className="flex flex-col items-end gap-0.5 shrink-0 w-[86px]">
+      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${tone}`}>{label}</span>
+      {sub && <span className={`text-[11px] ${label === "Overdue" ? "text-red-500" : "text-muted-foreground"}`}>{sub}</span>}
+    </div>
+  );
+}
+
+type BillFilter = "all" | "soon" | "overdue" | "paid";
+
 export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: () => void; bills: any[] }) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const owners = useOwnerNames();
   const { data: obligationsRaw } = useQuery<any[]>({ queryKey: ["/api/obligations"], staleTime: 30_000, enabled: open });
   const obById = useMemo(() => new Map((Array.isArray(obligationsRaw) ? obligationsRaw : []).map((o: any) => [o.id, o])), [obligationsRaw]);
@@ -180,6 +264,9 @@ export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: (
   const [editAmount, setEditAmount] = useState("");
   const [editDue, setEditDue] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<BillFilter>("all");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
 
   const payBill = useMutation({
     mutationFn: async (id: string) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
@@ -209,111 +296,239 @@ export function BillsPopup({ open, onClose, bills }: { open: boolean; onClose: (
   });
 
   const rows = useMemo(() => (bills || []).slice().sort((a, b) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9)), [bills]);
-  const total = rows.reduce((s, b) => s + (Number(b.amount) || 0), 0);
-  const overdueCount = rows.filter((b) => b.status === "overdue").length;
+  const monthStr = new Date().toLocaleDateString("en-CA").slice(0, 7);
+
+  // Paid this month — from obligation payments, the same ledger Mark-as-paid
+  // writes, so paying a bill anywhere moves it onto this tab immediately.
+  const paidRows = useMemo(() => {
+    const out: any[] = [];
+    for (const o of (Array.isArray(obligationsRaw) ? obligationsRaw : [])) {
+      const pays = (Array.isArray(o?.payments) ? o.payments : [])
+        .filter((p: any) => String(p?.date || "").slice(0, 7) === monthStr)
+        .sort((a: any, b: any) => String(b.date || "").localeCompare(String(a.date || "")));
+      if (pays.length === 0) continue;
+      out.push({
+        id: o.id, name: o.name || "Bill",
+        amount: Number(pays[0].amount ?? o.amount) || 0,
+        paidTotal: pays.reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0),
+        paidDate: String(pays[0].date || "").slice(0, 10),
+        category: o.category || o.kind, status: "paid", daysUntil: null,
+        dueDate: o.nextDueDate,
+      });
+    }
+    return out.sort((a, b) => String(b.paidDate).localeCompare(String(a.paidDate)));
+  }, [obligationsRaw, monthStr]);
+
+  const soonRows = rows.filter((b) => typeof b.daysUntil === "number" && b.daysUntil >= 0 && b.daysUntil <= 7);
+  const overdueRows = rows.filter((b) => b.status === "overdue" || (typeof b.daysUntil === "number" && b.daysUntil < 0));
+  const sum = (xs: any[], k = "amount") => xs.reduce((s, b) => s + (Number(b[k]) || 0), 0);
+  const totalDue = sum(rows);
+  const paidTotal = paidRows.reduce((s, b) => s + b.paidTotal, 0);
+  const money = formatMoney;
+
+  const FILTERS: Array<{ id: BillFilter; label: string; count?: number }> = [
+    { id: "all", label: "All Bills" },
+    { id: "soon", label: "Due Soon", count: soonRows.length },
+    { id: "overdue", label: "Overdue", count: overdueRows.length },
+    { id: "paid", label: "Paid", count: paidRows.length },
+  ];
+  const visible = filter === "soon" ? soonRows : filter === "overdue" ? overdueRows : filter === "paid" ? paidRows : rows;
+
+  // The expandable detail card under a row — recurrence, links, history, and
+  // the real in-place actions. Identical write paths to the previous popup.
+  const renderDetail = (b: any) => {
+    const full = obById.get(b.id) || {};
+    const freq = full.frequency || "monthly";
+    const payments: any[] = Array.isArray(full.payments) ? full.payments.slice().sort((x: any, y: any) => String(y.date || "").localeCompare(String(x.date || ""))) : [];
+    const ownerNames = owners.names(full.linkedProfiles);
+    const assetName = owners.nameOf(full.linkedAssetId);
+    const liabilityName = owners.nameOf(full.linkedLiabilityId);
+    const due = String(b.dueDate || full.nextDueDate || "").slice(0, 10);
+    const upcoming: string[] = [];
+    let cursor: string | null = due;
+    for (let i = 0; i < 3 && cursor; i++) {
+      cursor = addFrequency(cursor, freq);
+      if (!cursor) break;
+      if (full.recurrenceEnd && cursor > String(full.recurrenceEnd).slice(0, 10)) break;
+      upcoming.push(cursor);
+    }
+    let remaining: number | null = null;
+    if (full.recurrenceEnd && freq !== "once") {
+      let c: string | null = due; remaining = 0;
+      const end = String(full.recurrenceEnd).slice(0, 10);
+      while (c && c <= end && remaining < 500) { remaining++; c = addFrequency(c, freq); }
+    }
+    return (
+      <div className="px-3 pb-2.5 pt-1 border-t border-border/30 space-y-1.5 text-[11px]">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-1 text-muted-foreground">
+          <span>Category</span><span className="text-foreground capitalize">{b.category || full.category || "general"}</span>
+          <span>Frequency</span><span className="text-foreground">{FREQ_LABEL[freq] || freq}</span>
+          <span>Status</span>
+          <span className="text-foreground">
+            {b.status === "paid" ? `Paid ${fmtDate(b.paidDate)}`
+              : b.status === "overdue" ? "Overdue — payment missed"
+              : b.daysUntil === 0 ? "Due today" : "Scheduled"}
+          </span>
+          {due && (<><span>{b.status === "paid" ? "Next due" : "Due date"}</span><span className="text-foreground">{fmtDate(due)}</span></>)}
+          {b.autopay && (<><span>Autopay</span><span className="text-emerald-500">on</span></>)}
+          {full.status === "paused" && (<><span>Series</span><span className="text-amber-500">paused</span></>)}
+          {ownerNames && (<><span>Owner</span><span className="text-foreground">{ownerNames}</span></>)}
+          {remaining !== null && (<><span>Payments left</span><span className="text-foreground">{remaining} (ends {fmtDate(full.recurrenceEnd)})</span></>)}
+          {assetName && (<><span>Linked asset</span><span className="text-foreground">{assetName}</span></>)}
+          {liabilityName && (<><span>Linked liability</span><span className="text-foreground">{liabilityName}</span></>)}
+        </div>
+        {upcoming.length > 0 && (
+          <div>
+            <p className="micro-label text-muted-foreground mb-0.5">Upcoming</p>
+            {upcoming.map(d => <div key={d} className="flex justify-between"><span>{fmtDate(d)}</span><span className="tabular-nums">${Number(b.amount).toLocaleString()}</span></div>)}
+          </div>
+        )}
+        <div>
+          <p className="micro-label text-muted-foreground mb-0.5">Payment history</p>
+          {payments.length === 0 ? <p className="text-muted-foreground">No payments recorded yet.</p> :
+            payments.slice(0, 6).map((p: any) => (
+              <div key={p.id} className="flex justify-between">
+                <span>{fmtDate(p.date)}{p.method ? ` · ${p.method}` : ""}</span>
+                <span className="tabular-nums text-emerald-600 dark:text-emerald-400">${Number(p.amount).toLocaleString()}</span>
+              </div>
+            ))}
+        </div>
+        {editId === b.id ? (
+          <div className="flex items-center gap-1.5 pt-1">
+            <input type="number" value={editAmount} onChange={e => setEditAmount(e.target.value)} placeholder="Amount"
+              className="w-20 h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`bill-edit-amount-${b.id}`} />
+            <input type="date" value={editDue} onChange={e => setEditDue(e.target.value)}
+              className="h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`bill-edit-due-${b.id}`} />
+            <ActionBtn label="Save" icon={Check} disabled={editBill.isPending} testId={`bill-edit-save-${b.id}`}
+              onClick={() => editBill.mutate({ id: b.id, ...(editAmount ? { amount: Number(editAmount) } : {}), ...(editDue ? { nextDueDate: editDue } : {}) })} />
+            <ActionBtn label="Cancel" onClick={() => setEditId(null)} />
+          </div>
+        ) : confirmDeleteId === b.id ? (
+          <div className="flex items-center gap-1.5 pt-1">
+            <span className="text-red-500">Delete "{b.name}" and stop tracking it?</span>
+            <ActionBtn label="Delete" icon={Trash2} danger disabled={deleteBill.isPending} onClick={() => deleteBill.mutate(b.id)} testId={`bill-delete-confirm-${b.id}`} />
+            <ActionBtn label="Keep" onClick={() => setConfirmDeleteId(null)} />
+          </div>
+        ) : (
+          <div className="flex items-center flex-wrap gap-1.5 pt-1">
+            {b.status !== "paid" && (
+              <ActionBtn label="Mark as paid" icon={Check} disabled={payBill.isPending} onClick={() => payBill.mutate(b.id)} testId={`popup-pay-${b.id}`} />
+            )}
+            {b.status !== "paid" && (
+              <ActionBtn label="Skip payment" icon={RefreshCw} disabled={skipBill.isPending} onClick={() => skipBill.mutate(b)} testId={`popup-skip-${b.id}`} />
+            )}
+            <ActionBtn label="Edit" icon={Pencil} onClick={() => { setEditId(b.id); setEditAmount(String(b.amount ?? "")); setEditDue(due); }} testId={`popup-edit-${b.id}`} />
+            <ActionBtn label="Delete" icon={Trash2} danger onClick={() => setConfirmDeleteId(b.id)} testId={`popup-delete-${b.id}`} />
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
-    <PopupShell open={open} onClose={onClose} title="Bills & Obligations" icon={CreditCard}
-      accent="48 96% 53%" count={rows.length}
-      subtitle={rows.length ? `$${Math.round(total).toLocaleString()} due in the next 30 days${overdueCount ? ` · ${overdueCount} overdue` : ""}` : undefined}
-      footerLabel="Open Finance" footerHref="/dashboard/finance">
-      {rows.length === 0 ? <EmptyNote label="No bills due in the next 30 days." /> : rows.map((b: any) => {
-        const full = obById.get(b.id) || {};
-        const freq = full.frequency || "monthly";
-        const payments: any[] = Array.isArray(full.payments) ? full.payments.slice().sort((x: any, y: any) => String(y.date || "").localeCompare(String(x.date || ""))) : [];
-        const ownerNames = owners.names(full.linkedProfiles);
-        const assetName = owners.nameOf(full.linkedAssetId);
-        const liabilityName = owners.nameOf(full.linkedLiabilityId);
-        const due = String(b.dueDate || full.nextDueDate || "").slice(0, 10);
-        // Upcoming occurrences projected from the frequency (next 3 after current).
-        const upcoming: string[] = [];
-        let cursor: string | null = due;
-        for (let i = 0; i < 3 && cursor; i++) {
-          cursor = addFrequency(cursor, freq);
-          if (!cursor) break;
-          if (full.recurrenceEnd && cursor > String(full.recurrenceEnd).slice(0, 10)) break;
-          upcoming.push(cursor);
+    <>
+      <BubbleModal
+        open={open} onClose={onClose} title="Bills" icon={Receipt}
+        accent="155 65% 45%" width="lg"
+        subtitle="Track and manage your bills"
+        testId="bills-popup"
+        footer={
+          <div className="flex items-center justify-between gap-2">
+            <button
+              onClick={() => setAddOpen(true)}
+              className="pressable inline-flex items-center gap-1.5 text-[13px] font-semibold text-emerald-500"
+              data-testid="bills-add"
+            >
+              <Plus className="h-4 w-4" /> Add Bill
+            </button>
+            <button
+              onClick={() => { onClose(); navigate("/dashboard/obligations"); }}
+              className="pressable inline-flex items-center gap-1.5 text-[13px] font-semibold text-muted-foreground hover:text-foreground"
+              data-testid="bills-view-all"
+            >
+              View All Bills <ArrowRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
         }
-        // Remaining payments when the recurrence has a declared end.
-        let remaining: number | null = null;
-        if (full.recurrenceEnd && freq !== "once") {
-          let c: string | null = due; remaining = 0;
-          const end = String(full.recurrenceEnd).slice(0, 10);
-          while (c && c <= end && remaining < 500) { remaining++; c = addFrequency(c, freq); }
-        }
-        const urgent = b.status === "overdue" || b.daysUntil === 0;
-        return (
-          <ExpandCard key={b.id} urgentBorder={urgent ? "red" : b.daysUntil <= 3 ? "amber" : undefined} testId={`bill-card-${b.id}`}
-            summary={
-              <div>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-xs font-semibold truncate">{b.name}</span>
-                  <span className="ml-auto text-sm font-bold tabular-nums shrink-0">${Number(b.amount).toLocaleString()}</span>
-                </div>
-                <div className="flex items-center flex-wrap gap-1 mt-1">
-                  <Chip tone={urgent ? "neg" : b.daysUntil <= 3 ? "warn" : "muted"}>
-                    <Clock className="h-2.5 w-2.5" />{dueLabel(b.daysUntil)} · {fmtDate(due)}
-                  </Chip>
-                  <Chip>{FREQ_LABEL[freq] || freq}</Chip>
-                  {b.autopay && <Chip tone="pos">autopay</Chip>}
-                  {full.status === "paused" && <Chip tone="warn">paused</Chip>}
-                  {ownerNames && <Chip><User className="h-2.5 w-2.5" />{ownerNames}</Chip>}
-                </div>
-              </div>
-            }>
-            <div className="space-y-1.5 text-[11px]">
-              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-1 text-muted-foreground">
-                <span>Category</span><span className="text-foreground capitalize">{b.category || full.category || "general"}</span>
-                <span>Status</span><span className="text-foreground">{b.status === "overdue" ? "Overdue — payment missed" : b.status === "due_today" ? "Due today" : "Scheduled"}</span>
-                {remaining !== null && (<><span>Payments left</span><span className="text-foreground">{remaining} (ends {fmtDate(full.recurrenceEnd)})</span></>)}
-                {assetName && (<><span>Linked asset</span><span className="text-foreground">{assetName}</span></>)}
-                {liabilityName && (<><span>Linked liability</span><span className="text-foreground">{liabilityName}</span></>)}
-              </div>
-              {upcoming.length > 0 && (
-                <div>
-                  <p className="micro-label text-muted-foreground mb-0.5">Upcoming</p>
-                  {upcoming.map(d => <div key={d} className="flex justify-between"><span>{fmtDate(d)}</span><span className="tabular-nums">${Number(b.amount).toLocaleString()}</span></div>)}
-                </div>
+      >
+        {/* The four headline stats from the mock. */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <BillStat icon={CircleDollarSign} accent="155 65% 45%" label="Total Due" value={money(totalDue)} sub="This Month" testId="bills-stat-total" />
+          <BillStat icon={CalendarDays} accent="262 70% 62%" label="Due Soon" value={money(sum(soonRows))} sub="Next 7 Days" testId="bills-stat-soon" />
+          <BillStat icon={AlertTriangle} accent="25 95% 58%" label="Overdue" value={money(sum(overdueRows))} sub={`${overdueRows.length} Bill${overdueRows.length === 1 ? "" : "s"}`} testId="bills-stat-overdue" />
+          <BillStat icon={CheckCircle2} accent="217 91% 65%" label="Paid" value={money(paidTotal)} sub="This Month" testId="bills-stat-paid" />
+        </div>
+
+        {/* Filter chips. */}
+        <div className="flex items-center gap-1.5 flex-wrap pt-1">
+          {FILTERS.map(f => (
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              data-testid={`bills-filter-${f.id}`}
+              aria-pressed={filter === f.id}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold transition-colors ${
+                filter === f.id ? "bg-emerald-500/15 text-emerald-500" : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
+              }`}
+            >
+              {f.label}
+              {typeof f.count === "number" && f.count > 0 && (
+                <span className={`rounded-full px-1.5 py-px text-[11px] font-bold tabular-nums ${
+                  f.id === "overdue" ? "bg-red-500/20 text-red-500" : f.id === "soon" ? "bg-violet-500/20 text-violet-400" : "bg-muted text-muted-foreground"
+                }`}>{f.count}</span>
               )}
-              <div>
-                <p className="micro-label text-muted-foreground mb-0.5">Payment history</p>
-                {payments.length === 0 ? <p className="text-muted-foreground">No payments recorded yet.</p> :
-                  payments.slice(0, 6).map((p: any) => (
-                    <div key={p.id} className="flex justify-between">
-                      <span>{fmtDate(p.date)}{p.method ? ` · ${p.method}` : ""}</span>
-                      <span className="tabular-nums text-emerald-600 dark:text-emerald-400">${Number(p.amount).toLocaleString()}</span>
-                    </div>
-                  ))}
-              </div>
-              {editId === b.id ? (
-                <div className="flex items-center gap-1.5 pt-1">
-                  <input type="number" value={editAmount} onChange={e => setEditAmount(e.target.value)} placeholder="Amount"
-                    className="w-20 h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`bill-edit-amount-${b.id}`} />
-                  <input type="date" value={editDue} onChange={e => setEditDue(e.target.value)}
-                    className="h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`bill-edit-due-${b.id}`} />
-                  <ActionBtn label="Save" icon={Check} disabled={editBill.isPending} testId={`bill-edit-save-${b.id}`}
-                    onClick={() => editBill.mutate({ id: b.id, ...(editAmount ? { amount: Number(editAmount) } : {}), ...(editDue ? { nextDueDate: editDue } : {}) })} />
-                  <ActionBtn label="Cancel" onClick={() => setEditId(null)} />
+            </button>
+          ))}
+        </div>
+
+        {/* Rows — tap to expand into the full detail card. */}
+        {visible.length === 0 ? (
+          <EmptyNote label={filter === "paid" ? "Nothing paid yet this month." : filter === "overdue" ? "Nothing overdue — nice." : "No bills in this view."} />
+        ) : (
+          <div className="bubble divide-y divide-border/30 overflow-hidden" style={{ ["--accent-hsl" as any]: "155 65% 45%" }}>
+            {visible.map((b: any) => {
+              const { Icon, hsl } = billVisual(b.name, b.category || obById.get(b.id)?.category);
+              const rowOpen = expandedId === `${filter}:${b.id}`;
+              const due = String(b.dueDate || obById.get(b.id)?.nextDueDate || "").slice(0, 10);
+              return (
+                <div key={`${filter}:${b.id}`} data-testid={`bill-card-${b.id}`}>
+                  <button
+                    onClick={() => setExpandedId(rowOpen ? null : `${filter}:${b.id}`)}
+                    aria-expanded={rowOpen}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors"
+                    data-testid={`bill-row-${b.id}`}
+                  >
+                    <span
+                      className="h-10 w-10 rounded-xl flex items-center justify-center shrink-0"
+                      style={{ background: `hsl(${hsl} / 0.15)`, color: `hsl(${hsl})` }}
+                      aria-hidden="true"
+                    >
+                      <Icon className="h-[18px] w-[18px]" strokeWidth={2.1} />
+                    </span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-[14px] font-semibold leading-tight truncate">{b.name}</span>
+                      <span className="block text-[11px] text-muted-foreground capitalize truncate mt-0.5">
+                        {b.category || obById.get(b.id)?.category || obById.get(b.id)?.kind || "bill"}
+                      </span>
+                    </span>
+                    <span className="text-right shrink-0">
+                      <span className="block text-[14px] font-bold tabular-nums">{money(Number(b.amount) || 0)}</span>
+                      <span className={`block text-[11px] mt-0.5 ${b.status === "overdue" ? "text-red-500" : "text-muted-foreground"}`}>
+                        {b.status === "paid" ? fmtDate(b.paidDate) : due ? fmtDate(due) : ""}
+                      </span>
+                    </span>
+                    <BillStatus status={b.status} daysUntil={b.daysUntil} paidDate={b.paidDate} />
+                    <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${rowOpen ? "rotate-180" : ""}`} aria-hidden="true" />
+                  </button>
+                  {rowOpen && renderDetail(b)}
                 </div>
-              ) : confirmDeleteId === b.id ? (
-                <div className="flex items-center gap-1.5 pt-1">
-                  <span className="text-red-500">Delete "{b.name}" and stop tracking it?</span>
-                  <ActionBtn label="Delete" icon={Trash2} danger disabled={deleteBill.isPending} onClick={() => deleteBill.mutate(b.id)} testId={`bill-delete-confirm-${b.id}`} />
-                  <ActionBtn label="Keep" onClick={() => setConfirmDeleteId(null)} />
-                </div>
-              ) : (
-                <div className="flex items-center flex-wrap gap-1.5 pt-1">
-                  <ActionBtn label="Mark as paid" icon={Check} disabled={payBill.isPending} onClick={() => payBill.mutate(b.id)} testId={`popup-pay-${b.id}`} />
-                  <ActionBtn label="Skip payment" icon={RefreshCw} disabled={skipBill.isPending} onClick={() => skipBill.mutate(b)} testId={`popup-skip-${b.id}`} />
-                  <ActionBtn label="Edit" icon={Pencil} onClick={() => { setEditId(b.id); setEditAmount(String(b.amount ?? "")); setEditDue(due); }} testId={`popup-edit-${b.id}`} />
-                  <ActionBtn label="Delete" icon={Trash2} danger onClick={() => setConfirmDeleteId(b.id)} testId={`popup-delete-${b.id}`} />
-                </div>
-              )}
-            </div>
-          </ExpandCard>
-        );
-      })}
-    </PopupShell>
+              );
+            })}
+          </div>
+        )}
+      </BubbleModal>
+      {addOpen && <QuickAddDialog open kind="bill" onClose={() => setAddOpen(false)} />}
+    </>
   );
 }
 

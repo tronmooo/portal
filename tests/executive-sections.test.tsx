@@ -154,6 +154,26 @@ describe("ExecutiveBriefing", () => {
     expect(screen.getByTestId("exec-card-attention").textContent).toContain("Passport");
   });
 
+  it("opens the Bills popup — stats, filters, expandable rows — from a bill row", async () => {
+    await mount(enhancedWith());
+    // Tapping a bill row anywhere on the tab opens the Bills drill-down.
+    fireEvent.click(screen.getByTestId("exec-item-bill:b1"));
+    expect(await screen.findByTestId("bills-popup")).toBeTruthy();
+    // The mock's four headline stats.
+    for (const id of ["bills-stat-total", "bills-stat-soon", "bills-stat-overdue", "bills-stat-paid"]) {
+      expect(screen.getByTestId(id), id).toBeTruthy();
+    }
+    // Filter chips narrow the list; the overdue Phone bill stays visible under
+    // Overdue, and pressing its row reveals the detail card with real actions.
+    fireEvent.click(screen.getByTestId("bills-filter-overdue"));
+    fireEvent.click(screen.getByTestId("bill-row-b1"));
+    expect(screen.getByTestId("popup-pay-b1")).toBeTruthy();
+    expect(screen.getByTestId("popup-edit-b1")).toBeTruthy();
+    // The footer offers Add Bill and the full Bills page.
+    expect(screen.getByTestId("bills-add")).toBeTruthy();
+    expect(screen.getByTestId("bills-view-all")).toBeTruthy();
+  });
+
   it("offers a one-tap action on a row, and arms a payment before taking it", async () => {
     await mount(enhancedWith());
     const pay = screen.getByTestId("exec-action-bill:b1");

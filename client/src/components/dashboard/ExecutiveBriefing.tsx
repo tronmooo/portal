@@ -39,6 +39,9 @@ import {
 import { BubbleSkeleton } from "@/components/ui/skeleton";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import { BillsPopup, EventsPopup, DocsPopup } from "@/components/dashboard/BriefingPopups";
+// Already part of the dashboard chunk (dashboard.tsx imports them statically),
+// so pointing the overview KPIs at the real drill-downs costs no extra bytes.
+import { NetWorthPopup, CashFlowPopup } from "@/components/dashboard/HeroKPIPopups";
 import { ProgressRing, toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
 import type { DashboardStats } from "@shared/schema";
@@ -55,7 +58,7 @@ import { useShowTestData } from "@/lib/showTestData";
 import { extractVitals, readDailyTotal } from "@/lib/wellness-metrics";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 
-type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | null;
+type PopupKind = "tasks" | "habits" | "bills" | "events" | "docs" | "networth" | "cashflow" | null;
 
 // Card identity colours, matched to the reference mock and to the accents the
 // rest of the app already uses (red overdue, blue tasks, purple calendar,
@@ -766,7 +769,19 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         navigate(item.href);
     }
   };
-  const openItem = (item: AttentionItem) => navigate(item.href);
+  // Where a tapped row goes. Kinds with a rich drill-down open THEIR popup —
+  // the same one the cards' "View all" links open — instead of dumping the
+  // user onto a generic page; everything else navigates to its record's home
+  // (a document opens its own /documents/:id page, a med opens Wellness).
+  const openItem = (item: AttentionItem) => {
+    switch (item.kind) {
+      case "task": setPopup("tasks"); return;
+      case "habit": setPopup("habits"); return;
+      case "bill": setPopup("bills"); return;
+      case "event": setPopup("events"); return;
+      default: navigate(item.href);
+    }
+  };
 
   const feedLoading = anyBriefPending && sections.length === 0;
   const loadingDots = "…";
@@ -808,7 +823,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           value={nwValue}
           sub={netWorth == null ? undefined : nwSub}
           subClass={nwTrend ? (nwTrend.up ? "text-emerald-500" : "text-red-500") : undefined}
-          onClick={() => navigate("/dashboard/finance")}
+          onClick={() => setPopup("networth")}
           testId="exec-kpi-networth"
         />
         <OverviewCell
@@ -817,7 +832,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           label="Cash Flow"
           value={cfValue}
           sub={cashFlow == null ? undefined : "this month"}
-          onClick={() => navigate("/dashboard/finance")}
+          onClick={() => setPopup("cashflow")}
           testId="exec-kpi-cashflow"
         />
         <OverviewCell
@@ -838,7 +853,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           sub={nextImportant && nextDate
             ? `${fmtWeekdayDate(nextDate)} (${inDaysLabel(nextImportant.daysUntil!)})`
             : undefined}
-          onClick={() => nextImportant ? navigate(nextImportant.href) : navigate("/calendar")}
+          onClick={() => nextImportant ? openItem(nextImportant) : navigate("/calendar")}
           testId="exec-kpi-next"
         />
       </div>
@@ -1109,13 +1124,18 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   ) : (
                     <div className="space-y-1.5 text-[13px]">
                       {billsDueSoon.slice(0, 3).map((b: any) => (
-                        <div key={b.id} className="flex items-center justify-between gap-2 min-w-0">
+                        <button
+                          key={b.id}
+                          onClick={() => setPopup("bills")}
+                          className="w-full flex items-center justify-between gap-2 min-w-0 text-left rounded-md hover:bg-muted/30 transition-colors"
+                          data-testid={`exec-money-bill-${b.id}`}
+                        >
                           <span className="min-w-0">
                             <span className="block truncate">{b.name}</span>
                             <span className="block text-[11px] text-muted-foreground">{fmtShortDate(dateFromDays(b.daysUntil))}</span>
                           </span>
                           <span className="shrink-0 font-bold tabular-nums">${Number(b.amount || 0).toLocaleString(undefined, { minimumFractionDigits: Number(b.amount) % 1 ? 2 : 0 })}</span>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   )}
@@ -1291,6 +1311,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={allBills} />}
       {popup === "events" && <EventsPopup open onClose={() => setPopup(null)} items={timeline} todayStr={todayStr} />}
       {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={visibleDocs} />}
+      {popup === "networth" && <NetWorthPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode as "all" | "selected" | "everyone"} filterIds={ids} />}
+      {popup === "cashflow" && <CashFlowPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode as "all" | "selected" | "everyone"} filterIds={ids} />}
     </div>
   );
 }

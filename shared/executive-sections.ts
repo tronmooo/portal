@@ -610,6 +610,16 @@ export function buildExecutiveSections(
       tier: "upcoming", daysUntil: 0, score: 0, href: "/dashboard/tasks",
     });
   }
+  // An activity row opens the surface the activity happened on. "/dashboard"
+  // was a dead end — the user is already there when they tap the row.
+  const ACTIVITY_HREF: Record<string, string> = {
+    expense: "/dashboard/finance", income: "/dashboard/finance",
+    task: "/dashboard/tasks", habit: "/dashboard/habits",
+    document: "/linked?tab=documents", event: "/calendar",
+    journal: "/dashboard/journal", tracker: "/trackers",
+    obligation: "/dashboard/obligations", bill: "/dashboard/obligations",
+    goal: "/goals", profile: "/profiles",
+  };
   for (const a of input.recentActivity || []) {
     if (!a?.description) continue;
     cand.activity.push({
@@ -617,7 +627,8 @@ export function buildExecutiveSections(
       sourceKey: `activity:${a.id || a.timestamp || a.description}`,
       kind: "alert",
       title: a.description, reason: relTime(a.timestamp) || String(a.type || "activity"),
-      tier: "upcoming", daysUntil: null, score: 0, href: "/dashboard",
+      tier: "upcoming", daysUntil: null, score: 0,
+      href: ACTIVITY_HREF[String(a.type || "").toLowerCase()] || "/dashboard",
     });
   }
 
