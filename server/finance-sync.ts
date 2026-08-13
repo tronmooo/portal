@@ -302,6 +302,7 @@ async function startRun(
 
 async function finishRun(
   db: SupabaseClient,
+  userId: string,
   runId: string | null,
   result: Omit<SyncResult, "runId">,
 ): Promise<void> {
@@ -320,7 +321,9 @@ async function finishRun(
         ? `${result.accountErrors.length} account(s) failed`
         : null,
     })
-    .eq("id", runId);
+    // Ownership is stated, not assumed. This runs under the service-role key,
+    // so an id alone is enough to write ANY user's run row.
+    .eq("id", runId).eq("user_id", userId);
   if (error) logFinanceError("finishRun", error);
 }
 
@@ -698,7 +701,7 @@ export async function syncFinancialData(opts: SyncOptions): Promise<SyncResult> 
   };
 
   if (!connections || connections.length === 0) {
-    await finishRun(db, runId, { ...result, status: "success" });
+    await finishRun(db, userId, runId, { ...result, status: "success" });
     return result;
   }
 
@@ -825,7 +828,7 @@ export async function syncFinancialData(opts: SyncOptions): Promise<SyncResult> 
       : "success";
   if (result.status === "partial" && !result.errorCode) result.errorCode = "partial_import";
 
-  await finishRun(db, runId, result);
+  await finishRun(db, userId, runId, result);
   return result;
 }
 

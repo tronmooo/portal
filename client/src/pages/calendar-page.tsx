@@ -65,6 +65,9 @@ export default function CalendarPage() {
       date: String(item?.date || "").slice(0, 10),
       effectiveDate: String(item?.date || "").slice(0, 10),
       status: item?.completed ? "done" : "upcoming",
+      // Undated rows carry a placement date, not a deadline — rollupOccurrences
+      // must not count them in Today / Week / 30-day.
+      undated: !!item?.undated,
     })) as unknown as CalendarOccurrence[];
     const r = rollupOccurrences(list, todayStr);
     return { today: r.today, week: r.next7, horizon: r.next30 };

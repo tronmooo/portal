@@ -168,6 +168,122 @@ export function deleteProfileFields(
   return { fields: out, removed };
 }
 
+// ─── Document provenance vs. user deletion ───────────────────────────────────
+//
+// User report 2026-08-13:
+//   "I could not delete my birthday / date of birth until I deleted my
+//    driver's license."
+//
+// Document extraction records WHICH document contributed WHICH field, as
+// `fields._docFields[documentId] = { dateOfBirth: "1992-04-11", … }`. That
+// provenance exists so deleting a document can withdraw exactly the data it
+// contributed (see the cascade in the DELETE /api/documents/:id handler).
+//
+// The problem was the other direction. Deleting the Birthday row removed the
+// VALUE but left the provenance entry standing, and nothing consulted the
+// user's deletion afterwards — so:
+//   • the license still nominally "owned" a field that no longer existed, and
+//   • re-confirming the license's extraction (or a re-extract) wrote the DOB
+//     straight back, with no memory that the user had removed it.
+// Deleting the license was therefore the only action that made the deletion
+// stick, which is precisely the hidden dependency the user hit.
+//
+// The two helpers below break it. Deleting a field now (1) withdraws that
+// field from every document's provenance record, so no document claims it any
+// more, and (2) writes the field's identity into `_deletedFields` — a
+// suppression list that extraction consults before writing. The document keeps
+// its own extracted_data untouched (nothing is deleted from the document); it
+// simply loses the power to re-populate a profile field the user removed.
+//
+// Re-entering the field by hand clears its suppression — an explicit write is
+// the user changing their mind, and must always win.
+
+/** Reserved key holding the field identities the user explicitly deleted. */
+export const DELETED_FIELDS_KEY = "_deletedFields";
+/** Reserved key holding per-document field provenance. */
+export const DOC_FIELDS_KEY = "_docFields";
+
+/** The suppression list on a fields object, as a Set of field identities. */
+export function suppressedFieldIdentities(
+  fields: Record<string, any> | null | undefined,
+): Set<string> {
+  const raw = fields && typeof fields === "object" ? (fields as any)[DELETED_FIELDS_KEY] : null;
+  if (!Array.isArray(raw)) return new Set();
+  return new Set(raw.filter((k: any) => typeof k === "string" && k).map(fieldIdentity));
+}
+
+/** Has the user explicitly deleted this field (under any spelling)? */
+export function isFieldSuppressed(
+  fields: Record<string, any> | null | undefined,
+  key: unknown,
+): boolean {
+  return suppressedFieldIdentities(fields).has(fieldIdentity(key));
+}
+
+/**
+ * Record a user deletion: withdraw the deleted identities from every
+ * document's provenance entry, and add them to the suppression list.
+ *
+ * Mutates and returns `fields` (callers already own a fresh object from
+ * `deleteProfileFields`). A document whose provenance becomes empty is dropped
+ * from `_docFields` entirely, and `_docFields` itself is dropped when no
+ * document contributes anything any more.
+ */
+export function recordFieldDeletions(
+  fields: Record<string, any>,
+  uiKeys: readonly string[] | null | undefined,
+): Record<string, any> {
+  const identities = (uiKeys || [])
+    .filter((k) => typeof k === "string" && k)
+    .map(fieldIdentity);
+  if (identities.length === 0) return fields;
+
+  // 1. Withdraw the field from every document's provenance record.
+  const sources = fields[DOC_FIELDS_KEY];
+  if (sources && typeof sources === "object" && !Array.isArray(sources)) {
+    const targets = new Set(identities);
+    const nextSources: Record<string, any> = {};
+    for (const [docId, contributed] of Object.entries(sources as Record<string, any>)) {
+      if (!contributed || typeof contributed !== "object" || Array.isArray(contributed)) continue;
+      const kept: Record<string, any> = {};
+      for (const [k, v] of Object.entries(contributed as Record<string, any>)) {
+        if (!targets.has(fieldIdentity(k))) kept[k] = v;
+      }
+      if (Object.keys(kept).length > 0) nextSources[docId] = kept;
+    }
+    if (Object.keys(nextSources).length > 0) fields[DOC_FIELDS_KEY] = nextSources;
+    else delete fields[DOC_FIELDS_KEY];
+  }
+
+  // 2. Remember the deletion so extraction cannot silently undo it.
+  const existing = suppressedFieldIdentities(fields);
+  for (const id of identities) existing.add(id);
+  fields[DELETED_FIELDS_KEY] = Array.from(existing).sort();
+  return fields;
+}
+
+/**
+ * Lift suppression for fields the user has explicitly set again. An explicit
+ * write — typing the value back in, or confirming it in an extraction review —
+ * is the user changing their mind, and it always beats an earlier deletion.
+ */
+export function clearFieldSuppression(
+  fields: Record<string, any>,
+  keys: readonly string[] | null | undefined,
+): Record<string, any> {
+  const current = suppressedFieldIdentities(fields);
+  if (current.size === 0) return fields;
+  let changed = false;
+  for (const k of keys || []) {
+    const id = fieldIdentity(k);
+    if (current.delete(id)) changed = true;
+  }
+  if (!changed) return fields;
+  if (current.size > 0) fields[DELETED_FIELDS_KEY] = Array.from(current).sort();
+  else delete fields[DELETED_FIELDS_KEY];
+  return fields;
+}
+
 // ─── Display de-duplication ──────────────────────────────────────────────────
 
 export interface DedupedFieldsResult {

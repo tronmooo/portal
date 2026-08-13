@@ -625,6 +625,12 @@ export interface CalendarOccurrence {
   effectiveDate: string;
   moved: boolean;
   status: OccurrenceStatus;
+  /**
+   * True when the source record carries no date of its own and `date` is only
+   * a placement (e.g. an undated task pinned to its creation day). Urgency
+   * bucketing skips these — see `shared/dated-items.classify`.
+   */
+  undated?: boolean;
   /** This occurrence's own amount when the series carries one, else the series amount. */
   amount?: number;
   /** True when `amount` is a forecast (a variable bill that hasn't posted yet). */

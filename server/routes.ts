@@ -29,7 +29,7 @@ import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
-import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from "@shared/profile-field-identity";
+import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, suppressedFieldIdentities } from "@shared/profile-field-identity";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -2397,7 +2397,31 @@ ${JSON.stringify(ctx, null, 2)}`;
               // Fold alias spellings to the canonical key (currentMileage →
               // mileage, value → currentValue…) so a receipt's key naming
               // can't mint a second copy of a field the profile already has.
-              const incoming = canonicalizeProfileFields(profileFields, existingFields).fields;
+              let incoming = canonicalizeProfileFields(profileFields, existingFields).fields;
+
+              // DOCUMENT DEPENDENCY (2026-08-13). A field the user explicitly
+              // DELETED from this profile is not re-added by an extraction
+              // pass. Without this, deleting the Birthday that a driver's
+              // license contributed lasted only until the next extraction
+              // confirm put it straight back — which is why the DOB looked
+              // undeletable until the licence itself was deleted.
+              //
+              // This never silently swallows anything: skipped keys are named
+              // in the response's `skipped` list, and typing the value back in
+              // on the profile lifts the suppression (see
+              // shared/profile-field-identity.clearFieldSuppression).
+              const suppressed = suppressedFieldIdentities(existingFields);
+              if (suppressed.size > 0) {
+                const allowed: Record<string, any> = {};
+                for (const [k, v] of Object.entries(incoming)) {
+                  if (!k.startsWith("_") && suppressed.has(fieldIdentity(k))) {
+                    skippedFields.push(k);
+                    continue;
+                  }
+                  allowed[k] = v;
+                }
+                incoming = allowed;
+              }
 
               // The user confirmed each of these values, so a confirmed value
               // REPLACES every other spelling of the same field — top-level

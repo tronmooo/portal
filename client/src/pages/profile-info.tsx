@@ -356,6 +356,14 @@ function SingleProfileInfo({ id }: { id: string }) {
   // anything saved from chat via update_profile shows up.
   const nestedGroups: Array<{ key: string; entries: Array<[string, any]> }> = [];
   for (const [k, v] of Object.entries(fields)) {
+    // Underscore-prefixed keys are RESERVED METADATA, never user fields:
+    // `_docFields` (which document contributed which value), `_deletedFields`
+    // (fields the user removed), `_mileageHistory`, `_parentProfileId`. The
+    // detail page has always filtered them; this loop did not, so a profile
+    // that had been through document extraction rendered its own bookkeeping
+    // as if the user had typed it — and none of those rows is editable or
+    // deletable, because there is no real field behind them.
+    if (k.startsWith("_")) continue;
     if (shownKeys.has(k.toLowerCase())) continue;
     if (["dateofbirth", "dob"].includes(k.toLowerCase())) continue;
     if (v === undefined || v === null || v === "") continue;

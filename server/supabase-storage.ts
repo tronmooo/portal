@@ -49,7 +49,7 @@ import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } fr
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromProfiles, seriesFromEvents } from "../shared/calendar-adapters";
-import { deleteProfileFields } from "../shared/profile-field-identity";
+import { deleteProfileFields, recordFieldDeletions, clearFieldSuppression } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
@@ -1849,7 +1849,22 @@ export class SupabaseStorage implements IStorage {
     // hide behind another.
     const mergedFields = mergeAndApplyDeletes(existing.fields || {}, data.fields, null);
     const deletion = deleteProfileFields(mergedFields as Record<string, any>, data.fieldsToDelete);
-    const finalFields = deletion.fields;
+    let finalFields = deletion.fields;
+    // DOCUMENT DEPENDENCY (2026-08-13). A field that a document's extraction
+    // populated must stay deletable WITHOUT deleting the document. Deleting it
+    // withdraws the field from every document's provenance record and records
+    // the deletion, so no later extraction pass can put it back on its own.
+    // Explicitly setting a field again lifts its suppression — see
+    // shared/profile-field-identity for the full rationale.
+    if (data.fieldsToDelete && data.fieldsToDelete.length > 0) {
+      finalFields = recordFieldDeletions(finalFields, data.fieldsToDelete);
+    }
+    if (data.fields && typeof data.fields === "object") {
+      const explicitlySet = Object.keys(data.fields).filter(
+        (k) => !k.startsWith("_") && (data.fields as any)[k] !== null && (data.fields as any)[k] !== undefined && (data.fields as any)[k] !== "",
+      );
+      if (explicitlySet.length > 0) finalFields = clearFieldSuppression(finalFields, explicitlySet);
+    }
     if (deletion.removed.length > 0) {
       console.log(`[profile-delete] ${id} removed ${deletion.removed.length} key(s): ${deletion.removed.join(", ")}`);
     }
@@ -2226,11 +2241,16 @@ export class SupabaseStorage implements IStorage {
       else if (isLia(p)) liaIds.push(p.id);
     }
     const [assetLinks, liaLinks] = await Promise.all([
+      // ISOLATION: both link tables are filtered by user_id, not just by the
+      // id list. The ids come from this user's own profiles, so the `.in()`
+      // was already scoped in practice — but these run under the service-role
+      // key (RLS bypassed), so ownership is stated explicitly rather than
+      // inferred from where the ids happened to come from.
       assetIds.length > 0
-        ? this.supabase.from("asset_party_links").select("asset_profile_id, party_profile_id").in("asset_profile_id", assetIds)
+        ? this.supabase.from("asset_party_links").select("asset_profile_id, party_profile_id").eq("user_id", this.userId).in("asset_profile_id", assetIds)
         : Promise.resolve({ data: [] as any[] }),
       liaIds.length > 0
-        ? this.supabase.from("liability_profile_links").select("liability_profile_id, party_profile_id").in("liability_profile_id", liaIds)
+        ? this.supabase.from("liability_profile_links").select("liability_profile_id, party_profile_id").eq("user_id", this.userId).in("liability_profile_id", liaIds)
         : Promise.resolve({ data: [] as any[] }),
     ]);
     const assetLinkMap = new Map<string, Set<string>>();
@@ -2296,9 +2316,17 @@ export class SupabaseStorage implements IStorage {
   // version-stamped keys (`<uid>@v<N>`): any write bumps the version, making
   // every stale row unaddressable — no cross-instance bust protocol needed.
   async getResponseCache(key: string): Promise<any | null> {
+    // ISOLATION: filter on user_id as well as the key. Every cache key is
+    // built to embed the owner (`<uid>@v<N>`), so today the key alone is
+    // already unique per account — but that is a CONVENTION held up by string
+    // building in routes.ts, and this read runs under the service-role key,
+    // which bypasses RLS. One mis-built key (a new prefix that forgets the
+    // uid, the `nouser-…` fallback, a future caller) would otherwise hand one
+    // account's whole dashboard payload to another. The ownership filter makes
+    // that structurally impossible instead of conventionally unlikely.
     const { data, error } = await this.supabase
       .from("response_cache").select("payload,expires_at")
-      .eq("key", key).maybeSingle();
+      .eq("key", key).eq("user_id", this.userId).maybeSingle();
     if (error) throw error;
     if (!data) return null;
     if (new Date(data.expires_at).getTime() <= Date.now()) return null;
@@ -3702,6 +3730,12 @@ export class SupabaseStorage implements IStorage {
       // projected across the window instead of appearing once on its stored due
       // date. Without the projection "every Tuesday at 9 AM" occupied one
       // Tuesday and the rest of the year was blank.
+      // A task with no due date has no deadline. We still PLACE it on its
+      // creation day so the calendar can list it, but that placement is not a
+      // due date and must never be read as one — `undated` says so explicitly,
+      // and shared/dated-items skips undated rows in every urgency bucket.
+      const dueISO = String(task.dueDate || "").slice(0, 10);
+      const undated = !dueISO;
       const taskDates = task.dueDate
         ? taskOccurrenceDates({ dueDate: task.dueDate, tags: task.tags, status: task.status }, startDate, endDate, { todayISO: rdTodayISO })
         : (rawDate.slice(0, 10) >= startDate && rawDate.slice(0, 10) <= endDate ? [rawDate.slice(0, 10)] : []);
@@ -3716,8 +3750,12 @@ export class SupabaseStorage implements IStorage {
           allDay: !task.dueTime,
           color: taskColor, category: "task", description: task.description,
           // Only the stored occurrence can be complete; projected future ones
-          // are always still to do.
-          completed: task.status === "done" && d === String(task.dueDate || "").slice(0, 10),
+          // are always still to do. An UNDATED task has exactly one placement
+          // and no stored due date to compare against — comparing `d` to the
+          // empty string made every completed undated task read as not done,
+          // which is how three finished tasks showed up as "3 need action".
+          completed: task.status === "done" && (undated || d === dueISO),
+          undated,
           linkedProfiles: task.linkedProfiles, sourceId: task.id,
           meta: { priority: task.priority, status: task.status, tags: task.tags, recurring: isSeries },
         });
@@ -6729,7 +6767,7 @@ export class SupabaseStorage implements IStorage {
       if (existing?.id) {
         await this.supabase.from("net_worth_snapshots")
           .update({ assets_total: assetsTotal, liabilities_total: liabilitiesTotal, net_worth: netWorth })
-          .eq("id", existing.id);
+          .eq("id", existing.id).eq("user_id", this.userId);
       } else {
         await this.supabase.from("net_worth_snapshots").insert({
           user_id: this.userId, profile_id: pid, snapshot_date: snapshotDate,
@@ -6980,7 +7018,7 @@ export class SupabaseStorage implements IStorage {
     if (existing) {
       await this.supabase.from("preferences")
         .update({ value: JSON.stringify(budgets) })
-        .eq("id", existing.id);
+        .eq("id", existing.id).eq("user_id", this.userId);
     } else {
       await this.supabase.from("preferences").insert({
         user_id: this.userId,

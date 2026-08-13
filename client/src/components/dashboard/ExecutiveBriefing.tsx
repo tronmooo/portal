@@ -354,6 +354,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       date: String(item?.date || "").slice(0, 10),
       effectiveDate: String(item?.date || "").slice(0, 10),
       status: item?.completed ? "done" : "upcoming",
+      // An undated row is only PLACED on a date (an undated task sits on its
+      // creation day). rollupOccurrences drops these so nothing without a
+      // deadline can be counted as overdue or as needing action.
+      undated: !!item?.undated,
     })) as unknown as CalendarOccurrence[];
     return rollupOccurrences(rows, todayStr);
   }, [timelineRaw, todayStr, showTestData]);

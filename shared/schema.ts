@@ -1015,6 +1015,17 @@ export interface CalendarTimelineItem {
   description?: string;
   location?: string;
   completed?: boolean;
+  /**
+   * True when the row has NO date of its own and is only pinned to `date` so
+   * it still shows up somewhere (an undated task sits on its creation date).
+   *
+   * Every urgency counter MUST skip these: a thing with no deadline can never
+   * be overdue, and `shared/dated-items.classify` drops them for exactly that
+   * reason. Without the flag, an undated task became "overdue" the day after
+   * it was created — the source of the phantom "3 overdue tasks" on accounts
+   * whose only tasks were undated (and already completed).
+   */
+  undated?: boolean;
   linkedProfiles: string[];
   sourceId: string; // ID of the original entity
   meta?: Record<string, any>;

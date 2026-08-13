@@ -19,6 +19,7 @@
     "smoke:reset": "tsx tests/smoke/fixture/seed.ts --reset",
     "smoke:verify": "tsx tests/smoke/fixture/seed.ts --verify",
     "smoke:post-deploy": "tsx scripts/post-deploy-smoke.ts",
+    "test:isolation": "node scripts/verify-account-isolation.mjs",
     "lint": "tsc --noEmit",
     "test:migrations": "./scripts/test-migrations.sh",
     "db:push": "drizzle-kit push",

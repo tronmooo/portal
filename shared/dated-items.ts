@@ -78,6 +78,17 @@ function classify(
   if (!occ) return null;
   // A checked-off or skipped occurrence needs nothing from the user.
   if (occ.status === "done" || occ.status === "skipped") return null;
+  // An UNDATED occurrence has no deadline, so it cannot be overdue, due today,
+  // or due within any horizon. The timeline still emits it (pinned to the
+  // record's creation day) so the calendar can list it, but every urgency
+  // counter has to ignore that placement date.
+  //
+  // Reported 2026-08-13: a brand-new account showed "3 overdue tasks" and
+  // "3 need action" with no dated task anywhere. All three were tasks with a
+  // NULL due_date — pinned to their creation date four days earlier, which the
+  // line below then read as four days past due. Two of them were already
+  // marked done; see the matching `completed` fix in getCalendarTimeline.
+  if (occ.undated) return null;
   const date = String(occ.effectiveDate || occ.date || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
 
