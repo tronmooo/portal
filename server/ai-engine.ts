@@ -13616,28 +13616,90 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       // Split on commas / "and" to find multiple search terms
       const multiParts = cleanSearch.split(/\s*(?:,|\band\b)\s*/).filter(p => p.trim().length >= 2);
 
-      // PERF short-circuit: a single-document request with exactly ONE
-      // qualifying match needs no AI resolver — the deterministic fallback
-      // below would return this same document anyway after the Haiku
-      // round-trip (or its 4s timeout). Ambiguous and multi-document
-      // requests still go through the AI resolver.
-      if (multiParts.length <= 1 && matches.length === 1) {
-        const chosen = matches[0];
+      // Deterministic result handling — instant, no model call. A request that
+      // matches ANY document(s) here is answered immediately; showing every
+      // candidate (newest first) beats making the user wait seconds for an AI
+      // to narrow the list.
+      if (multiParts.length > 1) {
+        // Search each part separately against all docs
+        const multiMatches: Array<{ doc: any; part: string }> = [];
+        const usedIds = new Set<string>();
+        for (const part of multiParts) {
+          const partVariants = expandWithSynonyms(part.trim());
+          const partScored = allDocs.filter(d => !usedIds.has(d.id)).map(d => {
+            const nLC = d.name.toLowerCase();
+            const tLC = (d.type || "").toLowerCase().replace(/_/g, " ");
+            const nNorm = nLC.replace(/[''\-_\u2013\u2014]/g, " ").replace(/\s+/g, " ");
+            const s = `${nNorm} ${tLC}`;
+            let sc = 0;
+            for (const v of partVariants) {
+              const vn = v.replace(/[''\-_]/g, "");
+              if (s.includes(vn)) sc += 10;
+              for (const w of vn.split(/\s+/).filter(x => x.length >= 2)) {
+                if (s.includes(w)) sc += 2;
+                else { const ws = stem(w); if (ws.length >= 3 && s.includes(ws)) sc += 1.5; }
+              }
+            }
+            return { doc: d, score: sc };
+          }).filter(x => x.score >= 3).sort((a, b) => b.score - a.score);
+          if (partScored.length > 0) {
+            multiMatches.push({ doc: partScored[0].doc, part: part.trim() });
+            usedIds.add(partScored[0].doc.id);
+          }
+        }
+        if (multiMatches.length > 1) {
+          const names = multiMatches.map(m => m.doc.name);
+          // PERF: list rows already carry extracted_data — no per-doc
+          // binary-materializing getDocument() reads for previews.
+          const previews = multiMatches.map((m) => lazyPreview(m.doc) as any);
+          return {
+            reply: `Here are your ${multiMatches.length} documents: ${names.join(", ")}.`,
+            actions: multiMatches.map(m => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.doc.id } })),
+            results: [], // Avoid duplicate ConfirmationCards
+            documentPreview: previews[0],
+            documentPreviews: previews,
+          };
+        }
+      }
+
+      // Document match(es) found
+      if (matches.length > 0) {
+        // Sort by createdAt descending so the newest is first in the previews
+        const sorted = [...matches].sort((a, b) => {
+          const ta = new Date((a as any).createdAt || (a as any).created_at || 0).getTime();
+          const tb = new Date((b as any).createdAt || (b as any).created_at || 0).getTime();
+          return tb - ta;
+        });
+
+        // Single match — just render it
+        if (sorted.length === 1) {
+          const chosen = sorted[0];
+          return {
+            reply: `Here's your ${chosen.name}.`,
+            actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: chosen.id } }],
+            results: [],
+            documentPreview: lazyPreview(chosen) as any,
+          };
+        }
+
+        // Multiple matches — show ALL of them inline, newest first.
+        // PERF: list rows already carry extracted_data — no per-doc reads.
+        const previews = sorted.map((m) => lazyPreview(m) as any);
         return {
-          reply: `Here's your ${chosen.name}.`,
-          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: chosen.id } }],
+          reply: `Found ${sorted.length} matching documents — showing all.`,
+          actions: sorted.map(m => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.id } })),
           results: [],
-          documentPreview: lazyPreview(chosen) as any,
+          documentPreview: previews[0],
+          documentPreviews: previews,
         };
       }
 
-      // ══ AI RESOLVER (ambiguous cases) ═════════════════════════════════════
-      // Reached only when the deterministic scorer above found zero or several
-      // candidates (or a multi-document request). Sends a compact doc index to
-      // Haiku and lets it pick which docs the user wants — handles arbitrary
-      // phrasing ("pull up the Bob DL", "Jane utility bill", "my mortgage
-      // statement from March") without brittle regex rules. Falls through to
-      // the deterministic result handling below if AI fails or times out.
+      // ══ AI RESOLVER — LAST RESORT ONLY ════════════════════════════════════
+      // Reached only when the deterministic scorer above found NOTHING.
+      // Opening a document must not wait on a model round-trip (user report
+      // 2026-08-16: "it doesn't even need AI to determine which documents to
+      // open") — so Haiku is kept solely as a net for phrasing the scorer
+      // can't parse at all, where the alternative is the full agent loop.
       try {
         const profileById = new Map(allProfiles.map((p: any) => [String(p.id), String(p.name || "")]));
         // Build compact doc index. Cap at 200 docs to keep tokens bounded — if a
@@ -13744,80 +13806,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       } catch (e) {
         console.log(`[doc-open AI] AI resolver failed, falling through: ${e instanceof Error ? e.message : e}`);
       }
-      // ══ END AI RESOLVER (falls through to deterministic matcher below) ══════
-      if (multiParts.length > 1) {
-        // Search each part separately against all docs
-        const multiMatches: Array<{ doc: any; part: string }> = [];
-        const usedIds = new Set<string>();
-        for (const part of multiParts) {
-          const partVariants = expandWithSynonyms(part.trim());
-          const partScored = allDocs.filter(d => !usedIds.has(d.id)).map(d => {
-            const nLC = d.name.toLowerCase();
-            const tLC = (d.type || "").toLowerCase().replace(/_/g, " ");
-            const nNorm = nLC.replace(/[''\-_\u2013\u2014]/g, " ").replace(/\s+/g, " ");
-            const s = `${nNorm} ${tLC}`;
-            let sc = 0;
-            for (const v of partVariants) {
-              const vn = v.replace(/[''\-_]/g, "");
-              if (s.includes(vn)) sc += 10;
-              for (const w of vn.split(/\s+/).filter(x => x.length >= 2)) {
-                if (s.includes(w)) sc += 2;
-                else { const ws = stem(w); if (ws.length >= 3 && s.includes(ws)) sc += 1.5; }
-              }
-            }
-            return { doc: d, score: sc };
-          }).filter(x => x.score >= 3).sort((a, b) => b.score - a.score);
-          if (partScored.length > 0) {
-            multiMatches.push({ doc: partScored[0].doc, part: part.trim() });
-            usedIds.add(partScored[0].doc.id);
-          }
-        }
-        if (multiMatches.length > 1) {
-          const names = multiMatches.map(m => m.doc.name);
-          // PERF: list rows already carry extracted_data — no per-doc
-          // binary-materializing getDocument() reads for previews.
-          const previews = multiMatches.map((m) => lazyPreview(m.doc) as any);
-          return {
-            reply: `Here are your ${multiMatches.length} documents: ${names.join(", ")}.`,
-            actions: multiMatches.map(m => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.doc.id } })),
-            results: [], // Avoid duplicate ConfirmationCards
-            documentPreview: previews[0],
-            documentPreviews: previews,
-          };
-        }
-      }
-
-      // Document match(es) found
-      if (matches.length > 0) {
-        // Sort by createdAt descending so the newest is first in the previews
-        const sorted = [...matches].sort((a, b) => {
-          const ta = new Date((a as any).createdAt || (a as any).created_at || 0).getTime();
-          const tb = new Date((b as any).createdAt || (b as any).created_at || 0).getTime();
-          return tb - ta;
-        });
-
-        // Single match — just render it
-        if (sorted.length === 1) {
-          const chosen = sorted[0];
-          return {
-            reply: `Here's your ${chosen.name}.`,
-            actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: chosen.id } }],
-            results: [],
-            documentPreview: lazyPreview(chosen) as any,
-          };
-        }
-
-        // Multiple matches — show ALL of them inline, newest first.
-        // PERF: list rows already carry extracted_data — no per-doc reads.
-        const previews = sorted.map((m) => lazyPreview(m) as any);
-        return {
-          reply: `Found ${sorted.length} matching documents — showing all.`,
-          actions: sorted.map(m => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.id } })),
-          results: [],
-          documentPreview: previews[0],
-          documentPreviews: previews,
-        };
-      }
+      // ══ END AI RESOLVER ═════════════════════════════════════════════════
       // No match found — fall through to AI to try harder
     } catch { /* fall through to AI */ }
   }

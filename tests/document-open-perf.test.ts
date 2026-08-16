@@ -151,6 +151,22 @@ describe('POST /api/chat "open my drivers license"', () => {
     expect(JSON.stringify(r.data)).not.toContain(LICENSE_DOC.fileData);
   });
 
+  it("shows ALL candidates instantly when several match — no AI narrowing wait", async () => {
+    h.db.documents.push({ ...LICENSE_DOC });
+    h.db.documents.push({
+      ...LICENSE_DOC,
+      id: "doc-dl-2",
+      name: "Georgia Driver License",
+      createdAt: "2026-08-05T00:00:00.000Z",
+    });
+    const r = await h.api("POST", "/api/chat", { message: "open my drivers license" });
+    expect(r.status).toBe(200);
+    const ids = (r.data.documentPreviews || []).map((p: any) => p.id).sort();
+    expect(ids).toEqual(["doc-dl", "doc-dl-2"]);
+    for (const p of r.data.documentPreviews) expect(p.data).toBe("__LAZY_LOAD__");
+    expect(h.db.getDocumentCalls).toBe(0);
+  });
+
   it("still disambiguates: an unrelated document does not match", async () => {
     h.db.documents.push({ ...LICENSE_DOC });
     h.db.documents.push({
