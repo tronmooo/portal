@@ -2531,7 +2531,8 @@ export class SupabaseStorage implements IStorage {
 
       // Also add parent to document's linkedProfiles — [P2.2] routed through
       // the single writer (setOwners) instead of a raw linked_profiles write.
-      const doc = await this.getDocument(documentId);
+      // PERF: only linkedProfiles is needed — metadata read, never the binary.
+      const doc = await this.getDocumentMeta(documentId);
       if (doc && !doc.linkedProfiles.includes(parentId)) {
         try {
           await this.applyOwnershipPatch("document", documentId, [...doc.linkedProfiles, parentId]);
@@ -6113,7 +6114,8 @@ export class SupabaseStorage implements IStorage {
         case "event": entity = await this.getEvent(otherId); break;
         case "habit": entity = await this.getHabit(otherId); break;
         case "obligation": entity = await this.getObligation(otherId); break;
-        case "document": entity = await this.getDocument(otherId); break;
+        // PERF: metadata-only read — the binary was stripped below anyway.
+        case "document": entity = await this.getDocumentMeta(otherId); break;
       }
       if (entity) {
         if (otherType === "document" && entity.fileData) {
@@ -6897,7 +6899,9 @@ export class SupabaseStorage implements IStorage {
         ? Promise.all([...needed.event].map(id => this.getEvent(id).catch(() => null)))
         : Promise.resolve([] as any[]),
       needed.document.size > 0
-        ? Promise.all([...needed.document].map(id => this.getDocument(id).catch(() => null).then(d => d ? { ...d, fileData: undefined } : null)))
+        // PERF: metadata-only reads — the old getDocument() here downloaded and
+        // base64-encoded every linked file just to strip it out on the next line.
+        ? Promise.all([...needed.document].map(id => this.getDocumentMeta(id).catch(() => null).then(d => d ?? null)))
         : Promise.resolve([] as any[]),
     ]);
     const eventById = new Map<string, any>();
