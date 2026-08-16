@@ -1003,6 +1003,10 @@ interface FastPathResult {
   reply: string;
   actions: ParsedAction[];
   results: any[];
+  /** Lazy document previews (data === "__LAZY_LOAD__"): the client fetches the
+   *  bytes via GET /api/documents/:id/file, so the reply never carries base64. */
+  documentPreview?: { id: string; name: string; mimeType: string; data: string };
+  documentPreviews?: Array<{ id: string; name: string; mimeType: string; data: string }>;
 }
 
 async function tryFastPath(message: string): Promise<FastPathResult> {
@@ -1205,13 +1209,13 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
       const scored = allDocuments.map(d => ({ doc: d, score: scoreDoc(d) })).filter(s => s.score > 0).sort((a, b) => b.score - a.score);
       const doc = scored[0]?.doc;
       if (doc) {
-        const fullDoc = await storage.getDocument(doc.id);
+        // PERF: the list row already carries name/mimeType/extractedData, and
+        // previews are lazy (client fetches bytes via /api/documents/:id/file),
+        // so the binary-materializing getDocument() read never runs here.
         actions.push({ type: "retrieve", category: "document", data: { documentId: doc.id, name: doc.name } });
-        if (fullDoc) {
-          results.push(fullDoc);
-          foundDocs.push(fullDoc);
-          documentPreviews.push({ id: fullDoc.id, name: fullDoc.name, mimeType: fullDoc.mimeType, data: fullDoc.fileData });
-        }
+        results.push(doc);
+        foundDocs.push(doc);
+        documentPreviews.push({ id: doc.id, name: doc.name, mimeType: doc.mimeType, data: "__LAZY_LOAD__" });
       }
     }
     
@@ -5751,13 +5755,15 @@ function summarizeSingleItem(item: any): any {
     };
   }
 
-  // Never send fileData to Claude
-  if (item.fileData) {
+  // Never send fileData to Claude. Metadata-only document reads (open_document
+  // via getDocumentMeta) carry hasFileData instead of the binary — summarize
+  // them identically so the model sees the same shape either way.
+  if (item.fileData || (typeof item.hasFileData === "boolean" && item.mimeType && item.extractedData !== undefined)) {
     const { fileData, ...rest } = item;
     return {
       ...rest,
       extractedData: undefined,
-      hasFileData: true,
+      hasFileData: item.hasFileData ?? true,
       extractedFields: trimExtractedFields(item.extractedData),
     };
   }
@@ -10310,7 +10316,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (score > bestScore) { bestScore = score; bestDoc = doc; }
       }
       if (!bestDoc || bestScore < 2) return null;
-      return storage.getDocument(bestDoc.id);
+      // PERF: metadata-only read — the client renders the preview lazily via
+      // GET /api/documents/:id/file, so materializing the binary here (Storage
+      // download + base64 encode) was pure waste on every "open my X".
+      // hasFileData mirrors what summarizeResult used to report after
+      // stripping fileData, so the model sees the same signal as before.
+      const meta = await (storage as any).getDocumentMeta?.(bestDoc.id) ?? storage.getDocument(bestDoc.id);
+      if (!meta) return null;
+      const { fileData: _fd, storagePath: _sp, ...docMeta } = meta as any;
+      return { ...docMeta, hasFileData: (meta as any).hasFile ?? !!_fd };
     }
 
     case "create_document": {
@@ -13365,136 +13379,23 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   if (isDocOpen) {
     const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:up\s+)?(?:my\s+)?/, "").trim();
     try {
-      const allDocs = await storage.getDocuments(); // Note: fileData is excluded from list queries for performance
+      // PERF: one parallel round-trip; the document LIST projection already
+      // carries extracted_data, so every preview on this path is built from
+      // list rows and the binary-materializing getDocument() read never runs.
+      const [allDocs, allProfiles] = await Promise.all([
+        storage.getDocuments(), // fileData is excluded from list queries for performance
+        storage.getProfiles().catch(() => [] as any[]),
+      ]);
+      // Inline chat previews are lazy: the client fetches the bytes via GET
+      // /api/documents/:id/file (ETag-cached, prefetched on render), so the
+      // chat reply stays a few KB instead of carrying base64 blobs.
+      const lazyPreview = (d: any) => ({
+        id: d.id, name: d.name, mimeType: d.mimeType,
+        data: "__LAZY_LOAD__",
+        extractedData: d.extractedData || (d as any).extracted_data || undefined,
+        type: d.type,
+      });
 
-      // ══ AI-FIRST RESOLVER ═════════════════════════════════════════════════
-      // Send a compact doc index to Haiku and let it pick which docs the user wants.
-      // Handles arbitrary phrasing ("pull up the Bob DL", "Jane utility bill",
-      // "my mortgage statement from March") without brittle regex rules.
-      // Falls through to the deterministic matcher if AI fails or times out.
-      try {
-        const profilesForAI = await storage.getProfiles();
-        const profileById = new Map(profilesForAI.map((p: any) => [String(p.id), String(p.name || "")]));
-        // Build compact doc index. Cap at 200 docs to keep tokens bounded — if a
-        // user has more, the deterministic matcher takes over.
-        if (allDocs.length <= 200) {
-          const index = allDocs.map((d: any, i: number) => {
-            const linkedIds: string[] = Array.isArray(d.linkedProfiles) ? d.linkedProfiles
-              : Array.isArray(d.linked_profiles) ? d.linked_profiles : [];
-            const linkedNames = linkedIds.map(id => profileById.get(String(id))).filter(Boolean).join(", ");
-            const created = (d.createdAt || d.created_at || "").slice(0, 10);
-            return `${i}\t${d.name}\ttype=${d.type || "?"}\tlinked=[${linkedNames}]\tcreated=${created}`;
-          }).join("\n");
-          const systemPrompt = `You are a strict document picker. The user wants to open one or more documents. Given the user's request and a list of documents, return ONLY the indices of the documents that match.
-
-Rules:
-- If the user names a PERSON (e.g. "Jane's license"), every returned doc MUST be linked to that person.
-- If the user names a DOC TYPE (license, passport, registration, insurance, bill, statement, receipt, etc.), every returned doc MUST be that type. A utility bill is NOT a license.
-- If multiple docs match equally (e.g. user has 2 licenses for the same person), return ALL of them.
-- If the user is vague (e.g. just a person name with no doc type), return the empty list — we'll ask for clarification.
-- If nothing matches, return the empty list.
-- Never invent indices. Only return indices that appear in the list.
-
-Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, no markdown.`;
-          const userPrompt = `User request: ${searchTerm.trim()}\n\nDocuments (index<TAB>name<TAB>type<TAB>linked profiles<TAB>created):\n${index}`;
-          const client = getClient();
-          // Race against a 4s timeout so chat never feels slow on a stuck call.
-          const aiPromise = client.messages.create({
-            model: "claude-haiku-4-5-20251001",
-            max_tokens: 200,
-            system: systemPrompt,
-            messages: [{ role: "user", content: userPrompt }],
-          });
-          const timeoutPromise = new Promise<null>(resolve => setTimeout(() => resolve(null), 4000));
-          const aiResp: any = await Promise.race([aiPromise, timeoutPromise]);
-          if (aiResp && Array.isArray(aiResp.content)) {
-            const text = aiResp.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
-            const jsonMatch = text.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              try {
-                const parsed = JSON.parse(jsonMatch[0]);
-                const indices: number[] = Array.isArray(parsed.indices) ? parsed.indices.filter((n: any) => Number.isInteger(n) && n >= 0 && n < allDocs.length) : [];
-                console.log(`[doc-open AI] search="${searchTerm}" picked=${indices.length} reason="${parsed.reason || ""}"`);
-                if (indices.length > 0) {
-                  const chosen = indices.map(i => allDocs[i]);
-                  // Sort newest first
-                  chosen.sort((a: any, b: any) => {
-                    const ta = new Date(a.createdAt || a.created_at || 0).getTime();
-                    const tb = new Date(b.createdAt || b.created_at || 0).getTime();
-                    return tb - ta;
-                  });
-                  if (chosen.length === 1) {
-                    const d = chosen[0];
-                    let fullDoc: any = d;
-                    try { fullDoc = await storage.getDocument(d.id) || d; } catch { /* ignore */ }
-                    return {
-                      reply: `Here's your ${d.name}.`,
-                      actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: d.id } }],
-                      results: [],
-                      documentPreview: {
-                        id: d.id, name: d.name, mimeType: d.mimeType,
-                        data: "__LAZY_LOAD__",
-                        extractedData: fullDoc.extractedData || (fullDoc as any).extracted_data || undefined,
-                        type: d.type,
-                      } as any,
-                    };
-                  }
-                  // Multiple matches — show all
-                  const previews = await Promise.all(chosen.map(async (m: any) => {
-                    let ed: any = undefined;
-                    try {
-                      const full = await storage.getDocument(m.id);
-                      ed = (full as any)?.extractedData || (full as any)?.extracted_data;
-                    } catch { /* ignore */ }
-                    return {
-                      id: m.id, name: m.name, mimeType: m.mimeType,
-                      data: "__LAZY_LOAD__", extractedData: ed, type: m.type,
-                    } as any;
-                  }));
-                  return {
-                    reply: `Found ${chosen.length} matching documents — showing all.`,
-                    actions: chosen.map((m: any) => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.id } })),
-                    results: [],
-                    documentPreview: previews[0],
-                    documentPreviews: previews,
-                  };
-                }
-                // AI returned no indices = ambiguous. Ask for clarification with options.
-                // Show the top candidates (linked to any named person if detectable).
-                if (parsed.reason) {
-                  // Build a short list of likely candidates: any doc linked to a profile
-                  // whose name appears in the query, capped at 6.
-                  const queryLower = searchTerm.toLowerCase();
-                  const matchedProfiles = profilesForAI.filter((p: any) => {
-                    const first = String(p.name || "").trim().split(/\s+/)[0].toLowerCase();
-                    return first && first.length >= 2 && queryLower.includes(first);
-                  });
-                  if (matchedProfiles.length > 0) {
-                    const matchedIds = new Set(matchedProfiles.map((p: any) => String(p.id)));
-                    const candidates = allDocs.filter((d: any) => {
-                      const lp: string[] = Array.isArray(d.linkedProfiles) ? d.linkedProfiles : Array.isArray((d as any).linked_profiles) ? (d as any).linked_profiles : [];
-                      return lp.some(id => matchedIds.has(String(id)));
-                    }).slice(0, 6);
-                    if (candidates.length > 0) {
-                      const list = candidates.map((d: any, i: number) => `${i + 1}. ${d.name}`).join("\n");
-                      return {
-                        reply: `Which one did you mean?\n${list}`,
-                        actions: [],
-                        results: [],
-                      };
-                    }
-                  }
-                }
-              } catch (e) {
-                console.log(`[doc-open AI] JSON parse failed: ${e instanceof Error ? e.message : e}`);
-              }
-            }
-          }
-        }
-      } catch (e) {
-        console.log(`[doc-open AI] AI resolver failed, falling through: ${e instanceof Error ? e.message : e}`);
-      }
-      // ══ END AI RESOLVER (falls through to deterministic matcher below) ══════
       // Bidirectional synonym groups — every word in a group maps to all others
       const synonymGroups: string[][] = [
         ["car", "vehicle", "auto", "automobile"],
@@ -13539,8 +13440,6 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // pull the person name and use it as a HARD filter on linked_profiles.
       // Without this, all 3 drivers licenses (Bob, Jane, another Bob) match
       // equally because they all contain "license" + "driver".
-      let allProfiles: any[] = [];
-      try { allProfiles = await storage.getProfiles(); } catch { allProfiles = []; }
       const profileNames = allProfiles.map((p: any) => ({
         id: String(p.id),
         first: String(p.name || "").trim().split(/\s+/)[0].toLowerCase(),
@@ -13716,6 +13615,136 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // Check if the user asked for MULTIPLE documents (e.g., "open my registration, license, and birth certificate")
       // Split on commas / "and" to find multiple search terms
       const multiParts = cleanSearch.split(/\s*(?:,|\band\b)\s*/).filter(p => p.trim().length >= 2);
+
+      // PERF short-circuit: a single-document request with exactly ONE
+      // qualifying match needs no AI resolver — the deterministic fallback
+      // below would return this same document anyway after the Haiku
+      // round-trip (or its 4s timeout). Ambiguous and multi-document
+      // requests still go through the AI resolver.
+      if (multiParts.length <= 1 && matches.length === 1) {
+        const chosen = matches[0];
+        return {
+          reply: `Here's your ${chosen.name}.`,
+          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: chosen.id } }],
+          results: [],
+          documentPreview: lazyPreview(chosen) as any,
+        };
+      }
+
+      // ══ AI RESOLVER (ambiguous cases) ═════════════════════════════════════
+      // Reached only when the deterministic scorer above found zero or several
+      // candidates (or a multi-document request). Sends a compact doc index to
+      // Haiku and lets it pick which docs the user wants — handles arbitrary
+      // phrasing ("pull up the Bob DL", "Jane utility bill", "my mortgage
+      // statement from March") without brittle regex rules. Falls through to
+      // the deterministic result handling below if AI fails or times out.
+      try {
+        const profileById = new Map(allProfiles.map((p: any) => [String(p.id), String(p.name || "")]));
+        // Build compact doc index. Cap at 200 docs to keep tokens bounded — if a
+        // user has more, the deterministic matcher takes over.
+        if (allDocs.length <= 200) {
+          const index = allDocs.map((d: any, i: number) => {
+            const linkedIds: string[] = Array.isArray(d.linkedProfiles) ? d.linkedProfiles
+              : Array.isArray(d.linked_profiles) ? d.linked_profiles : [];
+            const linkedNames = linkedIds.map(id => profileById.get(String(id))).filter(Boolean).join(", ");
+            const created = (d.createdAt || d.created_at || "").slice(0, 10);
+            return `${i}\t${d.name}\ttype=${d.type || "?"}\tlinked=[${linkedNames}]\tcreated=${created}`;
+          }).join("\n");
+          const systemPrompt = `You are a strict document picker. The user wants to open one or more documents. Given the user's request and a list of documents, return ONLY the indices of the documents that match.
+
+Rules:
+- If the user names a PERSON (e.g. "Jane's license"), every returned doc MUST be linked to that person.
+- If the user names a DOC TYPE (license, passport, registration, insurance, bill, statement, receipt, etc.), every returned doc MUST be that type. A utility bill is NOT a license.
+- If multiple docs match equally (e.g. user has 2 licenses for the same person), return ALL of them.
+- If the user is vague (e.g. just a person name with no doc type), return the empty list — we'll ask for clarification.
+- If nothing matches, return the empty list.
+- Never invent indices. Only return indices that appear in the list.
+
+Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, no markdown.`;
+          const userPrompt = `User request: ${searchTerm.trim()}\n\nDocuments (index<TAB>name<TAB>type<TAB>linked profiles<TAB>created):\n${index}`;
+          const client = getClient();
+          // Race against a 4s timeout so chat never feels slow on a stuck call.
+          const aiPromise = client.messages.create({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 200,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userPrompt }],
+          });
+          const timeoutPromise = new Promise<null>(resolve => setTimeout(() => resolve(null), 4000));
+          const aiResp: any = await Promise.race([aiPromise, timeoutPromise]);
+          if (aiResp && Array.isArray(aiResp.content)) {
+            const text = aiResp.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("").trim();
+            const jsonMatch = text.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              try {
+                const parsed = JSON.parse(jsonMatch[0]);
+                const indices: number[] = Array.isArray(parsed.indices) ? parsed.indices.filter((n: any) => Number.isInteger(n) && n >= 0 && n < allDocs.length) : [];
+                console.log(`[doc-open AI] search="${searchTerm}" picked=${indices.length} reason="${parsed.reason || ""}"`);
+                if (indices.length > 0) {
+                  const chosen = indices.map(i => allDocs[i]);
+                  // Sort newest first
+                  chosen.sort((a: any, b: any) => {
+                    const ta = new Date(a.createdAt || a.created_at || 0).getTime();
+                    const tb = new Date(b.createdAt || b.created_at || 0).getTime();
+                    return tb - ta;
+                  });
+                  if (chosen.length === 1) {
+                    const d = chosen[0];
+                    // PERF: list rows already carry extracted_data — no
+                    // binary-materializing getDocument() read for a preview.
+                    return {
+                      reply: `Here's your ${d.name}.`,
+                      actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: d.id } }],
+                      results: [],
+                      documentPreview: lazyPreview(d) as any,
+                    };
+                  }
+                  // Multiple matches — show all
+                  const previews = chosen.map((m: any) => lazyPreview(m) as any);
+                  return {
+                    reply: `Found ${chosen.length} matching documents — showing all.`,
+                    actions: chosen.map((m: any) => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.id } })),
+                    results: [],
+                    documentPreview: previews[0],
+                    documentPreviews: previews,
+                  };
+                }
+                // AI returned no indices = ambiguous. Ask for clarification with options.
+                // Show the top candidates (linked to any named person if detectable).
+                if (parsed.reason) {
+                  // Build a short list of likely candidates: any doc linked to a profile
+                  // whose name appears in the query, capped at 6.
+                  const queryLower = searchTerm.toLowerCase();
+                  const matchedProfiles = allProfiles.filter((p: any) => {
+                    const first = String(p.name || "").trim().split(/\s+/)[0].toLowerCase();
+                    return first && first.length >= 2 && queryLower.includes(first);
+                  });
+                  if (matchedProfiles.length > 0) {
+                    const matchedIds = new Set(matchedProfiles.map((p: any) => String(p.id)));
+                    const candidates = allDocs.filter((d: any) => {
+                      const lp: string[] = Array.isArray(d.linkedProfiles) ? d.linkedProfiles : Array.isArray((d as any).linked_profiles) ? (d as any).linked_profiles : [];
+                      return lp.some(id => matchedIds.has(String(id)));
+                    }).slice(0, 6);
+                    if (candidates.length > 0) {
+                      const list = candidates.map((d: any, i: number) => `${i + 1}. ${d.name}`).join("\n");
+                      return {
+                        reply: `Which one did you mean?\n${list}`,
+                        actions: [],
+                        results: [],
+                      };
+                    }
+                  }
+                }
+              } catch (e) {
+                console.log(`[doc-open AI] JSON parse failed: ${e instanceof Error ? e.message : e}`);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`[doc-open AI] AI resolver failed, falling through: ${e instanceof Error ? e.message : e}`);
+      }
+      // ══ END AI RESOLVER (falls through to deterministic matcher below) ══════
       if (multiParts.length > 1) {
         // Search each part separately against all docs
         const multiMatches: Array<{ doc: any; part: string }> = [];
@@ -13745,17 +13774,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         }
         if (multiMatches.length > 1) {
           const names = multiMatches.map(m => m.doc.name);
-          const previews = await Promise.all(multiMatches.map(async (m) => {
-            let ed: any = undefined;
-            try {
-              const full = await storage.getDocument(m.doc.id);
-              ed = (full as any)?.extractedData || (full as any)?.extracted_data;
-            } catch { /* ignore */ }
-            return {
-              id: m.doc.id, name: m.doc.name, mimeType: m.doc.mimeType,
-              data: "__LAZY_LOAD__", extractedData: ed, type: m.doc.type,
-            } as any;
-          }));
+          // PERF: list rows already carry extracted_data — no per-doc
+          // binary-materializing getDocument() reads for previews.
+          const previews = multiMatches.map((m) => lazyPreview(m.doc) as any);
           return {
             reply: `Here are your ${multiMatches.length} documents: ${names.join(", ")}.`,
             actions: multiMatches.map(m => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.doc.id } })),
@@ -13778,33 +13799,17 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         // Single match — just render it
         if (sorted.length === 1) {
           const chosen = sorted[0];
-          let fullDoc: any = chosen;
-          try { fullDoc = await storage.getDocument(chosen.id) || chosen; } catch { /* keep list version */ }
           return {
             reply: `Here's your ${chosen.name}.`,
             actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: chosen.id } }],
             results: [],
-            documentPreview: {
-              id: chosen.id, name: chosen.name, mimeType: chosen.mimeType,
-              data: "__LAZY_LOAD__",
-              extractedData: fullDoc.extractedData || (fullDoc as any).extracted_data || undefined,
-              type: chosen.type,
-            } as any,
+            documentPreview: lazyPreview(chosen) as any,
           };
         }
 
-        // Multiple matches — show ALL of them inline, newest first
-        const previews = await Promise.all(sorted.map(async (m) => {
-          let ed: any = undefined;
-          try {
-            const full = await storage.getDocument(m.id);
-            ed = (full as any)?.extractedData || (full as any)?.extracted_data;
-          } catch { /* ignore */ }
-          return {
-            id: m.id, name: m.name, mimeType: m.mimeType,
-            data: "__LAZY_LOAD__", extractedData: ed, type: m.type,
-          } as any;
-        }));
+        // Multiple matches — show ALL of them inline, newest first.
+        // PERF: list rows already carry extracted_data — no per-doc reads.
+        const previews = sorted.map((m) => lazyPreview(m) as any);
         return {
           reply: `Found ${sorted.length} matching documents — showing all.`,
           actions: sorted.map(m => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.id } })),
@@ -13822,7 +13827,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   try {
     const fp = await tryFastPath(userMessage);
     if (fp.matched) {
-      return { reply: fp.reply, actions: fp.actions, results: fp.results };
+      // Pass lazy document previews through — they used to be dropped here,
+      // which forced the doc branch to inline base64 into the reply text path.
+      return {
+        reply: fp.reply, actions: fp.actions, results: fp.results,
+        ...(fp.documentPreview ? { documentPreview: fp.documentPreview } : {}),
+        ...(fp.documentPreviews?.length ? { documentPreviews: fp.documentPreviews } : {}),
+      };
     }
   } catch { /* fall through to AI */ }
 
@@ -14635,9 +14646,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             logAction(toolUse.name, actionType, String(entityName), entityId, userId);
           }
 
-          // Handle document previews
-          if (toolUse.name === "open_document" && result?.fileData) {
-            const preview = { id: result.id, name: result.name, mimeType: result.mimeType, data: result.fileData };
+          // Handle document previews — lazy: the client fetches the bytes via
+          // GET /api/documents/:id/file, so no base64 rides in the chat reply.
+          if (toolUse.name === "open_document" && result?.id && (result.hasFileData || result.fileData)) {
+            const preview = { id: result.id, name: result.name, mimeType: result.mimeType, data: "__LAZY_LOAD__" };
             if (!documentPreview) documentPreview = preview;
             documentPreviews.push(preview);
           }
@@ -15360,16 +15372,15 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
         return nameNorm.includes(normalized) || normalized.includes(nameNorm) || d.name.toLowerCase().includes(searchTerm);
       });
       if (matches.length > 0) {
-        // Fetch full document with fileData for the actual preview
-        const fullDoc = await storage.getDocument(matches[0].id);
-        if (fullDoc) {
-          return {
-            reply: `Here's your ${fullDoc.name}.`,
-            actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: fullDoc.id } }],
-            results: [{ id: fullDoc.id, name: fullDoc.name, type: fullDoc.type }],
-            documentPreview: fullDoc.fileData ? { id: fullDoc.id, name: fullDoc.name, mimeType: fullDoc.mimeType, data: fullDoc.fileData } : undefined,
-          };
-        }
+        // PERF: lazy preview — the client fetches the bytes via GET
+        // /api/documents/:id/file, so no full-document (binary) read here.
+        const doc = matches[0];
+        return {
+          reply: `Here's your ${doc.name}.`,
+          actions: [{ type: "retrieve" as const, category: "ai" as const, data: { documentId: doc.id } }],
+          results: [{ id: doc.id, name: doc.name, type: doc.type }],
+          documentPreview: { id: doc.id, name: doc.name, mimeType: doc.mimeType, data: "__LAZY_LOAD__" },
+        };
       }
     } catch { /* continue to other handlers */ }
   }

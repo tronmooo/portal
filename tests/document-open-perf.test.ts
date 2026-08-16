@@ -115,6 +115,59 @@ describe("GET /api/documents/:id/file", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Chat: "open my drivers license" must be metadata-only and lazy
+//
+// The reported symptom (2026-08 mobile report): asking chat to open a document
+// took seconds. The chat path still materialized the binary server-side
+// (Storage download + base64) and inlined it into the JSON reply — up to three
+// copies of a multi-MB base64 string over LTE — while the client was going to
+// lazy-fetch the same bytes via /api/documents/:id/file anyway.
+// ─────────────────────────────────────────────────────────────────────────────
+const LICENSE_DOC = {
+  id: "doc-dl",
+  name: "Florida Driver License",
+  type: "drivers_license",
+  mimeType: "image/jpeg",
+  fileData: Buffer.from("license-bytes").toString("base64"),
+  extractedData: { licenseNumber: "S226-116-24", expirationDate: "03/12/2034" },
+  linkedProfiles: [],
+  tags: [],
+  createdAt: "2026-08-01T00:00:00.000Z",
+  updatedAt: "2026-08-01T00:00:00.000Z",
+};
+
+describe('POST /api/chat "open my drivers license"', () => {
+  it("returns a lazy preview without ever materializing the binary", async () => {
+    h.db.documents.push({ ...LICENSE_DOC });
+    const r = await h.api("POST", "/api/chat", { message: "open my drivers license" });
+    expect(r.status).toBe(200);
+    expect(r.data.reply).toContain("Florida Driver License");
+    // The preview points at the document; the client fetches bytes via /file.
+    expect(r.data.documentPreview?.id).toBe("doc-dl");
+    expect(r.data.documentPreview?.data).toBe("__LAZY_LOAD__");
+    // The whole point: opening via chat costs no server-side file transfer…
+    expect(h.db.getDocumentCalls).toBe(0);
+    // …and no base64 rides in the reply, anywhere in the payload.
+    expect(JSON.stringify(r.data)).not.toContain(LICENSE_DOC.fileData);
+  });
+
+  it("still disambiguates: an unrelated document does not match", async () => {
+    h.db.documents.push({ ...LICENSE_DOC });
+    h.db.documents.push({
+      ...LICENSE_DOC,
+      id: "doc-ins",
+      name: "Blue Cross Insurance Card",
+      type: "insurance_card",
+      extractedData: {},
+    });
+    const r = await h.api("POST", "/api/chat", { message: "open my drivers license" });
+    expect(r.status).toBe(200);
+    expect(r.data.documentPreview?.id).toBe("doc-dl");
+    expect(h.db.getDocumentCalls).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Client: the resolved-blob cache
 // ─────────────────────────────────────────────────────────────────────────────
 const apiRequest = vi.fn();
