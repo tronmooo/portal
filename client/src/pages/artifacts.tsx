@@ -877,36 +877,57 @@ export default function ArtifactsPage() {
     return allItems.filter(item => passesProfileFilter(item.source?.linkedProfiles, ctx));
   }, [allItems, filterMode, filterIds, profiles]);
 
-  // Apply tab filter
-  const tabFiltered = useMemo(() => {
-    switch (activeTab) {
-      case "documents": return profileFiltered.filter(i => i.type === "document");
-      case "ai_reports": return profileFiltered.filter(i => i.type === "ai_report");
-      case "scans":     return profileFiltered.filter(i => i.type === "scan");
-      default:          return profileFiltered;
-    }
-  }, [profileFiltered, activeTab]);
+  // ── ONE filter pipeline, one set of counts ─────────────────────────────────
+  //
+  // Every number on this page — the summary tiles, the type chips, the tag
+  // chips and the rendered cards — is derived HERE, from `scopeItems`, using
+  // these three predicates. Before this, "Showing" was `profileFiltered.length`
+  // (the whole profile scope), so the page could say "10 Showing" directly
+  // above "No artifacts yet"; the type chips counted the profile scope while
+  // ignoring the active tag, so "AI Reports 1" led to an empty list once
+  // #drivers_license was selected; and the tag chips ignored the active type
+  // the same way. A count that comes from a different set than the list it
+  // labels is always eventually wrong (user report 2026-08-17).
+  //
+  // The rule each chip follows: a chip's count excludes ONLY its own dimension,
+  // so pressing it always yields exactly that many cards.
+  const matchesType = (i: UnifiedArtifact, tab: FilterTab) =>
+    tab === "documents" ? i.type === "document"
+    : tab === "ai_reports" ? i.type === "ai_report"
+    : tab === "scans" ? i.type === "scan"
+    : true;  // "all"
+  const matchesTag = (i: UnifiedArtifact, tag: string | null) =>
+    !tag || (i.tags || []).some(x => x.toLowerCase() === tag.toLowerCase());
+  const matchesSearch = (i: UnifiedArtifact, q: string) => {
+    const s = q.trim().toLowerCase();
+    if (!s) return true;
+    return i.title.toLowerCase().includes(s)
+      || i.typeLabel.toLowerCase().includes(s)
+      || i.preview.toLowerCase().includes(s)
+      || i.profileName.toLowerCase().includes(s)
+      || (i.tags || []).some(t => t.toLowerCase().includes(s));
+  };
 
-  // Wave 8: apply tag filter (case-insensitive). When a tag is selected we
-  // restrict to items carrying that tag — acts as a virtual folder.
-  const tagFiltered = useMemo(() => {
-    if (!activeTag) return tabFiltered;
-    const t = activeTag.toLowerCase();
-    return tabFiltered.filter(i => (i.tags || []).some(x => x.toLowerCase() === t));
-  }, [tabFiltered, activeTag]);
+  /** THE rendered set. "Showing" is this length, by definition. */
+  const filtered = useMemo(
+    () => profileFiltered.filter(i =>
+      matchesType(i, activeTab) && matchesTag(i, activeTag) && matchesSearch(i, search)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [profileFiltered, activeTab, activeTag, search],
+  );
 
-  // Apply search filter
-  const filtered = useMemo(() => {
-    if (!search.trim()) return tagFiltered;
-    const q = search.toLowerCase();
-    return tagFiltered.filter(i =>
-      i.title.toLowerCase().includes(q) ||
-      i.typeLabel.toLowerCase().includes(q) ||
-      i.preview.toLowerCase().includes(q) ||
-      i.profileName.toLowerCase().includes(q) ||
-      (i.tags || []).some(t => t.toLowerCase().includes(q))
-    );
-  }, [tagFiltered, search]);
+  /** Type-chip counts: scope + tag + search, broken down by type. Excludes the
+   *  type filter itself so each chip predicts its own result. */
+  const typeCounts = useMemo(() => {
+    const base = profileFiltered.filter(i => matchesTag(i, activeTag) && matchesSearch(i, search));
+    return {
+      all: base.length,
+      documents: base.filter(i => i.type === "document").length,
+      ai_reports: base.filter(i => i.type === "ai_report").length,
+      scans: base.filter(i => i.type === "scan").length,
+    } as Record<FilterTab, number>;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileFiltered, activeTag, search]);
 
   // Wave 8: pinned shelf items — always drawn from the post-profile list so it
   // honors the active profile filter, but ignores tab/tag/search so users can
@@ -916,21 +937,28 @@ export default function ArtifactsPage() {
     [profileFiltered],
   );
 
-  // Wave 8: aggregate the tag universe (sorted by frequency desc) for the
-  // filter chip strip. Drawn from profile-filtered items so chip counts match
-  // what's actually selectable.
+  // Tag chips: scope + TYPE + search, counted per tag. Excludes the tag filter
+  // itself so each chip predicts its own result — "#drivers_license 1" under
+  // the AI Reports type now correctly reads 0 and disappears, instead of
+  // advertising a global count that leads to an empty list.
   const allTags = useMemo(() => {
+    const base = profileFiltered.filter(i => matchesType(i, activeTab) && matchesSearch(i, search));
     const counts = new Map<string, number>();
-    for (const i of profileFiltered) {
+    for (const i of base) {
       for (const t of (i.tags || [])) {
         if (!t) continue;
         counts.set(t, (counts.get(t) || 0) + 1);
       }
     }
+    // The active tag always stays visible even when the current type excludes
+    // it — otherwise the chip you just pressed vanishes and you cannot unpress
+    // it. It shows its true count here: 0.
+    if (activeTag && !counts.has(activeTag)) counts.set(activeTag, 0);
     return Array.from(counts.entries())
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([tag, count]) => ({ tag, count }));
-  }, [profileFiltered]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileFiltered, activeTab, activeTag, search]);
 
   const isLoading = docsLoading || artifactsLoading;
 
@@ -971,20 +999,26 @@ export default function ArtifactsPage() {
         </div>
       </div>
 
-      {/* v2 summary band. All three counts derive from `profileFiltered` so they
-          respect the active profile filter — previously Documents/Artifacts read
-          the raw global arrays, so filtering on a profile with no items still
-          showed the full library counts (e.g. "7 / 3 / 0" for a profile that
-          owns nothing). `isArtifact` distinguishes document-source rows from
-          artifact-source rows in the unified list. */}
+      {/* Summary band — all three describe THE VISIBLE SET, and they add up:
+          Files + Artifacts === Showing, always.
+          · Files     = visible rows from the documents table (uploads + scans)
+          · Artifacts = visible rows authored in-app (AI reports, notes, sheets)
+          · Showing   = `filtered.length` — exactly the cards rendered below.
+          Every one of these was wrong before: Showing was the whole profile
+          scope (hence "10 Showing" printed above "No artifacts yet"), and the
+          first tile was labelled "Documents" for the documents-TABLE count
+          while the chip below said "Documents" for the canonical TYPE — 9 next
+          to 0, same word, two meanings. Source (Files/Artifacts) and canonical
+          type (the chips) are different cuts, so they now have different
+          words. */}
       <div className="grid grid-cols-3 gap-2" data-testid="artifacts-summary">
         {[
-          { label: "Documents", value: profileFiltered.filter(i => !i.isArtifact).length, color: "205 90% 58%" },
-          { label: "Artifacts", value: profileFiltered.filter(i => i.isArtifact).length, color: "262 70% 62%" },
-          { label: "Showing", value: profileFiltered.length, color: "155 60% 48%" },
+          { label: "Files", value: filtered.filter(i => !i.isArtifact).length, color: "205 90% 58%", testId: "artifacts-stat-files" },
+          { label: "Artifacts", value: filtered.filter(i => i.isArtifact).length, color: "262 70% 62%", testId: "artifacts-stat-artifacts" },
+          { label: "Showing", value: filtered.length, color: "155 60% 48%", testId: "artifacts-stat-showing" },
         ].map(s => (
           <div key={s.label} className=" bubble  p-2.5 text-center card-lift transition-all"
-            style={{ ["--accent-hsl" as any]: s.color }}>
+            style={{ ["--accent-hsl" as any]: s.color }} data-testid={s.testId}>
             <p className="metric-value text-lg leading-none" style={{ color: `hsl(${s.color})` }}>{s.value}</p>
             <p className="mt-1 micro-label text-muted-foreground">{s.label}</p>
           </div>
@@ -1017,13 +1051,9 @@ export default function ArtifactsPage() {
         {FILTER_TABS.map(tab => {
           const isActive = activeTab === tab.key;
           const Icon = tab.icon;
-          const count = tab.key === "all"
-            ? profileFiltered.length
-            : profileFiltered.filter(i =>
-                tab.key === "documents" ? i.type === "document" :
-                tab.key === "ai_reports" ? i.type === "ai_report" :
-                tab.key === "scans" ? i.type === "scan" : true
-              ).length;
+          // From the one pipeline — scope + tag + search, minus this chip's own
+          // dimension — so the number always equals the cards you get.
+          const count = typeCounts[tab.key];
           return (
             <button
               key={tab.key}
@@ -1117,15 +1147,32 @@ export default function ArtifactsPage() {
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <EmptyState
-          icon={search ? Search : Archive}
-          label={search ? "No results found" : "No artifacts yet"}
-          hint={
-            search
-              ? `Nothing matches "${search}". Try a different search term.`
-              : "Upload documents, write journal entries, or chat with AI to generate reports."
-          }
-        />
+        // "No artifacts yet" is reserved for a genuinely empty scope. When the
+        // library HAS records and the current filters simply exclude them all,
+        // say that instead and offer the way out — telling someone with ten
+        // items that they have none is how the counts and the copy ended up
+        // contradicting each other (user report 2026-08-17).
+        profileFiltered.length === 0 ? (
+          <EmptyState
+            icon={Archive}
+            label="No artifacts yet"
+            hint="Upload documents, write journal entries, or chat with AI to generate reports."
+            testId="artifacts-empty-none"
+          />
+        ) : (
+          <EmptyState
+            icon={Search}
+            label="No items match these filters"
+            hint={[
+              activeTab !== "all" ? FILTER_TABS.find(t => t.key === activeTab)?.label : null,
+              activeTag ? `#${activeTag}` : null,
+              search.trim() ? `"${search.trim()}"` : null,
+            ].filter(Boolean).join(" · ") + ` — ${profileFiltered.length} item${profileFiltered.length === 1 ? "" : "s"} in this profile.`}
+            ctaLabel="Clear filters"
+            onCta={() => { setActiveTab("all"); setActiveTag(null); setSearch(""); }}
+            testId="artifacts-empty-filtered"
+          />
+        )
       ) : activeTab === "documents" && documentGroups ? (
         // Documents tab: grouped by type
         <div className="space-y-5">
