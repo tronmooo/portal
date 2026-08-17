@@ -5747,7 +5747,13 @@ Rules:
     // file through this function first (Storage → serverless Buffer → device),
     // doubling the transfer and showing a spinner until the last byte of the
     // second hop. Legacy base64-in-DB rows still serve from the buffer below.
-    const delivery = await storage.getDocumentDelivery(req.params.id);
+    // ?preview=1 asks for the phone-sized image variant (~10x smaller). The
+    // storage layer generates it on first use and serves the original for
+    // non-images or when generation isn't possible — the client can request it
+    // unconditionally for images.
+    const delivery = await storage.getDocumentDelivery(req.params.id, {
+      preview: String((req.query as any)?.preview || "") === "1",
+    });
     if (!delivery) return res.status(404).json({ error: "Not found" });
     // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
     if (delivery.userId && delivery.userId !== (req as AuthenticatedRequest).userId) {

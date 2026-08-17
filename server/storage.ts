@@ -119,7 +119,10 @@ export interface IStorage {
   // (Storage → serverless Buffer → device), doubling the transfer and holding
   // the first pixel until the LAST byte had crossed both hops. Legacy
   // base64-in-DB rows (and non-Supabase backends) fall back to "buffer".
-  getDocumentDelivery(id: string): Promise<
+  // `opts.preview` requests the phone-sized image preview variant (generated
+  // on demand, ~10x smaller); non-images and generation failures serve the
+  // original transparently.
+  getDocumentDelivery(id: string, opts?: { preview?: boolean }): Promise<
     | { mode: "redirect"; url: string; mimeType: string; name: string; version: string; userId?: string }
     | { mode: "buffer"; buffer: Buffer; mimeType: string; name: string; version: string; userId?: string }
     | undefined>;
@@ -1491,8 +1494,9 @@ export class MemStorage implements IStorage {
       userId: doc.userId,
     };
   }
-  async getDocumentDelivery(id: string) {
-    // In-memory backend has no CDN to redirect to — always serve the buffer.
+  async getDocumentDelivery(id: string, _opts?: { preview?: boolean }) {
+    // In-memory backend has no CDN to redirect to (and no image pipeline) —
+    // always serve the original buffer.
     const file = await this.getDocumentFile(id);
     return file ? { mode: "buffer" as const, ...file } : undefined;
   }

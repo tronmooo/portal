@@ -151,18 +151,21 @@ export function makeFakeStorage(db: FakeDb) {
       };
     },
     // Mirrors SupabaseStorage.getDocumentDelivery: a storagePath means the
-    // bytes live on the storage CDN and the route should 302 to a signed URL;
-    // legacy base64 rows serve through the buffer path.
-    getDocumentDelivery: async (rid: string) => {
+    // bytes live on the storage CDN and the route should 302 to a signed URL
+    // (the phone-sized `.prev.jpg` variant when preview is requested for an
+    // image); legacy base64 rows serve through the buffer path.
+    getDocumentDelivery: async (rid: string, opts?: { preview?: boolean }) => {
       const row = db.documents.find(d => d.id === rid);
       if (!row) return undefined;
       if (row.storagePath) {
+        const preview = !!opts?.preview && /^image\//i.test(row.mimeType || "");
+        const objectPath = preview ? `${row.storagePath}.prev.jpg` : row.storagePath;
         return {
           mode: "redirect" as const,
-          url: `https://storage.example.test/${row.storagePath}?signed=1`,
-          mimeType: row.mimeType || "application/octet-stream",
+          url: `https://storage.example.test/${objectPath}?signed=1`,
+          mimeType: preview ? "image/jpeg" : (row.mimeType || "application/octet-stream"),
           name: row.name || "document",
-          version: `${row.updatedAt || row.createdAt || ""}-r`,
+          version: `${row.updatedAt || row.createdAt || ""}${preview ? "-p" : "-r"}`,
           userId: row.userId,
         };
       }

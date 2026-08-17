@@ -171,7 +171,12 @@ function fetchDocumentBlob(id: string, mimeType: string): Promise<Blob> {
   const pending = inflight.get(id);
   if (pending) return pending;
   const gen = generation.get(id) ?? 0;
-  const p = apiRequest("GET", `/api/documents/${id}/file`)
+  // PERF: images render at phone size, so ask for the server's preview variant
+  // (~10x fewer bytes; generated on demand, originals served until it exists).
+  // PDFs and other types need their full bytes. Download/share flows fetch the
+  // plain /file URL directly, so the original is always one request away.
+  const wantsPreview = /^image\//i.test(mimeType || "");
+  const p = apiRequest("GET", `/api/documents/${id}/file${wantsPreview ? "?preview=1" : ""}`)
     .then((res) => res.blob())
     .then((b) => {
       // Honor the server-declared content type when present.
