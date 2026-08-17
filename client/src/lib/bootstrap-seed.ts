@@ -43,12 +43,39 @@ export function seedDashboardCaches(
   ids: string[],
   month: string,
 ): void {
+  /* NEVER SEED OVER FRESHER DATA.
+     The bootstrap response can be served from the server's response cache
+     minutes after its rows were read, and this function overwrites ~25 list
+     caches from it. Without this guard a cached payload can clobber a list a
+     mutation just refreshed — the user creates a task, leaves the page, comes
+     back, and it is gone until the next refetch. (Caught by the CRUD drive
+     against production while validating this pass; the longer server TTL made
+     an already-possible race easy to hit.)
+
+     `generatedAt` is stamped server-side when the rows were actually read, so
+     any slot whose own data is newer than that keeps what it has. Falls back
+     to "now" for a payload from an older server build, which preserves the
+     previous behavior rather than silently skipping every seed. */
+  const generatedAt = Number(b?.generatedAt) || Date.now();
   for (const { key, data } of bootstrapSeedEntries(b, mode, ids, month)) {
-    queryClient.setQueryData(key, data);
+    const existing = queryClient.getQueryState(key as any);
+    const isFresher = !!existing?.dataUpdatedAt && existing.dataUpdatedAt > generatedAt;
+    /* Second guard, independent of the timestamp: a slot a mutation has
+       invalidated, or one with a fetch already in flight, is about to receive
+       authoritative data — seeding over it would either publish rows the write
+       predates or cause a visible flash. Skipping is safe in both cases: an
+       invalidated query refetches on its next mount regardless of staleTime,
+       and an in-flight fetch writes its own result. This also covers a payload
+       from a server build that predates `generatedAt` (rolling deploy), where
+       the timestamp check alone would fall back to "now" and not protect. */
+    const willBeReplaced = !!existing &&
+      (existing.isInvalidated || existing.fetchStatus === "fetching");
+    if (!isFresher && !willBeReplaced) queryClient.setQueryData(key, data);
     // Defaults are per exact seeded key (scope discriminators included), so
-    // this never widens to an unrelated query. A component that passes its
-    // own staleTime still wins — see the seeded consumers, which deliberately
-    // no longer do.
+    // this never widens to an unrelated query. Applied even when the seed was
+    // skipped: the slot is still bootstrap-covered, and the bootstrap is still
+    // its designated refresher. A component that passes its own staleTime
+    // still wins — see the seeded consumers, which deliberately no longer do.
     queryClient.setQueryDefaults(key as any, { staleTime: SEEDED_STALE_TIME_MS });
   }
 }

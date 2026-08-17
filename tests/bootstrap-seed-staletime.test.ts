@@ -44,8 +44,13 @@ function sampleBootstrap() {
 
 /** Mirrors seedDashboardCaches without importing the app's queryClient singleton. */
 function seedInto(qc: QueryClient, b: any, mode: string, ids: string[], month: string) {
+  const generatedAt = Number(b?.generatedAt) || Date.now();
   for (const { key, data } of bootstrapSeedEntries(b, mode, ids, month)) {
-    qc.setQueryData(key as any, data);
+    const existing = qc.getQueryState(key as any);
+    const isFresher = !!existing?.dataUpdatedAt && existing.dataUpdatedAt > generatedAt;
+    const willBeReplaced = !!existing &&
+      (existing.isInvalidated || existing.fetchStatus === "fetching");
+    if (!isFresher && !willBeReplaced) qc.setQueryData(key as any, data);
     qc.setQueryDefaults(key as any, { staleTime: SEEDED_STALE_TIME_MS });
   }
 }
@@ -211,6 +216,71 @@ describe("requests fired when returning to a section", () => {
     unsub();
 
     expect(fetches).toBe(1);
+  });
+});
+
+/**
+ * REGRESSION: "I created a task, left the page, came back, and it was gone."
+ *
+ * Caught by the CRUD drive against production while validating this pass. The
+ * bootstrap response can be served from the server's response cache minutes
+ * after its rows were read, and seeding overwrites ~25 list caches from it — so
+ * a cached payload could clobber a list a mutation had just refreshed. The
+ * longer server TTL introduced in this pass made an already-possible race easy
+ * to hit, which is why the seeder now refuses to seed over fresher data.
+ */
+describe("a cached bootstrap never clobbers a freshly mutated list", () => {
+  const tasksKey = [...scopedKey("/api/tasks", "everyone", [])];
+
+  it("keeps the newer rows when the payload was read BEFORE the slot was updated", () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const readAt = Date.now() - 60_000; // server read these rows a minute ago
+    // Meanwhile a mutation refreshed the tasks list with the new row.
+    qc.setQueryData(tasksKey, [{ id: "t1" }, { id: "brand-new" }]);
+
+    seedInto(qc, { ...sampleBootstrap(), generatedAt: readAt }, "everyone", [], MONTH);
+
+    expect(qc.getQueryData(tasksKey)).toEqual([{ id: "t1" }, { id: "brand-new" }]);
+  });
+
+  it("still seeds normally when the payload is newer than what's cached", () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(tasksKey, [{ id: "stale" }], { updatedAt: Date.now() - 60_000 });
+
+    seedInto(qc, { ...sampleBootstrap(), generatedAt: Date.now() }, "everyone", [], MONTH);
+
+    expect(qc.getQueryData(tasksKey)).toEqual([{ id: "t1" }]);
+  });
+
+  it("marks the slot bootstrap-covered even when the seed itself was skipped", () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(tasksKey, [{ id: "brand-new" }]);
+    seedInto(qc, { ...sampleBootstrap(), generatedAt: Date.now() - 60_000 }, "everyone", [], MONTH);
+    expect(qc.getQueryDefaults(tasksKey)?.staleTime).toBe(SEEDED_STALE_TIME_MS);
+  });
+
+  it("falls back to seeding when the payload carries no timestamp (older server build)", () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(tasksKey, [{ id: "whatever" }], { updatedAt: Date.now() - 5_000 });
+    const { generatedAt, ...noStamp } = { ...sampleBootstrap(), generatedAt: Date.now() };
+    seedInto(qc, noStamp, "everyone", [], MONTH);
+    expect(qc.getQueryData(tasksKey)).toEqual([{ id: "t1" }]);
+  });
+
+  it("leaves a slot a mutation just invalidated alone, even with no timestamp to compare", async () => {
+    // The rolling-deploy case: the client has the guard but the payload comes
+    // from a server build without `generatedAt`, so the timestamp check cannot
+    // help. The write's invalidation still protects the slot.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(tasksKey, [{ id: "t1" }, { id: "brand-new" }]);
+    await qc.invalidateQueries({ queryKey: ["/api/tasks"], refetchType: "none" });
+
+    const { generatedAt, ...noStamp } = { ...sampleBootstrap(), generatedAt: Date.now() };
+    seedInto(qc, noStamp, "everyone", [], MONTH);
+
+    expect(qc.getQueryData(tasksKey)).toEqual([{ id: "t1" }, { id: "brand-new" }]);
+    // Still invalidated, so it refetches on the next mount — nothing is pinned.
+    expect(qc.getQueryState(tasksKey)?.isInvalidated).toBe(true);
   });
 });
 

@@ -3220,6 +3220,16 @@ ${JSON.stringify(ctx, null, 2)}`;
         // client seed parses each into the shape its consumer caches — see
         // bootstrap-seed-keys.ts.
         preferences: bootstrapPrefs ?? null,
+        // When these rows were actually READ, not when they were served. A
+        // response can be served from the cache above (or the cross-instance
+        // one) minutes after it was computed, and the client seeds ~25 list
+        // caches from it — so without this stamp a cached payload could
+        // overwrite a list that a mutation had just refreshed, and the write
+        // would appear to vanish on the next visit. seedDashboardCaches
+        // compares this against each slot's own timestamp and never seeds over
+        // fresher data. Set inside the dedupe callback so a cache hit carries
+        // its ORIGINAL read time, not the time it was replayed.
+        generatedAt: Date.now(),
         month,
         filterIds: filterIds || [],
       };
