@@ -485,7 +485,14 @@ function getCached(key: string): any | null {
 // Rollout: on by default, SHARED_RESPONSE_CACHE=0 disables; degrades to
 // memory-only automatically when the table doesn't exist yet (first deploy
 // before the migration runs).
-const SHARED_CACHE_PREFIXES = ["bootstrap:", "stats:", "enhanced:", "caltimeline:"];
+// PERF (2026-08-17): expenses/trackers/obligations/incomes added — the
+// Finance and Assets tabs GATE their whole page on /api/expenses and
+// /api/trackers, which were the only hot keys still per-instance. The KPI
+// pills (stats:/enhanced:) were shared and fast while the tab-gating keys
+// recomputed cold on whichever instance caught them — the visible asymmetry
+// behind "pills load, tab spins". Keys are version-stamped (@v), so a write
+// invalidates shared rows exactly like the in-memory tier.
+const SHARED_CACHE_PREFIXES = ["bootstrap:", "stats:", "enhanced:", "caltimeline:", "expenses:", "trackers:", "obligations:", "incomes:"];
 let sharedCacheBroken = false; // latched when the table is missing/unreachable
 const SHARED_CACHE_ENABLED = () =>
   CACHE_ENABLED && !sharedCacheBroken &&
@@ -680,10 +687,19 @@ function cacheBustMiddleware(req: any, res: any, next: any) {
     // cached data is per-user, so there is nothing shared to clear. authMiddleware
     // runs before this (index.ts), so req.userId is populated on /api writes; the
     // rare no-user case (unauthenticated mutating path) falls back to a full clear.
+    //
+    // PERF (2026-08-17): /api/chat busts only when the turn actually MUTATED —
+    // the handler sets res.locals.chatMutated after inspecting the turn's
+    // actions. A read-only turn ("open my drivers license") used to cold-start
+    // every user-scoped cache pre-handler AND on finish, twice per message.
     const uid = (req as any).userId as string | undefined;
-    if (uid) bustUserCaches(uid); else clearAllCache();
+    const chatGated = req.path === "/api/chat";
+    if (!chatGated) {
+      if (uid) bustUserCaches(uid); else clearAllCache();
+    }
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 400) {
+        if (chatGated && !(res as any).locals?.chatMutated) return;
         if (uid) bustUserCaches(uid); else clearAllCache();
       }
     });
@@ -1061,11 +1077,24 @@ export async function registerRoutes(
             .then((v: number) => { if (v) versionMemo.set(uid, { v, at: Date.now() }); })
             .catch(() => { /* next GET resolves the version from the DB */ });
         };
-        // Pre-handler bump covers fast writes; the finish bump covers long
-        // writes (AI chat, 5-30s) whose DB writes land DURING the handler, so a
-        // GET racing mid-handler can't leave stale version-stamped data behind.
-        bumpVersion();
-        res.once("finish", bumpVersion);
+        // PERF (2026-08-17): a chat turn only invalidates when it actually
+        // MUTATED something. The unconditional bump made every "open my
+        // license" globally cold-start all version-stamped caches (bootstrap/
+        // stats/enhanced/expenses/trackers — including the shared Postgres
+        // rows), so the dashboard was never warm for a user who chats. The
+        // chat handler sets res.locals.chatMutated after inspecting the
+        // turn's actions; only a mutating turn bumps, and only on finish
+        // (the version scheme guarantees a mid-handler GET that caches
+        // pre-write data becomes unaddressable once the finish bump lands).
+        if (req.path === "/chat") {
+          res.once("finish", () => { if ((res as any).locals?.chatMutated) bumpVersion(); });
+        } else {
+          // Pre-handler bump covers fast writes; the finish bump covers long
+          // writes whose DB writes land DURING the handler, so a GET racing
+          // mid-handler can't leave stale version-stamped data behind.
+          bumpVersion();
+          res.once("finish", bumpVersion);
+        }
       }
     }
     next();
@@ -1276,10 +1305,19 @@ export async function registerRoutes(
         }))
         .filter(p => p.id);
 
+      // Did this turn actually change anything? Read-only turns (document
+      // opens, navigation, dashboard scoping, pure Q&A) must NOT invalidate
+      // caches or bump the data version — that's what kept the dashboard
+      // permanently cold for anyone using chat. The cacheBust and
+      // version-bump middlewares read this flag on 'finish'.
+      const READ_ONLY_ACTION_TYPES = new Set(["retrieve", "navigate", "set_dashboard_scope"]);
+      const turnMutated = actions.some(a => a?.type && !READ_ONLY_ACTION_TYPES.has(String(a.type)));
+      res.locals.chatMutated = turnMutated;
       // Bug fix: chat may have created/updated profiles, trackers, expenses etc. via
       // internal AI tool calls. Bust the response cache BEFORE sending the response so
-      // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale cache.
-      clearAllCache();
+      // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale
+      // cache — scoped to the mutating user, and only when something mutated.
+      if (turnMutated) bustUserCaches(userId);
       // Hoist a dashboard-scope directive (from set_dashboard_scope) to the top
       // level so the chat client can apply the profile filter without digging
       // through the results array. The engine can't touch the browser filter
@@ -8099,7 +8137,14 @@ No emojis. No prose outside the JSON.`,
 
   // ---- Income ----
   app.get("/api/incomes", asyncHandler(async (req, res) => {
-    let incomes = await storage.getIncomes();
+    // PERF (2026-08-17): this endpoint had no cache at all, yet it's fetched
+    // by BOTH the Finance page and the always-mounted KPI strip. Cache the raw
+    // list (same pattern as /api/expenses); filtering below stays per-request.
+    const incomesUid = cacheUserKey(req as AuthenticatedRequest);
+    const incomesCk = `incomes:${incomesUid}`;
+    const incomesHit = getCached(incomesCk);
+    let incomes = incomesHit || await dedupe(incomesCk, () => storage.getIncomes());
+    if (!incomesHit) setCache(incomesCk, incomes, 5 * 60 * 1000);
     // Support profile filtering: ?profileIds=x,y or ?profileId=x
     const fps = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
@@ -8122,6 +8167,7 @@ No emojis. No prose outside the JSON.`,
   // "Income this month" or "Net cashflow" numbers until the 5-min server
   // cache expired, which made the dashboard look broken.
   const bustIncomeCaches = (uid: string) => {
+    bustCache(`incomes:${uid}`);
     bustCache(`cashflow:${uid}`);
     bustCache(`stats:${uid}`);
     bustCache(`enhanced:`);

@@ -2446,7 +2446,16 @@ Return ONLY the JSON object, nothing else.`;
           label: k.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').replace(/\s+/g, ' ').trim(),
           date: normalizeDateString(v) || String(v),
         }));
-      if (dateEntries.length >= 2) {
+      // PERF (2026-08-17 teardown): this pass exists for multi-row date TABLES
+      // (the Banfield "due in the future" column with blank rows). A parking
+      // receipt has a transaction date AND a time, which tripped the old ≥2
+      // threshold and paid a second thinking-enabled Sonnet round-trip
+      // (10-20s) for a document that has no date table at all. Receipts /
+      // expense-classified documents never take the pass, and everything else
+      // needs a genuinely table-like number of dated fields (≥4).
+      const isReceiptLike = (classification as any)?.destinations?.expense === true
+        || (classification as any)?.category === "Receipt";
+      if (!isReceiptLike && dateEntries.length >= 4) {
         try {
           const verifyList = dateEntries.map((e, i) => `${i + 1}. id="${e.key}" — "${e.label}" = ${e.date}`).join('\n');
           const verifyPrompt = `Look at the SAME document image again. From it I extracted these dated items:

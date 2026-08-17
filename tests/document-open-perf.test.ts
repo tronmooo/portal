@@ -287,6 +287,25 @@ describe('POST /api/chat "open my drivers license"', () => {
     expect(h.db.getDocumentCalls).toBe(0);
   });
 
+  // PERF (2026-08-17): a read-only chat turn must NOT bump the per-user data
+  // version — the bump makes every version-stamped dashboard cache key
+  // (bootstrap/stats/enhanced/expenses/trackers, including the shared Postgres
+  // rows) unaddressable, so every "open my X" cold-started the whole dashboard.
+  it("a read-only document open does NOT bump the data version", async () => {
+    h.db.documents.push({ ...LICENSE_DOC });
+    const r = await h.api("POST", "/api/chat", { message: "open my drivers license" });
+    expect(r.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50)); // let finish listeners run
+    expect(h.db.bumpDataVersionCalls).toBe(0);
+  });
+
+  it("a mutating chat turn still bumps the data version", async () => {
+    const r = await h.api("POST", "/api/chat", { message: "mood good" });
+    expect(r.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(h.db.bumpDataVersionCalls).toBeGreaterThan(0);
+  });
+
   it("still disambiguates: an unrelated document does not match", async () => {
     h.db.documents.push({ ...LICENSE_DOC });
     h.db.documents.push({

@@ -29,4 +29,36 @@ describe("recoverWedgedQueries", () => {
   it("never throws (best-effort lifecycle handler)", async () => {
     await expect(recoverWedgedQueries()).resolves.toBeUndefined();
   });
+
+  // Fix (2026-08-17): StuckLoadingGuard's deadline used to run the RESUME
+  // recovery, which cancels every in-flight /api fetch. A legitimately slow
+  // request (cold Finance tab, honest 13-25s) was aborted at the deadline and
+  // restarted from zero, cold — an unbounded "Retrying automatically…" loop.
+  // Deadline-mode recovery must never cancel an in-flight fetch.
+  it("deadline mode leaves in-flight fetches alone", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date().getTime() + 60_000);
+    // A query that is mid-flight (never resolves) — i.e. "slow, not orphaned".
+    void queryClient.fetchQuery({
+      queryKey: ["/api/expenses", "everyone"],
+      queryFn: () => new Promise(() => { /* still running */ }),
+    }).catch(() => {});
+    const cancelSpy = vi.spyOn(queryClient, "cancelQueries");
+
+    await recoverWedgedQueries("deadline");
+
+    expect(cancelSpy).not.toHaveBeenCalled();
+  });
+
+  it("resume mode still cancels orphaned in-flight fetches (post-freeze fix)", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date().getTime() + 120_000);
+    void queryClient.fetchQuery({
+      queryKey: ["/api/trackers", "everyone"],
+      queryFn: () => new Promise(() => { /* orphaned */ }),
+    }).catch(() => {});
+    const cancelSpy = vi.spyOn(queryClient, "cancelQueries");
+
+    await recoverWedgedQueries("resume");
+
+    expect(cancelSpy).toHaveBeenCalled();
+  });
 });

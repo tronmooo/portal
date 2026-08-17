@@ -23,7 +23,10 @@ const AUTO_RETRY_WINDOW_MS = 10_000;
 
 export function StuckLoadingGuard({
   active,
-  deadlineMs = 12_000,
+  // 20s: the honest COLD load of the heaviest tabs is ~4-12s+ — a deadline
+  // below that fired while the request was still legitimately working
+  // (2026-08-17 report), and the old auto-recovery then cancelled it.
+  deadlineMs = 20_000,
   onRetry,
   children,
 }: {
@@ -46,8 +49,10 @@ export function StuckLoadingGuard({
     if (phase === "idle") {
       const t = setTimeout(() => {
         // Deadline hit: attempt ONE automatic recovery before demanding a tap.
+        // "deadline" mode never cancels an in-flight fetch — a slow request
+        // that was about to land must be allowed to land, not restarted cold.
         setPhase("auto");
-        void recoverWedgedQueries();
+        void recoverWedgedQueries("deadline");
         onRetryRef.current?.();
       }, deadlineMs);
       return () => clearTimeout(t);

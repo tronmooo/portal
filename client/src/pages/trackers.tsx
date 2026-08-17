@@ -5574,7 +5574,7 @@ export default function TrackersPage() {
   // placeholderData:keepPreviousData on the global client, a filter switch
   // keeps prior data while refetching — isPending stays false, the skeleton
   // never flashes, and the page updates in place when the new response arrives.
-  const { data: trackers, isPending } = useQuery<Tracker[]>({
+  const { data: trackers, isPending, refetch: refetchTrackers } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/trackers${trackerProfileParam}`).then(r => r.json()),
   });
@@ -6091,7 +6091,9 @@ export default function TrackersPage() {
   // Skeleton loading state — MUST be after all hooks
   if (showTrackerSkeleton && !trackers && isPending) {
     return (
-      <StuckLoadingGuard active>
+      // onRetry: without it the guard's Retry button never refetched THIS
+      // page's gating query — it only ran the generic cache recovery.
+      <StuckLoadingGuard active onRetry={() => { void refetchTrackers(); }}>
         <div className="p-3 md:p-5 space-y-3">
           <Skeleton className="h-7 w-32" />
           <div className="flex gap-2 overflow-x-hidden">

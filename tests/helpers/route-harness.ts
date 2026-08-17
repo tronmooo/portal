@@ -31,6 +31,9 @@ export interface FakeDb {
   /** Call counter for the binary-materializing read, so a test can prove the
    *  metadata route never touches it. */
   getDocumentCalls: number;
+  /** Call counter for the per-user data-version bump, so a test can prove a
+   *  read-only chat turn does NOT globally invalidate the dashboard caches. */
+  bumpDataVersionCalls: number;
 }
 
 let seq = 0;
@@ -48,6 +51,11 @@ const id = (p: string) => `${p}-${++seq}`;
 export function makeFakeStorage(db: FakeDb) {
   const impl: Record<string, any> = {
     _timezone: "America/Los_Angeles",
+
+    bumpDataVersion: async () => {
+      db.bumpDataVersionCalls++;
+      return db.bumpDataVersionCalls;
+    },
 
     getProfiles: async () => db.profiles,
     getProfilesLite: async () => db.profiles,
@@ -203,7 +211,8 @@ export interface Harness {
 export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness> {
   const db: FakeDb = {
     profiles: [], expenses: [], incomes: [], obligations: [],
-    tasks: [], events: [], documents: [], getDocumentCalls: 0, ...seed,
+    tasks: [], events: [], documents: [], getDocumentCalls: 0,
+    bumpDataVersionCalls: 0, ...seed,
   };
   const storage = makeFakeStorage(db);
 

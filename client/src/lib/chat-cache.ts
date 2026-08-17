@@ -29,10 +29,32 @@ export function loadChatHistory(): ChatMessage[] {
   return [WELCOME_MSG];
 }
 
+// Persisted attachments keep their base64 only when small enough to render a
+// thumbnail after reload without blowing the sessionStorage quota. Above this
+// the data is dropped (the document itself is already saved server-side).
+const PERSIST_ATTACHMENT_DATA_MAX_CHARS = 400_000; // ~400KB of base64
+
 export function saveChatHistory(messages: ChatMessage[]) {
   try {
-    // Keep last 100 messages to avoid storage bloat
-    const toSave = messages.slice(-100);
+    // Keep last 100 messages to avoid storage bloat. PERF (2026-08-17): this
+    // runs on EVERY setMessages, and multi-MB attachment base64 made each call
+    // a multi-MB JSON.stringify that then threw QuotaExceededError silently —
+    // so history quietly stopped persisting the moment a photo was uploaded.
+    // Strip oversized attachment data and NEVER persist blob: previewUrls
+    // (they cannot survive a reload — restoring them renders broken images).
+    const toSave = messages.slice(-100).map((m) => {
+      const att = (m as any).attachment;
+      if (!att) return m;
+      const keepData = typeof att.data === "string" && att.data.length <= PERSIST_ATTACHMENT_DATA_MAX_CHARS;
+      return {
+        ...m,
+        attachment: {
+          ...att,
+          data: keepData ? att.data : "",
+          previewUrl: "",
+        },
+      };
+    });
     sessionStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(toSave));
   } catch { /* storage full — ignore */ }
 }
