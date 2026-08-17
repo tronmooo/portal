@@ -99,7 +99,7 @@
     },
     "api/ai.js": {
       "maxDuration": 300,
-      "memory": 1024,
+      "memory": 1769,
       "includeFiles": "api/chunks/**"
     }
   }

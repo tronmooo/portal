@@ -33,3 +33,8 @@ export async function __traceSharp() { return import("sharp"); }
 
 // Chat SSE streaming (routes.ts /api/chat?stream=1) requires response streaming.
 export const config = { supportsResponseStreaming: true };
+
+// Cold-start head start (AI lambda only): begin parsing the ai-engine chunk
+// graph the moment the base bundle is up, in parallel with the first request,
+// instead of serialized inside its processMessage call.
+loadHandler().then(() => { try { globalThis.__PORTOL_WARM_AI?.(); } catch {} }).catch(() => {});

@@ -68,6 +68,15 @@ export function warmup(authHeader?: Record<string, string>): void {
       keepalive: true,
       headers: authed ? authHeader : undefined,
     }).catch(() => {});
+    // The AI lambda is a SEPARATE Vercel function (vercel.json routes
+    // /api/chat/* to api/ai.js) that /api/warmup never touches — without this
+    // ping the first chat message of every session paid its full cold start
+    // (~2-3s of module parsing) before the fast paths could even run.
+    fetch(`${API_BASE}/api/chat/warmup`, {
+      method: "GET",
+      cache: "no-store",
+      keepalive: true,
+    }).catch(() => {});
   } catch {
     /* ignore */
   }

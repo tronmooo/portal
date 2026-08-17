@@ -291,7 +291,9 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
   // the user is still on the sign-in screen, so the first real request — incl.
   // /api/auth/signin — hits a warm instance instead of timing out with
   // "Load failed"). /version and /client-errors must also work pre-auth.
-  if (req.path === "/warmup" || req.path === "/version" || req.path === "/client-errors") {
+  // /chat/warmup is the same pre-warm for the SEPARATE AI lambda (api/ai.js)
+  // that serves /api/chat — it loads code, touches no user data.
+  if (req.path === "/warmup" || req.path === "/chat/warmup" || req.path === "/version" || req.path === "/client-errors") {
     return next();
   }
 
