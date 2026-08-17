@@ -30,17 +30,18 @@ export function CashFlowView({ open, onOpenChange, filterMode, filterIds }: {
 
   // Same cache slots the dashboard/bootstrap already fill — on the happy path
   // opening this popup issues zero new requests.
+  // [PERF 2026-08-17] No staleTime overrides — both keys are bootstrap-seeded,
+  // and an override beats the seeded default, which made opening this popup
+  // cost two requests once the short window lapsed.
   const { data: enhanced } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
     queryFn: async () => (await apiRequest("GET", `/api/dashboard-enhanced${param}`)).json(),
     enabled: open,
-    staleTime: 30_000,
   });
   const { data: incomesRaw } = useQuery<any>({
     queryKey: ["/api/incomes", filterMode, ...filterIds, "hero"],
     queryFn: () => apiRequest("GET", `/api/incomes${param}`).then(r => r.json()),
     enabled: open,
-    staleTime: 60_000,
   });
 
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];

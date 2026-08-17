@@ -109,28 +109,31 @@ export function HubKpiStrip() {
   const ids = scope.selectedIds;
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
 
+  // [PERF 2026-08-17] All four keys are /api/dashboard-bootstrap-seeded, and
+  // this strip is mounted on EVERY hub route — so its per-query staleTime
+  // overrides (30-60s) put four requests on the critical path of every tab
+  // switch that crossed them, for data the bootstrap re-seeds anyway. Dropping
+  // the overrides lets the seeded default apply (lib/bootstrap-seed.ts).
+  // Freshness is unchanged: mutations invalidate these domains, and
+  // invalidation ignores staleTime.
   const { data: stats } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", mode, ...ids],
     queryFn: () => apiRequest("GET", `/api/stats${param}`).then(r => r.json()),
-    staleTime: 30_000,
     placeholderData: undefined,
   });
   const { data: enhanced } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", mode, ...ids],
     queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${param}`).then(r => r.json()),
-    staleTime: 30_000,
     placeholderData: undefined,
   });
   const { data: incomesRaw } = useQuery<any>({
     queryKey: ["/api/incomes", mode, ...ids, "hero"],
     queryFn: () => apiRequest("GET", `/api/incomes${param}`).then(r => r.json()),
-    staleTime: 60_000,
     placeholderData: undefined,
   });
   const { data: trackers, isPending: trackersPending } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", mode, ...ids],
     queryFn: () => apiRequest("GET", `/api/trackers${param}`).then(r => r.json()),
-    staleTime: 30_000,
     placeholderData: undefined,
   });
 

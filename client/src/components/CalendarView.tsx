@@ -1255,10 +1255,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       apiRequest("GET", timelineUrl).then(r => r.json()),
     // BUG-CAL-001/002/PRF-002: Keep previous data visible while a new month
     // (or profile filter) is loading so the calendar doesn't flash a giant
-    // skeleton for ~2s on every nav. staleTime suppresses redundant refetches
-    // when nothing changed.
+    // skeleton for ~2s on every nav.
     placeholderData: keepPreviousData,
-    staleTime: 60_000,
+    // [PERF 2026-08-17] The 60s staleTime override is gone: for the canonical
+    // window this key is bootstrap-seeded, and an override beats the seeded
+    // default, so returning to the calendar re-fetched the timeline every
+    // minute. Other months (not seeded) fall back to the global default, which
+    // is longer than the 60s this replaced.
   });
 
   // Group items by date (with type + profile filtering)

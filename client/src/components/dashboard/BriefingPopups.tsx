@@ -299,7 +299,8 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
     queryKey: ["/api/dashboard-enhanced", scope.mode, ...scope.selectedIds],
     queryFn: async () => (await apiRequest("GET", `/api/dashboard-enhanced${scopeParam}`)).json(),
     enabled: bills === undefined,
-    staleTime: 30_000,
+    // Bootstrap-seeded key — no staleTime override, so opening this popup is a
+    // cache hit rather than a refetch (see lib/bootstrap-seed.ts).
   });
   const sourceBills = useMemo(
     () => bills ?? dedupeBills((enhanced?.financeSnapshot?.upcomingBills || [])

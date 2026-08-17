@@ -12890,10 +12890,13 @@ export default function ProfileDetailPage() {
     enabled: !!id,
     // PERF: keep the detail in cache so re-opening a profile renders the header
     // and body from cache instantly instead of showing the full-page skeleton on
-    // every visit. Mutations here invalidate this key explicitly, so a short
-    // staleTime never serves stale data after an edit; it just avoids the
-    // redundant cold refetch when navigating back to a profile you just saw.
-    staleTime: 30 * 1000,
+    // every visit. Mutations here invalidate this key explicitly, so staleness
+    // never survives an edit; the window only decides how often an UNCHANGED
+    // profile pays for the ~12-query detail aggregation again.
+    // [PERF 2026-08-17] The 30s override is gone: it made every revisit past
+    // half a minute re-run that aggregation. The global 3-minute default now
+    // applies, matching the server's own response-cache window.
+
     gcTime: 10 * 60 * 1000,
     refetchOnMount: false,
   });
