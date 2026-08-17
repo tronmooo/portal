@@ -112,6 +112,22 @@ describe("GET /api/documents/:id/file", () => {
     const r = await h.api("GET", "/api/documents/doc-3/file");
     expect(r.status).toBe(404);
   });
+
+  // Storage-backed documents must NOT be proxied through the API function —
+  // the double hop (Storage → serverless Buffer → device) was the visible
+  // "spinner for seconds" on every photo/PDF open. The route hands the device
+  // a redirect to the storage CDN instead.
+  it("302s a Storage-backed document straight to the signed CDN URL", async () => {
+    h.db.documents.push({ ...DOC, id: "doc-4", fileData: "", storagePath: "user/doc-4.jpg" });
+    const r = await h.api("GET", "/api/documents/doc-4/file", undefined, undefined, { redirect: "manual" });
+    expect(r.status).toBe(302);
+    expect(r.headers["location"]).toContain("user/doc-4.jpg");
+    // Revalidation still works: same version → 304 without a second redirect.
+    const etag = r.headers["etag"];
+    expect(etag).toBeTruthy();
+    const again = await h.api("GET", "/api/documents/doc-4/file", undefined, { "If-None-Match": etag }, { redirect: "manual" });
+    expect(again.status).toBe(304);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -112,6 +112,17 @@ export interface IStorage {
   // PERF: raw bytes for /api/documents/:id/file. Skips the base64 round-trip
   // (Storage blob → base64 string → Buffer) that getDocument() forces.
   getDocumentFile(id: string): Promise<{ buffer: Buffer; mimeType: string; name: string; version: string; userId?: string } | undefined>;
+  // PERF: how /api/documents/:id/file should deliver the bytes. For
+  // Storage-backed documents the Supabase backend returns a short-lived signed
+  // URL ("redirect") so the device downloads straight from Supabase's edge —
+  // previously every open piped the whole file through the API function
+  // (Storage → serverless Buffer → device), doubling the transfer and holding
+  // the first pixel until the LAST byte had crossed both hops. Legacy
+  // base64-in-DB rows (and non-Supabase backends) fall back to "buffer".
+  getDocumentDelivery(id: string): Promise<
+    | { mode: "redirect"; url: string; mimeType: string; name: string; version: string; userId?: string }
+    | { mode: "buffer"; buffer: Buffer; mimeType: string; name: string; version: string; userId?: string }
+    | undefined>;
   createDocument(data: Partial<InsertDocument> & { name: string; type: string } & Record<string, unknown>): Promise<Document>;
   updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined>;
   deleteDocument(id: string): Promise<boolean>;
@@ -1479,6 +1490,11 @@ export class MemStorage implements IStorage {
       version: `${doc.updatedAt || doc.createdAt || ""}-${buffer.length}`,
       userId: doc.userId,
     };
+  }
+  async getDocumentDelivery(id: string) {
+    // In-memory backend has no CDN to redirect to — always serve the buffer.
+    const file = await this.getDocumentFile(id);
+    return file ? { mode: "buffer" as const, ...file } : undefined;
   }
   async createDocument(data: any): Promise<Document> {
     const document: Document = {
