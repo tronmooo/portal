@@ -205,6 +205,21 @@ import type { SmartFillSource, FillFieldInput } from "./smart-fill";
 // their few call sites await them.
 type AiEngineMod = typeof import("./ai-engine");
 const aiEngineMod = (): Promise<AiEngineMod> => import("./ai-engine");
+
+/** Projection identity for a chat action — the id that links a Capture to the
+ *  typed row the action produced. `documentId` MUST be in the fallback chain:
+ *  the doc-open fast path emits `{ type: "retrieve", data: { documentId } }`
+ *  and nothing else, and its absence made projections empty for every document
+ *  open — which flipped the capture block into its blocking branch and put a
+ *  2-second classifier wait on the fastest reply in the app. */
+export function projectionIdOf(a: any): string {
+  return String(a?.data?.id || a?.id || a?.data?.documentId || a?.data?.trackerName || a?.data?.name || "");
+}
+
+// Cold-start marker for the [chat-timing] log line: true for the first chat
+// turn this instance serves, false after — lets production logs separate
+// cold-start latency from steady-state latency at a glance.
+let chatServedOnce = false;
 const processMessage: AiEngineMod["processMessage"] =
   ((...a: any[]) => aiEngineMod().then((m: any) => m.processMessage(...a))) as any;
 const processFileUpload: AiEngineMod["processFileUpload"] =
@@ -1079,6 +1094,21 @@ export async function registerRoutes(
     setTimeout(() => idempotencyCache.delete(idemKey(userId, key)), IDEM_TTL_MS + 1000);
   }
 
+  // Pre-warm for the AI lambda. /api/chat/* routes to a SEPARATE Vercel
+  // function (api/ai.js — see vercel.json rewrites) that /api/warmup never
+  // touches, so before this route existed the first chat message of every
+  // session paid the AI function's full cold start: container boot + ~2MB base
+  // bundle + ~1MB ai-engine/Anthropic-SDK chunk graph. The client fires this
+  // fire-and-forget on app open (client/src/lib/warmup.ts). PUBLIC like
+  // /api/warmup (auth.ts skip list) and touches no user data — the await on
+  // the module import is deliberate: on Vercel, work started after the
+  // response can be frozen mid-flight, so we hold the (unread) response until
+  // the chunk graph is actually parsed.
+  app.get("/api/chat/warmup", asyncHandler(async (_req, res) => {
+    try { await aiEngineMod(); } catch { /* warmup is best-effort */ }
+    res.json({ ok: true, ts: Date.now() });
+  }));
+
   app.post("/api/chat", asyncHandler(async (req, res) => {
     const userId = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
     if (rateLimit(`chat:${userId}`, 20)) {
@@ -1134,6 +1164,14 @@ export async function registerRoutes(
       if (message.length > 5000) {
         return res.status(400).json({ error: "Message too long (max 5000 characters)" });
       }
+
+      // Build identity + turn clock: X-Portol-Rev confirms from the device
+      // which deploy served the reply; the [chat-timing] log below shows where
+      // the milliseconds went. Set before beginSse() flushes headers.
+      res.setHeader("X-Portol-Rev", String(process.env.VERCEL_GIT_COMMIT_SHA || "dev").slice(0, 7));
+      const tTurnStart = Date.now();
+      const coldTurn = !chatServedOnce;
+      chatServedOnce = true;
 
       /* A3: honor Idempotency-Key. Valid keys are 8-128 chars of
          [A-Za-z0-9._:-]. We don't validate semantics — the client (or a
@@ -1214,6 +1252,7 @@ export async function registerRoutes(
       const sourceMessageId = typeof req.body?.sourceMessageId === "string" && req.body.sourceMessageId.length <= 128
         ? req.body.sourceMessageId
         : undefined;
+      const tEngineStart = Date.now();
       const result = await (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, {
         profileFilterIds,
         debug,
@@ -1222,7 +1261,50 @@ export async function registerRoutes(
         // tool_start / tool_result) straight onto the SSE stream.
         ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),
       });
+      const tEngine = Date.now() - tEngineStart;
       if (idem) setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
+
+      // Projections computed up front — they feed the capture bookkeeping AND
+      // decide whether the reply can ship before it (routed turns can).
+      const actions: any[] = Array.isArray((result as any)?.actions) ? (result as any).actions : [];
+      const projections = actions
+        .filter(a => a && a.type)
+        .map(a => ({
+          kind: String(a.type),
+          id: projectionIdOf(a),
+          at: new Date().toISOString(),
+        }))
+        .filter(p => p.id);
+
+      // Bug fix: chat may have created/updated profiles, trackers, expenses etc. via
+      // internal AI tool calls. Bust the response cache BEFORE sending the response so
+      // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale cache.
+      clearAllCache();
+      // Hoist a dashboard-scope directive (from set_dashboard_scope) to the top
+      // level so the chat client can apply the profile filter without digging
+      // through the results array. The engine can't touch the browser filter
+      // store, so the client does it on receipt.
+      try {
+        const rs: any[] = Array.isArray((result as any)?.results) ? (result as any).results : [];
+        const scoped = rs.find((r) => r && typeof r === "object" && (r as any).scope);
+        if (scoped) (result as any).scope = (scoped as any).scope;
+      } catch { /* non-fatal */ }
+
+      // PERF (2026-08-17 latency teardown): a ROUTED turn — the engine produced
+      // projections or a document preview — ships its `final` frame NOW, before
+      // capture bookkeeping. The capture write still completes before the
+      // stream CLOSES (sse.end() below), so the serverless-freeze guarantee
+      // ("captures must never be lost") is preserved; only the user-visible
+      // wait stops paying for it. Unrouted turns keep the old order because
+      // the classifier's clarifyingQuestion may still amend the reply.
+      const routed = projections.length > 0
+        || !!(result as any)?.documentPreview
+        || ((result as any)?.documentPreviews?.length ?? 0) > 0;
+      let finalSent = false;
+      if (sse && routed) {
+        sse.send("final", result);
+        finalSent = true;
+      }
 
       // ─── Universal Capture (PR Y + Z) ──────────────────────────────
       // Record this message as a Capture so we never lose user input,
@@ -1235,30 +1317,24 @@ export async function registerRoutes(
       // confidence) instead of the PR Y heuristic. When confidence < 0.7
       // and no projections, the clarifyingQuestion is appended to the
       // chat reply so the user can disambiguate in the next turn.
+      let tClassifierWait = 0;
+      let tCapture = 0;
       try {
         if (storage.createCapture) {
-          const actions: any[] = Array.isArray((result as any)?.actions) ? (result as any).actions : [];
-          const projections = actions
-            .filter(a => a && a.type)
-            .map(a => ({
-              kind: String(a.type),
-              id: String(a?.data?.id || a?.id || a?.data?.trackerName || a?.data?.name || ""),
-              at: new Date().toISOString(),
-            }))
-            .filter(p => p.id);
-
           // Classifier result without blocking the reply on it: routed
           // messages take whatever has already settled (Haiku usually
           // finishes well inside a full agent turn); only an unrouted
           // message waits, bounded to 2s, because its clarifyingQuestion may
           // be appended to the reply below. On timeout the heuristic
           // fallbacks in this block handle classification=null as before.
+          const tClassifierStart = Date.now();
           const classification = projections.length > 0
             ? settledClassification
             : await Promise.race([
                 classifierPromise,
                 new Promise<null>(resolve => setTimeout(() => resolve(null), 2000)),
               ]);
+          tClassifierWait = Date.now() - tClassifierStart;
 
           // Prefer classifier output; fall back to action-derived heuristic.
           const typeMap: Record<string, string> = {
@@ -1287,6 +1363,7 @@ export async function registerRoutes(
           const baseConf = typeof classification?.confidence === "number" ? classification.confidence : (projections.length > 0 ? 0.9 : 0.4);
           const captureConf = projections.length > 0 ? Math.max(baseConf, 0.9) : baseConf;
 
+          const tCaptureStart = Date.now();
           await storage.createCapture({
             type: captureType,
             ownerProfileId: captureOwner,
@@ -1306,11 +1383,15 @@ export async function registerRoutes(
             projections,
             clarifyingQuestion: classification?.clarifyingQuestion || null,
           });
+          tCapture = Date.now() - tCaptureStart;
 
           // Surface the clarifying question in the chat reply when the
           // classifier is unsure AND nothing was routed. We only append
-          // (never replace) so the AI's own response stays intact.
+          // (never replace) so the AI's own response stays intact. Skipped
+          // when the final frame already shipped (routed turns) — the reply
+          // is on the wire and routed turns never carried the question anyway.
           if (
+            !finalSent &&
             classification?.clarifyingQuestion &&
             captureConf < 0.7 &&
             projections.length === 0 &&
@@ -1328,24 +1409,16 @@ export async function registerRoutes(
       } catch (err) {
         console.error("[capture] failed to record chat capture:", (err as Error).message);
       }
-      // Bug fix: chat may have created/updated profiles, trackers, expenses etc. via
-      // internal AI tool calls. Bust the response cache BEFORE sending the response so
-      // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale cache.
-      clearAllCache();
-      // Hoist a dashboard-scope directive (from set_dashboard_scope) to the top
-      // level so the chat client can apply the profile filter without digging
-      // through the results array. The engine can't touch the browser filter
-      // store, so the client does it on receipt.
-      try {
-        const rs: any[] = Array.isArray((result as any)?.results) ? (result as any).results : [];
-        const scoped = rs.find((r) => r && typeof r === "object" && (r as any).scope);
-        if (scoped) (result as any).scope = (scoped as any).scope;
-      } catch { /* non-fatal */ }
+
+      // Production latency accounting — one line per turn in the function logs.
+      console.log(`[chat-timing] engine=${tEngine}ms classifierWait=${tClassifierWait}ms capture=${tCapture}ms total=${Date.now() - tTurnStart}ms cold=${coldTurn} routed=${routed}`);
+
       if (sse) {
         // Streaming finalization: the `final` frame carries the EXACT object
         // the buffered path would have sent via res.json — the client's
-        // completion handling is identical either way.
-        sse.send("final", result);
+        // completion handling is identical either way. Routed turns already
+        // shipped it above, before capture bookkeeping.
+        if (!finalSent) sse.send("final", result);
         sse.end();
         return;
       }

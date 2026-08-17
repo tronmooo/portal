@@ -16,6 +16,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { startHarness, type Harness } from "./helpers/route-harness";
+import { projectionIdOf } from "../server/routes";
 
 // "hello" — small, but the assertions are about which reads happen, not size.
 const FILE_B64 = "aGVsbG8=";
@@ -197,6 +198,32 @@ describe('POST /api/chat "open my drivers license"', () => {
     const ids = (r.data.documentPreviews || []).map((p: any) => p.id).sort();
     expect(ids).toEqual(["doc-dl", "doc-dl-2"]);
     for (const p of r.data.documentPreviews) expect(p.data).toBe("__LAZY_LOAD__");
+    expect(h.db.getDocumentCalls).toBe(0);
+  });
+
+  // The doc-open fast path emits { type: "retrieve", data: { documentId } }.
+  // projectionIdOf MUST resolve an id for it: an empty id meant empty capture
+  // projections, which flipped the chat route into its blocking branch and put
+  // an up-to-2s classifier wait on every document open (2026-08-17 teardown).
+  it("projectionIdOf resolves ids for every action shape, including documentId", () => {
+    expect(projectionIdOf({ type: "retrieve", data: { documentId: "doc-dl" } })).toBe("doc-dl");
+    expect(projectionIdOf({ type: "create_task", data: { id: "t1" } })).toBe("t1");
+    expect(projectionIdOf({ type: "log_entry", data: { trackerName: "weight" } })).toBe("weight");
+    expect(projectionIdOf({ type: "create_habit", data: { name: "run" } })).toBe("run");
+    expect(projectionIdOf({ type: "noop", data: {} })).toBe("");
+  });
+
+  // SSE mode: the final frame must carry the full reply. With the reply now
+  // shipped BEFORE capture bookkeeping, this also guards the frame ordering.
+  it("streams ack then final with the reply and lazy preview (?stream=1)", async () => {
+    h.db.documents.push({ ...LICENSE_DOC });
+    const r = await h.api("POST", "/api/chat?stream=1", { message: "open my drivers license" });
+    expect(r.status).toBe(200);
+    const body = typeof r.data === "string" ? r.data : JSON.stringify(r.data);
+    expect(body).toContain("event: ack");
+    expect(body).toContain("event: final");
+    expect(body).toContain("Florida Driver License");
+    expect(body).toContain("__LAZY_LOAD__");
     expect(h.db.getDocumentCalls).toBe(0);
   });
 

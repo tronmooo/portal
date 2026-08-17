@@ -80,3 +80,12 @@ const initPromise = (async () => {
   }
   return app(req, res);
 };
+
+// Cold-start head start for the AI lambda ONLY: api/ai.js's stub (generated in
+// script/build-vercel.ts) calls this right after the base bundle loads, so the
+// ~1MB ai-engine/Anthropic-SDK chunk graph parses IN PARALLEL with the first
+// request's middleware instead of serialized inside processMessage's dynamic
+// import. api/index.js never calls it — its cold-start split stays intact.
+(globalThis as any).__PORTOL_WARM_AI = () => {
+  import("./ai-engine").catch(() => { /* first real AI call will retry */ });
+};

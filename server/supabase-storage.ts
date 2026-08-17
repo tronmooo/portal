@@ -2606,9 +2606,15 @@ export class SupabaseStorage implements IStorage {
 
   // Get the "self" profile (type="self") for this user — used for auto-linking
   async getSelfProfile(): Promise<Profile | undefined> {
-    const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId).eq("type", "self").is("deleted_at", null).limit(1).single();
-    if (error || !data) return undefined;
-    return this.rowToProfile(data);
+    // PERF: request-memoized — a chat turn used to hit this twice (classifier
+    // context + capture owner), two identical Supabase queries per message.
+    // memo() is cleared on every write (invalidateContextCache), so
+    // read-after-write correctness matches getProfiles.
+    return this.memo("getSelfProfile", async () => {
+      const { data, error } = await this.supabase.from("profiles").select("*").eq("user_id", this.userId).eq("type", "self").is("deleted_at", null).limit(1).single();
+      if (error || !data) return undefined;
+      return this.rowToProfile(data);
+    });
   }
 
   /**

@@ -132,7 +132,8 @@ export async function __traceSharp() { return import("sharp"); }
   await writeFile(
     "api/ai.js",
     FUNCTION_STUB +
-      "\n\n// Chat SSE streaming (routes.ts /api/chat?stream=1) requires response streaming.\nexport const config = { supportsResponseStreaming: true };\n"
+      "\n\n// Chat SSE streaming (routes.ts /api/chat?stream=1) requires response streaming.\nexport const config = { supportsResponseStreaming: true };\n" +
+      "\n// Cold-start head start (AI lambda only): begin parsing the ai-engine chunk\n// graph the moment the base bundle is up, in parallel with the first request,\n// instead of serialized inside its processMessage call.\nloadHandler().then(() => { try { globalThis.__PORTOL_WARM_AI?.(); } catch {} }).catch(() => {});\n"
   );
 
   // 3. Copy static files to public/ for Vercel
@@ -223,9 +224,12 @@ export async function __traceSharp() { return import("sharp"); }
       },
       // Chat / upload / smart-fill: multi-round AI turns, client waits up to
       // 170s (queryClient CHAT_TIMEOUT_MS) — server budget stays above that.
+      // memory 1769 = 1 full vCPU on Vercel: the AI lambda parses ~3MB of
+      // minified ESM on cold start, and at 1024MB (~0.6 vCPU) that parse ran
+      // at roughly half speed (2026-08-17 latency teardown).
       "api/ai.js": {
         maxDuration: 300,
-        memory: 1024,
+        memory: 1769,
         includeFiles: "api/chunks/**"
       }
     }
