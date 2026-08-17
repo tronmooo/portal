@@ -13612,9 +13612,22 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       }).filter(s => s.score >= 4).sort((a, b) => b.score - a.score);
       const matches = scored.map(s => s.doc);
 
-      // Check if the user asked for MULTIPLE documents (e.g., "open my registration, license, and birth certificate")
-      // Split on commas / "and" to find multiple search terms
-      const multiParts = cleanSearch.split(/\s*(?:,|\band\b)\s*/).filter(p => p.trim().length >= 2);
+      // Check if the user asked for MULTIPLE documents. Spoken/dictated
+      // requests separate documents with a repeated possessive and no commas —
+      // "open my license my car insurance for my honda and my registration" —
+      // so a possessive "my" that starts a new noun phrase is a boundary too
+      // (2026-08-17 report: that phrasing returned 2 of 3 documents because
+      // "my" was stripped as filler BEFORE the comma/"and" split, fusing two
+      // documents into one part that could only score one winner). A "my"
+      // right after a preposition ("insurance for my honda") modifies the
+      // CURRENT phrase and must NOT split, so those are collapsed first.
+      const splitDocRequestParts = (raw: string): string[] => raw
+        .replace(/\b(for|of|on|in|to|with|from|about)\s+my\b/gi, "$1")
+        .split(/\s*(?:,|\band\b|&|\bplus\b|\balso\b|\bmy\b)\s*/i)
+        .map(p => p.replace(/\b(for|of|the|a|an|my)\b\s*/gi, " ").replace(/\s+/g, " ").trim())
+        .filter(p => p.length >= 2);
+      // Split the RAW search term — cleanSearch has already had "my" stripped.
+      const multiParts = splitDocRequestParts(searchTerm);
 
       // Deterministic result handling — instant, no model call. A request that
       // matches ANY document(s) here is answered immediately; showing every
@@ -13623,14 +13636,37 @@ export async function processMessage(userMessage: string, conversationHistory?: 
       if (multiParts.length > 1) {
         // Search each part separately against all docs
         const multiMatches: Array<{ doc: any; part: string }> = [];
+        const missedParts: string[] = [];
         const usedIds = new Set<string>();
         for (const part of multiParts) {
           const partVariants = expandWithSynonyms(part.trim());
+          // HARD GATE, same rule as the whole-phrase matcher below: when the
+          // part names a doc-type term ("insurance", "registration", …), only
+          // documents carrying that term (or a synonym) can satisfy it.
+          // Without this, an "insurance" part with no insurance doc stored
+          // greedily consumed the REGISTRATION doc on generic words
+          // ("vehicle" + "honda"), which then starved the registration part.
+          const partTypeTerms = new Set<string>();
+          for (const w of part.trim().split(/\s+/).map(x => x.toLowerCase())) {
+            const ws = stem(w);
+            if (DOC_TYPE_TERMS.has(w) || (ws.length >= 3 && DOC_TYPE_TERMS.has(ws))) {
+              partTypeTerms.add(w);
+              for (const syn of synonymMap[w] || synonymMap[ws] || []) partTypeTerms.add(syn);
+            }
+          }
           const partScored = allDocs.filter(d => !usedIds.has(d.id)).map(d => {
             const nLC = d.name.toLowerCase();
             const tLC = (d.type || "").toLowerCase().replace(/_/g, " ");
             const nNorm = nLC.replace(/[''\-_\u2013\u2014]/g, " ").replace(/\s+/g, " ");
             const s = `${nNorm} ${tLC}`;
+            if (partTypeTerms.size > 0) {
+              const hasRequired = Array.from(partTypeTerms).some(t => {
+                if (s.includes(t)) return true;
+                const ts = stem(t);
+                return ts.length >= 3 && s.includes(ts);
+              });
+              if (!hasRequired) return { doc: d, score: -1 }; // wrong doc type for this part
+            }
             let sc = 0;
             for (const v of partVariants) {
               const vn = v.replace(/[''\-_]/g, "");
@@ -13645,15 +13681,29 @@ export async function processMessage(userMessage: string, conversationHistory?: 
           if (partScored.length > 0) {
             multiMatches.push({ doc: partScored[0].doc, part: part.trim() });
             usedIds.add(partScored[0].doc.id);
+          } else {
+            missedParts.push(part.trim());
           }
         }
-        if (multiMatches.length > 1) {
+        // Return whenever the multi-request resolved at least one document AND
+        // there's something multi-specific to say — several documents, or a
+        // part that matched nothing. Naming the misses matters: silently
+        // showing 2 of 3 left the user unable to tell a matching failure from
+        // a document that simply isn't stored. A single-part request with no
+        // misses falls through to the (stronger) whole-phrase matcher below.
+        if (multiMatches.length >= 1 && (multiMatches.length > 1 || missedParts.length > 0)) {
           const names = multiMatches.map(m => m.doc.name);
           // PERF: list rows already carry extracted_data — no per-doc
           // binary-materializing getDocument() reads for previews.
           const previews = multiMatches.map((m) => lazyPreview(m.doc) as any);
+          let reply = multiMatches.length === 1
+            ? `Here's "${names[0]}".`
+            : `Here are your ${multiMatches.length} documents: ${names.join(", ")}.`;
+          if (missedParts.length > 0) {
+            reply += `\n\nI couldn't find anything matching: ${missedParts.map(p => `"${p}"`).join(", ")}. If ${missedParts.length === 1 ? "that document is" : "those documents are"} saved under a different name, try opening ${missedParts.length === 1 ? "it" : "them"} by that name.`;
+          }
           return {
-            reply: `Here are your ${multiMatches.length} documents: ${names.join(", ")}.`,
+            reply,
             actions: multiMatches.map(m => ({ type: "retrieve" as const, category: "ai" as const, data: { documentId: m.doc.id } })),
             results: [], // Avoid duplicate ConfirmationCards
             documentPreview: previews[0],

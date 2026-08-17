@@ -227,6 +227,66 @@ describe('POST /api/chat "open my drivers license"', () => {
     expect(h.db.getDocumentCalls).toBe(0);
   });
 
+  // Spoken/dictated multi-document requests separate documents with a repeated
+  // possessive, no commas: "my X my Y and my Z". 2026-08-17 report: this exact
+  // phrasing returned 2 of 3 documents because the splitter only broke on
+  // commas/"and", fusing "drivers license" + "car insurance" into one part.
+  it('resolves EVERY document in a "my X my Y and my Z" request', async () => {
+    h.db.documents.push({ ...LICENSE_DOC });
+    h.db.documents.push({
+      ...LICENSE_DOC, id: "doc-ins", name: "Progressive Auto Insurance Card – Honda CRV",
+      type: "insurance_card", extractedData: {},
+    });
+    h.db.documents.push({
+      ...LICENSE_DOC, id: "doc-reg", name: "CA Vehicle Registration – Honda 2021",
+      type: "registration", extractedData: {},
+    });
+    const r = await h.api("POST", "/api/chat", {
+      message: "Open up my drivers license my car insurance for my Honda CRV and my car registration for my Honda CRV",
+    });
+    expect(r.status).toBe(200);
+    const ids = (r.data.documentPreviews || []).map((p: any) => p.id).sort();
+    expect(ids).toEqual(["doc-dl", "doc-ins", "doc-reg"]);
+    for (const p of r.data.documentPreviews) expect(p.data).toBe("__LAZY_LOAD__");
+    expect(h.db.getDocumentCalls).toBe(0);
+  });
+
+  it("names the part it could NOT find instead of silently dropping it", async () => {
+    h.db.documents.push({ ...LICENSE_DOC });
+    h.db.documents.push({
+      ...LICENSE_DOC, id: "doc-reg", name: "CA Vehicle Registration – Honda 2021",
+      type: "registration", extractedData: {},
+    });
+    // No insurance document exists.
+    const r = await h.api("POST", "/api/chat", {
+      message: "Open up my drivers license my car insurance for my Honda CRV and my car registration for my Honda CRV",
+    });
+    expect(r.status).toBe(200);
+    const ids = (r.data.documentPreviews || []).map((p: any) => p.id).sort();
+    expect(ids).toEqual(["doc-dl", "doc-reg"]);
+    expect(r.data.reply.toLowerCase()).toContain("couldn't find");
+    expect(r.data.reply.toLowerCase()).toContain("insurance");
+  });
+
+  it("comma-separated lists still resolve every document", async () => {
+    h.db.documents.push({ ...LICENSE_DOC });
+    h.db.documents.push({
+      ...LICENSE_DOC, id: "doc-reg", name: "CA Vehicle Registration – Honda 2021",
+      type: "registration", extractedData: {},
+    });
+    h.db.documents.push({
+      ...LICENSE_DOC, id: "doc-pass", name: "US Passport – Sennabaum",
+      type: "passport", extractedData: {},
+    });
+    const r = await h.api("POST", "/api/chat", {
+      message: "open my drivers license, car registration and passport",
+    });
+    expect(r.status).toBe(200);
+    const ids = (r.data.documentPreviews || []).map((p: any) => p.id).sort();
+    expect(ids).toEqual(["doc-dl", "doc-pass", "doc-reg"]);
+    expect(h.db.getDocumentCalls).toBe(0);
+  });
+
   it("still disambiguates: an unrelated document does not match", async () => {
     h.db.documents.push({ ...LICENSE_DOC });
     h.db.documents.push({
