@@ -603,7 +603,19 @@ let hiddenAt = 0;
 const RESUME_DEDUP_MS = 3_000;
 let lastRecoverAt = 0;
 
-export async function recoverWedgedQueries(): Promise<void> {
+/**
+ * @param reason Why recovery is running:
+ *  - "resume" (default): the app came back from a freeze — an in-flight fetch
+ *    is very likely an ORPHAN whose promise will never settle, so cancelling
+ *    and restarting it is the fix.
+ *  - "deadline": a loading UI hit its patience deadline (StuckLoadingGuard).
+ *    An in-flight fetch here is almost always a LEGITIMATELY SLOW request —
+ *    cancelling it restarts the work from zero on a cold backend and turned
+ *    "slow but finite" into an unbounded retry loop (2026-08-17 report: the
+ *    Finance/Assets tabs could never finish loading). For "deadline" we leave
+ *    in-flight fetches alone and only re-kick errored/dataless queries.
+ */
+export async function recoverWedgedQueries(reason: "resume" | "deadline" = "resume"): Promise<void> {
   const now = Date.now();
   if (now - lastRecoverAt < RESUME_DEDUP_MS) return;
   lastRecoverAt = now;
@@ -611,7 +623,7 @@ export async function recoverWedgedQueries(): Promise<void> {
     const isApiQuery = (q: { queryKey?: readonly unknown[] }) =>
       String(q.queryKey?.[0] || "").startsWith("/api/");
     const all = queryClient.getQueryCache().getAll();
-    const wedged = all.filter((q) =>
+    const wedged = reason === "deadline" ? [] : all.filter((q) =>
       q.state.fetchStatus === "fetching" && isApiQuery(q),
     );
     // FROZEN-REJECTION FIX (2026-07-21): a fetch can also REJECT while the tab

@@ -165,16 +165,17 @@ export default function FinancePage() {
     queryKey: ["/api/obligations", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
   });
+  // PERF (2026-08-17): refetchOnMount:"always" was dropped from both queries
+  // below. It forced a network round-trip on EVERY Finance mount, gating the
+  // whole page on a cold serverless recompute. staleTime + mutation-driven
+  // invalidation (every write invalidates these keys) already keep them fresh.
   const { data: enhanced } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}`).then(r => r.json()),
-    // Always refetch on mount so KPI tiles never show stale aggregates after navigating here
-    refetchOnMount: "always",
   });
   const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
     queryKey: ["/api/expenses", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
-    refetchOnMount: "always",
   });
   // Expenses page controls — persisted in localStorage so the toolbar survives
   // reloads (search + category + sort + date range).

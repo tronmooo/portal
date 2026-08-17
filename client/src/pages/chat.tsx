@@ -1157,7 +1157,20 @@ function ExtractionConfirmation({
           size="sm"
           className="h-7 text-xs"
           onClick={() => handleConfirm()}
-          disabled={confirming || fields.every((f) => !f.selected)}
+          disabled={
+            // Enabled as long as ANYTHING is selected. Requiring a profile
+            // field made "just save the $475 total as an expense" impossible —
+            // deselect-all + Create expense left a dead Confirm button
+            // (2026-08-17 report). The server only needs extractionId; the
+            // expense/obligation/tracker saves are independent of the fields.
+            confirming || (
+              fields.every((f) => !f.selected) &&
+              !createExpense &&
+              !createObligation &&
+              !addManualExpense &&
+              !selectedTrackers.some(Boolean)
+            )
+          }
         >
           {confirming ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}
           Confirm
@@ -1963,15 +1976,21 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
 // uses async convertToBlob/toBlob instead of synchronous toDataURL. The legacy
 // FileReader+canvas path below remains the fallback for browsers without
 // (working) createImageBitmap orientation support.
-const IMG_BUDGET_MB = 3.6; // stay safely under Vercel's ~4.5MB request body limit
-// Highest quality first; step down only if the encoded image is too big.
+// PERF (2026-08-17 teardown): the old budget was 3.6MB compared against the
+// DECODED byte count (b64.length * 0.75) — but the request carries the base64
+// STRING, so a "3.6MB" image was really ~4.8MB on the wire (over Vercel's
+// ~4.5MB body limit at the top end), and the ladder started at 3072px/q0.92,
+// shipping receipts at near-full camera resolution. That cost 10-20x the
+// uplink time AND ~4x the vision tokens on every server-side model pass.
+// 1600px is plenty for AI extraction of documents/receipts; the budget now
+// measures the actual wire size.
+const IMG_BUDGET_MB = 1.2; // WIRE size (base64 string length), not decoded bytes
 const IMG_ATTEMPTS: Array<{ dim: number; q: number }> = [
-  { dim: 3072, q: 0.92 },
-  { dim: 3072, q: 0.85 },
-  { dim: 2048, q: 0.85 },
   { dim: 1600, q: 0.8 },
+  { dim: 1280, q: 0.75 },
+  { dim: 1024, q: 0.7 },
 ];
-const b64SizeMB = (b64: string) => b64.length * 0.75 / 1024 / 1024;
+const b64SizeMB = (b64: string) => b64.length / 1024 / 1024;
 
 const blobToBase64 = (blob: Blob): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -2120,14 +2139,14 @@ const correctImageOrientation = (file: File): Promise<string> => {
           return canvas;
         };
 
-        const sizeMB = (b64: string) => b64.length * 0.75 / 1024 / 1024;
-        const BUDGET_MB = 3.6; // stay safely under Vercel's ~4.5MB request body limit
-        // Highest quality first; fall back only if the encoded image is too big.
+        // Keep in lockstep with IMG_BUDGET_MB / IMG_ATTEMPTS above: WIRE-size
+        // budget, 1600px ladder (see the 2026-08-17 teardown note there).
+        const sizeMB = (b64: string) => b64.length / 1024 / 1024;
+        const BUDGET_MB = 1.2;
         const attempts: Array<{ dim: number; q: number }> = [
-          { dim: 3072, q: 0.92 },
-          { dim: 3072, q: 0.85 },
-          { dim: 2048, q: 0.85 },
           { dim: 1600, q: 0.8 },
+          { dim: 1280, q: 0.75 },
+          { dim: 1024, q: 0.7 },
         ];
         let compressed = '';
         for (const a of attempts) {
@@ -2294,8 +2313,12 @@ const MessageRow = memo(function MessageRow({
             <div className="mb-2 rounded-lg overflow-hidden h-48">
               <img
                 src={
-                  msg.attachment.previewUrl ||
-                  `data:${msg.attachment.mimeType};base64,${msg.attachment.data}`
+                  // Durable source FIRST: previewUrl is a blob: URL that dies
+                  // on revoke (upload success used to revoke it → broken image
+                  // right as the reply arrived) and never survives a reload.
+                  msg.attachment.data
+                    ? `data:${msg.attachment.mimeType};base64,${msg.attachment.data}`
+                    : msg.attachment.previewUrl
                 }
                 alt={msg.attachment.name}
                 height={192}
@@ -3261,12 +3284,13 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, assistantMsg]);
       // Only NOW release the staged attachment — it stays attached through
       // failures so a dropped connection never costs the user their photo.
+      // Do NOT revoke the blob URL: the posted user bubble shares the same
+      // URL string, and revoking it here broke the transcript image the
+      // instant the reply arrived (2026-08-17 report). The URL is page-scoped
+      // and the attachment is a few hundred KB — letting it live is fine.
       setAttachments((prev) => {
         for (const a of prev) {
-          if (a.previewUrl) {
-            URL.revokeObjectURL(a.previewUrl);
-            attachmentDataRef.current.delete(a.previewUrl);
-          }
+          if (a.previewUrl) attachmentDataRef.current.delete(a.previewUrl);
         }
         return [];
       });
@@ -3430,11 +3454,10 @@ export default function ChatPage() {
       // connection never costs the user their files — re-uploads are safe
       // because the server dedupes identical files by content hash.
       if (error) { pendingBatchAttachmentsRef.current = []; return; }
+      // No revoke: posted user bubbles share these blob URLs (see the single
+      // upload onSuccess note) — revoking broke transcript thumbnails.
       pendingBatchAttachmentsRef.current.forEach(a => {
-        if (a.previewUrl) {
-          URL.revokeObjectURL(a.previewUrl);
-          attachmentDataRef.current.delete(a.previewUrl);
-        }
+        if (a.previewUrl) attachmentDataRef.current.delete(a.previewUrl);
       });
       pendingBatchAttachmentsRef.current = [];
       setAttachments([]);
@@ -4102,6 +4125,12 @@ export default function ChatPage() {
                         const name = t.tool.replace(/_/g, " ");
                         return label && label !== t.tool ? `${name}: ${label}…` : `${name}…`;
                       })()}
+                    </span>
+                  ) : (uploadMutation.isPending || batchUploadMutation.isPending) ? (
+                    // Uploads have no tool stream — say what's happening instead
+                    // of anonymous dots for the whole 10-30s round trip.
+                    <span className="text-xs text-muted-foreground" data-testid="upload-progress-indicator">
+                      Uploading &amp; reading your document…
                     </span>
                   ) : (
                     <SlowResponseHint />

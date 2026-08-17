@@ -217,9 +217,13 @@ export async function __traceSharp() { return import("sharp"); }
       // includeFiles: belt-and-braces so the code-split chunks (loaded via
       // dynamic import from _bundle.mjs) always ship with the function even
       // if Vercel's file tracer misses a specifier.
+      // memory 1769 = 1 full vCPU: the dashboard aggregations (getStats /
+      // getDashboardEnhanced / bootstrap) hold whole tables in the JS heap,
+      // run ~15 filter passes and serialize multi-hundred-KB payloads — all
+      // CPU-bound work that ran at ~0.6 vCPU before (2026-08-17 teardown).
       "api/index.js": {
         maxDuration: 60,
-        memory: 1024,
+        memory: 1769,
         includeFiles: "api/chunks/**"
       },
       // Chat / upload / smart-fill: multi-round AI turns, client waits up to
