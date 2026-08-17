@@ -35,7 +35,10 @@ function sampleBootstrap() {
     habits: [{ id: "h1" }],
     expenses: [{ id: "e1" }],
     notifications: [{ id: "n1" }],
-    dismissedNotifications: JSON.stringify(["n-old"]),
+    preferences: {
+      dismissed_notifications: JSON.stringify(["n-old"]),
+      dashboard_layout: "hero,finance",
+    },
   };
 }
 
@@ -211,32 +214,37 @@ describe("requests fired when returning to a section", () => {
   });
 });
 
-describe("dismissed-notification seed", () => {
-  it("seeds the shared preference slot the bell and Executive Brief both read", () => {
-    const entries = bootstrapSeedEntries(sampleBootstrap(), "everyone", [], MONTH);
-    const hit = entries.find(
-      (e) => JSON.stringify(e.key) === JSON.stringify(["/api/preferences/dismissed_notifications"]),
-    );
-    expect(hit?.data).toEqual(["n-old"]);
+describe("preference seeds", () => {
+  const find = (b: any, key: unknown[]) =>
+    bootstrapSeedEntries(b, "everyone", [], MONTH)
+      .find((e) => JSON.stringify(e.key) === JSON.stringify(key));
+
+  const DISMISSED_KEY = ["/api/preferences/dismissed_notifications"];
+  const LAYOUT_KEY = ["/api/preferences", "dashboard_layout"];
+
+  it("seeds the dismissed-ids slot the bell and Executive Brief both read", () => {
+    expect(find(sampleBootstrap(), DISMISSED_KEY)?.data).toEqual(["n-old"]);
   });
 
   it("treats a malformed stored preference as 'nothing dismissed' rather than throwing", () => {
-    const entries = bootstrapSeedEntries(
-      { ...sampleBootstrap(), dismissedNotifications: "{not json" },
-      "everyone", [], MONTH,
-    );
-    const hit = entries.find(
-      (e) => JSON.stringify(e.key) === JSON.stringify(["/api/preferences/dismissed_notifications"]),
-    );
-    expect(hit?.data).toEqual([]);
+    const b = { ...sampleBootstrap(), preferences: { dismissed_notifications: "{not json" } };
+    expect(find(b, DISMISSED_KEY)?.data).toEqual([]);
   });
 
-  it("does NOT seed the slot when the payload predates the field (an old cached bootstrap must not clobber it)", () => {
-    const { dismissedNotifications, ...withoutField } = sampleBootstrap();
-    const entries = bootstrapSeedEntries(withoutField, "everyone", [], MONTH);
-    const hit = entries.find(
-      (e) => JSON.stringify(e.key) === JSON.stringify(["/api/preferences/dismissed_notifications"]),
-    );
-    expect(hit).toBeUndefined();
+  it("seeds the layout slot in the endpoint's own response shape", () => {
+    expect(find(sampleBootstrap(), LAYOUT_KEY)?.data).toEqual({ value: "hero,finance" });
+  });
+
+  it("seeds an UNSET layout as { value: null } — the shape GET /api/preferences/:key returns", () => {
+    // A bare null would be skipped by the seeder, leaving the slot empty and
+    // the request still firing — the exact round trip this seed removes.
+    const b = { ...sampleBootstrap(), preferences: { dismissed_notifications: "[]" } };
+    expect(find(b, LAYOUT_KEY)?.data).toEqual({ value: null });
+  });
+
+  it("does NOT seed these slots when the payload predates the field (an old cached bootstrap must not clobber them)", () => {
+    const { preferences, ...withoutField } = sampleBootstrap();
+    expect(find(withoutField, DISMISSED_KEY)).toBeUndefined();
+    expect(find(withoutField, LAYOUT_KEY)).toBeUndefined();
   });
 });

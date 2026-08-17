@@ -76,18 +76,31 @@ export function bootstrapSeedEntries(
     );
   }
   add(k("/api/notifications"), b.notifications);
-  // Dismissed-notification ids (NotificationBell + Executive Brief both read
-  // this unscoped key). The payload carries the RAW preference value (JSON
-  // string or null); consumers cache the parsed array, so parse here. Only
-  // seed when the field is present — an older cached payload without it must
-  // not clobber the slot with a wrong empty list.
-  if ("dismissedNotifications" in b) {
+  // Preferences the dashboard blocks on. The payload carries RAW stored values
+  // (JSON string, or null when unset); each consumer caches a different shape,
+  // so seed exactly what that consumer's own queryFn would have produced.
+  // Only seed when `preferences` is present — an older cached payload without
+  // it must not clobber these slots with wrong defaults.
+  //
+  // attention_prefs is deliberately NOT seeded here: its cached shape is the
+  // merged AttentionConfig, and reproducing that would pull the attention
+  // module graph into the pre-mount entry chunk (this module is imported by
+  // queryClient.ts). It already carries a 5-minute staleTime, so it is not
+  // part of the refetch-on-every-visit problem.
+  if (b.preferences && typeof b.preferences === "object") {
+    const prefs = b.preferences as Record<string, string | null>;
+    // NotificationBell + Executive Brief cache the parsed id array.
     let dismissed: string[] = [];
     try {
-      const parsed = JSON.parse(b.dismissedNotifications || "[]");
+      const parsed = JSON.parse(prefs.dismissed_notifications || "[]");
       if (Array.isArray(parsed)) dismissed = parsed;
     } catch { /* malformed pref — treat as none dismissed, same as consumers */ }
     add(["/api/preferences/dismissed_notifications"], dismissed);
+    // dashboard.tsx caches the endpoint's response verbatim, and GET
+    // /api/preferences/:key answers { value: null } for an unset key — so an
+    // unset layout seeds that shape, not a bare null (which `add` would skip,
+    // leaving the slot empty and the request still firing).
+    add(["/api/preferences", "dashboard_layout"], { value: prefs.dashboard_layout ?? null });
   }
   return out;
 }

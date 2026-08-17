@@ -3052,7 +3052,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       const nwProfileId = filterIds && filterIds.length === 1 ? filterIds[0] : undefined;
       const [stats, profiles, incomes, expensesForBudget, budgets, obligationsAll, assetPartyLinks, liabilityProfileLinks,
         tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll,
-        calendarTimelineAll, notificationsAll, netWorthHistory, dismissedNotifPref] = await Promise.all([
+        calendarTimelineAll, notificationsAll, netWorthHistory, bootstrapPrefs] = await Promise.all([
         cachedStats ?? dedupe(statsCacheKey, async () => {
           // sharedFetches: this same request fetches every table unfiltered
           // for the seed payloads + buildNotifications below — let getStats
@@ -3095,12 +3095,16 @@ ${JSON.stringify(ctx, null, 2)}`;
         typeof (storage as any).getNetWorthHistory === "function"
           ? (storage as any).getNetWorthHistory(nwProfileId, 120).catch(() => [] as any[])
           : Promise.resolve([] as any[]),
-        // [PERF] Dismissed-notification ids ride along so the client seeds the
-        // NotificationBell + Executive Brief's shared query instead of firing a
-        // separate /api/preferences GET on the login critical path (measured
-        // 2.7-5.2s on a cold instance).
+        // [PERF] The preferences the dashboard blocks on ride along so the
+        // client seeds their cache slots instead of firing separate
+        // /api/preferences GETs on the login critical path (measured 0.6-5.2s
+        // each on a cold instance). Each is one indexed single-row read.
         typeof (storage as any).getPreference === "function"
-          ? (storage as any).getPreference("dismissed_notifications").catch(() => null)
+          ? Promise.all([
+              (storage as any).getPreference("dismissed_notifications").catch(() => null),
+              (storage as any).getPreference("dashboard_layout").catch(() => null),
+            ]).then(([dismissed_notifications, dashboard_layout]: any[]) =>
+              ({ dismissed_notifications, dashboard_layout }))
           : Promise.resolve(null),
       ]);
 
@@ -3212,9 +3216,10 @@ ${JSON.stringify(ctx, null, 2)}`;
         // Hero trend-line series (see nwProfileId above). Already scoped by the
         // storage call, so no extra filtering.
         netWorthHistory: Array.isArray(netWorthHistory) ? netWorthHistory : [],
-        // Raw preference value (JSON string of dismissed ids, or null). The
-        // client seed parses it — see bootstrap-seed-keys.ts.
-        dismissedNotifications: dismissedNotifPref ?? null,
+        // Raw stored preference values (JSON strings, or null when unset). The
+        // client seed parses each into the shape its consumer caches — see
+        // bootstrap-seed-keys.ts.
+        preferences: bootstrapPrefs ?? null,
         month,
         filterIds: filterIds || [],
       };
