@@ -378,7 +378,23 @@ export default function DocumentViewer({
     useDocumentBlobUrl(id, mimeType, data);
   const dataUrl = blobUrl || "";
 
-  const downloadFromBlob = useCallback(() => {
+  const downloadFromBlob = useCallback(async () => {
+    // Images render from the phone-sized preview variant — a download must
+    // deliver the ORIGINAL bytes, so pull them from the plain /file endpoint.
+    if (id && isImage) {
+      try {
+        const orig = await apiRequest("GET", `/api/documents/${id}/file`).then((r) => r.blob());
+        const href = URL.createObjectURL(orig);
+        const a = document.createElement("a");
+        a.href = href;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(href), 10_000);
+        return;
+      } catch { /* fall back to the rendered blob below */ }
+    }
     if (!dataUrl) return;
     const a = document.createElement("a");
     a.href = dataUrl;
@@ -386,7 +402,7 @@ export default function DocumentViewer({
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [dataUrl, name]);
+  }, [dataUrl, name, id, isImage]);
 
   const ZoomControls = () => (
     <div className="flex items-center gap-1 bg-background/90 backdrop-blur-sm rounded-lg border border-border p-1 shadow-sm">

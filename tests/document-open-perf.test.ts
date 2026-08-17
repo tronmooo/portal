@@ -128,6 +128,23 @@ describe("GET /api/documents/:id/file", () => {
     const again = await h.api("GET", "/api/documents/doc-4/file", undefined, { "If-None-Match": etag }, { redirect: "manual" });
     expect(again.status).toBe(304);
   });
+
+  // Camera photos are stored at full resolution but render at phone size —
+  // ?preview=1 serves the derived ~1600px variant (about 10x fewer bytes).
+  it("?preview=1 on a Storage-backed image 302s to the preview variant", async () => {
+    h.db.documents.push({ ...DOC, id: "doc-5", mimeType: "image/jpeg", fileData: "", storagePath: "user/doc-5.jpg" });
+    const r = await h.api("GET", "/api/documents/doc-5/file?preview=1", undefined, undefined, { redirect: "manual" });
+    expect(r.status).toBe(302);
+    expect(r.headers["location"]).toContain("user/doc-5.jpg.prev.jpg");
+  });
+
+  it("?preview=1 on a PDF still serves the original — only images have previews", async () => {
+    h.db.documents.push({ ...DOC, id: "doc-6", fileData: "", storagePath: "user/doc-6.pdf" });
+    const r = await h.api("GET", "/api/documents/doc-6/file?preview=1", undefined, undefined, { redirect: "manual" });
+    expect(r.status).toBe(302);
+    expect(r.headers["location"]).toContain("user/doc-6.pdf");
+    expect(r.headers["location"]).not.toContain(".prev.jpg");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,7 +244,15 @@ describe("document blob cache", () => {
     m.prefetchDocumentBlob("doc-1", "image/png");
     await new Promise((r) => setTimeout(r, 0));
     expect(apiRequest).toHaveBeenCalledTimes(1);
-    expect(apiRequest).toHaveBeenCalledWith("GET", "/api/documents/doc-1/file");
+    // Images ask for the phone-sized preview variant.
+    expect(apiRequest).toHaveBeenCalledWith("GET", "/api/documents/doc-1/file?preview=1");
+  });
+
+  it("non-image types fetch the original, never a preview variant", async () => {
+    const m = await freshModule();
+    m.prefetchDocumentBlob("doc-pdf", "application/pdf");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(apiRequest).toHaveBeenCalledWith("GET", "/api/documents/doc-pdf/file");
   });
 
   it("serves a second open from cache without touching the network", async () => {

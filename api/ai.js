@@ -23,5 +23,13 @@ export default async function(req, res) {
   }
 }
 
+// Dependency-trace hint, never called at runtime: sharp is external to the
+// esbuild bundle (native binaries) and its only real import sits in a
+// code-split chunk that Vercel's tracer doesn't analyze (chunks ship via
+// includeFiles). This literal import makes the tracer package
+// node_modules/sharp with the function. If it's still absent at runtime,
+// loadSharp() in supabase-storage degrades gracefully to serving originals.
+export async function __traceSharp() { return import("sharp"); }
+
 // Chat SSE streaming (routes.ts /api/chat?stream=1) requires response streaming.
 export const config = { supportsResponseStreaming: true };

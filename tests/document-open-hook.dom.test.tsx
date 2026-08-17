@@ -60,7 +60,10 @@ describe("useDocumentBlobUrl", () => {
 
     await waitFor(() => expect(renders[renders.length - 1].url).toBeTruthy());
     expect(renders[renders.length - 1].loading).toBe(false);
-    expect(apiRequest).toHaveBeenCalledWith("GET", "/api/documents/doc-1/file");
+    // The probe renders an image, so the fetch asks for the phone-sized
+    // preview variant (~10x fewer bytes; server serves the original until
+    // a preview exists).
+    expect(apiRequest).toHaveBeenCalledWith("GET", "/api/documents/doc-1/file?preview=1");
   });
 
   it("reopening the same document paints on the first render, with no request", async () => {

@@ -118,6 +118,38 @@ import { shareForParty, shareForParties, validateOwnership, roundPct, type Owner
 
 const DOCUMENTS_BUCKET = "documents";
 
+// ── Phone-sized image previews ───────────────────────────────────────────────
+// Camera photos are stored at full resolution (3–6MB). The viewer shows them at
+// ~700px, so every open shipped ~10x more bytes than the screen can use. A
+// derived preview (max 1600px JPEG, ~200–400KB) is generated ON DEMAND the
+// first time a document is opened with ?preview=1, stored next to the original
+// (`<storage_path>.prev.jpg` — storage paths are `${userId}/${docId}.${ext}`
+// and never change after creation, so a preview can't go stale), and served
+// from the CDN on every open after that.
+//
+// sharp is a native module: it stays OUTSIDE the serverless bundle (see
+// script/build-vercel.ts externals) and is loaded through this guarded dynamic
+// import. If it is ever unavailable at runtime, generation quietly reports
+// failure and the caller serves the original — previews are an optimization,
+// never a dependency.
+const PREVIEW_SUFFIX = ".prev.jpg";
+const PREVIEW_MAX_DIM = 1600;
+const PREVIEW_JPEG_QUALITY = 78;
+const PREVIEW_SOURCE_LIMIT = 25_000_000; // don't decode >25MB sources in a 1GB function
+const PREVIEWABLE_MIME = /^image\/(jpe?g|png|webp|heic|heif|tiff|bmp)$/i;
+
+let _sharp: any | null | undefined; // undefined = not tried, null = unavailable
+async function loadSharp(): Promise<any | null> {
+  if (_sharp !== undefined) return _sharp;
+  try {
+    _sharp = (await import("sharp")).default;
+  } catch (e: any) {
+    console.warn("[doc-preview] sharp unavailable — serving originals:", e?.message || e);
+    _sharp = null;
+  }
+  return _sharp;
+}
+
 // Explicit metadata-only projection for document LIST queries. Deliberately
 // omits file_data — base64 blobs can be 10MB+ each and must never ship in a
 // list. Binary is fetched on demand by getDocument(id)/:id/file only. Shared by
@@ -4217,8 +4249,11 @@ export class SupabaseStorage implements IStorage {
    * photo/PDF open. Legacy base64-in-DB rows fall back to the buffer path.
    *
    * Kill switch: DOC_FILE_PROXY=1 forces the old proxied buffer path.
+   * `opts.preview` asks for the phone-sized image preview variant — generated
+   * on first use, served from the CDN afterwards; non-image documents and any
+   * generation failure transparently serve the original instead.
    */
-  async getDocumentDelivery(id: string): Promise<
+  async getDocumentDelivery(id: string, opts?: { preview?: boolean }): Promise<
     | { mode: "redirect"; url: string; mimeType: string; name: string; version: string; userId?: string }
     | { mode: "buffer"; buffer: Buffer; mimeType: string; name: string; version: string; userId?: string }
     | undefined
@@ -4232,30 +4267,102 @@ export class SupabaseStorage implements IStorage {
       if (error || !data) return undefined;
       const row = data as any;
       if (row.storage_path) {
-        try {
-          const { data: signed, error: signErr } = await this.supabase.storage
-            .from(DOCUMENTS_BUCKET)
-            .createSignedUrl(row.storage_path, 300);
-          if (signErr) {
-            console.error(`[getDocumentDelivery] sign failed for ${row.storage_path}:`, signErr.message);
-          } else if (typeof signed?.signedUrl === "string" && /^https?:\/\//.test(signed.signedUrl)) {
+        const baseVersion = `${row.updated_at || row.created_at || ""}`;
+        const wantsPreview = !!opts?.preview
+          && PREVIEWABLE_MIME.test(row.mime_type || "")
+          && process.env.DOC_PREVIEW !== "0";
+        if (wantsPreview) {
+          const previewPath = `${row.storage_path}${PREVIEW_SUFFIX}`;
+          // Already generated on a previous open? Straight to the CDN.
+          let url = await this.signStorageUrl(previewPath, /* quietMiss */ true);
+          if (!url) {
+            // First open: derive it now, then serve it. Even this open is
+            // faster than shipping the original — the server-side download
+            // rides the datacenter link, and the phone receives ~10x less.
+            if (await this.generateDocumentPreview(row.storage_path, previewPath)) {
+              url = await this.signStorageUrl(previewPath, true);
+            }
+          }
+          if (url) {
             return {
-              mode: "redirect",
-              url: signed.signedUrl,
-              mimeType: row.mime_type || "application/octet-stream",
+              mode: "redirect", url,
+              mimeType: "image/jpeg",
               name: row.name || "document",
-              version: `${row.updated_at || row.created_at || ""}-r`,
+              version: `${baseVersion}-p`,
               userId: row.user_id,
             };
           }
-        } catch (e: any) {
-          console.error(`[getDocumentDelivery] sign error for ${row.storage_path}:`, e?.message || e);
+          // Generation unavailable — fall through to the original.
+        }
+        const url = await this.signStorageUrl(row.storage_path, false);
+        if (url) {
+          return {
+            mode: "redirect", url,
+            mimeType: row.mime_type || "application/octet-stream",
+            name: row.name || "document",
+            version: `${baseVersion}-r`,
+            userId: row.user_id,
+          };
         }
       }
     }
     // Legacy base64-in-DB row, signing failure, or forced proxy mode.
     const file = await this.getDocumentFile(id);
     return file ? { mode: "buffer" as const, ...file } : undefined;
+  }
+
+  /** Signed CDN URL for a storage object, or null. A missing preview object is
+   *  an EXPECTED miss (quietMiss) — only real failures are logged. */
+  private async signStorageUrl(path: string, quietMiss: boolean): Promise<string | null> {
+    try {
+      const { data: signed, error } = await this.supabase.storage
+        .from(DOCUMENTS_BUCKET)
+        .createSignedUrl(path, 300);
+      if (error) {
+        if (!quietMiss) console.error(`[getDocumentDelivery] sign failed for ${path}:`, error.message);
+        return null;
+      }
+      const url = signed?.signedUrl;
+      return typeof url === "string" && /^https?:\/\//.test(url) ? url : null;
+    } catch (e: any) {
+      if (!quietMiss) console.error(`[getDocumentDelivery] sign error for ${path}:`, e?.message || e);
+      return null;
+    }
+  }
+
+  /** Downscale the original into `<path>.prev.jpg` (max 1600px, JPEG). Returns
+   *  false on ANY problem — the caller then serves the original, so preview
+   *  generation can never break document viewing. */
+  private async generateDocumentPreview(srcPath: string, previewPath: string): Promise<boolean> {
+    try {
+      const sharp = await loadSharp();
+      if (!sharp) return false;
+      const { data: blob, error } = await this.supabase.storage
+        .from(DOCUMENTS_BUCKET)
+        .download(srcPath);
+      if (error || !blob) return false;
+      const buf = Buffer.from(await blob.arrayBuffer());
+      if (buf.length === 0 || buf.length > PREVIEW_SOURCE_LIMIT) return false;
+      const out: Buffer = await sharp(buf)
+        .rotate() // honor EXIF orientation — phone photos are usually rotated
+        .resize({ width: PREVIEW_MAX_DIM, height: PREVIEW_MAX_DIM, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: PREVIEW_JPEG_QUALITY, mozjpeg: true })
+        .toBuffer();
+      // Upsert even when the source was already small: the stored preview is
+      // what makes every subsequent open skip this generation step entirely.
+      const { error: upErr } = await this.supabase.storage
+        .from(DOCUMENTS_BUCKET)
+        .upload(previewPath, out, { contentType: "image/jpeg", upsert: true });
+      if (upErr) {
+        console.error(`[doc-preview] upload failed for ${previewPath}:`, upErr.message);
+        return false;
+      }
+      console.log(`[doc-preview] generated ${previewPath}: ${buf.length} → ${out.length} bytes`);
+      return true;
+    } catch (e: any) {
+      console.warn(`[doc-preview] generation failed for ${srcPath}:`, e?.message || e);
+      return false;
+    }
   }
 
   /**
@@ -4428,7 +4535,9 @@ export class SupabaseStorage implements IStorage {
     // URL is ever resurfaced.
     let storagePathToRemove: string | undefined;
     try {
-      const doc = await this.getDocument(id);
+      // PERF: metadata-only read — this delete path only needs storagePath and
+      // linkedProfiles, never the (blob-downloading) full document.
+      const doc = await this.getDocumentMeta(id);
       if (doc) {
         storagePathToRemove = doc.storagePath;
         // PERF FIX: was sequential getProfile + update per linked profile.
@@ -4462,7 +4571,9 @@ export class SupabaseStorage implements IStorage {
     // user-visible delete. We log but don't fail — the row is already gone.
     if (storagePathToRemove) {
       try {
-        const { error: rmErr } = await this.supabase.storage.from(DOCUMENTS_BUCKET).remove([storagePathToRemove]);
+        // The derived preview (if one was ever generated) goes with it.
+        const { error: rmErr } = await this.supabase.storage.from(DOCUMENTS_BUCKET)
+          .remove([storagePathToRemove, `${storagePathToRemove}${PREVIEW_SUFFIX}`]);
         if (rmErr) console.error(`[deleteDocument] Storage remove failed for ${storagePathToRemove}:`, rmErr.message);
       } catch (e: any) {
         console.error(`[deleteDocument] Storage remove exception for ${storagePathToRemove}:`, e.message);
