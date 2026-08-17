@@ -943,65 +943,7 @@ export default function FinancePage() {
             compact
           />
           </>)}
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-              <Input
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Search expenses…"
-                className="h-8 w-[180px] pl-8 pr-7 text-xs"
-                data-testid="input-expense-search"
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => setSearchQuery("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  aria-label="Clear search"
-                  data-testid="btn-clear-expense-search"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-            <Select value={filterCategory} onValueChange={setFilterCategory}>
-              <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-category-filter">
-                <Filter className="h-3 w-3 mr-1" />
-                <SelectValue placeholder="All" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Categories</SelectItem>
-                {categories.map(c => (
-                  <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={dateRange} onValueChange={(v) => setDateRange(v as typeof dateRange)}>
-              <SelectTrigger className="w-[130px] h-8 text-xs" data-testid="select-expense-range">
-                <CalendarDays className="h-3 w-3 mr-1" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All time</SelectItem>
-                <SelectItem value="month">This month</SelectItem>
-                <SelectItem value="30d">Last 30 days</SelectItem>
-                <SelectItem value="year">This year</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
-              <SelectTrigger className="w-[150px] h-8 text-xs" data-testid="select-expense-sort">
-                <ArrowUpDown className="h-3 w-3 mr-1" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="date-desc">Newest first</SelectItem>
-                <SelectItem value="date-asc">Oldest first</SelectItem>
-                <SelectItem value="amount-desc">Amount: high → low</SelectItem>
-                <SelectItem value="amount-asc">Amount: low → high</SelectItem>
-                <SelectItem value="name-asc">Name: A → Z</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="ml-auto flex items-center gap-2">
             {/* ADD EXPENSE LIVES WITH THE EXPENSES (2026-08-13, user request).
                 Logging a spend was the first thing on the page — above net
                 worth, cash flow and every account — which made Finance read as
@@ -1139,7 +1081,7 @@ export default function FinancePage() {
             </Dialog>
           </div>
         </div>
-        <p className="text-sm text-muted-foreground mt-0.5">Expense tracking and analysis{filterCategory !== "all" && ` — ${filterCategory}`}</p>
+        <p className="text-sm text-muted-foreground mt-0.5">Net worth, cash flow, bills and spending</p>
       </div>
 
       {/* ── Connected accounts (Stripe Financial Connections) ──
@@ -1365,14 +1307,91 @@ export default function FinancePage() {
           one record per account, never a second copy of the same money. */}
       <AccountsSection profiles={(profiles as any[]) || []} />
 
+      {/* ── Expenses ──────────────────────────────────────────────────────
+          THE place you look up a spend, and therefore the place the search,
+          category, date-range and sort controls live (2026-08-13). They used
+          to sit in the page header, three sections above the only list they
+          filter — so the first thing the Finance tab asked you to do was
+          filter expenses, before it had shown you a single number. The tab now
+          reads top to bottom: connected accounts → the money overview →
+          accounts → your expenses, with the tools for the list attached to the
+          list. */}
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="pb-2 space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <CardTitle className="text-sm font-semibold">Recent Expenses</CardTitle>
+            <div className="min-w-0">
+              <CardTitle className="text-sm font-semibold">Expenses</CardTitle>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {sortedExpenses.length === profileFiltered.length
+                  ? `${profileFiltered.length} ${profileFiltered.length === 1 ? "expense" : "expenses"}`
+                  : `${sortedExpenses.length} of ${profileFiltered.length} expenses`}
+                {filterCategory !== "all" && ` · ${filterCategory}`}
+              </p>
+            </div>
             {/* The one manual Add Expense affordance, next to the list it adds to. */}
-            <Button size="sm" className="h-8 text-xs" onClick={() => setAddOpen(true)} data-testid="button-add-expense">
+            <Button size="sm" className="h-8 text-xs shrink-0" onClick={() => setAddOpen(true)} data-testid="button-add-expense">
               <Plus className="h-3.5 w-3.5 mr-1" /> Add Expense
             </Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[160px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <Input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search expenses…"
+                className="h-8 w-full pl-8 pr-7 text-xs"
+                data-testid="input-expense-search"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                  data-testid="btn-clear-expense-search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <Select value={filterCategory} onValueChange={setFilterCategory}>
+              <SelectTrigger className="flex-1 min-w-[120px] sm:w-[130px] sm:flex-none h-8 text-xs" data-testid="select-category-filter">
+                <Filter className="h-3 w-3 mr-1" />
+                <SelectValue placeholder="All" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Categories</SelectItem>
+                {categories.map(c => (
+                  <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={dateRange} onValueChange={(v) => setDateRange(v as typeof dateRange)}>
+              <SelectTrigger className="flex-1 min-w-[120px] sm:w-[130px] sm:flex-none h-8 text-xs" data-testid="select-expense-range">
+                <CalendarDays className="h-3 w-3 mr-1" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All time</SelectItem>
+                <SelectItem value="month">This month</SelectItem>
+                <SelectItem value="30d">Last 30 days</SelectItem>
+                <SelectItem value="year">This year</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
+              <SelectTrigger className="flex-1 min-w-[130px] sm:w-[150px] sm:flex-none h-8 text-xs" data-testid="select-expense-sort">
+                <ArrowUpDown className="h-3 w-3 mr-1" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="date-desc">Newest first</SelectItem>
+                <SelectItem value="date-asc">Oldest first</SelectItem>
+                <SelectItem value="amount-desc">Amount: high → low</SelectItem>
+                <SelectItem value="amount-asc">Amount: low → high</SelectItem>
+                <SelectItem value="name-asc">Name: A → Z</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardHeader>
         <CardContent>
