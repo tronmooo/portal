@@ -5741,28 +5741,36 @@ Rules:
 
   // ---- Document file serving (for download / share) ----
   app.get("/api/documents/:id/file", asyncHandler(async (req, res) => {
-    // PERF: getDocumentFile reads the bytes straight into a Buffer (the old
-    // getDocument path went Storage blob → base64 string → Buffer, doubling the
-    // work and the peak memory on the hot path of every document preview).
-    const file = await storage.getDocumentFile(req.params.id);
-    if (!file) return res.status(404).json({ error: "Not found" });
+    // PERF: getDocumentDelivery decides HOW the bytes reach the device.
+    // Storage-backed documents 302 to a short-lived signed URL so the download
+    // flows straight from Supabase's edge — the old path buffered the whole
+    // file through this function first (Storage → serverless Buffer → device),
+    // doubling the transfer and showing a spinner until the last byte of the
+    // second hop. Legacy base64-in-DB rows still serve from the buffer below.
+    const delivery = await storage.getDocumentDelivery(req.params.id);
+    if (!delivery) return res.status(404).json({ error: "Not found" });
     // S1 fix: storage layer filters by user_id; defense-in-depth ownership guard.
-    if (file.userId && file.userId !== (req as AuthenticatedRequest).userId) {
+    if (delivery.userId && delivery.userId !== (req as AuthenticatedRequest).userId) {
       return res.status(404).json({ error: "Not found" });
     }
-    const { buffer, mimeType, name } = file;
 
     // PERF: a document's bytes are immutable until it's re-uploaded, and the
-    // ETag folds in updated_at + length so a replacement invalidates instantly.
+    // ETag folds in updated_at so a replacement invalidates instantly.
     // `no-cache` still revalidates every time (never serve a stale file), but a
     // 304 costs one small round-trip instead of re-sending megabytes over LTE —
     // which is the difference between reopening a PDF in ~100ms and in seconds.
-    const etag = `"doc-${req.params.id}-${createHash("sha1").update(file.version).digest("hex").slice(0, 16)}"`;
+    const etag = `"doc-${req.params.id}-${createHash("sha1").update(delivery.version).digest("hex").slice(0, 16)}"`;
     res.setHeader("ETag", etag);
     res.setHeader("Cache-Control", "private, no-cache, max-age=0");
     res.setHeader("Vary", "Authorization");
     if (req.headers["if-none-match"] === etag) return res.status(304).end();
 
+    if (delivery.mode === "redirect") {
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      return res.redirect(302, delivery.url);
+    }
+
+    const { buffer, mimeType, name } = delivery;
     res.setHeader("Content-Type", mimeType);
     // Sanitize filename: strip all non-alphanumeric except dots, hyphens, underscores
     const safeName = (name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);

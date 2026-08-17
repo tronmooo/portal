@@ -150,6 +150,25 @@ export function makeFakeStorage(db: FakeDb) {
         userId: row.userId,
       };
     },
+    // Mirrors SupabaseStorage.getDocumentDelivery: a storagePath means the
+    // bytes live on the storage CDN and the route should 302 to a signed URL;
+    // legacy base64 rows serve through the buffer path.
+    getDocumentDelivery: async (rid: string) => {
+      const row = db.documents.find(d => d.id === rid);
+      if (!row) return undefined;
+      if (row.storagePath) {
+        return {
+          mode: "redirect" as const,
+          url: `https://storage.example.test/${row.storagePath}?signed=1`,
+          mimeType: row.mimeType || "application/octet-stream",
+          name: row.name || "document",
+          version: `${row.updatedAt || row.createdAt || ""}-r`,
+          userId: row.userId,
+        };
+      }
+      const file = await impl.getDocumentFile(rid);
+      return file ? { mode: "buffer" as const, ...file } : undefined;
+    },
     updateDocument: async (rid: string, patch: any) => {
       const row = db.documents.find(d => d.id === rid);
       if (!row) return undefined;
@@ -171,8 +190,9 @@ export function makeFakeStorage(db: FakeDb) {
 
 export interface Harness {
   db: FakeDb;
-  /** HTTP call against the booted app. `headers` go on the wire verbatim. */
-  api: (method: string, path: string, body?: any, headers?: Record<string, string>) =>
+  /** HTTP call against the booted app. `headers` go on the wire verbatim.
+   *  `opts.redirect: "manual"` lets a test observe a 302 instead of following it. */
+  api: (method: string, path: string, body?: any, headers?: Record<string, string>, opts?: { redirect?: RequestRedirect }) =>
     Promise<{ status: number; ok: boolean; data: any; headers: Record<string, string> }>;
   close: () => Promise<void>;
 }
@@ -200,11 +220,12 @@ export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness>
   const port = (httpServer.address() as AddressInfo).port;
   const base = `http://127.0.0.1:${port}`;
 
-  const api: Harness["api"] = async (method, path, body, headers = {}) => {
+  const api: Harness["api"] = async (method, path, body, headers = {}, opts = {}) => {
     const r = await fetch(`${base}${path}`, {
       method,
       headers: { "Content-Type": "application/json", "X-Timezone": "America/Los_Angeles", ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
+      ...(opts.redirect ? { redirect: opts.redirect } : {}),
     });
     const text = await r.text();
     let data: any = null;

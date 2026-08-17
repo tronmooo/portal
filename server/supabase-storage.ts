@@ -4209,6 +4209,56 @@ export class SupabaseStorage implements IStorage {
   }
 
   /**
+   * PERF: delivery decision for the /file route. Storage-backed documents get
+   * a short-lived signed URL so the device downloads straight from Supabase's
+   * edge — piping every byte through the API function (Storage → serverless
+   * Buffer → device) doubled the transfer and held the first pixel until the
+   * LAST byte had crossed both hops, which read as a long spinner on every
+   * photo/PDF open. Legacy base64-in-DB rows fall back to the buffer path.
+   *
+   * Kill switch: DOC_FILE_PROXY=1 forces the old proxied buffer path.
+   */
+  async getDocumentDelivery(id: string): Promise<
+    | { mode: "redirect"; url: string; mimeType: string; name: string; version: string; userId?: string }
+    | { mode: "buffer"; buffer: Buffer; mimeType: string; name: string; version: string; userId?: string }
+    | undefined
+  > {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
+    if (process.env.DOC_FILE_PROXY !== "1") {
+      const { data, error } = await this.supabase.from("documents")
+        .select("id, user_id, name, mime_type, storage_path, updated_at, created_at")
+        .eq("id", id).eq("user_id", this.userId).is("deleted_at", null)
+        .maybeSingle();
+      if (error || !data) return undefined;
+      const row = data as any;
+      if (row.storage_path) {
+        try {
+          const { data: signed, error: signErr } = await this.supabase.storage
+            .from(DOCUMENTS_BUCKET)
+            .createSignedUrl(row.storage_path, 300);
+          if (signErr) {
+            console.error(`[getDocumentDelivery] sign failed for ${row.storage_path}:`, signErr.message);
+          } else if (typeof signed?.signedUrl === "string" && /^https?:\/\//.test(signed.signedUrl)) {
+            return {
+              mode: "redirect",
+              url: signed.signedUrl,
+              mimeType: row.mime_type || "application/octet-stream",
+              name: row.name || "document",
+              version: `${row.updated_at || row.created_at || ""}-r`,
+              userId: row.user_id,
+            };
+          }
+        } catch (e: any) {
+          console.error(`[getDocumentDelivery] sign error for ${row.storage_path}:`, e?.message || e);
+        }
+      }
+    }
+    // Legacy base64-in-DB row, signing failure, or forced proxy mode.
+    const file = await this.getDocumentFile(id);
+    return file ? { mode: "buffer" as const, ...file } : undefined;
+  }
+
+  /**
    * PERF: raw bytes for the /file route. Downloads straight into a Buffer
    * instead of the Storage-blob → base64 → Buffer round-trip `getDocument()`
    * forces (which doubles peak memory and burns CPU on every view).

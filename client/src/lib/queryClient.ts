@@ -74,7 +74,14 @@ export async function apiRequest(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const headers: Record<string, string> = { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader() };
+    // Document file GETs may 302 to a cross-origin storage CDN. fetch re-sends
+    // request headers to the redirect target, and custom headers would force a
+    // CORS preflight there — so keep these requests header-clean (the file
+    // route needs neither the timezone nor the active-profile hint).
+    const isDocFileFetch = /\/api\/documents\/[^/]+\/file/.test(url);
+    const headers: Record<string, string> = isDocFileFetch
+      ? {}
+      : { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader() };
     if (data) headers["Content-Type"] = "application/json";
     const res = await fetch(`${API_BASE}${url}`, {
       method,
