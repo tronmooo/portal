@@ -911,10 +911,11 @@ export default function FinancePage() {
 
   return (
     <div className="p-4 md:p-6 space-y-6 overflow-y-auto h-full pb-24" data-testid="page-finance">
-      <div>
-        <div className="flex items-center gap-3 mb-4">
-          {/* Hub-embedded (2026-07): shell owns back-nav + profile switcher. */}
-          {!hubEmbedded && (<>
+      {/* Standalone only: the hub shell owns back-nav and the profile
+          switcher, and the tab row above already names this tab — so
+          embedded there is no page header at all (2026-08-13). */}
+      {!hubEmbedded && (
+        <div className="flex items-center gap-3">
           {/* Round-6 fix (BUG-014): previously rendered a wouter <Link href="/dashboard"/>
               which navigates but does not pop history. On some platforms (mobile back
               gesture, dashboard → finance → expense detail → back) this could end up
@@ -942,8 +943,8 @@ export default function FinancePage() {
             onChange={() => {}}
             compact
           />
-          </>)}
-          <div className="ml-auto flex items-center gap-2">
+        </div>
+      )}
             {/* ADD EXPENSE LIVES WITH THE EXPENSES (2026-08-13, user request).
                 Logging a spend was the first thing on the page — above net
                 worth, cash flow and every account — which made Finance read as
@@ -1079,10 +1080,6 @@ export default function FinancePage() {
                 </div>
               </DialogContent>
             </Dialog>
-          </div>
-        </div>
-        <p className="text-sm text-muted-foreground mt-0.5">Net worth, cash flow, bills and spending</p>
-      </div>
 
       {/* ── Connected accounts (Stripe Financial Connections) ──
           Real bank balances, transactions, cash flow, spending, income and

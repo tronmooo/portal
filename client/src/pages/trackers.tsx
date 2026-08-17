@@ -6120,14 +6120,11 @@ export default function TrackersPage() {
           </Link>
           )}
 
-          <span className="text-xs text-muted-foreground">
-            {sectionFilter === "trackers" ? `${filteredTrackers.length} trackers`
-             : sectionFilter === "documents" ? `${filteredDocuments.length} documents`
-             : sectionFilter === "all" ? `${allItemsCount} items`
-             : sectionFilter === "liabilities" ? "liabilities"
-             : sectionFilter === "profiles" ? "assets"
-             : `${filteredTrackers.length} trackers`}
-          </span>
+          {/* The "9 documents" / "assets" / "liabilities" caption that used to
+              sit here is gone (2026-08-13). The hub tab row directly above
+              already names the section, and each group header inside the list
+              carries its own count — so this line restated the tab you had
+              just tapped and pushed the content down on every one of them. */}
         </div>
         <div className="flex items-center gap-1.5">
           {/* ONE button, not two (2026-08-13). A two-chip segmented control
