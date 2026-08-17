@@ -277,7 +277,8 @@ import {
 import { Slider } from "@/components/ui/slider";
 import type { ProfileDetail, Profile, Document, TimelineEntry, Tracker } from "@shared/schema";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
-import { invalidateDomains } from "@/lib/cache-bus";
+import { invalidateDomains, isStalePayload } from "@/lib/cache-bus";
+import { traceStart, traceStep, traceEnd, traceOp } from "@/lib/perf-trace";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr } from "@shared/timezone";
 import { habitDayProgress } from "@shared/habit-progress";
@@ -521,7 +522,12 @@ function getMaintenanceCost(fields: any): number {
 // there was an inline copy here that could drift from the shared version —
 // removed 2026-05-27.
 import { computeAssetRollup as sharedComputeAssetRollup } from "@shared/asset-rollup";
-import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
+import {
+  resolveAssetValue,
+  resolveLiabilityBalance,
+  isAssetTabProfile,
+  isLiabilityTabProfile,
+} from "@shared/asset-value";
 import { isRecurringBill } from "@shared/liability-types";
 function computeAssetRollup(profile: any, descendants: TreeNode[]): AssetRollup {
   // The shared function ignores everything except `fields` and
@@ -1947,7 +1953,13 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     setLookupError(null);
     setLookupResult(null);
     try {
-      const res = await apiRequest("POST", `/api/profiles/${profileId}/lookup-value`);
+      // §10/§23: the external valuation is the one operation here that is
+      // legitimately slow (live web search + model call). It is timed so the
+      // cost is visible and attributable, and it runs entirely outside the
+      // page's render path — the profile, its persisted estimate and every tab
+      // are already on screen while this is in flight.
+      const res = await traceOp("EXTERNAL VALUATION", () =>
+        apiRequest("POST", `/api/profiles/${profileId}/lookup-value`));
       const data = await res.json();
       if (!res.ok) {
         setLookupError(data.error || "Lookup failed");
@@ -1962,8 +1974,12 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
           missingInfo: Array.isArray(data.missingInfo) ? data.missingInfo : [],
           valuationDate: data.valuationDate || null,
         });
-        // Refresh the profile detail and AI summary so the new value flows everywhere.
-        invalidateDomains("profiles");
+        // A new valuation rewrites `currentValue` — the canonical asset value
+        // that net worth, the Assets list, the owner's profile and the
+        // Executive tile all read. `assets` carries that ripple; `profiles`
+        // alone left the Assets list showing the PREVIOUS estimate until a
+        // manual refresh (the "$79 here, $85 there" report).
+        invalidateDomains("profiles", "assets");
       }
     } catch (e: any) {
       setLookupError(e?.message || "Lookup failed");
@@ -2058,7 +2074,7 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
               profileId={profileId}
               fields={{}}
               missingInfo={lookupResult.missingInfo}
-              onSaved={() => invalidateDomains("profiles")}
+              onSaved={() => invalidateDomains("profiles", "assets")}
               onReestimate={handleLookupValue}
               reestimating={lookupBusy}
             />
@@ -3056,12 +3072,31 @@ function InfoTab({
   };
 
   // ── Key value for header display ──
+  //
+  // CONSISTENCY (asset/liability audit): this used to be its own truncated
+  // resolver — `f.current_value ?? f.currentValue ?? f.loan_balance ?? …`.
+  // It read a DIFFERENT (shorter) key list than shared/asset-value.ts, which is
+  // what every list, KPI tile and net-worth total uses, so the same item could
+  // legitimately print two different numbers: the header saw only
+  // `currentValue`, the list walked the full nested/snake_case ladder. Both
+  // sides now call the canonical resolvers, so "Value" here and "Value" in the
+  // Assets list are the same computation over the same record by construction.
+  //
+  // Concept discipline (§2/§15): an asset shows its VALUE, a liability shows
+  // its CURRENT BALANCE, and a monthly cost is labelled as a cost — a recurring
+  // payment must never be printed under a balance/value label.
   const keyValueEntry = (() => {
     const f = profile.fields;
-    if (f.current_value != null) return { label: "Value", value: typeof f.current_value === "number" ? formatCurrency(f.current_value) : String(f.current_value) };
-    if (f.currentValue != null) return { label: "Value", value: typeof f.currentValue === "number" ? formatCurrency(f.currentValue) : String(f.currentValue) };
-    if (f.loan_balance != null) return { label: "Balance", value: typeof f.loan_balance === "number" ? formatCurrency(f.loan_balance) : String(f.loan_balance) };
-    if (f.loanBalance != null) return { label: "Balance", value: typeof f.loanBalance === "number" ? formatCurrency(f.loanBalance) : String(f.loanBalance) };
+    if (isLiabilityTabProfile(profile)) {
+      const bal = resolveLiabilityBalance(profile);
+      if (bal > 0) return { label: "Current Balance", value: formatCurrency(bal) };
+    }
+    if (isAssetTabProfile(profile)) {
+      const val = resolveAssetValue(profile);
+      if (val > 0) return { label: "Value", value: formatCurrency(val) };
+    }
+    // Non-balance-sheet profiles (insurance, subscription, medical…) keep the
+    // recurring-cost readout, explicitly labelled as a cost, never as a value.
     if (f.cost != null) return { label: "Cost", value: typeof f.cost === "number" ? formatCurrency(f.cost) : String(f.cost) };
     if (f.premium != null) return { label: "Premium", value: typeof f.premium === "number" ? formatCurrency(f.premium) : String(f.premium) };
     return null;
@@ -3155,8 +3190,16 @@ function InfoTab({
       && !k.startsWith("_") && v != null && v !== "" && typeof v !== "object"
   );
 
+  // Inline field saves inside the Overview include the money fields
+  // (currentValue / currentBalance / monthlyPayment / dueDate), so the ripple
+  // must reach the balance-sheet and bill views, not just the profile lists.
+  // Type-scoped so a person-profile edit doesn't drag the finance aggregations
+  // along with it (§16).
   const handleSaved = () => {
-    invalidateDomains("profiles");
+    const domains: Parameters<typeof invalidateDomains> = ["profiles"];
+    if (isAssetTabProfile(profile)) domains.push("assets");
+    if (isLiabilityTabProfile(profile)) domains.push("liabilities", "obligations");
+    invalidateDomains(...domains);
   };
 
   // ── Fetch all profiles for BelongsToEditor candidate list ──
@@ -3601,7 +3644,7 @@ function InfoTab({
         const liabPct = (l: any) => typeof l._ownershipPercentage === "number" ? l._ownershipPercentage : 100;
         const totalBalance = liabilities.reduce((s: number, l: any) => {
           const f = l.fields || {}; const fin = f.finance || {};
-          const v = Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+          const v = resolveLiabilityBalance(f);
           // Sum only THIS profile's share of each debt.
           return s + (Number.isFinite(v) ? v * liabPct(l) / 100 : 0);
         }, 0);
@@ -3619,7 +3662,7 @@ function InfoTab({
           >
               {liabilities.slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || "")).map((l: any) => {
                 const f = l.fields || {}; const fin = f.finance || {};
-                const grossBal = Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+                const grossBal = resolveLiabilityBalance(f);
                 const pct = liabPct(l);
                 const bal = grossBal * pct / 100;
                 const isShared = pct < 100;
@@ -8572,7 +8615,9 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
     onSuccess: () => {
       toast({ title: "Loan details saved" });
       setEditing(false);
-      invalidateDomains("profiles");
+      // Balance, APR, payment and start date all feed net worth, the debt
+      // totals, cash flow and the payment schedule (§6/§11).
+      invalidateDomains("profiles", "liabilities", "obligations");
     },
     onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
@@ -9589,7 +9634,9 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Lookup failed");
       toast({ title: `Estimated at $${Number(data.currentValue).toLocaleString()}`, description: data.range ? `Range ${data.range}` : undefined });
-      invalidateDomains("profiles");
+      // Rewrites `currentValue` — the canonical asset value every list, tile
+      // and net-worth total reads.
+      invalidateDomains("profiles", "assets");
       onChanged();
     } catch (e: any) {
       toast({ title: "Couldn't re-estimate", description: formatApiError(e), variant: "destructive" });
@@ -9833,7 +9880,7 @@ function LinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile: any;
   const userBalanceShare = liabilities.reduce((s, x) => {
     const f = x.profile.fields || {};
     const fin = f.finance || {};
-    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    const bal = resolveLiabilityBalance(f);
     const pct = Number(x.link.ownershipPercentage ?? 100);
     return s + (bal * pct) / 100;
   }, 0);
@@ -9853,7 +9900,8 @@ function LinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile: any;
     onSuccess: () => {
       toast({ title: "Unlinked" });
       refetchPartyLinks();
-      invalidateDomains("profiles");
+      // Ownership share changed → every per-person debt total changed.
+      invalidateDomains("profiles", "liabilities");
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to unlink", description: formatApiError(err), variant: "destructive" }),
@@ -9890,7 +9938,7 @@ function LinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile: any;
       setLinkPct("100");
       setLinkSearch("");
       refetchPartyLinks();
-      invalidateDomains("profiles");
+      invalidateDomains("profiles", "liabilities");
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to link", description: formatApiError(err), variant: "destructive" }),
@@ -9995,7 +10043,7 @@ function LiabilityRow({ link, liability, allProfiles, refetchAll, onUnlink, onOp
 
   const f = liability.fields || {};
   const fin = f.finance || {};
-  const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+  const bal = resolveLiabilityBalance(f);
   const pct = Number(link.ownershipPercentage ?? 100);
   const monthly = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
   const userShare = (bal * pct) / 100;
@@ -10146,7 +10194,7 @@ function AssetLinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile:
   const totalSecuredBalance = liabilities.reduce((s, x) => {
     const f = x.profile.fields || {};
     const fin = f.finance || {};
-    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    const bal = resolveLiabilityBalance(f);
     const pct = Number(x.link.ownershipPercentage ?? 100);
     return s + (bal * pct) / 100;
   }, 0);
@@ -10166,7 +10214,8 @@ function AssetLinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile:
     onSuccess: () => {
       toast({ title: "Unlinked" });
       refetchAssetLinks();
-      invalidateDomains("profiles");
+      // Collateral changed → the asset's equity (value − secured debt) changed.
+      invalidateDomains("profiles", "assets", "liabilities");
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to unlink", description: formatApiError(err), variant: "destructive" }),
@@ -10203,7 +10252,7 @@ function AssetLinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile:
       setLinkPct("100");
       setLinkSearch("");
       refetchAssetLinks();
-      invalidateDomains("profiles");
+      invalidateDomains("profiles", "assets", "liabilities");
       onChanged();
     },
     onError: (err: Error) => toast({ title: "Failed to link", description: formatApiError(err), variant: "destructive" }),
@@ -10310,7 +10359,7 @@ function AssetLiabilityRow({ link, liability, allProfiles: _allProfiles, refetch
 
   const f = liability.fields || {};
   const fin = f.finance || {};
-  const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+  const bal = resolveLiabilityBalance(f);
   const pct = Number(link.ownershipPercentage ?? 100);
   const monthly = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
   const securedShare = (bal * pct) / 100;
@@ -11621,7 +11670,7 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
   const liabPct = (l: any) => typeof l._ownershipPercentage === "number" ? l._ownershipPercentage : 100;
   const liabBalance = (l: any) => {
     const f = l.fields || {}; const fin = f.finance || {};
-    return Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    return resolveLiabilityBalance(f);
   };
   const liabTotal = useMemo(() => {
     return liabilities.reduce((s: number, l: any) => {
@@ -12834,6 +12883,22 @@ export default function ProfileDetailPage() {
     reader.readAsDataURL(file);
   };
 
+  // ── Open-timing trace (§23) ────────────────────────────────────────────────
+  // Answers "why is opening this profile slow" with numbers instead of guesses:
+  // one block per open, from the click through to meaningful content. Steps are
+  // recorded inside the queryFn and closed by the render effect below.
+  // console.debug only — stripped from production builds.
+  const openTraceKey = `open-profile:${id}`;
+  useEffect(() => {
+    if (!id) return;
+    traceStart(openTraceKey, `OPEN PROFILE ${id}`);
+    // A cache hit never enters the queryFn, so close the trace on the next
+    // frame if the data was already there — that IS the measurement for the
+    // "reopen a cached asset" case (§27).
+    return () => traceEnd(openTraceKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   const { data: profile, isLoading, error } = useQuery<ProfileDetail>({
     queryKey: ["/api/profiles", id, "detail"],
     queryFn: async () => {
@@ -12846,14 +12911,29 @@ export default function ProfileDetailPage() {
       // Seeding the sibling cache keys here lets the dependent queries below
       // (and every child component that reads the same keys) resolve from
       // cache without any extra network calls.
+      // WRITE-ORDERING GUARD: this queryFn publishes the bootstrap payload into
+      // ~10 sibling cache keys. `setQueryData` re-stamps them FRESH, so a
+      // payload that predates a write would both erase the new data and stop
+      // anything from refetching it. `seed()` refuses to overwrite an entry
+      // that is newer than this request, and drops everything if a write landed
+      // after we started. See lib/bootstrap-seed.ts for the full rationale.
+      const startedAt = Date.now();
+      const seed = (key: unknown[], data: unknown) => {
+        if (data === undefined || data === null) return;
+        if (isStalePayload(startedAt)) return;
+        const state = queryClient.getQueryState(key as any);
+        if (state?.dataUpdatedAt && state.dataUpdatedAt > startedAt) return;
+        queryClient.setQueryData(key as any, data);
+      };
       try {
         const res = await apiRequest("GET", `/api/profile-bootstrap/${id}`);
         const b = await res.json();
+        traceStep(openTraceKey, "profile bootstrap");
         if (b && typeof b === "object" && b.detail) {
-          if (b.tree) queryClient.setQueryData(["/api/profiles", id, "tree"], b.tree);
-          if (b.profiles) queryClient.setQueryData(["/api/profiles"], b.profiles);
-          if (b.assetPartyLinks) queryClient.setQueryData(["/api/asset-party-links"], b.assetPartyLinks);
-          if (b.liabilityProfileLinks) queryClient.setQueryData(["/api/liability-profile-links"], b.liabilityProfileLinks);
+          seed(["/api/profiles", id, "tree"], b.tree);
+          seed(["/api/profiles"], b.profiles);
+          seed(["/api/asset-party-links"], b.assetPartyLinks);
+          seed(["/api/liability-profile-links"], b.liabilityProfileLinks);
           // Type-specific extras (PERF 2026-07-08): pre-seed the queries the
           // asset/liability pages fire right after the detail resolves, so
           // opening those profiles costs ONE round-trip instead of 5-6. Key
@@ -12861,16 +12941,22 @@ export default function ProfileDetailPage() {
           // uses both the array form ["/api/liabilities", id, "parties"] and
           // the template-string form [`/api/liabilities/${id}/parties`] for
           // parties, so both slots are seeded.
-          if (b.assetParties) queryClient.setQueryData(["/api/assets", id, "parties"], b.assetParties);
+          seed(["/api/assets", id, "parties"], b.assetParties);
+          // Liabilities secured by THIS asset — the Financials tab's own query
+          // (["/api/assets", id, "liabilities"]) used to be a separate
+          // round-trip fired after the page had already rendered, so the
+          // "Liab." column and the Net total popped in late. Served from the
+          // same bootstrap now.
+          seed(["/api/assets", id, "liabilities"], b.assetLiabilities);
           if (b.liabilityExtras && typeof b.liabilityExtras === "object") {
             const ex = b.liabilityExtras;
-            if (ex.payments) queryClient.setQueryData([`/api/liabilities/${id}/payments`], ex.payments);
-            if (ex.schedule) queryClient.setQueryData(["/api/liabilities", id, "schedule"], ex.schedule);
+            seed([`/api/liabilities/${id}/payments`], ex.payments);
+            seed(["/api/liabilities", id, "schedule"], ex.schedule);
             if (ex.parties) {
-              queryClient.setQueryData(["/api/liabilities", id, "parties"], ex.parties);
-              queryClient.setQueryData([`/api/liabilities/${id}/parties`], ex.parties);
+              seed(["/api/liabilities", id, "parties"], ex.parties);
+              seed([`/api/liabilities/${id}/parties`], ex.parties);
             }
-            if (ex.assets) queryClient.setQueryData([`/api/liabilities/${id}/assets`], ex.assets);
+            seed([`/api/liabilities/${id}/assets`], ex.assets);
           }
           // Flatten nested storage paths (fields.vehicles.*, fields.insurance.*,
           // fields.housing.*, fields.other.*, fields.finance.*) up to top level
@@ -12929,11 +13015,17 @@ export default function ProfileDetailPage() {
       ? ""
       : ` · ${profile.type.charAt(0).toUpperCase() + profile.type.slice(1)}`;
     document.title = `${profile.name}${niceType} — Portol`;
+    // §23: the profile's own name/value/tabs are on screen at this point —
+    // that is "meaningful content visible", the number the audit asks for.
+    // Optional work (AI summary, external valuation) is deliberately NOT part
+    // of this measurement: it renders after, and must never gate the page.
+    traceEnd(openTraceKey, "first meaningful render");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.name, profile?.type]);
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("DELETE", `/api/profiles/${id}`);
+      await traceOp("DELETE PROFILE", () => apiRequest("DELETE", `/api/profiles/${id}`));
     },
     onSuccess: () => {
       queryClient.setQueryData(["/api/profiles"], (old: any[]) =>
@@ -12941,7 +13033,14 @@ export default function ProfileDetailPage() {
       );
       toast({ title: `Profile deleted`, description: "All linked data has been removed" });
       // Cascade: profile delete also removes linked obligations, events, expenses, etc.
-      invalidateDomains("profiles", "obligations", "events", "expenses", "tasks", "trackers");
+      // §7: `assets`/`liabilities` are included so the relationship lists
+      // (/api/rel-assets, /api/rel-liabilities), cash flow, the loan schedule
+      // and the accounts list drop the row too — without them a deleted loan
+      // kept showing in Finance's upcoming payments until a manual refresh.
+      invalidateDomains(
+        "profiles", "assets", "liabilities",
+        "obligations", "events", "expenses", "tasks", "trackers",
+      );
       navigate("/profiles");
     },
     onError: (err: Error) => {
@@ -12949,8 +13048,18 @@ export default function ProfileDetailPage() {
     },
   });
 
+  // Called after ANY inline field save on this page — including the ones that
+  // change money: an asset's value, a liability's balance / APR / payment / due
+  // date. §6 requires every dependent view to update with no refresh, so the
+  // ripple has to match what the profile actually IS, not just "profiles".
+  //
+  // Kept type-scoped rather than firing every domain (§16): editing a person's
+  // phone number must not re-run the loan schedule or cash-flow aggregations.
   function handleSaved() {
-    invalidateDomains("profiles", "events");
+    const domains: Parameters<typeof invalidateDomains> = ["profiles", "events"];
+    if (profile && isAssetTabProfile(profile)) domains.push("assets");
+    if (profile && isLiabilityTabProfile(profile)) domains.push("liabilities", "obligations");
+    invalidateDomains(...domains);
   }
 
   // ── Owner dropdown (asset / vehicle / loan / subscription etc.) ───────────────

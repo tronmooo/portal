@@ -5468,12 +5468,15 @@ export default function DashboardPage() {
   const bootstrapQuery = useQuery<any>({
     queryKey: ["/api/dashboard-bootstrap", filterMode, ...filterIds, currentMonth],
     queryFn: async () => {
+      const startedAt = Date.now();
       const r = await apiRequest("GET", `/api/dashboard-bootstrap${bootstrapQs}`);
       const b = await r.json();
       // Pre-fill EVERY dashboard mount-time query key from the single
       // bootstrap response (see lib/bootstrap-seed.ts) — dependent hooks
       // resolve from cache instantly instead of firing ~12 GETs.
-      seedDashboardCaches(b, filterMode, filterIds, currentMonth);
+      // `startedAt` guards against publishing a payload that a write has
+      // already superseded (see seedDashboardCaches).
+      seedDashboardCaches(b, filterMode, filterIds, currentMonth, startedAt);
       return b ?? null;
     },
     placeholderData: undefined,

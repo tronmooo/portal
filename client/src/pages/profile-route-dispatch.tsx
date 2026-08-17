@@ -10,11 +10,13 @@
 // branch, never for people.
 import { lazy, Suspense, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { warmProfileDetail } from "@/lib/scope-prefetch";
 
-const ProfileDetailPage = lazy(() => import("@/pages/profile-detail"));
+const loadProfileDetail = () => import("@/pages/profile-detail");
+const ProfileDetailPage = lazy(loadProfileDetail);
 
 const PERSON_TYPES = new Set(["self", "person", "pet"]);
 
@@ -40,14 +42,50 @@ export default function ProfileRouteDispatch() {
   const wantsTab = tabMatch && (tabParams as { tab?: string } | null)?.tab !== "info";
   const [, navigate] = useLocation();
 
+  const qc = useQueryClient();
+
+  // ── PERF: break the open-a-profile request waterfall (§8/§9/§22) ───────────
+  // This dispatcher used to be a strictly SERIAL chain before any content could
+  // paint:
+  //
+  //   click → GET /api/profiles/lite → load the lazy detail chunk
+  //         → GET /api/profile-bootstrap/:id → render
+  //
+  // Three round-trips deep, each able to land on its own cold serverless
+  // instance. None of the three actually depends on the one before it: the
+  // chunk and the profile's data are needed for every non-person profile
+  // regardless of what `lite` says, and `lite` only answers "is this a
+  // person?".
+  //
+  // So all three now start together on mount. Nothing here is speculative for
+  // the common case — the overwhelming majority of /profiles/:id opens are
+  // non-person (assets, liabilities, vehicles, accounts…), and warmProfileDetail
+  // is already the app's own idempotent, throttled warm helper.
+  useEffect(() => {
+    if (!id) return;
+    void loadProfileDetail();
+    warmProfileDetail(id);
+  }, [id]);
+
   const { data: profiles, isLoading } = useQuery<any[]>({
     queryKey: ["/api/profiles", "lite"],
     queryFn: async () => (await apiRequest("GET", "/api/profiles/lite")).json(),
     staleTime: 30_000,
   });
 
-  const profile = (profiles || []).find((p: any) => p.id === id);
+  // Answer "person or not?" from the full profile list when it is already in
+  // cache (the dashboard bootstrap seeds `["/api/profiles"]` on every app open,
+  // and navigating here from Assets/Liabilities guarantees it). That removes
+  // the `lite` fetch from the critical path entirely on the common navigation,
+  // instead of blocking the whole page on it. The `lite` query still runs and
+  // still wins once it lands — this is a faster path to the same answer, not a
+  // different answer.
+  const cachedProfiles = qc.getQueryData<any[]>(["/api/profiles"]);
+  const profile = (profiles || []).find((p: any) => p.id === id)
+    || (cachedProfiles || []).find((p: any) => p.id === id);
   const isPerson = !!profile && PERSON_TYPES.has(profile.type);
+  // Only block on `lite` when nothing has told us the type yet.
+  const resolvingType = isLoading && !profile;
 
   useEffect(() => {
     if (!id) return;
@@ -65,7 +103,7 @@ export default function ProfileRouteDispatch() {
 
   // Show a loader while resolving the type, while redirecting a person, or while
   // normalizing the legacy alias.
-  if ((singularMatch && !pluralMatch) || isLoading || (isPerson && !wantsTab)) return <Loader />;
+  if ((singularMatch && !pluralMatch) || resolvingType || (isPerson && !wantsTab)) return <Loader />;
 
   // Non-person profile — keep the per-type detail page.
   return (

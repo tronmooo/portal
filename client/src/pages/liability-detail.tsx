@@ -112,6 +112,9 @@ import {
   type AmortizationRow,
 } from "@shared/liability-calc";
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
+// Canonical balance resolver — the SAME computation Finance, the Executive
+// dashboard, the Liabilities list and net worth use. See readTerms below.
+import { resolveLiabilityBalance } from "@shared/asset-value";
 import { liabilityBillStatus, BILL_STATUS_META } from "@shared/liability-status";
 
 interface LiabilityProfileLike {
@@ -213,17 +216,38 @@ function readTerms(profile: LiabilityProfileLike) {
     }
     return 0;
   };
-  const currentBalance =
-    pick(
-      f.currentBalance, f.current_balance,
-      f.remainingBalance, f.remaining_balance,
-      f.loanBalance, f.loan_balance,
-      f.balance,
-      finance.currentBalance, finance.current_balance,
-      finance.remainingBalance, finance.remaining_balance, finance.balance,
-      loan.currentBalance, loan.current_balance,
-      loan.remainingBalance, loan.remaining_balance, loan.balance,
-    ) || 0;
+  // CANONICAL CURRENT BALANCE (§2 — one concept, one number).
+  //
+  // This used to be its own ladder, and it disagreed with
+  // shared/asset-value.ts `resolveLiabilityBalance` — the resolver Finance, the
+  // Executive tile, the Liabilities list and net worth all use — in both ORDER
+  // and COVERAGE. It preferred `fields.remainingBalance` over
+  // `fields.finance.currentBalance`, where the canonical resolver prefers the
+  // reverse, and it had never heard of `outstandingBalance`, the `other.*`
+  // namespace, or the nested `finance.loans[]` rows AI extraction writes. Any
+  // liability holding two of those keys printed one balance on this page and a
+  // different one everywhere else — exactly the "$8,500 here, something else
+  // there" failure. Delegating means the liability profile cannot drift from
+  // the balance sheet.
+  //
+  // The local `pick` survives only as a fallback for a NON-POSITIVE stored
+  // balance (the credit-convention negative some accounts use). The canonical
+  // resolver reports those as 0 — as does net worth, which never treats a
+  // negative liability as debt — so showing the raw figure here contradicts
+  // nothing while preserving the existing credit-card readout.
+  const canonicalBalance = resolveLiabilityBalance(profile);
+  const currentBalance = canonicalBalance > 0
+    ? canonicalBalance
+    : (pick(
+        f.currentBalance, f.current_balance,
+        f.remainingBalance, f.remaining_balance,
+        f.loanBalance, f.loan_balance,
+        f.balance,
+        finance.currentBalance, finance.current_balance,
+        finance.remainingBalance, finance.remaining_balance, finance.balance,
+        loan.currentBalance, loan.current_balance,
+        loan.remainingBalance, loan.remaining_balance, loan.balance,
+      ) || 0);
   const originalBalance =
     pick(
       f.originalBalance, f.original_balance,
@@ -748,7 +772,11 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const todayISO = new Date().toLocaleDateString("en-CA");
   const billStatus = liabilityBillStatus(billDueRaw, todayISO, false);
   const creditLimit = Number(f2.creditLimit ?? f2.credit_limit ?? 0) || 0;
-  const utilizationPct = creditLimit > 0 ? Math.min(999, Math.round((Number(f2.balance ?? f2.currentBalance ?? 0) / creditLimit) * 100)) : 0;
+  // Utilization must use the SAME balance the KPI row prints. This read had its
+  // own two-key ladder in the WRONG order (`balance` before `currentBalance`),
+  // so a card carrying both showed a utilization percentage computed from a
+  // balance no other number on the page agreed with.
+  const utilizationPct = creditLimit > 0 ? Math.min(999, Math.round((terms.currentBalance / creditLimit) * 100)) : 0;
 
   // Payments fetch
   const paymentsQuery = useQuery<LiabilityPayment[]>({

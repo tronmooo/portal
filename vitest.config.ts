@@ -196,6 +196,10 @@ export default defineConfig({
       // living in the Payments tab, and no "you already have a similar entry"
       // note (whose date the model invented) after a logged expense.
       'tests/bill-payments-tab.test.ts',
+      // Asset + Liability audit 2026-08-17: one canonical value/balance
+      // resolver for every surface, and the write-ordering rule that stops an
+      // in-flight bootstrap from reverting a just-completed CRUD.
+      'tests/asset-liability-consistency.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

@@ -248,6 +248,53 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
   }
 }
 
+// ─── Write epoch ────────────────────────────────────────────────────
+// Timestamp of the most recent invalidation (i.e. the last time we KNOW the
+// server data changed underneath us).
+//
+// Why this exists: several aggregate responses (/api/dashboard-bootstrap,
+// /api/profile-bootstrap/:id) are unpacked client-side into ~24 other query
+// keys via `setQueryData` (lib/bootstrap-seed.ts). `setQueryData` stamps the
+// entry as FRESH, so a bootstrap response that was already in flight when a
+// write landed would overwrite the freshly-refetched `/api/profiles` (and every
+// other seeded key) with PRE-WRITE rows and then mark them fresh for the whole
+// staleTime window. Nothing refetched them again — which is precisely the
+// "I created/edited an asset, it didn't show up, I had to refresh the app"
+// report. Background sibling-scope warms (lib/scope-prefetch.ts
+// warmSiblingScopes) made this a routine race rather than a rare one.
+//
+// Seeders compare the time their request STARTED against this value and refuse
+// to publish a payload that predates the write.
+let _lastInvalidationAt = 0;
+export function lastInvalidationAt(): number {
+  return _lastInvalidationAt;
+}
+/** True when a write landed after `startedAt`, so a response begun then is stale. */
+export function isStalePayload(startedAt: number): boolean {
+  return _lastInvalidationAt > startedAt;
+}
+
+// ─── Aggregate (fan-out) response keys ──────────────────────────────
+// These endpoints return MANY domains in one payload and are unpacked into
+// other query keys client-side. Any write to any domain can change them, so
+// they are invalidated on every bus call regardless of which domain fired.
+//
+// refetchType "none" is deliberate: the per-domain keys above already refetch
+// actively, and eagerly re-running the bootstrap aggregation (~18 Supabase
+// queries) after every single mutation is exactly the "one click, dozens of
+// requests" problem this audit exists to remove. Marking it stale means the
+// next mount picks up fresh data — and, critically, that a stale bootstrap can
+// never be replayed into the seeded keys.
+function invalidateAggregates(): Promise<unknown> {
+  return queryClient.invalidateQueries({
+    predicate: (q) => {
+      const k0 = String(q.queryKey?.[0] || "");
+      return k0 === "/api/dashboard-bootstrap" || k0.startsWith("/api/profile-bootstrap");
+    },
+    refetchType: "none",
+  });
+}
+
 // ─── Cross-tab propagation ──────────────────────────────────────────
 // React Query caches are per-tab: a write in tab A invalidated tab A's
 // queries only, so tab B kept rendering the pre-write data until a hard
@@ -293,6 +340,10 @@ export function invalidateDomains(...domains: Domain[]): Promise<void> {
 function invalidateDomainsInternal(domains: Domain[], _remote: boolean): Promise<void> {
   const seen = new Set<string>();
   const promises: Promise<unknown>[] = [];
+  // Stamp the write epoch BEFORE any awaits so an aggregate response that is
+  // already in flight is recognisable as pre-write when it lands.
+  _lastInvalidationAt = Date.now();
+  if (domains.length > 0) promises.push(invalidateAggregates());
 
   for (const d of domains) {
     // 1. Explicit top-level keys

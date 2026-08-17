@@ -3626,8 +3626,17 @@ ${JSON.stringify(ctx, null, 2)}`;
       // types whose page reads ["/api/assets", id, "parties"].
       const ASSET_PAGE_TYPES = new Set(["vehicle", "asset", "subscription", "loan", "investment", "property", "insurance", "medical", "account"]);
       let assetParties: any[] | undefined;
+      let assetLiabilities: any[] | undefined;
       if (ASSET_PAGE_TYPES.has(profileType)) {
         assetParties = enrichParties((assetPartyLinks as any[]).filter((l: any) => l?.assetProfileId === profileId));
+        // PERF (asset/liability audit): the asset page's Financials tab fires
+        // GET /api/assets/:id/liabilities right after the detail resolves — a
+        // second serverless round-trip for one indexed read, on the critical
+        // path of the "Liab." column and the Net total. Fold it into the
+        // bootstrap like the liability extras below.
+        assetLiabilities = (storage as any).getLiabilityAssetLinksForAsset
+          ? await (storage as any).getLiabilityAssetLinksForAsset(profileId).catch(() => [] as any[])
+          : [];
       }
 
       let liabilityExtras: any;
@@ -3666,7 +3675,12 @@ ${JSON.stringify(ctx, null, 2)}`;
       // Build the tree in-process from the already-fetched allProfiles list
       // (no extra DB round-trip, no duplicate getProfiles call).
       const childIndex = new Map<string, typeof allProfiles>();
+      // PERF: buildTree used to resolve every node with `allProfiles.find(...)`,
+      // an O(n) scan per node — O(n·m) for a household with a deep asset tree.
+      // One index, then O(1) lookups.
+      const profileById = new Map<string, (typeof allProfiles)[number]>();
       for (const p of allProfiles) {
+        profileById.set(p.id, p);
         if (p.deletedAt) continue;
         const k = p.parentProfileId || "__root__";
         const arr = childIndex.get(k);
@@ -3674,7 +3688,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       }
       const MAX_DEPTH = 50;
       function buildTree(pid: string, visited: Set<string>, depth: number): any {
-        const p = allProfiles.find(x => x.id === pid);
+        const p = profileById.get(pid);
         if (!p) return null;
         const node: any = {
           id: p.id, name: p.name, type: p.type, fields: p.fields,
@@ -3700,6 +3714,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         assetPartyLinks,
         liabilityProfileLinks,
         ...(assetParties !== undefined ? { assetParties } : {}),
+        ...(assetLiabilities !== undefined ? { assetLiabilities } : {}),
         ...(liabilityExtras !== undefined ? { liabilityExtras } : {}),
       };
     });

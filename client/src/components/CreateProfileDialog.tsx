@@ -31,6 +31,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import type { ProfileType, InsertProfile } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
+import { isAssetTabProfile, isLiabilityTabProfile } from "@shared/asset-value";
 import { useToast } from "@/hooks/use-toast";
 
 function FieldRow({
@@ -104,8 +106,17 @@ export function CreateProfileDialog({
   const createMutation = useMutation({
     mutationFn: async (payload: InsertProfile & { type_key?: string; skipDupCheck?: boolean }) => {
       if (!payload.skipDupCheck) {
-        // Check for duplicate name by querying current profiles
-        const existing = await apiRequest("GET", "/api/profiles").then(r => r.json()) as any[];
+        // PERF: this used to `await GET /api/profiles` on every create — a full
+        // profile scan on a serverless round-trip, strictly BEFORE the POST
+        // could even start. That serial pair is most of the "the popup took a
+        // while" delay. The profile list is already in the query cache (the
+        // dashboard bootstrap seeds it, and this dialog is only reachable from
+        // screens that render it), so read it from there and only fall back to
+        // the network when the cache is genuinely empty.
+        let existing = queryClient.getQueryData<any[]>(["/api/profiles"]);
+        if (!Array.isArray(existing)) {
+          existing = await apiRequest("GET", "/api/profiles").then(r => r.json()) as any[];
+        }
         const dup = existing?.find((p: any) => p.name.toLowerCase() === payload.name.toLowerCase());
         if (dup) {
           setDupWarning({ name: dup.name, type: dup.type, payload });
@@ -117,8 +128,35 @@ export function CreateProfileDialog({
       return res.json();
     },
     onSuccess: (created: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      // OPTIMISTIC INSERT (§4/§5/§21): put the created row into the shared
+      // profile list synchronously so every screen reading `["/api/profiles"]`
+      // — Assets, Liabilities, the owner's profile, the net-worth strip —
+      // renders it on this tick, without waiting for the refetch below.
+      // The server response IS the row, so there is nothing to roll back: this
+      // is a confirmed write, not a guess. (A guessed pre-flight insert would
+      // need rollback; we deliberately don't do that here because the server
+      // assigns the id every downstream link is keyed by.)
+      if (created?.id) {
+        queryClient.setQueryData<any[]>(["/api/profiles"], (old) =>
+          Array.isArray(old)
+            ? (old.some((p) => p.id === created.id) ? old : [...old, created])
+            : old,
+        );
+      }
+      // PROPAGATION (§4/§5): the previous two-key invalidation
+      // (["/api/profiles"] + ["/api/stats"]) left dashboard-enhanced, the
+      // relationship lists, cash flow, obligations, the calendar timeline and
+      // the bootstrap aggregates all serving pre-create data — which is why a
+      // new asset needed a manual browser refresh to appear everywhere. Route
+      // it through the bus, which knows the full ripple for each domain, and
+      // declare the domains this specific profile type actually touches.
+      const domains: Parameters<typeof invalidateDomains> = ["profiles", "dashboard"];
+      if (isAssetTabProfile(created)) domains.push("assets");
+      if (isLiabilityTabProfile(created)) {
+        // A liability also drives bills, the payment calendar and cash flow.
+        domains.push("liabilities", "obligations", "events");
+      }
+      void invalidateDomains(...domains);
       toast({ title: `"${name}" profile created`, description: selectedTypeDef?.label || selectedTypeKey });
       try { onCreated?.({ id: created?.id, name: created?.name || name, type: created?.type || "" }); } catch {}
       handleClose();

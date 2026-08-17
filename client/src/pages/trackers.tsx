@@ -15,7 +15,7 @@ import { liabilityFamily } from "@shared/liability-types";
 import { passesProfileFilter } from "@shared/profile-filter";
 import {
   ASSET_TAB_TYPES, assetTypeLabel, isAssetTabProfile, isLiabilityTabProfile,
-  resolveAssetValue,
+  resolveAssetValue, resolveLiabilityBalance,
 } from "@shared/asset-value";
 import { accountKindMeta, accountKindOf } from "@shared/finance-accounts";
 import {
@@ -6544,8 +6544,18 @@ export default function TrackersPage() {
             // Hide liabilities nested under an asset (e.g. "Service plan for
             // Sony TV" nested under TV — shows only inside the TV detail page).
             if (hasAssetAncestor(p)) return;
+            // Canonical resolver (shared/asset-value.ts). The inline ladder this
+            // replaces stopped at four keys and never looked at
+            // `outstandingBalance`, the `loan.*` namespace, or the nested
+            // `finance.loans[]` rows AI extraction writes — so a liability whose
+            // balance lived in any of those printed "—" here while Finance, the
+            // Executive tile and net worth all showed the real balance.
+            // CONCEPT (§15): `bal` is the outstanding BALANCE; `cost` is the
+            // recurring PAYMENT. They are rendered differently below and must
+            // never substitute for one another.
             const f = (p.fields as any) || {}; const fin = f.finance || {};
-            const bal = toNum(f.currentBalance) ?? toNum(f.remainingBalance) ?? toNum(f.loanBalance) ?? toNum(f.balance) ?? toNum(fin.remainingBalance) ?? toNum(fin.loanBalance) ?? toNum(fin.balance);
+            const resolvedBal = resolveLiabilityBalance(p);
+            const bal = resolvedBal > 0 ? resolvedBal : null;
             const cost = toNum(f.cost) ?? toNum(f.amount) ?? toNum(f.monthlyPayment) ?? toNum(fin.monthlyPayment);
             const freq = (f.frequency || "monthly").toString();
             const sub = liabilitySubcategoryOf(p);
@@ -7095,7 +7105,7 @@ export default function TrackersPage() {
           // actual debt instruments so the header total stays meaningful.
           if (l.type === "subscription") return s;
           const f: any = l.fields || {}; const fin = f.finance || {};
-          return s + (toNumLiab(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance) || 0);
+          return s + resolveLiabilityBalance(l);
         }, 0);
         const totalMonthly = liabs.reduce((s, l) => {
           const f: any = l.fields || {}; const fin = f.finance || {};
@@ -7163,7 +7173,7 @@ export default function TrackersPage() {
                 const fields: any = liab.fields || {};
                 const fin = fields.finance || {};
                 const isSubscription = liab.type === "subscription";
-                const balance = toNumLiab(fields.currentBalance ?? fields.remainingBalance ?? fields.loanBalance ?? fields.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance);
+                const balance = (resolveLiabilityBalance(liab) || null);
                 const subFreq = String(fields.frequency || fields.billingFrequency || "monthly").toLowerCase();
                 const subCost = toNumLiab(fields.cost ?? fields.monthlyAmount ?? fields.amount);
                 const apr = toNumLiab(fields.annualInterestRate ?? fields.apr ?? fin.annualInterestRate);

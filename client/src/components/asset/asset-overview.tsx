@@ -71,6 +71,9 @@ import {
   computeAssetRollup,
   type AssetRollupRow,
 } from "../../../../shared/asset-rollup";
+// Canonical value/balance resolvers — every number this file prints must come
+// from the same computation the lists, KPI tiles and net worth use.
+import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 
 // ---------------------------------------------------------------------------
 // Shared types — kept loose because profile-detail's local types are coupled
@@ -394,14 +397,11 @@ export function AssetSummaryCard({
   const reversedSuspect = useMemo(() => {
     if (ownRollup.totalValue <= 0) return null;
     for (const c of directChildren) {
-      const cv =
-        Number(
-          (c.fields as any)?.currentValue ??
-            (c.fields as any)?.value ??
-            (c.fields as any)?.purchasePrice ??
-            (c.fields as any)?.balance ??
-            0,
-        ) || 0;
+      // Canonical resolver — the inline 4-key ladder here disagreed with the
+      // value the SAME child renders one card below (TopChildrenPreview) and in
+      // the Financials breakdown, so the "possible reversed parent" warning
+      // fired (or failed to fire) on a number nothing else on the page showed.
+      const cv = resolveAssetValue(c);
       if (cv >= ownRollup.totalValue * 5) {
         return { name: c.name, id: c.id, value: cv };
       }
@@ -565,12 +565,14 @@ export function TopChildrenPreview({
   if (directChildren.length === 0) return null;
 
   // Top 3 by base value descending.
+  // Canonical resolver: the two-key inline read this replaces showed "—" for a
+  // child whose value lives under any other storage path (purchasePrice,
+  // marketValue, finance.balance, the vehicle/housing namespaces…), while the
+  // Contained tab and the Financials rollup showed a real number for the same
+  // row.
   const sorted = [...directChildren]
-    .map((c) => ({
-      c,
-      v: (c.fields as any)?.currentValue || (c.fields as any)?.value || 0,
-    }))
-    .sort((a, b) => Number(b.v) - Number(a.v))
+    .map((c) => ({ c, v: resolveAssetValue(c) }))
+    .sort((a, b) => b.v - a.v)
     .slice(0, 3);
 
   return (
@@ -651,8 +653,9 @@ export function FinancialsBreakdown({
   const linkedLiabRows = (assetLiabLinks || []).map((link: any) => {
     const lp = (allProfilesForLiab || []).find((p: any) => p.id === link.liabilityProfileId);
     if (!lp) return null;
-    const f = lp.fields || {}; const fin = f.finance || {};
-    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    // Canonical resolver — same balance the Liabilities tab, Finance and net
+    // worth read for this loan.
+    const bal = resolveLiabilityBalance(lp);
     const pct = Number(link.ownershipPercentage ?? 100);
     return { id: lp.id, name: lp.name || "Liability", secured: (bal * pct) / 100 };
   }).filter(Boolean) as Array<{ id: string; name: string; secured: number }>;
