@@ -197,6 +197,10 @@ export default defineConfig({
       // note (whose date the model invented) after a logged expense.
       'tests/bill-payments-tab.test.ts',
       'tests/artifacts-counts.dom.test.tsx',
+      // Chat must resolve what the dashboard shows (2026-08-17).
+      'tests/entity-resolution.test.ts',
+      'tests/ai-mark-done-routing.test.ts',
+      'tests/entity-resolution-contract.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

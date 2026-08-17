@@ -41,6 +41,8 @@ import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
+// One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
+import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
 import { parseTurnIntent, parseTurnPlan, parseDailyTarget, parseDurationDays, isActionable, type ParsedIntent, type TurnIntentPlan } from "@shared/ai-intent";
 import {
@@ -7251,7 +7253,51 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // fallback: search all tasks (any profile, any status)
         const fallback = safeMatchEntity(tasks, input.title || "", t => t.title);
         if (fallback.match && fallback.match.status === "done") return { alreadyDone: true, title: fallback.match.title };
-        return { error: result.error || "Task not found", candidates: result.candidates };
+
+        // THE DATABASE DECIDES EXISTENCE (user report 2026-08-17).
+        //
+        // "Mark Clean my room done" landed here because the model saw "done"
+        // and picked this tool. This used to answer 'Not found: "Clean my
+        // room"' — and the model relayed that as "no such task, want me to
+        // create it?" — while a HABIT of exactly that name sat on the
+        // dashboard. Before reporting absence, ask every actionable type.
+        const resolved = await resolveActionable(storage as any, {
+          name: input.title || "",
+          userMessage: String((input as any).__userMessage || ""),
+          forProfile: input.forProfile,
+        });
+        // The user said "task" explicitly → never silently act on a habit.
+        if (resolved.explicit !== "task") {
+          const habitHit = ofKind(resolved, "habit");
+          if (habitHit.length === 1) {
+            // Exactly one habit, no task: this IS the habit. Perform the real
+            // check-in through the same tool the habit path uses, so streaks,
+            // per-occurrence progress and cache busting behave identically.
+            const checkin = await executeTool("checkin_habit", {
+              ...input,
+              name: habitHit[0].name,
+              __userMessage: `mark habit ${habitHit[0].name} done`,
+            }, userId);
+            return { resolvedAs: "habit", habitName: habitHit[0].name, ...(checkin || {}) };
+          }
+          if (habitHit.length > 1) {
+            return {
+              error: `Several habits match "${input.title}". Ask which one.`,
+              candidates: habitHit.map(h => ({ id: h.id, name: h.name })),
+            };
+          }
+          const hint = crossKindHint(resolved, "task");
+          if (hint) {
+            return { error: `${hint} Act on that instead — do NOT create anything.`, code: "WRONG_ENTITY_KIND" };
+          }
+        }
+        return {
+          error: result.error || "Task not found",
+          candidates: result.candidates,
+          // Say plainly that the lookup was exhaustive, so the model does not
+          // dress a partial search up as a certainty.
+          checkedKinds: resolved.searched,
+        };
       }
       const doneTask = await storage.updateTask(result.match.id, { status: "done" });
       // (Removed 2026-08-09: a pass that hunted down reminder rows whose title
@@ -9700,9 +9746,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const prof = matchProfileByName(allProfs, input.forProfile);
         if (prof) eligible = habits.filter(h => (h.linkedProfiles || []).includes(prof.id));
       } else {
-        const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
-        if (selfProf) {
-          eligible = habits.filter(h => !(h.linkedProfiles || []).length || (h.linkedProfiles || []).includes(selfProf.id));
+        // The CANONICAL ownership rule (shared/profile-filter), not a local
+        // copy: every self profile, plus orphans, exactly as the dashboard
+        // resolves them. This used to narrow to the FIRST profile with
+        // type "self", so an account with two self rows had half its habits
+        // invisible to chat while the dashboard showed them all.
+        const allProfiles = await storage.getProfiles();
+        const selfIds = [...selfIdsFrom(allProfiles)];
+        if (selfIds.length > 0) {
+          eligible = habits.filter(h =>
+            passesProfileFilter(h.linkedProfiles, { selectedIds: selfIds, allProfiles }));
         }
       }
       // Fuzzy, stem-aware match so "mark off my pooping" resolves the "POOP"
@@ -9711,9 +9764,33 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // it let unqualified messages check in other people's habits.
       const habit = matchHabitByName(eligible, input.name || "");
       if (!habit) {
+        // Same rule as complete_task, in reverse: never report absence until
+        // every actionable type has been asked. An explicit "habit" in the
+        // message still forbids touching a task of that name.
+        const resolved = await resolveActionable(storage as any, {
+          name: input.name || "",
+          userMessage: checkinMsg,
+          forProfile: input.forProfile,
+        });
+        if (resolved.explicit !== "habit") {
+          const taskHit = ofKind(resolved, "task");
+          if (taskHit.length === 1) {
+            const done = await executeTool("complete_task", {
+              ...input,
+              title: taskHit[0].name,
+              __userMessage: `mark task ${taskHit[0].name} done`,
+            }, userId);
+            return { resolvedAs: "task", taskTitle: taskHit[0].name, ...(done || {}) };
+          }
+          const hint = crossKindHint(resolved, "habit");
+          if (hint) {
+            return { error: `${hint} Act on that instead — do NOT create anything.`, code: "WRONG_ENTITY_KIND" };
+          }
+        }
         return {
-          error: `No habit named "${input.name || "unknown"}" on ${input.forProfile ? `${input.forProfile}'s` : "the user's"} profile. Do NOT create a habit and do NOT check in another profile's habit — if the user reported doing something, log it with log_tracker_entry instead.`,
+          error: `No habit named "${input.name || "unknown"}" on ${input.forProfile ? `${input.forProfile}'s` : "the user's"} profile, and nothing else by that name either. Do NOT create a habit and do NOT check in another profile's habit — if the user reported doing something, log it with log_tracker_entry instead.`,
           code: "HABIT_NOT_FOUND",
+          checkedKinds: resolved.searched,
         };
       }
 
@@ -10897,7 +10974,33 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (prof) evtPool = events.filter(e => (e.linkedProfiles || []).includes(prof.id));
       }
       const ceResult = safeMatchEntity(evtPool, input.title || "", e => e.title);
-      if (!ceResult.match) return { error: ceResult.error || "Event not found", candidates: ceResult.candidates };
+      if (!ceResult.match) {
+        // Same rule as complete_task / checkin_habit: the database decides
+        // existence across every actionable type before absence is reported.
+        const resolved = await resolveActionable(storage as any, {
+          name: input.title || "",
+          userMessage: String((input as any).__userMessage || ""),
+          forProfile: input.forProfile,
+        });
+        if (resolved.explicit !== "event") {
+          const hit = resolved.candidates.filter(c => c.kind !== "event");
+          if (hit.length >= 1) {
+            const target = hit[0];
+            const tool = target.kind === "habit" ? "checkin_habit"
+              : target.kind === "task" ? "complete_task" : null;
+            if (tool && hit.length === 1) {
+              const out = await executeTool(tool, {
+                ...input,
+                ...(target.kind === "habit" ? { name: target.name } : { title: target.name }),
+                __userMessage: `mark ${target.kind} ${target.name} done`,
+              }, userId);
+              return { resolvedAs: target.kind, name: target.name, ...(out || {}) };
+            }
+            return { error: `${crossKindHint(resolved, "event")} Act on that instead — do NOT create anything.`, code: "WRONG_ENTITY_KIND" };
+          }
+        }
+        return { error: ceResult.error || "Event not found", candidates: ceResult.candidates, checkedKinds: resolved.searched };
+      }
       const completed = await storage.updateEvent(ceResult.match.id, { status: "completed" } as any);
       if (input.removeFromSchedule) {
         // Also mark as hidden from upcoming by setting date to past
