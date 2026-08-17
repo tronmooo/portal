@@ -71,3 +71,49 @@ describe("hasExplicitHabitCreateIntent", () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "Mark <name> done" is a completion COMMAND, not an activity report
+// (user report 2026-08-17). The gate only fired on "mark off/it/that/my/the",
+// so "Mark Daily run done" — the plainest way anyone says this — was treated as
+// narration. checkin_habit bailed out before looking the habit up, and the
+// model relayed that as "no such habit, want me to log a tracker entry?" while
+// the habit was on screen.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("completion commands reach the habit", () => {
+  const COMMANDS = [
+    "Mark Daily run done",
+    "Mark Clean my room done",
+    "mark daily run complete",
+    "mark my meditation finished",
+    "complete Daily run",
+    "finish Daily run",
+    "check off Daily run",
+    "Mark habit Daily run done",
+    "mark off my run",
+    "done meditation",
+  ];
+  it.each(COMMANDS)("%s is an explicit check-in", (msg) => {
+    expect(hasExplicitHabitCheckinIntent(msg)).toBe(true);
+  });
+
+  // The guard this gate exists for must still hold.
+  const REPORTS = [
+    "I went to the bathroom at 8:15 AM",
+    "I drank a glass of water",
+    "I ran 3 miles this morning",
+    "I smoked a cigarette",
+    "had coffee",
+  ];
+  it.each(REPORTS)("%s is NOT a check-in — it is a tracker log", (msg) => {
+    expect(hasExplicitHabitCheckinIntent(msg)).toBe(false);
+  });
+
+  it("does not drag a 'done' from a later sentence into range", () => {
+    // Sentence-bounded: the completion word must belong to the mark clause.
+    // ("mark my …" is a check-in by the older rule, so this case deliberately
+    // avoids the off/it/that/my/the forms to isolate the new one.)
+    expect(hasExplicitHabitCheckinIntent("mark rex's bowl. the laundry is done"))
+      .toBe(false);
+  });
+});

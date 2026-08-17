@@ -28,6 +28,9 @@ function reseed() {
   db.habits = [
     { id: "h-clean", name: "Clean my room", linkedProfiles: [SELF.id], targetPerDay: 1, checkins: [] },
     { id: "h-bath", name: "Bathroom Visit", linkedProfiles: [SELF.id], targetPerDay: 2, checkins: [] },
+    // ORPHAN — no linked profile at all. The dashboard shows these as the
+    // user's own; chat must too (user report 2026-08-17, "Daily run").
+    { id: "h-run", name: "Daily run", linkedProfiles: [], targetPerDay: 1, checkins: [] },
   ];
   db.tasks = [
     { id: "t-groc", title: "Buy groceries", status: "open", linkedProfiles: [SELF.id] },
@@ -147,6 +150,36 @@ describe("'mark X done' reaches the record the dashboard shows", () => {
     expect(res?.resolvedAs).toBeUndefined();
   });
 
+  it('"Mark Daily run done" checks in an ORPHAN habit — the second report', async () => {
+    // Two things had to be true for this to work: the check-in intent gate has
+    // to accept "Mark <name> done" (it used to read that as an activity report
+    // and divert to a tracker), and the profile scope has to admit a habit with
+    // no linkedProfiles at all.
+    const res = await executeTool("checkin_habit", {
+      name: "Daily run", __userMessage: "Mark Daily run done",
+    }, "u1");
+    expect(res?.error, `should not have errored: ${JSON.stringify(res)}`).toBeUndefined();
+    expect(progress("h-run")).toBe("1/1");
+  });
+
+  it('"Mark Daily run done" also works when the model routes it as a task', async () => {
+    const res = await executeTool("complete_task", {
+      title: "Daily run", __userMessage: "Mark Daily run done",
+    }, "u1");
+    expect(res?.resolvedAs).toBe("habit");
+    expect(progress("h-run")).toBe("1/1");
+  });
+
+  it("a plain activity report is still NOT a habit check-in", async () => {
+    // The 2026-07-15 guard must survive: narrating an activity logs a tracker
+    // entry, it does not silently move someone's streak.
+    const res = await executeTool("checkin_habit", {
+      name: "Daily run", __userMessage: "I ran 3 miles this morning",
+    }, "u1");
+    expect(res?.code).toBe("NOT_A_HABIT_CHECKIN");
+    expect(progress("h-run")).toBe("0/1");
+  });
+
   it("offers to create only when NOTHING of any kind matches", async () => {
     const res = await executeTool("complete_task", {
       title: "Wash the dragon", __userMessage: "mark wash the dragon done",
@@ -154,7 +187,8 @@ describe("'mark X done' reaches the record the dashboard shows", () => {
     expect(res?.error).toBeTruthy();
     // The lookup was exhaustive, and says so.
     expect(res?.checkedKinds).toBeTruthy();
-    expect(db.habits).toHaveLength(2);
+    // Nothing was invented as a side effect of the failed lookup.
+    expect(db.habits).toHaveLength(3);
     expect(db.tasks).toHaveLength(1);
   });
 

@@ -34,8 +34,22 @@ export function hasExplicitHabitCheckinIntent(message: string): boolean {
     /\bhabits?\b/.test(m) ||
     /\bstreaks?\b/.test(m) ||
     /\bmark(ed)?\s+(off|it|that|my|the)\b/.test(m) ||
+    // "Mark Daily run done" / "mark clean my room complete" — an imperative
+    // naming the thing between the verb and the completion word.
+    //
+    // THE GAP THIS CLOSES (user report 2026-08-17): the alternation above only
+    // fired when "mark" was followed by off/it/that/my/the, so the plainest
+    // completion command in the language — "Mark <name> done" — was read as an
+    // activity report. checkin_habit then bailed out with NOT_A_HABIT_CHECKIN
+    // BEFORE looking anything up, and the model relayed that as "no such habit
+    // found, want me to log it to a tracker instead?" while the habit sat on
+    // the dashboard. The name is deliberately matched loosely (any words) and
+    // bounded to one sentence so a later clause can't drag an unrelated
+    // "done" into range.
+    /\bmark(ed)?\b[^.!?;]*\b(done|complete|completed|finished|off)\b/.test(m) ||
     /\bcheck(ed)?\s*(-\s*)?(in|off)\b/.test(m) ||
-    /^\s*(done|did|completed?)\s+/.test(m) || // imperative shorthand: "done meditation"
+    // Imperative shorthand: "done meditation", "finish Daily run".
+    /^\s*(done|did|completed?|finish(ed)?)\s+/.test(m) ||
     // Reporting a dose/occurrence of a multi-completion habit: "I took my first
     // dose", "I already did one of them", "I took both doses". These name a
     // completion explicitly, so they are check-ins, not activity reports.
