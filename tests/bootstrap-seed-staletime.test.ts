@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { bootstrapSeedEntries } from "../client/src/lib/bootstrap-seed-keys";
 import { scopedKey } from "../shared/query-keys";
 
@@ -105,6 +105,109 @@ describe("bootstrap-seeded staleTime", () => {
     expect(qc.getQueryData(p1Key)).toEqual([{ id: "t1" }]);
     expect(qc.getQueryData(p2Key)).toBeUndefined();
     expect(qc.getQueryDefaults(p2Key)?.staleTime).not.toBe(SEEDED_STALE_TIME_MS);
+  });
+});
+
+/**
+ * The headline claim, measured rather than argued: how many network calls a
+ * remount actually costs. Each seeded key gets a real QueryObserver with
+ * refetchOnMount: true (the app's global default) and a counting queryFn, so
+ * these numbers are the request counts the browser would produce.
+ */
+describe("requests fired when returning to a section", () => {
+  const SEEDED_ENDPOINTS = [
+    "/api/tasks", "/api/habits", "/api/goals", "/api/notifications",
+    "/api/obligations", "/api/trackers", "/api/events", "/api/documents",
+  ] as const;
+
+  function mountAll(qc: QueryClient, onFetch: (endpoint: string) => void) {
+    const observers = SEEDED_ENDPOINTS.map((endpoint) => {
+      const observer = new QueryObserver(qc, {
+        queryKey: [...scopedKey(endpoint, "everyone", [])],
+        queryFn: async () => { onFetch(endpoint); return []; },
+        refetchOnMount: true,
+      });
+      const unsub = observer.subscribe(() => {});
+      return unsub;
+    });
+    return () => observers.forEach((u) => u());
+  }
+
+  it("fires ZERO requests on remount while the bootstrap seed is still fresh (was one per section)", async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { staleTime: BOOTSTRAP_STALE_TIME_MS, retry: false } },
+    });
+    seedInto(qc, sampleBootstrap(), "everyone", [], MONTH);
+    // The bootstrap payload does not carry every one of these; seed the rest so
+    // the test measures staleness policy, not seed coverage.
+    for (const endpoint of SEEDED_ENDPOINTS) {
+      const key = [...scopedKey(endpoint, "everyone", [])];
+      if (qc.getQueryData(key) === undefined) {
+        qc.setQueryData(key, []);
+        qc.setQueryDefaults(key as any, { staleTime: SEEDED_STALE_TIME_MS });
+      }
+    }
+
+    const fetched: string[] = [];
+    const unmount = mountAll(qc, (e) => fetched.push(e));
+    await new Promise((r) => setTimeout(r, 50));
+    unmount();
+
+    expect(fetched).toEqual([]);
+  });
+
+  it("CONTROL — the old policy fired one request per section on the same remount", async () => {
+    // Reproduces the pre-fix arrangement: seeded slots carry the short
+    // per-query staleTime the consumers used to pass (30-60s), so after an
+    // ordinary pause every one of them is stale and refetches on mount. This
+    // is the 8-12 request storm the production drive measured; it is kept as a
+    // control so the fix above is a measured delta, not an assertion of faith.
+    const OLD_STALE_TIME_MS = 60_000;
+    const qc = new QueryClient({
+      defaultOptions: { queries: { staleTime: BOOTSTRAP_STALE_TIME_MS, retry: false } },
+    });
+    const seededAt = Date.now() - (OLD_STALE_TIME_MS + 10_000);
+    for (const endpoint of SEEDED_ENDPOINTS) {
+      const key = [...scopedKey(endpoint, "everyone", [])];
+      qc.setQueryData(key, [], { updatedAt: seededAt });
+    }
+
+    const fetched: string[] = [];
+    const observers = SEEDED_ENDPOINTS.map((endpoint) => {
+      const observer = new QueryObserver(qc, {
+        queryKey: [...scopedKey(endpoint, "everyone", [])],
+        queryFn: async () => { fetched.push(endpoint); return []; },
+        refetchOnMount: true,
+        staleTime: OLD_STALE_TIME_MS, // the override the consumers used to pass
+      });
+      return observer.subscribe(() => {});
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    observers.forEach((u) => u());
+
+    expect(fetched.length).toBe(SEEDED_ENDPOINTS.length);
+  });
+
+  it("still refetches on remount once the seed is genuinely stale", async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { staleTime: BOOTSTRAP_STALE_TIME_MS, retry: false } },
+    });
+    const key = [...scopedKey("/api/tasks", "everyone", [])];
+    // Seeded long enough ago that even the extended staleTime has passed.
+    qc.setQueryData(key, [], { updatedAt: Date.now() - (SEEDED_STALE_TIME_MS + 60_000) });
+    qc.setQueryDefaults(key as any, { staleTime: SEEDED_STALE_TIME_MS });
+
+    let fetches = 0;
+    const observer = new QueryObserver(qc, {
+      queryKey: key,
+      queryFn: async () => { fetches++; return []; },
+      refetchOnMount: true,
+    });
+    const unsub = observer.subscribe(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+    unsub();
+
+    expect(fetches).toBe(1);
   });
 });
 

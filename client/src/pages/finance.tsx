@@ -168,13 +168,18 @@ export default function FinancePage() {
   const { data: enhanced } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}`).then(r => r.json()),
-    // Always refetch on mount so KPI tiles never show stale aggregates after navigating here
-    refetchOnMount: "always",
+    // [PERF 2026-08-17] These two carried refetchOnMount: "always", which fires
+    // a network request on EVERY visit to Finance no matter how fresh the cache
+    // is — measured as 2 unavoidable requests per visit on the production drive,
+    // even when nothing had changed. The default ("refetch if stale") is enough
+    // here: the cache bus invalidates BOTH of these keys on every expense,
+    // income, obligation and liability write (lib/cache-bus.ts), and an
+    // invalidated query refetches on mount regardless of staleTime. So a write
+    // still lands immediately; an unchanged revisit is now free.
   });
   const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
     queryKey: ["/api/expenses", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
-    refetchOnMount: "always",
   });
   // Expenses page controls — persisted in localStorage so the toolbar survives
   // reloads (search + category + sort + date range).

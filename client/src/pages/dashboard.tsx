@@ -647,7 +647,10 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
       const totalSpent = monthExpenses.reduce((s: number, e: any) => s + e.amount, 0);
       return { totalBudget, totalSpent, remaining: totalBudget - totalSpent };
     },
-    staleTime: 30_000,
+    // [PERF 2026-08-17] No staleTime override: this key is bootstrap-seeded, and
+    // an explicit staleTime beats the seeded default (lib/bootstrap-seed.ts), so
+    // it used to expire on its own and refetch — twice over, since this queryFn
+    // makes two requests — for data the bootstrap re-seeds anyway.
     placeholderData: undefined,
   });
 
@@ -658,7 +661,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   const { data: incomesRaw, isSuccess: incomesLoaded } = useQuery<any[]>({
     queryKey: ["/api/incomes", filterMode, ...filterIds, "hero"],
     queryFn: () => apiRequest("GET", `/api/incomes${leading}`).then(r => r.json()),
-    staleTime: 60_000,
+    // Bootstrap-seeded — see the budget summary above.
     placeholderData: undefined,
   });
   const incomes = Array.isArray(incomesRaw) ? incomesRaw : (incomesRaw as any)?.items || [];
@@ -812,7 +815,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   const { data: nwHistory = [] } = useQuery<any[]>({
     queryKey: ["/api/net-worth/history", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", histUrl).then(r => r.json()).catch(() => []),
-    staleTime: 60_000,
+    // Bootstrap-seeded — see the budget summary above.
   });
   const nwSeries = useMemo(() => {
     const rows = Array.isArray(nwHistory) ? [...nwHistory] : [];
@@ -1634,12 +1637,12 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
   const { data: habitsRaw } = useQuery<any>({
     queryKey: ["/api/habits", filterMode, ...filterIds, "trends"],
     queryFn: () => apiRequest("GET", `/api/habits${leading}`).then(r => r.json()).catch(() => []),
-    staleTime: 60_000,
+    // Bootstrap-seeded (the "trends" suffix reads the same payload).
   });
   const { data: trackersRaw } = useQuery<any>({
     queryKey: ["/api/trackers", filterMode, ...filterIds, "trends"],
     queryFn: () => apiRequest("GET", `/api/trackers${leading}`).then(r => r.json()).catch(() => []),
-    staleTime: 60_000,
+    // Bootstrap-seeded (the "trends" suffix reads the same payload).
   });
   const habits: any[] = Array.isArray(habitsRaw) ? habitsRaw : (habitsRaw?.items || habitsRaw?.habits || []);
   const trackers: any[] = Array.isArray(trackersRaw) ? trackersRaw : (trackersRaw?.items || trackersRaw?.trackers || []);
@@ -4816,7 +4819,7 @@ export function NotificationsSection({ filterMode, filterIds }: { filterMode: st
   const { data: notifications = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()).catch(() => []),
-    staleTime: 60_000,
+    // Bootstrap-seeded — see the budget summary above.
   });
   const items = (Array.isArray(notifications) ? notifications : []).filter((n: any) => !n.dismissed).slice(0, 6);
   if (items.length === 0) return null;
