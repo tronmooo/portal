@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -17,7 +17,7 @@ import {
   BellOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
 
 interface Notification {
@@ -103,28 +103,19 @@ function getSeverityStyles(severity: Notification["severity"]) {
 
 // Persist dismissed IDs to the preferences API so they survive page reloads
 const DISMISSED_PREF_KEY = "dismissed_notifications";
-
-async function loadDismissedIds(): Promise<string[]> {
-  try {
-    // Audit fix: this used raw fetch() which bypassed the auth interceptor,
-    // so the request went unauthenticated, returned 401, and dismissed IDs
-    // were never restored on reload — making 'Dismiss all' look broken.
-    // apiRequest() runs through the auth interceptor with the bearer token.
-    const res = await apiRequest("GET", `/api/preferences/${DISMISSED_PREF_KEY}`);
-    const json = await res.json().catch(() => null);
-    if (!json?.value) return [];
-    const parsed = JSON.parse(json.value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
+// Shared query slot: seeded by /api/dashboard-bootstrap and also read by the
+// Executive Brief (ExecutiveBriefing.tsx). One fetch serves all three surfaces
+// instead of the bell firing its own GET on the login critical path.
+const DISMISSED_QUERY_KEY = ["/api/preferences/dismissed_notifications"];
 
 async function saveDismissedIds(ids: string[]): Promise<void> {
+  // Keep the shared cache slot in sync so the Executive Brief's alert list
+  // agrees with the bell without a refetch.
+  try { queryClient.setQueryData(DISMISSED_QUERY_KEY, ids); } catch { /* ignore */ }
   try {
-    // Audit fix: same auth issue as loadDismissedIds — raw fetch bypassed
-    // the bearer-token interceptor and the PUT silently 401'd, so dismissals
-    // never persisted across reloads.
+    // Audit fix: raw fetch bypassed the bearer-token interceptor and the PUT
+    // silently 401'd, so dismissals never persisted across reloads.
+    // apiRequest() runs through the auth interceptor with the bearer token.
     await apiRequest("PUT", `/api/preferences/${DISMISSED_PREF_KEY}`, {
       value: JSON.stringify(ids),
     });
@@ -136,23 +127,41 @@ async function saveDismissedIds(ids: string[]): Promise<void> {
 export function NotificationBell() {
   const [, setLocation] = useLocation();
   const [open, setOpen] = useState(false);
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
-  // Whether the persisted dismissal list has come back yet. The badge stays
-  // hidden until it has: dismissals load one round trip AFTER the notifications
-  // do, so rendering in between shows a count that is about to drop for no
-  // reason the user can see (QA 2026-07-29 CRUD-T1-004 watched the badge run
-  // 7 → 8 → 20 → 19 → 7 with no matching event).
-  const [dismissedReady, setDismissedReady] = useState(false);
-  const dismissedLoaded = useRef(false);
+  // Persisted dismissals come from the SHARED query slot the bootstrap seeds
+  // (see bootstrap-seed-keys.ts) and the Executive Brief also reads — so the
+  // bell no longer fires its own /api/preferences GET on the login critical
+  // path, and the two surfaces can't disagree about what's dismissed.
+  // Local state stays the authority for THIS session's dismissals (they must
+  // apply instantly, before the PUT lands); the query result seeds it.
+  const [localDismissed, setLocalDismissed] = useState<Set<string>>(new Set());
+  const { data: persistedDismissed = [], isPending: dismissedPending } = useQuery<string[]>({
+    queryKey: DISMISSED_QUERY_KEY,
+    queryFn: () => apiRequest("GET", `/api/preferences/${DISMISSED_PREF_KEY}`)
+      .then(r => r.json())
+      .then(d => { try { const p = JSON.parse(d?.value || "[]"); return Array.isArray(p) ? p : []; } catch { return []; } })
+      .catch(() => []),
+  });
+  const dismissedIds = useMemo(
+    () => new Set<string>([...persistedDismissed, ...Array.from(localDismissed)]),
+    [persistedDismissed, localDismissed],
+  );
+  // Whether the persisted dismissal list has arrived. The badge stays hidden
+  // until it has: rendering in between shows a count that is about to drop for
+  // no reason the user can see (QA 2026-07-29 CRUD-T1-004 watched the badge run
+  // 7 → 8 → 20 → 19 → 7 with no matching event). Seeded from the bootstrap on
+  // the happy path, so this is normally true on first render.
+  const dismissedReady = !dismissedPending;
 
-  // Load persisted dismissed IDs on mount
-  useEffect(() => {
-    if (dismissedLoaded.current) return;
-    dismissedLoaded.current = true;
-    loadDismissedIds()
-      .then(ids => { if (ids.length > 0) setDismissedIds(new Set(ids)); })
-      .finally(() => setDismissedReady(true));
-  }, []);
+  // Record a dismissal locally AND persist it (shared slot + preferences PUT).
+  const addDismissed = useCallback((ids: string[]) => {
+    setLocalDismissed(prev => {
+      const next = new Set(prev);
+      for (const id of ids) next.add(id);
+      return next;
+    });
+    const merged = Array.from(new Set([...persistedDismissed, ...Array.from(localDismissed), ...ids]));
+    saveDismissedIds(merged);
+  }, [persistedDismissed, localDismissed]);
 
   // Read the active profile scope from the ONE reactive store binding. The bell
   // previously mirrored the store into local state, so during a profile switch
@@ -164,7 +173,12 @@ export function NotificationBell() {
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["/api/notifications", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/notifications${notifProfileParam}`).then(r => r.json()),
-    refetchInterval: 60000,
+    // Notifications are derived from due dates and expiries — they change on
+    // the scale of hours, not seconds, and every mutation that could add one
+    // already invalidates this key through the cache bus. The 60s poll was a
+    // request per minute per open tab (each one a serverless invocation)
+    // competing with whatever the user was actually doing.
+    refetchInterval: 5 * 60_000,
     // Keep the previous scope's list on screen while the new one loads instead
     // of flashing an empty (or default-keyed) count in between.
     placeholderData: keepPreviousData,
@@ -179,35 +193,19 @@ export function NotificationBell() {
   const totalCount = visibleNotifications.length;
 
   const handleDismissAll = useCallback(() => {
-    const allIds = notifications.map(n => n.id);
-    setDismissedIds(prev => {
-      const merged = new Set([...Array.from(prev), ...allIds]);
-      saveDismissedIds(Array.from(merged));
-      return merged;
-    });
-  }, [notifications]);
+    addDismissed(notifications.map(n => n.id));
+  }, [notifications, addDismissed]);
 
   const handleDismiss = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setDismissedIds(prev => {
-      const next = new Set(Array.from(prev));
-      next.add(id);
-      saveDismissedIds(Array.from(next));
-      return next;
-    });
-  }, []);
+    addDismissed([id]);
+  }, [addDismissed]);
 
   const handleNotificationClick = useCallback(
     (notification: Notification) => {
       // Mark as read (same persistence as the X button) so badge count decrements
       // and the item disappears from the unread list after click.
-      setDismissedIds(prev => {
-        if (prev.has(notification.id)) return prev;
-        const next = new Set(Array.from(prev));
-        next.add(notification.id);
-        saveDismissedIds(Array.from(next));
-        return next;
-      });
+      if (!dismissedIds.has(notification.id)) addDismissed([notification.id]);
       // Deep-link based on notification type/entity
       switch (notification.type) {
         case "task_overdue":
@@ -254,7 +252,7 @@ export function NotificationBell() {
       }
       setOpen(false);
     },
-    [setLocation]
+    [setLocation, dismissedIds, addDismissed]
   );
 
 

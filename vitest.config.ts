@@ -149,6 +149,9 @@ export default defineConfig({
       'tests/profile-edit-event-gating.test.ts',
       'tests/profile-edit-no-ai-regen.test.ts',
       'tests/bootstrap-seed-keys.test.ts',
+      // Perf 2026-08-17: bootstrap-seeded keys outlive the bootstrap's own
+      // staleTime, so returning to a section costs one request, not a dozen.
+      'tests/bootstrap-seed-staletime.test.ts',
       'tests/scope-prefetch-siblings.test.ts',
       'tests/request-memo-reuse.test.ts',
       'tests/documents-page.test.ts',

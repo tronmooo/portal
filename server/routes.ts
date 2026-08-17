@@ -486,14 +486,33 @@ function getCached(key: string): any | null {
 // memory-only automatically when the table doesn't exist yet (first deploy
 // before the migration runs).
 const SHARED_CACHE_PREFIXES = ["bootstrap:", "stats:", "enhanced:", "caltimeline:"];
+// Keys that are deliberately NOT data-version-stamped but still safe to share
+// across instances. The AI daily briefing key embeds user + scope + DAY and the
+// manual Refresh button bypasses the cache with force:true — nothing about it
+// goes stale on a data write in a way the user would notice inside its TTL.
+// Sharing it means a request landing on a fresh instance serves the briefing
+// from one indexed read instead of re-running a 5-9s Anthropic call (the
+// "Executive briefing is slow every time I come back" report).
+const SHARED_CACHE_UNVERSIONED_PREFIXES = ["aisummary:"];
 let sharedCacheBroken = false; // latched when the table is missing/unreachable
 const SHARED_CACHE_ENABLED = () =>
   CACHE_ENABLED && !sharedCacheBroken &&
   process.env.SHARED_RESPONSE_CACHE !== "0" && process.env.SHARED_RESPONSE_CACHE !== "false";
 function sharedCacheEligible(key: string): boolean {
-  return SHARED_CACHE_ENABLED() && key.includes("@v") &&
+  if (!SHARED_CACHE_ENABLED()) return false;
+  if (SHARED_CACHE_UNVERSIONED_PREFIXES.some((p) => key.startsWith(p))) return true;
+  return key.includes("@v") &&
     SHARED_CACHE_PREFIXES.some((p) => key.startsWith(p));
 }
+// TTL for the version-stamped aggregation caches (bootstrap/stats/enhanced/
+// caltimeline/notifications). Writes self-invalidate these keys instantly —
+// cacheUserKey embeds the user's data version, which every write bumps — so
+// the TTL only bounds TIME-derived staleness (a task crossing into "overdue",
+// a bill entering its due window). 3 min matches the client's staleTime, so a
+// "return to a section" background revalidation is served from cache instead
+// of re-running the ~15-query aggregation it used to trigger past the old
+// 30-60s TTLs.
+const AGG_CACHE_TTL_MS = 3 * 60_000;
 function latchSharedCacheError(err: any): void {
   // 42P01 = undefined_table. Anything else is transient — keep trying.
   const code = err?.code || err?.details?.code;
@@ -563,6 +582,9 @@ const USER_CACHE_PREFIXES = [
   "obligations:", "journal:", "documents:", "goals:", "insights:",
   "insights-data:", "activity:", "ai-digest:", "artifacts:", "notifications:",
   "cashflow:", "calendar:",
+  // Finance-page reads cached as of 2026-08-17. Version-stamped like the rest,
+  // so this scoped bust is belt-and-braces on top of the version bump.
+  "accounts:", "loans-schedule:", "paychecks:", "profiles-lite:",
 ];
 
 // Scoped cache-bust: drop only the MUTATING user's cached responses instead of
@@ -1007,13 +1029,13 @@ export async function registerRoutes(
         // getCachedShared: skip the recompute when ANY instance already holds
         // a live entry, not just this one.
         if (!(await getCachedShared(ckStats))) {
-          try { setCache(ckStats, await scoped.getStats(undefined, filterIds), 60 * 1000); } catch {}
+          try { setCache(ckStats, await scoped.getStats(undefined, filterIds), AGG_CACHE_TTL_MS); } catch {}
         }
         if (!(await getCachedShared(ckEnh))) {
-          try { setCache(ckEnh, await scoped.getDashboardEnhanced(undefined, filterIds), 60 * 1000); } catch {}
+          try { setCache(ckEnh, await scoped.getDashboardEnhanced(undefined, filterIds), AGG_CACHE_TTL_MS); } catch {}
         }
         if (!getCached(ckProf)) {
-          try { setCache(ckProf, await scoped.getProfiles(), 60 * 1000); } catch {}
+          try { setCache(ckProf, await scoped.getProfiles(), AGG_CACHE_TTL_MS); } catch {}
         }
         try { (scoped as any).disableRequestMemo?.(); } catch {}
       } catch { /* best-effort warm */ }
@@ -2081,7 +2103,12 @@ export async function registerRoutes(
       // returning to a scope you've already seen today renders it instantly.
       const briefingKey = `aisummary:${userId}:${useFilter ? ids.slice().sort().join(",") : "everyone"}:${todayISO}`;
       if (!force) {
-        const cachedBriefing = getCached(briefingKey);
+        // Shared (cross-instance) read: the briefing used to live only in this
+        // instance's memory, so any request landing on a fresh instance re-ran
+        // the 5-9s Anthropic call — the recurring "Executive briefing writes
+        // itself again" slowness. One indexed Postgres read now serves it from
+        // whichever instance generated it today.
+        const cachedBriefing = await getCachedShared(briefingKey);
         if (cachedBriefing) return res.json(cachedBriefing);
       }
 
@@ -2878,11 +2905,12 @@ ${JSON.stringify(ctx, null, 2)}`;
     // dedupe: concurrent identical requests share one DB query
     const stats = await dedupe(cacheKey, () => storage.getStats(undefined, filterIds));
     try { (storage as any).disableRequestMemo?.(); } catch {}
-    // 60-second cache. cacheBustMiddleware drops it synchronously on any mutation
-    // (including AI-driven /api/chat and /api/upload paths), so this cannot serve
-    // stale data after a write. Longer TTL = many more page navigations served
-    // from cache without re-aggregating ~10 supabase queries each time.
-    setCache(cacheKey, stats, 60 * 1000);
+    // cacheBustMiddleware drops this synchronously on any mutation (including
+    // AI-driven /api/chat and /api/upload paths) and the version-stamped key
+    // self-invalidates across instances, so this cannot serve stale data after
+    // a write. Longer TTL = many more page navigations served from cache
+    // without re-aggregating ~10 supabase queries each time.
+    setCache(cacheKey, stats, AGG_CACHE_TTL_MS);
     res.json(stats);
   }));
 
@@ -2900,8 +2928,8 @@ ${JSON.stringify(ctx, null, 2)}`;
     // dedupe: concurrent identical requests share one DB query
     const data = await dedupe(cacheKey, () => storage.getDashboardEnhanced(undefined, filterIds));
     try { (storage as any).disableRequestMemo?.(); } catch {}
-    // 60-second cache (same rationale as /api/stats above).
-    setCache(cacheKey, data, 60 * 1000);
+    // Same TTL + rationale as /api/stats above.
+    setCache(cacheKey, data, AGG_CACHE_TTL_MS);
     res.json(data);
   }));
 
@@ -3024,7 +3052,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       const nwProfileId = filterIds && filterIds.length === 1 ? filterIds[0] : undefined;
       const [stats, profiles, incomes, expensesForBudget, budgets, obligationsAll, assetPartyLinks, liabilityProfileLinks,
         tasksAll, habitsAll, goalsAll, journalAll, eventsAll, documentsAll, trackersAll,
-        calendarTimelineAll, notificationsAll, netWorthHistory] = await Promise.all([
+        calendarTimelineAll, notificationsAll, netWorthHistory, dismissedNotifPref] = await Promise.all([
         cachedStats ?? dedupe(statsCacheKey, async () => {
           // sharedFetches: this same request fetches every table unfiltered
           // for the seed payloads + buildNotifications below — let getStats
@@ -3067,6 +3095,13 @@ ${JSON.stringify(ctx, null, 2)}`;
         typeof (storage as any).getNetWorthHistory === "function"
           ? (storage as any).getNetWorthHistory(nwProfileId, 120).catch(() => [] as any[])
           : Promise.resolve([] as any[]),
+        // [PERF] Dismissed-notification ids ride along so the client seeds the
+        // NotificationBell + Executive Brief's shared query instead of firing a
+        // separate /api/preferences GET on the login critical path (measured
+        // 2.7-5.2s on a cold instance).
+        typeof (storage as any).getPreference === "function"
+          ? (storage as any).getPreference("dismissed_notifications").catch(() => null)
+          : Promise.resolve(null),
       ]);
 
       const enhanced = cachedEnhanced ?? await dedupe(enhancedCacheKey, async () => {
@@ -3177,6 +3212,9 @@ ${JSON.stringify(ctx, null, 2)}`;
         // Hero trend-line series (see nwProfileId above). Already scoped by the
         // storage call, so no extra filtering.
         netWorthHistory: Array.isArray(netWorthHistory) ? netWorthHistory : [],
+        // Raw preference value (JSON string of dismissed ids, or null). The
+        // client seed parses it — see bootstrap-seed-keys.ts.
+        dismissedNotifications: dismissedNotifPref ?? null,
         month,
         filterIds: filterIds || [],
       };
@@ -3189,23 +3227,24 @@ ${JSON.stringify(ctx, null, 2)}`;
       }
     });
 
-    // [P2] 30s TTL (was 60s). cacheBustMiddleware busts this synchronously on
-    // any same-instance mutation, and version-stamped keys (cacheUserKey)
-    // handle cross-instance writes — but both are best-effort under
-    // serverless, so the TTL is the hard staleness ceiling. The QA spec
-    // accepts 30s of bootstrap staleness; 60s exceeded that budget whenever
-    // the busting paths didn't reach a warm instance.
-    setCache(cacheKey, data, 30 * 1000);
+    // cacheBustMiddleware busts this synchronously on any same-instance
+    // mutation, and version-stamped keys (cacheUserKey) invalidate across
+    // instances within ~2s of any write — so post-write staleness is bounded
+    // by the version bump, not this TTL. The TTL only bounds TIME-derived
+    // drift (see AGG_CACHE_TTL_MS): raising it from 30s to match the client's
+    // staleTime means a "return to the dashboard after a few minutes" serves
+    // the ~18-query aggregation from cache instead of recomputing it.
+    setCache(cacheKey, data, AGG_CACHE_TTL_MS);
     // Publish this request's raw reads for the NEXT scope (see rawCacheKey
     // above). Only on a miss — refreshing the TTL on every hit would let one
-    // long browsing session extend the snapshot indefinitely past the 30s
+    // long browsing session extend the snapshot indefinitely past the
     // staleness ceiling. An empty snapshot means `dedupe` handed us another
     // request's in-flight result and this storage never read anything, so
     // there is nothing worth publishing (and nothing to clobber).
     if (!rawSnapshot) {
       try {
         const snap = await (storage as any).snapshotRequestMemo?.();
-        if (snap && Object.keys(snap).length > 0) setCache(rawCacheKey, snap, 30 * 1000);
+        if (snap && Object.keys(snap).length > 0) setCache(rawCacheKey, snap, AGG_CACHE_TTL_MS);
       } catch { /* best-effort warm — never fail the response over it */ }
     }
     try { (storage as any).disableRequestMemo?.(); } catch {}
@@ -5415,11 +5454,17 @@ Rules:
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
-    let items: any[];
-    if (loanId) {
-      items = await storage.getLoanSchedule(loanId);
-    } else {
-      items = await storage.getAllLoanSchedules();
+    // [PERF 2026-08-17] Was uncached: the no-loanId form scans every
+    // amortization row on each Finance mount (measured 0.3-3.1s). Cache the
+    // UNFILTERED result (version-stamped key) and apply the profile filter per
+    // request, exactly like /api/paychecks above — so scopes share one read.
+    const uid_ls = cacheUserKey(req as AuthenticatedRequest);
+    const ck_ls = `loans-schedule:${uid_ls}:${loanId || "all"}`;
+    let items: any[] = getCached(ck_ls);
+    if (!items) {
+      items = await dedupe(ck_ls, async () =>
+        loanId ? await storage.getLoanSchedule(loanId) : await storage.getAllLoanSchedules());
+      setCache(ck_ls, items, AGG_CACHE_TTL_MS);
     }
     if (ids.length > 0) {
       items = items.filter((item: any) => {
@@ -5452,7 +5497,16 @@ Rules:
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
-    let items = await storage.getCashflow(month);
+    // [PERF 2026-08-17] Was uncached (measured 0.3-3.8s per Finance mount).
+    // Cache the UNFILTERED month rows under a version-stamped key and filter
+    // per request, so every profile scope shares one read.
+    const uid_cf = cacheUserKey(req as AuthenticatedRequest);
+    const ck_cf = `cashflow:${uid_cf}:${month || "current"}`;
+    let items = getCached(ck_cf);
+    if (!items) {
+      items = await dedupe(ck_cf, () => storage.getCashflow(month));
+      setCache(ck_cf, items, AGG_CACHE_TTL_MS);
+    }
     if (ids.length > 0) {
       // Use the unified passesProfileFilter so non-self profiles do NOT see
       // orphan cashflow rows, but the rule still allows item.profileId direct
@@ -5572,7 +5626,7 @@ Rules:
       try { (storage as any).enableRequestMemo?.(); } catch {}
       const items = await dedupe(calCacheKey, () => storage.getCalendarTimeline(start, end, profileIds));
       try { (storage as any).disableRequestMemo?.(); } catch {}
-      setCache(calCacheKey, items, 30 * 1000);
+      setCache(calCacheKey, items, AGG_CACHE_TTL_MS);
       res.json(items);
     } catch (err: any) {
       res.status(500).json({ error: "Failed to load calendar" });
@@ -6443,9 +6497,20 @@ Rules:
   // record plus a profile shadow of it. These routes add only the shaping and
   // the balance ledger that the generic profile endpoints don't know about.
   app.get("/api/accounts", asyncHandler(async (req, res) => {
-    const accounts = await (storage as any).getAccounts();
-    const summary = summarizeAccounts(accounts.map((a: any) => a.profile));
-    res.json({ accounts, summary });
+    // [PERF 2026-08-17] Was uncached: every Finance mount re-read the account
+    // profiles and re-summarized them (measured 0.2-1.7s on the live drive).
+    // The key is version-stamped (cacheUserKey), so any write makes it
+    // unaddressable — the TTL only bounds time-derived drift.
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const ck = `accounts:${uid}`;
+    const hit = getCached(ck);
+    if (hit) return res.json(hit);
+    const payload = await dedupe(ck, async () => {
+      const accounts = await (storage as any).getAccounts();
+      return { accounts, summary: summarizeAccounts(accounts.map((a: any) => a.profile)) };
+    });
+    setCache(ck, payload, AGG_CACHE_TTL_MS);
+    res.json(payload);
   }));
 
   app.post("/api/accounts", asyncHandler(async (req, res) => {
@@ -6855,6 +6920,10 @@ Rules:
       // Notification building lives in server/notification-service.ts so the
       // AI chat's dismiss_notifications tool computes the SAME list with the
       // SAME deterministic ids. Caching + profile filter stay here.
+      // PERF: request memo — buildNotifications fetches 5 tables and the
+      // profile-filter pass below re-reads 4 of them; the memo collapses each
+      // table to one Supabase round trip per request (same pattern as /api/stats).
+      try { (storage as any).enableRequestMemo?.(); } catch {}
       const notifTz = getTimezone(req);
       const deduped = await buildNotifications(storage, notifTz);
 
@@ -6886,13 +6955,16 @@ Rules:
         // Custom (user-created) notifications aren't entity-derived — they
         // survive every profile filter rather than silently vanishing.
         const filtered = deduped.filter(n => n.type === "custom" || matchesProfile(n.entityType, n.entityId));
-        setCache(fullKey, filtered, 2 * 60 * 1000);
+        try { (storage as any).disableRequestMemo?.(); } catch {}
+        setCache(fullKey, filtered, AGG_CACHE_TTL_MS);
         return res.json(filtered);
       }
 
-      setCache(fullKey, deduped, 2 * 60 * 1000); // 2-minute cache
+      try { (storage as any).disableRequestMemo?.(); } catch {}
+      setCache(fullKey, deduped, AGG_CACHE_TTL_MS);
       res.json(deduped);
     } catch (err: any) {
+      try { (storage as any).disableRequestMemo?.(); } catch {}
       log.error("[Notifications]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to compute notifications" });
     }

@@ -479,17 +479,23 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // swallow errors into a cached-as-success empty value (`.catch(() => [])`).
   // A transient failure — e.g. the pre-auth boot window racing token restore —
   // then renders as "0 in every category" for the whole staleTime window.
+  //
+  // [PERF 2026-08-17] Every query below reads a key /api/dashboard-bootstrap
+  // seeds. Their per-query staleTime overrides (30-60s) are deliberately GONE:
+  // an explicit staleTime beats the seeded default, so each one expired on its
+  // own and refetched independently — 12 parallel requests when returning to
+  // this tab, all of them re-fetching data the bootstrap was about to re-seed
+  // anyway (see lib/bootstrap-seed.ts). Freshness is unchanged: every mutation
+  // path invalidates these domains, and invalidation ignores staleTime.
   const { data: tasksRaw = [], isPending: tasksPending } = useQuery<any[]>({
     queryKey: ["/api/tasks", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/tasks${param}`).then(r => r.json()),
-    staleTime: 30_000,
   });
   const { data: habitsRaw = [], isPending: habitsPending } = useQuery<any[]>({
     queryKey: ["/api/habits", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/habits${param}`).then(r => r.json()),
-    staleTime: 30_000,
   });
   // [PERF 2026-07-31] Canonical shared window (shared/calendar-window.ts): the
   // same key the bootstrap seeds, the calendar page counts from and the month
@@ -499,19 +505,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryKey: timelineQueryKey(timelineWindow, mode, ids),
     enabled: ready,
     queryFn: () => apiRequest("GET", timelineUrl(timelineWindow, mode, ids)).then(r => r.json()),
-    staleTime: 60_000,
   });
   const { data: goalsRaw = [], isPending: goalsPending } = useQuery<any[]>({
     queryKey: ["/api/goals", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/goals${param}`).then(r => r.json()),
-    staleTime: 60_000,
   });
   const { data: notificationsRaw = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()),
-    staleTime: 60_000,
   });
   // Health inputs. Obligations carry `kind` and the taken-today payment ledger
   // (a medication is not an electricity bill); trackers carry the
@@ -521,22 +524,23 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryKey: ["/api/obligations", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/obligations${param}`).then(r => r.json()),
-    staleTime: 60_000,
   });
   const { data: trackersRaw = [] } = useQuery<any[]>({
     queryKey: ["/api/trackers", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/trackers${param}`).then(r => r.json()),
-    staleTime: 60_000,
   });
   // Dismissed alerts — same store the bell and the AI's dismiss tool write.
+  // Same slot the NotificationBell reads and /api/dashboard-bootstrap seeds —
+  // one fetch for all three surfaces (and no disagreement about what's
+  // dismissed). Errors resolve to [] so a transient failure hides nothing.
   const { data: dismissedIds = [] } = useQuery<string[]>({
     queryKey: ["/api/preferences/dismissed_notifications"],
     enabled: ready,
     queryFn: () => apiRequest("GET", "/api/preferences/dismissed_notifications")
       .then(r => r.json())
-      .then(d => { try { return JSON.parse(d?.value || "[]"); } catch { return []; } }),
-    staleTime: 60_000,
+      .then(d => { try { const p = JSON.parse(d?.value || "[]"); return Array.isArray(p) ? p : []; } catch { return []; } })
+      .catch(() => []),
   });
   // Cash flow needs income; the key matches HubKpiStrip/HeroKPISection so the
   // three surfaces share one cache slot and agree to the dollar.
@@ -544,7 +548,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryKey: ["/api/incomes", mode, ...ids, "hero"],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/incomes${param}`).then(r => r.json()),
-    staleTime: 60_000,
   });
   // Net-worth history for the overview bar's month-over-month movement.
   const { data: nwHistory = [] } = useQuery<any[]>({

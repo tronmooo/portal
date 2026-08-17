@@ -76,6 +76,19 @@ export function bootstrapSeedEntries(
     );
   }
   add(k("/api/notifications"), b.notifications);
+  // Dismissed-notification ids (NotificationBell + Executive Brief both read
+  // this unscoped key). The payload carries the RAW preference value (JSON
+  // string or null); consumers cache the parsed array, so parse here. Only
+  // seed when the field is present — an older cached payload without it must
+  // not clobber the slot with a wrong empty list.
+  if ("dismissedNotifications" in b) {
+    let dismissed: string[] = [];
+    try {
+      const parsed = JSON.parse(b.dismissedNotifications || "[]");
+      if (Array.isArray(parsed)) dismissed = parsed;
+    } catch { /* malformed pref — treat as none dismissed, same as consumers */ }
+    add(["/api/preferences/dismissed_notifications"], dismissed);
+  }
   return out;
 }
 

@@ -13,6 +13,30 @@
 import { queryClient } from "./queryClient";
 import { bootstrapSeedEntries } from "./bootstrap-seed-keys";
 
+/* [PERF 2026-08-17] "Coming back to a section reloads everything."
+   ─────────────────────────────────────────────────────────────────
+   Measured on production (Playwright drive, smoke account): leaving the
+   Executive tab for >3 min and returning fired 12 parallel API requests;
+   Finance fired 8. Every one of those datasets is ALREADY carried by
+   /api/dashboard-bootstrap and re-seeded by this function.
+
+   Cause: seeding stamps each key fresh at the same instant, so all ~25
+   seeded slots cross the global 3-min staleTime together. On the next
+   mount every component independently refetched its own slot — while the
+   bootstrap refetched too and then overwrote all of them with the same
+   rows. The individual requests were pure waste, and on serverless each
+   one is its own invocation.
+
+   Fix: the bootstrap is the designated refresher for the data it carries,
+   so its dependents are given a longer staleTime than the bootstrap's own.
+   The bootstrap goes stale first, refetches once, and re-seeds every
+   dependent slot before any of them expires — one request instead of a
+   dozen. Freshness is unaffected: it is invalidation-driven in this app
+   (every mutation path invalidates the domains it touched, and
+   invalidation ignores staleTime entirely), and a stale-marked query still
+   refetches on the next mount exactly as before. */
+const SEEDED_STALE_TIME_MS = 10 * 60_000;
+
 export function seedDashboardCaches(
   b: any,
   mode: string,
@@ -21,5 +45,10 @@ export function seedDashboardCaches(
 ): void {
   for (const { key, data } of bootstrapSeedEntries(b, mode, ids, month)) {
     queryClient.setQueryData(key, data);
+    // Defaults are per exact seeded key (scope discriminators included), so
+    // this never widens to an unrelated query. A component that passes its
+    // own staleTime still wins — see the seeded consumers, which deliberately
+    // no longer do.
+    queryClient.setQueryDefaults(key as any, { staleTime: SEEDED_STALE_TIME_MS });
   }
 }
