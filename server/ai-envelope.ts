@@ -668,14 +668,42 @@ const NON_ROW_KEYS = new Set([
   "_previousState", "trackerId",
 ]);
 
+/**
+ * A whole family of write tools — every liability tool, the paycheck tools, the
+ * ownership-link tools — returns `{ result: <row>, actions: [...] }` rather than
+ * the row itself. `extractEntityId` does not know that shape, so those writes
+ * reached the client with no id and no row: the UI could only invalidate and
+ * wait for a refetch, which is precisely the "created a liability, the list
+ * still shows the old set" lag this whole change exists to remove.
+ *
+ * Unwrapped for the MANIFEST ONLY, deliberately not inside `extractEntityId`.
+ * That function also drives post-write verification, and several tools in this
+ * family return a LINK or a summary under `result` whose id belongs to a
+ * different table than their TOOL_ENTITY mapping — teaching verification to
+ * read those ids would fail the read-back and report successful writes as
+ * failures. A wrong id here is harmless by construction: a row is only ever
+ * inserted for a create, into the endpoint mapped for its entity type, and only
+ * when the row's own id matches the manifest's.
+ */
+function manifestEntityId(rawResult: any): string | undefined {
+  const direct = extractEntityId(rawResult);
+  if (direct) return direct;
+  const wrapped = rawResult?.result;
+  return wrapped && typeof wrapped === "object" && typeof wrapped.id === "string" ? wrapped.id : undefined;
+}
+
 /** The DB row a tool wrote, or undefined when the result isn't row-shaped. */
 function pickRow(rawResult: any, entityType: string | undefined, entityId: string | undefined): Record<string, any> | undefined {
   if (!rawResult || typeof rawResult !== "object" || Array.isArray(rawResult)) return undefined;
-  // Some tools return { task: {...} } / { expense: {...} } rather than the row.
+  // Some tools return { task: {...} } / { expense: {...} } rather than the row,
+  // and the liability/paycheck/ownership family returns { result: {...} }.
   const nested = entityType && rawResult[entityType];
+  const wrapped = rawResult.result;
   const candidate = (typeof rawResult.id === "string" && rawResult.id)
     ? rawResult
-    : (nested && typeof nested === "object" && typeof nested.id === "string" ? nested : undefined);
+    : (nested && typeof nested === "object" && typeof nested.id === "string" ? nested
+      : (wrapped && typeof wrapped === "object" && !Array.isArray(wrapped) && typeof wrapped.id === "string" ? wrapped
+        : undefined));
   if (!candidate) return undefined;
   // Only hand back a row we can positively tie to the verified entity — a
   // mismatched id would insert the wrong record into a list.
@@ -711,7 +739,7 @@ export function buildChatMutation(
       || entityTypeForTool(toolName)
       || null;
     const id = (typeof envelopeResult?.entity?.id === "string" && envelopeResult.entity.id)
-      || extractEntityId(rawResult);
+      || manifestEntityId(rawResult);
     const domains = domainsForEntity(entityType);
     const endpoint = endpointForEntity(entityType);
     const row = op === "delete" ? undefined : pickRow(rawResult, entityType || undefined, id);

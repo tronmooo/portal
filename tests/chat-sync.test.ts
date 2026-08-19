@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { queryClient, getKnownDataVersion, clearDataVersion } from "../client/src/lib/queryClient";
 import { applyRowPatches, scopeIdsFromKey, applyChatMutations } from "../client/src/lib/chat-sync";
+import { buildChatMutation } from "../server/ai-envelope";
 import type { ChatMutation } from "@shared/schema";
 
 const SELF = "self-1";
@@ -201,5 +202,45 @@ describe("applyChatMutations", () => {
     expect(keys).toContain(JSON.stringify(["/api/tasks"]));
     // An expenses-only key would mean the tasks write was invalidating unrelated data.
     expect(keys).not.toContain(JSON.stringify(["/api/expenses"]));
+  });
+});
+
+// A whole family of write tools — every liability tool, the paycheck tools, the
+// ownership-link tools — returns `{ result: <row>, actions: [...] }` rather than
+// the row itself. The manifest could not see through that wrapper, so those
+// writes reached the client with no id and no row and the UI could only
+// invalidate and wait: creating a liability left the list showing the old set
+// until a refetch landed. Caught by the browser acceptance run, pinned here.
+describe("buildChatMutation — the { result: row } tool family", () => {
+  it("finds the row and id inside the result wrapper", () => {
+    const row = { id: "liab-1", name: "Car loan", type: "liability", currentBalance: 5000 };
+    const m = buildChatMutation("create_liability", { success: true, action: "create_liability" }, { result: row, actions: [] });
+    expect(m).toBeTruthy();
+    expect(m!.id).toBe("liab-1");
+    expect(m!.row).toMatchObject({ id: "liab-1", name: "Car loan" });
+    expect(m!.endpoint).toBe("/api/profiles");
+    expect(m!.domains).toContain("liabilities");
+  });
+
+  it("still prefers the envelope's own verified entity id", () => {
+    const m = buildChatMutation(
+      "create_liability",
+      { success: true, entity: { type: "profile", id: "verified-1" } },
+      { result: { id: "verified-1", name: "Car loan" } },
+    );
+    expect(m!.id).toBe("verified-1");
+  });
+
+  it("does not invent a row when the wrapper holds a summary rather than a record", () => {
+    // refund_expense returns { result: { refunded, expenseId, ... } } — no `id`,
+    // so there is nothing safe to insert into a cached list.
+    const m = buildChatMutation("refund_expense", { success: true }, { result: { refunded: 20, expenseId: "e1" } });
+    expect(m!.row).toBeUndefined();
+  });
+
+  it("reports a dedupe as no change at all", () => {
+    // A dedupe merged into an existing record; claiming a create would put a
+    // phantom row in the list.
+    expect(buildChatMutation("create_task", { success: true, deduped: true }, { id: "t1" })).toBeNull();
   });
 });
