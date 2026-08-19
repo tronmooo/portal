@@ -453,6 +453,58 @@ async function currentDataVersion(uid: string): Promise<number> {
   versionMemo.set(uid, { v: Number(v) || 0, at: Date.now() });
   return Number(v) || 0;
 }
+/**
+ * Bump the user's data version and WAIT for it.
+ *
+ * The fire-and-forget bump (used by the write middleware, where a pre-handler
+ * bump already covers the request) is not enough for AI chat: the chat reply is
+ * the client's cue to refetch, so if the bump is still in flight when the reply
+ * lands, the refetch computes the PRE-write cache key and is served pre-write
+ * data — which React Query then stores as fresh for a full staleTime. That is
+ * the "AI said it saved it, the page doesn't show it until I refresh" bug.
+ * Awaiting this before sending the reply makes the response a read-your-writes
+ * barrier.
+ *
+ * Returns the new version so it can be handed to the client as a token (see
+ * DATA_VERSION_HEADER below); undefined if the storage can't report one, in
+ * which case callers fall back to today's behavior.
+ */
+export async function bumpDataVersionNow(uid: string): Promise<number | undefined> {
+  versionMemo.delete(uid);
+  try {
+    const raw = await (storage as any).bumpDataVersion?.();
+    const v = Number(raw);
+    if (Number.isFinite(v) && v > 0) {
+      versionMemo.set(uid, { v, at: Date.now() });
+      return v;
+    }
+  } catch { /* the next GET resolves the version from the DB */ }
+  return undefined;
+}
+
+/**
+ * Read-your-writes token. A client that has just been told "saved" sends the
+ * data version it was given on every subsequent GET; this instance then uses
+ * max(its own memo, the client's token) to build the cache key.
+ *
+ * Awaiting the bump (above) alone does NOT close the window: the response cache
+ * is per-instance and each instance memoizes the version for VERSION_MEMO_MS,
+ * so a GET landing on a DIFFERENT warm instance within ~2s still computes the
+ * pre-write key. The token makes that instance compute the post-write key
+ * regardless of what its own memo says.
+ */
+export const DATA_VERSION_HEADER = "x-data-version";
+// A client token can only ever move the key FORWARD, and only within a sane
+// distance of the version we know about — so a buggy or hostile value costs
+// that one user some cache misses and nothing else. Keys are per-user, so no
+// other account can be affected.
+const MAX_VERSION_LOOKAHEAD = 1000;
+export function resolveDataVersion(memoVersion: number, headerValue: unknown): number {
+  const raw = Number(Array.isArray(headerValue) ? headerValue[0] : headerValue);
+  if (!Number.isFinite(raw) || raw <= memoVersion) return memoVersion;
+  return Math.min(Math.floor(raw), memoVersion + MAX_VERSION_LOOKAHEAD);
+}
+
 function cacheUserKey(req: { userId?: string }): string {
   if (!req.userId) return `nouser-${Math.random().toString(36).slice(2)}`;
   const v = (req as any).__dataVersion;
@@ -673,6 +725,45 @@ export function shouldBustCaches(method: string, path: string): boolean {
 // the GET could return stale cache before 'finish' cleared it. Now we ALSO bust
 // caches synchronously BEFORE handing control to the route for chat/upload paths
 // that mutate data via internal AI tool calls (not just direct REST writes).
+// ── Read-your-writes barrier for the AI-adjacent write routes ──────────────
+// Like /api/chat (which does this inline), these endpoints write via internal
+// AI tool calls and their RESPONSE is what tells the client to refetch. The
+// generic write middleware bumps the data version pre-handler (before the
+// writes land) and again on 'finish' (after the response is on the wire), so
+// neither bump is ordered against the client's refetch — it could be served a
+// pre-write cache entry and store it as fresh for a full staleTime.
+//
+// This wraps res.json so a successful response is not sent until the version
+// bump has completed, and carries the new version back as the client's
+// read-your-writes token.
+const AI_WRITE_BARRIER_PATHS = new Set([
+  "/api/upload",
+  "/api/upload/batch",
+  "/api/chat/confirm-extraction",
+  "/api/smart-fill/render",
+]);
+function aiWriteBarrierMiddleware(req: any, res: any, next: any) {
+  if (req.method !== "POST" || !AI_WRITE_BARRIER_PATHS.has(req.path)) return next();
+  const uid = (req as AuthenticatedRequest).userId;
+  if (!uid) return next();
+  const sendJson = res.json.bind(res);
+  res.json = (body: any) => {
+    // Errors wrote nothing worth waiting on — and must never be delayed.
+    if (res.statusCode >= 400) return sendJson(body);
+    bustUserCaches(uid);
+    Promise.resolve(bumpDataVersionNow(uid))
+      .then((v) => {
+        if (v !== undefined && body && typeof body === "object" && !Array.isArray(body)) {
+          try { (body as any).dataVersion = v; } catch { /* frozen body — skip the token */ }
+        }
+      })
+      .catch(() => { /* fall through: the client keeps its old behavior */ })
+      .finally(() => sendJson(body));
+    return res;
+  };
+  next();
+}
+
 function cacheBustMiddleware(req: any, res: any, next: any) {
   // Read-only POST generators/analyzers never write data — skip the bust so an
   // AI summary or receipt scan can't cold-start every other user-scoped cache.
@@ -883,6 +974,7 @@ export async function registerRoutes(
 
   // Clear server cache on any mutation so changes are reflected immediately
   app.use(cacheBustMiddleware);
+  app.use(aiWriteBarrierMiddleware);
 
   // PERF observability (2026-07-08): log any API request that takes >1s so
   // slow endpoints are visible in production logs (Vercel function logs)
@@ -911,7 +1003,11 @@ export async function registerRoutes(
       res.setHeader("Access-Control-Allow-Origin", origin);
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id");
+    // X-Timezone / X-Active-Profile / X-Data-Version are sent by the web client
+    // on every request (see client/src/lib/queryClient.ts); the Capacitor shell
+    // talks to this API cross-origin, so they must be allowed through preflight
+    // or those requests fail before the handler ever runs.
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-Timezone, X-Active-Profile-Ids, X-Data-Version");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
@@ -1045,8 +1141,13 @@ export async function registerRoutes(
     if (req.method !== "GET") return next();
     const uid = (req as AuthenticatedRequest).userId;
     if (!uid) return next();
+    // max(this instance's memo, the client's read-your-writes token) — see
+    // resolveDataVersion. A client that was just told "saved" carries the
+    // post-write version, so it can never be served this instance's pre-write
+    // cache entry even while the 2s memo is still stale.
+    const token = req.headers[DATA_VERSION_HEADER];
     currentDataVersion(uid)
-      .then((v) => { (req as any).__dataVersion = v; next(); })
+      .then((v) => { (req as any).__dataVersion = resolveDataVersion(v, token); next(); })
       .catch(() => next());
   });
 
@@ -1071,12 +1172,10 @@ export async function registerRoutes(
       // cacheBustMiddleware deliberately skips). The version bump below is B's
       // own responsibility (cacheBustMiddleware never bumps the version).
       if (uid !== "anon") {
-        const bumpVersion = () => {
-          versionMemo.delete(uid);
-          Promise.resolve((storage as any).bumpDataVersion?.())
-            .then((v: number) => { if (v) versionMemo.set(uid, { v, at: Date.now() }); })
-            .catch(() => { /* next GET resolves the version from the DB */ });
-        };
+        // Fire-and-forget here: a pre-handler bump already covers this
+        // request, so nothing is waiting on the result. AI chat needs the
+        // awaited form instead — see bumpDataVersionNow's doc comment.
+        const bumpVersion = () => { void bumpDataVersionNow(uid); };
         // PERF (2026-08-17): a chat turn only invalidates when it actually
         // MUTATED something. The unconditional bump made every "open my
         // license" globally cold-start all version-stamped caches (bootstrap/
@@ -1311,13 +1410,41 @@ export async function registerRoutes(
       // permanently cold for anyone using chat. The cacheBust and
       // version-bump middlewares read this flag on 'finish'.
       const READ_ONLY_ACTION_TYPES = new Set(["retrieve", "navigate", "set_dashboard_scope"]);
-      const turnMutated = actions.some(a => a?.type && !READ_ONLY_ACTION_TYPES.has(String(a.type)));
+      // The engine's own change manifest is the authoritative signal — it is
+      // built from what the TOOLS actually wrote. The action-type check stays
+      // as a union term: previously it was the ONLY term, so a write whose tool
+      // had no action-type mapping busted nothing at all, server-side, and the
+      // stale response cache outlived the write.
+      const mutations: any[] = Array.isArray((result as any)?.mutations) ? (result as any).mutations : [];
+      const turnMutated = mutations.length > 0
+        || actions.some(a => a?.type && !READ_ONLY_ACTION_TYPES.has(String(a.type)));
       res.locals.chatMutated = turnMutated;
       // Bug fix: chat may have created/updated profiles, trackers, expenses etc. via
       // internal AI tool calls. Bust the response cache BEFORE sending the response so
       // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale
       // cache — scoped to the mutating user, and only when something mutated.
-      if (turnMutated) bustUserCaches(userId);
+      let tBump = 0;
+      if (turnMutated) {
+        bustUserCaches(userId);
+        // Read-your-writes barrier: the reply is what tells the client to
+        // refetch, so the version bump must be DONE before the reply is on the
+        // wire. Handing the new version back lets the client stamp its refetches
+        // with it (DATA_VERSION_HEADER), which closes the same window on other
+        // warm instances too. Best-effort: an unavailable counter leaves
+        // dataVersion undefined and the client behaves as it did before.
+        const tBumpStart = Date.now();
+        const v = await bumpDataVersionNow(userId);
+        tBump = Date.now() - tBumpStart;
+        if (v !== undefined) (result as any).dataVersion = v;
+      }
+      // Stage timings for the whole pipeline (engine + cache barrier), so the
+      // remaining latency can be measured per stage instead of guessed at.
+      try {
+        (result as any).meta = {
+          ...((result as any).meta || {}),
+          timings: { ...(((result as any).meta || {}).timings || {}), engineMs: tEngine, bumpMs: tBump },
+        };
+      } catch { /* telemetry must never break a reply */ }
       // Hoist a dashboard-scope directive (from set_dashboard_scope) to the top
       // level so the chat client can apply the profile filter without digging
       // through the results array. The engine can't touch the browser filter
@@ -1449,7 +1576,7 @@ export async function registerRoutes(
       }
 
       // Production latency accounting — one line per turn in the function logs.
-      console.log(`[chat-timing] engine=${tEngine}ms classifierWait=${tClassifierWait}ms capture=${tCapture}ms total=${Date.now() - tTurnStart}ms cold=${coldTurn} routed=${routed}`);
+      console.log(`[chat-timing] engine=${tEngine}ms classifierWait=${tClassifierWait}ms capture=${tCapture}ms bump=${tBump}ms mutations=${mutations.length} total=${Date.now() - tTurnStart}ms cold=${coldTurn} routed=${routed}`);
 
       if (sse) {
         // Streaming finalization: the `final` frame carries the EXACT object

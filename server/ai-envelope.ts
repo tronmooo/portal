@@ -22,6 +22,8 @@
 // - The envelope must NEVER break a tool: any error here returns the raw
 //   result unchanged.
 import type { IStorage } from "./storage";
+import type { ChatMutation } from "@shared/schema";
+import { domainsForEntity, endpointForEntity } from "@shared/entity-domains";
 
 export interface ToolVerification {
   /** Post-write read-back: the record is visible in the database (creates/
@@ -158,6 +160,17 @@ const TOOL_ENTITY: Record<string, string> = {
   create_document: "document",
   log_expected_paycheck: "paycheck", confirm_paycheck_received: "paycheck", delete_paycheck: "paycheck",
 };
+
+/** Which entity a tool operates on — exported so the change manifest and its
+ *  coverage test read the SAME map the verification does. */
+export function entityTypeForTool(toolName: string): string | undefined {
+  return TOOL_ENTITY[toolName];
+}
+
+/** Every tool name that has an entity mapping (coverage test reads this). */
+export function mappedToolNames(): string[] {
+  return Object.keys(TOOL_ENTITY);
+}
 
 /** Operation class drives which verification checks run. */
 export function classifyOperation(toolName: string): "create" | "update" | "delete" {
@@ -637,5 +650,84 @@ export async function finalizeToolResult(
     // The envelope must never break a tool.
     try { console.warn(`[ai-envelope] finalize failed for ${toolName}:`, e?.message || e); } catch { /* noop */ }
     return stripInternal(result);
+  }
+}
+
+
+// ─── Change manifest ────────────────────────────────────────────────────────
+// The envelope already knows exactly what a tool wrote — entity type, id, and
+// the row itself. This turns that into the ChatMutation the client applies to
+// its caches, so an AI-created row appears on its page instantly instead of
+// after a refetch race (see shared/schema.ts ChatMutation).
+
+// Envelope bookkeeping and tool-internal hints that must not be written into a
+// cached list row. Everything else on the raw result IS the row.
+const NON_ROW_KEYS = new Set([
+  "success", "action", "action_type", "message", "entity", "verification",
+  "error", "deduped", "_verify", "_displayData", "_validationWarnings",
+  "_previousState", "trackerId",
+]);
+
+/** The DB row a tool wrote, or undefined when the result isn't row-shaped. */
+function pickRow(rawResult: any, entityType: string | undefined, entityId: string | undefined): Record<string, any> | undefined {
+  if (!rawResult || typeof rawResult !== "object" || Array.isArray(rawResult)) return undefined;
+  // Some tools return { task: {...} } / { expense: {...} } rather than the row.
+  const nested = entityType && rawResult[entityType];
+  const candidate = (typeof rawResult.id === "string" && rawResult.id)
+    ? rawResult
+    : (nested && typeof nested === "object" && typeof nested.id === "string" ? nested : undefined);
+  if (!candidate) return undefined;
+  // Only hand back a row we can positively tie to the verified entity — a
+  // mismatched id would insert the wrong record into a list.
+  if (entityId && candidate.id !== entityId) return undefined;
+  const row: Record<string, any> = {};
+  for (const [k, v] of Object.entries(candidate)) {
+    if (NON_ROW_KEYS.has(k)) continue;
+    if (k.startsWith("_")) continue;
+    if (typeof v === "function") continue;
+    row[k] = v;
+  }
+  return typeof row.id === "string" ? row : undefined;
+}
+
+/**
+ * Build the manifest entry for one executed tool.
+ *
+ * `envelopeResult` is what finalizeToolResult returned (or the raw result for
+ * tools that skip the envelope). Returns null for reads, failures, and dedupes
+ * — a dedupe wrote nothing, so claiming a create would put a phantom row in
+ * the list.
+ */
+export function buildChatMutation(
+  toolName: string,
+  envelopeResult: any,
+  rawResult: any,
+): ChatMutation | null {
+  try {
+    if (!envelopeResult || envelopeResult.error) return null;
+    if (envelopeResult.deduped === true) return null;
+    const op = classifyOperation(toolName);
+    const entityType = (typeof envelopeResult?.entity?.type === "string" && envelopeResult.entity.type)
+      || entityTypeForTool(toolName)
+      || null;
+    const id = (typeof envelopeResult?.entity?.id === "string" && envelopeResult.entity.id)
+      || extractEntityId(rawResult);
+    const domains = domainsForEntity(entityType);
+    const endpoint = endpointForEntity(entityType);
+    const row = op === "delete" ? undefined : pickRow(rawResult, entityType || undefined, id);
+    return {
+      op,
+      entityType,
+      domains,
+      ...(id ? { id } : {}),
+      ...(endpoint ? { endpoint } : {}),
+      ...(row ? { row } : {}),
+      tool: toolName,
+    };
+  } catch {
+    // A manifest is an optimization. If we can't describe the write precisely,
+    // say "something changed" rather than dropping it — the client's fallback
+    // is the blanket invalidation it used to do unconditionally.
+    return { op: "update", entityType: null, domains: ["everything"], tool: toolName };
   }
 }

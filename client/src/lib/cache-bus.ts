@@ -21,31 +21,18 @@
 // One bus, with `predicate`-based matching, fixes all of this.
 
 import { queryClient } from "./queryClient";
+import type { Domain } from "@shared/entity-domains";
 
 // ─── Domains ────────────────────────────────────────────────────────
 // A "domain" is a logical category of data. Mutations declare what
 // domain(s) they touch; the bus expands each to the full set of cache
 // keys that depend on it.
-export type Domain =
-  | "tasks"
-  | "habits"
-  | "trackers"
-  | "profiles"
-  | "assets"
-  | "liabilities"
-  | "people"
-  | "documents"
-  | "expenses"
-  | "incomes"
-  | "obligations"
-  | "budgets"
-  | "goals"
-  | "events"
-  | "journal"
-  | "notifications"
-  | "preferences"
-  | "dashboard"   // KPI tiles + dashboard-enhanced + stats
-  | "everything"; // nuclear — use for chat AI which can touch anything
+//
+// The Domain union itself lives in shared/entity-domains.ts so the SERVER can
+// name domains too — the AI chat response now carries a manifest of the
+// domains its turn touched (see shared/entity-domains.ts and lib/chat-sync.ts).
+// This file remains the single owner of what each domain EXPANDS to.
+export type { Domain } from "@shared/entity-domains";
 
 // ─── Domain → keys map ───────────────────────────────────────────────
 // Top-level keys for each domain. The bus also runs nested-key
@@ -180,6 +167,15 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
   ],
+  artifacts: [
+    ["/api/artifacts"],
+    ["/api/chat-artifacts"],
+    ["/api/dashboard-enhanced"],
+    ["/api/activity"],
+  ],
+  memories: [
+    ["/api/memories"],
+  ],
   notifications: [
     ["/api/notifications"],
   ],
@@ -191,6 +187,12 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/stats"],
     ["/api/insights"],
     ["/api/ai-digest"],
+    // The bootstrap payload is the dashboard's first paint AND the seed for
+    // ~24 dependent list caches (bootstrap-seed-keys.ts), and it is persisted
+    // to localStorage. It belonged in this list all along: no domain named it,
+    // so it only ever went stale via a blanket invalidate-everything. Targeted
+    // invalidation would otherwise leave the next launch seeding pre-write rows.
+    ["/api/dashboard-bootstrap"],
   ],
   // "everything" handled via predicate below — invalidates every
   // /api/* key the app knows about
@@ -239,6 +241,8 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/tasks");
     case "habits":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/habits");
+    case "artifacts":
+      return (q) => String(q.queryKey?.[0] || "").startsWith("/api/artifacts");
     case "everything":
       // Invalidate every /api/* query the app has — used by AI chat
       // because Claude can mutate literally any domain in one turn.

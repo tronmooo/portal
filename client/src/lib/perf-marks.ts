@@ -43,3 +43,40 @@ try {
     return rows;
   };
 } catch { /* SSR/test env */ }
+
+/** ?perfLog=1 — opt-in verbose timing output. Never on for real users. */
+export function perfLogEnabled(): boolean {
+  try {
+    return typeof window !== "undefined" &&
+      /(?:\?|&)perfLog=1\b/.test(window.location.search + window.location.hash);
+  } catch { return false; }
+}
+
+/**
+ * Print the SERVER half of the write pipeline next to the client marks.
+ *
+ * The point of pairing them: "the AI is slow" and "the UI is slow" look
+ * identical from the outside. With engineMs / per-tool execMs+verifyMs / bumpMs
+ * from the server and chat:round-trip + chat:cache-patch from the client, every
+ * stage from AI tool call → DB commit → cache update → render is attributable.
+ * Shape comes from processMessage's meta.timings (server/ai-engine.ts) plus the
+ * cache-barrier numbers routes.ts adds.
+ */
+export function logServerTimings(payload: unknown): void {
+  if (!perfLogEnabled()) return;
+  try {
+    const t = (payload as any)?.meta?.timings;
+    if (!t) return;
+    const rows: Array<{ stage: string; ms: number }> = [];
+    if (typeof t.engineMs === "number") rows.push({ stage: "server:engine", ms: t.engineMs });
+    if (typeof t.aiMs === "number") rows.push({ stage: "server:ai-turn", ms: t.aiMs });
+    for (const tool of Array.isArray(t.tools) ? t.tools : []) {
+      rows.push({ stage: `server:tool ${tool.tool} exec`, ms: tool.execMs });
+      rows.push({ stage: `server:tool ${tool.tool} verify`, ms: tool.verifyMs });
+    }
+    if (typeof t.bumpMs === "number") rows.push({ stage: "server:cache-barrier", ms: t.bumpMs });
+    if (rows.length === 0) return;
+    if (typeof console.table === "function") console.table(rows);
+    else console.log("[perf] server timings", rows);
+  } catch { /* diagnostics must never break a reply */ }
+}

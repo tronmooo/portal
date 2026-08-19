@@ -201,6 +201,12 @@ export default defineConfig({
       'tests/entity-resolution.test.ts',
       'tests/ai-mark-done-routing.test.ts',
       'tests/entity-resolution-contract.test.ts',
+      // AI write → UI synchronization: the manifest that tells the client what
+      // a chat turn changed, and the read-your-writes barrier that stops a
+      // post-write refetch being served pre-write cache.
+      'tests/entity-domain-coverage.test.ts',
+      'tests/chat-sync.test.ts',
+      'tests/chat-read-your-writes.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
