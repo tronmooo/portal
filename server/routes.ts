@@ -3973,6 +3973,13 @@ ${JSON.stringify(ctx, null, 2)}`;
     // (it is a write-only deletion hint, not a stored column) so the parser would
     // strip it. We sanitize to a string[] and re-attach to req.body after parse.
     // Without this, every profile-field delete from the UI silently no-ops.
+    // `fieldPathsToDelete` removes EXACTLY those paths — no identity sweep. The
+    // calendar's "remove this date" uses it, because clearing one date must not
+    // take a same-named date in another group with it.
+    const fieldPathsToDeleteRaw: any = (req.body && typeof req.body === "object") ? req.body.fieldPathsToDelete : undefined;
+    const fieldPathsToDelete: string[] | undefined = Array.isArray(fieldPathsToDeleteRaw)
+      ? fieldPathsToDeleteRaw.filter((k: any) => typeof k === "string" && k.length > 0)
+      : undefined;
     const fieldsToDeleteRaw: any = (req.body && typeof req.body === "object") ? req.body.fieldsToDelete : undefined;
     const fieldsToDelete: string[] | undefined = Array.isArray(fieldsToDeleteRaw)
       ? fieldsToDeleteRaw.filter((k: any) => typeof k === "string" && k.length > 0)
@@ -3981,6 +3988,11 @@ ${JSON.stringify(ctx, null, 2)}`;
       const parsed = insertProfileSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
+      if (fieldPathsToDelete && fieldPathsToDelete.length > 0) {
+        (req.body as any).fieldPathsToDelete = fieldPathsToDelete;
+      } else {
+        delete (req.body as any).fieldPathsToDelete;
+      }
       if (fieldsToDelete && fieldsToDelete.length > 0) {
         (req.body as any).fieldsToDelete = fieldsToDelete;
       } else {

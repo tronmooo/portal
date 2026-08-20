@@ -209,6 +209,11 @@ export function normalizeFieldKey(key: unknown): string {
 const FIELD_MATCHERS: FieldMatcher[] = [
   // ── Informational first: these must never reach the calendar ──
   // "Document generated on May 4" is metadata, not something to act on.
+  //
+  // Anything explicitly BACKWARD-looking is the same. `lastServiceDate` and
+  // `previousRenewal` classify as maintenance and renewal on their nouns alone,
+  // and then arrive as overdue things to act on — a service you already had.
+  { ruleType: "informational", match: /^(last|previous|prior|former|past|completed|performed|paid)/ },
   {
     ruleType: "informational",
     match: /^(created|updated|modified|uploaded|scanned|printed|generated|issued?|issuedate|dateissued|dateofissue|effective|recorded|filed|entered|logged|observed|reported|timestamp|lastupdated|lastmodified|dateadded|addedon|photodate|captured|verified|dateverified|signed|datesigned|asof|asofdate)/,
@@ -286,8 +291,15 @@ const COUNTDOWN_TYPES = new Set<DateRuleType>([
 ]);
 
 /** Rules that belong in the "Important Dates" half of the recurring screen. */
+/**
+ * The types that belong on the Important Dates half of the recurring screen.
+ *
+ * `start` is not one of them. A start date is a fact about when something
+ * began — it is on the calendar, but listing it under dates to watch made a
+ * subscription that started three years ago read as overdue.
+ */
 const IMPORTANT_TYPES = new Set<DateRuleType>([
-  "expiration", "renewal", "due", "deadline", "cancellation", "end", "start", "maintenance",
+  "expiration", "renewal", "due", "deadline", "cancellation", "end", "maintenance",
 ]);
 
 /**
@@ -817,10 +829,14 @@ function ruleLabel(name: string, cls: FieldClassification, fieldKey?: unknown, g
   const phrase = [fieldPhrase(group), fieldPhrase(fieldKey)].filter(Boolean).join(" ");
   const sub = SUBTYPE_LABEL[cls.ruleSubtype || ""];
   const already = SUBTYPE_KEYWORD[cls.ruleSubtype || ""];
+  const type = TYPE_LABEL[cls.ruleType];
   const namer = phrase && phrase.split(/\s+/).length > 1 ? phrase : (sub || phrase);
+  // "Honda — Service Service": the field's own words can already END with the
+  // type word, and appending it again is just noise on the card.
+  const namerSaysIt = !!namer && new RegExp(`(^|\\s)${type}$`, "i").test(namer);
   const qualifier = namer && !(already && already.test(n) && namer === sub)
-    ? `${namer} ${TYPE_LABEL[cls.ruleType]}`
-    : TYPE_LABEL[cls.ruleType];
+    ? (namerSaysIt ? namer : `${namer} ${type}`)
+    : type;
   return `${n} — ${qualifier}`;
 }
 
@@ -1114,9 +1130,10 @@ export function seriesFromDateRules(rules: readonly DateRule[]): CalendarSeries[
       baseDate: r.date,
       recurrence: r.recurrence || "none",
       recurrenceEnd: r.recurrenceEnd,
-      // The rule already decided this; the calendar kind cannot express it —
+      // The rule already decided these; the calendar kind cannot express them —
       // a court date and an ordinary to-do are both `task`.
       important: r.importantVisible,
+      ruleType: r.ruleType,
     });
   }
   return out;

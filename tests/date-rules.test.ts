@@ -1298,6 +1298,18 @@ describe("deleting one nested date leaves its neighbours alone", () => {
     expect(after.licenseExpiration).toBe("2029-05-05");
   });
 
+  it("does not sweep a nested twin when the date is top-level", () => {
+    // A top-level path is just the key — and it must NOT become an identity
+    // sweep, or clearing one date takes a same-named one in a group with it.
+    const { fields: after, removed } = deleteProfileFields(
+      { expirationDate: "2029-05-05", insurance: { expirationDate: "2028-04-02" } },
+      null,
+      ["expirationDate"],
+    );
+    expect(removed).toEqual(["expirationDate"]);
+    expect(after.insurance).toEqual({ expirationDate: "2028-04-02" });
+  });
+
   it("still sweeps by identity for a bare key, as the profile UI expects", () => {
     const { removed } = deleteProfileFields(
       { vehicle: { expirationDate: "2027-03-01" }, insurance: { expirationDate: "2028-04-02" } },
@@ -1346,5 +1358,52 @@ describe("a copy is suppressed by ITS document, not by any document", () => {
     // The document that wrote the copy is gone, so the copy is the record now.
     expect(rules.some(r => r.sourceEntityType === "profile")).toBe(true);
     expect(rules).toHaveLength(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 25. Fourteenth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("dates already behind you are not things to watch", () => {
+  it("does not list a start date among important dates", () => {
+    const [rule] = rulesFromProfiles([{
+      id: "s1", name: "Spotify", type: "subscription", fields: { startDate: "2023-01-04" },
+    }]);
+    expect(rule.ruleType).toBe("start");
+    // On the calendar, yes. On a list of dates to watch, no — a subscription
+    // that began three years ago is not overdue.
+    expect(rule.calendarVisible).toBe(true);
+    expect(rule.importantVisible).toBe(false);
+  });
+
+  it("reads a backward-looking field as metadata", () => {
+    for (const key of ["lastServiceDate", "previousRenewalDate", "priorExpirationDate", "paidDate"]) {
+      expect(classifyDateField(key).actionable, key).toBe(false);
+    }
+    // …while the forward-looking twin still counts.
+    expect(classifyDateField("nextServiceDate").ruleType).toBe("maintenance");
+  });
+});
+
+describe("the label does not say the same word twice", () => {
+  it("reads 'Honda — Service', not 'Honda — Service Service'", () => {
+    const [rule] = rulesFromProfiles([{
+      id: "v1", name: "Honda", type: "vehicle", fields: { nextServiceDate: "2026-11-02" },
+    }]);
+    expect(rule.label).toBe("Honda — Service");
+  });
+});
+
+describe("the countdown reads the rule, not a lossy round-trip", () => {
+  it("says a start date started", () => {
+    const [rule] = rulesFromProfiles([{
+      id: "s1", name: "Spotify", type: "subscription", fields: { startDate: "2023-01-04" },
+    }]);
+    const [series] = seriesFromDateRules([rule]);
+    // `start` and `event` share the `custom` kind, so deriving the verb from the
+    // kind produced "Was due 3 years ago" for a subscription's start date.
+    expect(series.ruleType).toBe("start");
+    expect(countdownLabel(series.baseDate, TODAY, series.ruleType as any)).toMatch(/^Started /);
   });
 });

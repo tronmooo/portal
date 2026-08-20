@@ -1748,7 +1748,11 @@ export class SupabaseStorage implements IStorage {
       ? normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? existing.type ?? "") }).fields
       : data.fields;
     const mergedFields = mergeAndApplyDeletes(existing.fields || {}, incomingFields, null);
-    const deletion = deleteProfileFields(mergedFields as Record<string, any>, data.fieldsToDelete);
+    const deletion = deleteProfileFields(
+      mergedFields as Record<string, any>,
+      data.fieldsToDelete,
+      (data as any).fieldPathsToDelete,
+    );
     const finalFields = deletion.fields;
     if (deletion.removed.length > 0) {
       console.log(`[profile-delete] ${id} removed ${deletion.removed.length} key(s): ${deletion.removed.join(", ")}`);

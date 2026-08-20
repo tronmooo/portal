@@ -133,6 +133,16 @@ export interface FieldDeletionResult {
 export function deleteProfileFields(
   fields: Record<string, any> | null | undefined,
   uiKeys: readonly string[] | null | undefined,
+  /**
+   * Paths to delete EXACTLY — no identity sweep, no other group.
+   *
+   * `uiKeys` is the profile UI's universal delete: "remove my licence number"
+   * should take every spelling of it wherever it is stored. That is wrong for a
+   * single date the calendar is removing, because two groups can legitimately
+   * hold same-named dates — clearing a top-level `expirationDate` swept
+   * `insurance.expirationDate` away with it. A top-level path is just the key.
+   */
+  exactPaths: readonly string[] | null | undefined = null,
 ): FieldDeletionResult {
   const removed: string[] = [];
   if (!fields || typeof fields !== "object") return { fields: {}, removed };
@@ -142,9 +152,10 @@ export function deleteProfileFields(
   // however it is spelled, and wrong when they mean one of two same-named dates
   // in different groups: deleting `registration.expirationDate` from the
   // calendar would have taken `insurance.expirationDate` with it.
-  const exact = new Set(
-    (uiKeys || []).filter((k) => typeof k === "string" && k.includes(".")),
-  );
+  const exact = new Set([
+    ...(uiKeys || []).filter((k) => typeof k === "string" && k.includes(".")),
+    ...(exactPaths || []).filter((k) => typeof k === "string" && k),
+  ]);
   const targets = new Set(
     (uiKeys || [])
       .filter((k) => typeof k === "string" && k && !k.includes("."))
@@ -160,6 +171,8 @@ export function deleteProfileFields(
     const isGroup =
       (PROFILE_FIELD_GROUPS as readonly string[]).includes(key) &&
       value && typeof value === "object" && !Array.isArray(value);
+
+    if (!isGroup && exact.has(key)) { removed.push(key); continue; }
 
     if (isGroup) {
       const kept: Record<string, any> = {};

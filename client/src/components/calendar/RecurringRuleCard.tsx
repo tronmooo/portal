@@ -108,9 +108,13 @@ export function RecurringRuleCard({
   // An important one-off (a licence, a passport, a lease end) reads as a
   // countdown rather than as a schedule — see isImportantDate.
   const important = isImportantDate(series);
-  // What this date DOES, so the countdown says it. Hardcoding "expiration"
-  // told the user their car service and their court date expired.
-  const countdownType: DateRuleType = RULE_TYPE_FOR_KIND[series.kind] ?? "expiration";
+  // What this date DOES, so the countdown says it. Hardcoding "expiration" told
+  // the user their car service and their court date expired; re-deriving it
+  // from the calendar KIND told them a subscription's start date "Was due" —
+  // that round-trip is lossy, since `start` and `event` share one kind. The
+  // rule says so itself.
+  const countdownType = (series.ruleType as DateRuleType)
+    ?? RULE_TYPE_FOR_KIND[series.kind] ?? "expiration";
   const overdue = important
     ? series.baseDate < todayISO
     : !!next && next.effectiveDate < todayISO;

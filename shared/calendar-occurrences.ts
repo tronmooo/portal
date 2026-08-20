@@ -252,6 +252,13 @@ export interface CalendarSeries {
    */
   important?: boolean;
   /**
+   * The Date Rule type this came from ("expiration", "maintenance", "start"…).
+   * Carried, not re-derived: mapping kind→type is lossy — `start` and `event`
+   * share the `custom` kind — and the countdown verb read off that round-trip
+   * told a user their subscription's start date "Was due 3 years ago".
+   */
+  ruleType?: string;
+  /**
    * Set when the series was INFERRED from several materialized rows rather than
    * read off a recurrence rule (shared/series-detect) — e.g. six monthly
    * "Refill … - August/September/…" tasks that carry no `recur:` tag. Carries

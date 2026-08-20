@@ -260,15 +260,16 @@ async function deleteSourceRecord(
       // all of them wiped the person's date of birth and left the expiration
       // exactly where it was.
       //
-      // Deletion goes through `fieldsToDelete` (shared/profile-field-identity).
-      // A dotted path targets EXACTLY that field in that group; a bare key is
-      // the app's universal identity sweep. Sending the leaf name for a nested
-      // date would have swept every same-named date in every other group, and
-      // sending a `fields` patch for the group would have REPLACED the group,
-      // taking every sibling with it.
+      // `fieldPathsToDelete` removes EXACTLY this one field. `fieldsToDelete`
+      // is the profile UI's universal delete — it sweeps every spelling of a
+      // field across every nested group, which is right for "remove my licence
+      // number" and wrong here: two groups can legitimately hold same-named
+      // dates, and clearing one must not take the other. Sending a `fields`
+      // patch for a nested group would be worse still — a shallow merge
+      // REPLACES the group, taking every sibling field with it.
       const field = series?.source?.field
         || (series?.kind === "anniversary" ? "anniversary" : "birthday");
-      await apiRequest("PATCH", `/api/profiles/${id}`, { fieldsToDelete: [field] });
+      await apiRequest("PATCH", `/api/profiles/${id}`, { fieldPathsToDelete: [field] });
       return;
     }
     case "document": {
