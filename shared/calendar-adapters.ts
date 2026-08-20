@@ -192,11 +192,24 @@ export function seriesFromEvents(
   opts: {
     knownBirthdayProfiles?: ReadonlySet<string>;
     knownAnniversaryProfiles?: ReadonlySet<string>;
+    /**
+     * Document ids whose own dates are already on the calendar as Date Rules.
+     *
+     * Extraction used to write a standalone event for every date it found, so
+     * an uploaded licence produced BOTH `document:…` (derived from the field)
+     * and `event:…` (a copy). It no longer does, but accounts are full of the
+     * copies. Rather than migrate rows, the copy is marked a SHADOW of the
+     * record it was copied from — the same mechanism that collapses a typed-in
+     * birthday into the profile's. Matching is by link, not by title, so an
+     * emoji or a "— Expires" suffix cannot make the pair miss each other.
+     */
+    ruledDocumentIds?: ReadonlySet<string>;
   } = {},
 ): CalendarSeries[] {
   const out: CalendarSeries[] = [];
   const knownBirthdays = opts.knownBirthdayProfiles ?? new Set<string>();
   const knownAnniversaries = opts.knownAnniversaryProfiles ?? new Set<string>();
+  const ruledDocs = opts.ruledDocumentIds ?? new Set<string>();
 
   for (const e of events || []) {
     if (!e?.id || !isISO(e.date)) continue;
@@ -217,9 +230,13 @@ export function seriesFromEvents(
 
     // A typed-in birthday/anniversary for a profile that already carries the
     // date on its own record is a duplicate of it, not a second date.
+    const autoFromDocument =
+      Array.isArray(e.tags) && e.tags.includes("document-extraction") &&
+      (Array.isArray(e.linkedDocuments) ? e.linkedDocuments : []).some((id: any) => ruledDocs.has(String(id)));
     const shadow =
       (kind === "birthday" && !!profileId && knownBirthdays.has(profileId)) ||
-      (kind === "anniversary" && !!profileId && knownAnniversaries.has(profileId));
+      (kind === "anniversary" && !!profileId && knownAnniversaries.has(profileId)) ||
+      autoFromDocument;
 
     out.push({
       id: `event:${e.id}`,
@@ -691,10 +708,13 @@ export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
   const knownAnniversaryProfiles = new Set(
     dateRules.filter((r) => r.ruleType === "anniversary").map((r) => r.profileId!).filter(Boolean),
   );
+  const ruledDocumentIds = new Set(
+    dateRules.filter((r) => r.sourceEntityType === "document").map((r) => r.sourceEntityId),
+  );
   return [
     ...ruleSeries,
     ...seriesFromLiabilityProfiles(input.profiles || []),
-    ...seriesFromEvents(input.events || [], { knownBirthdayProfiles, knownAnniversaryProfiles }),
+    ...seriesFromEvents(input.events || [], { knownBirthdayProfiles, knownAnniversaryProfiles, ruledDocumentIds }),
     ...seriesFromObligations(input.obligations || []),
     ...seriesFromTasks(input.tasks || []),
     ...seriesFromIncomes(input.incomes || []),

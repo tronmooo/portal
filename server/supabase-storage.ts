@@ -49,7 +49,7 @@ import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } fr
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents } from "../shared/calendar-adapters";
-import { rulesFromAll, seriesFromDateRules } from "../shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO } from "../shared/date-rules";
 import { deleteProfileFields } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
@@ -3622,8 +3622,13 @@ export class SupabaseStorage implements IStorage {
     const knownAnniversaryProfiles = new Set(
       profileDateSeries.filter(x => x.kind === "anniversary").map(x => x.source.profileId!).filter(Boolean),
     );
+    // Legacy extraction-written events for a document whose dates are now
+    // derived are shadows of it, matched by link rather than by title.
+    const ruledDocumentIds = new Set(
+      profileDateSeries.filter(x => x.source.system === "document").map(x => x.source.id),
+    );
     const shadowEventIds = new Set(
-      seriesFromEvents(allEvents as any[], { knownBirthdayProfiles, knownAnniversaryProfiles })
+      seriesFromEvents(allEvents as any[], { knownBirthdayProfiles, knownAnniversaryProfiles, ruledDocumentIds })
         .filter(x => x.shadow)
         .map(x => x.source.id),
     );
@@ -6533,20 +6538,32 @@ export class SupabaseStorage implements IStorage {
     const allEvents = rawEvents.filter(e => matchesProfileEnhanced(e.linkedProfiles));
     // Filter documents by profile
     const filteredDocs = documents.filter(d => matchesProfileEnhanced(d.linkedProfiles));
+    // Expirations, from the ONE Date Rule engine (shared/date-rules).
+    //
+    // This block used to carry its own list of twelve expiry key spellings and
+    // `new Date(val)` parsing — a sixth vocabulary, and one that read DOCUMENTS
+    // only. A passport expiration typed onto a person was therefore absent from
+    // the Executive tab while showing up in Upcoming. The rule engine reads both
+    // sources, every spelling, and non-ISO values, so this section now sees
+    // exactly what the calendar and the Important Dates screen see.
     const expiringDocs: any[] = [];
-    for (const doc of filteredDocs) {
-      const ed = doc.extractedData || {};
-      const dateFields = ['expiration_date', 'expirationDate', 'expiry', 'expires', 'exp_date', 'expiration', 'valid_until', 'validUntil', 'end_date', 'endDate', 'renewal_date', 'renewalDate'];
-      for (const key of Object.keys(ed)) {
-        const lk = key.toLowerCase().replace(/[\s_-]+/g, '');
-        const isDateField = dateFields.some(df => lk.includes(df.toLowerCase().replace(/[\s_-]+/g, '')));
-        if (!isDateField) continue;
-        const val = ed[key];
-        if (!val || typeof val !== 'string') continue;
-        const parsed = new Date(val);
-        if (isNaN(parsed.getTime())) continue;
-        const daysUntil = Math.ceil((parsed.getTime() - now.getTime()) / 86400000);
-        expiringDocs.push({ documentId: doc.id, documentName: doc.name, documentType: doc.type, fieldName: key, expirationDate: val, daysUntil, status: daysUntil < 0 ? 'expired' : daysUntil <= 30 ? 'expiring_soon' : daysUntil <= 90 ? 'upcoming' : 'ok' });
+    {
+      const scopedProfilesForExp = allProfiles.filter(p => matchesProfileEnhanced([p.id]));
+      for (const rule of rulesFromAll({ profiles: scopedProfilesForExp, documents: filteredDocs })) {
+        // Only dates you count DOWN to belong in an expirations list; a
+        // birthday is a celebration, not a warning.
+        if (!rule.countdownEnabled) continue;
+        const daysUntil = daysBetweenISO(today, rule.date);
+        expiringDocs.push({
+          documentId: rule.sourceEntityId,
+          documentName: rule.label,
+          documentType: rule.ruleSubtype || rule.sourceEntityType,
+          fieldName: rule.sourceField,
+          expirationDate: rule.date,
+          daysUntil,
+          ruleId: rule.id,
+          status: daysUntil < 0 ? 'expired' : daysUntil <= 30 ? 'expiring_soon' : daysUntil <= 90 ? 'upcoming' : 'ok',
+        });
       }
     }
     expiringDocs.sort((a, b) => a.daysUntil - b.daysUntil);

@@ -4,7 +4,7 @@ import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEF
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
-import { rulesFromAll, seriesFromDateRules } from "@shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO } from "@shared/date-rules";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -2034,33 +2034,32 @@ export class MemStorage implements IStorage {
 
     // Document expiration alerts — scan extractedData for date fields
     const documents = Array.from(this.documents.values()).filter(d => matchesFilter((d as any).linkedProfiles));
+    // Expirations, from the ONE Date Rule engine (shared/date-rules).
+    //
+    // This block used to carry its own list of twelve expiry key spellings and
+    // `new Date(val)` parsing — a sixth vocabulary, and one that read DOCUMENTS
+    // only. A passport expiration typed onto a person was therefore absent from
+    // the Executive tab while showing up in Upcoming. The rule engine reads both
+    // sources, every spelling, and non-ISO values, so this section now sees
+    // exactly what the calendar and the Important Dates screen see.
     const expiringDocs: any[] = [];
-    for (const doc of documents) {
-      const ed = doc.extractedData || {};
-      // Look for common expiration-related fields
-      const dateFields = ['expiration_date', 'expirationDate', 'expiry', 'expires', 'exp_date',
-        'expiration', 'valid_until', 'validUntil', 'end_date', 'endDate', 'renewal_date', 'renewalDate'];
-      for (const key of Object.keys(ed)) {
-        const lk = key.toLowerCase().replace(/[\s_-]+/g, '');
-        const isDateField = dateFields.some(df => lk.includes(df.toLowerCase().replace(/[\s_-]+/g, '')));
-        if (!isDateField) continue;
-        const val = ed[key];
-        if (!val || typeof val !== 'string') continue;
-        const parsed = new Date(val);
-        if (isNaN(parsed.getTime())) continue;
-        const daysUntil = Math.ceil((parsed.getTime() - now.getTime()) / 86400000);
+    {
+      const profilesForExp = Array.from(this.profiles.values()).filter(p => matchesFilter([p.id]));
+      for (const rule of rulesFromAll({ profiles: profilesForExp, documents })) {
+        if (!rule.countdownEnabled) continue;
+        const daysUntil = daysBetweenISO(now.toLocaleDateString("en-CA"), rule.date);
         expiringDocs.push({
-          documentId: doc.id,
-          documentName: doc.name,
-          documentType: doc.type,
-          fieldName: key,
-          expirationDate: val,
+          documentId: rule.sourceEntityId,
+          documentName: rule.label,
+          documentType: rule.ruleSubtype || rule.sourceEntityType,
+          fieldName: rule.sourceField,
+          expirationDate: rule.date,
           daysUntil,
+          ruleId: rule.id,
           status: daysUntil < 0 ? 'expired' : daysUntil <= 30 ? 'expiring_soon' : daysUntil <= 90 ? 'upcoming' : 'ok',
         });
       }
     }
-    // Sort by urgency
     expiringDocs.sort((a, b) => a.daysUntil - b.daysUntil);
 
     // Health snapshot — aggregate recent tracker data from health-related trackers

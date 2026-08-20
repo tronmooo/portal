@@ -66,6 +66,7 @@ import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import { inferKindFromText } from "@shared/calendar-adapters";
+import { classifyDateField } from "@shared/date-rules";
 import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
@@ -9481,6 +9482,49 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // occurrence from it (shared/date-rules) — exactly what document
       // extraction and the manual form now produce for the same sentence.
       // Anything without an owning record still becomes a real event.
+      //
+      // The same rule applies to an EXPIRATION told to the chat ("my driver's
+      // licence expires July 18 2034"): the licence is the thing that expires,
+      // so the date goes on the record, and the important-date rule follows
+      // from it. Told twice, it updates rather than duplicating — the field is
+      // the identity.
+      {
+        const evtTitle = String(input.title || "");
+        const expiryWord = /\b(expir\w*|renew\w*|valid until|good thru)\b/i.test(evtTitle);
+        const evtRepeats = !!input.recurrence && String(input.recurrence).toLowerCase() !== "none";
+        if (expiryWord && !evtRepeats) {
+          const profs = await storage.getProfiles();
+          const subject = evtTitle
+            .replace(/\b(expir\w*|renew\w*|valid until|good thru|date|on)\b/gi, " ")
+            .replace(/\s+/g, " ").trim();
+          const target = (input.forProfile && matchProfileByName(profs, input.forProfile))
+            || profs.find((p: any) => p.type === "self");
+          if (target) {
+            // Name the field for what it holds, so the rule engine can classify
+            // it and the profile reads sensibly: "Driver's License Expiration".
+            const cls = classifyDateField("expiration_date", `${subject} ${target.type ?? ""}`);
+            const prefix = cls.ruleSubtype
+              ? cls.ruleSubtype.replace(/_(\w)/g, (_m, c) => c.toUpperCase())
+              : "";
+            const field = prefix ? `${prefix}Expiration` : "expirationDate";
+            const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
+            const existing: Record<string, any> = (target as any).fields || {};
+            await storage.updateProfile(target.id, {
+              fields: canonicalizeProfileFields({ [field]: iso }, existing).fields,
+            } as any);
+            const updatedProfile = await storage.getProfile(target.id);
+            logger.info("ai", `"${evtTitle}" is an expiration — saved to ${target.name}.${field}; the important date is derived from it`);
+            return {
+              result: {
+                savedTo: "profile", profileId: target.id, profileName: target.name,
+                field, value: iso, occurrenceType: "one_time",
+                note: "Saved to the record that owns this date; the calendar and Important Dates derive it.",
+              },
+              actions: [{ type: "update", category: "profile", data: updatedProfile }],
+            };
+          }
+        }
+      }
       {
         const evtKind = inferKindFromText(input.title, input.category);
         if (evtKind === "birthday" || evtKind === "anniversary") {
