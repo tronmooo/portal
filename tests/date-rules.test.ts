@@ -1474,3 +1474,33 @@ describe("removing a date from a group the whitelist has never heard of", () => 
     expect(after.registration).toEqual({ plate: "8ABC123" });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 27. Sixteenth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("an abbreviation still names the thing", () => {
+  it("reads dlExpiration as a driver's licence", () => {
+    // `\bdl\b` could never match a separator-stripped key, so this got no
+    // subtype — mislabelled, and rendered twice because dedupe wants subtypes
+    // to agree.
+    expect(classifyDateField("dlExpiration").ruleSubtype).toBe("drivers_license");
+    expect(classifyDateField("rxExpirationDate").ruleSubtype).toBe("medication");
+  });
+
+  it("does not read those letters inside another word", () => {
+    expect(classifyDateField("handlingExpiration").ruleSubtype).not.toBe("drivers_license");
+  });
+});
+
+describe("a range with a bare far end is still a range", () => {
+  it("is left exactly as written", () => {
+    // One full date, so the two-token test lets it through — and the value was
+    // rewritten to its first day, losing the rest.
+    for (const raw of ["1/1/2026 to 12/31", "1/1/2026 - 12/31", "2026-01-01 through 06-30"]) {
+      expect(bareDateOf(raw), raw).toBeNull();
+      const { fields } = normalizeEntityDateFields({ coverageDate: raw });
+      expect(fields.coverageDate, raw).toBe(raw);
+    }
+  });
+});

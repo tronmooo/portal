@@ -349,7 +349,10 @@ export function classifyDateField(
     const recurrence = m.recurrence || "none";
     return {
       ruleType: m.ruleType,
-      ruleSubtype: m.subtype || inferSubtype(key, ctx),
+      // The RAW keys, so camel-case boundaries survive: matching an
+      // abbreviation like `dl` needs word edges, and the normalized form has
+      // none ("dlexpiration").
+      ruleSubtype: m.subtype || inferSubtype(String(fieldKey ?? ""), String(contextKey ?? "")),
       occurrenceType: recurrence === "none" ? "one_time" : "recurring",
       recurrence,
       actionable: isActionableRuleType(m.ruleType),
@@ -368,7 +371,12 @@ export function classifyDateField(
 
 /** The THING the date is about — read from the field key, then its context. */
 function inferSubtype(key: string, ctx: string): string | undefined {
-  const both = `${key} ${ctx}`;
+  // SPACED, so `\b` means something. Both arguments arrive separator-stripped
+  // ("dlexpiration"), and a pattern like `\bdl\b` could never match one — so a
+  // `dlExpiration` field got no subtype, mislabelled, and (since dedupe wants
+  // subtypes to agree) rendered the same expiration twice.
+  const spaced = (t: string) => t.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[^A-Za-z0-9]+/g, " ");
+  const both = `${spaced(key)} ${spaced(ctx)}`.toLowerCase();
   if (/driver|dl\b|driving/.test(both)) return "drivers_license";
   if (/passport/.test(both)) return "passport";
   if (/visa/.test(both)) return "visa";
@@ -541,6 +549,11 @@ export function bareDateOf(value: unknown): string | null {
   // (Un-spaced, `normalizeDateString`'s mid-string search even picked the wrong
   // end.) Two date-looking tokens means this value is not a day.
   if ((t.match(DATEISH_TOKEN) || []).length > 1) return null;
+  // …and a range whose far end has no year is still a range.
+  // "1/1/2026 to 12/31" carries one full date, so the token count above lets it
+  // through, and the value was then rewritten to "2026-01-01" — losing the rest
+  // of it, in every storage write path.
+  if (/\d\s*(?:-|–|—|to|through|thru|till|until)\s*\d/i.test(t)) return null;
   // Any word that is not a month name means this is prose.
   const withoutMonths = t.replace(/[A-Za-z]{3,9}\.?(?=\s|,|$)/g, (w) => (MONTH_WORD.test(w) ? "" : w));
   if (/[A-Za-z]{3,}/.test(withoutMonths)) return null;
