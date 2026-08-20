@@ -1106,19 +1106,29 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     // page's composer and the POST /api/journal fallback.
     const mood: string = detectMoodFromText(content);
     const profiles = await storage.getProfiles();
-    const profile = profiles.find(p => p.name.toLowerCase() === profileName.toLowerCase())
-      || profiles.find(p => p.name.toLowerCase().includes(profileName.toLowerCase()));
-    const entry = await storage.createJournalEntry({ mood: mood as any, content, tags: [] });
-    if (profile) {
-      try {
-        await storage.updateJournalEntry(entry.id, { linkedProfiles: [profile.id] } as any);
-        await storage.linkProfileTo(profile.id, "journal", entry.id)
-          .catch((err) => { console.error("[ai-engine:journal-fast-path] linkProfileTo failed:", err); });
-      } catch (err) { console.error("[ai-engine:journal-fast-path] failed to link journal entry to profile:", err); }
+    // WHOSE ENTRY? Substring matching ("sarah".includes) and a silent
+    // unlinked-save were both ways to file one person's day under another
+    // (or under the user). The fast-path now writes ONLY when the name
+    // resolves to exactly one profile; anything else falls through to the
+    // model, which can ask or create the profile first.
+    const journalResolution = resolveProfileByName(profiles, profileName);
+    if (journalResolution.kind !== "found") {
+      // fall through to the AI path — never guess an owner
+    } else {
+    const profile = journalResolution.profile;
+    const journalTz = (storage as any)._timezone || "America/Los_Angeles";
+    // SAME SERVICE AS THE TOOL PATH: one entry per person per day, appended
+    // to rather than duplicated, and never merged into anyone else's row.
+    const { entry } = await upsertJournalEntry(storage, {
+      content,
+      mood,
+      entryDate: new Date().toLocaleDateString("en-CA", { timeZone: journalTz }),
+      profileId: profile.id,
+    });
+    actions.push({ type: "journal_entry", category: "journal", data: { mood, content, forProfile: profile.name } });
+    results.push({ ...entry, linkedProfiles: [profile.id], forProfile: profile.name });
+    return { matched: true, reply: `Journal entry saved for ${profile.name}. Mood: ${mood}. "${content.slice(0, 100)}"`, actions, results };
     }
-    actions.push({ type: "journal_entry", category: "journal", data: { mood, content, forProfile: profileName } });
-    results.push(entry);
-    return { matched: true, reply: `Journal entry saved for ${profile?.name || profileName}. Mood: ${mood}. "${content.slice(0, 100)}"`, actions, results };
     }
   }
   // └─ END JOURNAL FAST-PATH ──────────────────────────────────────────┘
@@ -10682,10 +10692,30 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         ? String(input.entryDate).slice(0, 10)
         : todayDate;
 
+      // WHOSE ENTRY IS THIS? An entry filed under the wrong person is the
+      // worst failure this tool has — it puts one person's day inside
+      // another's profile. So the name must resolve to EXACTLY one profile:
+      //   · ambiguous ("Sarah" with two Sarahs) → ask, never guess the first
+      //   · unknown   (no such profile)         → say so, never silently fall
+      //                                           back to the user's own journal
+      // matchProfileByName() is deliberately NOT used here: it returns the
+      // first of several matches, which is a guess.
       let targetProfile: any = null;
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
-        targetProfile = matchProfileByName(profiles, input.forProfile);
+        const resolution = resolveProfileByName(profiles, input.forProfile);
+        if (resolution.kind === "ambiguous") {
+          return {
+            error: `"${input.forProfile}" matches more than one profile: ${resolution.matches.map((m: any) => m.name).join(", ")}. Ask the user which one before saving — a journal entry filed under the wrong person is not recoverable by them.`,
+            candidates: resolution.matches.map((m: any) => m.name),
+          };
+        }
+        if (resolution.kind === "none") {
+          return {
+            error: `No profile named "${input.forProfile}" exists, so there is nowhere to file this entry. Create that profile first (create_profile) and then save the journal entry for them. Do NOT save it to the user's own journal instead.`,
+          };
+        }
+        targetProfile = resolution.profile;
       }
 
       const { entry, appended } = await upsertJournalEntry(storage, {
@@ -10693,7 +10723,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         mood: input.mood,
         entryDate,
         profileId: targetProfile?.id ?? null,
-        profileLabel: targetProfile?.name ?? null,
         energy: input.energy,
         gratitude: input.gratitude,
         highlights: input.highlights,
@@ -10713,9 +10742,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
 
+      // ATTRIBUTION GUARD. The chat card badges the entry with
+      // linkedProfiles[0] (see resolveEntityOwner at the tool-loop), so a
+      // legacy row that still carries several owners could badge the entry
+      // with someone the user never named. Put the person this entry was
+      // written FOR first, and shout if a foreign owner is on the row at all.
+      if (targetProfile) {
+        const owners: string[] = Array.isArray(finalEntry?.linkedProfiles) ? [...finalEntry.linkedProfiles] : [];
+        const foreign = owners.filter((id) => id !== targetProfile.id);
+        if (foreign.length > 0) {
+          logger.error("ai", `journal_entry: entry ${finalEntry?.id} for "${targetProfile.name}" also owned by ${foreign.join(", ")} — badging ${targetProfile.name}.`);
+        }
+        finalEntry = { ...finalEntry, linkedProfiles: [targetProfile.id, ...foreign] };
+      }
+
       const actionable = findActionableTime(input.content || "");
       return {
         ...finalEntry,
+        forProfile: targetProfile?.name,
         appended,
         entryDate,
         dateRules: [],
@@ -16104,7 +16148,12 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
   if (moodMatch) {
     try {
       const mood = moodMatch[1] as any;
-      const entry = await storage.createJournalEntry({ mood, content: "", tags: [] });
+      // Same door as every other journal write: the user's own entry for today,
+      // appended to rather than duplicated (and never someone else's row).
+      const moodTz = (storage as any)._timezone || "America/Los_Angeles";
+      const { entry } = await upsertJournalEntry(storage, {
+        content: "", mood, entryDate: new Date().toLocaleDateString("en-CA", { timeZone: moodTz }),
+      });
       return { reply: `Logged mood: ${mood}`, actions: [{ type: "journal_entry" as const, category: "journal" as const, data: { mood } }], results: [entry] };
     } catch { /* continue */ }
   }

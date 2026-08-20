@@ -158,9 +158,8 @@ export interface JournalInput {
   mood?: string;
   /** The day the EXPERIENCE happened, YYYY-MM-DD. Not a calendar commitment. */
   entryDate: string;
+  /** Resolved profile id — never a name. Name resolution belongs to the caller. */
   profileId?: string | null;
-  /** Display name used to attribute an appended snippet. */
-  profileLabel?: string | null;
   energy?: number;
   gratitude?: string[];
   highlights?: string[];
@@ -168,12 +167,37 @@ export interface JournalInput {
 
 const MOODS = ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"];
 
+/** Ids of the user's own (type "self") profiles. Best-effort — never blocks a write. */
+async function selfProfileIds(storage: IStorage): Promise<Set<string>> {
+  try {
+    const profiles = await storage.getProfiles();
+    return new Set((profiles || []).filter((p: any) => p?.type === "self").map((p: any) => p.id));
+  } catch {
+    return new Set<string>();
+  }
+}
+
+/** The profile ids a journal row belongs to. */
+const entryOwners = (j: any): string[] =>
+  (Array.isArray(j?.linkedProfiles) ? j.linkedProfiles : []).filter(Boolean).map(String);
+
 /**
- * Write a journal entry for a specific DATE.
+ * Write a journal entry for a specific DATE **and a specific owner**.
  *
- * `journal_entries` carries a UNIQUE (user_id, date) constraint — one entry per
- * day — so a second write for the same day APPENDS rather than failing. That is
- * also exactly what "add this to today's journal" should do.
+ * ONE ENTRY PER PERSON PER DAY — not one entry per day. A day can hold the
+ * user's own entry, Sarah's entry and John's entry side by side; they are
+ * separate rows and they never merge.
+ *
+ * THE BUG THIS ENCODES (2026-08-20): the existing-entry lookup matched on the
+ * DATE ALONE. "Journal this for Sarah: we went hiking" appended Sarah's text
+ * into whatever entry that day already had — John Hancock's — and unioned
+ * Sarah onto its owners. The row then rendered, on the chat card and on the
+ * profile page, under JOHN HANCOCK: someone else's journal now contained
+ * Sarah's day. Scoping the lookup by owner is the fix; a write for one person
+ * can no longer even see another person's row.
+ *
+ * A second write for the SAME person and day still appends, because that is
+ * what "add this to today's journal" should do.
  *
  * The entry date never produces a Date Rule. See NON_TEMPORAL_ENTITIES in
  * shared/temporal-rules for why.
@@ -186,16 +210,28 @@ export async function upsertJournalEntry(
   const date = String(input.entryDate).slice(0, 10);
   const mood = MOODS.includes(String(input.mood)) ? String(input.mood) : "neutral";
 
+  const targetProfileId = input.profileId || null;
+
+  // OWNER SCOPING — see the doc comment above. A write for a person only ever
+  // matches that person's row; an unattributed write (the user's own) only
+  // ever matches a row owned by nobody or by the self profile.
   const all = await storage.getJournalEntries();
-  const existing = (all || []).find((j: any) => String(j.date).slice(0, 10) === date) || null;
+  const sameDay = (all || []).filter((j: any) => String(j.date).slice(0, 10) === date);
+  const selfIds = targetProfileId ? new Set<string>() : await selfProfileIds(storage);
+  const existing = sameDay.find((j: any) => {
+    const owners = entryOwners(j);
+    if (targetProfileId) return owners.includes(targetProfileId);
+    return owners.length === 0 || owners.every((id) => selfIds.has(id));
+  }) || null;
 
   if (existing) {
     // IDEMPOTENCY: a retried turn must not append the same paragraph twice.
     if (normalizeText(existing.content).includes(normalizeText(content)) && content) {
       return { entry: existing, appended: false };
     }
-    const label = input.profileLabel ? `[${input.profileLabel}] ` : "";
-    const merged = existing.content ? `${existing.content}\n\n${label}${content}` : `${label}${content}`;
+    // No "[Name] " prefix any more: the row belongs to exactly one owner, so
+    // there is nothing to disambiguate inside the text.
+    const merged = existing.content ? `${existing.content}\n\n${content}` : content;
     const linked = Array.from(new Set([
       ...(existing.linkedProfiles || []),
       ...(input.profileId ? [input.profileId] : []),
@@ -214,6 +250,9 @@ export async function upsertJournalEntry(
     return { entry: updated || existing, appended: true };
   }
 
+  // Owner is stamped AT INSERT: a two-step create-then-relink briefly left the
+  // row owned by the self profile, and anything reading in between (or a
+  // failed second step) attributed a person's entry to the user.
   const created = await storage.createJournalEntry({
     date,
     mood: mood as any,
@@ -222,10 +261,14 @@ export async function upsertJournalEntry(
     energy: input.energy,
     gratitude: input.gratitude,
     highlights: input.highlights,
+    ...(targetProfileId ? { linkedProfiles: [targetProfileId] } : {}),
   } as any);
-  if (input.profileId) {
-    await storage.updateJournalEntry(created.id, { linkedProfiles: [input.profileId] } as any);
-    await storage.linkProfileTo(input.profileId, "journal", created.id).catch(() => { /* non-fatal */ });
+  if (targetProfileId) {
+    if (!entryOwners(created).includes(targetProfileId)) {
+      await storage.updateJournalEntry(created.id, { linkedProfiles: [targetProfileId] } as any);
+      (created as any).linkedProfiles = [targetProfileId];
+    }
+    await storage.linkProfileTo(targetProfileId, "journal", created.id).catch(() => { /* non-fatal */ });
   }
   return { entry: created, appended: false };
 }

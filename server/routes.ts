@@ -7281,9 +7281,10 @@ Rules:
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     // SAME SERVICE AS CHAT. `entryDate` (or the legacy `date`) is the day the
-    // experience happened; a second write for a day that already has an entry
-    // appends, because journal_entries is UNIQUE on (user_id, date) and
-    // "add this to today's journal" should append anyway.
+    // experience happened; a second write for the same day AND THE SAME OWNER
+    // appends, because "add this to today's journal" should append. A write
+    // for a different person is a different entry — one journal per person
+    // per day, never one per day.
     const entryDate = String(req.body.entryDate || parsed.data.date || getUserToday(getTimezone(req))).slice(0, 10);
     const linkedProfileId = Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0
       ? String(req.body.linkedProfiles[0]) : null;
