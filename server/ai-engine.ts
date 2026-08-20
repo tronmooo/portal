@@ -1116,13 +1116,12 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
       // fall through to the AI path — never guess an owner
     } else {
     const profile = journalResolution.profile;
-    const journalTz = (storage as any)._timezone || "America/Los_Angeles";
     // SAME SERVICE AS THE TOOL PATH: one entry per person per day, appended
     // to rather than duplicated, and never merged into anyone else's row.
     const { entry } = await upsertJournalEntry(storage, {
       content,
       mood,
-      entryDate: new Date().toLocaleDateString("en-CA", { timeZone: journalTz }),
+      entryDate: getUserToday(aiUserTimezone()),
       profileId: profile.id,
     });
     actions.push({ type: "journal_entry", category: "journal", data: { mood, content, forProfile: profile.name } });
@@ -10686,8 +10685,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     // user has ever written onto their schedule.
     case "journal_entry":
     case "append_journal_entry": {
-      const journalTz = (storage as any)._timezone || "America/Los_Angeles";
-      const todayDate = new Date().toLocaleDateString("en-CA", { timeZone: journalTz });
+      const todayDate = getUserToday(aiUserTimezone());
       const entryDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.entryDate || "").slice(0, 10))
         ? String(input.entryDate).slice(0, 10)
         : todayDate;
@@ -16150,9 +16148,8 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
       const mood = moodMatch[1] as any;
       // Same door as every other journal write: the user's own entry for today,
       // appended to rather than duplicated (and never someone else's row).
-      const moodTz = (storage as any)._timezone || "America/Los_Angeles";
       const { entry } = await upsertJournalEntry(storage, {
-        content: "", mood, entryDate: new Date().toLocaleDateString("en-CA", { timeZone: moodTz }),
+        content: "", mood, entryDate: getUserToday(aiUserTimezone()),
       });
       return { reply: `Logged mood: ${mood}`, actions: [{ type: "journal_entry" as const, category: "journal" as const, data: { mood } }], results: [entry] };
     } catch { /* continue */ }
