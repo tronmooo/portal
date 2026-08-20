@@ -29,7 +29,7 @@ import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
-import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeConfirmedFields, confirmedFieldPersisted } from "@shared/profile-field-identity";
+import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted, removeDocumentContributedFields } from "@shared/profile-field-identity";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -2516,8 +2516,8 @@ ${JSON.stringify(ctx, null, 2)}`;
               // "streetAddress" (and "State" and "issuing State") for one
               // field each, and the sweep used to null the first of the pair
               // right after writing it. Replaced odometer readings are kept in
-              // _mileageHistory rather than lost. See mergeConfirmedFields.
-              const mergeResult = mergeConfirmedFields(existingFields, canonical);
+              // _mileageHistory rather than lost. See mergeFieldWrite.
+              const mergeResult = mergeFieldWrite(existingFields, canonical);
               const merged: Record<string, any> = mergeResult.fields;
               const incoming = mergeResult.written;
               if (mergeResult.replacedMileage.length > 0) {
@@ -2555,7 +2555,7 @@ ${JSON.stringify(ctx, null, 2)}`;
               // `address` (or inside `personal.address`). The old exact-key
               // check reported a perfectly good save as
               // "fields did not persist to <name>: address, issuing State".
-              const unsavedKeys = confirmedKeys.filter((k) => !confirmedFieldPersisted(afterFields, k, incoming[k]));
+              const unsavedKeys = confirmedKeys.filter((k) => !fieldValuePersisted(afterFields, k, incoming[k]));
               const savedKeys = confirmedKeys.filter((k) => !unsavedKeys.includes(k));
               if (unsavedKeys.length > 0) {
                 failures.push(`fields did not persist to ${profile.name}: ${unsavedKeys.join(", ")}`);
@@ -5751,14 +5751,13 @@ Rules:
         const sources = p.fields?._docFields;
         const recorded = (sources && typeof sources === "object") ? sources[docIdToDelete] : undefined;
         if (!recorded || typeof recorded !== "object") continue;
-        const nextFields: Record<string, any> = { ...p.fields };
-        const removedKeys: string[] = [];
-        for (const [k, savedVal] of Object.entries(recorded)) {
-          if (k in nextFields && looselyEqual(nextFields[k], savedVal)) {
-            delete nextFields[k];
-            removedKeys.push(k);
-          }
-        }
+        // Match the recorded field on IDENTITY, not on the literal key it was
+        // saved under — see removeDocumentContributedFields.
+        const cascade = removeDocumentContributedFields(p.fields as Record<string, any>, recorded);
+        const nextFields = cascade.fields;
+        // Top-level keys need an explicit null so the storage merge removes
+        // them; nested groups are already rewritten without their entry.
+        const removedKeys = cascade.removed.filter((path) => !path.includes("."));
         const nextSources: Record<string, any> = { ...sources };
         delete nextSources[docIdToDelete];
         // Null markers = deletion intents for the storage merge layer.
@@ -5767,8 +5766,8 @@ Rules:
         if (Object.keys(nextSources).length > 0) patch._docFields = nextSources;
         else { delete patch._docFields; patch._docFields = null; }
         await storage.updateProfile(p.id, { fields: patch } as any);
-        if (removedKeys.length > 0) {
-          log.info(`[doc-delete-cascade] ${docIdToDelete} → removed ${removedKeys.length} field(s) from ${p.name}: ${removedKeys.join(", ")}`);
+        if (cascade.removed.length > 0) {
+          log.info(`[doc-delete-cascade] ${docIdToDelete} → removed ${cascade.removed.length} field(s) from ${p.name}: ${cascade.removed.join(", ")}`);
         }
       }
     } catch (cascadeErr: any) {

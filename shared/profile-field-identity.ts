@@ -432,7 +432,7 @@ export function fieldBelongsOnProfileType(key: unknown, profileType: unknown): b
 // And verification asks "did this VALUE land under this IDENTITY anywhere?"
 // instead of "is this exact key still spelled the same way?".
 //
-// Pinned by tests/confirm-extraction-merge.test.ts.
+// Pinned by tests/profile-field-write-identity.test.ts.
 
 import { looselyEqual } from "./profile-field-canon";
 
@@ -519,20 +519,27 @@ export function foldIncomingTwins(
   return { fields: out, collapsed };
 }
 
-export interface ConfirmedMergeResult {
+export interface FieldWriteResult {
   /** The fields object to store (null marks a twin for deletion). */
   fields: Record<string, any>;
   /** What this payload actually writes, after folding. Verify against THIS. */
   written: Record<string, any>;
   collapsed: Array<{ from: string; into: string }>;
+  /** Keys nulled because this write superseded them. Safe to drop entirely. */
+  superseded: string[];
   /** Odometer readings displaced by a newer one, for `_mileageHistory`. */
   replacedMileage: Array<{ from: string; value: any }>;
 }
 
 /**
- * Merge a confirmed extraction payload into a profile's stored fields.
+ * Merge an authoritative field write into a profile's stored fields.
  *
- * A confirmed value REPLACES every other spelling of the same field — the
+ * "Authoritative" means the write says what the field IS now — a confirmed
+ * extraction, an inline edit, an AI `update_profile` call. Every such write
+ * goes through here (storage.updateProfile calls it), so a fix landed once
+ * covers every door into a profile instead of the one that happened to break.
+ *
+ * The written value REPLACES every other spelling of the same field — the
  * top-level twin is set to null (the storage merge layer reads null as a
  * deletion intent) and a twin inside a nested group is dropped — so the Info
  * tab can't end up showing "Mileage 80000" and "Current Mileage 69063" as two
@@ -541,14 +548,15 @@ export interface ConfirmedMergeResult {
  *
  * Pure: returns new objects, never mutates the inputs.
  */
-export function mergeConfirmedFields(
+export function mergeFieldWrite(
   existing: Record<string, any> | null | undefined,
   incoming: Record<string, any> | null | undefined,
-): ConfirmedMergeResult {
+): FieldWriteResult {
   const existingFields = (existing && typeof existing === "object") ? existing : {};
   const { fields: written, collapsed } = foldIncomingTwins(incoming, existingFields);
   const merged: Record<string, any> = { ...existingFields };
   const replacedMileage: Array<{ from: string; value: any }> = [];
+  const superseded: string[] = [];
   // Every key this payload writes — off-limits to the twin sweep.
   const writing = new Set(Object.keys(written).map((k) => normalizeKey(k)));
 
@@ -566,6 +574,7 @@ export function mergeConfirmedFields(
         replacedMileage.push({ from: existingKey, value: merged[existingKey] });
       }
       merged[existingKey] = null;
+      superseded.push(existingKey);
     }
 
     for (const group of PROFILE_FIELD_GROUPS) {
@@ -589,7 +598,7 @@ export function mergeConfirmedFields(
     merged[key] = value;
   }
 
-  return { fields: merged, written, collapsed, replacedMileage };
+  return { fields: merged, written, collapsed, superseded, replacedMileage };
 }
 
 /**
@@ -600,7 +609,7 @@ export function mergeConfirmedFields(
  * or inside `personal.address`. Comparing exact keys is what made a successful
  * save report itself as a failure.
  */
-export function confirmedFieldPersisted(
+export function fieldValuePersisted(
   fields: Record<string, any> | null | undefined,
   key: string,
   value: any,
@@ -624,4 +633,57 @@ export function confirmedFieldPersisted(
     if (looselyEqual(v, value)) return true;
   }
   return isBlank(value);
+}
+
+/**
+ * Remove the fields a deleted document contributed to a profile.
+ *
+ * `recorded` is the provenance blob confirm-extraction wrote
+ * (`fields._docFields[documentId] = { key: savedValue }`). A field is removed
+ * only while it still holds what the document saved — anything the user edited
+ * since is theirs and stays.
+ *
+ * Matching is by identity, top level and nested groups alike: the value saved
+ * as `streetAddress` may now be stored as `address`, or inside
+ * `personal.address`, because a later write supersedes twins. An exact-key
+ * cascade walked past both and left the deleted document's data behind.
+ *
+ * Pure: returns new objects, never mutates the input.
+ */
+export function removeDocumentContributedFields(
+  fields: Record<string, any> | null | undefined,
+  recorded: Record<string, any> | null | undefined,
+): FieldDeletionResult {
+  const removed: string[] = [];
+  if (!fields || typeof fields !== "object") return { fields: {}, removed };
+  const out: Record<string, any> = { ...fields };
+  if (!recorded || typeof recorded !== "object") return { fields: out, removed };
+
+  for (const [key, savedValue] of Object.entries(recorded)) {
+    if (key.startsWith("_")) continue;
+    const identity = fieldIdentity(key);
+    for (const storedKey of Object.keys(out)) {
+      if (storedKey.startsWith("_")) continue;
+      const storedValue = out[storedKey];
+      const isGroup =
+        (PROFILE_FIELD_GROUPS as readonly string[]).includes(storedKey) &&
+        storedValue && typeof storedValue === "object" && !Array.isArray(storedValue);
+      if (isGroup) {
+        const nested = storedValue as Record<string, any>;
+        const doomed = Object.keys(nested).filter(
+          (nk) => fieldIdentity(nk) === identity && looselyEqual(nested[nk], savedValue),
+        );
+        if (doomed.length === 0) continue;
+        const cleaned = { ...nested };
+        for (const nk of doomed) { delete cleaned[nk]; removed.push(`${storedKey}.${nk}`); }
+        out[storedKey] = cleaned;
+        continue;
+      }
+      if (fieldIdentity(storedKey) !== identity) continue;
+      if (!looselyEqual(storedValue, savedValue)) continue;
+      delete out[storedKey];
+      removed.push(storedKey);
+    }
+  }
+  return { fields: out, removed };
 }
