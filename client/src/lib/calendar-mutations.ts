@@ -269,7 +269,17 @@ async function deleteSourceRecord(
       // REPLACES the group, taking every sibling field with it.
       const field = series?.source?.field
         || (series?.kind === "anniversary" ? "anniversary" : "birthday");
-      await apiRequest("PATCH", `/api/profiles/${id}`, { fieldPathsToDelete: [field] });
+      // A person has ONE birthday however many spellings carry it, and older
+      // rows hold both `birthday` and `dateOfBirth`. Removing only the spelling
+      // the rule happened to anchor on left the other behind, the birthday was
+      // re-derived from it, and Delete appeared to do nothing. So for those two
+      // the identity sweep is exactly right — and for every other date it is
+      // exactly wrong, because two groups can hold same-named dates.
+      const singleton = series?.kind === "birthday" || series?.kind === "anniversary";
+      const body = singleton
+        ? { fieldsToDelete: [field.split(".").pop() || field] }
+        : { fieldPathsToDelete: [field] };
+      await apiRequest("PATCH", `/api/profiles/${id}`, body);
       return;
     }
     case "document": {

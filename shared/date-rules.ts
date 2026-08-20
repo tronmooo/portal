@@ -306,9 +306,14 @@ const IMPORTANT_TYPES = new Set<DateRuleType>([
  * The rule types that describe something running OUT — what belongs in an
  * "expirations" list. Narrower than `countdownEnabled`, which also covers due
  * dates and deadlines: those are bills and tasks, not documents about to lapse.
+ *
+ * `renewal` is not here either. A subscription's `renewalDate` is the day it
+ * renews — it carries on — and listing it among documents about to expire read
+ * as a warning about something that was never at risk. Renewals still appear on
+ * the calendar and under Important Dates.
  */
 export const EXPIRY_RULE_TYPES = new Set<DateRuleType>([
-  "expiration", "renewal", "end", "cancellation",
+  "expiration", "end", "cancellation",
 ]);
 
 /** Every actionable type — i.e. everything except pure metadata. */

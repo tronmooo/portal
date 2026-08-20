@@ -182,12 +182,12 @@ describe("each action hits the right API", () => {
 describe("destructive actions never destroy the wrong record", () => {
   it("removing a birthday clears the DATE, never the person", async () => {
     await run(SERIES.birthday, "deleteSeries");
-    // Via `fieldPathsToDelete`, which removes EXACTLY this field. The app's universal delete: it matches on field
-    // IDENTITY across the top level and every nested group, so it reaches a
-    // date wherever it is stored. A `fields` patch for a nested group would
-    // REPLACE that group and take every sibling field with it.
+    // A person has ONE birthday however many spellings carry it, and older rows
+    // hold both `birthday` and `dateOfBirth` — so this one takes the identity
+    // sweep. Removing a single spelling left the other behind and the birthday
+    // was simply re-derived from it, so Delete appeared to do nothing.
     expect(requests).toEqual([{
-      method: "PATCH", url: "/api/profiles/joe", body: { fieldPathsToDelete: ["birthday"] },
+      method: "PATCH", url: "/api/profiles/joe", body: { fieldsToDelete: ["birthday"] },
     }]);
     // Emphatically not a DELETE on the profile.
     expect(requests.some((r) => r.method === "DELETE")).toBe(false);
@@ -195,7 +195,7 @@ describe("destructive actions never destroy the wrong record", () => {
 
   it("clears the anniversary field for an anniversary", async () => {
     await run({ ...SERIES.birthday, kind: "anniversary" }, "deleteSeries");
-    expect(requests[0].body).toEqual({ fieldPathsToDelete: ["anniversary"] });
+    expect(requests[0].body).toEqual({ fieldsToDelete: ["anniversary"] });
   });
 
   it("clears the field the date actually came from, not a guessed one", async () => {

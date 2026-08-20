@@ -1211,9 +1211,20 @@ describe("the expirations list is for things that expire", () => {
   });
 
   it("keeps the ones that really do lapse", () => {
-    for (const t of ["expiration", "renewal", "end", "cancellation"] as const) {
+    for (const t of ["expiration", "end", "cancellation"] as const) {
       expect(EXPIRY_RULE_TYPES.has(t), t).toBe(true);
     }
+  });
+
+  it("does not warn about a subscription that is merely renewing", () => {
+    const [rule] = rulesFromProfiles([{
+      id: "s1", name: "Spotify", type: "subscription", fields: { renewalDate: "2026-09-04" },
+    }]);
+    expect(rule.ruleType).toBe("renewal");
+    // On the calendar and under Important Dates, yes. Among documents about to
+    // expire, no — it carries on.
+    expect(rule.importantVisible).toBe(true);
+    expect(EXPIRY_RULE_TYPES.has(rule.ruleType)).toBe(false);
   });
 });
 
