@@ -82,7 +82,9 @@ describe("only genuinely repeating rules belong on a recurrence manager", () => 
       "Florida Driver License – Sennabaum — Expiration",
       "House Viewing",
       "Soccer Game",
-      "Passport",
+      // A document's date is labelled by what the date MEANS, not just by the
+      // document's name — "Passport — Expiration" is the important date.
+      "Passport — Expiration",
     ];
     for (const title of oneOffTitles) {
       const s = all.find((x) => x.title === title);

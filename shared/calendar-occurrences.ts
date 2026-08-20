@@ -47,6 +47,14 @@ export type OccurrenceKind =
   | "liability"
   | "bill"
   | "renewal"
+  // An expiration is a ONE-TIME important future date, not a yearly repeat. It
+  // is its own kind so the recurring screen can show it under Important Dates
+  // and the countdown machinery can find it, without any code ever having to
+  // pretend a driver's licence repeats every year.
+  | "expiration"
+  // Recurring income (a paycheck) is money IN, so it must never be folded into
+  // the payment kinds — the cash-flow and dedup rules there are about bills.
+  | "income"
   | "maintenance"
   | "appointment"
   | "task"
@@ -73,6 +81,8 @@ export const KIND_LABELS: Record<OccurrenceKind, string> = {
   liability: "Liability",
   bill: "Bill",
   renewal: "Renewal",
+  expiration: "Expiration",
+  income: "Income",
   maintenance: "Maintenance",
   appointment: "Appointment",
   task: "Task",
@@ -97,7 +107,9 @@ export const HORIZON_DAYS: Record<OccurrenceKind, number> = {
   subscription: 366,
   liability: 366,
   bill: 366,
-  renewal: 366,
+  renewal: 366 * 12,   // a 2034 licence must still be generated in 2026
+  income: 366,
+  expiration: 366 * 12,
   maintenance: 366,
   appointment: 366,
   task: 366,

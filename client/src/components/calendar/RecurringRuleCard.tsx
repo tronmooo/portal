@@ -39,6 +39,7 @@ export const RULE_ICONS: Record<OccurrenceKind, any> = {
   liability: Wallet, bill: Receipt, renewal: RefreshCw, maintenance: Wrench,
   appointment: Stethoscope, task: CheckSquare, habit: Repeat,
   document: FileText, event: CalendarDays, custom: CalendarDays,
+  expiration: FileText, income: Wallet,
 };
 
 // Muted accents. The old cards let a category colour take over the whole card;
@@ -49,6 +50,7 @@ export const RULE_HSL: Record<OccurrenceKind, string> = {
   maintenance: "199 55% 52%", appointment: "155 45% 46%",
   task: "210 55% 58%", habit: "170 45% 46%", document: "215 12% 58%",
   event: "240 8% 58%", custom: "240 8% 58%",
+  expiration: "22 70% 55%", income: "150 45% 46%",
 };
 
 const ACTION_ICONS: Record<CalendarAction, any> = {

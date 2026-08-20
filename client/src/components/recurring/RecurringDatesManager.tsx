@@ -60,6 +60,7 @@ const OCC_ICONS: Record<OccurrenceKind, any> = {
   liability: Wallet, bill: Receipt, renewal: RefreshCw, maintenance: Wrench,
   appointment: Stethoscope, task: CheckSquare, habit: Repeat,
   document: FileText, event: CalendarClock, custom: Repeat,
+  expiration: FileText, income: Wallet,
 };
 const KIND_HSL: Record<OccurrenceKind, string> = {
   birthday: "262 75% 64%", anniversary: "330 75% 60%", subscription: "220 80% 62%",
@@ -67,6 +68,7 @@ const KIND_HSL: Record<OccurrenceKind, string> = {
   maintenance: "199 85% 55%", appointment: "155 62% 44%",
   task: "210 80% 60%", habit: "170 60% 45%", document: "215 15% 60%",
   event: "240 8% 60%", custom: "240 8% 60%",
+  expiration: "22 80% 55%", income: "150 60% 45%",
 };
 
 const KIND_ICONS: Record<RecurringKind, any> = {

@@ -26,6 +26,7 @@ import { addYearsISO } from "./date-math";
 import { canonicalObligationCategory } from "./category-canon";
 import { resolveBillingModel, resolveOccurrenceAmount } from "./liability-billing";
 import { groupMaterializedSeries } from "./series-detect";
+import { rulesFromAll, seriesFromDateRules } from "./date-rules";
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
 const clip = (v: unknown): string => String(v ?? "").slice(0, 10);
@@ -619,6 +620,44 @@ export function seriesFromDocuments(documents: readonly any[]): CalendarSeries[]
   return out;
 }
 
+// ─── Recurring income ────────────────────────────────────────────────────────
+
+/**
+ * Paychecks and other recurring income.
+ *
+ * Income had no adapter at all, so "I get paid every other Friday" existed in
+ * the finance tables and on no calendar surface. It is emitted as its own
+ * `income` kind rather than as a payment: the payment kinds share a dedup and
+ * cash-flow identity space that is about money going OUT, and a paycheck
+ * landing in it would be netted against a bill of the same size.
+ */
+export function seriesFromIncomes(incomes: readonly any[]): CalendarSeries[] {
+  const out: CalendarSeries[] = [];
+  for (const i of incomes || []) {
+    if (!i?.id || i.deletedAt) continue;
+    if (!isISO(i.date)) continue;
+    const profileId = Array.isArray(i.linkedProfiles) ? i.linkedProfiles[0] : undefined;
+    out.push({
+      id: `income:${i.id}`,
+      kind: "income",
+      title: i.description || "Income",
+      subtitle: i.category || undefined,
+      source: {
+        system: "event",
+        id: i.id,
+        profileId,
+        ownerIds: uniq(Array.isArray(i.linkedProfiles) ? i.linkedProfiles : []),
+        label: i.description,
+        href: "#/finance",
+      },
+      baseDate: clip(i.date),
+      recurrence: frequencyToRecurrence(i.frequency),
+      amount: typeof i.amount === "number" ? i.amount : undefined,
+    });
+  }
+  return out;
+}
+
 // ─── The whole calendar ──────────────────────────────────────────────────────
 
 export interface CalendarInputs {
@@ -627,6 +666,7 @@ export interface CalendarInputs {
   obligations?: readonly any[];
   tasks?: readonly any[];
   documents?: readonly any[];
+  incomes?: readonly any[];
 }
 
 /**
@@ -636,20 +676,28 @@ export interface CalendarInputs {
  * ownership is known before events are adapted and can be flagged as shadows.
  */
 export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
-  const profileSeries = seriesFromProfiles(input.profiles || []);
+  // Profiles and documents no longer get a bespoke adapter each. Their dates
+  // are whatever the Date Rule engine classifies as actionable
+  // (shared/date-rules) — birthdays, anniversaries, licence/passport/
+  // registration/warranty expirations, renewals, lease ends — so the calendar
+  // sees exactly the same set the Upcoming feed and the Important Dates screen
+  // see. The three used to disagree; that was the bug.
+  const dateRules = rulesFromAll({ profiles: input.profiles || [], documents: input.documents || [] });
+  const ruleSeries = seriesFromDateRules(dateRules);
+
   const knownBirthdayProfiles = new Set(
-    profileSeries.filter((s) => s.kind === "birthday").map((s) => s.source.profileId!).filter(Boolean),
+    dateRules.filter((r) => r.ruleType === "birthday").map((r) => r.profileId!).filter(Boolean),
   );
   const knownAnniversaryProfiles = new Set(
-    profileSeries.filter((s) => s.kind === "anniversary").map((s) => s.source.profileId!).filter(Boolean),
+    dateRules.filter((r) => r.ruleType === "anniversary").map((r) => r.profileId!).filter(Boolean),
   );
   return [
-    ...profileSeries,
+    ...ruleSeries,
     ...seriesFromLiabilityProfiles(input.profiles || []),
     ...seriesFromEvents(input.events || [], { knownBirthdayProfiles, knownAnniversaryProfiles }),
     ...seriesFromObligations(input.obligations || []),
     ...seriesFromTasks(input.tasks || []),
-    ...seriesFromDocuments(input.documents || []),
+    ...seriesFromIncomes(input.incomes || []),
   ];
 }
 
