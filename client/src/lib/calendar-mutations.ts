@@ -294,17 +294,39 @@ async function deleteSourceRecord(
       const field = series?.source?.field;
       if (!field) throw new Error("This date has no field to clear.");
       const doc = await apiRequest("GET", `/api/documents/${id}`).then((r) => r.json());
-      const extractedData = { ...(doc?.extractedData || {}) };
       const path = field.split(".").filter(Boolean);
-      let cursor: any = extractedData;
-      for (let i = 0; i < path.length - 1; i++) {
-        const next = cursor?.[path[i]];
-        if (!next || typeof next !== "object") { cursor = null; break; }
-        cursor[path[i]] = { ...next };
-        cursor = cursor[path[i]];
+      /** Remove `path` from a bag, returning a new bag, or null if it wasn't there. */
+      const without = (bag: any): Record<string, any> | null => {
+        if (!bag || typeof bag !== "object") return null;
+        const copy = { ...bag };
+        let cursor: any = copy;
+        for (let i = 0; i < path.length - 1; i++) {
+          const next = cursor?.[path[i]];
+          if (!next || typeof next !== "object") return null;
+          cursor[path[i]] = { ...next };
+          cursor = cursor[path[i]];
+        }
+        const leaf = path[path.length - 1];
+        if (!(leaf in cursor)) return null;
+        delete cursor[leaf];
+        return copy;
+      };
+      // A document's dates are read from `extractedData`, from `fields`, and
+      // from the `expirationDate` column — clearing only the first left the
+      // date behind while the UI said "Updated".
+      const patch: Record<string, any> = {};
+      const nextExtracted = without(doc?.extractedData);
+      if (nextExtracted) patch.extractedData = nextExtracted;
+      const nextFields = without(doc?.fields);
+      if (nextFields) patch.fields = nextFields;
+      if (path.length === 1 && doc?.expirationDate
+        && /^expirationdate$/i.test(path[0].replace(/[^a-z]/gi, ""))) {
+        patch.expirationDate = null;
       }
-      if (cursor) delete cursor[path[path.length - 1]];
-      await apiRequest("PATCH", `/api/documents/${id}`, { extractedData });
+      if (Object.keys(patch).length === 0) {
+        throw new Error("That date is no longer on this document.");
+      }
+      await apiRequest("PATCH", `/api/documents/${id}`, patch);
       return;
     }
     case "liability":

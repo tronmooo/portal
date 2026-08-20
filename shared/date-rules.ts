@@ -237,7 +237,11 @@ const FIELD_MATCHERS: FieldMatcher[] = [
   { ruleType: "expiration", match: /lease(end|expir|termination|enddate)|endoflease/, subtype: "lease" },
   {
     ruleType: "expiration",
-    match: /(expir|expiry|expires|validuntil|validthru|validthrough|validto|goodthru|goodthrough|useby|bestbefore)/,
+    // `expdate` / `…exp` are the abbreviated spellings the two deleted
+    // vocabularies both enumerated (`exp_date`), and which
+    // notification-service and insights-engine still treat as expirations.
+    // Without them an `exp_date` reached no surface at all.
+    match: /(expir|expiry|expires|expdate|exp$|validuntil|validthru|validthrough|validto|goodthru|goodthrough|useby|bestbefore)/,
   },
 
   // ── Renewals: one-time until the thing is renewed, same as expirations ──
@@ -540,7 +544,11 @@ export function bareDateOf(value: unknown): string | null {
   // meant a date stored as "2027-01-01T00:00:00Z" produced no rule anywhere,
   // where the adapter this replaced read it fine. (The WRITE path still leaves
   // such a value alone: truncating it there would throw away the clock.)
-  const stamp = t.match(/^(\d{4}-\d{2}-\d{2})T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?$/);
+  // Both forms: "2027-01-01T00:00:00Z" and the space-separated
+  // "2027-01-01 00:00:00" Postgres hands back. Only the `T` form was accepted,
+  // so the other derived no rule where the prefix test it replaced clipped it
+  // happily.
+  const stamp = t.match(/^(\d{4}-\d{2}-\d{2})[T ][\d:.]+(?:\s*Z|\s*[+-]\d{2}(?::?\d{2})?)?$/);
   if (stamp) return isRealDay(stamp[1]) ? stamp[1] : null;
   if (/\d{1,2}:\d{2}/.test(t)) return null;                    // carries a time
   // A RANGE is not a date. "01/01/2026 - 12/31/2026" is a coverage period, and

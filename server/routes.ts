@@ -6043,6 +6043,15 @@ Rules:
         // it already applies to profile fields above — is that a document takes
         // back exactly what it contributed. An auto-created event is
         // contributed data. Leaving it would be the orphan the user reported.
+        // An event linked to OTHER documents too is not this document's to
+        // delete — unlink and leave it. Deleting on "includes this id" orphaned
+        // events that still belonged to a surviving document.
+        const others = linked.filter((d) => d !== docIdToDelete);
+        if (others.length > 0) {
+          await storage.updateEvent(ev.id, { linkedDocuments: others } as any);
+          log.info(`[doc-delete-cascade] ${docIdToDelete} → unlinked event ${ev.id} (still on ${others.length} document(s))`);
+          continue;
+        }
         await storage.deleteEvent(ev.id);
         log.info(`[doc-delete-cascade] ${docIdToDelete} → removed derived event ${ev.id} "${ev.title}"`);
       }

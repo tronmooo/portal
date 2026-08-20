@@ -543,3 +543,37 @@ describe("one record, several dates, all of them visible", () => {
     expect(new Set(cal.data.map((i: any) => i.sourceId))).toEqual(new Set(["jane-1"]));
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("deleting a document shared by an extraction event", () => {
+  it("unlinks rather than orphan-deleting it", async () => {
+    const { api, db } = await boot({
+      documents: [
+        { id: "doc-1", name: "Scan A", type: "other", extractedData: {}, linkedProfiles: ["jane-1"], tags: [] },
+        { id: "doc-2", name: "Scan B", type: "other", extractedData: {}, linkedProfiles: ["jane-1"], tags: [] },
+      ],
+      events: [{
+        id: "ev-shared", title: "Board Meeting", date: `${YEAR}-09-02`, recurrence: "none",
+        linkedProfiles: ["jane-1"], linkedDocuments: ["doc-1", "doc-2"], tags: ["document-extraction"],
+      }],
+    });
+    await api("DELETE", "/api/documents/doc-1");
+    // The event still belongs to a surviving document, so it is not this
+    // document's to delete.
+    expect(db.events.map((e: any) => e.id)).toEqual(["ev-shared"]);
+    expect(db.events[0].linkedDocuments).toEqual(["doc-2"]);
+  });
+
+  it("still removes one that belonged only to the deleted document", async () => {
+    const { api, db } = await boot({
+      documents: [{ id: "doc-1", name: "Scan A", type: "other", extractedData: {}, linkedProfiles: ["jane-1"], tags: [] }],
+      events: [{
+        id: "ev-only", title: "Board Meeting", date: `${YEAR}-09-02`, recurrence: "none",
+        linkedProfiles: ["jane-1"], linkedDocuments: ["doc-1"], tags: ["document-extraction"],
+      }],
+    });
+    await api("DELETE", "/api/documents/doc-1");
+    expect(db.events).toHaveLength(0);
+  });
+});

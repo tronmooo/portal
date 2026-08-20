@@ -1552,3 +1552,32 @@ describe("a one-time income is not a monthly one", () => {
     expect(buildCalendarOccurrences(series, { todayISO: TODAY }).map(o => o.date)).toEqual(["2026-09-04"]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 29. Eighteenth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("the abbreviated spellings the deleted vocabularies knew", () => {
+  it("still reads exp_date as an expiration", () => {
+    // Both deleted key lists enumerated `exp_date`, and notification-service
+    // and insights-engine still treat it as one. Dropping it meant the date
+    // reached no surface at all.
+    for (const key of ["exp_date", "expDate", "dl_exp", "expiryDate"]) {
+      expect(classifyDateField(key).ruleType, key).toBe("expiration");
+    }
+  });
+
+  it("does not read an unrelated word that merely contains those letters", () => {
+    expect(classifyDateField("expenseDate").ruleType).not.toBe("expiration");
+  });
+});
+
+describe("a timestamp written with a space", () => {
+  it("names the day, like the T form", () => {
+    expect(bareDateOf("2027-01-01 00:00:00")).toBe("2027-01-01");
+    expect(bareDateOf("2027-01-01 12:30:00+00")).toBe("2027-01-01");
+    // …and the stored value still keeps its clock.
+    const { fields } = normalizeEntityDateFields({ expirationDate: "2027-01-01 00:00:00" });
+    expect(fields.expirationDate).toBe("2027-01-01 00:00:00");
+  });
+});

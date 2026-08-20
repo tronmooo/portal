@@ -337,10 +337,14 @@ export function computeAttention(
         href: String(doc?.href || "").replace(/^#/, "") || `/documents/${id}`,
         action: { kind: "open", label: "Review" },
       });
-      // …and the RECORD, so the notifications pass does not raise the same
+      // …and the DOCUMENT, so the notifications pass does not raise the same
       // expiration again under the entity's own key.
+      //
+      // Deliberately not the profile: a person's key stands for the person, and
+      // claiming it because one of their documents expires would silence every
+      // other alert about them — including a critical one. A duplicated row is
+      // a nuisance; a swallowed critical alert is not.
       alsoClaim(`document:${id}`);
-      if (doc?.relatedProfileId) alsoClaim(`profile:${doc.relatedProfileId}`);
     }
   }
 
