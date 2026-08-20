@@ -2500,14 +2500,18 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         const isDate = hasDate || /expir|renew|due|valid|issued|birth|appoint/i.test(key);
         let suggestedEvent: string | undefined;
         // Only suggest a calendar event when we can actually resolve a real date
-        // from the value (a key called "dueAmount" must not become an event).
-        if (hasDate) {
-          if (/expir/i.test(key)) suggestedEvent = `⚠️ ${label}`;
-          else if (/renew/i.test(key)) suggestedEvent = `🔄 ${label}`;
-          else if (/due/i.test(key)) suggestedEvent = `📅 ${label}`;
-          else if (/appoint|visit|service/i.test(key)) suggestedEvent = `🗓️ ${label}`;
-          else if (/valid|issued|administered/i.test(key)) suggestedEvent = undefined;
-          else suggestedEvent = `📅 ${label}`;
+        // from the value (a key called "dueAmount" must not become an event) —
+        // AND only when the record does not already own that date.
+        //
+        // An expiration, a renewal, a due date or a birthday now reaches the
+        // calendar by being ON the record (shared/date-rules), so offering an
+        // "also add to calendar" tick for one promised a second, disconnected
+        // copy. The activity feed entry "⚠️ expiration Date" in the user's
+        // screenshot was exactly that copy. What remains is the genuinely
+        // uncovered case: a date the classifier does not recognise, which has
+        // no source field to be derived from and so does need an event.
+        if (hasDate && !classifyDateField(key, docType).actionable) {
+          suggestedEvent = `📅 ${label}`;
         }
 
         const category = categorizeField(key, CATEGORY_MAP);
