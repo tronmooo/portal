@@ -2120,7 +2120,10 @@ export class MemStorage implements IStorage {
     // exactly what the calendar and the Important Dates screen see.
     const expiringDocs: any[] = [];
     {
-      const profilesForExp = Array.from(this.profiles.values()).filter(p => matchesFilter([p.id]));
+      // Profile AND parent, as the calendar block scopes — see the twin in
+      // supabase-storage.
+      const profilesForExp = Array.from(this.profiles.values()).filter(p =>
+        matchesFilter([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
       for (const rule of rulesFromAll({ profiles: profilesForExp, documents })) {
         // Only things that EXPIRE — see the twin in supabase-storage.
         if (!EXPIRY_RULE_TYPES.has(rule.ruleType)) continue;

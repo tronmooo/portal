@@ -6474,7 +6474,11 @@ export class SupabaseStorage implements IStorage {
     // exactly what the calendar and the Important Dates screen see.
     const expiringDocs: any[] = [];
     {
-      const scopedProfilesForExp = allProfiles.filter(p => matchesProfileEnhanced([p.id]));
+      // Scope on the profile AND ITS PARENT, exactly as the calendar block does.
+      // Matching the child id alone dropped a nested vehicle's or property's
+      // expiration from this tile while the calendar still showed it.
+      const scopedProfilesForExp = allProfiles.filter(p =>
+        matchesProfileEnhanced([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
       for (const rule of rulesFromAll({ profiles: scopedProfilesForExp, documents: filteredDocs })) {
         // Only things that EXPIRE. `countdownEnabled` is wider than that — it
         // covers due dates and deadlines too — and only liability profiles have

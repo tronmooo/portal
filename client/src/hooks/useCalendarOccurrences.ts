@@ -250,7 +250,7 @@ export function useCalendarOccurrences(
     todayISO,
     isLoading:
       events.isLoading || profiles.isLoading || obligations.isLoading ||
-      tasks.isLoading || documents.isLoading,
+      tasks.isLoading || documents.isLoading || incomes.isLoading,
   };
 }
 

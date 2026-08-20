@@ -29,6 +29,11 @@ import type { CalendarSeries, CalendarOccurrence } from "@shared/calendar-occurr
  *  liability AND an obligation AND a dashboard number. */
 const CALENDAR_DOMAINS: Domain[] = [
   "events", "obligations", "liabilities", "profiles", "tasks",
+  // A document carries dates too, and clearing one is a document write. Without
+  // this the calendar and the Important Dates screen — which derive document
+  // rules from /api/documents — kept rendering the date that had just been
+  // removed, so the delete looked like a no-op.
+  "documents",
   "notifications", "dashboard",
 ];
 
