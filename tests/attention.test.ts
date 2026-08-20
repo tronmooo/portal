@@ -404,3 +404,42 @@ describe("one expiration, one row on Immediate Attention", () => {
     }
   });
 });
+
+describe("a profile-carried expiration is one alert, not two", () => {
+  const today = "2026-08-20";
+  const soon = "2026-08-25";
+
+  it("claims the DATE, so notification-service's twin is suppressed", () => {
+    const items = computeAttention({
+      now: new Date(`${today}T09:00:00`), today,
+      documents: [{
+        documentId: "p-1", ruleId: "profile:p-1:driverslicenseexpiration:expiration",
+        documentName: "Jane — Driver's License Expiration", fieldName: "driversLicenseExpiration",
+        expirationDate: soon, daysUntil: 5, href: "#/profiles/p-1", relatedProfileId: "p-1",
+      }],
+      notifications: [{
+        id: "profile-exp-p-1-driversLicenseExpiration", type: "document_expiring",
+        entityType: "profile", entityId: "p-1", severity: "warning",
+        title: "Expiring soon: Jane - driversLicenseExpiration", dueDate: soon,
+      }],
+    } as any).items;
+    expect(items.filter((i: any) => /driver/i.test(i.title))).toHaveLength(1);
+  });
+
+  it("does not silence an unrelated alert about the same person", () => {
+    // Claiming the person outright would have. The claim names the date.
+    const items = computeAttention({
+      now: new Date(`${today}T09:00:00`), today,
+      documents: [{
+        documentId: "p-1", ruleId: "profile:p-1:driverslicenseexpiration:expiration",
+        documentName: "Jane — Driver's License Expiration", fieldName: "driversLicenseExpiration",
+        expirationDate: soon, daysUntil: 5, href: "#/profiles/p-1", relatedProfileId: "p-1",
+      }],
+      notifications: [{
+        id: "n-critical", entityType: "profile", entityId: "p-1", severity: "critical",
+        title: "Jane's insurance lapsed", dueDate: today,
+      }],
+    } as any).items;
+    expect(items.some((i: any) => /insurance lapsed/.test(i.title))).toBe(true);
+  });
+});

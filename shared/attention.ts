@@ -198,6 +198,16 @@ const TIER_RANK: Record<AttentionTier, number> = { immediate: 0, soon: 1, upcomi
 
 // ── The model ────────────────────────────────────────────────────────────────
 
+/**
+ * The identity of ONE profile-carried expiration.
+ *
+ * Not the person — several of their dates can expire, and claiming the person
+ * would silence every other alert about them, including a critical one.
+ */
+function profileExpirationClaimKey(profileId: string, dateISO: string): string {
+  return `profile-exp:${profileId}:${String(dateISO).slice(0, 10)}`;
+}
+
 export function computeAttention(
   input: AttentionInputs,
   config?: Partial<AttentionConfig>,
@@ -345,6 +355,14 @@ export function computeAttention(
       // other alert about them — including a critical one. A duplicated row is
       // a nuisance; a swallowed critical alert is not.
       alsoClaim(`document:${id}`);
+      // A profile-carried expiration is raised by notification-service under
+      // the PROFILE's key, which nothing here claims — so the same licence came
+      // back as a second alert. Claiming the person outright would silence
+      // every other alert about them, so the claim names the DATE: this
+      // expiration on this person, and nothing else about them.
+      if (doc?.relatedProfileId && doc?.expirationDate) {
+        alsoClaim(profileExpirationClaimKey(doc.relatedProfileId, doc.expirationDate));
+      }
     }
   }
 
@@ -499,9 +517,15 @@ export function computeAttention(
     for (const n of input.notifications || []) {
       if (!n?.id || n.dismissed || dismissed.has(n.id)) continue;
       if (n.severity === "info") continue;   // info is bell material, not attention
-      const sourceKey = n.entityType && n.entityId
-        ? `${n.entityType}:${n.entityId}`
-        : `notification:${n.id}`;
+      // A profile-field expiration identifies itself by the DATE, not by the
+      // person: several of a person's dates can expire, and they are not one
+      // another. The expirations pass above claims the same key.
+      const sourceKey = n.entityType === "profile" && n.entityId && n.dueDate
+          && String(n.type || "") === "document_expiring"
+        ? profileExpirationClaimKey(n.entityId, n.dueDate)
+        : n.entityType && n.entityId
+          ? `${n.entityType}:${n.entityId}`
+          : `notification:${n.id}`;
       if (claimed.has(sourceKey)) continue;  // ← the duplication fix
       const du = daysBetween(today, n.dueDate);
       const critical = n.severity === "critical";

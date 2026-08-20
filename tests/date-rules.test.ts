@@ -1163,15 +1163,24 @@ describe("nested groups are their own dates", () => {
 
 describe("a corrected spelling wins over a stale one", () => {
   it("derives the correction, not the date it replaced", () => {
-    // `{...existing, ...incoming}` keeps existing keys in position, so the
-    // stale spelling comes first — and keeping the first meant the correction
-    // was never derived.
+    // Key order does not say which is current — a spread keeps a pre-existing
+    // key in place — so the CANONICAL spelling decides. Every write path
+    // produces `dateOfBirth`.
+    for (const fields of [
+      { birthday: "1994-07-10", dateOfBirth: "1994-07-11" },
+      { dateOfBirth: "1994-07-11", birthday: "1994-07-10" },
+    ]) {
+      const rules = rulesFromProfiles([{ id: "p1", name: "Jane", type: "person", fields }]);
+      expect(rules.filter(r => r.ruleType === "birthday")).toHaveLength(1);
+      expect(rules[0].date, JSON.stringify(fields)).toBe("1994-07-11");
+    }
+  });
+
+  it("still picks one when neither spelling is the canonical one", () => {
     const rules = rulesFromProfiles([{
-      id: "p1", name: "Jane", type: "person",
-      fields: { birthday: "1994-07-10", dateOfBirth: "1994-07-11" },
+      id: "p1", name: "Jane", type: "person", fields: { birthday: "1994-07-10", dob: "1994-07-11" },
     }]);
     expect(rules.filter(r => r.ruleType === "birthday")).toHaveLength(1);
-    expect(rules[0].date).toBe("1994-07-11");
   });
 });
 

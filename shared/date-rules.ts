@@ -531,6 +531,9 @@ function isRealDay(iso: string): boolean {
   return d <= new Date(Date.UTC(y, m, 0)).getUTCDate();
 }
 
+/** The spelling every write path produces for a person's own singleton date. */
+const CANONICAL_SINGLETON_FIELD = /^(dateofbirth|anniversary)$/;
+
 const DATEISH_TOKEN = /\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\.?,?\s+\d{4}/g;
 
 export function bareDateOf(value: unknown): string | null {
@@ -698,16 +701,22 @@ export function scanEntityDates(
       if (seen.has(id) || seen.has(valueKey)) continue;
       seen.add(id);
       seen.add(valueKey);
-      // A singleton keeps the LAST spelling seen, not the first.
+      // A singleton keeps the CANONICAL spelling, not whichever came first or
+      // last in key order.
       //
-      // A corrected `dateOfBirth` written beside a stale `birthday` lands after
-      // it in the merged object (`{...existing, ...incoming}` keeps existing
-      // keys in place), so keeping the first meant the correction was never
-      // derived and the calendar kept showing the old day.
+      // A profile can hold both `dateOfBirth` and a stale `birthday`, and key
+      // order does not say which is current: a spread keeps a pre-existing key
+      // in place, so neither "first" nor "last" is the correction. The write
+      // paths all produce `dateOfBirth`, so that is the one to believe; when
+      // neither is canonical the first still wins.
       if (singletonKey) {
         const prior = singletonHolders.get(singletonKey);
         if (prior !== undefined) {
           const at = out.findIndex((r) => r.id === prior);
+          const incomingIsCanonical = CANONICAL_SINGLETON_FIELD.test(normalizeFieldKey(key));
+          const heldIsCanonical = at >= 0
+            && CANONICAL_SINGLETON_FIELD.test(normalizeFieldKey(out[at].sourceField));
+          if (heldIsCanonical || !incomingIsCanonical) continue;
           if (at >= 0) out.splice(at, 1);
         }
       }
