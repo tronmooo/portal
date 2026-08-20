@@ -384,3 +384,27 @@ describe("a date ticked for the calendar alone is not dropped", () => {
     expect(titles).toContain("Policy — Renewal");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("an event created for an uncovered date survives the shadow pass", () => {
+  it("keeps it even when it lands on the same day as a derived rule", async () => {
+    const { api, db } = await boot({
+      documents: [{ id: "doc-1", name: "Policy", type: "insurance", extractedData: {}, linkedProfiles: ["jane-1"], tags: [] }],
+    });
+    await api("POST", "/api/chat/confirm-extraction", {
+      extractionId: "doc-1",
+      targetProfileId: "jane-1",
+      confirmedFields: [{ key: "renewalDate", value: "2027-04-01" }],
+      createCalendarEvents: [
+        // An unclassified date the pipeline deliberately still writes, on the
+        // SAME day as the renewal the record now owns.
+        { field: "boardMeeting", date: "2027-04-01", title: "Board Meeting", category: "other" },
+      ],
+    });
+    expect(db.events.map((e: any) => e.title)).toEqual(["Board Meeting"]);
+    const titles = (await api("GET", `/api/calendar/timeline?${RANGE}`)).data.map((i: any) => i.title);
+    expect(titles).toContain("Board Meeting");
+    expect(titles).toContain("Policy — Renewal");
+  });
+});

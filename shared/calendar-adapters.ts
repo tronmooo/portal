@@ -235,8 +235,13 @@ export function seriesFromEvents(
 
     // A typed-in birthday/anniversary for a profile that already carries the
     // date on its own record is a duplicate of it, not a second date.
+    const tagList: string[] = Array.isArray(e.tags) ? e.tags : [];
     const autoFromDocument =
-      Array.isArray(e.tags) && e.tags.includes("document-extraction") &&
+      tagList.includes("document-extraction") &&
+      // An event the pipeline deliberately created for a date NO rule covers
+      // says so, and is never treated as a copy — even when it happens to land
+      // on the same day as a derived rule from the same document.
+      !tagList.includes("date-rule-uncovered") &&
       (Array.isArray(e.linkedDocuments) ? e.linkedDocuments : [])
         .some((id: any) => ruledDocDates.has(`${String(id)}@${clip(e.date)}`));
     const shadow =

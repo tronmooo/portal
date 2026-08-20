@@ -557,7 +557,26 @@ const CATEGORY_FOR_SUBTYPE: Record<string, UpcomingCategory> = {
   loan: "loan_payment",
   medication: "prescription_expiration",
   contract: "contract_renewal",
+  vaccination: "pet_vaccination",
+  court: "court_date",
+  travel: "travel_departure",
+  school: "school_enrollment",
 };
+
+/**
+ * The rule types whose SUBTYPE names the thing the date is about, and so should
+ * pick the category.
+ *
+ * For everything else the type is the better answer: an insurance policy's
+ * `paymentDueDate` is a bill due, not an insurance renewal, and letting the
+ * surrounding document's subtype win filed it under the wrong one.
+ */
+const SUBTYPE_NAMES_THE_CATEGORY = new Set<DateRuleType>([
+  "expiration", "renewal", "end", "cancellation", "appointment", "deadline",
+  // A travel date is only ever an "event" by type; its subtype is what says
+  // departure rather than an unnamed entry on the calendar.
+  "event",
+]);
 
 const CATEGORY_FOR_RULE_TYPE: Partial<Record<DateRuleType, UpcomingCategory>> = {
   birthday: "birthday",
@@ -579,9 +598,10 @@ const CATEGORY_FOR_RULE_TYPE: Partial<Record<DateRuleType, UpcomingCategory>> = 
 
 function categoryForRule(r: DateRule): UpcomingCategory {
   const bySub = r.ruleSubtype ? CATEGORY_FOR_SUBTYPE[r.ruleSubtype] : undefined;
-  // The subtype is the more specific answer, but only for the date types where
-  // it actually changes the meaning — a licence's BIRTHDAY is still a birthday.
-  if (bySub && r.ruleType !== "birthday" && r.ruleType !== "anniversary") return bySub;
+  if (bySub && SUBTYPE_NAMES_THE_CATEGORY.has(r.ruleType)) return bySub;
+  // A refill is modelled as a `due` date, but "Medication Refill" is what it
+  // is — the one place a subtype names the category outside the set above.
+  if (r.ruleType === "due" && r.ruleSubtype === "medication") return "medication_refill";
   return CATEGORY_FOR_RULE_TYPE[r.ruleType] || "custom";
 }
 

@@ -13,6 +13,7 @@
 // fields.paused / fields.pausedUntil suppress generation while paused.
 
 import { freqToUnit, advance, type RecurrenceRule } from "./recurrence";
+import { normalizeDateString } from "./extraction-normalize";
 import { liabilityBillStatus, type BillStatus } from "./liability-status";
 import { liabilityFamily } from "./liability-types";
 import {
@@ -118,7 +119,14 @@ export function deriveScheduleFields(
   // it is a spelling the profile writer produces, and without it this falls
   // through to `todayISO` — putting a payment on the wrong day rather than
   // none at all, which is worse.
-  let due = clip(f.nextPaymentDate ?? f.nextPayment ?? f.dueDate ?? f.nextDueDate ?? f.firstPaymentDate);
+  // Normalized, and in the SAME precedence the calendar adapter uses. Without
+  // normalization a legacy "07/18/2026" failed the ISO test below and fell
+  // through to today — so the calendar showed the payment on its real day and
+  // the schedule card showed it on this one.
+  let due = clip(normalizeDateString(
+    f.nextDueDate ?? f.next_due_date ?? f.dueDate ?? f.due_date
+    ?? f.nextPayment ?? f.next_payment ?? f.nextPaymentDate ?? f.firstPaymentDate,
+  ) ?? "");
   if (!ISO_RE.test(due)) {
     const day = parseInt(String(f.dueDay ?? ""), 10);
     if (day >= 1 && day <= 31) {

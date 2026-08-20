@@ -880,3 +880,72 @@ describe("a generic date is only dropped when a name restates the record", () =>
     expect(rules.map(r => r.sourceField)).toContain("leaseEndDate");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 15. Fifth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a payment date is not a monthly bill", () => {
+  it("does not turn an invoice's due date into an endless series", () => {
+    const [rule] = rulesFromDocuments([{
+      id: "d1", name: "Invoice", type: "invoice", linkedProfiles: [],
+      extractedData: { paymentDueDate: "2026-09-15" },
+    }]);
+    expect(rule.recurrence).toBe("none");
+    const [series] = seriesFromDateRules([rule]);
+    expect(buildCalendarOccurrences([series], { todayISO: TODAY })).toHaveLength(1);
+  });
+});
+
+describe("the categories the hand-written walker used to cover", () => {
+  const soon = () => new Date(Date.now() + 12 * 86400000).toISOString().slice(0, 10);
+
+  it("still reaches Upcoming after the walker was replaced", () => {
+    const cases: Array<[string, string]> = [
+      ["vaccinationDate", "pet_vaccination"],
+      ["nextRefillDate", "medication_refill"],
+      ["courtDate", "court_date"],
+      ["departureDate", "travel_departure"],
+      ["enrollmentDeadline", "school_enrollment"],
+    ];
+    for (const [key, category] of cases) {
+      const items = aggregateUpcomingDates({
+        profiles: [{ ...bareProfile(), fields: { [key]: soon() } }],
+      } as any);
+      expect(items.map(u => u.category), key).toContain(category);
+    }
+  });
+
+  it("files an insurance policy's payment as a bill, not as a renewal", () => {
+    const items = aggregateUpcomingDates({
+      profiles: [bareProfile()],
+      documents: [{
+        id: "d1", name: "Auto Policy", type: "insurance", linkedProfiles: [JANE],
+        extractedData: { paymentDueDate: soon() },
+      }],
+    } as any);
+    expect(items.map(u => u.category)).toContain("bill_due");
+  });
+});
+
+describe("the countdown borrows correctly across a short month", () => {
+  it("does not report a 29-day gap as a bare month", () => {
+    // Borrowing February's days once from a -30 difference produced days: -2,
+    // which the label hid by only printing days when positive.
+    const d = calendarDelta("2026-01-31", "2026-03-01");
+    expect(d.months).toBe(1);
+    expect(d.days).toBe(1);
+    expect(countdownLabel("2026-03-01", "2026-01-31")).toBe("Expires in 1 month, 1 day");
+  });
+
+  it("keeps the ordinary cases it already got right", () => {
+    expect(countdownLabel("2034-07-18", "2026-08-20")).toBe("Expires in 7 years, 10 months");
+    expect(countdownLabel("2026-11-20", "2026-08-20")).toBe("Expires in 3 months");
+    expect(countdownLabel("2026-09-10", "2026-08-20")).toBe("Expires in 21 days");
+  });
+
+  it("counts a clamped month-end step without drifting", () => {
+    // Jan 31 → Feb 28 is one whole month, not "0 months, 28 days".
+    expect(calendarDelta("2026-01-31", "2026-02-28")).toMatchObject({ months: 1, days: 0 });
+  });
+});

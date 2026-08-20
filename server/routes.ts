@@ -2701,7 +2701,13 @@ ${JSON.stringify(ctx, null, 2)}`;
               color: undefined,
               linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
               linkedDocuments: [extractionId],
-              tags: ["document-extraction"],
+              // `date-rule-uncovered` says: this event is NOT a copy of a date
+              // the record owns — it is the only home the date has. The shadow
+              // pass (shared/calendar-adapters) suppresses extraction events
+              // that duplicate a derived rule, matching on document and day,
+              // and without this marker an uncovered date landing on the same
+              // day as a derived one would be suppressed with them.
+              tags: ["document-extraction", "date-rule-uncovered"],
               source: "chat",
             });
             saved.push(`Created event: ${event.title || event.field}`);

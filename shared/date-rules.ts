@@ -233,10 +233,14 @@ const FIELD_MATCHERS: FieldMatcher[] = [
   { ruleType: "renewal", match: /(renew|reregistration|nextregistration|registrationdue)/ },
 
   // ── Money ──
+  // No cadence, for the same reason the income matcher carries none: a field
+  // holding a date says WHEN, never how often. Forcing "monthly" turned a
+  // one-off `paymentDueDate` on an invoice into an endless monthly bill. A
+  // genuinely recurring charge is an obligation or a liability with its own
+  // frequency, and those keep their dedicated adapters.
   {
     ruleType: "payment",
     match: /(nextpayment|nextbilling|nextcharge|billingdate|paymentdate|chargedate|nextduedate|paymentdue|billdue|autopay)/,
-    recurrence: "monthly",
   },
   // Anchored, and with NO cadence. Unanchored, `depositdate` matched inside
   // `securityDepositDate` on a lease, and the biweekly default then repeated
@@ -247,6 +251,18 @@ const FIELD_MATCHERS: FieldMatcher[] = [
   { ruleType: "due", match: /(duedate|due$|maturity|payoff|balancedue)/ },
 
   // ── Calendar-shaped ──
+  //
+  // The five below existed in the hand-written walker this engine replaced
+  // (shared/upcoming-dates), and without them a pet's vaccination, a
+  // prescription refill, a court date, a flight and a school enrolment all
+  // classified as metadata and left the Upcoming feed. They are matched ahead
+  // of the generic appointment/deadline patterns so their subtype survives —
+  // that subtype is what names the category the dashboard shows.
+  { ruleType: "appointment", match: /(vaccin|immuniz|booster)/, subtype: "vaccination" },
+  { ruleType: "due", match: /(refill)/, subtype: "medication" },
+  { ruleType: "deadline", match: /(court|hearing|arraign|trialdate)/, subtype: "court" },
+  { ruleType: "event", match: /(departure|departs|flight|travel|checkin|checkout|reservation|itinerary)/, subtype: "travel" },
+  { ruleType: "deadline", match: /(enrollment|enrolment|applicationdeadline|semesterstart|termbegins)/, subtype: "school" },
   { ruleType: "appointment", match: /(appointment|visitdate|followup|nextvisit|vetvisit|nextvet|checkup|consultation|surgery|procedure)/ },
   { ruleType: "deadline", match: /(deadline|filingdate|filingdeadline|submitby|respondby|applicationdue)/ },
   { ruleType: "maintenance", match: /(service|maintenance|inspection|oilchange|nextservice|smog)/ },
@@ -381,18 +397,29 @@ export function calendarDelta(fromISO: string, toISO: string): {
   const totalDays = daysBetweenISO(fromISO, toISO);
   const past = totalDays < 0;
   const [a, b] = past ? [toISO, fromISO] : [fromISO, toISO];
-  let years = +b.slice(0, 4) - +a.slice(0, 4);
-  let months = +b.slice(5, 7) - +a.slice(5, 7);
-  let days = +b.slice(8, 10) - +a.slice(8, 10);
-  if (days < 0) {
-    months -= 1;
-    // Days in the month preceding `b`.
-    const pm = +b.slice(5, 7) - 1;
-    const py = pm === 0 ? +b.slice(0, 4) - 1 : +b.slice(0, 4);
-    const pmm = pm === 0 ? 12 : pm;
-    days += new Date(Date.UTC(py, pmm, 0)).getUTCDate();
-  }
-  if (months < 0) { years -= 1; months += 12; }
+  // Count WHOLE months by walking from `a`, clamping each step to the end of
+  // the target month, and stop at the last one that has not passed `b`. Then
+  // the remainder is a plain day count from that anchor.
+  //
+  // Subtracting the calendar components and borrowing once gets this wrong
+  // whenever the borrow is not enough: Jan 31 → Mar 1 borrowed February's 28
+  // days from a difference of -30 and produced days: -2, which the label then
+  // hid by only printing days when positive — so a 29-day gap read as a bare
+  // "in 1 month".
+  const ay = +a.slice(0, 4), am = +a.slice(5, 7), ad = +a.slice(8, 10);
+  const clampedStep = (n: number): string => {
+    const total = (am - 1) + n;
+    const y = ay + Math.floor(total / 12);
+    const m = ((total % 12) + 12) % 12;              // 0-based
+    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const d = Math.min(ad, lastDay);
+    return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  };
+  let steps = 0;
+  while (clampedStep(steps + 1) <= b) steps++;
+  const years = Math.floor(steps / 12);
+  const months = steps % 12;
+  const days = daysBetweenISO(clampedStep(steps), b);
   return { past, years, months, days, totalDays: Math.abs(totalDays) };
 }
 
