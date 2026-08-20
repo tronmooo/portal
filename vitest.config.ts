@@ -150,7 +150,6 @@ export default defineConfig({
       'tests/curated-persistence.test.ts',
       'tests/model-router.test.ts',
       'tests/chat-frontdoor.test.ts',
-      'tests/profile-edit-event-gating.test.ts',
       'tests/profile-edit-no-ai-regen.test.ts',
       'tests/bootstrap-seed-keys.test.ts',
       'tests/scope-prefetch-siblings.test.ts',

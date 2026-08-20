@@ -35,47 +35,26 @@ const SRC = fs.readFileSync(
   path.resolve(__dirname, "..", "server/supabase-storage.ts"), "utf8",
 );
 
-/** The `eventDefs.push(...)` field keys inside autoGenerateProfileEvents. */
-function generatedFieldKeys(): string[] {
-  const start = SRC.indexOf("private async autoGenerateProfileEvents");
-  expect(start, "autoGenerateProfileEvents not found").toBeGreaterThan(-1);
-  const body = SRC.slice(start, SRC.indexOf("\n  async updateProfile", start));
-  return [...body.matchAll(/eventDefs\.push\(\{\s*fieldKey:\s*"([^"]+)"/g)].map((m) => m[1]);
-}
-
-describe("the profile-event generator writes nothing the engine derives", () => {
-  const DERIVED = [
-    // A liability / subscription's recurring payment schedule. The engine reads
-    // nextDueDate + frequency off the profile and generates every occurrence.
-    "nextPayment",
-    // A subscription's renewal cycle — same schedule, different word. This is
-    // the exact key that produced "🔄 Progressive … — Renewal".
-    "renewalDate",
-    // `seriesFromProfiles` already yields a yearly series from fields.birthday.
-    "birthday",
-  ];
-
-  it.each(DERIVED)("never generates an event from `%s`", (key) => {
-    expect(
-      generatedFieldKeys(),
-      `autoGenerateProfileEvents still writes an event row for "${key}" — the ` +
-      `occurrence engine already generates that date, so every one will appear twice`,
-    ).not.toContain(key);
-  });
-
-  it("still generates the one-off dates nothing else derives", () => {
-    // Not a blanket ban — a warranty expiry is a real date with no rule behind
-    // it, so it does need a row.
-    const keys = generatedFieldKeys();
-    expect(keys).toContain("warrantyExpiry");
-    expect(keys).toContain("leaseEnd");
-    expect(keys.length).toBeGreaterThan(3);
+describe("nothing writes a calendar row for a date a record already owns", () => {
+  // The generator is GONE, not merely narrowed.
+  //
+  // Its own rule was "generate an event ONLY for a date the occurrence engine
+  // cannot derive". Every field it had left — leaseEnd, insuranceExpiry,
+  // nextService, warrantyExpiry, maturityDate, expirationDate, nextVisit,
+  // nextVetVisit, startDate — is derived now by the Date Rule engine
+  // (shared/date-rules), so it had no remaining job and kept doing it: each of
+  // those dates rendered twice, once as the rule and once as its event row.
+  it("has no profile-event generator left to write one", () => {
+    expect(SRC).not.toMatch(/private async autoGenerateProfileEvents/);
+    expect(SRC).not.toMatch(/eventDefs\.push\(/);
+    // …and no per-type list of "date keys" either, which is the same second
+    // vocabulary in a smaller shape.
+    expect(SRC).not.toMatch(/export function eventDrivingFieldKeys/);
   });
 
   it("keeps a written record of why, so this is not silently reverted", () => {
-    const start = SRC.indexOf("private async autoGenerateProfileEvents");
-    const body = SRC.slice(start, start + 3000);
-    expect(body).toMatch(/never own data|cannot derive|already derives/i);
+    expect(SRC).toMatch(/Removed 2026-08-20: `autoGenerateProfileEvents`/);
+    expect(SRC).toMatch(/never own data|cannot derive|already derives|derived now/i);
   });
 });
 

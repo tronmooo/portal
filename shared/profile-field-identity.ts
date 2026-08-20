@@ -136,10 +136,21 @@ export function deleteProfileFields(
 ): FieldDeletionResult {
   const removed: string[] = [];
   if (!fields || typeof fields !== "object") return { fields: {}, removed };
-  const targets = new Set(
-    (uiKeys || []).filter((k) => typeof k === "string" && k).map(fieldIdentity),
+  // A DOTTED key targets exactly one field in one group. Everything else is an
+  // identity sweep across the top level and every group, which is the app's
+  // universal delete — right when the user says "remove my licence number"
+  // however it is spelled, and wrong when they mean one of two same-named dates
+  // in different groups: deleting `registration.expirationDate` from the
+  // calendar would have taken `insurance.expirationDate` with it.
+  const exact = new Set(
+    (uiKeys || []).filter((k) => typeof k === "string" && k.includes(".")),
   );
-  if (targets.size === 0) return { fields: { ...fields }, removed };
+  const targets = new Set(
+    (uiKeys || [])
+      .filter((k) => typeof k === "string" && k && !k.includes("."))
+      .map(fieldIdentity),
+  );
+  if (targets.size === 0 && exact.size === 0) return { fields: { ...fields }, removed };
 
   const out: Record<string, any> = {};
   for (const [key, value] of Object.entries(fields)) {
@@ -153,7 +164,7 @@ export function deleteProfileFields(
     if (isGroup) {
       const kept: Record<string, any> = {};
       for (const [nk, nv] of Object.entries(value as Record<string, any>)) {
-        if (targets.has(fieldIdentity(nk))) removed.push(`${key}.${nk}`);
+        if (targets.has(fieldIdentity(nk)) || exact.has(`${key}.${nk}`)) removed.push(`${key}.${nk}`);
         else kept[nk] = nv;
       }
       // Drop a group that has been emptied out.

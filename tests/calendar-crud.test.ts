@@ -207,7 +207,7 @@ describe("destructive actions never destroy the wrong record", () => {
         source: { ...SERIES.birthday.source, field: "identity.passportExpiration" } } as any,
       "deleteSeries",
     );
-    expect(requests[0].body).toEqual({ fieldsToDelete: ["passportExpiration"] });
+    expect(requests[0].body).toEqual({ fieldsToDelete: ["identity.passportExpiration"] });
   });
 
   it("stopping a liability pauses the schedule, never deletes the debt", async () => {

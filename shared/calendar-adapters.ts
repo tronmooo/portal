@@ -603,7 +603,7 @@ export function seriesFromIncomes(incomes: readonly any[]): CalendarSeries[] {
       title: i.description || "Income",
       subtitle: i.category || undefined,
       source: {
-        system: "event",
+        system: "income",
         id: i.id,
         profileId,
         ownerIds: uniq(Array.isArray(i.linkedProfiles) ? i.linkedProfiles : []),

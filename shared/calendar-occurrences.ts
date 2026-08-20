@@ -65,6 +65,10 @@ export type OccurrenceKind =
 
 /** Which system physically stores the record. Drives `href` and edit routing. */
 export type SourceSystem =
+  // Recurring income. Its own system, not "event": claiming to be an event sent
+  // every calendar action to /api/events/<incomeId>, which 404s — so completing,
+  // moving or deleting a paycheck failed silently on the calendar.
+  | "income"
   | "event"
   | "profile"
   | "obligation"
@@ -983,6 +987,7 @@ export function sourceHref(
     case "document": return recordId ? `#/documents/${recordId}` : "#/documents";
     case "goal": return recordId ? `#/goals?focus=${recordId}` : "#/goals";
     case "habit": return recordId ? `#/habits?focus=${recordId}` : "#/habits";
+    case "income": return "#/finance";
     case "event": return recordId ? `#/calendar?event=${recordId}` : "#/calendar";
     default: return "#/calendar";
   }

@@ -44,6 +44,8 @@ import {
   generateSeriesOccurrences,
 } from "../shared/calendar-occurrences";
 import { aggregateUpcomingDates } from "../shared/upcoming-dates";
+import { can, reasonFor } from "../shared/calendar-capabilities";
+import { deleteProfileFields } from "../shared/profile-field-identity";
 import { canonicalizeProfileFields } from "../shared/profile-field-canon";
 
 const JANE = "jane-1";
@@ -1223,5 +1225,83 @@ describe("recurring income reaches the calendar", () => {
     const occ = buildCalendarOccurrences(series, { todayISO: TODAY });
     expect(occ.length).toBeGreaterThan(1);
     expect(new Set(occ.map(o => new Date(`${o.date}T12:00:00`).getDay()))).toEqual(new Set([5]));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 23. Twelfth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("the copy a document put on the profile", () => {
+  const licence = {
+    id: "doc-1", name: "Sample Driver License", type: "drivers_license",
+    linkedProfiles: [JANE], extractedData: { expiration_date: "2034-07-18" },
+  };
+  // What confirm-extraction leaves behind: the value AND a record of who wrote it.
+  const person = {
+    ...bareProfile(),
+    fields: {
+      expirationDate: "2034-07-18",
+      _docFields: { "doc-1": { expirationDate: "2034-07-18" } },
+    },
+  };
+
+  it("is one date, not two", () => {
+    const rules = rulesFromAll({ profiles: [person], documents: [licence] });
+    expect(rules.filter(r => r.ruleType === "expiration")).toHaveLength(1);
+    // The document survives: it is the record that actually expires.
+    expect(rules[0].sourceEntityType).toBe("document");
+  });
+
+  it("becomes the record again once the document is gone", () => {
+    const rules = rulesFromAll({ profiles: [person], documents: [] });
+    expect(rules).toHaveLength(1);
+    expect(rules[0].sourceEntityType).toBe("profile");
+    expect(rules[0].date).toBe("2034-07-18");
+  });
+
+  it("does not suppress a date the profile owns in its own right", () => {
+    const own = { ...bareProfile(), fields: { passportExpiration: "2030-03-02" } };
+    const rules = rulesFromAll({ profiles: [own], documents: [licence] });
+    expect(rules.map(r => r.sourceEntityType).sort()).toEqual(["document", "profile"]);
+  });
+});
+
+describe("a paycheck is read-only on the calendar", () => {
+  it("offers no action that would 404", () => {
+    const [series] = seriesFromAll({
+      incomes: [{ id: "inc-1", description: "Paycheck", amount: 2400, frequency: "biweekly", date: "2026-08-21", linkedProfiles: ["p1"] }],
+    });
+    expect(series.source.system).toBe("income");
+    for (const action of ["complete", "skip", "move", "deleteOccurrence", "deleteSeries"] as const) {
+      expect(can(series, action), action).toBe(false);
+      expect(reasonFor(series, action), action).toBeTruthy();
+    }
+    // Opening it still works — it goes to Finance, where the record lives.
+    expect(can(series, "edit")).toBe(true);
+    expect(series.source.href).toBe("#/finance");
+  });
+});
+
+describe("deleting one nested date leaves its neighbours alone", () => {
+  it("targets exactly that group's field", () => {
+    const fields = {
+      vehicle: { expirationDate: "2027-03-01", plate: "8ABC123" },
+      insurance: { expirationDate: "2028-04-02" },
+      licenseExpiration: "2029-05-05",
+    };
+    const { fields: after, removed } = deleteProfileFields(fields, ["vehicle.expirationDate"]);
+    expect(removed).toEqual(["vehicle.expirationDate"]);
+    expect(after.vehicle).toEqual({ plate: "8ABC123" });
+    expect(after.insurance).toEqual({ expirationDate: "2028-04-02" });
+    expect(after.licenseExpiration).toBe("2029-05-05");
+  });
+
+  it("still sweeps by identity for a bare key, as the profile UI expects", () => {
+    const { removed } = deleteProfileFields(
+      { vehicle: { expirationDate: "2027-03-01" }, insurance: { expirationDate: "2028-04-02" } },
+      ["expirationDate"],
+    );
+    expect(removed.sort()).toEqual(["insurance.expirationDate", "vehicle.expirationDate"]);
   });
 });

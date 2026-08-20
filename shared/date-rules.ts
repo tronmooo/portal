@@ -128,6 +128,12 @@ export interface DateRule {
   ownerIds: string[];
   label: string;
   subtitle?: string;
+  /**
+   * Documents that wrote this field onto the record (`fields._docFields`).
+   * A copy is suppressed while the document that made it still holds the date —
+   * see `suppressDocumentCopies`.
+   */
+  provenanceDocIds?: string[];
 
   /** Canonical ISO anchor: the DOB, the expiration, the next due date. */
   date: string;
@@ -551,6 +557,8 @@ export interface ScanContext {
   ownerIds?: string[];
   /** Prefix for one-line rule labels: `${namePrefix} — Expiration`. */
   namePrefix?: string;
+  /** field key (normalized) → documents that wrote it. From `_docFields`. */
+  provenance?: Record<string, string[]>;
   href?: string;
 }
 
@@ -686,6 +694,7 @@ function buildRule(a: ScanContext & {
     rawValue: a.raw,
     profileId: a.profileId,
     ownerIds: uniq(a.ownerIds || []),
+    provenanceDocIds: a.provenance?.[normalizeFieldKey(a.field)],
     label: ruleLabel(a.namePrefix ?? a.entityLabel, cls, a.field,
       a.path.includes(".") ? a.path.split(".")[0] : undefined),
     subtitle: a.entityLabel,
@@ -815,6 +824,24 @@ function ruleLabel(name: string, cls: FieldClassification, fieldKey?: unknown, g
  * expiration typed onto a person now reaches the calendar too, instead of
  * being visible only in Upcoming.
  */
+/**
+ * Which documents wrote which of a profile's fields, from the `_docFields`
+ * provenance `confirm-extraction` records. Keyed by normalized field name.
+ */
+function docFieldProvenance(fields: unknown): Record<string, string[]> {
+  const src = (fields as any)?._docFields;
+  const out: Record<string, string[]> = {};
+  if (!src || typeof src !== "object") return out;
+  for (const [docId, saved] of Object.entries(src as Record<string, any>)) {
+    if (!saved || typeof saved !== "object") continue;
+    for (const key of Object.keys(saved)) {
+      const k = normalizeFieldKey(key);
+      (out[k] ||= []).push(docId);
+    }
+  }
+  return out;
+}
+
 export function rulesFromProfiles(profiles: readonly any[]): DateRule[] {
   const out: DateRule[] = [];
   for (const p of profiles || []) {
@@ -827,6 +854,7 @@ export function rulesFromProfiles(profiles: readonly any[]): DateRule[] {
     // the money-schedule types are handed back.
     const isScheduled = p.type === "liability" || p.type === "loan";
     const scanned = scanEntityDates(p.fields && typeof p.fields === "object" ? p.fields : {}, {
+      provenance: docFieldProvenance(p.fields),
       entityType: "profile",
       entityId: p.id,
       entityLabel: name,
@@ -904,8 +932,43 @@ export interface DateRuleInputs {
  * without either re-implementing the other.
  */
 export function rulesFromAll(input: DateRuleInputs): DateRule[] {
-  const out = [...rulesFromProfiles(input.profiles || []), ...rulesFromDocuments(input.documents || [])];
-  return dedupeRules(out);
+  const documents = input.documents || [];
+  const documentRules = rulesFromDocuments(documents);
+  const profileRules = rulesFromProfiles(input.profiles || []);
+  return dedupeRules([
+    ...suppressDocumentCopies(profileRules, documents, documentRules),
+    ...documentRules,
+  ]);
+}
+
+/**
+ * Drop a profile field that a document PUT there and still holds.
+ *
+ * Extraction copies a licence's expiration onto the person as well as leaving
+ * it on the licence, and records that it did so in `fields._docFields[docId]`.
+ * Both then produce a rule for one real date, and dedup could not always tell:
+ * the document knows it is a driver's licence and the copied field
+ * (`expirationDate`) does not, and merging on a mismatched subtype is how an
+ * unrelated passport got swallowed.
+ *
+ * Provenance answers it exactly. The copy is suppressed only while the document
+ * that wrote it still exists and still carries that date — delete the document
+ * and the profile's copy becomes the record again, which is the same rule the
+ * delete cascade follows.
+ */
+function suppressDocumentCopies(
+  profileRules: readonly DateRule[],
+  documents: readonly any[],
+  documentRules: readonly DateRule[],
+): DateRule[] {
+  const liveDocIds = new Set((documents || []).map((d) => d?.id).filter(Boolean));
+  if (liveDocIds.size === 0) return [...profileRules];
+  const datesHeldByDocs = new Set(documentRules.map((r) => `${r.ruleType}:${r.date}`));
+  return (profileRules || []).filter((r) => {
+    if (!r.provenanceDocIds?.length) return true;
+    if (!r.provenanceDocIds.some((id) => liveDocIds.has(id))) return true;
+    return !datesHeldByDocs.has(`${r.ruleType}:${r.date}`);
+  });
 }
 
 /**

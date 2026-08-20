@@ -328,53 +328,11 @@ export function resolveMonthlyPayment(fields: any): number {
   return 0;
 }
 
-// The set of profile field keys that can drive an auto-generated calendar
-// event, per profile type. Kept in lockstep with the eventDefs switch in
-// SupabaseStorage.autoGenerateProfileEvents. Exported so the write path can
-// gate the (expensive: full getEvents() fetch) event generation — an edit that
-// touches none of these keys (e.g. a vehicle mileage update) can never produce
-// an event, so it skips the work entirely. `dueDay`/`due_day` are included for
-// liability/loan because Phase 4 synthesizes a nextPayment date from them.
-export function eventDrivingFieldKeys(type: string): string[] {
-  switch (type) {
-    case "person":
-    case "self":
-      return ["birthday"];
-    case "medical":
-      return ["nextVisit"];
-    case "vehicle":
-      return ["nextService"];
-    case "subscription":
-      return ["renewalDate", "nextPayment", "startDate"];
-    case "loan":
-    case "liability":
-      return ["nextPayment", "startDate", "dueDay", "due_day"];
-    case "pet":
-      return ["nextVetVisit"];
-    case "property":
-      return ["insuranceExpiry", "leaseEnd"];
-    case "investment":
-      return ["maturityDate"];
-    case "account":
-      return ["expirationDate"];
-    case "asset":
-      return ["warrantyExpiry"];
-    default:
-      return [];
-  }
-}
-
-// True when an incoming profile patch touches at least one event-driving key
-// for the profile's type — i.e. the edit could create/refresh a calendar event
-// and therefore justifies the getEvents() round-trip. A mileage/value-only edit
-// returns false and skips event generation on the hot path.
-export function profileEditTouchesEventKey(
-  type: string,
-  patchFields: Record<string, any> | undefined | null,
-): boolean {
-  if (!patchFields || typeof patchFields !== "object") return false;
-  return eventDrivingFieldKeys(type).some((k) => patchFields[k] !== undefined);
-}
+// (Removed with `autoGenerateProfileEvents`: `eventDrivingFieldKeys` and
+// `profileEditTouchesEventKey`. They existed to decide whether a profile edit
+// was worth generating calendar events for; nothing generates them any more,
+// and a hardcoded per-type list of "date keys" is exactly the kind of second
+// vocabulary this change removed everywhere else.)
 
 // ---- MIME type → file extension helper ----
 function getExtension(mimeType: string): string {
@@ -1667,7 +1625,6 @@ export class SupabaseStorage implements IStorage {
     this.logActivity("profile", `Created profile: ${data.name}`);
 
     // Auto-generate calendar events from profile date fields
-    await this.autoGenerateProfileEvents(id, data.type, data.name, data.fields || {});
 
     // ---- Default-ownership hook ----
     // For new asset/liability profiles with no explicit ownership, auto-link the
@@ -1739,133 +1696,19 @@ export class SupabaseStorage implements IStorage {
   }
 
   /** Auto-create calendar events for profile date fields */
-  private async autoGenerateProfileEvents(profileId: string, type: string, name: string, fields: Record<string, any>): Promise<void> {
-    // ── Phase 4: synthesize nextPayment from dueDay for liability/loan profiles ──
-    // If the profile has a `dueDay` (1-31) but no explicit nextPayment date, compute
-    // the next occurrence so the auto-event generator below picks it up.
-    if ((type === "liability" || type === "loan") && !fields.nextPayment) {
-      const dueDayRaw = fields.dueDay ?? fields.due_day ?? fields?.finance?.dueDay;
-      const dd = Number(dueDayRaw);
-      if (Number.isFinite(dd) && dd >= 1 && dd <= 31) {
-        const today = new Date();
-        const y = today.getFullYear();
-        const m = today.getMonth();
-        const d = today.getDate();
-        // If due day already passed this month, schedule for next month
-        const targetMonth = d <= dd ? m : m + 1;
-        const candidate = new Date(y, targetMonth, dd);
-        // Clamp to last day of month if needed (e.g. Feb 31 → Feb 28/29)
-        if (candidate.getMonth() !== ((targetMonth) % 12 + 12) % 12) {
-          candidate.setDate(0);
-        }
-        const iso = candidate.toISOString().slice(0, 10);
-        // Mutate the fields snapshot we'll feed into the event generator below
-        fields = { ...fields, nextPayment: iso };
-      }
-    }
-
-    // ── WHAT THIS MAY AND MAY NOT GENERATE ──────────────────────────────────
-    //
-    // User report 2026-07-26, Problem #6:
-    //   "The calendar should never own data. Liability → Recurring Rule →
-    //    Occurrence Generator → Calendar. NOT Calendar → creates another record
-    //    → creates another profile → creates duplicate."
-    //
-    // This function used to write a calendar EVENT ROW for a profile's own
-    // recurring schedule. The occurrence engine already derives those dates
-    // from the profile (`seriesFromLiabilityProfiles`, `seriesFromProfiles`),
-    // so every one of them came out twice — once as the real record and once as
-    // a generated twin that then drifted into its own category:
-    //
-    //   liability "Progressive Auto Insurance"  (bill, $155, day 30)
-    //     └─ 🔄 Progressive Auto Insurance — Renewal   monthly, tagged
-    //        auto-generated  →  filed under EVENTS, alongside the bill
-    //
-    // Deleted from the database 2026-07-26; this is the write path that made
-    // them. The rule now: generate an event ONLY for a date the occurrence
-    // engine cannot derive from the profile itself. A recurring payment, a
-    // renewal and a birthday are all derived — so none of them belongs here.
-    // One-off milestones (a warranty expiry, a lease end) are not derived, so
-    // they still get a row.
-    const eventDefs: { fieldKey: string; titleFn: (n: string) => string; category: string; recurrence: string; color: string }[] = [];
-
-    switch (type) {
-      case "person":
-      case "self":
-        // `fields.birthday` → `seriesFromProfiles` already yields a yearly
-        // birthday series. Writing an event too gave every person two.
-        break;
-      case "medical":
-        eventDefs.push({ fieldKey: "nextVisit", titleFn: (n) => `\u{1F3E5} ${n} — Visit`, category: "health", recurrence: "none", color: "#6DAA45" });
-        break;
-      case "vehicle":
-        eventDefs.push({ fieldKey: "nextService", titleFn: (n) => `\u{1F697} ${n} — Service`, category: "other", recurrence: "none", color: "#BB653B" });
-        break;
-      case "subscription":
-        // `renewalDate` and `nextPayment` are the subscription's own recurring
-        // schedule — the engine generates those occurrences. Writing event rows
-        // for them is what produced "🔄 Netflix — Renewal" sitting next to
-        // Netflix. Only the one-off start date, which nothing derives, remains.
-        eventDefs.push({ fieldKey: "startDate", titleFn: (n) => `\u{1F504} ${n} — Start Date`, category: "finance", recurrence: "none", color: "#D19900" });
-        break;
-      case "loan":
-      case "liability":
-        // Calendar events on loan/liability profiles. Phase 4 also derives a synthetic
-        // 'nextPayment' from `dueDay` (1-31) when explicit nextPayment isn't set —
-        // see synthesizeNextPaymentFromDueDay below.
-        // `nextPayment` is the liability's own payment schedule — derived, so
-        // no event row. The synthesised value above still feeds the profile.
-        eventDefs.push({ fieldKey: "startDate", titleFn: (n) => `\u{1F4B0} ${n} — Start Date`, category: "finance", recurrence: "none", color: "#BB653B" });
-        break;
-      case "pet":
-        eventDefs.push({ fieldKey: "nextVetVisit", titleFn: (n) => `\u{1F43E} ${n} — Vet Visit`, category: "health", recurrence: "none", color: "#6DAA45" });
-        break;
-      case "property":
-        eventDefs.push({ fieldKey: "insuranceExpiry", titleFn: (n) => `\u{1F3E0} ${n} — Insurance Expiry`, category: "finance", recurrence: "none", color: "#BB653B" });
-        eventDefs.push({ fieldKey: "leaseEnd", titleFn: (n) => `\u{1F3E0} ${n} — Lease End`, category: "finance", recurrence: "none", color: "#A13544" });
-        break;
-      case "investment":
-        eventDefs.push({ fieldKey: "maturityDate", titleFn: (n) => `\u{1F4C8} ${n} — Maturity`, category: "finance", recurrence: "none", color: "#D19900" });
-        break;
-      case "account":
-        eventDefs.push({ fieldKey: "expirationDate", titleFn: (n) => `\u26A0\uFE0F ${n} — Expires`, category: "other", recurrence: "none", color: "#A13544" });
-        break;
-      case "asset":
-        eventDefs.push({ fieldKey: "warrantyExpiry", titleFn: (n) => `\u{1F6E1}\uFE0F ${n} — Warranty Expiry`, category: "other", recurrence: "none", color: "#BB653B" });
-        break;
-    }
-
-    // Fetch existing events to dedup — don't create if a matching event already exists
-    const existingEvents = await this.getEvents();
-    for (const def of eventDefs) {
-      const dateVal = fields[def.fieldKey];
-      if (dateVal && typeof dateVal === "string" && dateVal.length >= 10) {
-        const title = def.titleFn(name);
-        const date = dateVal.slice(0, 10);
-        // Dedup: skip if an event with the same title already exists for this profile
-        const alreadyExists = existingEvents.some(e => 
-          e.title === title && e.linkedProfiles.includes(profileId)
-        );
-        if (alreadyExists) continue;
-        try {
-          await this.createEvent({
-            title,
-            date,
-            allDay: true,
-            category: def.category as any,
-            color: def.color,
-            recurrence: def.recurrence as any,
-            linkedProfiles: [profileId],
-            linkedDocuments: [],
-            tags: ["auto-generated"],
-            source: "ai",
-          });
-        } catch (e) {
-          console.error(`Auto-event generation failed for ${name} / ${def.fieldKey}:`, e);
-        }
-      }
-    }
-  }
+  // (Removed 2026-08-20: `autoGenerateProfileEvents`.
+  //
+  // Its stated rule was "generate an event ONLY for a date the occurrence
+  // engine cannot derive from the profile itself" — and every field it had left
+  // (leaseEnd, insuranceExpiry, nextService, warrantyExpiry, maturityDate,
+  // expirationDate, nextVisit, nextVetVisit, startDate) is derived now, by the
+  // Date Rule engine. So it had no remaining job, and kept doing it: each of
+  // those dates rendered twice, once as the derived rule and once as the event
+  // row this wrote. The shadow pass could not save it either — that only covers
+  // birthdays, anniversaries and document-linked extraction events.
+  //
+  // This was the last WRITE-side date duplicator. Nothing generates a calendar
+  // row for a date a record already owns.)
 
   async updateProfile(
     id: string,
@@ -1924,19 +1767,8 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("profiles").update(updateData).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
 
-    // Auto-generate calendar events from updated profile date fields (dedup logic
-    // prevents duplicates). PERF: this fetches ALL events to dedup, so only run it
-    // when the incoming patch actually touches an event-driving key for this type.
-    // A mileage/value-only edit can never produce an event, so skipping avoids a
-    // full getEvents() round-trip on the hot edit path. It's fire-and-forget with
-    // error logging — event creation is noncritical and must not delay the write
-    // response. `nextPayment` can be synthesized from a `dueDay` change, so both
-    // are covered by eventDrivingFieldKeys.
-    if (profileEditTouchesEventKey(merged.type, data.fields)) {
-      this.autoGenerateProfileEvents(id, merged.type, merged.name, merged.fields || {}).catch((e) =>
-        console.error(`Auto-event generation failed for profile ${id}:`, e)
-      );
-    }
+    // (No auto-generated events here any more. Editing a profile date changes
+    // the date; the calendar is a view of it, so there is nothing to write.)
 
     return this.getProfile(id);
   }
