@@ -219,8 +219,81 @@ export function deriveDateRulesForRecord(
       : system === "document" ? { documents: [record] }
       : system === "obligation" ? { obligations: [record] }
       : system === "liability" ? { profiles: [record] }
+      : system === "habit" ? { habits: [record] }
       : {};
   return deriveDateRules(userId, inputs).filter((r) => r.source.id === String(record.id ?? ""));
+}
+
+// ─── Reference, don't duplicate ──────────────────────────────────────────────
+//
+// The rule the whole architecture rests on: a date that a canonical record
+// ALREADY owns must not also be copied into a second record.
+//
+// The document-extraction door is where this went wrong. It saves an extracted
+// field to the document/profile AND creates a standalone CalendarEvent for the
+// same date. But `seriesFromDocuments` already derives a rule from a document's
+// expiration key, and `seriesFromProfiles` already derives a yearly rule from a
+// profile's date-of-birth — so the calendar drew the fact twice, from two
+// records that will drift apart the moment either is edited. (This is the same
+// shape as the original "Joe's birthday appears twice" bug, arriving through a
+// different door.)
+//
+// These predicates name the fields the adapters already read, so the extraction
+// path can skip the copy and let the canonical record be the calendar entry.
+
+/** Field keys `seriesFromDocuments` derives an expiration rule from. */
+const DOCUMENT_RULE_KEYS =
+  /^(expiration_?date|expiry|expires|exp_?date|expiration|valid_?until|renewal_?date)$/i;
+
+/** Field keys `seriesFromProfiles` derives a birthday/anniversary rule from. */
+const PROFILE_RULE_KEYS = /^(birthday|birthdate|birth_date|dob|dateofbirth|date_of_birth)$/i;
+const PROFILE_ANNIVERSARY_KEYS = /anniversary/i;
+
+export interface CanonicalDateCoverage {
+  /** True when a canonical record already puts this date on the calendar. */
+  covered: boolean;
+  /** Which record owns it, when covered. */
+  system?: RuleSourceSystem;
+  ruleType?: DateRuleType;
+  /** Why — safe to show in an extraction summary. */
+  reason?: string;
+}
+
+/**
+ * Would saving this extracted field ALREADY produce a calendar date on its own?
+ *
+ * When the answer is yes, the caller must NOT also create a standalone event:
+ * the canonical record is the calendar entry, and everything else references it.
+ *
+ * `hasDocument` distinguishes "this field is being written onto a document
+ * record" (whose expiration the document adapter reads) from a loose field.
+ */
+export function canonicalDateCoverage(
+  fieldKey: string,
+  opts: { hasDocument?: boolean; hasProfile?: boolean } = {},
+): CanonicalDateCoverage {
+  const key = String(fieldKey ?? "").trim();
+  if (!key) return { covered: false };
+
+  if (opts.hasProfile !== false && PROFILE_RULE_KEYS.test(key)) {
+    return {
+      covered: true, system: "profile", ruleType: "birthday",
+      reason: "the profile's date of birth already generates a yearly birthday on the calendar",
+    };
+  }
+  if (opts.hasProfile !== false && PROFILE_ANNIVERSARY_KEYS.test(key)) {
+    return {
+      covered: true, system: "profile", ruleType: "anniversary",
+      reason: "the profile's anniversary field already generates a yearly date on the calendar",
+    };
+  }
+  if (opts.hasDocument && DOCUMENT_RULE_KEYS.test(key)) {
+    return {
+      covered: true, system: "document", ruleType: "expiration",
+      reason: "the document's expiration field already generates its expiry on the calendar",
+    };
+  }
+  return { covered: false };
 }
 
 // ─── Actionable time inside prose ────────────────────────────────────────────

@@ -84,6 +84,7 @@ import {
   createNote, updateNote, deleteNote, listNotes,
   upsertJournalEntry, syncDateRulesForEntity,
 } from "./content-service";
+import { canonicalDateCoverage } from "@shared/temporal-rules";
 
 // ────────────────────────────────────────────────────────────────────
 // syncLiabilityObligation
@@ -2652,6 +2653,24 @@ ${JSON.stringify(ctx, null, 2)}`;
             // "Jun 4, 2029" normalize correctly instead of being dropped.
             const dateStr = normalizeDateString(event.date);
             if (!dateStr) continue;
+            // REFERENCE, DON'T DUPLICATE. A date the canonical record already
+            // projects onto the calendar must not be copied into a second,
+            // free-standing event. A licence expiration saved to the document
+            // is drawn by `seriesFromDocuments`; a date of birth saved to the
+            // profile is drawn by `seriesFromProfiles`. Creating an event too
+            // put the same fact on the calendar twice, from two records that
+            // drift apart the moment either is edited — the same failure as
+            // the original "Joe's birthday appears twice", through the
+            // extraction door.
+            const coverage = canonicalDateCoverage(String(event.field || ""), {
+              hasDocument: !!extractionId,
+              hasProfile: !!resolvedProfileId,
+            });
+            if (coverage.covered) {
+              log.info(`[confirm-extraction] Skipped duplicate event for "${event.field}" — ${coverage.reason}`);
+              saved.push(`${event.title || event.field}: on the calendar from the ${coverage.system} record`);
+              continue;
+            }
             await storage.createEvent({
               title: event.title || `📅 ${event.field}`,
               date: dateStr,

@@ -14,6 +14,7 @@ import {
   detectStructuredDomain,
   extractProfileHint,
   isBareFilingDirective,
+  isStructured,
   CONTENT_CONFIDENCE_FLOOR,
 } from "@shared/content-routing";
 
@@ -49,12 +50,13 @@ describe("explicit intent always wins", () => {
 
 describe("structured domain objects take priority", () => {
   it.each([
-    ["My birthday is July 10, 1994.", "profile_dob"],
-    ["Robert's driver's license expires July 18, 2034.", "document_expiration"],
-    ["I spent $38 at Costco.", "expense"],
-  ])("%s → structured/%s", (msg, domain) => {
+    ["My birthday is July 10, 1994.", "profile_field", "profile_dob"],
+    ["Robert's driver's license expires July 18, 2034.", "document", "document_expiration"],
+    ["I spent $38 at Costco.", "expense", "expense"],
+  ])("%s → %s/%s", (msg, kind, domain) => {
     const c = classifyContent(msg);
-    expect(c.kind).toBe("structured");
+    expect(c.kind).toBe(kind);
+    expect(isStructured(c.kind)).toBe(true);
     expect(c.structuredDomain).toBe(domain);
   });
 
@@ -72,8 +74,8 @@ describe("the twelve spec sentences", () => {
     ["Robert needs to call Progressive tomorrow at 2 PM.", "task", "Robert"],
     ["Journal for Robert: today was a really good day and he seemed much happier.", "journal", "Robert"],
     ["Journal for yesterday: I worked all day and played soccer at night.", "journal", null],
-    ["Remember that Robert's birthday is July 10, 1994.", "structured", "Robert"],
-    ["Robert's driver's license expires July 18, 2034.", "structured", "Robert"],
+    ["Remember that Robert's birthday is July 10, 1994.", "profile_field", "Robert"],
+    ["Robert's driver's license expires July 18, 2034.", "document", "Robert"],
     ["Remind Robert to renew his license one month before it expires.", "task", "Robert"],
     ["Create a note for Robert that his license expires July 18, 2034.", "note", "Robert"],
     ["Buy dog food every Saturday.", "task", null],

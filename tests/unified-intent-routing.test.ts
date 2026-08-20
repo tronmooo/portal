@@ -168,6 +168,35 @@ describe("3. one message, several objects — the gate stays out of the way", ()
   });
 });
 
+describe("3b. habit vs task, and structured data, through the gate", () => {
+  it("an explicit habit request refuses create_task", () => {
+    const v = checkContentRouting("create_task", "Make drinking water a daily habit");
+    expect(v).not.toBeNull();
+    expect(v!.requestedKind).toBe("habit");
+    expect(v!.modelDirective).toMatch(/create_habit/);
+  });
+
+  it("an explicit task request refuses create_habit", () => {
+    const v = checkContentRouting("create_habit", "Add a task to meditate every morning");
+    expect(v).not.toBeNull();
+    expect(v!.requestedKind).toBe("task");
+  });
+
+  it("a recurring CHORE is left to create_task", () => {
+    expect(checkContentRouting("create_task", "Take out the trash every Tuesday")).toBeNull();
+  });
+
+  it("structured writes are never gated — that is how the router's verdict gets acted on", () => {
+    const msg = "Robert's email is robert@example.com";
+    expect(routeContent(msg).actions[0].kind).toBe("profile_field");
+    // update_profile is not in CONTENT_TOOL_KIND, so the gate is silent.
+    expect(checkContentRouting("update_profile", msg)).toBeNull();
+    // …and a note tool on the same message is likewise not refused: the read
+    // was INFERRED, not explicit, so it informs the model without blocking it.
+    expect(checkContentRouting("create_note", msg)).toBeNull();
+  });
+});
+
 describe("4. profile isolation", () => {
   it("Jane's note does not surface in Robert's notes", async () => {
     await executeTool("create_note", { content: "Gate code is 4821", forProfile: "Jane Doe" }, "u1");
@@ -321,7 +350,7 @@ describe("10. temporal coverage audit — no dated write escapes the calendar", 
   const DATE_PARAM = /(date|due|expir|renew|when|schedule|recurrence|anniversar|birthday|at)$/i;
 
   /** Systems shared/calendar-adapters turns into CalendarSeries. */
-  const COVERED_SYSTEMS = new Set(["task", "event", "profile", "document", "obligation", "liability"]);
+  const COVERED_SYSTEMS = new Set(["task", "event", "profile", "document", "obligation", "liability", "habit"]);
 
   /**
    * Tools whose date is deliberately NOT a calendar date. Each entry is a
@@ -378,14 +407,13 @@ describe("10. temporal coverage audit — no dated write escapes the calendar", 
   };
 
   /**
-   * KNOWN PARALLEL PATH, reported rather than silently tolerated.
+   * KNOWN PARALLEL PATHS, reported rather than silently tolerated.
    *
-   * Habits are the one dated system seriesFromAll does NOT adapt — they are
-   * expanded by shared/habit-schedule and drawn from there. That predates this
-   * work and unifying it is a change to the habit engine, not to content
-   * routing, so it is named here instead of being quietly exempted.
+   * Habits USED to live here: seriesFromAll did not adapt them, so a daily
+   * habit was invisible to the Calendar. `seriesFromHabits` closed that, and
+   * "habit" is now a covered system above — this set is what remains.
    */
-  const KNOWN_PARALLEL = new Set(["create_habit", "update_habit", "delete_habit", "restore_habit", "schedule_medication_refills"]);
+  const KNOWN_PARALLEL = new Set(["schedule_medication_refills"]);
 
   it("every dated write tool lands in an adapter-covered system", async () => {
     const { TOOL_DEFINITIONS, READ_ONLY_TOOLS } = await import("../server/ai-engine");

@@ -40,22 +40,63 @@ import { splitIntentClauses } from "./ai-intent";
 // ─── What can a message be? ──────────────────────────────────────────────────
 
 /**
- * The three generic content types, plus the two escape hatches.
+ * Every canonical destination a piece of information about a person can have.
  *
- * `structured` means "this belongs to a typed domain record (a profile field, a
- * document expiration, an expense, a liability payment) that already owns it" —
- * the caller routes to that system instead of filing generic content.
+ * The first five are the GENERIC kinds — they hold information no typed record
+ * claims. Everything after them is a STRUCTURED domain: a typed record that
+ * already owns this class of fact, and which must win, because a birthday
+ * buried in note prose never becomes a birthday on the calendar.
+ *
+ * `structured` is retained as a coarse alias for "some typed record owns this"
+ * so callers that only care about generic-vs-typed keep working; `isStructured`
+ * is the test, and `structuredDomain` carries the specific answer.
  */
-export type ContentKind = "note" | "journal" | "task" | "structured" | "unknown";
+export type DomainKind =
+  // Generic content
+  | "note" | "journal" | "task" | "habit" | "event"
+  // Structured domains
+  | "profile_field" | "asset" | "liability" | "income" | "expense"
+  | "subscription" | "document" | "health" | "pet" | "tracker"
+  // Escape hatches
+  | "structured" | "unknown";
 
-/** Which typed system claims the information, when `kind` is "structured". */
+/** Back-compatible alias — the router's kind vocabulary is now the full taxonomy. */
+export type ContentKind = DomainKind;
+
+/** The generic kinds: content with no typed record of its own. */
+export const GENERIC_KINDS: ReadonlySet<DomainKind> = new Set<DomainKind>([
+  "note", "journal", "task", "habit", "event",
+]);
+
+export function isStructured(kind: DomainKind): boolean {
+  return kind !== "unknown" && !GENERIC_KINDS.has(kind);
+}
+
+/**
+ * Which typed record claims the information, and — for profile data — WHICH
+ * FIELD of it. The field matters: "my email is x@y.com" and "my birthday is
+ * July 10" are both profile writes, but only one of them produces a Date Rule.
+ */
 export type StructuredDomain =
+  // Profile attributes
   | "profile_dob"
+  | "profile_contact"
+  | "profile_address"
+  | "profile_employment"
+  | "profile_identifier"
+  | "profile_attribute"
+  // Records
   | "document_expiration"
   | "expense"
   | "income"
   | "payment_schedule"
-  | "appointment";
+  | "subscription"
+  | "appointment"
+  | "asset"
+  | "liability"
+  | "health"
+  | "pet"
+  | "tracker";
 
 export interface ContentClassification {
   kind: ContentKind;
@@ -103,6 +144,18 @@ const EXPLICIT_JOURNAL: RegExp[] = [
   /\bjournals?\b/,
   /\bdiar(?:y|ies)\b/,
   /\bdaily\s+log\b/,
+];
+
+const EXPLICIT_HABIT: RegExp[] = [
+  /\bhabits?\b/,
+  /\broutines?\b/,
+  /\bstreaks?\b/,
+  /\bmake\s+(?:this|that|it)\s+(?:a\s+)?(?:daily|weekly)?\s*(?:habit|routine)\b/,
+];
+
+const EXPLICIT_EVENT: RegExp[] = [
+  /\b(?:create|add|make|new|put|schedule)\s+(?:me\s+)?(?:an?|the)?\s*(?:calendar\s+)?(?:event|appointment|meeting)\b/,
+  /\bon\s+(?:my|his|her|the)\s+calendar\b/,
 ];
 
 const EXPLICIT_TASK: RegExp[] = [
@@ -153,6 +206,12 @@ export function detectExplicitKind(clause: string): { kind: ContentKind; at: num
   consider("note", EXPLICIT_NOTE);
   consider("journal", EXPLICIT_JOURNAL);
   consider("task", EXPLICIT_TASK);
+  // Habit is considered LAST at equal position on purpose: "remind me to
+  // stretch every day" names a task AND carries a habit cue, and the named
+  // object is what the user asked for. `consider` keeps the earliest match, so
+  // a habit only wins when its word comes first.
+  consider("habit", EXPLICIT_HABIT);
+  consider("event", EXPLICIT_EVENT);
   return best;
 }
 
@@ -166,19 +225,47 @@ export function detectExplicitKind(clause: string): { kind: ContentKind; at: num
 const DATEY =
   /\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{4})?|\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*)\b/;
 
+/**
+ * Typed records, in priority order. The FIRST rule that matches wins, so the
+ * most specific claims are listed before the broader ones.
+ *
+ * `kind` is where the information is written; `domain` says which part of that
+ * record, which is what tells "my email is x@y.com" (no date) apart from "my
+ * birthday is July 10" (a yearly Date Rule) even though both are profile writes.
+ */
 const STRUCTURED_RULES: Array<{
+  kind: DomainKind;
   domain: StructuredDomain;
   re: RegExp;
   /** Also require a date-shaped token in the clause. */
   needsDate?: boolean;
   weight: number;
 }> = [
-  { domain: "profile_dob", re: /\b(?:birthday|date\s+of\s+birth|dob|was\s+born|born\s+on)\b/, needsDate: true, weight: 0.92 },
-  { domain: "document_expiration", re: /\b(?:expires?|expiration|expiry|renewal\s+date|valid\s+(?:through|until))\b/, needsDate: true, weight: 0.9 },
-  { domain: "expense", re: /\b(?:spent|paid)\b[^.]*\$\s?\d|\$\s?\d[\d,.]*\s+(?:at|on|for)\b/, weight: 0.88 },
-  { domain: "income", re: /\b(?:got\s+paid|paycheck|received\s+\$|deposited)\b/, weight: 0.85 },
-  { domain: "payment_schedule", re: /\bpayment\s+is\s+\$?\d|\$\s?\d[\d,.]*\s+(?:on\s+the\s+\d{1,2}(?:st|nd|rd|th)?|every\s+month|monthly)\b/, weight: 0.85 },
-  { domain: "appointment", re: /\bappointment\b/, needsDate: true, weight: 0.8 },
+  // ── Profile attributes ────────────────────────────────────────────────────
+  // These are the ones that used to become notes. An email address filed as
+  // note prose is not on the person's record, does not show in their Info tab,
+  // and cannot be looked up — which is the whole complaint.
+  { kind: "profile_field", domain: "profile_dob", re: /\b(?:birthday|date\s+of\s+birth|dob|was\s+born|born\s+on)\b/, needsDate: true, weight: 0.92 },
+  { kind: "profile_field", domain: "profile_contact", re: /[\w.+-]+@[\w-]+\.[\w.]{2,}/, weight: 0.94 },
+  { kind: "profile_field", domain: "profile_contact", re: /\b(?:phone|cell|mobile|number\s+is)\b[^.]{0,20}(?:\+?\d[\d\s().-]{7,})|\b\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/, weight: 0.9 },
+  { kind: "profile_field", domain: "profile_address", re: /\b(?:address\s+is|lives?\s+at|moved\s+to\s+\d|mailing\s+address)\b|\b\d{1,6}\s+[A-Za-z][\w'-]*\s+(?:st|street|ave|avenue|rd|road|blvd|boulevard|ln|lane|dr|drive|ct|court|way|pl|place|pkwy|parkway|cir|circle|ter|terrace)\b/i, weight: 0.88 },
+  { kind: "profile_field", domain: "profile_employment", re: /\b(?:works?\s+(?:at|for)|employer\s+is|employed\s+(?:at|by)|job\s+is\s+at|company\s+is)\b/, weight: 0.88 },
+  { kind: "profile_field", domain: "profile_identifier", re: /\b(?:license|licence|passport|policy|member|account|vin|badge|employee|student|medicaid|medicare|insurance)\s*(?:#|no\.?|number|id)\b|\bssn\b/, weight: 0.88 },
+  { kind: "profile_field", domain: "profile_attribute", re: /\b(?:blood\s+type|allerg(?:y|ic|ies)|height\s+is|weight\s+is|shoe\s+size|shirt\s+size|ring\s+size|eye\s+colou?r|hair\s+colou?r)\b/, weight: 0.86 },
+
+  // ── Records ───────────────────────────────────────────────────────────────
+  { kind: "document", domain: "document_expiration", re: /\b(?:expires?|expiration|expiry|renewal\s+date|valid\s+(?:through|until))\b/, needsDate: true, weight: 0.9 },
+  // Income is tested BEFORE expense: "I got paid $2,400" contains the word
+  // "paid", and money coming IN filed as money going OUT is not a near miss.
+  { kind: "income", domain: "income", re: /\b(?:got\s+paid|paid\s+me|paycheck|received\s+\$|deposited|salary\s+is|earn(?:ed)?\s+\$|make\s+\$[\d,]+\s+(?:a|per)\s+(?:year|month|hour))\b/, weight: 0.86 },
+  { kind: "expense", domain: "expense", re: /\b(?:spent|paid)\b[^.]*\$\s?\d|\$\s?\d[\d,.]*\s+(?:at|on|for)\b/, weight: 0.88 },
+  { kind: "subscription", domain: "subscription", re: /\bsubscri(?:ption|be[ds]?)\b|\b(?:netflix|spotify|hulu|disney\+|youtube\s+premium|icloud|dropbox)\b[^.]{0,30}\$\s?\d/, weight: 0.85 },
+  { kind: "liability", domain: "payment_schedule", re: /\bpayment\s+is\s+\$?\d|\$\s?\d[\d,.]*\s+(?:on\s+the\s+\d{1,2}(?:st|nd|rd|th)?|every\s+month|monthly)\b/, weight: 0.85 },
+  { kind: "liability", domain: "liability", re: /\b(?:owes?\s+\$|balance\s+(?:is|of)\s+\$|loan\s+(?:is|of|for)\s+\$|mortgage|car\s+note)\b/, weight: 0.84 },
+  { kind: "asset", domain: "asset", re: /\b(?:worth|valued\s+at|appraised\s+at)\b[^.]{0,20}\$\s?\d|\bbought\s+(?:a|an|my)\b[^.]{0,40}\bfor\s+\$\s?\d/, weight: 0.82 },
+  { kind: "health", domain: "health", re: /\b(?:blood\s+pressure|a1c|cholesterol|prescribed|diagnos(?:ed|is)|dosage|mg\s+(?:of|daily)|symptoms?)\b/, weight: 0.8 },
+  { kind: "pet", domain: "pet", re: /\b(?:breed\s+is|microchip|vet\s+(?:is|said)|spayed|neutered|litter\s+box)\b/, weight: 0.8 },
+  { kind: "event", domain: "appointment", re: /\bappointment\b/, needsDate: true, weight: 0.8 },
 ];
 
 /**
@@ -192,16 +279,21 @@ const STRUCTURED_RULES: Array<{
 const OBLIGATION_MODALITY =
   /\b(?:needs?\s+to|need\s+to|have\s+to|has\s+to|must|should|don'?t\s+forget|remember\s+to|make\s+sure\s+to|gotta|got\s+to|remind)\b/;
 
-export function detectStructuredDomain(clause: string): { domain: StructuredDomain; confidence: number } | null {
-  const c = lc(clause);
+export function detectStructuredDomain(
+  clause: string,
+): { kind: DomainKind; domain: StructuredDomain; confidence: number } | null {
+  const raw = String(clause ?? "");
+  const c = lc(raw);
   if (!c) return null;
   // Work about a structured record is a Task, not an edit to the record.
   if (OBLIGATION_MODALITY.test(c)) return null;
 
   for (const rule of STRUCTURED_RULES) {
-    if (!rule.re.test(c)) continue;
+    // Email/address/phone patterns are case-sensitive-ish; test the raw text
+    // for those and the lowered text for the word-based rules.
+    if (!rule.re.test(c) && !rule.re.test(raw)) continue;
     if (rule.needsDate && !DATEY.test(c)) continue;
-    return { domain: rule.domain, confidence: rule.weight };
+    return { kind: rule.kind, domain: rule.domain, confidence: rule.weight };
   }
   return null;
 }
@@ -215,6 +307,62 @@ const ACTION_VERBS =
 /** First word is a bare imperative — "Call Progressive.", "Buy dog food." */
 const LEADING_IMPERATIVE =
   /^\s*(?:please\s+)?(?:call|phone|email|text|message|buy|purchase|order|pay|submit|file|mail|send|schedule|book|renew|register|cancel|return|fix|repair|replace|clean|wash|mow|water|feed|walk|take|bring|check|confirm|apply|sign|print|refill|install|finish|pick)\b/;
+
+// ─── Habit vs recurring Task ─────────────────────────────────────────────────
+//
+// Both repeat. The app models them differently and the difference is real:
+//
+//   HABIT — a BEHAVIOUR you are building or maintaining. It has a streak, a
+//     per-day target, and check-ins; missing one is not "overdue", it is a gap
+//     in a streak. "Take my medication every day at 8", "meditate each morning".
+//
+//   RECURRING TASK — a CHORE that comes due. It has a due date, it goes
+//     overdue, and completing one occurrence spawns the next. "Take out the
+//     trash every Tuesday", "pay rent on the first".
+//
+// The test that separates them is not the cadence — both have one — it is
+// whether the sentence describes a personal practice or an errand against the
+// outside world. A chore verb with an external object is a task; a
+// self-directed behaviour on a cadence is a habit.
+//
+// NOTE ON A SPEC CONFLICT: the earlier routing spec asked for "take medication
+// every day at 8 AM" as a recurring TASK. The later one asks for behaviours on
+// a schedule to become HABITS. This module implements the later rule, and
+// leaves chores ("take out the trash every Tuesday", "buy dog food every
+// Saturday") as recurring tasks, which both specs agree on. Explicit wording —
+// "add a task to…" or "make it a habit" — overrides either way.
+
+/** Does the clause state a repeating cadence at all? */
+const RECURRENCE_CUE =
+  /\b(?:every|each)\s+(?:day|morning|afternoon|evening|night|week|weekday|weekend|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|other\s+day|\d+\s+(?:days?|weeks?|months?))\b|\b(?:daily|nightly|weekly|biweekly|monthly|twice\s+a\s+day|\d+x\s*(?:a|per)\s*day)\b/;
+
+/** Self-directed practices — the things people build streaks around. */
+const HABIT_BEHAVIOURS =
+  /\b(?:medication|medicine|meds|pill|vitamin|supplement|insulin|inhaler|meditat\w*|exercise|workout|work\s+out|gym|run|running|jog\w*|walk|walking|stretch\w*|yoga|pushups?|situps?|steps|water|hydrate|drink\s+water|read|reading|journal\w*|floss\w*|brush\s+(?:my|his|her|their)?\s*teeth|skincare|sunscreen|practice|study|studying|breathe|breathing|weigh\s+(?:myself|in)|track)\b/;
+
+/** Errands against the outside world — chores that come due. */
+const CHORE_OBJECTS =
+  /\b(?:trash|garbage|recycling|bins?|rent|bill|bills|mortgage|dishes|laundry|lawn|grass|groceries|dog\s+food|cat\s+food|litter|mail|oil\s+change|filter|car\s+wash|invoice|timesheet|report)\b/;
+
+export interface HabitReadResult {
+  isHabit: boolean;
+  reason: string;
+}
+
+/**
+ * Is this repeating clause a HABIT rather than a recurring task?
+ *
+ * Returns false when there is no cadence at all — a one-off is never a habit —
+ * and false for chores, which stay tasks.
+ */
+export function readsAsHabit(clause: string): HabitReadResult {
+  const c = lc(clause);
+  if (!c) return { isHabit: false, reason: "empty" };
+  if (!RECURRENCE_CUE.test(c)) return { isHabit: false, reason: "no repeating cadence — a one-off is never a habit" };
+  if (CHORE_OBJECTS.test(c)) return { isHabit: false, reason: "a recurring chore against the outside world is a task, not a streak" };
+  if (HABIT_BEHAVIOURS.test(c)) return { isHabit: true, reason: "a self-directed behaviour on a cadence — this is what habits and streaks are for" };
+  return { isHabit: false, reason: "repeats, but reads as an errand rather than a practice" };
+}
 
 /** Experience, reflection, memory, narrative. */
 const JOURNAL_SIGNALS: RegExp[] = [
@@ -322,11 +470,11 @@ export function classifyClause(clause: string): ContentClassification {
   const structured = detectStructuredDomain(raw);
   if (structured) {
     return {
-      kind: "structured",
+      kind: structured.kind,
       explicit: false,
       confidence: structured.confidence,
       structuredDomain: structured.domain,
-      reason: `information owned by the ${structured.domain} record, not by generic content`,
+      reason: `information owned by the ${structured.kind} record (${structured.domain}) — not generic content`,
       ...base,
     };
   }
@@ -343,6 +491,11 @@ export function classifyClause(clause: string): ContentClassification {
     // task when the sentence is plainly a fact being filed.
     if (noteHits > 0 && !LEADING_IMPERATIVE.test(c) && !/\bremind\b/.test(c)) {
       return { kind: "note", explicit: false, confidence: 0.78, reason: "reference information, stated for later recall", ...base };
+    }
+    // A repeating self-directed behaviour is a HABIT, not a task that respawns.
+    const habit = readsAsHabit(raw);
+    if (habit.isHabit) {
+      return { kind: "habit", explicit: false, confidence: 0.85, reason: habit.reason, ...base };
     }
     return {
       kind: "task",
@@ -369,8 +522,14 @@ export function classifyClause(clause: string): ContentClassification {
   }
 
   // A bare action verb with no modality — "Buy dog food every Saturday".
-  if (ACTION_VERBS.test(c)) {
-    return { kind: "task", explicit: false, confidence: 0.72, reason: "action verb with no reflective or reference framing", ...base };
+  if (ACTION_VERBS.test(c) || RECURRENCE_CUE.test(c)) {
+    const habit = readsAsHabit(raw);
+    if (habit.isHabit) {
+      return { kind: "habit", explicit: false, confidence: 0.82, reason: habit.reason, ...base };
+    }
+    if (ACTION_VERBS.test(c)) {
+      return { kind: "task", explicit: false, confidence: 0.72, reason: "action verb with no reflective or reference framing", ...base };
+    }
   }
 
   // A plain declarative fact about someone ("Robert likes Italian food") is a
@@ -447,8 +606,15 @@ export function classifyContent(message: string): ContentClassification {
 
 // ─── The gate ────────────────────────────────────────────────────────────────
 
-/** Which of the three content types each chat tool writes. */
-export const CONTENT_TOOL_KIND: Record<string, Exclude<ContentKind, "structured" | "unknown">> = {
+/**
+ * Which GENERIC content type each chat tool writes.
+ *
+ * Only the generic kinds are listed. A structured write (update_profile,
+ * create_expense, create_liability…) is never gated here: those tools are how
+ * the router's structured verdict gets ACTED on, and refusing them would block
+ * the very routing this module asks for.
+ */
+export const CONTENT_TOOL_KIND: Record<string, DomainKind> = {
   create_note: "note",
   update_note: "note",
   delete_note: "note",
@@ -460,6 +626,12 @@ export const CONTENT_TOOL_KIND: Record<string, Exclude<ContentKind, "structured"
   update_task: "task",
   delete_task: "task",
   complete_task: "task",
+  create_habit: "habit",
+  update_habit: "habit",
+  delete_habit: "habit",
+  create_event: "event",
+  update_event: "event",
+  delete_event: "event",
 };
 
 export interface ContentRoutingViolation {
@@ -493,7 +665,9 @@ export function checkContentRouting(toolName: string, message: string): ContentR
   if (!toolKind) return null;
 
   const plan = routeContent(message);
-  const explicitKinds = new Set(plan.actions.filter((a) => a.explicit).map((a) => a.kind));
+  const explicitKinds = new Set(
+    plan.actions.filter((a) => a.explicit && GENERIC_KINDS.has(a.kind)).map((a) => a.kind),
+  );
   if (explicitKinds.size === 0) return null;
   // Several objects were named — this tool serves one of them, or serves an
   // implicit clause we did not gate. Either way, not a routing error.
@@ -507,7 +681,9 @@ export function checkContentRouting(toolName: string, message: string): ContentR
 
   const right = requestedKind === "note" ? "create_note"
     : requestedKind === "journal" ? "journal_entry"
-      : "create_task";
+      : requestedKind === "habit" ? "create_habit"
+        : requestedKind === "event" ? "create_event"
+          : "create_task";
   return {
     tool: toolName,
     requestedKind,

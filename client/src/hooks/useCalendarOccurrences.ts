@@ -102,6 +102,15 @@ export function useCalendarOccurrences(
     queryKey: [...scopedKey("/api/documents", mode, kIds)],
     queryFn: () => get(`/api/documents${profileParam}`),
   });
+  // HABITS join the one occurrence stream (2026-08-20). The engine has always
+  // had a `habit` kind, horizon and href; nothing was ever fetched to fill
+  // them, so a daily habit was invisible to the Calendar, Upcoming and
+  // Recurring & Important Dates while the Habits page drew it from its own
+  // schedule rules. Same records, same rules — one stream.
+  const habits = useQuery<any[]>({
+    queryKey: [...scopedKey("/api/habits", mode, kIds)],
+    queryFn: () => get(`/api/habits${profileParam}`),
+  });
 
   const profileList: any[] = Array.isArray(profiles.data)
     ? profiles.data
@@ -121,8 +130,9 @@ export function useCalendarOccurrences(
         obligations: Array.isArray(obligations.data) ? obligations.data : [],
         tasks: Array.isArray(tasks.data) ? tasks.data : [],
         documents: Array.isArray(documents.data) ? documents.data : [],
+        habits: Array.isArray(habits.data) ? habits.data : [],
       }),
-    [profileList, eventList, obligations.data, tasks.data, documents.data],
+    [profileList, eventList, obligations.data, tasks.data, documents.data, habits.data],
   );
 
   // Self ids drive the soft-orphan rule: an unassigned record belongs to the

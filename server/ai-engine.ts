@@ -8,7 +8,7 @@ import {
   upsertJournalEntry, syncDateRulesForEntity,
 } from "./content-service";
 import { findActionableTime } from "@shared/temporal-rules";
-import { classifyContent, routeContent, checkContentRouting, type ContentClassification } from "@shared/content-routing";
+import { classifyContent, routeContent, checkContentRouting, isStructured, type ContentClassification } from "@shared/content-routing";
 import type { ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate } from "@shared/nutrition-shaped";
@@ -5268,10 +5268,23 @@ the user means BEFORE choosing a tool.
     followed up on, called, purchased, submitted or scheduled.
     "Call Progressive" · "Robert needs to renew his license" · "Remind me to …"
 
-THE THREE TESTS, in order:
-  1. Is the primary purpose to REMEMBER INFORMATION?      → NOTE
-  2. Is it to preserve an EXPERIENCE or REFLECTION?       → JOURNAL ENTRY
-  3. Is there something that NEEDS TO BE DONE?            → TASK
+  HABIT (create_habit) - a BEHAVIOUR meant to repeat on a schedule, with a
+    streak and a per-day target. "Take my medication every day at 8",
+    "meditate each morning", "drink water 3x a day", "make this a daily habit".
+
+HABIT vs RECURRING TASK - both repeat; the cadence is not what separates them.
+  A HABIT is a personal practice you are building: medication, exercise,
+    meditation, water, reading, stretching, flossing, study.
+  A RECURRING TASK is a chore that comes DUE and goes overdue: take out the
+    trash every Tuesday, pay rent on the first, buy dog food every Saturday.
+  Explicit wording wins either way - "add a task to..." stays a task even if it
+  repeats; "make it a habit" is a habit even when it sounds like a chore.
+
+THE FOUR TESTS, in order:
+  1. Is the primary purpose to REMEMBER INFORMATION?      -> NOTE
+  2. Is it to preserve an EXPERIENCE or REFLECTION?       -> JOURNAL ENTRY
+  3. Is it a BEHAVIOUR meant to repeat on a cadence?      -> HABIT
+  4. Is there something that NEEDS TO BE DONE?            -> TASK
 
 EXPLICIT INTENT ALWAYS WINS. If the user names the object — "create a note",
 "journal this", "add a task", "jane doe note: …" — use THAT tool, even when the
@@ -5280,12 +5293,32 @@ tool that writes a different kind than the one the user named.
   "Create a note that I need to call Progressive tomorrow" → create_note.
   It may ALSO deserve a task; create the task IN ADDITION, never instead.
 
-STRUCTURED OBJECTS COME FIRST. Before any of the three, check whether a typed
-record already owns the information — a profile date of birth, a document
-expiration, an expense, a liability payment schedule. "My birthday is July 10,
+STRUCTURED RECORDS COME FIRST. Before any generic kind, check whether a typed
+record already owns the information. Route it there — NEVER into a note:
+
+  email / phone / address / employer / ID or licence number / blood type /
+  allergies / sizes / date of birth       -> update_profile (fields: {...})
+  a document's expiration or renewal      -> the document record's field
+  money spent                             -> create_expense
+  money earned / paycheck / salary        -> log_income
+  a recurring bill or subscription        -> create_obligation
+  a debt, loan, or balance owed           -> create_liability
+  something owned, and its value          -> create_profile (asset) / revalue_asset
+  a pet's breed, microchip, vet           -> update_profile on the pet
+  a measured health value                 -> log_tracker_entry
+  a dated thing that HAPPENS               -> create_event
+
+"My email is rob@x.com" is update_profile, not a note. "My birthday is July 10,
 1994" is update_profile, not a note. "I spent $38 at Costco" is create_expense.
 A task about a structured record ("renew my registration before Oct 10") and
 the record's own date are DIFFERENT things and may both exist.
+
+STORE ONCE, REFERENCE EVERYWHERE. A date a canonical record already carries is
+ALREADY on the calendar — this app DERIVES calendar dates from the records
+themselves. After setting a profile birthday, a document expiration, a task due
+date, an obligation schedule or a habit cadence, do NOT also create a calendar
+event for the same fact: that yields two entries that drift apart the moment
+either is edited. Create an event only for something that has no other record.
 
 ONE MESSAGE CAN CREATE SEVERAL OBJECTS. "Journal this: I had a stressful day.
 Remind me to call my landlord tomorrow." is a journal entry AND a task. Never
@@ -13088,7 +13121,7 @@ export function buildContentRoutingDirective(userMessage: string): string | null
     const kinds = Array.from(new Set(named.map((a) => a.kind)));
     lines.push(
       `[ROUTER] The user explicitly named ${kinds.length === 1 ? "this object" : "these objects"}: ${kinds.join(", ").toUpperCase()}. ` +
-      `Use the matching tool (note → create_note, journal → journal_entry, task → create_task). ` +
+      `Use the matching tool (note -> create_note, journal -> journal_entry, task -> create_task, habit -> create_habit, event -> create_event). ` +
       `Explicit intent is never overridden — a tool that writes a different kind will be refused.`,
     );
   }
@@ -13096,11 +13129,15 @@ export function buildContentRoutingDirective(userMessage: string): string | null
     const parts = inferred.map((a) => `"${a.clause.slice(0, 60)}" reads as a ${a.kind.toUpperCase()} (${a.reason})`);
     lines.push(`[ROUTER] Inferred, for your judgement: ${parts.join("; ")}.`);
   }
-  const structured = plan.actions.filter((a) => a.kind === "structured");
+  // Structured verdicts name BOTH the destination record and the field family,
+  // because "profile_field/profile_contact" and "profile_field/profile_dob" are
+  // the same tool call with very different temporal consequences.
+  const structured = plan.actions.filter((a) => isStructured(a.kind));
   if (structured.length > 0) {
+    const parts = structured.map((a) => `"${a.clause.slice(0, 60)}" belongs to the ${a.kind.toUpperCase()} record (${a.structuredDomain})`);
     lines.push(
-      `[ROUTER] This message carries information a STRUCTURED record already owns (${structured.map((a) => a.structuredDomain).join(", ")}). ` +
-      `Update that record — do not bury it in a note.`,
+      `[ROUTER] A typed record already owns this: ${parts.join("; ")}. ` +
+      `Write it there — do NOT bury it in a note. If that record's field is a date, it is already on the calendar; do not also create an event for it.`,
     );
   }
   const owners = Array.from(new Set(plan.actions.map((a) => a.profileHint).filter(Boolean)));
@@ -14897,11 +14934,14 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // OBJECT instead, which is the thing the user was explicit about.
             const contentViolation = checkContentRouting(toolUse.name, userMessage);
             if (contentViolation) {
+              // The router's generic kinds map 1:1 onto intent entities; the
+              // cast is safe because `checkContentRouting` only ever reports a
+              // GENERIC kind (see GENERIC_KINDS in shared/content-routing).
               return {
                 mismatchType: "entity_mismatch",
                 tool: toolUse.name,
-                expectedEntity: (contentViolation.requestedKind === "task" ? "task" : contentViolation.requestedKind === "journal" ? "journal" : "note") as any,
-                actualEntity: (contentViolation.toolKind === "task" ? "task" : contentViolation.toolKind === "journal" ? "journal" : "note") as any,
+                expectedEntity: contentViolation.requestedKind as any,
+                actualEntity: contentViolation.toolKind as any,
                 expectedOperation: "create",
                 actualOperation: toolOperation(toolUse.name),
                 modelDirective: contentViolation.modelDirective,

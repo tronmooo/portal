@@ -22,7 +22,7 @@ import {
   sourceHref,
 } from "./calendar-occurrences";
 import { parseRecurringMeta, expandRecurrenceDates } from "./recurring-dates";
-import { addYearsISO } from "./date-math";
+import { addYearsISO, weekdaySetToRecurrence } from "./date-math";
 import { canonicalObligationCategory } from "./category-canon";
 import { resolveBillingModel, resolveOccurrenceAmount } from "./liability-billing";
 import { groupMaterializedSeries } from "./series-detect";
@@ -585,6 +585,89 @@ export function seriesFromTasks(tasks: readonly any[]): CalendarSeries[] {
 // ─── Documents ───────────────────────────────────────────────────────────────
 
 /** Document expirations — one-off dates that still belong on the calendar. */
+/**
+ * HABITS → one recurring series each.
+ *
+ * This adapter did not exist until 2026-08-20, and its absence was the one real
+ * hole in "one engine generates every date the app shows". The occurrence
+ * engine has always carried a `habit` kind, a habit horizon and a habit href —
+ * the slot was built and never filled, so habits were drawn only by the Habits
+ * page and were invisible to the Calendar, Upcoming and Recurring & Important
+ * Dates. (SupabaseStorage's timeline excluded them deliberately, with the note
+ * "they don't belong on the calendar"; the current requirement is the opposite
+ * — every meaningful recurring date belongs to the unified system.)
+ *
+ * The cadence is read through the SAME rules the Habits page uses
+ * (shared/habit-schedule): daily → every day; weekly/custom → the configured
+ * `targetDays`, expressed as the engine's `weekly:0,3` token so the recurrence
+ * expander — not this adapter — decides which days those are.
+ *
+ * Per-day targets do NOT multiply occurrences. A "3× daily" habit is ONE
+ * occurrence on each scheduled day; the three check-ins are progress within it.
+ * Generating three calendar rows for one day would be the duplicate-data
+ * failure this whole architecture exists to avoid.
+ */
+export function seriesFromHabits(habits: readonly any[]): CalendarSeries[] {
+  const out: CalendarSeries[] = [];
+  for (const h of habits || []) {
+    if (!h?.id || !h?.name) continue;
+    // An archived/paused habit stays out of the stream the same way a paused
+    // recurring date does.
+    if (h.archived) continue;
+
+    const freq = String(h.frequency || "daily").toLowerCase();
+    const days: number[] = Array.isArray(h.targetDays)
+      ? h.targetDays.map(Number).filter((d: number) => d >= 0 && d <= 6)
+      : [];
+    // `isHabitDueOn` defaults a weekly habit with no configured days to Monday;
+    // mirror that here rather than inventing a second answer.
+    const recurrence =
+      freq === "weekly" ? weekdaySetToRecurrence(days.length > 0 ? days : [1])
+        : freq === "custom" ? (days.length > 0 ? weekdaySetToRecurrence(days) : "none")
+          : "daily";
+    // A custom habit with no days configured is scheduled on no day at all —
+    // that is what the user set, and it must not become a daily series.
+    if (recurrence === "none") continue;
+
+    const baseDate = isISO(h.startDate) ? clip(h.startDate) : clip(h.createdAt);
+    if (!isISO(baseDate)) continue;
+
+    // Which scheduled days are already satisfied. `targetPerDay` decides
+    // "satisfied", so a 3×-daily habit with one check-in is NOT done.
+    const target = Math.max(1, Number(h.targetPerDay) || 1);
+    const perDate = new Map<string, number>();
+    for (const c of h.checkins || []) {
+      const d = clip(c?.date);
+      if (!isISO(d)) continue;
+      perDate.set(d, (perDate.get(d) || 0) + 1);
+    }
+    const completedDates: string[] = [];
+    perDate.forEach((count, date) => { if (count >= target) completedDates.push(date); });
+
+    const ownerIds = uniq(Array.isArray(h.linkedProfiles) ? h.linkedProfiles : []);
+    const profileId = ownerIds[0];
+    out.push({
+      id: `habit:${h.id}`,
+      kind: "habit",
+      title: humanizeTitle(h.name, "Habit"),
+      subtitle: target > 1 ? `${target}× per day` : undefined,
+      source: {
+        system: "habit",
+        id: String(h.id),
+        profileId,
+        ownerIds,
+        label: String(h.name),
+        href: sourceHref("habit", String(h.id), profileId),
+      },
+      baseDate,
+      recurrence,
+      ...(isISO(h.endDate) ? { recurrenceEnd: clip(h.endDate) } : {}),
+      ...(completedDates.length > 0 ? { completedDates } : {}),
+    });
+  }
+  return out;
+}
+
 export function seriesFromDocuments(documents: readonly any[]): CalendarSeries[] {
   const out: CalendarSeries[] = [];
   const KEYS = [
@@ -627,6 +710,7 @@ export interface CalendarInputs {
   obligations?: readonly any[];
   tasks?: readonly any[];
   documents?: readonly any[];
+  habits?: readonly any[];
 }
 
 /**
@@ -650,6 +734,7 @@ export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
     ...seriesFromObligations(input.obligations || []),
     ...seriesFromTasks(input.tasks || []),
     ...seriesFromDocuments(input.documents || []),
+    ...seriesFromHabits(input.habits || []),
   ];
 }
 
