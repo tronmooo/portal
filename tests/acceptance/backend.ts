@@ -164,11 +164,30 @@ export function createBackend() {
   // profile list, which drops every orphan row from every scoped endpoint — a
   // rig-manufactured "staleness" that looks exactly like the real bug. A rig
   // that invents failures is worse than no rig, so unimplemented means absent.
+  // Reads return DEEP COPIES, because a real backend does.
+  //
+  // MemStorage hands back references to its own live objects, so anything that
+  // holds a result — most importantly the server's response cache — silently
+  // mutates in step with the database. A cached pre-write snapshot would
+  // therefore "correct itself" and the whole class of stale-cache bugs would be
+  // invisible to this rig. Postgres returns fresh rows every time; so does this.
+  const READ_METHODS = /^(get|list|search)/;
+  const snapshot = (value: any) => {
+    if (value === null || typeof value !== "object") return value;
+    try { return structuredClone(value); } catch { return value; }
+  };
+
   const storage = new Proxy(base, {
     get(target, prop: string) {
       if (prop in extensions) return extensions[prop];
       const value = target[prop];
-      if (typeof value === "function") return value.bind(target);
+      if (typeof value === "function") {
+        const bound = value.bind(target);
+        if (typeof prop === "string" && READ_METHODS.test(prop)) {
+          return async (...args: any[]) => snapshot(await bound(...args));
+        }
+        return bound;
+      }
       return value;
     },
     has(target, prop) {

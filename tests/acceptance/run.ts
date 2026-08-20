@@ -18,6 +18,7 @@ import {
   crossTab, reloadConsistency, repeatedCycles, switchScope,
   dashboardBootstrap, uploadPath,
 } from "./suites";
+import { uiCreate, uiEdit, uiDelete } from "./ui-writes";
 
 export type Verdict = "PASS" | "FAIL" | "INCONCLUSIVE" | "RIG";
 export interface Result {
@@ -191,6 +192,9 @@ async function main() {
     ["Cache consistency across surfaces", () => cacheConsistency(page, rig)],
     ["Rapid navigation", () => rapidNavigation(page, rig)],
     ["Consecutive writes", () => consecutiveWrites(page, rig)],
+    ["UI create (form, not chat)", () => uiCreate(page, rig)],
+    ["UI edit (checkbox, not chat)", () => uiEdit(page, rig)],
+    ["UI delete (button, not chat)", () => uiDelete(page, rig)],
     ["Dashboard bootstrap", () => dashboardBootstrap(page, rig)],
     ["Upload / extraction", () => uploadPath(page, rig)],
     ["Reload consistency", () => reloadConsistency(page, rig)],

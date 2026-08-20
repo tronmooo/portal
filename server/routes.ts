@@ -742,23 +742,68 @@ const AI_WRITE_BARRIER_PATHS = new Set([
   "/api/chat/confirm-extraction",
   "/api/smart-fill/render",
 ]);
-function aiWriteBarrierMiddleware(req: any, res: any, next: any) {
-  if (req.method !== "POST" || !AI_WRITE_BARRIER_PATHS.has(req.path)) return next();
+
+/**
+ * Read-your-writes barrier for EVERY write, not just the AI ones.
+ *
+ * The response to a write is what tells the client to refetch. If the data
+ * version has not been bumped by the time that response is on the wire, the
+ * refetch computes the PRE-write cache key, and any instance holding an entry
+ * under that key answers with pre-write data — the deleted row comes back, the
+ * new row is missing, and React Query stores that answer as fresh for a full
+ * staleTime. Chat has been ordered correctly for a while; ordinary writes made
+ * from the interface — every add, edit and delete — were not, which is why they
+ * still lagged and why a delete took time to propagate across screens.
+ *
+ * The bump is not extra work: the write middleware already issued one on
+ * 'finish'. This moves it before the response and awaits it, and hands the new
+ * version back as `X-Data-Version` so other instances (whose own memo may still
+ * be pre-write for up to VERSION_MEMO_MS) compute the post-write key too.
+ *
+ * A header rather than a body field, deliberately: it works for every route
+ * regardless of what shape its response has, including deletes that return no
+ * JSON at all.
+ */
+function writeBarrierMiddleware(req: any, res: any, next: any) {
+  const method = String(req.method || "").toUpperCase();
+  const isWrite = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+  const isAiWrite = method === "POST" && AI_WRITE_BARRIER_PATHS.has(req.path);
+  if (!isWrite && !isAiWrite) return next();
+  // Read-only POST generators must not pay for a barrier they do not need.
+  if (isReadOnlyPost(req)) return next();
   const uid = (req as AuthenticatedRequest).userId;
   if (!uid) return next();
-  const sendJson = res.json.bind(res);
-  res.json = (body: any) => {
-    // Errors wrote nothing worth waiting on — and must never be delayed.
-    if (res.statusCode >= 400) return sendJson(body);
+  // /api/chat runs the barrier inline (it must land before the SSE `final`
+  // frame, which never goes through res.json).
+  if (req.path === "/api/chat") return next();
+
+  let barrierDone = false;
+  const settle = (send: () => void, body: any) => {
+    if (barrierDone || res.statusCode >= 400) { send(); return; }
+    barrierDone = true;
     bustUserCaches(uid);
     Promise.resolve(bumpDataVersionNow(uid))
       .then((v) => {
-        if (v !== undefined && body && typeof body === "object" && !Array.isArray(body)) {
-          try { (body as any).dataVersion = v; } catch { /* frozen body — skip the token */ }
+        if (v === undefined) return;
+        try { res.setHeader(DATA_VERSION_HEADER, String(v)); } catch { /* headers already sent */ }
+        // The AI write routes also carry it in the body, which their clients
+        // already read; keep that contract.
+        if (isAiWrite && body && typeof body === "object" && !Array.isArray(body)) {
+          try { (body as any).dataVersion = v; } catch { /* frozen body */ }
         }
       })
       .catch(() => { /* fall through: the client keeps its old behavior */ })
-      .finally(() => sendJson(body));
+      .finally(send);
+  };
+
+  const sendJson = res.json.bind(res);
+  res.json = (body: any) => {
+    settle(() => sendJson(body), body);
+    return res;
+  };
+  const sendStatus = res.sendStatus.bind(res);
+  res.sendStatus = (code: number) => {
+    settle(() => sendStatus(code), null);
     return res;
   };
   next();
@@ -974,7 +1019,7 @@ export async function registerRoutes(
 
   // Clear server cache on any mutation so changes are reflected immediately
   app.use(cacheBustMiddleware);
-  app.use(aiWriteBarrierMiddleware);
+  app.use(writeBarrierMiddleware);
 
   // PERF observability (2026-07-08): log any API request that takes >1s so
   // slow endpoints are visible in production logs (Vercel function logs)
@@ -1008,6 +1053,10 @@ export async function registerRoutes(
     // talks to this API cross-origin, so they must be allowed through preflight
     // or those requests fail before the handler ever runs.
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-Timezone, X-Active-Profile-Ids, X-Data-Version");
+    // The client READS X-Data-Version off write responses to build its
+    // read-your-writes token; without this it is invisible to cross-origin
+    // callers (the Capacitor shell) and those writes silently lose the barrier.
+    res.setHeader("Access-Control-Expose-Headers", "X-Data-Version, X-Total-Count");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
@@ -1191,8 +1240,11 @@ export async function registerRoutes(
           // Pre-handler bump covers fast writes; the finish bump covers long
           // writes whose DB writes land DURING the handler, so a GET racing
           // mid-handler can't leave stale version-stamped data behind.
+          // Pre-handler bump covers fast writes. The post-write bump that used
+          // to run on 'finish' now runs BEFORE the response, awaited, in
+          // writeBarrierMiddleware — a bump after the response is on the wire
+          // is too late to help the refetch that response triggers.
           bumpVersion();
-          res.once("finish", bumpVersion);
         }
       }
     }

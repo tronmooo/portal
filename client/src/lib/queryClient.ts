@@ -124,6 +124,24 @@ export async function apiRequest(
       signal: controller.signal,
     });
     await throwIfResNotOk(res);
+    // Every write in the app goes through this one function, so this is the
+    // single place that can make ALL of them behave like the chat path:
+    //   · learn the post-write data version, so the refetch this write triggers
+    //     cannot be served pre-write data by another server instance;
+    //   · apply the written row to every cached list that shows it, so the
+    //     change appears everywhere immediately instead of after a round trip.
+    // Both are best-effort by construction: a response we do not recognise is
+    // left completely alone.
+    if (method.toUpperCase() !== "GET") {
+      noteDataVersion(res.headers.get("X-Data-Version"));
+      try {
+        const { applyRestWrite } = await import("./write-sync");
+        // Read the body from a CLONE: callers still need the original stream.
+        let body: unknown = null;
+        try { body = await res.clone().json(); } catch { /* not JSON — deletes often aren't */ }
+        applyRestWrite(method, url, body);
+      } catch { /* cache sync must never fail a write */ }
+    }
     return res;
   } catch (err: any) {
     if (err.name === 'AbortError') throw new Error('Request timed out. Please try again.');
@@ -175,7 +193,17 @@ export const getQueryFn: <T>(options: {
     }
 
     await throwIfResNotOk(res);
-    return await res.json();
+    noteDataVersion(res.headers.get("X-Data-Version"));
+    const payload = await res.json();
+    // A response that predates a delete — already in flight when the row was
+    // removed, or served from a server cache that had not been busted yet —
+    // would otherwise put the deleted row back on screen. See write-sync.
+    try {
+      const { filterTombstoned } = await import("./write-sync");
+      return filterTombstoned(payload);
+    } catch {
+      return payload;
+    }
   };
 
 /**
@@ -520,6 +548,7 @@ export function clearAllClientCaches(): void {
     queryClient.clear();
   } catch { /* ignore */ }
   clearDataVersion();
+  void import("./write-sync").then((m) => m.clearAllTombstones()).catch(() => { /* ignore */ });
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch { /* private mode — ignore */ }

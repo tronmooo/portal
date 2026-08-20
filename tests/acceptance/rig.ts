@@ -53,6 +53,18 @@ export interface Rig {
   captured: CapturedResponse[];
   /** Set to capture response bodies for matching request paths. */
   setCapture: (re: RegExp | null) => void;
+  /** Pin every subsequent /api request to one instance (null = round-robin). */
+  pinInstance: (index: number | null) => void;
+  /**
+   * Answer the next request matching `re` with `body` instead of asking a
+   * backend — a stand-in for the pre-write response a stale instance or an
+   * in-flight request delivers after a write has already landed. This is the
+   * only way to reproduce that here: the rig's instances share one process, so
+   * they share the response cache and version memo and cannot genuinely
+   * disagree with each other.
+   */
+  injectStaleOnce: (re: RegExp, body: unknown) => void;
+  instanceCount: number;
   session: { access_token: string; refresh_token: string; expires_at: number };
   close: () => Promise<void>;
 }
@@ -81,6 +93,8 @@ export async function startRig(opts: { instances?: number } = {}): Promise<Rig> 
   const instanceCount = opts.instances ?? 2;
   const captured: CapturedResponse[] = [];
   let capturePattern: RegExp | null = null;
+  let pinned: number | null = null;
+  let staleInjection: { re: RegExp; body: unknown } | null = null;
 
   const distPath = path.resolve(process.cwd(), "dist/public");
   if (!fs.existsSync(distPath)) {
@@ -110,7 +124,13 @@ export async function startRig(opts: { instances?: number } = {}): Promise<Rig> 
   const front = express();
 
   front.use("/api", async (req, res) => {
-    const index = cursor++ % instances.length;
+    if (staleInjection && staleInjection.re.test(req.originalUrl)) {
+      const body = staleInjection.body;
+      staleInjection = null;
+      res.status(200).json(body);
+      return;
+    }
+    const index = pinned ?? (cursor++ % instances.length);
     routing.push({ path: req.originalUrl, instance: index });
     const target = `${instances[index].url}${req.originalUrl}`;
     const headers: Record<string, string> = {};
@@ -185,6 +205,9 @@ export async function startRig(opts: { instances?: number } = {}): Promise<Rig> 
     routing,
     captured,
     setCapture: (re) => { capturePattern = re; },
+    pinInstance: (i) => { pinned = i; },
+    injectStaleOnce: (re, body) => { staleInjection = { re, body }; },
+    instanceCount,
     session: {
       access_token,
       refresh_token: "rig-refresh",

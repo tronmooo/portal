@@ -112,9 +112,27 @@ export async function navigateAndRecord(
     const marker = ${JSON.stringify(marker)};
     const needle = ${JSON.stringify(needle)};
     const control = ${JSON.stringify(control)};
+    // Read only from the app's PAGE CONTAINERS, never document.body.
+    //
+    // Toasts are portaled to the body, and the undo toast carries the deleted
+    // item's own name for eight seconds — reading the whole body made a freshly
+    // deleted row look present on every surface. Scoping to the marker element
+    // was worse: several markers are BUTTONS (the liabilities tab is identified
+    // by its "Add liability" button), whose text can never contain the needle,
+    // so those pages read as "never rendered". Listing the page roots is
+    // unambiguous: every surface under test lives inside one of them, and no
+    // toast does.
+    const PAGE_ROOTS = '[data-testid^="page-"], [data-testid="hub-shell"], [data-testid="calendar-page"], [data-testid="executive-briefing"], [data-testid="wellness-overview"]';
+    const pageText = () => {
+      const roots = document.querySelectorAll(PAGE_ROOTS);
+      if (roots.length === 0) return "";
+      let out = "";
+      roots.forEach((el) => { out += " " + (el.innerText || ""); });
+      return out;
+    };
     const sample = () => {
       const mounted = !!document.querySelector(marker);
-      const text = document.body.innerText || "";
+      const text = pageText();
       const present = text.indexOf(needle) !== -1;
       const populated = control ? (text.indexOf(control) !== -1 || present) : true;
       frames.push({ t: Math.round(performance.now() - t0), mounted: mounted, present: present, populated: populated });
