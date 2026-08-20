@@ -4,6 +4,8 @@ import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEF
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
+import { rulesFromAll, seriesFromDateRules } from "@shared/date-rules";
+import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
@@ -1438,6 +1440,42 @@ export class MemStorage implements IStorage {
             sourceId: habit.id,
             meta: { streak: habit.currentStreak, icon: habit.icon, frequency: habit.frequency },
           });
+        }
+      }
+    }
+
+    // 5. Profile- and document-carried dates, from the ONE Date Rule engine
+    // (shared/date-rules) — the same call SupabaseStorage.getCalendarTimeline
+    // makes. This storage had NO derivation at all, so a birthday or a licence
+    // expiration existed on the profile and on no calendar; parity between the
+    // two storages is the only way a test here means anything in production.
+    {
+      const ruleSeries = seriesFromDateRules(rulesFromAll({
+        profiles: Array.from(this.profiles.values()),
+        documents: Array.from(this.documents.values()),
+      }));
+      for (const ser of ruleSeries) {
+        for (const occ of generateSeriesOccurrences(ser, {
+          todayISO: rdTodayISO, horizonDays: 366 * 12, cap: 24,
+        })) {
+          if (occ.date < startDate || occ.date > endDate) continue;
+          items.push({
+            id: `${ser.id}-${occ.date}`,
+            type: "event",
+            title: ser.title,
+            date: occ.date,
+            allDay: true,
+            color: ser.kind === "birthday" ? "#A78BFA" : ser.kind === "anniversary" ? "#F472B6" : "#E0803C",
+            category: ser.kind === "birthday" || ser.kind === "anniversary" ? "family" : "other",
+            linkedProfiles: ser.source.ownerIds?.length
+              ? ser.source.ownerIds
+              : (ser.source.profileId ? [ser.source.profileId] : []),
+            sourceId: ser.source.id,
+            meta: {
+              recurrence: ser.recurrence, source: ser.source.system,
+              kind: ser.kind, href: ser.source.href, ruleId: ser.id.replace(/^rule:/, ""),
+            },
+          } as any);
         }
       }
     }

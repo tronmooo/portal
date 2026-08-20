@@ -220,7 +220,7 @@ const FIELD_MATCHERS: FieldMatcher[] = [
   { ruleType: "due", match: /(duedate|due$|maturity|payoff|balancedue)/ },
 
   // ── Calendar-shaped ──
-  { ruleType: "appointment", match: /(appointment|visitdate|followup|nextvisit|checkup|consultation|surgery|procedure)/ },
+  { ruleType: "appointment", match: /(appointment|visitdate|followup|nextvisit|vetvisit|nextvet|checkup|consultation|surgery|procedure)/ },
   { ruleType: "deadline", match: /(deadline|filingdate|filingdeadline|submitby|respondby|applicationdue)/ },
   { ruleType: "maintenance", match: /(service|maintenance|inspection|oilchange|nextservice|smog)/ },
   { ruleType: "reminder", match: /(remind|alert)/ },
@@ -614,11 +614,14 @@ export function rulesFromProfiles(profiles: readonly any[]): DateRule[] {
   const out: DateRule[] = [];
   for (const p of profiles || []) {
     if (!p?.id || p.deletedAt) continue;
-    // Liability/loan payment schedules keep their dedicated adapter — it reads
-    // per-occurrence paid/skipped state this generic scanner cannot see.
-    if (p.type === "liability" || p.type === "loan") continue;
     const name = p.name || "Unnamed";
-    out.push(...scanEntityDates(p.fields && typeof p.fields === "object" ? p.fields : {}, {
+    // A liability's PAYMENT schedule keeps its dedicated adapter — that one
+    // reads per-occurrence paid/skipped/estimated state this generic scanner
+    // cannot see. Everything else a liability carries (an insurance expiry, a
+    // lease end) is an ordinary rule, so the profile is still scanned; only
+    // the money-schedule types are handed back.
+    const isScheduled = p.type === "liability" || p.type === "loan";
+    const scanned = scanEntityDates(p.fields && typeof p.fields === "object" ? p.fields : {}, {
       entityType: "profile",
       entityId: p.id,
       entityLabel: name,
@@ -627,7 +630,10 @@ export function rulesFromProfiles(profiles: readonly any[]): DateRule[] {
       profileId: p.id,
       ownerIds: uniq([p.id, p.parentProfileId, ...(Array.isArray(p.linkedProfiles) ? p.linkedProfiles : [])]),
       href: sourceHref("profile", p.id, p.id),
-    }));
+    });
+    out.push(...(isScheduled
+      ? scanned.filter((r) => r.ruleType !== "payment" && r.ruleType !== "due" && r.ruleType !== "income")
+      : scanned));
   }
   return out;
 }

@@ -63,6 +63,8 @@ export function looselyEqual(a: unknown, b: unknown): boolean {
   return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 }
 
+import { normalizeEntityDateFields } from "./date-rules";
+
 export interface CanonFieldsResult {
   fields: Record<string, any>;
   /** incoming key → canonical key it was folded into */
@@ -93,6 +95,18 @@ export function canonicalizeProfileFields(
   // profile already uses instead of adding a differently-cased twin.
   const existingByNorm: Record<string, string> = {};
   for (const k of Object.keys(existing || {})) existingByNorm[normalizeFieldKey(k)] = k;
+
+  // EVERY date arrives here in whatever shape its source printed it — a
+  // driver's licence says "07/18/2034", the chat says "July 18, 2034", a form
+  // says "7/18/2034". Downstream, every calendar/upcoming/important-date
+  // surface requires ISO, so a non-ISO date used to be stored, shown on the
+  // profile, and invisible everywhere else. That was the whole "the data saved
+  // but no rules were created" bug. Normalizing at the ONE chokepoint every
+  // profile-field writer already routes through (document extraction and the
+  // chat tools) is what makes a date mean the same thing whatever door it
+  // came in by.
+  const dated = normalizeEntityDateFields(incoming as Record<string, any>);
+  incoming = dated.fields;
 
   for (const [rawKey, value] of Object.entries(incoming)) {
     if (rawKey.startsWith("_")) { out[rawKey] = value; continue; } // reserved metadata

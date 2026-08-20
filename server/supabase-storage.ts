@@ -48,7 +48,8 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
-import { seriesFromProfiles, seriesFromEvents } from "../shared/calendar-adapters";
+import { seriesFromEvents } from "../shared/calendar-adapters";
+import { rulesFromAll, seriesFromDateRules } from "../shared/date-rules";
 import { deleteProfileFields } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
@@ -3603,7 +3604,18 @@ export class SupabaseStorage implements IStorage {
     //     date is a SHADOW of it and is suppressed here, so the same birthday
     //     can never render twice.
     const scopedProfiles = profiles.filter(p => !filterActive || matchesProfile([p.id]));
-    const profileDateSeries = seriesFromProfiles(scopedProfiles as any[]);
+    // Every profile- and document-carried date, from the ONE Date Rule engine
+    // (shared/date-rules) the Recurring & Important Dates screen and the
+    // Upcoming feed also read. This block used to cover birthdays and
+    // anniversaries only, and a separate block further down tried to add
+    // document expirations from `doc.expirationDate` — a property
+    // `rowToDocument` never sets, so it was dead code and a driver's licence
+    // expiration never reached this grid at all. One engine, no dead branch.
+    const allDocsForDates = await this.getDocuments();
+    const scopedDocs = (allDocsForDates as any[]).filter(d => matchesProfile(d.linkedProfiles));
+    const profileDateSeries = seriesFromDateRules(
+      rulesFromAll({ profiles: scopedProfiles as any[], documents: scopedDocs }),
+    );
     const knownBirthdayProfiles = new Set(
       profileDateSeries.filter(x => x.kind === "birthday").map(x => x.source.profileId!).filter(Boolean),
     );
@@ -3615,22 +3627,37 @@ export class SupabaseStorage implements IStorage {
         .filter(x => x.shadow)
         .map(x => x.source.id),
     );
+    const RULE_KIND_COLOR: Record<string, string> = {
+      birthday: "#A78BFA", anniversary: "#F472B6", expiration: "#E0803C",
+      renewal: "#E0A63C", appointment: "#5FB98A", maintenance: "#4F98A3",
+    };
     for (const ser of profileDateSeries) {
       for (const occ of generateSeriesOccurrences(ser, {
-        todayISO: rdTodayISO0, horizonDays: 366 * 6, cap: 12,
+        // A one-time expiration can be years out (a 2034 licence), so the
+        // horizon has to reach it. The window filter below still bounds what
+        // the response carries to the month the caller asked for.
+        todayISO: rdTodayISO0, horizonDays: 366 * 12, cap: 24,
       })) {
         if (occ.date < startDate || occ.date > endDate) continue;
         items.push({
-          id: `${ser.kind}-${ser.source.id}-${occ.date}`,
+          // The series id already encodes entity + field + semantic type, so a
+          // calendar item can be traced all the way back to the field it came
+          // from: occurrence → rule → source entity.
+          id: `${ser.id}-${occ.date}`,
           type: "event",
           title: ser.title,
           date: occ.date,
           allDay: true,
-          color: ser.kind === "birthday" ? "#A78BFA" : "#F472B6",
-          category: "family",
-          linkedProfiles: ser.source.profileId ? [ser.source.profileId] : [],
+          color: RULE_KIND_COLOR[ser.kind] || "#4F98A3",
+          category: ser.kind === "birthday" || ser.kind === "anniversary" ? "family" : "other",
+          linkedProfiles: ser.source.ownerIds && ser.source.ownerIds.length
+            ? ser.source.ownerIds
+            : (ser.source.profileId ? [ser.source.profileId] : []),
           sourceId: ser.source.id,
-          meta: { recurrence: "yearly", source: ser.source.system, kind: ser.kind, href: ser.source.href },
+          meta: {
+            recurrence: ser.recurrence, source: ser.source.system,
+            kind: ser.kind, href: ser.source.href, ruleId: ser.id.replace(/^rule:/, ""),
+          },
         } as any);
       }
     }
@@ -3865,29 +3892,13 @@ export class SupabaseStorage implements IStorage {
     items.length = 0;
     items.push(...finalItems);
 
-    // ── Document expiration dates ──
-    const documents = await this.getDocuments();
-    for (const doc of documents) {
-      const expField = doc.expirationDate || doc.fields?.expirationDate;
-      if (expField) {
-        // Parse date (could be MM/DD/YYYY or YYYY-MM-DD)
-        let expDate: string;
-        if (expField.includes('/')) {
-          const [m, d, y] = expField.split('/');
-          expDate = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-        } else {
-          expDate = expField.slice(0, 10);
-        }
-        if (expDate >= startDate && expDate <= endDate && matchesProfile(doc.linkedProfiles)) {
-          items.push({
-            id: `doc-expiry-${doc.id}`, type: "event", title: `📄 ${doc.title || doc.name} expires`,
-            date: expDate, allDay: true, color: "#A13544", category: "document",
-            description: `Document expiration`, linkedProfiles: doc.linkedProfiles || [],
-            sourceId: doc.id, meta: { docType: doc.type }
-          });
-        }
-      }
-    }
+    // (Removed: a document-expiration pass that read `doc.expirationDate ||
+    // doc.fields?.expirationDate`. `rowToDocument` populates NEITHER — a
+    // document's extracted dates live in `extractedData` — so the branch never
+    // fired and document expirations were absent from this grid entirely,
+    // while the Recurring screen showed them. Documents are now adapted by the
+    // Date Rule engine in the block at the top of this method, alongside
+    // profile-carried dates, so both surfaces read the same set.)
 
     // (Removed: a second pass that iterated habit.checkins and pushed an
     // additional habit item per checkin. The earlier loop above already
@@ -3948,166 +3959,23 @@ export class SupabaseStorage implements IStorage {
       console.warn('[calendar] loan amortization read failed:', e?.message);
     }
 
-    // ── Profile-derived virtual events ──────────────────────────
-    // Build fingerprint set from existing stored events to prevent duplicates
-    const storedEventFPs = new Set<string>();
-    for (const item of items) {
-      if (item.type === "event") storedEventFPs.add(`${item.title.toLowerCase().trim()}::${item.date}`);
-    }
-    const addVirtualEvent = (item: CalendarTimelineItem) => {
-      const fp = `${item.title.toLowerCase().trim()}::${item.date}`;
-      if (!storedEventFPs.has(fp)) items.push(item);
-    };
-    for (const profile of profiles) {
-      const f = profile.fields || {};
-
-      // PROFILE-SCOPE FIX (BUG-20260709-virtual-event-leak): every virtual event
-      // below (birthday, subscription renewal, vehicle service, vet visit,
-      // warranty/insurance expiry, loan payment…) was pushed via addVirtualEvent
-      // WITHOUT any profile-filter check — the one timeline source that skipped
-      // matchesProfile entirely. That is why "Car Insurance — Renewal" (a
-      // subscription nested under Self) persisted on EVERY profile's calendar and
-      // Important Dates (Bill, Bob, Jim…), regardless of the isolation policy —
-      // no policy change could fix a path that never filtered at all.
-      //
-      // Scope this profile's virtual events to the profile itself, plus its
-      // PARENT for child profiles (a subscription/vehicle/asset/loan is owned by
-      // the person it is nested under), using the SAME matchesProfile rule the
-      // stored-events / tasks / obligations / liability paths already use. When a
-      // filter is active and this profile is out of scope, emit none of its
-      // virtual events; unfiltered ("Everyone") still shows everything.
-      const vevScope = profile.parentProfileId
-        ? [profile.id, profile.parentProfileId]
-        : [profile.id];
-      if (!matchesProfile(vevScope)) continue;
-
-      // Person / Self → birthday (yearly)
-      if ((profile.type === "person" || profile.type === "self") && f.birthday) {
-        const bday = f.birthday.slice(0, 10); // YYYY-MM-DD
-        // Generate for current year of the view range
-        const startY = parseInt(startDate.slice(0, 4), 10);
-        const endY = parseInt(endDate.slice(0, 4), 10);
-        for (let y = startY; y <= endY; y++) {
-          const d = `${y}-${bday.slice(5, 10)}`;
-          if (d >= startDate && d <= endDate) {
-            addVirtualEvent({ id: `profile-birthday-${profile.id}-${d}`, type: "event", title: `🎂 ${profile.name}'s Birthday`, date: d, allDay: true, color: "#A86FDF", category: "family", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: profile.type } });
-          }
-        }
-      }
-
-      // Medical → nextVisit
-      if (profile.type === "medical" && f.nextVisit) {
-        const d = f.nextVisit.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
-          addVirtualEvent({ id: `profile-medical-${profile.id}-${d}`, type: "event", title: `🏥 ${profile.name} — Visit`, date: d, allDay: true, color: "#6DAA45", category: "health", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "medical" } });
-        }
-      }
-
-      // Vehicle → nextService
-      if (profile.type === "vehicle" && f.nextService) {
-        const d = f.nextService.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
-          addVirtualEvent({ id: `profile-vehicle-${profile.id}-${d}`, type: "event", title: `🚗 ${profile.name} — Service`, date: d, allDay: true, color: "#BB653B", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "vehicle" } });
-        }
-      }
-
-      // Subscription → renewalDate
-      if (profile.type === "subscription" && f.renewalDate) {
-        const d = f.renewalDate.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
-          addVirtualEvent({ id: `profile-subscription-${profile.id}-${d}`, type: "event", title: `🔄 ${profile.name} — Renewal`, date: d, allDay: true, color: "#D19900", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "subscription" } });
-        }
-      }
-
-      // Loan → startDate or nextPayment
-      if ((profile.type === "loan" || profile.type === "liability") && (f.nextPayment || f.startDate)) {
-        const d = (f.nextPayment || f.startDate).slice(0, 10);
-        if (d >= startDate && d <= endDate) {
-          const label = f.nextPayment ? "Payment Due" : "Start Date";
-          addVirtualEvent({ id: `profile-loan-${profile.id}-${d}`, type: "event", title: `💰 ${profile.name} — ${label}`, date: d, allDay: true, color: "#BB653B", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "loan" } });
-        }
-      }
-
-      // Pet → nextVetVisit
-      if (profile.type === "pet" && f.nextVetVisit) {
-        const d = f.nextVetVisit.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
-          addVirtualEvent({ id: `profile-pet-${profile.id}-${d}`, type: "event", title: `🐾 ${profile.name} — Vet Visit`, date: d, allDay: true, color: "#6DAA45", category: "health", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "pet" } });
-        }
-      }
-
-      // Property → insurance expiry, lease end, etc.
-      if (profile.type === "property") {
-        if (f.insuranceExpiry) {
-          const d = f.insuranceExpiry.slice(0, 10);
-          if (d >= startDate && d <= endDate) {
-            addVirtualEvent({ id: `profile-property-ins-${profile.id}-${d}`, type: "event", title: `🏠 ${profile.name} — Insurance Expiry`, date: d, allDay: true, color: "#BB653B", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "property" } });
-          }
-        }
-        if (f.leaseEnd) {
-          const d = f.leaseEnd.slice(0, 10);
-          if (d >= startDate && d <= endDate) {
-            addVirtualEvent({ id: `profile-property-lease-${profile.id}-${d}`, type: "event", title: `🏠 ${profile.name} — Lease End`, date: d, allDay: true, color: "#A13544", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "property" } });
-          }
-        }
-      }
-
-      // Investment → maturityDate
-      if (profile.type === "investment" && f.maturityDate) {
-        const d = f.maturityDate.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
-          addVirtualEvent({ id: `profile-investment-${profile.id}-${d}`, type: "event", title: `📈 ${profile.name} — Maturity`, date: d, allDay: true, color: "#D19900", category: "finance", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "investment" } });
-        }
-      }
-
-      // Account → expirationDate
-      if (profile.type === "account" && f.expirationDate) {
-        const d = f.expirationDate.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
-          addVirtualEvent({ id: `profile-account-${profile.id}-${d}`, type: "event", title: `⚠️ ${profile.name} — Expires`, date: d, allDay: true, color: "#A13544", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "account" } });
-        }
-      }
-
-      // Asset → warrantyExpiry
-      if (profile.type === "asset" && f.warrantyExpiry) {
-        const d = f.warrantyExpiry.slice(0, 10);
-        if (d >= startDate && d <= endDate) {
-          addVirtualEvent({ id: `profile-asset-${profile.id}-${d}`, type: "event", title: `🛡️ ${profile.name} — Warranty Expiry`, date: d, allDay: true, color: "#BB653B", category: "other", linkedProfiles: [profile.id], sourceId: profile.id, meta: { source: "profile", profileType: "asset" } });
-        }
-      }
-    }
-
-    // ── Document-extracted dates (expiry, renewal, due, appointment) ──────
-    // documents already fetched above for expiration dates
-    const DATE_KEY_RE = /expir|renew|due|valid.until|appoint|next.visit|warranty/i;
-    const DATE_VAL_RE = /^\d{4}[-/]\d{2}[-/]\d{2}/;
-    for (const doc of documents) {
-      const ed = doc.extractedData as Record<string, any> | null;
-      if (!ed) continue;
-      for (const [key, val] of Object.entries(ed)) {
-        if (!DATE_KEY_RE.test(key)) continue;
-        const strVal = String(val || "");
-        const dateMatch = strVal.match(/(\d{4})[-/](\d{2})[-/](\d{2})/);
-        if (!dateMatch) continue;
-        const d = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
-        if (d < startDate || d > endDate) continue;
-        if (!matchesProfile(doc.linkedProfiles)) continue;
-        const label = key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim();
-        const emoji = /expir/i.test(key) ? "⚠️" : /renew/i.test(key) ? "🔄" : /due/i.test(key) ? "📅" : "📄";
-        items.push({
-          id: `doc-date-${doc.id}-${key}`,
-          type: "event",
-          title: `${emoji} ${doc.name} — ${label}`,
-          date: d,
-          allDay: true,
-          color: /expir/i.test(key) ? "#A13544" : "#BB653B",
-          category: "other" as any,
-          linkedProfiles: doc.linkedProfiles || [],
-          sourceId: doc.id,
-          meta: { source: "document", documentType: doc.type, field: key },
-        });
-      }
-    }
+    // (Removed 2026-08-20: two more date vocabularies lived here.
+    //
+    //  1. "Profile-derived virtual events" — a hard-coded ladder of
+    //     (profile.type, exact field key) pairs: person→birthday,
+    //     vehicle→nextService, property→leaseEnd, account→expirationDate…
+    //     It matched one spelling per type and only ISO values, so an
+    //     `expiration_date` or a "07/18/2034" was invisible, and a licence
+    //     expiration typed onto a PERSON matched no branch at all.
+    //  2. "Document-extracted dates" — a second regex over extractedData that
+    //     emitted the SAME dates again under different titles
+    //     ("⚠️ … — Expiration" vs "📄 … expires"), which is what made
+    //     `stripGeneratedSuffix` in shared/calendar-occurrences necessary.
+    //
+    // Both are superseded by the Date Rule pass at the top of this method: it
+    // reads every profile type and every document, understands every key
+    // spelling, and normalizes non-ISO values — so it is a strict superset of
+    // what these two produced, emitted once each.)
 
     items.sort((a, b) => {
       const cmp = a.date.localeCompare(b.date);
