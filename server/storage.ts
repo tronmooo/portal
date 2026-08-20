@@ -2073,6 +2073,9 @@ export class MemStorage implements IStorage {
           expirationDate: rule.date,
           daysUntil,
           ruleId: rule.id,
+          sourceEntityType: rule.sourceEntityType,
+          href: rule.href,
+          relatedProfileId: rule.profileId,
           status: daysUntil < 0 ? 'expired' : daysUntil <= 30 ? 'expiring_soon' : daysUntil <= 90 ? 'upcoming' : 'ok',
         });
       }

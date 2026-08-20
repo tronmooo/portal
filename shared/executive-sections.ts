@@ -510,7 +510,12 @@ export function buildExecutiveSections(
         title: doc.documentName || doc.name || doc.fieldName || "Document",
         reason: du < 0 ? `Expired ${Math.abs(du)}d ago` : du === 0 ? "Expires today" : `Expires ${dayLabel(du)}`,
         tier: du <= 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
-        daysUntil: du, score: 0, href: `/documents/${id}`,
+        // Prefer the row's own link. An expiration can be carried by a
+        // PROFILE (a passport typed onto a person) as well as by a document,
+        // and `/documents/<profileId>` leads nowhere. The `#/` prefix is the
+        // app-wide hash-route form these rows are built with elsewhere.
+        daysUntil: du, score: 0,
+        href: String(doc.href || "").replace(/^#/, "") || `/documents/${id}`,
         action: { kind: "open", label: "Review" },
       });
     }

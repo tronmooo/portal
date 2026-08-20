@@ -200,3 +200,46 @@ describe("no write path can save an actionable date in a form the rules cannot r
     expect(await timelineTitles()).toContain("Raw Writer's Birthday");
   });
 });
+
+describe("the dashboard's expirations link to the record that holds them", () => {
+  it("sends a document expiration to the document", async () => {
+    await storage.createDocument({
+      name: "Passport", type: "passport", mimeType: "image/jpeg", fileData: "",
+      extractedData: { expiration_date: new Date(Date.now() + 15 * 86400000).toISOString().slice(0, 10) },
+      linkedProfiles: [janeId], tags: [],
+    } as any);
+    const enhanced: any = await storage.getDashboardEnhanced();
+    const row = enhanced.expiringDocuments.find((d: any) => d.sourceEntityType === "document");
+    expect(row.href).toMatch(/^#\/documents\//);
+  });
+
+  it("sends a profile-carried expiration to the profile, not to a document id", async () => {
+    // A passport expiration typed onto a person. `/documents/<profileId>` is
+    // not a page, and this row used to be built with exactly that link.
+    await storage.updateProfile(janeId, {
+      fields: { passportExpiration: new Date(Date.now() + 15 * 86400000).toISOString().slice(0, 10) },
+    } as any);
+    const enhanced: any = await storage.getDashboardEnhanced();
+    const row = enhanced.expiringDocuments.find((d: any) => d.sourceEntityType === "profile");
+    expect(row).toBeTruthy();
+    expect(row.href).toBe(`#/profiles/${janeId}`);
+    expect(row.relatedProfileId).toBe(janeId);
+  });
+});
+
+describe("a liability whose payment date is spelled nextPayment", () => {
+  it("still lands on the calendar", async () => {
+    // This spelling used to be reached only by the server timeline's per-type
+    // virtual-event ladder, which the Date Rule pass replaced.
+    const soon = new Date(Date.now() + 12 * 86400000).toISOString().slice(0, 10);
+    await storage.createProfile({
+      name: "Car Loan", type: "liability", parentProfileId: janeId,
+      fields: { nextPayment: soon, monthlyPayment: 415, frequency: "monthly" },
+    } as any);
+    const { seriesFromAll } = await import("../shared/calendar-adapters");
+    const series = seriesFromAll({ profiles: await storage.getProfiles() });
+    const payment = series.find((s: any) => s.source.system === "liability");
+    expect(payment).toBeTruthy();
+    expect(payment!.baseDate).toBe(soon);
+  });
+});

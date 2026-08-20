@@ -393,7 +393,13 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
     if (!p?.id) continue;
     if (p.type !== "liability" && p.type !== "loan") continue;
     const f = p.fields && typeof p.fields === "object" ? p.fields : {};
-    const due = f.nextDueDate ?? f.next_due_date ?? f.dueDate ?? f.due_date;
+    // `nextPayment` is the spelling the profile writer synthesizes from a
+    // `dueDay`, and it was previously reached only by the server timeline's
+    // per-type virtual-event ladder. That ladder is gone (the Date Rule pass
+    // replaces it), so this list has to carry the spelling or a liability whose
+    // date lives under it would silently leave the calendar.
+    const due = f.nextDueDate ?? f.next_due_date ?? f.dueDate ?? f.due_date
+      ?? f.nextPayment ?? f.next_payment ?? f.nextPaymentDate;
     if (!isISO(due)) continue;
     const amount = Number(f.monthlyPayment ?? f.monthly_payment ?? f.amount);
     const end = f.payoffDate ?? f.payoff_date ?? f.endDate ?? f.end_date ?? f.recurrenceEnd;

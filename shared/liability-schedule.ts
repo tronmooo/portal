@@ -114,7 +114,11 @@ export function deriveScheduleFields(
 
   const amount = Number(f.monthlyPayment ?? f.minimumPayment ?? f.amount ?? f.monthlyAmount ?? 0) || 0;
   // Next payment date: an explicit date, else the due day this/next month.
-  let due = clip(f.nextPaymentDate ?? f.dueDate ?? f.nextDueDate ?? f.firstPaymentDate);
+  // `nextPayment` included for the same reason as in shared/calendar-adapters:
+  // it is a spelling the profile writer produces, and without it this falls
+  // through to `todayISO` — putting a payment on the wrong day rather than
+  // none at all, which is worse.
+  let due = clip(f.nextPaymentDate ?? f.nextPayment ?? f.dueDate ?? f.nextDueDate ?? f.firstPaymentDate);
   if (!ISO_RE.test(due)) {
     const day = parseInt(String(f.dueDay ?? ""), 10);
     if (day >= 1 && day <= 31) {

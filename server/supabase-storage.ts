@@ -6610,6 +6610,12 @@ export class SupabaseStorage implements IStorage {
           expirationDate: rule.date,
           daysUntil,
           ruleId: rule.id,
+          // A rule can come from a PROFILE (a passport expiration typed onto a
+          // person), and `/documents/<profileId>` is not a page. The rule
+          // already knows where its record lives.
+          sourceEntityType: rule.sourceEntityType,
+          href: rule.href,
+          relatedProfileId: rule.profileId,
           status: daysUntil < 0 ? 'expired' : daysUntil <= 30 ? 'expiring_soon' : daysUntil <= 90 ? 'upcoming' : 'ok',
         });
       }
