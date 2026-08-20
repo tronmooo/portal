@@ -23,8 +23,11 @@ import fs from "fs";
 import { SignJWT } from "jose";
 import { requestStorageContext } from "../../server/storage";
 import { registerRoutes } from "../../server/routes";
+import { spawn, type ChildProcess } from "child_process";
+import { fileURLToPath } from "url";
 import { createBackend, seedProfiles } from "./backend";
 import { startMockAnthropic, type MockModel } from "./mock-anthropic";
+import { serveStorage } from "./storage-rpc";
 
 export const JWT_SECRET = "acceptance-rig-secret-at-least-32-characters-long";
 export const USER_ID = "3f2b8c9e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
@@ -89,8 +92,55 @@ async function bootInstance(storage: any): Promise<{ url: string; close: () => P
   };
 }
 
-export async function startRig(opts: { instances?: number } = {}): Promise<Rig> {
+/**
+ * Boot one server instance in its OWN PROCESS, against the shared database.
+ *
+ * In-process instances share every module-level thing routes.ts owns — the
+ * response cache, the version memo, the rate limiter — so they can never
+ * disagree, and cross-instance staleness cannot be reproduced. Separate
+ * processes can.
+ */
+async function bootProcessInstance(storageUrl: string): Promise<{ url: string; close: () => Promise<void> }> {
+  // ESM module scope: no require/__dirname. Resolve both from import.meta.url.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const child: ChildProcess = spawn(
+    "npx",
+    ["tsx", path.join(here, "instance-entry.ts")],
+    {
+      env: {
+        ...process.env,
+        RIG_STORAGE_URL: storageUrl,
+        RIG_USER_ID: USER_ID,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  const port = await new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("instance did not start in 60s")), 60_000);
+    let buffer = "";
+    child.stdout!.on("data", (chunk) => {
+      buffer += String(chunk);
+      const m = buffer.match(/RIG_INSTANCE_READY (\d+)/);
+      if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+    });
+    child.stderr!.on("data", (chunk) => {
+      if (process.env.RIG_VERBOSE) process.stderr.write(`[instance] ${String(chunk)}`);
+      else {
+        const text = String(chunk);
+        if (/Error|error:/i.test(text)) process.stderr.write(`[instance] ${text}`);
+      }
+    });
+    child.on("exit", (code) => { clearTimeout(timer); reject(new Error(`instance exited early (${code})`)); });
+  });
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: async () => { child.kill("SIGKILL"); },
+  };
+}
+
+export async function startRig(opts: { instances?: number; separateProcesses?: boolean } = {}): Promise<Rig> {
   const instanceCount = opts.instances ?? 2;
+  const separateProcesses = opts.separateProcesses ?? false;
   const captured: CapturedResponse[] = [];
   let capturePattern: RegExp | null = null;
   let pinned: number | null = null;
@@ -116,7 +166,13 @@ export async function startRig(opts: { instances?: number } = {}): Promise<Rig> 
   const profiles = await requestStorageContext.run(storage, () => seedProfiles(storage));
 
   const instances = [];
-  for (let i = 0; i < instanceCount; i++) instances.push(await bootInstance(storage));
+  let storageServer: { url: string; close: () => Promise<void> } | null = null;
+  if (separateProcesses) {
+    storageServer = await serveStorage(storage);
+    for (let i = 0; i < instanceCount; i++) instances.push(await bootProcessInstance(storageServer.url));
+  } else {
+    for (let i = 0; i < instanceCount; i++) instances.push(await bootInstance(storage));
+  }
 
   // ── Front proxy: static client + round-robin /api ────────────────────────
   const routing: Rig["routing"] = [];
@@ -216,6 +272,7 @@ export async function startRig(opts: { instances?: number } = {}): Promise<Rig> 
     close: async () => {
       await new Promise<void>((r) => frontServer.close(() => r()));
       await Promise.all(instances.map((i) => i.close()));
+      if (storageServer) await storageServer.close();
       await model.close();
     },
   };

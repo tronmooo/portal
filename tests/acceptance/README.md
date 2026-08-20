@@ -30,13 +30,26 @@ wants executed while everything downstream stays production code:
 ##create_task {...} ##create_expense {...}      # one turn, two tool calls
 ```
 
-## Why two server instances
+## Two rigs, two questions
 
-`rig.ts` boots N Express instances over one shared backend and round-robins
-`/api` across them. Each instance memoizes the per-user data version for ~2s, so
-a GET landing on a different instance than the write could compute the pre-write
-cache key. One process cannot reproduce that; Vercel sprays one page load's
-requests across instances exactly this way.
+**`run.ts` / `run-ui.ts` — what is on screen, and when.** Instances run
+in-process (`startRig({ instances: 2 })`). They round-robin `/api`, but they
+share every module-level thing `server/routes.ts` owns — the response cache, the
+data-version memo, the rate limiter — so they cannot genuinely disagree. These
+runs therefore say nothing about cross-instance staleness; they measure the
+client: optimistic patches, invalidation, profile scoping, cross-tab, reload.
+
+**`cross-instance.ts` — can one instance serve data another just changed?**
+This one uses `startRig({ separateProcesses: true })`: each instance is a real
+child process with its own caches, talking to a database the parent owns over a
+small RPC (`storage-rpc.ts`). That is the only way to reproduce the production
+failure, and it does: against the pre-fix commit the other instance returns a
+deleted row, misses an added row, and misses an edit. Requests are pinned to a
+chosen instance so the sequence is deterministic rather than a race.
+
+The AI chat path does not currently run under the separate-process rig — the
+child cannot drive the ai-engine import — so `cross-instance.ts` exercises REST
+writes only. That is where the gap was.
 
 ## Why every case needs a control row
 

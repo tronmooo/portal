@@ -193,6 +193,20 @@ export function createBackend() {
     has(target, prop) {
       return prop in extensions || prop in target;
     },
+    // Make the extensions DISCOVERABLE, not just callable. The separate-process
+    // rig introspects this object to build its RPC proxy, and a trap-only
+    // extension is invisible to Object.getOwnPropertyNames — which silently
+    // dropped bumpDataVersion in the child, so no version was ever bumped and
+    // the read-your-writes barrier looked broken when it was not.
+    ownKeys(target) {
+      return Array.from(new Set([...Reflect.ownKeys(target), ...Object.keys(extensions)]));
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (typeof prop === "string" && prop in extensions) {
+        return { configurable: true, enumerable: true, writable: false, value: extensions[prop] };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
   });
 
   return { storage, stats, raw: base, sharedCache: shared };

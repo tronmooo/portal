@@ -171,6 +171,10 @@ async function runUpdateAndDelete(page: Page, rig: Rig) {
 }
 
 async function main() {
+  // In-process instances. They share the response cache and version memo, so
+  // this run deliberately does NOT speak to cross-instance staleness — that
+  // question is answered by cross-instance.ts, which uses real processes. What
+  // this run measures is everything client-side: what is on screen, when.
   const rig = await startRig({ instances: 2 });
   const browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox"] });
   const page = await openApp(browser, rig);
