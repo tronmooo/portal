@@ -28,7 +28,7 @@ import { routeContent, checkContentRouting } from "@shared/content-routing";
 import { checkToolAgainstIntent } from "@shared/ai-tool-routing";
 import { groundedSummary } from "@shared/ai-claim-check";
 import { profileNoun, profileNounLower } from "@shared/entity-nouns";
-import { ownershipHintFor, correctionConfirmation, writtenEntityNoun } from "../server/ai-engine";
+import { ownershipHintFor, ownershipHintFrom, namedProfilesIn, correctionConfirmation, writtenEntityNoun } from "../server/ai-engine";
 
 const FOUR_CLAUSE =
   "John's email is john@test.com, remind me to call him Friday, note that he hates cilantro, and his birthday is April 7.";
@@ -210,5 +210,112 @@ describe("the noun comes from the row that was written", () => {
   it("says nothing rather than guessing", () => {
     expect(writtenEntityNoun("update_profile", {})).toBeUndefined();
     expect(writtenEntityNoun("create_task", { type: "person" })).toBeUndefined();
+  });
+});
+
+// ── Variations ──────────────────────────────────────────────────────────────
+//
+// "Will variations of this work?" — the point of the fixes is that they key on
+// the shape of the request, not on the exact sentences in the bug report. These
+// are the paraphrases, run through the same code.
+
+describe("corrections, however they are phrased", () => {
+  const CORRECTIONS = [
+    "Actually make that $92.",
+    "actually make it 92 dollars",
+    "no, make that $92",
+    "sorry, change that to $92",
+    "wait, that should be $92",
+    "I meant $92",
+    "scratch that, $92",
+    "nope, $92",
+    "Actually make that April 9",
+    "no, 3pm",
+  ];
+
+  it.each(CORRECTIONS)("reads %j as an update", (m) => {
+    expect(detectOperation(m)).toBe("update");
+  });
+
+  it.each(CORRECTIONS)("does not block the update tool for %j", (m) => {
+    expect(checkToolAgainstIntent("update_obligation", parseTurnPlan(m))).toBeNull();
+  });
+
+  // The other half of the guarantee: an ordinary create must stay a create, or
+  // every "add a task" turn starts asking permission.
+  it.each([
+    "Add a task to call the dentist",
+    "actually, add a task for Friday",
+    "make a note for John that he likes cilantro",
+    "no problem, log $20 for lunch",
+    "Create a new bill for $92 a month",
+  ])("leaves %j as a create", (m) => {
+    expect(detectOperation(m)).not.toBe("update");
+  });
+});
+
+describe("a note clause survives whatever it travels with", () => {
+  it.each([
+    "note that he hates cilantro",
+    "Sarah's phone is 555-1234, note that she works nights",
+    "add a task to call Mike, note that he prefers text",
+    "make a note for Jane that the gate code is 4412",
+    "jot down that the wifi password is hunter2",
+    "remind me to pay rent Friday and note that the landlord changed banks",
+  ])("%j produces a note that is not refused", (m) => {
+    expect(routeContent(m).actions.some((a) => a.kind === "note")).toBe(true);
+    expect(checkContentRouting("create_note", m)).toBeNull();
+  });
+
+  it.each([
+    ["Sarah's birthday is March 3 and her email is s@x.com", 2],
+    ["add a task to call Bob, log $40 for gas, and note that the car is making a noise", 3],
+    ["her anniversary is June 12, remind me to buy flowers", 2],
+  ] as Array<[string, number]>)("splits %j into its parts", (m, n) => {
+    expect(splitIntentClauses(m).length).toBe(n);
+  });
+});
+
+describe("ownership across a whole message", () => {
+  // The cast as the resolver sees it — note the profile is "John Hancock"
+  // while every message calls him John.
+  const CAST = [
+    { name: "Me", type: "self" },
+    { name: "John Hancock", type: "person" },
+    { name: "Sarah", type: "person" },
+    { name: "Mike", type: "person" },
+    { name: "Jane", type: "person" },
+  ];
+  const owner = (tool: string, m: string) => ownershipHintFrom(tool, {}, m, CAST);
+
+  it("resolves a first name to the profile that answers to it", () => {
+    expect(owner("journal_entry", "Journal entry for John: He seemed much happier today."))
+      .toBe("John Hancock");
+    expect(namedProfilesIn("John's email is john@test.com", CAST)).toEqual(["John Hancock"]);
+  });
+
+  it("finds the person named in a SIBLING clause", () => {
+    // The note itself only says "he" — Mike is named by the task beside it.
+    expect(owner("create_note", "add a task to call Mike, note that he prefers text")).toBe("Mike");
+  });
+
+  it("refuses to choose when the message names two people", () => {
+    expect(owner("journal_entry", "Journal entry about John and Sarah's argument")).toBeNull();
+  });
+
+  it("leaves a genuinely self entry alone", () => {
+    expect(owner("journal_entry", "Today was a good day.")).toBeNull();
+  });
+
+  it("does not treat a shared first name as an alias", () => {
+    const twoJanes = [{ name: "Jane Doe", type: "person" }, { name: "Jane Smith", type: "person" }];
+    expect(namedProfilesIn("note for Jane: she called", twoJanes)).toEqual([]);
+    expect(namedProfilesIn("note for Jane Doe: she called", twoJanes)).toEqual(["Jane Doe"]);
+  });
+
+  it("still does not pick up a name inside a longer one", () => {
+    const cast = [{ name: "Max", type: "pet" }];
+    expect(namedProfilesIn("Maxwell called today", cast)).toEqual([]);
+    expect(namedProfilesIn("Max needs a walk", cast)).toEqual(["Max"]);
   });
 });

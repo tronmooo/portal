@@ -13225,23 +13225,53 @@ async function directLinkToProfile(entityType: string, entityId: string, forProf
 // A8 fix: collect ALL profile mentions in free text. Returns up to N matches
 // in mention order (after long-name preference) so callers can decide whether
 // to split or surface a disambiguation question.
-async function resolveAllForProfiles(text: string): Promise<string[]> {
+/**
+ * Which of these profiles does the text name? Pure, so it can be tested
+ * against a fixed cast (see tests/chat-routing-regressions.test.ts) rather
+ * than a database.
+ *
+ * Longest name first, so "Mary Jane" wins over "Mary" when both exist.
+ */
+export function namedProfilesIn(text: string, profiles: Array<{ name: string; type?: string }>): string[] {
   if (!text) return [];
-  const profiles = await storage.getProfiles();
   const candidates = profiles
     .filter(p => p.type !== 'self' && p.name.length >= 2)
     .sort((a, b) => b.name.length - a.name.length);
   const lc = text.toLowerCase();
+
+  // PEOPLE GO BY THEIR FIRST NAME. The profile is "John Hancock"; the user
+  // types "John". Matching only the full name meant a message naming two
+  // people read as naming one — and the entry filed silently under whichever
+  // one happened to be written out in full.
+  //
+  // A first name is only an alias when exactly ONE profile answers to it. Two
+  // Janes and the shorthand is genuinely ambiguous, which is the answer.
+  const firstNameCount = new Map<string, number>();
+  for (const p of candidates) {
+    const first = p.name.trim().split(/\s+/)[0].toLowerCase();
+    if (first.length >= 3) firstNameCount.set(first, (firstNameCount.get(first) ?? 0) + 1);
+  }
+
   const found: string[] = [];
   for (const p of candidates) {
-    const pn = p.name.toLowerCase();
-    const pnEsc = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // Word-boundary check so "Max" doesn't pick up "Maxwell".
-    if (new RegExp(`(^|\\b)${pnEsc}(\\b|$)`).test(lc)) {
-      if (!found.includes(p.name)) found.push(p.name);
+    const first = p.name.trim().split(/\s+/)[0].toLowerCase();
+    const aliases = [p.name.toLowerCase()];
+    if (firstNameCount.get(first) === 1 && first !== p.name.toLowerCase()) aliases.push(first);
+    for (const alias of aliases) {
+      const esc = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Word-boundary check so "Max" doesn't pick up "Maxwell".
+      if (new RegExp(`(^|\\b)${esc}(\\b|$)`).test(lc)) {
+        if (!found.includes(p.name)) found.push(p.name);
+        break;
+      }
     }
   }
   return found;
+}
+
+async function resolveAllForProfiles(text: string): Promise<string[]> {
+  if (!text) return [];
+  return namedProfilesIn(text, await storage.getProfiles());
 }
 
 // Scan text for profile names when forProfile wasn't explicitly set
@@ -13403,6 +13433,56 @@ export function ownershipHintFor(toolName: string, input: Record<string, any>, u
     routeContent(userMessage).actions.map((a) => a.profileHint).filter((h): h is string => !!h),
   ));
   return hints.length === 1 ? hints[0] : null;
+}
+
+/**
+ * The same question, asked of the whole message against the profiles that
+ * actually exist.
+ *
+ * The router reads owners out of the shapes it knows — "for John", "note for
+ * Jane", "Sarah's phone". Two phrasings slip past it, and both matter:
+ *
+ *   "add a task to call Mike, note that he prefers text"
+ *        the person is named in a SIBLING clause, and the note itself only
+ *        says "he" — so the note landed on nobody.
+ *
+ *   "Journal entry about John and Sarah's argument"
+ *        the router saw the possessive "Sarah's" and missed John entirely, so
+ *        a genuinely ambiguous entry filed silently under one of them.
+ *
+ * Scanning the message against real profile rows fixes both, and cannot invent
+ * a person: `resolveAllForProfiles` only matches names that exist. Two matches
+ * is an ambiguity and returns null — the model's own choice beats a coin flip,
+ * and a wrong owner is the profile leak the isolation rules exist to prevent.
+ *
+ * Falls back to the router's hint when NO profile matches, because the person
+ * may not have a row yet ("note for Jane" before Jane exists).
+ */
+export function ownershipHintFrom(
+  toolName: string,
+  input: Record<string, any>,
+  userMessage: string,
+  profiles: Array<{ name: string; type?: string }>,
+): string | null {
+  if (!PROFILE_SCOPED_TOOLS.has(toolName)) return null;
+  if (typeof input?.forProfile === "string" && input.forProfile.trim()) return null;
+  const named = namedProfilesIn(userMessage, profiles);
+  if (named.length === 1) return named[0];
+  if (named.length > 1) return null;
+  return ownershipHintFor(toolName, input, userMessage);
+}
+
+async function resolveOwnershipHint(
+  toolName: string,
+  input: Record<string, any>,
+  userMessage: string,
+): Promise<string | null> {
+  try {
+    return ownershipHintFrom(toolName, input, userMessage, await storage.getProfiles());
+  } catch {
+    // No storage (a cold start) — the router's read of the message still stands.
+    return ownershipHintFor(toolName, input, userMessage);
+  }
 }
 
 /**
@@ -15362,7 +15442,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // left `forProfile` empty, fill it in — the router already knew whose
           // record this is, and hoping the model passes it on is how "Journal
           // entry for John" ended up on the user's own profile.
-          const ownershipHint = ownershipHintFor(toolUse.name, validation.normalized as Record<string, any>, userMessage);
+          const ownershipHint = await resolveOwnershipHint(toolUse.name, validation.normalized as Record<string, any>, userMessage);
           if (ownershipHint) {
             (validation.normalized as Record<string, any>).forProfile = ownershipHint;
             logger.info("ai", `[turn ${turnId.slice(0, 8)}] ownership: ${toolUse.name} forProfile <- "${ownershipHint}" (from message)`);
