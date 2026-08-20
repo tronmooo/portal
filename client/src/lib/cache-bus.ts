@@ -63,6 +63,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/stats"],
     ["/api/activity"],
     ["/api/calendar/timeline"],
+    ["/api/date-rules"],  // a due date is a deadline rule
     ["/api/insights"],
     ["/api/ai-digest"],
     // ...and the notification feed, which derives "due today" / "overdue"
@@ -96,6 +97,13 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/activity"],
     ["/api/insights"],
     ["/api/ai-digest"],
+    // A profile OWNS dates — a date of birth, an anniversary, a licence or
+    // passport expiration. Changing July 10 to July 11 has to move the yearly
+    // birthday everywhere at once, which it cannot do while the calendar and
+    // the rules list keep serving the pre-edit answer.
+    ["/api/calendar/timeline"],
+    ["/api/date-rules"],
+    ["/api/notifications"],
     // nested keys handled via predicate below
   ],
   assets: [
@@ -113,6 +121,8 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/obligations"],
     ["/api/loans/schedule"],
     ["/api/cashflow"],
+    ["/api/calendar/timeline"],
+    ["/api/date-rules"],
     // Paying a bill from an account moves that account's balance, so the
     // Accounts list is stale the moment a liability write lands.
     ["/api/accounts"],
@@ -127,6 +137,20 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/activity"],
+    // User report 2026-08-20 (screenshot): a deleted document vanished from
+    // the Documents tab instantly and stayed on the Info tab. The Info tab
+    // reads the profile-detail EMBED (`relatedDocuments`) and the activity
+    // timeline, neither of which lives under "/api/documents" — so a
+    // documents-only invalidation left both showing a document that no longer
+    // existed until the detail query happened to refetch. Hence "it took some
+    // time for it to delete".
+    ["/api/profiles"],
+    // A document carries dates (an expiration IS a calendar item — see
+    // shared/date-rules), so saving, editing or deleting one changes the
+    // calendar, the upcoming feed and the important-date list too.
+    ["/api/calendar/timeline"],
+    ["/api/date-rules"],
+    ["/api/notifications"],
   ],
   expenses: [
     ["/api/expenses"],
@@ -145,6 +169,9 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/stats"],
     ["/api/paychecks"],
     ["/api/cashflow"],
+    // Recurring income is a calendar series now (a paycheck lands on a date).
+    ["/api/calendar/timeline"],
+    ["/api/date-rules"],
     ["/api/insights"],
     ["/api/ai-digest"],
   ],
@@ -157,6 +184,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/insights"],
     ["/api/ai-digest"],
     ["/api/calendar/timeline"], // bills and loan payments are calendar items
+    ["/api/date-rules"],        // …and each one is a payment rule
     ["/api/notifications"],     // "bill due" alerts derive from obligations
   ],
   budgets: [
@@ -172,7 +200,9 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   events: [
     ["/api/events"],
     ["/api/calendar/timeline"],
+    ["/api/date-rules"],
     ["/api/dashboard-enhanced"],
+    ["/api/activity"],
   ],
   journal: [
     ["/api/journal"],
@@ -233,7 +263,10 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
     case "documents":
       return (q) => {
         const k0 = String(q.queryKey?.[0] || "");
-        return k0.startsWith("/api/documents");
+        // ["/api/profiles", id, "detail"] carries the `relatedDocuments` embed
+        // and the activity timeline the Info tab renders. Without it a deleted
+        // document kept its card and its count on that tab.
+        return k0.startsWith("/api/documents") || k0.startsWith("/api/profiles");
       };
     case "tasks":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/tasks");

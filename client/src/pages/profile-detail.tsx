@@ -4288,14 +4288,32 @@ function DocumentsTab({
       const prevDocs = queryClient.getQueryData<any[]>(["/api/documents"]);
       const prevDetail = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
       queryClient.setQueryData<any[]>(["/api/documents"], (old) => (old || []).filter((d: any) => d.id !== docId));
+      // The profile detail carries documents as `relatedDocuments` (plus a
+      // separate total and the activity timeline). This used to patch
+      // `old.documents`, a key the ProfileDetail shape has never had — so the
+      // optimistic delete silently did nothing and the Info tab kept showing
+      // the deleted document, its count, and its timeline entry.
       queryClient.setQueryData<any>(["/api/profiles", profileId, "detail"], (old: any) => {
-        if (!old?.documents) return old;
-        return { ...old, documents: old.documents.filter((d: any) => d.id !== docId) };
+        if (!old) return old;
+        const kept = (old.relatedDocuments || []).filter((d: any) => d.id !== docId);
+        if (kept.length === (old.relatedDocuments || []).length && !old.timeline) return old;
+        return {
+          ...old,
+          relatedDocuments: kept,
+          ...(typeof old.relatedDocumentsTotal === "number"
+            ? { relatedDocumentsTotal: Math.max(0, old.relatedDocumentsTotal - 1) }
+            : {}),
+          ...(Array.isArray(old.timeline)
+            ? { timeline: old.timeline.filter((t: any) => !(t.type === "document" && t.id === docId)) }
+            : {}),
+        };
       });
       return { prevDocs, prevDetail };
     },
     onSuccess: () => {
-      invalidateDomains("documents");
+      // "profiles" as well: the Info tab, the tab counters and the activity
+      // feed all read the profile-detail embed, not the document list.
+      invalidateDomains("documents", "profiles");
       toast({ title: "Document deleted" });
       setDeletingDocId(null);
       onUploaded();

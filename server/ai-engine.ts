@@ -65,6 +65,7 @@ import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollo
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
+import { inferKindFromText } from "@shared/calendar-adapters";
 import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
@@ -9468,6 +9469,50 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!input.date || typeof input.date !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(input.date)) {
         return { error: "Valid event date (YYYY-MM-DD) is required" };
       }
+      // ── The source entity owns its own dates ──────────────────────────
+      //
+      // "My birthday is July 10, 1994" is not a request for a calendar event;
+      // it is a fact about a person. Writing it as an event created a second,
+      // disconnected record of the same date: edit the profile later and the
+      // event stayed on July 10, delete the person and the event survived.
+      //
+      // So a birthday or anniversary aimed at a resolvable profile is written
+      // to that PROFILE's field, and the Date Rule engine derives the yearly
+      // occurrence from it (shared/date-rules) — exactly what document
+      // extraction and the manual form now produce for the same sentence.
+      // Anything without an owning record still becomes a real event.
+      {
+        const evtKind = inferKindFromText(input.title, input.category);
+        if (evtKind === "birthday" || evtKind === "anniversary") {
+          const profs = await storage.getProfiles();
+          // Either the explicit target, or the person named in the title
+          // ("Joe's Birthday" → Joe).
+          const nameFromTitle = String(input.title).replace(/['’]s\b/gi, "")
+            .replace(/\b(birthday|b-?day|anniversary)\b/gi, "").trim();
+          const target = (input.forProfile && matchProfileByName(profs, input.forProfile))
+            || (nameFromTitle.length >= 2 ? matchProfileByName(profs, nameFromTitle) : null)
+            || (evtKind === "birthday" ? profs.find((p: any) => p.type === "self") : null);
+          if (target) {
+            const field = evtKind === "birthday" ? "dateOfBirth" : "anniversary";
+            const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
+            const existing: Record<string, any> = (target as any).fields || {};
+            await storage.updateProfile(target.id, {
+              fields: canonicalizeProfileFields({ [field]: iso }, existing).fields,
+            } as any);
+            const updatedProfile = await storage.getProfile(target.id);
+            logger.info("ai", `"${input.title}" is ${target.name}'s ${field} — saved to the profile; the yearly occurrence is derived from it`);
+            return {
+              result: {
+                savedTo: "profile", profileId: target.id, profileName: target.name,
+                field, value: iso, recurrence: "yearly",
+                note: "Saved to the profile that owns this date; the calendar derives it.",
+              },
+              actions: [{ type: "update", category: "profile", data: updatedProfile }],
+            };
+          }
+        }
+      }
+
       // In-memory dedup lock
       // A9 fix: include forProfile in event dedup key.
       const evtDedupKey = `event:${safeLC(input.forProfile || "")}:${safeLC(input.title)}:${input.date}`;

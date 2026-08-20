@@ -5851,10 +5851,23 @@ Rules:
       if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Document name must be a non-empty string" });
       req.body.name = sanitize(req.body.name);
     }
+    // Editing a document's expiration by hand is the same write as extracting
+    // it, so it normalizes the same way — change 2034 to 2036 here and the
+    // derived rule (and every view of it) moves, because the rule reads this
+    // field. See shared/date-rules.
+    if (req.body.extractedData && typeof req.body.extractedData === "object") {
+      req.body.extractedData = normalizeEntityDateFields(
+        req.body.extractedData as Record<string, any>,
+        { contextKey: String(req.body.type ?? "") },
+      ).fields;
+    }
     const updated = await storage.updateDocument(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_d2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d2}:`); bustCache(`notifications:${uid_d2}`);
+    // A document's dates are calendar items, so an edit to them is a calendar
+    // change too.
+    bustCache(`caltimeline:${uid_d2}`); bustCache(`activity:${uid_d2}`);
     res.json(updated);
   }));
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
