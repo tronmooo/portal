@@ -38,6 +38,7 @@ export interface FakeDb {
 
 let seq = 0;
 const id = (p: string) => `${p}-${++seq}`;
+let harnessSeq = 0;
 
 /**
  * A storage double covering the methods the routes under test touch.
@@ -52,6 +53,14 @@ export function makeFakeStorage(db: FakeDb) {
   const impl: Record<string, any> = {
     _timezone: "America/Los_Angeles",
 
+    // The catch-all proxy answers unknown methods with `[]`, which is TRUTHY —
+    // and the response-cache read is `if (cached) return res.json(cached)`. So
+    // every cached endpoint served an empty array to the first caller and every
+    // caller after it. These two make the double behave like a cold cache.
+    getResponseCache: async () => null,
+    setResponseCache: async () => undefined,
+    getDataVersion: async () => 0,
+
     bumpDataVersion: async () => {
       db.bumpDataVersionCalls++;
       return db.bumpDataVersionCalls;
@@ -61,6 +70,21 @@ export function makeFakeStorage(db: FakeDb) {
     getProfilesLite: async () => db.profiles,
     getProfile: async (pid: string) => db.profiles.find(p => p.id === pid),
     linkProfileTo: async () => true,
+    createProfile: async (data: any) => {
+      const row = { id: id("prof"), fields: {}, tags: [], documents: [], ...data };
+      db.profiles.push(row);
+      return row;
+    },
+    // Deliberately a SHALLOW merge of `fields`, mirroring what the real storage
+    // does for a partial field patch — a route that means to add one field must
+    // not have the double do the merging work the route is being tested for.
+    updateProfile: async (pid: string, patch: any) => {
+      const row = db.profiles.find(p => p.id === pid);
+      if (!row) return undefined;
+      const fields = patch.fields ? { ...(row.fields || {}), ...patch.fields } : row.fields;
+      Object.assign(row, patch, { fields });
+      return row;
+    },
 
     getExpenses: async () => db.expenses,
     createExpense: async (data: any) => {
@@ -186,6 +210,45 @@ export function makeFakeStorage(db: FakeDb) {
       Object.assign(row, patch);
       return row;
     },
+    createDocument: async (data: any) => {
+      const row = { id: id("doc"), extractedData: {}, linkedProfiles: [], tags: [], type: "other", ...data };
+      db.documents.push(row);
+      return row;
+    },
+    deleteDocument: async (rid: string) => {
+      const before = db.documents.length;
+      db.documents = db.documents.filter(d => d.id !== rid);
+      return db.documents.length < before;
+    },
+
+    // The unified timeline, run through the same shared engine the real
+    // storages use. Without it every calendar assertion here would pass
+    // against an empty array — the failure mode this whole harness exists to
+    // avoid. Kept deliberately thin: events, tasks and the Date Rule pass,
+    // which is what the date tests read.
+    getCalendarTimeline: async (startDate: string, endDate: string) => {
+      const { rulesFromAll, seriesFromDateRules } = await import("../../shared/date-rules");
+      const { generateSeriesOccurrences } = await import("../../shared/calendar-occurrences");
+      const todayISO = new Date().toLocaleDateString("en-CA");
+      const items: any[] = [];
+      for (const ev of db.events) {
+        const d = String(ev.date || "").slice(0, 10);
+        if (d >= startDate && d <= endDate) {
+          items.push({ id: `event-${ev.id}-${d}`, type: "event", title: ev.title, date: d,
+            linkedProfiles: ev.linkedProfiles || [], sourceId: ev.id, meta: { tags: ev.tags } });
+        }
+      }
+      const rules = rulesFromAll({ profiles: db.profiles, documents: db.documents });
+      for (const ser of seriesFromDateRules(rules)) {
+        for (const occ of generateSeriesOccurrences(ser, { todayISO, horizonDays: 366 * 12, cap: 24 })) {
+          if (occ.date < startDate || occ.date > endDate) continue;
+          items.push({ id: `${ser.id}-${occ.date}`, type: "event", title: ser.title, date: occ.date,
+            linkedProfiles: ser.source.ownerIds || [], sourceId: ser.source.id,
+            meta: { kind: ser.kind, ruleId: ser.id.replace(/^rule:/, "") } });
+        }
+      }
+      return items.sort((a, b) => a.date.localeCompare(b.date));
+    },
 
   };
 
@@ -221,8 +284,14 @@ export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness>
   // Stand in for server/index.ts's authMiddleware: give every request a user
   // and bind the fake storage for the duration of the request, exactly the way
   // the real per-request scoped storage is bound in production.
+  // A DISTINCT user per harness. server/routes.ts keeps its response cache in a
+  // module-level Map keyed by user + data version, and that module is loaded
+  // once for the whole test file — so a shared "test-user" let one test's
+  // cached calendar be served to the next one, which is how a profile with no
+  // date of birth came back with a birthday on it.
+  const userId = `test-user-${++harnessSeq}`;
   app.use((req, _res, next) => {
-    (req as any).userId = "test-user";
+    (req as any).userId = userId;
     requestStorageContext.run(storage as any, () => next());
   });
 

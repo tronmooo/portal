@@ -2536,6 +2536,9 @@ ${JSON.stringify(ctx, null, 2)}`;
               // _mileageHistory rather than lost.
               const merged: Record<string, any> = { ...existingFields };
               const replacedMileage: Array<{ from: string; value: any }> = [];
+              // Keys this sweep deliberately retires because a SIBLING spelling
+              // of the same field is taking the value. They are not failures.
+              const retiredTwins = new Map<string, string>(); // retired key → survivor
               for (const [key, value] of Object.entries(incoming)) {
                 if (key.startsWith("_")) { merged[key] = value; continue; }
                 const identity = fieldIdentity(key);
@@ -2547,6 +2550,7 @@ ${JSON.stringify(ctx, null, 2)}`;
                     replacedMileage.push({ from: existingKey, value: merged[existingKey] });
                   }
                   merged[existingKey] = null;
+                  retiredTwins.set(existingKey, key);
                 }
                 for (const group of PROFILE_FIELD_GROUPS) {
                   const nested = merged[group];
@@ -2597,8 +2601,26 @@ ${JSON.stringify(ctx, null, 2)}`;
               const after = await storage.getProfile(resolvedProfileId);
               const afterFields: Record<string, any> = (after as any)?.fields || {};
               const confirmedKeys = Object.keys(incoming).filter((k) => !k.startsWith("_"));
-              const unsavedKeys = confirmedKeys.filter((k) => !looselyEqual(afterFields[k], incoming[k]));
-              const savedKeys = confirmedKeys.filter((k) => !unsavedKeys.includes(k));
+              // A key the sweep above retired in favour of a sibling spelling
+              // did exactly what it was meant to do.
+              //
+              // Reported 2026-08-20: extracting a date of birth answered
+              // "Confirmed: … — but 1 step(s) failed: fields did not persist to
+              // Jane Doe: dateOfBirth", with success:false. Nothing had gone
+              // wrong. The routing writes BOTH `dateOfBirth` and `birthday` for
+              // one confirmed DOB; the twin sweep then nulls one so the profile
+              // does not show the same date twice; and this check, reading the
+              // pre-sweep key list, called the intended null a lost write.
+              // Verify the VALUE landed under whichever spelling survived.
+              const unsavedKeys = confirmedKeys.filter((k) => {
+                if (looselyEqual(afterFields[k], incoming[k])) return false;
+                const survivor = retiredTwins.get(k);
+                return !(survivor && looselyEqual(afterFields[survivor], incoming[k]));
+              });
+              // Count the fields the user will SEE, not the alias spellings
+              // written alongside them — "Saved 2 fields" for one confirmed
+              // date of birth is its own small lie.
+              const savedKeys = confirmedKeys.filter((k) => !unsavedKeys.includes(k) && !retiredTwins.has(k));
               if (unsavedKeys.length > 0) {
                 failures.push(`fields did not persist to ${profile.name}: ${unsavedKeys.join(", ")}`);
               }
