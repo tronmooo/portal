@@ -29,7 +29,7 @@ import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
-import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from "@shared/profile-field-identity";
+import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted, removeDocumentContributedFields } from "@shared/profile-field-identity";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -2687,55 +2687,23 @@ ${JSON.stringify(ctx, null, 2)}`;
               // Fold alias spellings to the canonical key (currentMileage →
               // mileage, value → currentValue…) so a receipt's key naming
               // can't mint a second copy of a field the profile already has.
-              const incoming = canonicalizeProfileFields(profileFields, existingFields).fields;
+              const canonical = canonicalizeProfileFields(profileFields, existingFields).fields;
 
-              // The user confirmed each of these values, so a confirmed value
-              // REPLACES every other spelling of the same field — top-level
-              // twins and copies inside nested groups alike. Without this
-              // sweep the profile ends up showing "Mileage 80000" AND
-              // "Current Mileage 69063" as two separate rows. A twin at the
-              // top level is set to null (the storage merge layer treats null
-              // as a deletion intent); a modified nested group is rewritten
-              // wholesale. Replaced odometer readings are kept in
-              // _mileageHistory rather than lost.
-              const merged: Record<string, any> = { ...existingFields };
-              const replacedMileage: Array<{ from: string; value: any }> = [];
-              for (const [key, value] of Object.entries(incoming)) {
-                if (key.startsWith("_")) { merged[key] = value; continue; }
-                const identity = fieldIdentity(key);
-                for (const existingKey of Object.keys(merged)) {
-                  if (existingKey === key || existingKey.startsWith("_")) continue;
-                  if ((PROFILE_FIELD_GROUPS as readonly string[]).includes(existingKey)) continue;
-                  if (fieldIdentity(existingKey) !== identity) continue;
-                  if (identity === "mileage" && merged[existingKey] != null && !looselyEqual(merged[existingKey], value)) {
-                    replacedMileage.push({ from: existingKey, value: merged[existingKey] });
-                  }
-                  merged[existingKey] = null;
-                }
-                for (const group of PROFILE_FIELD_GROUPS) {
-                  const nested = merged[group];
-                  if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
-                  const twins = Object.keys(nested).filter((nk) => fieldIdentity(nk) === identity);
-                  if (twins.length === 0) continue;
-                  const cleaned: Record<string, any> = { ...nested };
-                  for (const nk of twins) {
-                    if (identity === "mileage" && cleaned[nk] != null && !looselyEqual(cleaned[nk], value)) {
-                      replacedMileage.push({ from: `${group}.${nk}`, value: cleaned[nk] });
-                    }
-                    delete cleaned[nk];
-                  }
-                  merged[group] = cleaned;
-                }
-                if (identity === "mileage" && merged[key] != null && !looselyEqual(merged[key], value)) {
-                  replacedMileage.push({ from: key, value: merged[key] });
-                }
-                merged[key] = value;
-              }
-              if (replacedMileage.length > 0) {
+              // Merge onto the profile. The confirmed value replaces every
+              // other spelling of the same field, EXCEPT a spelling this same
+              // payload is also writing — a license card sends "address" and
+              // "streetAddress" (and "State" and "issuing State") for one
+              // field each, and the sweep used to null the first of the pair
+              // right after writing it. Replaced odometer readings are kept in
+              // _mileageHistory rather than lost. See mergeFieldWrite.
+              const mergeResult = mergeFieldWrite(existingFields, canonical);
+              const merged: Record<string, any> = mergeResult.fields;
+              const incoming = mergeResult.written;
+              if (mergeResult.replacedMileage.length > 0) {
                 const history = Array.isArray(existingFields._mileageHistory) ? existingFields._mileageHistory : [];
                 merged._mileageHistory = [
                   ...history,
-                  ...replacedMileage.map((m) => ({ value: m.value, from: m.from, replacedAt: new Date().toISOString() })),
+                  ...mergeResult.replacedMileage.map((m) => ({ value: m.value, from: m.from, replacedAt: new Date().toISOString() })),
                 ];
               }
 
@@ -2761,7 +2729,12 @@ ${JSON.stringify(ctx, null, 2)}`;
               const after = await storage.getProfile(resolvedProfileId);
               const afterFields: Record<string, any> = (after as any)?.fields || {};
               const confirmedKeys = Object.keys(incoming).filter((k) => !k.startsWith("_"));
-              const unsavedKeys = confirmedKeys.filter((k) => !looselyEqual(afterFields[k], incoming[k]));
+              // Verify on IDENTITY, not on the literal key: a value written as
+              // `streetAddress` has landed when the profile holds it under
+              // `address` (or inside `personal.address`). The old exact-key
+              // check reported a perfectly good save as
+              // "fields did not persist to <name>: address, issuing State".
+              const unsavedKeys = confirmedKeys.filter((k) => !fieldValuePersisted(afterFields, k, incoming[k]));
               const savedKeys = confirmedKeys.filter((k) => !unsavedKeys.includes(k));
               if (unsavedKeys.length > 0) {
                 failures.push(`fields did not persist to ${profile.name}: ${unsavedKeys.join(", ")}`);
@@ -5957,14 +5930,13 @@ Rules:
         const sources = p.fields?._docFields;
         const recorded = (sources && typeof sources === "object") ? sources[docIdToDelete] : undefined;
         if (!recorded || typeof recorded !== "object") continue;
-        const nextFields: Record<string, any> = { ...p.fields };
-        const removedKeys: string[] = [];
-        for (const [k, savedVal] of Object.entries(recorded)) {
-          if (k in nextFields && looselyEqual(nextFields[k], savedVal)) {
-            delete nextFields[k];
-            removedKeys.push(k);
-          }
-        }
+        // Match the recorded field on IDENTITY, not on the literal key it was
+        // saved under — see removeDocumentContributedFields.
+        const cascade = removeDocumentContributedFields(p.fields as Record<string, any>, recorded);
+        const nextFields = cascade.fields;
+        // Top-level keys need an explicit null so the storage merge removes
+        // them; nested groups are already rewritten without their entry.
+        const removedKeys = cascade.removed.filter((path) => !path.includes("."));
         const nextSources: Record<string, any> = { ...sources };
         delete nextSources[docIdToDelete];
         // Null markers = deletion intents for the storage merge layer.
@@ -5973,8 +5945,8 @@ Rules:
         if (Object.keys(nextSources).length > 0) patch._docFields = nextSources;
         else { delete patch._docFields; patch._docFields = null; }
         await storage.updateProfile(p.id, { fields: patch } as any);
-        if (removedKeys.length > 0) {
-          log.info(`[doc-delete-cascade] ${docIdToDelete} → removed ${removedKeys.length} field(s) from ${p.name}: ${removedKeys.join(", ")}`);
+        if (cascade.removed.length > 0) {
+          log.info(`[doc-delete-cascade] ${docIdToDelete} → removed ${cascade.removed.length} field(s) from ${p.name}: ${cascade.removed.join(", ")}`);
         }
       }
     } catch (cascadeErr: any) {

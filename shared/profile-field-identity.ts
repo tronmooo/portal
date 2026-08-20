@@ -401,3 +401,289 @@ export function fieldBelongsOnProfileType(key: unknown, profileType: unknown): b
   }
   return true;
 }
+
+// ─── Confirming an extraction onto a profile ─────────────────────────────────
+//
+// User report 2026-08-20 (driver-license review card): ticking every field and
+// pressing Confirm returned
+//   "Saved with warnings — Some pieces didn't save: fields did not persist to
+//    Jane Doe: address, issuing State"
+// while the server log showed the write succeeding and the profile really did
+// end up holding the address and the state.
+//
+// WHY. The confirm route wrote the payload, then swept alias TWINS of each
+// written key to null so a confirmed value replaces every other spelling of
+// itself. That sweep ran against the whole merged object — including keys
+// written moments earlier BY THE SAME PAYLOAD. A license card sends two
+// spellings of one field:
+//     address / streetAddress   → both fieldIdentity "address"
+//     issuing State / State     → both fieldIdentity "licenseState"
+// Writing `streetAddress` nulled the `address` written one loop iteration
+// earlier; the post-write verification then compared afterFields["address"]
+// (null) against the confirmed value and reported it as unsaved. The data was
+// never lost — it sat under the sibling spelling — but the user was told their
+// save had failed, every single time a document names one field twice.
+//
+// The fix is two rules, both lived out here rather than inline in the route:
+//   1. Fold twins WITHIN the payload before merging, so one logical field is
+//      written once. Only agreeing values are folded — two different values
+//      are genuinely different data and both keys survive.
+//   2. Never null a key this payload is itself writing.
+// And verification asks "did this VALUE land under this IDENTITY anywhere?"
+// instead of "is this exact key still spelled the same way?".
+//
+// Pinned by tests/profile-field-write-identity.test.ts.
+
+import { looselyEqual } from "./profile-field-canon";
+
+const isBlank = (v: unknown) => v === undefined || v === null || String(v).trim() === "";
+
+export interface FoldedIncoming {
+  /** One entry per logical field (unless two spellings disagreed). */
+  fields: Record<string, any>;
+  /** Spellings folded away: `{ from: "address", into: "streetAddress" }`. */
+  collapsed: Array<{ from: string; into: string }>;
+}
+
+/**
+ * Collapse alias spellings inside ONE confirmed payload.
+ *
+ * Preference order for the surviving key: the spelling the profile already
+ * uses, then the spelling that matches the canonical identity, then the first
+ * key in payload order. A non-empty value always beats an empty one, and two
+ * non-empty values that disagree keep both keys — losing one would be losing
+ * data the user explicitly ticked.
+ */
+export function foldIncomingTwins(
+  incoming: Record<string, any> | null | undefined,
+  existing?: Record<string, any> | null,
+): FoldedIncoming {
+  const collapsed: Array<{ from: string; into: string }> = [];
+  if (!incoming || typeof incoming !== "object") return { fields: {}, collapsed };
+
+  const existingByIdentity = new Map<string, string>();
+  for (const k of Object.keys(existing || {})) {
+    if (k.startsWith("_")) continue;
+    const id = fieldIdentity(k);
+    if (!existingByIdentity.has(id)) existingByIdentity.set(id, k);
+  }
+
+  const out: Record<string, any> = {};
+  // identity → the key in `out` currently carrying that field
+  const holder = new Map<string, string>();
+
+  const preferred = (identity: string, a: string, b: string): string => {
+    const onProfile = existingByIdentity.get(identity);
+    if (onProfile) {
+      if (normalizeKey(a) === normalizeKey(onProfile)) return a;
+      if (normalizeKey(b) === normalizeKey(onProfile)) return b;
+    }
+    if (normalizeKey(a) === normalizeKey(identity)) return a;
+    if (normalizeKey(b) === normalizeKey(identity)) return b;
+    return a; // payload order
+  };
+
+  for (const [key, value] of Object.entries(incoming)) {
+    if (key.startsWith("_")) { out[key] = value; continue; }
+    const identity = fieldIdentity(key);
+    const held = holder.get(identity);
+    if (held === undefined) {
+      out[key] = value;
+      holder.set(identity, key);
+      continue;
+    }
+    // Two spellings of one field in the same payload.
+    if (isBlank(value)) { collapsed.push({ from: key, into: held }); continue; }
+    if (isBlank(out[held])) {
+      delete out[held];
+      out[key] = value;
+      holder.set(identity, key);
+      collapsed.push({ from: held, into: key });
+      continue;
+    }
+    if (!looselyEqual(out[held], value)) {
+      // Genuinely different values — keep both, lose nothing.
+      out[key] = value;
+      continue;
+    }
+    const winner = preferred(identity, held, key);
+    if (winner === held) {
+      collapsed.push({ from: key, into: held });
+    } else {
+      delete out[held];
+      out[winner] = value;
+      holder.set(identity, winner);
+      collapsed.push({ from: held, into: winner });
+    }
+  }
+  return { fields: out, collapsed };
+}
+
+export interface FieldWriteResult {
+  /** The fields object to store (null marks a twin for deletion). */
+  fields: Record<string, any>;
+  /** What this payload actually writes, after folding. Verify against THIS. */
+  written: Record<string, any>;
+  collapsed: Array<{ from: string; into: string }>;
+  /** Keys nulled because this write superseded them. Safe to drop entirely. */
+  superseded: string[];
+  /** Odometer readings displaced by a newer one, for `_mileageHistory`. */
+  replacedMileage: Array<{ from: string; value: any }>;
+}
+
+/**
+ * Merge an authoritative field write into a profile's stored fields.
+ *
+ * "Authoritative" means the write says what the field IS now — a confirmed
+ * extraction, an inline edit, an AI `update_profile` call. Every such write
+ * goes through here (storage.updateProfile calls it), so a fix landed once
+ * covers every door into a profile instead of the one that happened to break.
+ *
+ * The written value REPLACES every other spelling of the same field — the
+ * top-level twin is set to null (the storage merge layer reads null as a
+ * deletion intent) and a twin inside a nested group is dropped — so the Info
+ * tab can't end up showing "Mileage 80000" and "Current Mileage 69063" as two
+ * separate rows. Keys this same payload is writing are never swept: that is
+ * the bug documented above.
+ *
+ * Pure: returns new objects, never mutates the inputs.
+ */
+export function mergeFieldWrite(
+  existing: Record<string, any> | null | undefined,
+  incoming: Record<string, any> | null | undefined,
+): FieldWriteResult {
+  const existingFields = (existing && typeof existing === "object") ? existing : {};
+  const { fields: written, collapsed } = foldIncomingTwins(incoming, existingFields);
+  const merged: Record<string, any> = { ...existingFields };
+  const replacedMileage: Array<{ from: string; value: any }> = [];
+  const superseded: string[] = [];
+  // Every key this payload writes — off-limits to the twin sweep.
+  const writing = new Set(Object.keys(written).map((k) => normalizeKey(k)));
+
+  for (const [key, value] of Object.entries(written)) {
+    if (key.startsWith("_")) { merged[key] = value; continue; }
+    const identity = fieldIdentity(key);
+
+    for (const existingKey of Object.keys(merged)) {
+      if (existingKey === key || existingKey.startsWith("_")) continue;
+      if ((PROFILE_FIELD_GROUPS as readonly string[]).includes(existingKey)) continue;
+      if (fieldIdentity(existingKey) !== identity) continue;
+      // A sibling spelling this payload is also writing is not a stale twin.
+      if (writing.has(normalizeKey(existingKey))) continue;
+      if (identity === "mileage" && merged[existingKey] != null && !looselyEqual(merged[existingKey], value)) {
+        replacedMileage.push({ from: existingKey, value: merged[existingKey] });
+      }
+      merged[existingKey] = null;
+      superseded.push(existingKey);
+    }
+
+    for (const group of PROFILE_FIELD_GROUPS) {
+      const nested = merged[group];
+      if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
+      const twins = Object.keys(nested).filter((nk) => fieldIdentity(nk) === identity);
+      if (twins.length === 0) continue;
+      const cleaned: Record<string, any> = { ...nested };
+      for (const nk of twins) {
+        if (identity === "mileage" && cleaned[nk] != null && !looselyEqual(cleaned[nk], value)) {
+          replacedMileage.push({ from: `${group}.${nk}`, value: cleaned[nk] });
+        }
+        delete cleaned[nk];
+      }
+      merged[group] = cleaned;
+    }
+
+    if (identity === "mileage" && merged[key] != null && !looselyEqual(merged[key], value)) {
+      replacedMileage.push({ from: key, value: merged[key] });
+    }
+    merged[key] = value;
+  }
+
+  return { fields: merged, written, collapsed, superseded, replacedMileage };
+}
+
+/**
+ * Did this confirmed value actually reach the profile?
+ *
+ * Answers on IDENTITY, not on the literal key: a value written as
+ * `streetAddress` counts as saved when the profile holds it under `address`,
+ * or inside `personal.address`. Comparing exact keys is what made a successful
+ * save report itself as a failure.
+ */
+export function fieldValuePersisted(
+  fields: Record<string, any> | null | undefined,
+  key: string,
+  value: any,
+): boolean {
+  if (!fields || typeof fields !== "object") return isBlank(value);
+  const identity = fieldIdentity(key);
+
+  for (const [k, v] of Object.entries(fields)) {
+    if (k.startsWith("_")) continue;
+    const isGroup =
+      (PROFILE_FIELD_GROUPS as readonly string[]).includes(k) &&
+      v && typeof v === "object" && !Array.isArray(v);
+    if (isGroup) {
+      for (const [nk, nv] of Object.entries(v as Record<string, any>)) {
+        if (fieldIdentity(nk) === identity && !isBlank(nv) && looselyEqual(nv, value)) return true;
+      }
+      continue;
+    }
+    if (fieldIdentity(k) !== identity) continue;
+    if (isBlank(v)) continue;
+    if (looselyEqual(v, value)) return true;
+  }
+  return isBlank(value);
+}
+
+/**
+ * Remove the fields a deleted document contributed to a profile.
+ *
+ * `recorded` is the provenance blob confirm-extraction wrote
+ * (`fields._docFields[documentId] = { key: savedValue }`). A field is removed
+ * only while it still holds what the document saved — anything the user edited
+ * since is theirs and stays.
+ *
+ * Matching is by identity, top level and nested groups alike: the value saved
+ * as `streetAddress` may now be stored as `address`, or inside
+ * `personal.address`, because a later write supersedes twins. An exact-key
+ * cascade walked past both and left the deleted document's data behind.
+ *
+ * Pure: returns new objects, never mutates the input.
+ */
+export function removeDocumentContributedFields(
+  fields: Record<string, any> | null | undefined,
+  recorded: Record<string, any> | null | undefined,
+): FieldDeletionResult {
+  const removed: string[] = [];
+  if (!fields || typeof fields !== "object") return { fields: {}, removed };
+  const out: Record<string, any> = { ...fields };
+  if (!recorded || typeof recorded !== "object") return { fields: out, removed };
+
+  for (const [key, savedValue] of Object.entries(recorded)) {
+    if (key.startsWith("_")) continue;
+    const identity = fieldIdentity(key);
+    for (const storedKey of Object.keys(out)) {
+      if (storedKey.startsWith("_")) continue;
+      const storedValue = out[storedKey];
+      const isGroup =
+        (PROFILE_FIELD_GROUPS as readonly string[]).includes(storedKey) &&
+        storedValue && typeof storedValue === "object" && !Array.isArray(storedValue);
+      if (isGroup) {
+        const nested = storedValue as Record<string, any>;
+        const doomed = Object.keys(nested).filter(
+          (nk) => fieldIdentity(nk) === identity && looselyEqual(nested[nk], savedValue),
+        );
+        if (doomed.length === 0) continue;
+        const cleaned = { ...nested };
+        for (const nk of doomed) { delete cleaned[nk]; removed.push(`${storedKey}.${nk}`); }
+        out[storedKey] = cleaned;
+        continue;
+      }
+      if (fieldIdentity(storedKey) !== identity) continue;
+      if (!looselyEqual(storedValue, savedValue)) continue;
+      delete out[storedKey];
+      removed.push(storedKey);
+    }
+  }
+  return { fields: out, removed };
+}

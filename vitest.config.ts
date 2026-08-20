@@ -100,6 +100,7 @@ export default defineConfig({
       'tests/date-year-integrity.test.ts',
       'tests/profile-field-identity.test.ts',
       'tests/profile-field-crud-contract.test.ts',
+      'tests/profile-field-write-identity.test.ts',
       'tests/crud-coverage.test.ts',
       'tests/touch-crud-reachable.test.ts',
       'tests/source-type-stability.test.ts',
