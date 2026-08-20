@@ -28,6 +28,7 @@ import { routeContent, checkContentRouting } from "@shared/content-routing";
 import { checkToolAgainstIntent } from "@shared/ai-tool-routing";
 import { groundedSummary } from "@shared/ai-claim-check";
 import { profileNoun, profileNounLower } from "@shared/entity-nouns";
+import { ownershipHintFor, correctionConfirmation, writtenEntityNoun } from "../server/ai-engine";
 
 const FOUR_CLAUSE =
   "John's email is john@test.com, remind me to call him Friday, note that he hates cilantro, and his birthday is April 7.";
@@ -137,5 +138,77 @@ describe("5. every clause of a compound message is its own request", () => {
     expect(splitIntentClauses("Robert's email is robert@example.com")).toEqual([
       "Robert's email is robert@example.com",
     ]);
+  });
+});
+
+// ── The server-side halves of the same five turns ───────────────────────────
+//
+// These are the functions server/ai-engine.ts runs between a tool call and the
+// write. The model's choice of tool is supplied by hand here — everything
+// after it is the production path.
+
+describe("ownership is applied, not suggested", () => {
+  it("fills in forProfile for a journal entry that names one person", () => {
+    expect(ownershipHintFor("journal_entry", {}, "Journal entry for John: He seemed much happier today."))
+      .toBe("John");
+    expect(ownershipHintFor("create_note", {}, "Make a note for John that he prefers morning appointments."))
+      .toBe("John");
+  });
+
+  it("never overrides a choice the model already made", () => {
+    expect(ownershipHintFor("journal_entry", { forProfile: "Jane" }, "Journal entry for John: …")).toBeNull();
+  });
+
+  it("stays out of it when the message names nobody", () => {
+    expect(ownershipHintFor("journal_entry", {}, "Today was a good day.")).toBeNull();
+  });
+
+  it("leaves untargeted tools alone", () => {
+    expect(ownershipHintFor("create_expense", {}, "Log $20 for lunch with John")).toBeNull();
+  });
+});
+
+describe("a correction asks before it writes", () => {
+  const bill = [{ id: "ob1", name: "QA Phone Bill", amount: 86.5, frequency: "monthly" }];
+
+  it("asks the question from the report, in the user's own units", () => {
+    const ask = correctionConfirmation(
+      "update_obligation", { name: "QA Phone Bill", amount: 92 }, "Actually make that $92.", bill,
+    );
+    expect(ask?.userMessage).toBe("Do you want me to change the QA Phone Bill from $86.50 to $92?");
+  });
+
+  it("writes on the confirmation instead of asking again", () => {
+    expect(correctionConfirmation("update_obligation", { name: "QA Phone Bill", amount: 92 }, "yes", bill)).toBeNull();
+  });
+
+  it("says nothing when the value is already what was asked for", () => {
+    expect(correctionConfirmation(
+      "update_obligation", { name: "QA Phone Bill", amount: 86.5 }, "Actually make that $86.50.", bill,
+    )).toBeNull();
+  });
+
+  it("does not hold an ordinary update", () => {
+    expect(correctionConfirmation(
+      "update_obligation", { name: "QA Phone Bill", amount: 92 }, "Change the QA Phone Bill to $92.", bill,
+    )).toBeNull();
+  });
+
+  it("falls through when no stored record matches", () => {
+    expect(correctionConfirmation("update_obligation", { name: "Gas Bill", amount: 92 }, "Actually make that $92.", bill))
+      .toBeNull();
+  });
+});
+
+describe("the noun comes from the row that was written", () => {
+  it("reads a person as a person and a truck as an asset", () => {
+    expect(writtenEntityNoun("update_profile", { type: "person" })).toBe("person");
+    expect(writtenEntityNoun("update_profile", { type: "vehicle" })).toBe("asset");
+    expect(writtenEntityNoun("create_note", { type: "note" })).toBe("note");
+  });
+
+  it("says nothing rather than guessing", () => {
+    expect(writtenEntityNoun("update_profile", {})).toBeUndefined();
+    expect(writtenEntityNoun("create_task", { type: "person" })).toBeUndefined();
   });
 });

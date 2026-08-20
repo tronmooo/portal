@@ -13279,7 +13279,7 @@ const PROFILE_ROW_TOOLS = new Set(["create_profile", "update_profile", "create_l
  * about a person. Returns undefined when the row says nothing useful, leaving
  * the old wording in place.
  */
-function writtenEntityNoun(toolName: string, result: any): string | undefined {
+export function writtenEntityNoun(toolName: string, result: any): string | undefined {
   if (toolName === "create_note" || toolName === "update_note") return "note";
   if (!PROFILE_ROW_TOOLS.has(toolName)) return undefined;
   return profileNounLower(result?.type) ?? undefined;
@@ -13309,7 +13309,18 @@ const CORRECTION_SKIP_KEYS = new Set([
   "name", "title", "id", "forProfile", "trackerName", "query", "key", "confirm", "plan_id",
 ]);
 
-function correctionConfirmation(
+/** Fields whose numbers are dollars, so the question can show them as dollars. */
+const MONEY_FIELDS = new Set([
+  "amount", "value", "currentValue", "balance", "currentBalance", "monthlyPayment",
+  "price", "cost", "total", "minimumPayment", "creditLimit",
+]);
+
+/** "$86.50" / "$92" — cents only when the number has them. */
+function formatMoneyForAsk(n: number): string {
+  return `$${n.toFixed(2).replace(/\.00$/, "")}`;
+}
+
+export function correctionConfirmation(
   toolName: string,
   input: Record<string, any>,
   userMessage: string,
@@ -13341,7 +13352,15 @@ function correctionConfirmation(
     const before = (row as any)[k];
     if (before === null || before === undefined || typeof before === "object") continue;
     if (String(before).trim() === String(v).trim()) continue;
-    diffs.push(`${k} from ${String(before)} to ${String(v)}`);
+    // "from $86.50 to $92" — the user's own units. A bare "amount from 86.5"
+    // is the same fact stated worse, and the question exists to be answered at
+    // a glance.
+    const money = MONEY_FIELDS.has(k) && Number.isFinite(Number(before)) && Number.isFinite(Number(v));
+    const show = (x: any) => (money ? formatMoneyForAsk(Number(x)) : String(x));
+    // `amount` needs no naming — "change the QA Phone Bill from $86.50 to $92"
+    // already says what changed.
+    const field = k === "amount" ? "" : `${k} `;
+    diffs.push(`${field}from ${show(before)} to ${show(v)}`);
   }
   if (diffs.length === 0) return null;
 
