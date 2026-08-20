@@ -28,6 +28,8 @@ export interface FakeDb {
   tasks: any[];
   events: any[];
   documents: any[];
+  /** Chat-saved facts (the memories store), for the profile-scoping tests. */
+  memories: any[];
   /** Call counter for the binary-materializing read, so a test can prove the
    *  metadata route never touches it. */
   getDocumentCalls: number;
@@ -85,6 +87,8 @@ export function makeFakeStorage(db: FakeDb) {
       Object.assign(row, patch, { fields });
       return row;
     },
+
+    getMemories: async () => db.memories,
 
     getExpenses: async () => db.expenses,
     createExpense: async (data: any) => {
@@ -292,7 +296,7 @@ export interface Harness {
 export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness> {
   const db: FakeDb = {
     profiles: [], expenses: [], incomes: [], obligations: [],
-    tasks: [], events: [], documents: [], getDocumentCalls: 0,
+    tasks: [], events: [], documents: [], memories: [], getDocumentCalls: 0,
     bumpDataVersionCalls: 0, ...seed,
   };
   const storage = makeFakeStorage(db);

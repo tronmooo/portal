@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useExclusiveOverlay } from "@/lib/overlay-manager";
 import { useLocation } from "wouter";
 import {
   Command,
@@ -216,6 +217,10 @@ export function useCommandSearch() {
 
 export function CommandSearchProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  // Global search is an overlay like any other: opening it closes whatever
+  // popover was already showing instead of rendering over it (QA 2026-08-20
+  // bug 13, "Search opened over the remaining filter panel").
+  useExclusiveOverlay("command-search", open, setOpen);
 
   // Cmd+K / Ctrl+K global shortcut
   useEffect(() => {

@@ -72,8 +72,11 @@ import { buildExecutiveSections, type ExecSectionId } from "@shared/executive-se
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
-import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
+// ONE ownership-aware task selector for the whole hub — the header chip and
+// this card must never disagree again (QA 2026-08-20 bug 10).
+import { useScopedTasks, isHiddenTestRow, daysFromToday as sharedDaysFromToday } from "@/lib/scoped-tasks";
+import { useExclusiveOverlay } from "@/lib/overlay-manager";
 import { extractVitals } from "@/lib/wellness-metrics";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 
@@ -470,6 +473,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // out instead of blinking away when the refetch lands.
   const [leavingKeys, setLeavingKeys] = useState<Set<string>>(new Set());
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // The attention filter drawer is a plain conditional panel, not a Radix root:
+  // without this it had no Escape handling and could sit open behind the
+  // dashboard menu, search and notifications all at once (QA 2026-08-20 bug
+  // 13). Registered with the central overlay manager, it closes on Escape and
+  // whenever any other registered overlay opens.
+  useExclusiveOverlay("attention-filters", filtersOpen, setFiltersOpen);
   const mode = filterMode;
   const ids = filterIds;
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
@@ -479,12 +488,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // swallow errors into a cached-as-success empty value (`.catch(() => [])`).
   // A transient failure — e.g. the pre-auth boot window racing token restore —
   // then renders as "0 in every category" for the whole staleTime window.
-  const { data: tasksRaw = [], isPending: tasksPending } = useQuery<any[]>({
-    queryKey: ["/api/tasks", mode, ...ids],
-    enabled: ready,
-    queryFn: () => apiRequest("GET", `/api/tasks${param}`).then(r => r.json()),
-    staleTime: 30_000,
-  });
+  // Tasks come from the shared selector (lib/scoped-tasks.ts) — same query
+  // key, same test-row filter and same arithmetic the hub header chip runs, so
+  // "Tasks Due" up there and "Remaining" down here are one number.
+  const {
+    tasks, pending, overdue: overdueTasks, doneToday, sortedPending,
+    isPending: tasksPending,
+  } = useScopedTasks(mode, ids, { enabled: ready });
   const { data: habitsRaw = [], isPending: habitsPending } = useQuery<any[]>({
     queryKey: ["/api/habits", mode, ...ids],
     enabled: ready,
@@ -561,16 +571,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
   // "Hide test data" (default) — same shared detector the finance surfaces use.
   const showTestData = useShowTestData();
-  const testText = (s: any): boolean => {
-    if (isTestDataRow(s)) return true;
-    const str = String(s || "");
-    return str.includes(":") && str.split(":").slice(1).some((part: string) => isTestDataRow(part.trim()));
-  };
-  const isTestRow = (r: any) =>
-    testText(r?.name) || testText(r?.title) || isTestDataRow(r?.description) ||
-    testText(r?.message) || isTestDataRow(r?.documentName);
-  const hideTest = <T,>(rows: T[]): T[] => (showTestData ? rows : (rows || []).filter(r => !isTestRow(r)));
-  const tasks = hideTest(tasksRaw || []);
+  // The predicate lives in lib/scoped-tasks.ts so the hub header applies the
+  // EXACT same rule to the number it shows.
+  const hideTest = <T,>(rows: T[]): T[] => (showTestData ? rows : (rows || []).filter(r => !isHiddenTestRow(r)));
   const habits = hideTest(habitsRaw || []);
   // Canonical window includes pre-today rows for the calendar grid; this tab
   // is today-onward only.
@@ -684,17 +687,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const monthlyExpenses = monthlySpendBase != null ? monthlySpendBase + (snap?.monthlyObligationTotal ?? 0) : null;
   const cashFlow = monthlyExpenses != null ? monthlyIncome - monthlyExpenses : null;
 
-  // Tasks
-  const pending = (tasks || []).filter((t: any) => t.status !== "done");
-  const daysFromToday = (dateStr: any): number | null => {
-    const t = String(dateStr || "").slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
-    return Math.round((new Date(`${t}T12:00:00`).getTime() - new Date(`${todayStr}T12:00:00`).getTime()) / 86400000);
-  };
-  const overdueTasks = pending.filter((t: any) => (daysFromToday(t.dueDate) ?? 1) < 0);
-  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
-  const sortedPending = pending.slice().sort((a: any, b: any) =>
-    (daysFromToday(a.dueDate) ?? 9e9) - (daysFromToday(b.dueDate) ?? 9e9));
+  // Tasks — pending / overdue / doneToday / sortedPending all come from
+  // useScopedTasks above. `daysFromToday` stays local only as a formatting
+  // helper for rows in every other section.
+  const daysFromToday = (dateStr: any): number | null => sharedDaysFromToday(dateStr, todayStr);
 
   // Next Important — the soonest dated thing across every domain. Falls back
   // to the most urgent attention row when nothing is coming up.

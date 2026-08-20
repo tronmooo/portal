@@ -154,9 +154,12 @@ function EveryoneInfo() {
         )}
       </div>
 
-      {/* Chat-saved facts are stored per USER, not per profile, so they belong
-          to the combined view as much as to Self's. */}
-      <MemoriesSection />
+      {/* Chat-saved facts. On "Everyone" the whole store is the right answer;
+          on a narrowed selection ("Selected people") only the facts linked to
+          those people are — the same rule every other panel on this screen
+          follows (QA 2026-08-20 bug 12). */}
+      <MemoriesSection profileIds={scope.mode === "selected" && scope.selectedIds.length > 0
+        ? [...scope.selectedIds] : undefined} />
     </div>
   );
 }
@@ -487,8 +490,10 @@ function SingleProfileInfo({ id }: { id: string }) {
       {/* Documents linked to this profile */}
       <DocumentsSection documents={documents} />
 
-      {/* Chat-saved facts (the memories store) — user-level, shown on Self */}
-      {isSelf && <MemoriesSection />}
+      {/* Chat-saved facts. Self's page is the account-level view of the store;
+          any other person shows only facts linked to THEM, never the shared
+          pool (QA 2026-08-20 bug 12). */}
+      {isSelf ? <MemoriesSection /> : <MemoriesSection profileIds={[profile.id]} />}
 
       {/* Activity + Journal */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -581,21 +586,41 @@ function DocumentsSection({ documents }: { documents: any[] }) {
 }
 
 // ── Chat-saved facts (memories store) ─────────────────────────────────────────
-function MemoriesSection() {
+// PROFILE SCOPE (QA 2026-08-20, bug 12: "Jane QA and Test Child QA display the
+// identical fact"). A memory belongs to the user, but it may also be LINKED to
+// specific profiles — and a screen that is showing one person's information may
+// only show that person's facts. The rule, in one place:
+//
+//   · `profileIds` given  → ask the API for exactly those ids and show only
+//     what comes back. An unlinked, account-level fact is nobody's in
+//     particular, so it does not appear under a named person.
+//   · `profileIds` omitted → the account-level view (Self's page, Everyone),
+//     which is the only place the whole store is the right answer.
+//
+// The id set is always explicit: there is no "current profile" ambient state
+// this component could read wrongly.
+function MemoriesSection({ profileIds }: { profileIds?: string[] }) {
   const { toast } = useToast();
+  const scoped = Array.isArray(profileIds) && profileIds.length > 0;
+  const idsKey = scoped ? profileIds!.join(",") : "";
   const { data: memories } = useQuery<any[]>({
-    queryKey: ["/api/memories"],
-    queryFn: async () => (await apiRequest("GET", "/api/memories")).json(),
+    queryKey: scoped ? ["/api/memories", "profiles", idsKey] : ["/api/memories"],
+    queryFn: async () => (await apiRequest(
+      "GET",
+      scoped ? `/api/memories?profileIds=${encodeURIComponent(idsKey)}` : "/api/memories",
+    )).json(),
     staleTime: 30_000,
   });
 
   const update = useMutation({
     mutationFn: async ({ id, value }: { id: string; value: string }) => { await apiRequest("PATCH", `/api/memories/${id}`, { value }); },
+    // Prefix match: covers the unscoped list AND every scoped variant.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/memories"] }),
     onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
   const remove = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/memories/${id}`); },
+    // Prefix match: covers the unscoped list AND every scoped variant.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/memories"] }),
     onError: (err: Error) => toast({ title: "Failed to remove", description: formatApiError(err), variant: "destructive" }),
   });

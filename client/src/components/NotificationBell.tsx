@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import { useExclusiveOverlay } from "@/lib/overlay-manager";
 
 interface Notification {
   id: string;
@@ -136,6 +137,10 @@ async function saveDismissedIds(ids: string[]): Promise<void> {
 export function NotificationBell() {
   const [, setLocation] = useLocation();
   const [open, setOpen] = useState(false);
+  // One overlay at a time: opening the bell closes the attention filter
+  // drawer / dashboard menu / search instead of stacking over them
+  // (QA 2026-08-20 bug 13).
+  useExclusiveOverlay("notifications", open, setOpen);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   // Whether the persisted dismissal list has come back yet. The badge stays
   // hidden until it has: dismissals load one round trip AFTER the notifications
@@ -405,6 +410,12 @@ function NotificationItem({
   const Icon = getIcon(notification.type);
   const relativeTime = getRelativeTime(notification.dueDate);
 
+  // ACCESSIBLE NAMES (QA 2026-08-20 bug 14: "the rendered notification
+  // contains a final anonymous button with no label"). Every interactive
+  // control in a row states what it does and which notification it does it to
+  // — an icon-only <Button> exposes no name at all to a screen reader, and the
+  // row itself was a bare <div onClick> with no role, name or keyboard path.
+  const openLabel = `Open notification: ${notification.title}`;
   return (
     <div
       className={cn(
@@ -412,7 +423,13 @@ function NotificationItem({
         styles.border,
         styles.bg
       )}
+      role="button"
+      tabIndex={0}
+      aria-label={openLabel}
       onClick={() => onClick(notification)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(notification); }
+      }}
       data-testid={`notification-item-${notification.id}`}
     >
       <div className={cn("mt-0.5 shrink-0", styles.iconColor)}>
@@ -436,9 +453,11 @@ function NotificationItem({
         size="icon"
         className="h-6 w-6 shrink-0 mt-0.5 opacity-50 hover:opacity-100 focus:opacity-100"
         onClick={(e) => onDismiss(notification.id, e)}
+        aria-label={`Dismiss notification: ${notification.title}`}
+        title="Dismiss"
         data-testid={`button-dismiss-${notification.id}`}
       >
-        <X className="h-3 w-3" />
+        <X className="h-3 w-3" aria-hidden="true" />
       </Button>
     </div>
   );

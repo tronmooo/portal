@@ -7342,10 +7342,21 @@ Rules:
   app.get("/api/memories", asyncHandler(async (req, res) => {
     try {
       let items: any[] = await storage.getMemories();
+      // Profile scoping. `profileId` (single) is the original spelling;
+      // `profileIds` (comma list) mirrors every other scoped endpoint so the
+      // Info tab can ask for the people currently in scope in one request.
+      // QA 2026-08-20 (bug 12): the Info tab showed the SAME chat-saved fact
+      // on Jane and on Test Child because it asked for the unscoped list —
+      // an explicit id set is the only thing that can answer "whose fact is
+      // this?", so a scoped request returns ONLY facts linked to those ids.
+      const profileIdsParam = req.query.profileIds as string | undefined;
       const profileId = req.query.profileId as string | undefined;
-      if (profileId) {
+      const ids = profileIdsParam
+        ? profileIdsParam.split(",").map(s => s.trim()).filter(Boolean)
+        : (profileId ? [profileId] : []);
+      if (ids.length > 0) {
         items = items.filter((item: any) =>
-          (item.linkedProfiles || []).includes(profileId) || item.profileId === profileId
+          ids.some(id => (item.linkedProfiles || []).includes(id) || item.profileId === id)
         );
       }
       res.json(items);

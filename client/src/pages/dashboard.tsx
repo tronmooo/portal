@@ -43,6 +43,7 @@ import {
   type FindingDirection,
 } from "@shared/tracker-insights";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
+import { useExclusiveOverlay } from "@/lib/overlay-manager";
 import { warmSiblingScopes } from "@/lib/scope-prefetch";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -5195,15 +5196,45 @@ function useOwnershipTables(allProfiles: any[]): OwnershipTables {
 // "Everyone" reads as an aggregate view at a glance. Uses computeNetWorth (the
 // single source of truth) so it agrees with the per-profile cards + personal
 // dashboards to the dollar.
-function HouseholdHero({ allProfiles }: { allProfiles: any[] }) {
+function HouseholdHero({ allProfiles, profilesReady = true, snapshot }: {
+  allProfiles: any[];
+  /** False while /api/profiles is still in flight — see ProfileSummaryGrid. */
+  profilesReady?: boolean;
+  /** The server's scope-filtered finance snapshot (enhanced.financeSnapshot). */
+  snapshot?: { totalAssetValue?: number; totalLiabilities?: number } | null;
+}) {
   // Household total is unfiltered, so every share sums to 100% and the
   // ownership tables can't change the answer — but pass them anyway so this
   // hero and the per-person cards below run the exact same code path.
   const ownership = useOwnershipTables(allProfiles);
-  const { assets, liabilities, netWorth } = useMemo(
+  const rolled = useMemo(
     () => computeNetWorth(allProfiles || [], { mode: "everyone", selectedIds: [], ownership }),
     [allProfiles, ownership],
   );
+  // AGGREGATE SOURCE OF TRUTH (QA 2026-08-20 bug 10: header "$149,563",
+  // household hero "$0"). The header chip and the Executive overview both read
+  // the server's finance snapshot; this hero rolled its own total up from
+  // /api/profiles, which is the app's slowest endpoint (~6s) and renders as a
+  // confident $0 for as long as it is empty. Prefer the same snapshot the rest
+  // of the Everyone view shows, and fall back to the client roll-up only when
+  // the snapshot has not landed.
+  const { assets, liabilities, netWorth } = snapshot
+    ? {
+        assets: snapshot.totalAssetValue ?? 0,
+        liabilities: snapshot.totalLiabilities ?? 0,
+        netWorth: (snapshot.totalAssetValue ?? 0) - (snapshot.totalLiabilities ?? 0),
+      }
+    : rolled;
+  // Never claim "$0 · 0 people" for a household we simply have not loaded yet.
+  if (!snapshot && !profilesReady) {
+    return (
+      <div className="rounded-2xl border border-border bg-gradient-to-br from-primary/[0.08] to-transparent p-4" data-testid="household-hero-loading">
+        <Skeleton className="h-3 w-32" />
+        <Skeleton className="h-8 w-40 mt-2" />
+        <Skeleton className="h-2.5 w-full mt-3 rounded-full" />
+      </div>
+    );
+  }
   const total = assets + liabilities;
   const assetPct = total > 0 ? Math.round((assets / total) * 100) : (assets > 0 ? 100 : 0);
   const peopleCount = (allProfiles || []).filter((p: any) => p.type === "self" || p.type === "person").length;
@@ -5235,7 +5266,14 @@ function HouseholdHero({ allProfiles }: { allProfiles: any[] }) {
 // breakdown + each person's share of household net worth. Net worth per person
 // comes from the SINGLE source of truth (computeNetWorth). Clicking a card
 // switches scope to that profile's personal dashboard.
-function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
+function ProfileSummaryGrid({ allProfiles, profilesReady = true }: {
+  allProfiles: any[];
+  /** False while /api/profiles is still in flight. "No people or pets yet" is
+   *  a claim about the account, and it must never be made from an empty cache:
+   *  QA 2026-08-20 (bug 10) saw it on an account whose Info tab listed eight
+   *  profiles at the same moment. */
+  profilesReady?: boolean;
+}) {
   // BUG (QA 2026-07-25, "House: $250,000 in Finance but $500,000 in Assets"):
   // these per-person cards used to sum WHOLE asset/liability values, so a
   // 50/50 house counted $500k on both owners' cards while the Finance tab —
@@ -5263,9 +5301,17 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
 
   const totalPositiveNW = useMemo(() => cards.reduce((s: number, c: any) => s + Math.max(0, c.netWorth), 0), [cards]);
 
+  if (cards.length === 0 && !profilesReady) {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2" data-testid="household-profiles-loading">
+        {[0, 1, 2].map(i => <Skeleton key={i} className="h-[104px] rounded-xl" />)}
+      </div>
+    );
+  }
+
   if (cards.length === 0) {
     return (
-      <div className="bubble -dashed p-6 text-center">
+      <div className="bubble -dashed p-6 text-center" data-testid="household-profiles-empty">
         <Users className="h-7 w-7 text-muted-foreground/40 mx-auto mb-2" />
         <p className="text-sm text-muted-foreground">No people or pets yet</p>
         <p className="text-xs text-muted-foreground/70 mt-0.5">Add a profile to see household totals here</p>
@@ -5322,12 +5368,14 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
   );
 }
 
-function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton, ready = true }: {
+function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton, ready = true, profilesReady = true }: {
   enhanced: any;
   stats: any;
   allProfiles: any[];
   showSkeleton?: boolean;
   ready?: boolean;
+  /** Has /api/profiles resolved? Gates the household panels' empty states. */
+  profilesReady?: boolean;
 }) {
   if (showSkeleton) return <SkeletonGrid cols={3} rows={2} h="h-14" />;
   return (
@@ -5340,8 +5388,8 @@ function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton, ready 
           follow below the briefing. */}
       <ExecutiveBriefing filterMode="everyone" filterIds={[]} stats={stats} enhanced={enhanced} ready={ready} />
       <HouseholdGroupHeader icon={Users} label="Household" />
-      <HouseholdHero allProfiles={allProfiles} />
-      <ProfileSummaryGrid allProfiles={allProfiles} />
+      <HouseholdHero allProfiles={allProfiles} profilesReady={profilesReady} snapshot={enhanced?.financeSnapshot ?? null} />
+      <ProfileSummaryGrid allProfiles={allProfiles} profilesReady={profilesReady} />
       <AISummaryWidget stats={stats} enhanced={enhanced} filterMode="everyone" filterIds={[]} scopeLabel="Everyone" />
     </div>
   );
@@ -5362,6 +5410,11 @@ export default function DashboardPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
+  // The kebab menu joins the central overlay manager: opening it closes the
+  // attention filter drawer / notifications / search rather than stacking on
+  // top of them (QA 2026-08-20 bug 13).
+  const [dashMenuOpen, setDashMenuOpen] = useState(false);
+  useExclusiveOverlay("dashboard-menu", dashMenuOpen, setDashMenuOpen);
   const [chatgptImportOpen, setChatgptImportOpen] = useState(false);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
@@ -5403,8 +5456,10 @@ export default function DashboardPage() {
     console.log(`[perfLog] filter switch → ${filterMode} [${filterIds.join(",") || "everyone"}] @ ${Math.round(filterSwitchMarkRef.current)}ms`);
   }, [perfLogEnabled, filterMode, filterIds.join(",")]);
 
-  // Fetch profiles for filter
-  const { data: allProfiles = [] } = useQuery<any[]>({
+  // Fetch profiles for filter. `isPending` is forwarded to the household
+  // panels so an unresolved list renders as skeletons rather than as the
+  // factual claims "$0" and "No people or pets yet" (QA 2026-08-20 bug 10).
+  const { data: allProfiles = [], isPending: profilesPending } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
@@ -5838,7 +5893,7 @@ export default function DashboardPage() {
           )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <DropdownMenu>
+          <DropdownMenu open={dashMenuOpen} onOpenChange={setDashMenuOpen}>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="icon" className="h-8 w-8 hover:bg-accent" data-testid="btn-dashboard-menu" aria-label="Dashboard menu">
                 <MoreVertical className="h-4 w-4" />
@@ -5963,6 +6018,7 @@ export default function DashboardPage() {
           allProfiles={allProfiles}
           showSkeleton={showDashSkeleton && !stats}
           ready={bootstrapSettled}
+          profilesReady={!profilesPending}
         />
         )
       ) : (() => {

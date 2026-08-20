@@ -18,6 +18,7 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { useResumeTick } from "@/hooks/useResumeTick";
 import { useOverflowX } from "@/hooks/useOverflowX";
 import { HUB_TABS, activeHubTab, hubTabAccent, infoTabRoute, reconcileInfoRoute } from "./hub-routes";
+import { overlayJustClosed } from "@/lib/overlay-manager";
 import { HubKpiStrip } from "./HubKpiStrip";
 import { HubProfileSwitcher } from "./HubProfileSwitcher";
 
@@ -81,7 +82,18 @@ export function HubShell() {
               role="tab"
               aria-selected={isActive}
               data-testid={`hub-tab-${tab.id}`}
-              onClick={() => hashNavigate(tab.id === "info" ? infoTabRoute([...scope.selectedIds]) : tab.route)}
+              // GHOST-TAP SHIELD (QA 2026-08-20 bug 11: "selecting Jane
+              // changed the selected tab to Info"). The profile switcher's
+              // menu is right-aligned and hangs over this row, so the tap that
+              // committed a profile choice could land on the chip underneath
+              // once the menu unmounted — the right-most chip being Info, and
+              // which chip you hit depending on how far down the list the
+              // person sat. Switching scope must never change section.
+              onPointerDown={(e) => { if (overlayJustClosed()) e.preventDefault(); }}
+              onClick={(e) => {
+                if (overlayJustClosed()) { e.preventDefault(); return; }
+                hashNavigate(tab.id === "info" ? infoTabRoute([...scope.selectedIds]) : tab.route);
+              }}
               // The active chip wears the tab's own colour rather than one
               // app-wide primary, so the strip tells you where you are at a
               // glance and agrees with the page it opens.

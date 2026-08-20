@@ -8,7 +8,7 @@
 // IMPORTANT: never writes the store on mount — initDefaultProfileFilter()
 // (dashboard.tsx) seeds the Self profile on first load and a mount-time write
 // here would race it.
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, Gem, Users } from "lucide-react";
@@ -23,12 +23,23 @@ import {
 } from "@/lib/profileFilter";
 import { prefetchScopeBootstrap } from "@/lib/scope-prefetch";
 import { modalJustClosed } from "@/lib/modal-history";
+import { useExclusiveOverlay } from "@/lib/overlay-manager";
 
 interface LiteProfile { id: string; type: string; name: string; avatar?: string }
 
 export function HubProfileSwitcher() {
   const [, navigate] = useLocation();
   const scope = useProfileScope();
+  // CONTROLLED (was uncontrolled). Two reasons, both from QA 2026-08-20:
+  //  · bug 13 — one overlay at a time across the whole shell;
+  //  · bug 11 — "selecting Jane changed the selected tab to Info". The menu is
+  //    right-aligned and hangs directly over the tab chip row, so the tap that
+  //    picked a person landed on whatever chip sat under that row position once
+  //    the menu unmounted — Info being the last, right-most chip. Registering
+  //    the menu stamps a close time the chips check (see HubShell), which is
+  //    why the behavior depended on which row you picked.
+  const [menuOpen, setMenuOpen] = useState(false);
+  useExclusiveOverlay("hub-profile-switcher", menuOpen, setMenuOpen);
 
   // Same key + fallback pattern as MultiProfileFilter so the two share a cache.
   const fullProfilesCache = queryClient.getQueryData<any[]>(["/api/profiles"]);
@@ -64,7 +75,7 @@ export function HubProfileSwitcher() {
   const isChecked = (id: string) => scope.mode === "selected" && scope.selectedIds.includes(id);
 
   return (
-    <DropdownMenu>
+    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="outline" size="sm"

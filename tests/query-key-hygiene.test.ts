@@ -54,7 +54,10 @@ const ALLOWLIST = new Set<string>([
   // global payloads dominated large accounts — so they left this list.)
   "pages/profile-detail.tsx::trackers",
   // Account / settings pages — global, not rendered under the profile filter.
-  "pages/profile-info.tsx::memories",
+  // (profile-info's memories read left this list on 2026-08-20: the Info page
+  // now passes an explicit ?profileIds= whenever it is showing named people,
+  // and keeps the bare read only for the account-level Self/Everyone view —
+  // so the scanner no longer sees an unconditional global read here.)
   "pages/settings.tsx::stats",
   "pages/settings.tsx::documents",
   // Trackers hub — reads all docs, then filters into `profileFilteredDocs`

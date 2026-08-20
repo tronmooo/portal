@@ -19,6 +19,11 @@ import { useQuery } from "@tanstack/react-query";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
+// ONE task selector for the hub (lib/scoped-tasks.ts). The chip used to show
+// the server's stats.activeTasks while the Tasks card below it counted the
+// client list — same label, two definitions, "48" over "0 Remaining" on the
+// same screen (QA 2026-08-20 bug 10).
+import { useScopedTasks } from "@/lib/scoped-tasks";
 import { useOverflowX } from "@/hooks/useOverflowX";
 import { computeHealthScore } from "@/lib/tracker-health";
 import type { DashboardStats, Tracker } from "@shared/schema";
@@ -162,8 +167,11 @@ export function HubKpiStrip() {
     ? Math.max(0, ...(stats.streaks || []).map(s => s.days || 0), stats.journalStreak || 0)
     : null;
 
-  const tasksDue = stats?.activeTasks;
-  const tasksLate: number = (enhanced?.overdueTasks || []).length;
+  // Same query key the bootstrap seeds, so this costs no extra request.
+  const { pending: pendingTasks, overdue: overdueTasks, isPending: tasksPending } =
+    useScopedTasks(mode, ids);
+  const tasksDue = tasksPending ? null : pendingTasks.length;
+  const tasksLate: number = overdueTasks.length;
 
   const expDocs: any[] = enhanced?.expiringDocuments || [];
   const minDocDays = expDocs.length > 0
