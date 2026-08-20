@@ -26,6 +26,9 @@ import { addYearsISO } from "./date-math";
 import { canonicalObligationCategory } from "./category-canon";
 import { resolveBillingModel, resolveOccurrenceAmount } from "./liability-billing";
 import { groupMaterializedSeries } from "./series-detect";
+import { rulesFromAll, seriesFromDateRules } from "./date-rules";
+import { normalizeDateString } from "./extraction-normalize";
+import { resolveLiabilityDueDate, resolveLiabilityEndDate } from "./liability-schedule";
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
 const clip = (v: unknown): string => String(v ?? "").slice(0, 10);
@@ -114,66 +117,14 @@ export function inferKindFromText(title: unknown, category?: unknown): Occurrenc
   return "custom";
 }
 
-/** The profile-field keys that carry a person's or pet's birthday. */
-const BIRTHDAY_KEYS = /^(birthday|birthdate|birth_date|dob|dateofbirth|date_of_birth)$/i;
-const ANNIVERSARY_KEYS = /anniversary/i;
-
 // ─── Profiles: birthdays & anniversaries ─────────────────────────────────────
 
-/**
- * Birthdays and anniversaries carried on a profile's `fields`. These are the
- * AUTHORITATIVE source for those dates — editing a birthday means editing the
- * profile, so `dedupeSeries` prefers these over any typed-in event.
- *
- * Only one birthday series is emitted per profile even if several field
- * spellings are present (`dob` and `birthday` both set), because the identity
- * key is per-profile and the first match wins.
- */
-export function seriesFromProfiles(profiles: readonly any[]): CalendarSeries[] {
-  const out: CalendarSeries[] = [];
-  for (const p of profiles || []) {
-    if (!p?.id) continue;
-    const fields = p.fields && typeof p.fields === "object" ? p.fields : {};
-    const name = p.name || "Unnamed";
-    const seenKinds = new Set<OccurrenceKind>();
-
-    const visit = (obj: any, depth: number) => {
-      if (!obj || typeof obj !== "object" || depth > 2) return;
-      for (const [key, value] of Object.entries(obj)) {
-        if (value && typeof value === "object" && !Array.isArray(value)) {
-          visit(value, depth + 1);
-          continue;
-        }
-        if (typeof value !== "string" || !isISO(value)) continue;
-        const kind: OccurrenceKind | null = BIRTHDAY_KEYS.test(key)
-          ? "birthday"
-          : ANNIVERSARY_KEYS.test(key)
-            ? "anniversary"
-            : null;
-        if (!kind || seenKinds.has(kind)) continue;
-        seenKinds.add(kind);
-        out.push({
-          id: `profile:${p.id}:${kind}`,
-          kind,
-          title: kind === "birthday" ? `${name}'s Birthday` : `${name} — Anniversary`,
-          subtitle: name,
-          source: {
-            system: "profile",
-            id: p.id,
-            profileId: p.id,
-            ownerIds: uniq([p.id, p.parentProfileId]),
-            label: name,
-            href: sourceHref("profile", p.id, p.id),
-          },
-          baseDate: clip(value),
-          recurrence: "yearly",
-        });
-      }
-    };
-    visit(fields, 0);
-  }
-  return out;
-}
+// (Removed: `seriesFromProfiles`. It knew about birthdays and anniversaries and
+// nothing else, which is why a licence expiration typed onto a person reached
+// Upcoming and no calendar. Profile-carried dates come from the Date Rule
+// engine now — shared/date-rules — and it is deliberately gone rather than left
+// exported: an unused second vocabulary is an invitation to re-create the
+// divergence this whole change exists to remove.)
 
 // ─── Calendar events ─────────────────────────────────────────────────────────
 
@@ -191,11 +142,41 @@ export function seriesFromEvents(
   opts: {
     knownBirthdayProfiles?: ReadonlySet<string>;
     knownAnniversaryProfiles?: ReadonlySet<string>;
+    /**
+     * `documentId@YYYY-MM-DD` for every date a document already puts on the
+     * calendar as a Date Rule.
+     *
+     * Extraction used to write a standalone event for every date it found, so
+     * an uploaded licence produced BOTH `document:…` (derived from the field)
+     * and `event:…` (a copy). It no longer does, but accounts are full of the
+     * copies. Rather than migrate rows, the copy is marked a SHADOW of the
+     * record it was copied from — the same mechanism that collapses a typed-in
+     * birthday into the profile's. Matching is by link AND DATE, not by title,
+     * so an emoji or a "— Expires" suffix cannot make the pair miss each other
+     * — and a "House Viewing" the extractor legitimately created from the same
+     * document (a date no rule covers, which routes.ts deliberately still
+     * writes) is not swept away with it.
+     */
+    ruledDocumentDates?: ReadonlySet<string>;
+    /**
+     * `profileId@YYYY-MM-DD` for every date a PROFILE already puts on the
+     * calendar as a Date Rule.
+     *
+     * Accounts still hold the `auto-generated` event rows the retired
+     * `autoGenerateProfileEvents` wrote for a lease end, a warranty, a service
+     * date. Those dates are derived from the profile now, so the row beside
+     * them is a copy — and the old title fingerprint that used to hide it no
+     * longer matches ("🏠 Home — Lease End" vs "Home — Lease Expiration").
+     * Matching on owner and day instead means no migration and no stale twin.
+     */
+    ruledProfileDates?: ReadonlySet<string>;
   } = {},
 ): CalendarSeries[] {
   const out: CalendarSeries[] = [];
   const knownBirthdays = opts.knownBirthdayProfiles ?? new Set<string>();
   const knownAnniversaries = opts.knownAnniversaryProfiles ?? new Set<string>();
+  const ruledDocDates = opts.ruledDocumentDates ?? new Set<string>();
+  const ruledProfileDates = opts.ruledProfileDates ?? new Set<string>();
 
   for (const e of events || []) {
     if (!e?.id || !isISO(e.date)) continue;
@@ -216,9 +197,24 @@ export function seriesFromEvents(
 
     // A typed-in birthday/anniversary for a profile that already carries the
     // date on its own record is a duplicate of it, not a second date.
+    const tagList: string[] = Array.isArray(e.tags) ? e.tags : [];
+    const autoFromDocument =
+      tagList.includes("document-extraction") &&
+      // An event the pipeline deliberately created for a date NO rule covers
+      // says so, and is never treated as a copy — even when it happens to land
+      // on the same day as a derived rule from the same document.
+      !tagList.includes("date-rule-uncovered") &&
+      (Array.isArray(e.linkedDocuments) ? e.linkedDocuments : [])
+        .some((id: any) => ruledDocDates.has(`${String(id)}@${clip(e.date)}`));
+    const autoFromProfile =
+      tagList.includes("auto-generated") &&
+      (Array.isArray(e.linkedProfiles) ? e.linkedProfiles : [])
+        .some((pid: any) => ruledProfileDates.has(`${String(pid)}@${clip(e.date)}`));
     const shadow =
       (kind === "birthday" && !!profileId && knownBirthdays.has(profileId)) ||
-      (kind === "anniversary" && !!profileId && knownAnniversaries.has(profileId));
+      (kind === "anniversary" && !!profileId && knownAnniversaries.has(profileId)) ||
+      autoFromDocument ||
+      autoFromProfile;
 
     out.push({
       id: `event:${e.id}`,
@@ -250,7 +246,10 @@ export function seriesFromEvents(
 
 /** Obligation `frequency` → the recurrence vocabulary the engine speaks. */
 export function frequencyToRecurrence(frequency: unknown): string {
-  switch (String(frequency ?? "").toLowerCase()) {
+  // Separators folded: the Finance income form writes "one_time" while this
+  // knew only "one-time" and "once", so a one-off bonus fell through to the
+  // default and became a MONTHLY series on every calendar surface.
+  switch (String(frequency ?? "").toLowerCase().replace(/[\s_]+/g, "-")) {
     case "daily": return "daily";
     case "weekly": return "weekly";
     case "biweekly": case "bi-weekly": return "biweekly";
@@ -260,7 +259,7 @@ export function frequencyToRecurrence(frequency: unknown): string {
     // monthly and thinned by the caller, so we keep it explicit rather than
     // silently mislabelling it as monthly here.
     case "quarterly": return "quarterly";
-    case "once": case "one-time": case "": return "none";
+    case "once": case "one-time": case "onetime": case "single": case "": return "none";
     default: return "monthly";
   }
 }
@@ -375,10 +374,20 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
     if (!p?.id) continue;
     if (p.type !== "liability" && p.type !== "loan") continue;
     const f = p.fields && typeof p.fields === "object" ? p.fields : {};
-    const due = f.nextDueDate ?? f.next_due_date ?? f.dueDate ?? f.due_date;
+    // `nextPayment` is the spelling the profile writer synthesizes from a
+    // `dueDay`, and it was previously reached only by the server timeline's
+    // per-type virtual-event ladder. That ladder is gone (the Date Rule pass
+    // replaces it), so this list has to carry the spelling or a liability whose
+    // date lives under it would silently leave the calendar.
+    // The SAME resolver the schedule card uses (shared/liability-schedule), so
+    // the two surfaces cannot show one liability's payment on two different
+    // days — and normalized, so a row written before the write-path fix
+    // ("07/18/2026") lights up on the first read instead of failing the ISO
+    // test and vanishing with nothing to explain it.
+    const due = resolveLiabilityDueDate(f);
     if (!isISO(due)) continue;
     const amount = Number(f.monthlyPayment ?? f.monthly_payment ?? f.amount);
-    const end = f.payoffDate ?? f.payoff_date ?? f.endDate ?? f.end_date ?? f.recurrenceEnd;
+    const end = resolveLiabilityEndDate(f);
     const kind = kindForLiabilityProfile(p);
     // Per-occurrence state lives in `fields.occurrences`, keyed by canonical
     // date. Reading it here is what puts THIS month's variable amount on the
@@ -584,36 +593,43 @@ export function seriesFromTasks(tasks: readonly any[]): CalendarSeries[] {
 
 // ─── Documents ───────────────────────────────────────────────────────────────
 
-/** Document expirations — one-off dates that still belong on the calendar. */
-export function seriesFromDocuments(documents: readonly any[]): CalendarSeries[] {
+// (Removed: `seriesFromDocuments`, for the same reason as `seriesFromProfiles`
+// above — its ten hard-coded expiry key spellings were one of the three
+// vocabularies that disagreed. Documents are read by the Date Rule engine.)
+
+// ─── Recurring income ────────────────────────────────────────────────────────
+
+/**
+ * Paychecks and other recurring income.
+ *
+ * Income had no adapter at all, so "I get paid every other Friday" existed in
+ * the finance tables and on no calendar surface. It is emitted as its own
+ * `income` kind rather than as a payment: the payment kinds share a dedup and
+ * cash-flow identity space that is about money going OUT, and a paycheck
+ * landing in it would be netted against a bill of the same size.
+ */
+export function seriesFromIncomes(incomes: readonly any[]): CalendarSeries[] {
   const out: CalendarSeries[] = [];
-  const KEYS = [
-    "expiration_date", "expirationDate", "expiry", "expires", "exp_date",
-    "expiration", "valid_until", "validUntil", "renewal_date", "renewalDate",
-  ];
-  for (const d of documents || []) {
-    if (!d?.id) continue;
-    const ed = d.extractedData && typeof d.extractedData === "object" ? d.extractedData : {};
-    let found: string | null = null;
-    for (const k of KEYS) {
-      if (isISO(ed[k])) { found = clip(ed[k]); break; }
-    }
-    if (!found) continue;
-    const profileId = Array.isArray(d.linkedProfiles) ? d.linkedProfiles[0] : undefined;
+  for (const i of incomes || []) {
+    if (!i?.id || i.deletedAt) continue;
+    if (!isISO(i.date)) continue;
+    const profileId = Array.isArray(i.linkedProfiles) ? i.linkedProfiles[0] : undefined;
     out.push({
-      id: `document:${d.id}`,
-      kind: "document",
-      title: humanizeTitle(d.name, "Document"),
-      subtitle: d.type || undefined,
+      id: `income:${i.id}`,
+      kind: "income",
+      title: i.description || "Income",
+      subtitle: i.category || undefined,
       source: {
-        system: "document",
-        id: d.id,
+        system: "income",
+        id: i.id,
         profileId,
-        ownerIds: uniq(Array.isArray(d.linkedProfiles) ? d.linkedProfiles : []),
-        href: sourceHref("document", d.id, profileId),
+        ownerIds: uniq(Array.isArray(i.linkedProfiles) ? i.linkedProfiles : []),
+        label: i.description,
+        href: "#/finance",
       },
-      baseDate: found,
-      recurrence: "none",
+      baseDate: clip(i.date),
+      recurrence: frequencyToRecurrence(i.frequency),
+      amount: typeof i.amount === "number" ? i.amount : undefined,
     });
   }
   return out;
@@ -627,6 +643,7 @@ export interface CalendarInputs {
   obligations?: readonly any[];
   tasks?: readonly any[];
   documents?: readonly any[];
+  incomes?: readonly any[];
 }
 
 /**
@@ -636,20 +653,36 @@ export interface CalendarInputs {
  * ownership is known before events are adapted and can be flagged as shadows.
  */
 export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
-  const profileSeries = seriesFromProfiles(input.profiles || []);
+  // Profiles and documents no longer get a bespoke adapter each. Their dates
+  // are whatever the Date Rule engine classifies as actionable
+  // (shared/date-rules) — birthdays, anniversaries, licence/passport/
+  // registration/warranty expirations, renewals, lease ends — so the calendar
+  // sees exactly the same set the Upcoming feed and the Important Dates screen
+  // see. The three used to disagree; that was the bug.
+  const dateRules = rulesFromAll({ profiles: input.profiles || [], documents: input.documents || [] });
+  const ruleSeries = seriesFromDateRules(dateRules);
+
   const knownBirthdayProfiles = new Set(
-    profileSeries.filter((s) => s.kind === "birthday").map((s) => s.source.profileId!).filter(Boolean),
+    dateRules.filter((r) => r.ruleType === "birthday").map((r) => r.profileId!).filter(Boolean),
   );
   const knownAnniversaryProfiles = new Set(
-    profileSeries.filter((s) => s.kind === "anniversary").map((s) => s.source.profileId!).filter(Boolean),
+    dateRules.filter((r) => r.ruleType === "anniversary").map((r) => r.profileId!).filter(Boolean),
+  );
+  const ruledDocumentDates = new Set(
+    dateRules.filter((r) => r.sourceEntityType === "document")
+      .map((r) => `${r.sourceEntityId}@${r.date}`),
+  );
+  const ruledProfileDates = new Set(
+    dateRules.filter((r) => r.sourceEntityType === "profile")
+      .map((r) => `${r.sourceEntityId}@${r.date}`),
   );
   return [
-    ...profileSeries,
+    ...ruleSeries,
     ...seriesFromLiabilityProfiles(input.profiles || []),
-    ...seriesFromEvents(input.events || [], { knownBirthdayProfiles, knownAnniversaryProfiles }),
+    ...seriesFromEvents(input.events || [], { knownBirthdayProfiles, knownAnniversaryProfiles, ruledDocumentDates, ruledProfileDates }),
     ...seriesFromObligations(input.obligations || []),
     ...seriesFromTasks(input.tasks || []),
-    ...seriesFromDocuments(input.documents || []),
+    ...seriesFromIncomes(input.incomes || []),
   ];
 }
 

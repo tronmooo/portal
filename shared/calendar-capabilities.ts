@@ -104,6 +104,7 @@ const MANAGE_AT: Record<SourceSystem, string> = {
   habit: "the habit",
   document: "the document",
   goal: "the goal",
+  income: "your income in Finance",
 };
 
 /**
@@ -155,6 +156,9 @@ export function capabilitiesFor(series: CalendarSeries): ActionCapability[] {
         if (isSingleton) {
           return cap(action, false, `A ${series.kind} comes from ${where} — remove the date there to stop it.`);
         }
+        if (system === "income") {
+          return cap(action, false, `Manage this on ${where}.`);
+        }
         if (!recurring) {
           return action === "deleteOccurrence"
             ? cap("deleteOccurrence", true)
@@ -166,6 +170,9 @@ export function capabilitiesFor(series: CalendarSeries): ActionCapability[] {
         return cap(action, true);
 
       case "deleteFuture":
+        if (system === "income") {
+          return cap("deleteFuture", false, `Manage this on ${where}.`);
+        }
         if (!recurring) {
           return cap("deleteFuture", false, "This date happens once — there are no future occurrences.");
         }
@@ -175,6 +182,13 @@ export function capabilitiesFor(series: CalendarSeries): ActionCapability[] {
         return cap("deleteFuture", true);
 
       case "deleteSeries":
+        // Income is READ-ONLY on the calendar. A paycheck is a finance record
+        // and has no calendar endpoint; offering Delete here sent a request to
+        // /api/events/<incomeId>, which 404s — the action appeared to work and
+        // did nothing.
+        if (system === "income") {
+          return cap("deleteSeries", false, `Manage this on ${where}.`);
+        }
         return cap("deleteSeries", true);
 
       default:

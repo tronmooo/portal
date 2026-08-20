@@ -60,6 +60,8 @@ const KIND_ICONS: Record<OccurrenceKind, any> = {
   document: FileText,
   event: CalendarDays,
   custom: CalendarDays,
+  expiration: FileText,
+  income: Wallet,
 };
 
 const KIND_HSL: Record<OccurrenceKind, string> = {
@@ -76,6 +78,8 @@ const KIND_HSL: Record<OccurrenceKind, string> = {
   document: "215 15% 60%",
   event: "240 8% 60%",
   custom: "240 8% 60%",
+  expiration: "22 80% 55%",
+  income: "150 60% 45%",
 };
 
 const STATUS_HSL: Record<CalendarOccurrence["status"], string> = {

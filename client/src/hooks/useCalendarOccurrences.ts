@@ -13,7 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { seriesFromAll, filterSeriesByProfiles } from "@shared/calendar-adapters";
 import { scopedKey } from "@shared/query-keys";
-import { onlyRecurringRules } from "@shared/calendar-occurrences";
+import { onlyRulesAndImportantDates } from "@shared/calendar-occurrences";
 import {
   buildCalendarOccurrences,
   dedupeSeries,
@@ -100,7 +100,18 @@ export function useCalendarOccurrences(
   });
   const documents = useQuery<any[]>({
     queryKey: [...scopedKey("/api/documents", mode, kIds)],
-    queryFn: () => get(`/api/documents${profileParam}`),
+    // `limit` explicitly: the route defaults to 100 newest, so on a large
+    // account the oldest documents derived no rules — their expirations never
+    // reached this screen and their legacy extraction events stopped being
+    // recognised as copies.
+    queryFn: () => get(`/api/documents${profileParam}${profileParam ? "&" : "?"}limit=1000`),
+  });
+  // Recurring income. Without this the paycheck adapter existed and ran
+  // nowhere: "I get paid every other Friday" was in the finance tables and on
+  // no calendar surface at all.
+  const incomes = useQuery<any[]>({
+    queryKey: [...scopedKey("/api/incomes", mode, kIds)],
+    queryFn: () => get(`/api/incomes${profileParam}`),
   });
 
   const profileList: any[] = Array.isArray(profiles.data)
@@ -121,8 +132,9 @@ export function useCalendarOccurrences(
         obligations: Array.isArray(obligations.data) ? obligations.data : [],
         tasks: Array.isArray(tasks.data) ? tasks.data : [],
         documents: Array.isArray(documents.data) ? documents.data : [],
+        incomes: Array.isArray(incomes.data) ? incomes.data : [],
       }),
-    [profileList, eventList, obligations.data, tasks.data, documents.data],
+    [profileList, eventList, obligations.data, tasks.data, documents.data, incomes.data],
   );
 
   // Self ids drive the soft-orphan rule: an unassigned record belongs to the
@@ -152,7 +164,12 @@ export function useCalendarOccurrences(
   const survivingSeries = useMemo(() => deduped.map((d) => d.series), [deduped]);
   /** The subset the RULES list manages. */
   const ruleSeries = useMemo(
-    () => (recurringOnly ? onlyRecurringRules(survivingSeries) : survivingSeries),
+    // "Recurring only" now means "rules AND important one-off dates" — a
+    // driver's licence expiration is not a recurrence, but it IS something the
+    // Recurring & Important Dates screen manages. It keeps its one-time
+    // semantics all the way through (`isImportantDate`, never `isRecurringRule`),
+    // so nothing downstream treats it as repeating.
+    () => (recurringOnly ? onlyRulesAndImportantDates(survivingSeries) : survivingSeries),
     [survivingSeries, recurringOnly],
   );
 
@@ -237,7 +254,7 @@ export function useCalendarOccurrences(
     todayISO,
     isLoading:
       events.isLoading || profiles.isLoading || obligations.isLoading ||
-      tasks.isLoading || documents.isLoading,
+      tasks.isLoading || documents.isLoading || incomes.isLoading,
   };
 }
 

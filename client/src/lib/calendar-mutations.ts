@@ -29,6 +29,11 @@ import type { CalendarSeries, CalendarOccurrence } from "@shared/calendar-occurr
  *  liability AND an obligation AND a dashboard number. */
 const CALENDAR_DOMAINS: Domain[] = [
   "events", "obligations", "liabilities", "profiles", "tasks",
+  // A document carries dates too, and clearing one is a document write. Without
+  // this the calendar and the Important Dates screen — which derive document
+  // rules from /api/documents — kept rendering the date that had just been
+  // removed, so the delete looked like a no-op.
+  "documents",
   "notifications", "dashboard",
 ];
 
@@ -84,7 +89,11 @@ export async function applyCalendarAction(input: ApplyActionInput): Promise<void
       // must survive. For a one-off date it really is a delete.
       const isOneOff = !series.recurrence || series.recurrence === "none";
       if (action === "deleteOccurrence" && isOneOff) {
-        await deleteSourceRecord(system, id);
+        // The series, not just the id: without it the profile branch falls back
+        // to "birthday", so deleting a one-off licence expiration wiped the
+        // person's date of birth and left the expiration — the same bug the
+        // deleteSeries path was changed to fix.
+        await deleteSourceRecord(system, id, series);
         break;
       }
       const mode = action === "complete" ? "done" : "skip";
@@ -247,10 +256,75 @@ async function deleteSourceRecord(
       await apiRequest("DELETE", `/api/tasks/${id}`);
       return;
     case "profile": {
-      // Clear the date field, never the profile. Deleting Joe because you
+      // Clear THE date field, never the profile. Deleting Joe because you
       // wanted his birthday off the calendar would be catastrophic.
-      const key = series?.kind === "anniversary" ? "anniversary" : "birthday";
-      await apiRequest("PATCH", `/api/profiles/${id}`, { fields: { [key]: null } });
+      //
+      // And clear the RIGHT one. A profile-sourced series used to be a birthday
+      // or an anniversary and nothing else; it can now be any date a person
+      // carries — a licence, a passport, a warranty. Guessing "birthday" for
+      // all of them wiped the person's date of birth and left the expiration
+      // exactly where it was.
+      //
+      // `fieldPathsToDelete` removes EXACTLY this one field. `fieldsToDelete`
+      // is the profile UI's universal delete — it sweeps every spelling of a
+      // field across every nested group, which is right for "remove my licence
+      // number" and wrong here: two groups can legitimately hold same-named
+      // dates, and clearing one must not take the other. Sending a `fields`
+      // patch for a nested group would be worse still — a shallow merge
+      // REPLACES the group, taking every sibling field with it.
+      const field = series?.source?.field
+        || (series?.kind === "anniversary" ? "anniversary" : "birthday");
+      // A person has ONE birthday however many spellings carry it, and older
+      // rows hold both `birthday` and `dateOfBirth`. Removing only the spelling
+      // the rule happened to anchor on left the other behind, the birthday was
+      // re-derived from it, and Delete appeared to do nothing. So for those two
+      // the identity sweep is exactly right — and for every other date it is
+      // exactly wrong, because two groups can hold same-named dates.
+      const singleton = series?.kind === "birthday" || series?.kind === "anniversary";
+      const body = singleton
+        ? { fieldsToDelete: [field.split(".").pop() || field] }
+        : { fieldPathsToDelete: [field] };
+      await apiRequest("PATCH", `/api/profiles/${id}`, body);
+      return;
+    }
+    case "document": {
+      // Clear the date, not the document. The document is the file; its
+      // expiration is one field of what was read out of it, and removing that
+      // date from the calendar must not destroy the record it came from.
+      const field = series?.source?.field;
+      if (!field) throw new Error("This date has no field to clear.");
+      const doc = await apiRequest("GET", `/api/documents/${id}`).then((r) => r.json());
+      const path = field.split(".").filter(Boolean);
+      /** Remove `path` from a bag, returning a new bag, or null if it wasn't there. */
+      const without = (bag: any): Record<string, any> | null => {
+        if (!bag || typeof bag !== "object") return null;
+        const copy = { ...bag };
+        let cursor: any = copy;
+        for (let i = 0; i < path.length - 1; i++) {
+          const next = cursor?.[path[i]];
+          if (!next || typeof next !== "object") return null;
+          cursor[path[i]] = { ...next };
+          cursor = cursor[path[i]];
+        }
+        const leaf = path[path.length - 1];
+        if (!(leaf in cursor)) return null;
+        delete cursor[leaf];
+        return copy;
+      };
+      // A document's dates are read from `extractedData` and from the
+      // `expirationDate` column — clearing only the first left the date behind
+      // while the UI said "Updated".
+      const patch: Record<string, any> = {};
+      const nextExtracted = without(doc?.extractedData);
+      if (nextExtracted) patch.extractedData = nextExtracted;
+      if (path.length === 1 && doc?.expirationDate
+        && /^expirationdate$/i.test(path[0].replace(/[^a-z]/gi, ""))) {
+        patch.expirationDate = null;
+      }
+      if (Object.keys(patch).length === 0) {
+        throw new Error("That date is no longer on this document.");
+      }
+      await apiRequest("PATCH", `/api/documents/${id}`, patch);
       return;
     }
     case "liability":

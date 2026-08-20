@@ -605,10 +605,44 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
   const [renewId, setRenewId] = useState<string | null>(null);
   const [renewDate, setRenewDate] = useState("");
 
+  /** Where this expiration's record actually lives. */
+  const recordHref = (row: any): string =>
+    String(row?.href || "").replace(/^#/, "") || `/documents/${row?.documentId}`;
+
+  /**
+   * What a row IS, for per-row state.
+   *
+   * One record can now carry several expirations — a person with a passport and
+   * a licence, a vehicle with insurance and registration. Keying snooze,
+   * dismiss and the renew editor on the record id made them act on all of them
+   * at once: dismissing one hid the rest, and opening the date editor opened
+   * every row's.
+   */
+  const rowKey = (row: any): string => String(row?.ruleId || row?.documentId || "");
+
   const renew = useMutation({
     mutationFn: async (vars: { row: any; newDate: string }) => {
-      const full = docById.get(vars.row.documentId);
-      const extractedData = { ...(full?.extractedData || {}), [vars.row.fieldName]: vars.newDate };
+      // Read the document being edited rather than hoping it is in the list.
+      // `/api/documents` is paginated, so a document past the first page missed
+      // the map and the fallback `{}` then PATCHed an empty extractedData over
+      // it — wiping every other field the document held.
+      const full = docById.get(vars.row.documentId)
+        ?? await apiRequest("GET", `/api/documents/${vars.row.documentId}`).then((r) => r.json());
+      if (!full) throw new Error("Couldn't load that document.");
+      // Write the date back WHERE IT LIVES. A document's dates can sit inside a
+      // nested group, and writing the leaf name at the top level left the stale
+      // nested one in place — so renewing a licence gave the record two
+      // expirations instead of moving the one it had.
+      const path = String(vars.row.fieldPath || vars.row.fieldName || "").split(".").filter(Boolean);
+      if (path.length === 0) throw new Error("This expiration has no field to write back to.");
+      const extractedData = { ...(full?.extractedData || {}) };
+      let cursor: any = extractedData;
+      for (let i = 0; i < path.length - 1; i++) {
+        const key = path[i];
+        cursor[key] = { ...(cursor[key] && typeof cursor[key] === "object" ? cursor[key] : {}) };
+        cursor = cursor[key];
+      }
+      cursor[path[path.length - 1]] = vars.newDate;
       await apiRequest("PATCH", `/api/documents/${vars.row.documentId}`, { extractedData });
     },
     onSuccess: () => {
@@ -626,7 +660,9 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
     toast({ title: "Alert dismissed", description: "Hidden from expiration alerts for 30 days." });
   };
 
-  const visible = (docs || []).filter((d: any) => !snoozeMap[d.documentId]);
+  // Per-rule, with the record id still honoured so snoozes taken before rows
+  // became per-rule keep working.
+  const visible = (docs || []).filter((d: any) => !snoozeMap[d.ruleId] && !snoozeMap[d.documentId]);
   const bands: Array<{ key: string; label: string; tone: "neg" | "warn" | "muted"; rows: any[] }> = [
     { key: "expired", label: "Expired", tone: "neg", rows: visible.filter((d: any) => d.daysUntil < 0) },
     { key: "soon", label: "Expiring soon · next 30 days", tone: "warn", rows: visible.filter((d: any) => d.daysUntil >= 0 && d.daysUntil <= 30) },
@@ -641,7 +677,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
     const type = d.documentType || full?.type;
     const fieldLabel = String(d.fieldName || "expiration").replace(/[_-]+/g, " ");
     return (
-      <ExpandCard key={`${d.documentId}-${d.fieldName}`} urgentBorder={urgent} testId={`doc-card-${d.documentId}`}
+      <ExpandCard key={rowKey(d)} urgentBorder={urgent} testId={`doc-card-${rowKey(d)}`}
         summary={
           <div>
             <div className="flex items-baseline gap-2">
@@ -666,20 +702,29 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
             <span>Exact date</span><span className="text-foreground">{fmtDate(d.expirationDate)}</span>
             <span>Days remaining</span><span className="text-foreground tabular-nums">{d.daysUntil >= 0 ? d.daysUntil : `${Math.abs(d.daysUntil)} past`}</span>
           </div>
-          {renewId === d.documentId ? (
+          {renewId === rowKey(d) ? (
             <div className="flex items-center gap-1.5 pt-1">
               <input type="date" value={renewDate} onChange={e => setRenewDate(e.target.value)}
-                className="h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`doc-renew-date-${d.documentId}`} />
+                className="h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`doc-renew-date-${rowKey(d)}`} />
               <ActionBtn label="Save new date" icon={Check} disabled={renew.isPending || !renewDate}
-                onClick={() => renew.mutate({ row: d, newDate: renewDate })} testId={`doc-renew-save-${d.documentId}`} />
+                onClick={() => renew.mutate({ row: d, newDate: renewDate })} testId={`doc-renew-save-${rowKey(d)}`} />
               <ActionBtn label="Cancel" onClick={() => setRenewId(null)} />
             </div>
           ) : (
             <div className="flex items-center flex-wrap gap-1.5 pt-1">
-              <ActionBtn label="View" icon={FileText} onClick={() => { onClose(); navigate(`/documents/${d.documentId}`); }} testId={`doc-view-${d.documentId}`} />
-              <ActionBtn label="Edit" icon={Pencil} onClick={() => { onClose(); navigate(`/documents/${d.documentId}`); }} testId={`doc-edit-${d.documentId}`} />
-              <ActionBtn label="Renewed — set new date" icon={RefreshCw} onClick={() => { setRenewId(d.documentId); setRenewDate(""); }} testId={`doc-renew-${d.documentId}`} />
-              <ActionBtn label="Dismiss 30d" icon={BellOff} onClick={() => dismiss(d.documentId)} testId={`doc-dismiss-${d.documentId}`} />
+              {/* This list is no longer documents-only: an expiration can be
+                  carried by a PROFILE (a passport typed onto a person), and
+                  `/documents/<profileId>` is not a page. The row carries the
+                  link to its own record. */}
+              <ActionBtn label="View" icon={FileText} onClick={() => { onClose(); navigate(recordHref(d)); }} testId={`doc-view-${rowKey(d)}`} />
+              <ActionBtn label="Edit" icon={Pencil} onClick={() => { onClose(); navigate(recordHref(d)); }} testId={`doc-edit-${rowKey(d)}`} />
+              {/* "Renewed" PATCHes the DOCUMENT's extractedData, so it is only
+                  offered for a row a document actually owns. A profile-carried
+                  expiration is edited on the profile, which Edit opens. */}
+              {d.sourceEntityType !== "profile" && (
+                <ActionBtn label="Renewed — set new date" icon={RefreshCw} onClick={() => { setRenewId(rowKey(d)); setRenewDate(""); }} testId={`doc-renew-${rowKey(d)}`} />
+              )}
+              <ActionBtn label="Dismiss 30d" icon={BellOff} onClick={() => dismiss(rowKey(d))} testId={`doc-dismiss-${rowKey(d)}`} />
             </div>
           )}
         </div>

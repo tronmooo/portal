@@ -133,13 +133,35 @@ export interface FieldDeletionResult {
 export function deleteProfileFields(
   fields: Record<string, any> | null | undefined,
   uiKeys: readonly string[] | null | undefined,
+  /**
+   * Paths to delete EXACTLY — no identity sweep, no other group.
+   *
+   * `uiKeys` is the profile UI's universal delete: "remove my licence number"
+   * should take every spelling of it wherever it is stored. That is wrong for a
+   * single date the calendar is removing, because two groups can legitimately
+   * hold same-named dates — clearing a top-level `expirationDate` swept
+   * `insurance.expirationDate` away with it. A top-level path is just the key.
+   */
+  exactPaths: readonly string[] | null | undefined = null,
 ): FieldDeletionResult {
   const removed: string[] = [];
   if (!fields || typeof fields !== "object") return { fields: {}, removed };
+  // A DOTTED key targets exactly one field in one group. Everything else is an
+  // identity sweep across the top level and every group, which is the app's
+  // universal delete — right when the user says "remove my licence number"
+  // however it is spelled, and wrong when they mean one of two same-named dates
+  // in different groups: deleting `registration.expirationDate` from the
+  // calendar would have taken `insurance.expirationDate` with it.
+  const exact = new Set([
+    ...(uiKeys || []).filter((k) => typeof k === "string" && k.includes(".")),
+    ...(exactPaths || []).filter((k) => typeof k === "string" && k),
+  ]);
   const targets = new Set(
-    (uiKeys || []).filter((k) => typeof k === "string" && k).map(fieldIdentity),
+    (uiKeys || [])
+      .filter((k) => typeof k === "string" && k && !k.includes("."))
+      .map(fieldIdentity),
   );
-  if (targets.size === 0) return { fields: { ...fields }, removed };
+  if (targets.size === 0 && exact.size === 0) return { fields: { ...fields }, removed };
 
   const out: Record<string, any> = {};
   for (const [key, value] of Object.entries(fields)) {
@@ -150,10 +172,30 @@ export function deleteProfileFields(
       (PROFILE_FIELD_GROUPS as readonly string[]).includes(key) &&
       value && typeof value === "object" && !Array.isArray(value);
 
+    if (!isGroup && exact.has(key)) { removed.push(key); continue; }
+
+    // An exact path may point into ANY nested object, not just one of the
+    // whitelisted groups — `registration.expirationDate` is a real shape the
+    // scanner emits, and matching only the whitelist made "remove this date"
+    // answer 200 and change nothing.
+    if (!isGroup && value && typeof value === "object" && !Array.isArray(value)) {
+      const inner = value as Record<string, any>;
+      const hits = Object.keys(inner).filter((nk) => exact.has(`${key}.${nk}`));
+      if (hits.length > 0) {
+        const kept: Record<string, any> = {};
+        for (const [nk, nv] of Object.entries(inner)) {
+          if (hits.includes(nk)) removed.push(`${key}.${nk}`);
+          else kept[nk] = nv;
+        }
+        if (Object.keys(kept).length > 0) out[key] = kept;
+        continue;
+      }
+    }
+
     if (isGroup) {
       const kept: Record<string, any> = {};
       for (const [nk, nv] of Object.entries(value as Record<string, any>)) {
-        if (targets.has(fieldIdentity(nk))) removed.push(`${key}.${nk}`);
+        if (targets.has(fieldIdentity(nk)) || exact.has(`${key}.${nk}`)) removed.push(`${key}.${nk}`);
         else kept[nk] = nv;
       }
       // Drop a group that has been emptied out.

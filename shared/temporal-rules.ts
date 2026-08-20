@@ -32,6 +32,7 @@
 
 import type { CalendarSeries, OccurrenceKind } from "./calendar-occurrences";
 import { seriesFromAll, type CalendarInputs } from "./calendar-adapters";
+import { classifyDateField } from "./date-rules";
 
 // ─── Rule vocabulary ─────────────────────────────────────────────────────────
 
@@ -240,13 +241,12 @@ export function deriveDateRulesForRecord(
 // These predicates name the fields the adapters already read, so the extraction
 // path can skip the copy and let the canonical record be the calendar entry.
 
-/** Field keys `seriesFromDocuments` derives an expiration rule from. */
-const DOCUMENT_RULE_KEYS =
-  /^(expiration_?date|expiry|expires|exp_?date|expiration|valid_?until|renewal_?date)$/i;
-
-/** Field keys `seriesFromProfiles` derives a birthday/anniversary rule from. */
-const PROFILE_RULE_KEYS = /^(birthday|birthdate|birth_date|dob|dateofbirth|date_of_birth)$/i;
-const PROFILE_ANNIVERSARY_KEYS = /anniversary/i;
+// (The three hard-coded key lists that used to live here — DOCUMENT_RULE_KEYS,
+// PROFILE_RULE_KEYS, PROFILE_ANNIVERSARY_KEYS — are gone. Enumerating spellings
+// is the failure this whole layer exists to end: a fourth list disagrees with
+// the other three the moment a document says `exp_date` instead of
+// `expirationDate`. `classifyDateField` (shared/date-rules) is the one
+// vocabulary, and it reads any spelling.)
 
 export interface CanonicalDateCoverage {
   /** True when a canonical record already puts this date on the calendar. */
@@ -273,20 +273,21 @@ export function canonicalDateCoverage(
 ): CanonicalDateCoverage {
   const key = String(fieldKey ?? "").trim();
   if (!key) return { covered: false };
+  const cls = classifyDateField(key);
 
-  if (opts.hasProfile !== false && PROFILE_RULE_KEYS.test(key)) {
+  if (opts.hasProfile !== false && cls.ruleType === "birthday") {
     return {
       covered: true, system: "profile", ruleType: "birthday",
       reason: "the profile's date of birth already generates a yearly birthday on the calendar",
     };
   }
-  if (opts.hasProfile !== false && PROFILE_ANNIVERSARY_KEYS.test(key)) {
+  if (opts.hasProfile !== false && cls.ruleType === "anniversary") {
     return {
       covered: true, system: "profile", ruleType: "anniversary",
       reason: "the profile's anniversary field already generates a yearly date on the calendar",
     };
   }
-  if (opts.hasDocument && DOCUMENT_RULE_KEYS.test(key)) {
+  if (opts.hasDocument && (cls.ruleType === "expiration" || cls.ruleType === "renewal")) {
     return {
       covered: true, system: "document", ruleType: "expiration",
       reason: "the document's expiration field already generates its expiry on the calendar",

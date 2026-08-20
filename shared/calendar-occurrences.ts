@@ -47,6 +47,14 @@ export type OccurrenceKind =
   | "liability"
   | "bill"
   | "renewal"
+  // An expiration is a ONE-TIME important future date, not a yearly repeat. It
+  // is its own kind so the recurring screen can show it under Important Dates
+  // and the countdown machinery can find it, without any code ever having to
+  // pretend a driver's licence repeats every year.
+  | "expiration"
+  // Recurring income (a paycheck) is money IN, so it must never be folded into
+  // the payment kinds — the cash-flow and dedup rules there are about bills.
+  | "income"
   | "maintenance"
   | "appointment"
   | "task"
@@ -57,6 +65,10 @@ export type OccurrenceKind =
 
 /** Which system physically stores the record. Drives `href` and edit routing. */
 export type SourceSystem =
+  // Recurring income. Its own system, not "event": claiming to be an event sent
+  // every calendar action to /api/events/<incomeId>, which 404s — so completing,
+  // moving or deleting a paycheck failed silently on the calendar.
+  | "income"
   | "event"
   | "profile"
   | "obligation"
@@ -73,6 +85,8 @@ export const KIND_LABELS: Record<OccurrenceKind, string> = {
   liability: "Liability",
   bill: "Bill",
   renewal: "Renewal",
+  expiration: "Expiration",
+  income: "Income",
   maintenance: "Maintenance",
   appointment: "Appointment",
   task: "Task",
@@ -97,7 +111,14 @@ export const HORIZON_DAYS: Record<OccurrenceKind, number> = {
   subscription: 366,
   liability: 366,
   bill: 366,
+  // `renewal` covers RECURRING renewals (inferKindFromText maps /renew|
+  // registration/), so widening it expanded a yearly registration renewal into
+  // twelve rows. A one-off renewal is emitted as `expiration` instead — see
+  // seriesFromDateRules — which is where the long horizon belongs: a 2034
+  // licence must still be generated when the user is looking at 2026.
   renewal: 366,
+  income: 366,
+  expiration: 366 * 12,
   maintenance: 366,
   appointment: 366,
   task: 366,
@@ -126,6 +147,15 @@ export interface OccurrenceSource {
   system: SourceSystem;
   /** Record id inside that system. */
   id: string;
+  /**
+   * The FIELD on that record that carries the date, dotted for a nested group.
+   *
+   * Set by Date Rule-derived series. Deleting such a date means clearing this
+   * field — and only this one: the delete path used to assume a profile-sourced
+   * date was always a birthday, so removing a licence expiration from the
+   * calendar wiped that person's date of birth and left the expiration.
+   */
+  field?: string;
   /**
    * Where tapping this date NAVIGATES — the record the user edits. For a bill
    * backed by a liability that is the liability profile, not the person.
@@ -216,6 +246,19 @@ export interface CalendarSeries {
    */
   shadow?: boolean;
   /**
+   * Whether this belongs on the Important Dates half of the recurring screen.
+   * Carried from the Date Rule that produced it, because the calendar KIND is
+   * too coarse to answer: a court date and an ordinary to-do are both `task`.
+   */
+  important?: boolean;
+  /**
+   * The Date Rule type this came from ("expiration", "maintenance", "start"…).
+   * Carried, not re-derived: mapping kind→type is lossy — `start` and `event`
+   * share the `custom` kind — and the countdown verb read off that round-trip
+   * told a user their subscription's start date "Was due 3 years ago".
+   */
+  ruleType?: string;
+  /**
    * Set when the series was INFERRED from several materialized rows rather than
    * read off a recurrence rule (shared/series-detect) — e.g. six monthly
    * "Refill … - August/September/…" tasks that carry no `recur:` tag. Carries
@@ -255,6 +298,40 @@ export function isRecurringRule(series: CalendarSeries): boolean {
 /** Just the genuinely repeating series. */
 export function onlyRecurringRules(list: readonly CalendarSeries[]): CalendarSeries[] {
   return (list || []).filter(isRecurringRule);
+}
+
+/**
+ * Is this an IMPORTANT FUTURE DATE — a one-off the user needs to see coming?
+ *
+ * The counterpart to `isRecurringRule`, and the reason the recurring screen can
+ * finally show a driver's licence without lying about it. A licence expiring on
+ * 18 July 2034 is not a yearly event and must never be modelled as one; it is a
+ * single date with a countdown attached. Both belong on the same screen —
+ * "Recurring & Important Dates" — and neither is allowed to corrupt the other's
+ * semantics to get there.
+ *
+ * A plain one-off ("House Viewing", "Soccer Game") is NOT important: it is an
+ * appointment on the grid, not something to track the distance to.
+ */
+const IMPORTANT_ONE_TIME_KINDS = new Set<OccurrenceKind>([
+  "expiration", "renewal", "document",
+]);
+
+export function isImportantDate(series: CalendarSeries): boolean {
+  if (!series) return false;
+  if (isRecurringRule(series)) return false;
+  // A Date Rule says whether it is important; inferring it from the calendar
+  // KIND could not, because several important rule types share a kind with
+  // ordinary ones. A court date is a `deadline` rule and a `task` kind, so
+  // reading the kind alone put it on no screen at all — while an ordinary
+  // one-off task must stay off this one.
+  if (series.important !== undefined) return series.important;
+  return IMPORTANT_ONE_TIME_KINDS.has(series.kind);
+}
+
+/** Recurring rules plus important one-off dates — what the screen manages. */
+export function onlyRulesAndImportantDates(list: readonly CalendarSeries[]): CalendarSeries[] {
+  return (list || []).filter((s) => isRecurringRule(s) || isImportantDate(s));
 }
 
 // ─── Rule validity ───────────────────────────────────────────────────────────
@@ -600,9 +677,18 @@ export function dedupeSeries(list: readonly CalendarSeries[]): DedupedSeries[] {
       held.duplicateIds.push(s.id);
     }
   }
+  // A SHADOW that ends up alone in its group is still a shadow.
+  //
+  // Losing deduplication is only a punishment when there is something to lose
+  // to, and identities do not always match: a legacy "🏠 Home — Lease End" event
+  // and the derived "Home — Lease Expiration" it copies have different titles,
+  // so they land in different groups and both survived. A shadow is by
+  // definition a duplicate of a record another system owns — the adapters only
+  // set it when they have identified that record — so it never renders.
+  const groups = [...byIdentity.values()].filter((g) => !g.series.shadow);
   // Second pass for payments whose identities anchor differently (an
   // obligation on its liability, a hand-made event on nothing at all).
-  return mergeEquivalentPayments([...byIdentity.values()]);
+  return mergeEquivalentPayments(groups);
 }
 
 // ─── Occurrences ─────────────────────────────────────────────────────────────
@@ -689,13 +775,23 @@ function statusFor(
  * Every other kind keeps its base date verbatim: a subscription that genuinely
  * starts next March must not be dragged into the past.
  */
-function annualAnchoredBase(series: CalendarSeries, todayISO: string): string {
+function annualAnchoredBase(series: CalendarSeries, todayISO: string, windowStart?: string): string {
   const base = String(series.baseDate || "").slice(0, 10);
   if (!SINGLETON_KINDS.has(series.kind)) return base;
   if ((series.recurrence || "") !== "yearly") return base;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return base;
   const baseYear = Number(base.slice(0, 4));
-  const anchorYear = Number(todayISO.slice(0, 4)) - 1;
+  // Anchor to the year before today, or to the year the CALLER'S WINDOW starts
+  // in when that is earlier. Hardcoding `todayYear - 1` meant a birthday could
+  // never be generated for a month further back than last year, so browsing the
+  // calendar to March 2024 showed nothing — a regression the per-year ladder
+  // that used to cover [startYear, endYear] had been hiding.
+  const windowYear = windowStart && /^\d{4}-/.test(windowStart)
+    ? Number(windowStart.slice(0, 4)) : NaN;
+  const anchorYear = Math.min(
+    Number(todayISO.slice(0, 4)) - 1,
+    Number.isFinite(windowYear) ? windowYear : Infinity,
+  );
   if (!Number.isFinite(baseYear) || !Number.isFinite(anchorYear)) return base;
   const baseDay = base.slice(8, 10);
   // Re-anchor to the year before today so this year's date is still in range.
@@ -746,7 +842,7 @@ export function generateSeriesOccurrences(
   const identityKey = seriesIdentityKey(series);
   const moved = series.movedDates || {};
 
-  const dates = expandRecurrenceDates(annualAnchoredBase(series, today), series.recurrence || "none", {
+  const dates = expandRecurrenceDates(annualAnchoredBase(series, today, windowStart), series.recurrence || "none", {
     recurrenceEnd: series.recurrenceEnd,
     windowStart,
     windowEnd,
@@ -907,6 +1003,7 @@ export function sourceHref(
     case "document": return recordId ? `#/documents/${recordId}` : "#/documents";
     case "goal": return recordId ? `#/goals?focus=${recordId}` : "#/goals";
     case "habit": return recordId ? `#/habits?focus=${recordId}` : "#/habits";
+    case "income": return "#/finance";
     case "event": return recordId ? `#/calendar?event=${recordId}` : "#/calendar";
     default: return "#/calendar";
   }

@@ -1102,7 +1102,12 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     toast({ title: "Document snoozed", description: "Hidden from alerts for 30 days" });
   };
   const visibleDocs: any[] = useMemo(() => {
-    return (enhanced?.expiringDocuments || []).filter((d: any) => !docSnoozeMap[d.documentId]);
+    // Per RULE, now that one record can carry several expirations — and still
+    // honouring a record-id snooze taken before that was true. Keying on the
+    // record alone left a dismissed row visible here while the popup and the
+    // Executive section both hid it.
+    return (enhanced?.expiringDocuments || [])
+      .filter((d: any) => !docSnoozeMap[d.ruleId] && !docSnoozeMap[d.documentId]);
   }, [enhanced, docSnoozeMap]);
 
   // BUG-20260530-stats-slow-blank-tiles: when /api/stats is slow (8-12s cold
@@ -1448,7 +1453,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                     }`}>
                     <button
                       type="button"
-                      onClick={() => { setPopup(null); navigate(`/documents/${doc.documentId}`); }}
+                      onClick={() => { setPopup(null); navigate(String(doc.href || "").replace(/^#/, "") || `/documents/${doc.documentId}`); }}
                       className="flex items-center gap-2.5 flex-1 min-w-0 text-left hover:opacity-80"
                     >
                       <FileText className={`h-3.5 w-3.5 shrink-0 ${expired ? "text-red-500" : expiringSoon ? "text-amber-500" : "text-muted-foreground"}`} />
@@ -1466,7 +1471,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                     </button>
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); snoozeDoc(doc.documentId); }}
+                      onClick={(e) => { e.stopPropagation(); snoozeDoc(doc.ruleId || doc.documentId); }}
                       title="Hide for 30 days"
                       className="h-6 px-1.5 rounded text-[11px] font-semibold flex items-center gap-0.5 bg-muted/60 hover:bg-muted text-muted-foreground shrink-0"
                       data-testid={`btn-snooze-doc-${doc.documentId}`}

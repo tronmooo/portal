@@ -89,6 +89,15 @@ const KIND_TO_CATEGORY: Record<OccurrenceKind, SourceCategory> = {
   subscription: "subscriptions",
   liability: "liabilities",
   document: "documents",
+  // An expiration IS the important-date category's raison d'être, but
+  // "important" is a computed STATUS here, not a source category — so an
+  // expiration files under the record it expires (documents).
+  expiration: "documents",
+  // NOT "bills". Income is money IN — the whole reason it was given a kind of
+  // its own rather than being folded into the payment kinds — so filing a
+  // paycheck under the Bills chip would undo that in the one place the user
+  // actually looks.
+  income: "other",
   task: "tasks",
   habit: "tasks",
   // Renewals, maintenance and appointments are calendar events with a flavour;

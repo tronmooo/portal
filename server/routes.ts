@@ -29,6 +29,8 @@ import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
+import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
+import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted, removeDocumentContributedFields } from "@shared/profile-field-identity";
 
 /** Extract user timezone from request header, with fallback */
@@ -84,7 +86,6 @@ import {
   createNote, updateNote, deleteNote, listNotes,
   upsertJournalEntry, syncDateRulesForEntity,
 } from "./content-service";
-import { canonicalDateCoverage } from "@shared/temporal-rules";
 
 // ────────────────────────────────────────────────────────────────────
 // syncLiabilityObligation
@@ -627,6 +628,13 @@ const USER_CACHE_PREFIXES = [
   "obligations:", "journal:", "documents:", "goals:", "insights:",
   "insights-data:", "activity:", "ai-digest:", "artifacts:", "notifications:",
   "cashflow:", "calendar:",
+  // The calendar timeline's key prefix is "caltimeline:", not "calendar:", so
+  // it matched nothing in this list and no write ever busted it on the writing
+  // instance. Version-stamped keys made that survivable (a write bumps the
+  // version and the stale entry stops being addressable) but only after the
+  // 2s version memo expires — the "it took a while for the deletion to show
+  // up" window. Same-instance busting closes it immediately.
+  "caltimeline:",
 ];
 
 // Scoped cache-bust: drop only the MUTATING user's cached responses instead of
@@ -2602,15 +2610,36 @@ ${JSON.stringify(ctx, null, 2)}`;
       // The document always keeps ALL data as the source of truth.
 
       // Step 0: ALWAYS save all confirmed fields to the document's extractedData (source of truth)
+      //
+      // What Step 2 needs to know: which fields actually LANDED, and what kind
+      // of document this is. Both are known here, so they are recorded rather
+      // than re-fetched — that second `getDocument` downloaded the file binary
+      // again just to read a type and a name.
+      let docContextForDates = "";
+      const persistedFieldValues = new Map<string, any>();
+      const profileSavedKeys = new Set<string>();
       if (confirmedFields && confirmedFields.length > 0) {
         try {
           const doc = await storage.getDocument(extractionId);
           if (doc) {
+            docContextForDates = `${doc.type ?? ""} ${doc.name ?? ""}`;
             const updatedData: Record<string, any> = { ...(doc.extractedData || {}) };
             for (const field of confirmedFields) {
               updatedData[field.key] = unwrap(field.value);
             }
-            await storage.updateDocument(extractionId, { extractedData: updatedData });
+            // The document is the source of truth for its own dates, so its
+            // dates must be stored the ONE way every reader can parse. A
+            // licence prints "07/18/2034"; stored verbatim it was a string the
+            // calendar, Upcoming and Important Dates could all see and none
+            // could understand. See shared/date-rules.
+            const normalizedDoc = normalizeEntityDateFields(updatedData, { contextKey: docContextForDates });
+            await storage.updateDocument(extractionId, { extractedData: normalizedDoc.fields });
+            // Record what LANDED, and under the value that landed — Step 2 has
+            // to know not just that the field saved but that a rule can be
+            // derived from it.
+            for (const field of confirmedFields) {
+              persistedFieldValues.set(normalizeFieldKey(field.key), normalizedDoc.fields[field.key]);
+            }
             saved.push(`Saved ${confirmedFields.length} fields to document`);
           }
         } catch (e: any) {
@@ -2667,10 +2696,18 @@ ${JSON.stringify(ctx, null, 2)}`;
           // Skip document-metadata fields — they belong on the document, not the profile
           if (DOC_ONLY_FIELDS.has(key)) { skippedFields.push(key); continue; }
 
-          // Normalize keys: dateOfBirth/dob → save as both dateOfBirth AND birthday
+          // ONE spelling. This used to write `dateOfBirth` AND `birthday`, and
+          // the twin sweep below then nulled one of them anyway — so the pair
+          // bought nothing and cost plenty: the write verification counted the
+          // retired half as a lost field, and which spelling survived decided
+          // the Date Rule's id, so an extracted birthday and a typed one
+          // produced rules with different ids for the same fact.
+          //
+          // Every reader accepts either spelling (profile-detail reads
+          // `birthday || dateOfBirth || dob`), and the rule engine classifies
+          // all of them, so the canonical one is enough.
           if (key === 'dateOfBirth' || key === 'dob') {
             profileFields['dateOfBirth'] = coerceValue(key, val);
-            profileFields['birthday'] = coerceValue(key, val);
           } else if (key === 'patientName') {
             // patientName → save as 'name' only if profile doesn't already have one
             // (checked below when we have the profile object)
@@ -2749,13 +2786,33 @@ ${JSON.stringify(ctx, null, 2)}`;
               // check reported a perfectly good save as
               // "fields did not persist to <name>: address, issuing State".
               const unsavedKeys = confirmedKeys.filter((k) => !fieldValuePersisted(afterFields, k, incoming[k]));
-              const savedKeys = confirmedKeys.filter((k) => !unsavedKeys.includes(k));
+              // Count the fields the user will SEE — one per FIELD, not one per
+              // spelling. A licence sends "address" and "streetAddress" for one
+              // field, and "Saved 2 fields" for one address is its own small lie.
+              const seenIdentities = new Set<string>();
+              const savedKeys = confirmedKeys.filter((k) => {
+                if (unsavedKeys.includes(k)) return false;
+                const identity = fieldIdentity(k);
+                if (seenIdentities.has(identity)) return false;
+                seenIdentities.add(identity);
+                return true;
+              });
               if (unsavedKeys.length > 0) {
                 failures.push(`fields did not persist to ${profile.name}: ${unsavedKeys.join(", ")}`);
               }
               if (savedKeys.length > 0) {
                 saved.push(`Saved ${savedKeys.length} field${savedKeys.length === 1 ? "" : "s"} to ${profile.name}`);
               }
+              // What Step 2 needs: the fields that reached the PROFILE. A
+              // document does not derive a birthday, so suppressing that
+              // event on "a profile id existed" alone lost the date whenever
+              // the profile write failed.
+              // By field IDENTITY, not by spelling: a field confirmed as `dob`
+              // is routed to `dateOfBirth`, so comparing the raw key never
+              // matched — and a standalone birthday event was written and
+              // tagged `date-rule-uncovered`, which exempts it from the shadow
+              // pass, leaving a permanent duplicate of the derived rule.
+              for (const k of savedKeys) profileSavedKeys.add(fieldIdentity(k));
               log.info(`[confirm-extraction] Routed ${savedKeys.length}/${confirmedKeys.length} fields to profile ${profile.name}${unsavedKeys.length > 0 ? ` (FAILED: ${unsavedKeys.join(", ")})` : ""}`);
 
               // Link the document to the profile
@@ -2780,33 +2837,66 @@ ${JSON.stringify(ctx, null, 2)}`;
         }
       }
 
-      // 2. Create calendar events for confirmed date fields
+      // 2. Dates the source entity does NOT already own
+      //
+      // Every date that classifies as a Date Rule (shared/date-rules) — a DOB,
+      // an expiration, a renewal, a payment date — is now DERIVED from the
+      // field the step above just saved. Writing a standalone calendar event
+      // for it as well was the app's second date system: the event was a copy
+      // that drifted when the field was edited and survived as an orphan when
+      // the document was deleted. The entity owns the date; the calendar is a
+      // view of it.
+      //
+      // A date the classifier does NOT recognise (a one-off "House Viewing"
+      // printed on an invitation) has no source field to be derived from, so
+      // it still becomes a real event — that is the only case left.
       if (createCalendarEvents && createCalendarEvents.length > 0) {
+        // A date is only DERIVED if its field actually PERSISTED.
+        //
+        // `createCalendarEvents` arrives independently of `confirmedFields`, so
+        // a date ticked for the calendar alone has no field behind it — and if
+        // Step 0's write threw, neither does one that was ticked. Suppressing
+        // the event in either case loses the date entirely while the response
+        // still reports success, so the set below is the fields that landed.
         for (const event of createCalendarEvents) {
           try {
+            // A rule must be DERIVABLE, not merely plausible. A value the date
+            // engine rejects — a range, a sentence, a timestamp — still
+            // classifies as actionable from its field NAME, so suppressing on
+            // classification alone left the date on no surface at all while
+            // the response reported success.
+            const key = normalizeFieldKey(event.field);
+            const cls = classifyDateField(event.field, docContextForDates);
+            // A document does not derive a BIRTHDAY — that belongs to the
+            // person, and only the profile write above can carry it. With no
+            // profile to route to, the field saved to the document and derived
+            // nowhere, so suppressing the event left the date on no surface
+            // while the response reported success.
+            const derivedByTheDocument = cls.ruleType !== "birthday" && cls.ruleType !== "anniversary";
+            const derivedByTheProfile = profileSavedKeys.has(fieldIdentity(event.field))
+              && (cls.ruleType === "birthday" || cls.ruleType === "anniversary");
+            const covered = persistedFieldValues.has(key)
+              && !!bareDateOf(persistedFieldValues.get(key))
+              && cls.actionable
+              && (derivedByTheDocument || derivedByTheProfile);
+            if (covered) {
+              log.info(`[confirm-extraction] "${event.field}" is owned by its record — derived as a Date Rule, no standalone event`);
+              continue;
+            }
             // Parse date from the field value. Uses the shared parser so
             // printed forms like "6/4/2029" (single-digit month/day) and
             // "Jun 4, 2029" normalize correctly instead of being dropped.
             const dateStr = normalizeDateString(event.date);
             if (!dateStr) continue;
-            // REFERENCE, DON'T DUPLICATE. A date the canonical record already
-            // projects onto the calendar must not be copied into a second,
-            // free-standing event. A licence expiration saved to the document
-            // is drawn by `seriesFromDocuments`; a date of birth saved to the
-            // profile is drawn by `seriesFromProfiles`. Creating an event too
-            // put the same fact on the calendar twice, from two records that
-            // drift apart the moment either is edited — the same failure as
-            // the original "Joe's birthday appears twice", through the
-            // extraction door.
-            const coverage = canonicalDateCoverage(String(event.field || ""), {
-              hasDocument: !!extractionId,
-              hasProfile: !!resolvedProfileId,
-            });
-            if (coverage.covered) {
-              log.info(`[confirm-extraction] Skipped duplicate event for "${event.field}" — ${coverage.reason}`);
-              saved.push(`${event.title || event.field}: on the calendar from the ${coverage.system} record`);
-              continue;
-            }
+            // (The `canonicalDateCoverage` gate that used to sit here has been
+            // folded into the `covered` test above. Both answered "would the
+            // record already put this date on the calendar?", and running two
+            // of them meant the weaker one could veto a date the stronger one
+            // had deliberately allowed: it asked only whether a profile or
+            // document EXISTS, where the check above asks whether the field
+            // actually persisted and whether a rule can be derived from the
+            // value that landed. A date ticked for the calendar alone was
+            // dropped by the second gate and reported as saved.)
             await storage.createEvent({
               title: event.title || `📅 ${event.field}`,
               date: dateStr,
@@ -2821,7 +2911,13 @@ ${JSON.stringify(ctx, null, 2)}`;
               color: undefined,
               linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
               linkedDocuments: [extractionId],
-              tags: ["document-extraction"],
+              // `date-rule-uncovered` says: this event is NOT a copy of a date
+              // the record owns — it is the only home the date has. The shadow
+              // pass (shared/calendar-adapters) suppresses extraction events
+              // that duplicate a derived rule, matching on document and day,
+              // and without this marker an uncovered date landing on the same
+              // day as a derived one would be suppressed with them.
+              tags: ["document-extraction", "date-rule-uncovered"],
               source: "chat",
             });
             saved.push(`Created event: ${event.title || event.field}`);
@@ -3905,6 +4001,13 @@ ${JSON.stringify(ctx, null, 2)}`;
       return res.status(400).json({ error: "Profile type is required" });
     }
     req.body.name = sanitize(req.body.name);
+    // Manual entry follows the exact same rule as extraction and chat: a date
+    // typed as "7/18/2034" is stored as 2034-07-18, so the Date Rule engine
+    // (shared/date-rules) derives the same rule whichever door the date came
+    // in by. No screen-specific shortcut.
+    if (req.body.fields && typeof req.body.fields === "object") {
+      req.body.fields = normalizeEntityDateFields(req.body.fields as Record<string, any>).fields;
+    }
     // Validate common profile fields if provided
     if (req.body.fields && typeof req.body.fields === "object") {
       const f = req.body.fields;
@@ -4034,6 +4137,13 @@ ${JSON.stringify(ctx, null, 2)}`;
     // (it is a write-only deletion hint, not a stored column) so the parser would
     // strip it. We sanitize to a string[] and re-attach to req.body after parse.
     // Without this, every profile-field delete from the UI silently no-ops.
+    // `fieldPathsToDelete` removes EXACTLY those paths — no identity sweep. The
+    // calendar's "remove this date" uses it, because clearing one date must not
+    // take a same-named date in another group with it.
+    const fieldPathsToDeleteRaw: any = (req.body && typeof req.body === "object") ? req.body.fieldPathsToDelete : undefined;
+    const fieldPathsToDelete: string[] | undefined = Array.isArray(fieldPathsToDeleteRaw)
+      ? fieldPathsToDeleteRaw.filter((k: any) => typeof k === "string" && k.length > 0)
+      : undefined;
     const fieldsToDeleteRaw: any = (req.body && typeof req.body === "object") ? req.body.fieldsToDelete : undefined;
     const fieldsToDelete: string[] | undefined = Array.isArray(fieldsToDeleteRaw)
       ? fieldsToDeleteRaw.filter((k: any) => typeof k === "string" && k.length > 0)
@@ -4042,6 +4152,11 @@ ${JSON.stringify(ctx, null, 2)}`;
       const parsed = insertProfileSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
+      if (fieldPathsToDelete && fieldPathsToDelete.length > 0) {
+        (req.body as any).fieldPathsToDelete = fieldPathsToDelete;
+      } else {
+        delete (req.body as any).fieldPathsToDelete;
+      }
       if (fieldsToDelete && fieldsToDelete.length > 0) {
         (req.body as any).fieldsToDelete = fieldsToDelete;
       } else {
@@ -4054,6 +4169,13 @@ ${JSON.stringify(ctx, null, 2)}`;
         return res.status(400).json({ error: "Profile name must be a non-empty string" });
       }
       req.body.name = sanitize(req.body.name);
+    }
+    // Manual entry follows the exact same rule as extraction and chat: a date
+    // typed as "7/18/2034" is stored as 2034-07-18, so the Date Rule engine
+    // (shared/date-rules) derives the same rule whichever door the date came
+    // in by. No screen-specific shortcut.
+    if (req.body.fields && typeof req.body.fields === "object") {
+      req.body.fields = normalizeEntityDateFields(req.body.fields as Record<string, any>).fields;
     }
     // Validate common profile fields if provided
     if (req.body.fields && typeof req.body.fields === "object") {
@@ -5878,6 +6000,57 @@ Rules:
     }
   }));
 
+  // ---- Date Rules ----
+  //
+  // The queryable face of shared/date-rules. Every actionable date in the
+  // account, in ONE shape, with full traceability back to the entity and field
+  // it came from — so "does a rule actually exist for Jane's licence?" is a
+  // question with an answer, not an inference from what happens to render.
+  //
+  // Rules are DERIVED here rather than stored: the id is a pure function of
+  // (source entity, source field, semantic type), so this endpoint cannot
+  // return a duplicate, cannot return a rule whose source was deleted, and
+  // needs no backfill for records that predate the feature.
+  app.get("/api/date-rules", asyncHandler(async (req, res) => {
+    const profileIdsRaw = req.query.profileIds as string | undefined;
+    const profileIds = profileIdsRaw ? profileIdsRaw.split(",").filter(Boolean) : undefined;
+    try {
+      const [profiles, documents, events, obligations, tasks, incomes] = await Promise.all([
+        storage.getProfiles(),
+        storage.getDocuments(),
+        storage.getEvents(),
+        storage.getObligations(),
+        storage.getTasks(),
+        (storage as any).getIncomes?.() ?? Promise.resolve([]),
+      ]);
+      // Half the rules come from field-carried dates (profiles, documents);
+      // the other half from the systems that already model a schedule in a
+      // dedicated column (events, obligations, liabilities, tasks, income).
+      // Both halves are presented as rules so callers see one list.
+      const fieldRules = rulesFromAll({ profiles, documents });
+      // `documents` must be passed here even though the field-carried rules
+      // above already cover them: `seriesFromAll` uses the documents to work
+      // out which legacy `document-extraction` events are shadows of a date the
+      // record now owns. Passing an empty list left that set empty, so one real
+      // expiration came back as two rules — the derived one and its copy.
+      // The `rule:` series are dropped afterwards, so nothing is counted twice.
+      const schedRules = rulesFromSeries(seriesFromAll({
+        profiles, events, obligations, tasks, incomes, documents,
+      }).filter((s) => !s.id.startsWith("rule:")));
+      let rules: DateRule[] = dedupeRules([...fieldRules, ...schedRules]);
+      if (profileIds && profileIds.length > 0) {
+        const allow = new Set(profileIds);
+        rules = rules.filter((r) =>
+          (r.profileId && allow.has(r.profileId)) || (r.ownerIds || []).some((id) => allow.has(id)));
+      }
+      rules.sort((a, b) => a.date.localeCompare(b.date) || a.label.localeCompare(b.label));
+      res.json(rules);
+    } catch (err: any) {
+      log.error(`[date-rules] ${err?.message || err}`);
+      res.status(500).json({ error: "Failed to load date rules" });
+    }
+  }));
+
   // ---- Documents ----
   app.get("/api/documents", asyncHandler(async (req, res) => {
     // [P2.4] Profile filter (parity with /api/obligations, /api/tasks, etc.).
@@ -6019,10 +6192,23 @@ Rules:
       if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Document name must be a non-empty string" });
       req.body.name = sanitize(req.body.name);
     }
+    // Editing a document's expiration by hand is the same write as extracting
+    // it, so it normalizes the same way — change 2034 to 2036 here and the
+    // derived rule (and every view of it) moves, because the rule reads this
+    // field. See shared/date-rules.
+    if (req.body.extractedData && typeof req.body.extractedData === "object") {
+      req.body.extractedData = normalizeEntityDateFields(
+        req.body.extractedData as Record<string, any>,
+        { contextKey: String(req.body.type ?? "") },
+      ).fields;
+    }
     const updated = await storage.updateDocument(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_d2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d2}:`); bustCache(`notifications:${uid_d2}`);
+    // A document's dates are calendar items, so an edit to them is a calendar
+    // change too.
+    bustCache(`caltimeline:${uid_d2}`); bustCache(`activity:${uid_d2}`);
     res.json(updated);
   }));
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
@@ -6062,9 +6248,53 @@ Rules:
       // Cascade is best-effort — the delete itself must still succeed.
       console.error(`[doc-delete-cascade] failed for ${docIdToDelete}: ${cascadeErr?.message || cascadeErr}`);
     }
+    // CASCADE 2: retire the standalone calendar events that older extractions
+    // wrote for this document's dates.
+    //
+    // Those events are the legacy of the second date system: an expiration
+    // saved BOTH as a field on the document and as an independent event with
+    // no link back. Deleting the document left the event behind, still sitting
+    // on the calendar with a date whose source no longer exists — the orphan
+    // the user reported. New extractions no longer write them (the date is
+    // derived from the document instead), so this only ever cleans up history;
+    // it is scoped to events this app auto-created FROM this document, never
+    // to anything the user made themselves.
+    try {
+      const allEvents = await storage.getEvents();
+      for (const ev of allEvents as any[]) {
+        const linked: string[] = Array.isArray(ev.linkedDocuments) ? ev.linkedDocuments : [];
+        const tags: string[] = Array.isArray(ev.tags) ? ev.tags : [];
+        if (!linked.includes(docIdToDelete)) continue;
+        if (!tags.includes("document-extraction")) continue;
+        // `date-rule-uncovered` events go too, deliberately. That tag exists to
+        // stop the DISPLAY-time shadow pass hiding a date nothing else carries;
+        // deletion is a different question, and this cascade's rule — the one
+        // it already applies to profile fields above — is that a document takes
+        // back exactly what it contributed. An auto-created event is
+        // contributed data. Leaving it would be the orphan the user reported.
+        // An event linked to OTHER documents too is not this document's to
+        // delete — unlink and leave it. Deleting on "includes this id" orphaned
+        // events that still belonged to a surviving document.
+        const others = linked.filter((d) => d !== docIdToDelete);
+        if (others.length > 0) {
+          await storage.updateEvent(ev.id, { linkedDocuments: others } as any);
+          log.info(`[doc-delete-cascade] ${docIdToDelete} → unlinked event ${ev.id} (still on ${others.length} document(s))`);
+          continue;
+        }
+        await storage.deleteEvent(ev.id);
+        log.info(`[doc-delete-cascade] ${docIdToDelete} → removed derived event ${ev.id} "${ev.title}"`);
+      }
+    } catch (evErr: any) {
+      console.error(`[doc-delete-cascade] event cleanup failed for ${docIdToDelete}: ${evErr?.message || evErr}`);
+    }
     await storage.deleteDocument(docIdToDelete);
     const uid_d3 = cacheUserKey(req as AuthenticatedRequest);
+    // A document carries dates, so deleting one changes the calendar, the
+    // upcoming feed and the Important Dates list — not just the document list.
+    // Omitting the calendar bust here is why a deleted licence's expiration
+    // outlived it on screen.
     bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
+    bustCache(`profiles:${uid_d3}`); bustCache(`events:${uid_d3}`); bustCache(`caltimeline:${uid_d3}`); bustCache(`activity:${uid_d3}`);
     res.json({ success: true });
   }));
   // ---- Re-extract: re-read a stored document and recover missed fields ----

@@ -31,6 +31,9 @@ import {
 
 const TODAY = "2026-07-25";
 const JOE = "joe-id";
+// Joe's birthday is now a Date Rule (shared/date-rules): the series id traces
+// back to the exact entity + field + semantic type it was derived from.
+const JOE_BIRTHDAY = `rule:profile:${JOE}:birthday:birthday`;
 const CHATGPT = "chatgpt-id";
 const PROGRESSIVE = "progressive-id";
 
@@ -156,15 +159,15 @@ describe("Rules view: one compact card per source", () => {
 
   it("shows the earliest birthday after today, not the drifted 2029 date", () => {
     mount();
-    const card = screen.getByTestId(`rule-card-profile:${JOE}:birthday`);
+    const card = screen.getByTestId(`rule-card-${JOE_BIRTHDAY}`);
     expect(card.textContent).toContain("February 11, 2027");
     expect(card.textContent).not.toContain("2029");
   });
 
   it("does NOT put a Done button on a birthday", () => {
     mount();
-    const card = screen.getByTestId(`rule-card-profile:${JOE}:birthday`);
-    expect(within(card).queryByTestId(`rule-primary-profile:${JOE}:birthday`)).toBeNull();
+    const card = screen.getByTestId(`rule-card-${JOE_BIRTHDAY}`);
+    expect(within(card).queryByTestId(`rule-primary-${JOE_BIRTHDAY}`)).toBeNull();
   });
 
   it("labels the payment primary action 'Mark paid', never 'Done'", () => {
@@ -235,7 +238,7 @@ describe("Upcoming dates view", () => {
 describe("opening an item", () => {
   it("opens the detail sheet for that exact item", () => {
     mount();
-    fireEvent.click(screen.getByTestId(`rule-open-profile:${JOE}:birthday`));
+    fireEvent.click(screen.getByTestId(`rule-open-${JOE_BIRTHDAY}`));
     const sheet = screen.getByTestId("calendar-item-detail");
     expect(within(sheet).getByTestId("cal-detail-title").textContent).toContain("Joe's Birthday");
     expect(within(sheet).getByTestId("cal-detail-type").textContent).toContain("Birthday");
@@ -243,7 +246,7 @@ describe("opening an item", () => {
 
   it("links the birthday to Joe's profile, not a generic list", () => {
     mount();
-    fireEvent.click(screen.getByTestId(`rule-open-profile:${JOE}:birthday`));
+    fireEvent.click(screen.getByTestId(`rule-open-${JOE_BIRTHDAY}`));
     const link = screen.getByTestId("cal-detail-source-link");
     expect(link.textContent).toContain("Joe");
     fireEvent.click(link);
@@ -252,7 +255,7 @@ describe("opening an item", () => {
 
   it("shows five years of birthdays in the detail schedule", () => {
     mount();
-    fireEvent.click(screen.getByTestId(`rule-open-profile:${JOE}:birthday`));
+    fireEvent.click(screen.getByTestId(`rule-open-${JOE_BIRTHDAY}`));
     const occ = screen.getByTestId("cal-detail-occurrences");
     for (const y of ["2027", "2028", "2029", "2030", "2031"]) {
       expect(occ.textContent, y).toContain(y);

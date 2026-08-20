@@ -24,6 +24,7 @@
 // display.
 
 import { computeAttention, BIRTHDAY_RE, type AttentionItem, type AttentionInputs, type AttentionConfig } from "./attention";
+import { ruleClaimKey } from "./date-rules";
 import { dayLabel } from "./now-rank";
 import { isHabitDueOn, isHabitDoneOn } from "./habit-schedule";
 import { habitDayProgress } from "./habit-progress";
@@ -253,6 +254,20 @@ function relTime(iso: string | null | undefined): string {
 
 // ── The router ───────────────────────────────────────────────────────────────
 
+/**
+ * The identity a calendar item claims, so it appears in exactly ONE section.
+ *
+ * Date-Rule items all carry the source ENTITY as their sourceId, so a person
+ * with a birthday and a licence expiration emitted two items claiming
+ * `event:<profileId>` and all but the first were dropped everywhere. The rule
+ * is the distinct key — but EVERY section has to use it, or the same date
+ * claims two keys and renders in two sections instead of none.
+ */
+function eventClaimKey(e: any): string {
+  return e?.meta?.ruleId ? ruleClaimKey(e.meta.ruleId) : `event:${e?.sourceId || e?.id}`;
+}
+
+
 export function buildExecutiveSections(
   input: ExecSectionInputs,
   config?: Partial<AttentionConfig>,
@@ -426,7 +441,7 @@ export function buildExecutiveSections(
     if (du == null || du < 0 || du > 14) continue;
     if (!isHealthText(`${e.title || ""} ${e.category || ""}`)) continue;
     cand.health.push({
-      key: `event:${e.id}`, sourceKey: `event:${e.sourceId || e.id}`, kind: "event",
+      key: `event:${e.id}`, sourceKey: eventClaimKey(e), kind: "event",
       title: e.title || "Appointment",
       reason: [du === 0 ? "Today" : dayLabel(du), timeLabel(e.time)].filter(Boolean).join(" · "),
       tier: du === 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
@@ -456,8 +471,9 @@ export function buildExecutiveSections(
     // birthday has `sourceId` of `profile:<id>:birthday` — not an event id —
     // so offering Done on one would PATCH /api/events/profile:… and 404.
     const canMarkDone = parseRecurringMeta(e.meta?.tags).isRecurringDate;
+    const claimKey = eventClaimKey(e);
     cand.importantDates.push({
-      key: `event:${e.id}`, sourceKey: `event:${e.sourceId || e.id}`, kind: "event",
+      key: `event:${e.id}`, sourceKey: claimKey, kind: "event",
       title: e.title || "Occasion",
       reason: [kindLabel, du === 0 ? "Today" : dayLabel(du)].filter(Boolean).join(" · "),
       tier: du === 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
@@ -498,19 +514,36 @@ export function buildExecutiveSections(
     const bestByDoc = new Map<string, { doc: any; du: number }>();
     for (const d of input.documents || []) {
       const id = d?.documentId || d?.id;
-      if (!id || snoozed.has(id)) continue;
+      if (!id) continue;
+      // Snoozing is per RULE now that a record can carry several. Testing the
+      // record id alone meant dismissing a passport also hid the licence.
+      // The record id is still honoured so snoozes made before this keep working.
+      if (snoozed.has(d?.ruleId) || snoozed.has(id)) continue;
+      // Group by the RULE, not by the record it hangs off. `documentId` is the
+      // source entity now, so a person carrying both a passport and a licence
+      // expiring inside the window collapsed to whichever was nearer and the
+      // other never appeared.
+      const groupKey = d?.ruleId || id;
       const du = typeof d.daysUntil === "number" ? d.daysUntil : daysBetween(today, d.expirationDate);
       if (du == null || du > (config?.docsWithinDays ?? 30)) continue;
-      const prev = bestByDoc.get(id);
-      if (!prev || du < prev.du) bestByDoc.set(id, { doc: d, du });
+      const prev = bestByDoc.get(groupKey);
+      if (!prev || du < prev.du) bestByDoc.set(groupKey, { doc: d, du });
     }
-    for (const [id, { doc, du }] of bestByDoc) {
+    for (const [groupKey, { doc, du }] of bestByDoc) {
+      const id = doc?.documentId || doc?.id || groupKey;
       cand.documents.push({
-        key: `doc:${id}`, sourceKey: `document:${id}`, kind: "document",
+        key: `doc:${groupKey}`,
+        sourceKey: doc?.ruleId ? ruleClaimKey(doc.ruleId) : `document:${groupKey}`,
+        kind: "document",
         title: doc.documentName || doc.name || doc.fieldName || "Document",
         reason: du < 0 ? `Expired ${Math.abs(du)}d ago` : du === 0 ? "Expires today" : `Expires ${dayLabel(du)}`,
         tier: du <= 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
-        daysUntil: du, score: 0, href: `/documents/${id}`,
+        // Prefer the row's own link. An expiration can be carried by a
+        // PROFILE (a passport typed onto a person) as well as by a document,
+        // and `/documents/<profileId>` leads nowhere. The `#/` prefix is the
+        // app-wide hash-route form these rows are built with elsewhere.
+        daysUntil: du, score: 0,
+        href: String(doc.href || "").replace(/^#/, "") || `/documents/${id}`,
         action: { kind: "open", label: "Review" },
       });
     }
@@ -542,7 +575,7 @@ export function buildExecutiveSections(
     if (String(e.date || "").slice(0, 10) !== today) continue;
     const past = !!e.time && String(e.time).slice(0, 5) < nowClock;
     cand.today.push({
-      key: `event:${e.id}`, sourceKey: `event:${e.sourceId || e.id}`, kind: "event",
+      key: `event:${e.id}`, sourceKey: eventClaimKey(e), kind: "event",
       title: e.title || "Event",
       reason: e.allDay || !e.time ? "All day" : `${timeLabel(e.time)}${past ? " · passed" : ""}`,
       tier: past ? "soon" : "immediate",
@@ -566,7 +599,7 @@ export function buildExecutiveSections(
     const du = daysBetween(today, e.date);
     if (du == null || du < 1 || du > 7) continue;
     cand.upcoming.push({
-      key: `event:${e.id}`, sourceKey: `event:${e.sourceId || e.id}`, kind: "event",
+      key: `event:${e.id}`, sourceKey: eventClaimKey(e), kind: "event",
       title: e.title || "Event",
       reason: [dayLabel(du), timeLabel(e.time)].filter(Boolean).join(" · "),
       tier: "soon", daysUntil: du, score: 0, href: "/calendar",

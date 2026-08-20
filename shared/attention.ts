@@ -17,6 +17,7 @@
 // score = urgency (shared curve) + impact. Higher surfaces sooner.
 
 import { dayLabel, urgencyScore } from "./now-rank";
+import { ruleClaimKey } from "./date-rules";
 import { isHabitDueOn, isHabitDoneOn, type HabitScheduleShape } from "./habit-schedule";
 import { habitDayProgress } from "./habit-progress";
 
@@ -197,6 +198,16 @@ const TIER_RANK: Record<AttentionTier, number> = { immediate: 0, soon: 1, upcomi
 
 // ── The model ────────────────────────────────────────────────────────────────
 
+/**
+ * The identity of ONE profile-carried expiration.
+ *
+ * Not the person — several of their dates can expire, and claiming the person
+ * would silence every other alert about them, including a critical one.
+ */
+function profileExpirationClaimKey(profileId: string, dateISO: string): string {
+  return `profile-exp:${profileId}:${String(dateISO).slice(0, 10)}`;
+}
+
 export function computeAttention(
   input: AttentionInputs,
   config?: Partial<AttentionConfig>,
@@ -216,6 +227,18 @@ export function computeAttention(
     if (claimed.has(item.sourceKey)) return;
     claimed.add(item.sourceKey);
     built.push(item);
+  };
+  /**
+   * Mark a key as spoken for without emitting a row.
+   *
+   * Rows are identified per DATE now — one record can carry a passport and a
+   * licence — but the notifications pass at the bottom only knows entity ids
+   * (`${entityType}:${entityId}`). Claiming the row's own key alone left the
+   * record unclaimed, so notification-service's "Expiring soon" alert for the
+   * same licence came back as a second Immediate Attention row.
+   */
+  const alsoClaim = (key: string | null | undefined) => {
+    if (key) claimed.add(key);
   };
 
   // ── Tasks ──────────────────────────────────────────────────────────────────
@@ -276,25 +299,41 @@ export function computeAttention(
   }
 
   // ── Expiring documents ─────────────────────────────────────────────────────
-  // One row per DOCUMENT, not per expiring field: a card with both an
-  // expiration_date and a valid_until is still one thing to go renew.
+  // One row per DATE RULE.
+  //
+  // It used to be one row per record — "a card with both an expiration_date and
+  // a valid_until is still one thing to go renew" — but two spellings of one
+  // date now collapse in the rule engine, and what reaches here instead is a
+  // record that can genuinely carry SEVERAL different dates: a person with a
+  // passport and a licence, a vehicle with insurance and registration. Keyed on
+  // the record they collapsed to whichever expired first.
+  //
+  // The key also has to match `shared/executive-sections`, which moved to the
+  // rule: with different sourceKeys the claim loop cannot tell they are the
+  // same row, and an expired licence rendered in Immediate Attention AND under
+  // Documents. And a snooze taken by rule id stopped suppressing this one.
   {
     const snoozed = new Set(input.snoozedDocumentIds || []);
     const bestByDoc = new Map<string, { doc: any; du: number }>();
     for (const d of input.documents || []) {
       const id = d?.documentId || d?.id;
-      if (!id || snoozed.has(id)) continue;
+      if (!id) continue;
+      if (snoozed.has(d?.ruleId) || snoozed.has(id)) continue;
       const du = typeof d.daysUntil === "number" ? d.daysUntil : daysBetween(today, d.expirationDate);
       if (du == null || du > cfg.docsWithinDays) continue;
-      const prev = bestByDoc.get(id);
-      if (!prev || du < prev.du) bestByDoc.set(id, { doc: d, du });
+      const groupKey = d?.ruleId || id;
+      const prev = bestByDoc.get(groupKey);
+      if (!prev || du < prev.du) bestByDoc.set(groupKey, { doc: d, du });
     }
-    for (const [id, { doc, du }] of bestByDoc) {
+    for (const [groupKey, { doc, du }] of bestByDoc) {
+      const id = doc?.documentId || doc?.id || groupKey;
       const name = doc.documentName || doc.name || doc.fieldName || "Document";
       const critical = CRITICAL_DOC.test(`${name} ${doc.documentType || ""} ${doc.fieldName || ""}`);
       claim({
-        key: `doc:${id}`,
-        sourceKey: `document:${id}`,
+        key: `doc:${groupKey}`,
+        // The SAME key `shared/executive-sections` uses, so the two surfaces
+        // agree that this row and its calendar-item twin are one thing.
+        sourceKey: doc?.ruleId ? ruleClaimKey(doc.ruleId) : `document:${groupKey}`,
         kind: "document",
         title: name,
         reason: du < 0
@@ -303,9 +342,27 @@ export function computeAttention(
         tier: tierOf(du),
         daysUntil: du,
         score: urgencyScore(du) + (critical ? 160 : 20),
-        href: `/documents/${id}`,
+        // An expiration can be carried by a PROFILE as well as by a document,
+        // and `/documents/<profileId>` leads nowhere. The row knows its record.
+        href: String(doc?.href || "").replace(/^#/, "") || `/documents/${id}`,
         action: { kind: "open", label: "Review" },
       });
+      // …and the DOCUMENT, so the notifications pass does not raise the same
+      // expiration again under the entity's own key.
+      //
+      // Deliberately not the profile: a person's key stands for the person, and
+      // claiming it because one of their documents expires would silence every
+      // other alert about them — including a critical one. A duplicated row is
+      // a nuisance; a swallowed critical alert is not.
+      alsoClaim(`document:${id}`);
+      // A profile-carried expiration is raised by notification-service under
+      // the PROFILE's key, which nothing here claims — so the same licence came
+      // back as a second alert. Claiming the person outright would silence
+      // every other alert about them, so the claim names the DATE: this
+      // expiration on this person, and nothing else about them.
+      if (doc?.relatedProfileId && doc?.expirationDate) {
+        alsoClaim(profileExpirationClaimKey(doc.relatedProfileId, doc.expirationDate));
+      }
     }
   }
 
@@ -450,17 +507,25 @@ export function computeAttention(
   // ── Notifications, LAST ────────────────────────────────────────────────────
   // Everything above has already claimed its key, so a notification derived
   // from one of those records is dropped here. What survives is what has no
-  // other representation on this surface: custom/AI-raised items, profile-field
-  // expirations (notification-service scans profile.fields, nothing else does),
-  // and streak milestones.
+  // other representation on this surface: custom/AI-raised items and streak
+  // milestones. (Profile-field expirations used to belong on that list, back
+  // when notification-service was the only thing that scanned profile.fields.
+  // The Date Rule engine scans them now, so those rows claim their record above
+  // and this pass correctly skips them.)
   {
     const dismissed = new Set(input.dismissedNotificationIds || []);
     for (const n of input.notifications || []) {
       if (!n?.id || n.dismissed || dismissed.has(n.id)) continue;
       if (n.severity === "info") continue;   // info is bell material, not attention
-      const sourceKey = n.entityType && n.entityId
-        ? `${n.entityType}:${n.entityId}`
-        : `notification:${n.id}`;
+      // A profile-field expiration identifies itself by the DATE, not by the
+      // person: several of a person's dates can expire, and they are not one
+      // another. The expirations pass above claims the same key.
+      const sourceKey = n.entityType === "profile" && n.entityId && n.dueDate
+          && String(n.type || "") === "document_expiring"
+        ? profileExpirationClaimKey(n.entityId, n.dueDate)
+        : n.entityType && n.entityId
+          ? `${n.entityType}:${n.entityId}`
+          : `notification:${n.id}`;
       if (claimed.has(sourceKey)) continue;  // ← the duplication fix
       const du = daysBetween(today, n.dueDate);
       const critical = n.severity === "critical";

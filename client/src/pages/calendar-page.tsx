@@ -2,7 +2,8 @@ import { useEffect, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import CalendarView from "@/components/CalendarView";
-// The Recurring Dates screen: category chips + Rules/Upcoming views, all fed
+// The Recurring & Important Dates screen: category chips + Rules/Upcoming
+// views, all fed
 // by the one occurrence engine. Replaces the old manager, which ran recurring
 // RULES and generated OCCURRENCES together as a single scroll.
 import { RecurringDatesPage } from "@/components/recurring/RecurringDatesPage";
@@ -95,9 +96,9 @@ export default function CalendarPage() {
         />
       </div>
 
-      {/* Calendar | Recurring Dates tab toggle */}
+      {/* Calendar | Recurring & Important Dates tab toggle */}
       <div className="flex gap-1 rounded-xl bg-muted/50 p-1 mb-2" data-testid="calendar-tabs">
-        {([["calendar", "Calendar", CalendarDays], ["recurring", "Recurring Dates", Repeat]] as const).map(([key, label, Icon]) => (
+        {([["calendar", "Calendar", CalendarDays], ["recurring", "Recurring & Important", Repeat]] as const).map(([key, label, Icon]) => (
           <button key={key} type="button" onClick={() => setTab(key)}
             className={`flex-1 rounded-lg py-1.5 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors ${tab === key ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
             data-testid={`calendar-tab-${key}`}>

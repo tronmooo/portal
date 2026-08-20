@@ -720,7 +720,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
   // Documents
   const visibleDocs = allExpiringDocs
-    .filter((d: any) => !snoozedDocumentIds.includes(d.documentId))
+    // Dismissal is per RULE now that one record can carry several expirations.
+    // Filtering on the record id alone left a dismissed row in this card and in
+    // the count below while the popup and the executive section hid it.
+    .filter((d: any) => !snoozedDocumentIds.includes(d.ruleId) && !snoozedDocumentIds.includes(d.documentId))
     .filter((d: any) => typeof d.daysUntil === "number")
     .sort((a: any, b: any) => a.daysUntil - b.daysUntil);
   const docsSoonCount = visibleDocs.filter((d: any) => d.daysUntil <= 30).length;
@@ -1284,8 +1287,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     {visibleDocs.slice(0, 4).map((d: any) => {
                       const name = d.documentName || d.name || d.fieldName || "Document";
                       const tone = tonePalette(toneForDays(d.daysUntil));
+                      // One row per RULE, not per record — a person with both a
+                      // passport and a licence expiring renders two, and keying
+                      // on the shared source-entity id gave them the same key.
                       return (
-                        <div key={d.documentId || d.id}
+                        <div key={d.ruleId || d.documentId || d.id}
                           role="button" tabIndex={0}
                           onClick={() => setPopup("docs")}
                           onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPopup("docs"); } }}

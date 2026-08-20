@@ -13,6 +13,7 @@
 // fields.paused / fields.pausedUntil suppress generation while paused.
 
 import { freqToUnit, advance, type RecurrenceRule } from "./recurrence";
+import { normalizeDateString } from "./extraction-normalize";
 import { liabilityBillStatus, type BillStatus } from "./liability-status";
 import { liabilityFamily } from "./liability-types";
 import {
@@ -103,6 +104,56 @@ import { addMonthsISO } from "./date-math";
  * revolving / one-time debts derive a monthly payment series from their
  * monthly payment, due day, and remaining term.
  */
+/**
+ * THE next-payment date on a liability's fields.
+ *
+ * Two readers used to answer this separately and could disagree about the same
+ * row: the schedule card put `nextPaymentDate` first, the calendar adapter put
+ * `nextDueDate` first, and neither normalized — so a legacy "07/18/2026" fell
+ * through to today on one surface and rendered correctly on the other.
+ *
+ * Precedence is most-deliberate first: `nextPaymentDate` and `nextPayment` are
+ * what the Payments tab writes when the user edits "Next Due", and that edit
+ * must not be shadowed by the `dueDate` written when the liability was created.
+ */
+export function resolveLiabilityDueDate(f: Record<string, any> | null | undefined): string | null {
+  const fields = f || {};
+  // The first spelling that PARSES, not the first that is merely present.
+  // Coalescing with `??` first meant an empty-string `nextPayment` — which `??`
+  // does not skip — short-circuited the chain and returned null, and the
+  // liability then emitted no series at all: it left the calendar entirely.
+  for (const v of [
+    fields.nextPaymentDate, fields.nextPayment, fields.next_payment,
+    fields.nextDueDate, fields.next_due_date,
+    fields.dueDate, fields.due_date,
+    fields.firstPaymentDate,
+  ]) {
+    const iso = normalizeDateString(v);
+    if (iso) return iso;
+  }
+  return null;
+}
+
+/**
+ * THE date a liability's payments stop, or null.
+ *
+ * Same trap as `resolveLiabilityDueDate`, same fix: coalescing the spelling
+ * chain with `??` first meant a blank `payoffDate` — which `??` does not skip —
+ * short-circuited past a real `endDate`, and the series then had no end at all
+ * and generated payments past payoff.
+ */
+export function resolveLiabilityEndDate(f: Record<string, any> | null | undefined): string | null {
+  const fields = f || {};
+  for (const v of [
+    fields.payoffDate, fields.payoff_date,
+    fields.endDate, fields.end_date, fields.recurrenceEnd,
+  ]) {
+    const iso = normalizeDateString(v);
+    if (iso) return iso;
+  }
+  return null;
+}
+
 export function deriveScheduleFields(
   fields: Record<string, any> | null | undefined,
   typeKey: string | null | undefined,
@@ -114,7 +165,11 @@ export function deriveScheduleFields(
 
   const amount = Number(f.monthlyPayment ?? f.minimumPayment ?? f.amount ?? f.monthlyAmount ?? 0) || 0;
   // Next payment date: an explicit date, else the due day this/next month.
-  let due = clip(f.nextPaymentDate ?? f.dueDate ?? f.nextDueDate ?? f.firstPaymentDate);
+  // `nextPayment` included for the same reason as in shared/calendar-adapters:
+  // it is a spelling the profile writer produces, and without it this falls
+  // through to `todayISO` — putting a payment on the wrong day rather than
+  // none at all, which is worse.
+  let due = clip(resolveLiabilityDueDate(f) ?? "");
   if (!ISO_RE.test(due)) {
     const day = parseInt(String(f.dueDay ?? ""), 10);
     if (day >= 1 && day <= 31) {

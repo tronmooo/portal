@@ -73,6 +73,7 @@ import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollo
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
+import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel } from "@shared/date-rules";
 import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
@@ -2506,14 +2507,24 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         const isDate = hasDate || /expir|renew|due|valid|issued|birth|appoint/i.test(key);
         let suggestedEvent: string | undefined;
         // Only suggest a calendar event when we can actually resolve a real date
-        // from the value (a key called "dueAmount" must not become an event).
-        if (hasDate) {
-          if (/expir/i.test(key)) suggestedEvent = `⚠️ ${label}`;
-          else if (/renew/i.test(key)) suggestedEvent = `🔄 ${label}`;
-          else if (/due/i.test(key)) suggestedEvent = `📅 ${label}`;
-          else if (/appoint|visit|service/i.test(key)) suggestedEvent = `🗓️ ${label}`;
-          else if (/valid|issued|administered/i.test(key)) suggestedEvent = undefined;
-          else suggestedEvent = `📅 ${label}`;
+        // from the value (a key called "dueAmount" must not become an event) —
+        // AND only when the record does not already own that date.
+        //
+        // An expiration, a renewal, a due date or a birthday now reaches the
+        // calendar by being ON the record (shared/date-rules), so offering an
+        // "also add to calendar" tick for one promised a second, disconnected
+        // copy. The activity feed entry "⚠️ expiration Date" in the user's
+        // screenshot was exactly that copy. What remains is the genuinely
+        // uncovered case: a date the classifier does not recognise, which has
+        // no source field to be derived from and so does need an event.
+        // `/valid|issued|administered/` stays suppressed explicitly. Those keys
+        // classify as informational, so the actionable test alone would let
+        // them through — and "add `dateAdministered` to the calendar?" is the
+        // clutter this branch has always been careful to avoid.
+        if (hasDate
+          && !classifyDateField(key, docType).actionable
+          && !/valid|issued|administered/i.test(key)) {
+          suggestedEvent = `📅 ${label}`;
         }
 
         const category = categorizeField(key, CATEGORY_MAP);
@@ -9677,6 +9688,136 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!input.date || typeof input.date !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(input.date)) {
         return { error: "Valid event date (YYYY-MM-DD) is required" };
       }
+      // ── The source entity owns its own dates ──────────────────────────
+      //
+      // "My birthday is July 10, 1994" is not a request for a calendar event;
+      // it is a fact about a person. Writing it as an event created a second,
+      // disconnected record of the same date: edit the profile later and the
+      // event stayed on July 10, delete the person and the event survived.
+      //
+      // So a birthday or anniversary aimed at a resolvable profile is written
+      // to that PROFILE's field, and the Date Rule engine derives the yearly
+      // occurrence from it (shared/date-rules) — exactly what document
+      // extraction and the manual form now produce for the same sentence.
+      // Anything without an owning record still becomes a real event.
+      //
+      // The same rule applies to an EXPIRATION told to the chat ("my driver's
+      // licence expires July 18 2034"): the licence is the thing that expires,
+      // so the date goes on the record, and the important-date rule follows
+      // from it. Told twice, it updates rather than duplicating — the field is
+      // the identity.
+      {
+        const evtTitle = String(input.title || "");
+        const evtRepeats = !!input.recurrence && String(input.recurrence).toLowerCase() !== "none";
+        // Deliberately narrow — see isBareExpiryStatement. "Renew passport at
+        // the embassy" is an errand and stays an event; only a bare statement
+        // that something expires is redirected onto the record that expires.
+        if (isBareExpiryStatement(evtTitle) && !evtRepeats) {
+          const profs = await storage.getProfiles();
+          const subject = evtTitle
+            .replace(/\b(expir\w*|renew\w*|valid until|good thru|date|on)\b/gi, " ")
+            .replace(/\s+/g, " ").trim();
+          // No self-fallback. Guessing the owner of an expiration writes a
+          // field onto whoever happens to be the primary person AND swallows
+          // the event the user asked for; with no named target, an event is
+          // the honest answer.
+          const target = input.forProfile ? matchProfileByName(profs, input.forProfile) : null;
+          if (target) {
+            // Name the field for what it holds, so the rule engine can classify
+            // it and the profile reads sensibly: "Driver's License Expiration".
+            const cls = classifyDateField("expiration_date", `${subject} ${target.type ?? ""}`);
+            const prefix = cls.ruleSubtype
+              ? cls.ruleSubtype.replace(/_(\w)/g, (_m, c) => c.toUpperCase())
+              : "";
+            const field = prefix ? `${prefix}Expiration` : "expirationDate";
+            const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
+            const existing: Record<string, any> = (target as any).fields || {};
+            // Merge onto the profile's existing fields, as every other
+            // updateProfile caller does. Passing the single canonicalized field
+            // alone replaces `fields` wholesale in the in-memory storage.
+            await storage.updateProfile(target.id, {
+              fields: { ...existing, ...canonicalizeProfileFields({ [field]: iso }, existing).fields },
+            } as any);
+            const updatedProfile = await storage.getProfile(target.id);
+            logger.info("ai", `"${evtTitle}" is an expiration — saved to ${target.name}.${field}; the important date is derived from it`);
+            return {
+              result: {
+                savedTo: "profile", profileId: target.id, profileName: target.name,
+                field, value: iso, occurrenceType: "one_time",
+                note: "Saved to the record that owns this date; the calendar and Important Dates derive it.",
+              },
+              actions: [{ type: "update", category: "profile", data: updatedProfile }],
+            };
+          }
+        }
+      }
+      {
+        // THREE conditions, all required, because the write here OVERWRITES a
+        // person's date of birth:
+        //
+        //   1. the title is a bare LABEL ("Joe's Birthday"), not a party
+        //      ("Birthday party at Chuck E Cheese", "Joe's 40th Birthday Bash");
+        //   2. a specific profile is named — never a fallback to whoever is the
+        //      primary person;
+        //   3. the year is in the PAST, so the date is a birth year rather than
+        //      an occurrence. "Joe's Birthday on 2027-02-11" is Joe's birthday
+        //      NEXT YEAR; storing it as his DOB would replace 1990 with 2027
+        //      and break every age the app computes.
+        //
+        // Anything that fails one of them stays an ordinary calendar event.
+        const label = parseBirthdayLabel(input.title);
+        const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
+        const year = /^\d{4}-/.test(iso) ? Number(iso.slice(0, 4)) : NaN;
+        const thisYear = new Date().getFullYear();
+        if (label && year < thisYear) {
+          const allProfs = await storage.getProfiles();
+          // Only records that HAVE a birthday. `matchProfileByName` searches
+          // every profile, so "Sam's Birthday" could land on a vehicle called
+          // Sam.
+          const profs = allProfs.filter((p: any) =>
+            p.type === "person" || p.type === "self" || p.type === "pet");
+          // An explicit target may be matched loosely; a name read out of the
+          // TITLE must be unambiguous. `matchProfileByName` returns the first
+          // of a tie, and writing a date of birth onto "whichever Sam matched
+          // first" is not a guess worth making — with two Sams this stays an
+          // ordinary event.
+          const byTitle = label.name.length >= 2
+            ? profs.filter((p: any) => matchProfileByName([p], label.name))
+            : [];
+          const target = (input.forProfile && matchProfileByName(profs, input.forProfile))
+            || (byTitle.length === 1 ? byTitle[0] : null);
+          if (target) {
+            const field = label.kind === "birthday" ? "dateOfBirth" : "anniversary";
+            const existing: Record<string, any> = (target as any).fields || {};
+            const held = existing[field] ?? existing[label.kind === "birthday" ? "birthday" : "anniversaryDate"];
+            // "Joe's Birthday" on 2025-06-15 is LAST YEAR'S OCCURRENCE, not
+            // Joe's date of birth — and that is true whether or not the profile
+            // already holds one. Writing it would either replace 1990 with 2025
+            // or invent a birth year out of a party, and either way the event
+            // the user asked for would never be created. A date of birth is
+            // years old; a recent year is an occurrence, and an occurrence is an
+            // ordinary calendar event.
+            const looksLikeAnOccurrence = year > thisYear - 5;
+            const alreadyRight = !!held && looselyEqual(held, iso);
+            if (alreadyRight || !looksLikeAnOccurrence) {
+              await storage.updateProfile(target.id, {
+                fields: { ...existing, ...canonicalizeProfileFields({ [field]: iso }, existing).fields },
+              } as any);
+              const updatedProfile = await storage.getProfile(target.id);
+              logger.info("ai", `"${input.title}" is ${target.name}'s ${field} — saved to the profile; the yearly occurrence is derived from it`);
+              return {
+                result: {
+                  savedTo: "profile", profileId: target.id, profileName: target.name,
+                  field, value: iso, recurrence: "yearly",
+                  note: "Saved to the profile that owns this date; the calendar derives it.",
+                },
+                actions: [{ type: "update", category: "profile", data: updatedProfile }],
+              };
+            }
+          }
+        }
+      }
+
       // In-memory dedup lock
       // A9 fix: include forProfile in event dedup key.
       const evtDedupKey = `event:${safeLC(input.forProfile || "")}:${safeLC(input.title)}:${input.date}`;

@@ -4,6 +4,10 @@ import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEF
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "@shared/date-rules";
+import { deleteProfileFields } from "@shared/profile-field-identity";
+import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
+import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
@@ -910,6 +914,11 @@ export class MemStorage implements IStorage {
 
   async createProfile(data: InsertProfile): Promise<Profile> {
     const now = new Date().toISOString();
+    // Same guard as SupabaseStorage: a date reaches the row in one form
+    // because the storage layer will not take another. See shared/date-rules.
+    if (data.fields && typeof data.fields === "object") {
+      data = { ...data, fields: normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields };
+    }
     const profile: Profile = { id: randomUUID(), ...data, fields: data.fields || {}, tags: data.tags || [], notes: data.notes || "", documents: [], linkedTrackers: [], linkedExpenses: [], linkedTasks: [], linkedEvents: [], createdAt: now, updatedAt: now };
     this.profiles.set(profile.id, profile);
     this.logActivity("profile", `Created profile: ${profile.name}`);
@@ -919,7 +928,25 @@ export class MemStorage implements IStorage {
   async updateProfile(id: string, data: Partial<Profile>) {
     const p = this.profiles.get(id);
     if (!p) return undefined;
+    // Same guard as SupabaseStorage: a date reaches the row in one form
+    // because the storage layer will not take another. See shared/date-rules.
+    if (data.fields && typeof data.fields === "object") {
+      data = { ...data, fields: normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? p.type ?? "") }).fields };
+    }
+    // Honour the delete hints, as SupabaseStorage does. Without this the
+    // calendar's "remove this date" was a no-op here AND the hint arrays were
+    // spread onto the stored profile as if they were data — parity this
+    // storage exists to provide.
+    const { fieldsToDelete, fieldPathsToDelete, ...rest } = data as any;
+    data = rest;
     const updated = { ...p, ...data, updatedAt: new Date().toISOString() };
+    if ((fieldsToDelete?.length || 0) + (fieldPathsToDelete?.length || 0) > 0) {
+      updated.fields = deleteProfileFields(
+        { ...(p.fields || {}), ...(data.fields || {}) },
+        fieldsToDelete,
+        fieldPathsToDelete,
+      ).fields;
+    }
     this.profiles.set(id, updated);
     return updated;
   }
@@ -1300,7 +1327,37 @@ export class MemStorage implements IStorage {
     // state (rd:done/rd:skip/rd:paused/rd:archived tags — see
     // shared/recurring-dates) applies here exactly like the Supabase timeline.
     const rdTodayISO = new Date().toLocaleDateString("en-CA");
+    // Legacy standalone events an older extraction wrote beside a document's
+    // own date are SHADOWS of it — the same suppression SupabaseStorage
+    // applies. Without it this storage renders one real date twice, and a test
+    // here would pass while production showed a duplicate (or the reverse).
+    const rulesForShadowing = rulesFromAll({
+      profiles: Array.from(this.profiles.values()),
+      documents: Array.from(this.documents.values()),
+    });
+    const shadowEventIds = new Set(
+      seriesFromEvents(Array.from(this.events.values()) as any[], {
+        // Birthdays and anniversaries too, not just document copies: a typed-in
+        // "Jane's Birthday" event is a shadow of the profile field the rule is
+        // derived from, and without these two sets this storage rendered both.
+        knownBirthdayProfiles: new Set(
+          rulesForShadowing.filter(r => r.ruleType === "birthday").map(r => r.profileId!).filter(Boolean),
+        ),
+        knownAnniversaryProfiles: new Set(
+          rulesForShadowing.filter(r => r.ruleType === "anniversary").map(r => r.profileId!).filter(Boolean),
+        ),
+        ruledDocumentDates: new Set(
+          rulesForShadowing.filter(r => r.sourceEntityType === "document")
+            .map(r => `${r.sourceEntityId}@${r.date}`),
+        ),
+        ruledProfileDates: new Set(
+          rulesForShadowing.filter(r => r.sourceEntityType === "profile")
+            .map(r => `${r.sourceEntityId}@${r.date}`),
+        ),
+      }).filter(x => x.shadow).map(x => x.source.id),
+    );
     for (const ev of this.events.values()) {
+      if (shadowEventIds.has(ev.id)) continue;
       const color = ev.color || EVENT_CATEGORY_COLORS[ev.category] || "#4F98A3";
       const rdMeta = parseRecurringMeta(ev.tags);
       if (rdMeta.archived) continue;
@@ -1442,6 +1499,70 @@ export class MemStorage implements IStorage {
       }
     }
 
+    // 5. Profile- and document-carried dates, from the ONE Date Rule engine
+    // (shared/date-rules) — the same call SupabaseStorage.getCalendarTimeline
+    // makes. This storage had NO derivation at all, so a birthday or a licence
+    // expiration existed on the profile and on no calendar; parity between the
+    // two storages is the only way a test here means anything in production.
+    {
+      // Recurring income, same as the Supabase timeline — a paycheck belongs on
+      // the Calendar tab and not only on the Recurring screen.
+      for (const ser of seriesFromIncomes(Array.from(this.incomes.values()))) {
+        for (const occ of generateSeriesOccurrences(ser, {
+          todayISO: rdTodayISO,
+          horizonDays: Math.max(366, daysBetweenISO(rdTodayISO, endDate) + 1),
+          lookbackDays: Math.max(0, daysBetweenISO(startDate, rdTodayISO) + 1),
+          cap: 400,
+        })) {
+          if (occ.date < startDate || occ.date > endDate) continue;
+          items.push({
+            id: `${ser.id}-${occ.date}`, type: "event", title: ser.title, date: occ.date,
+            allDay: true, color: "#4FA37A", category: "finance",
+            linkedProfiles: ser.source.ownerIds || [], sourceId: ser.source.id,
+            meta: { kind: "income", amount: occ.amount, recurrence: ser.recurrence, href: ser.source.href },
+          } as any);
+        }
+      }
+
+      const ruleSeries = seriesFromDateRules(rulesFromAll({
+        profiles: Array.from(this.profiles.values()),
+        documents: Array.from(this.documents.values()),
+      }));
+      for (const ser of ruleSeries) {
+        for (const occ of generateSeriesOccurrences(ser, {
+          // The window the CALLER asked for, not "from today forward".
+          // Generating from `todayISO` with no lookback meant any date before
+          // today produced nothing: a lease that ended in January, a licence
+          // that expired last year, and every birthday earlier in the current
+          // year simply left the grid, where the per-type pass this replaced
+          // rendered anything inside the requested range.
+          todayISO: rdTodayISO,
+          horizonDays: Math.max(366 * 12, daysBetweenISO(rdTodayISO, endDate) + 1),
+          lookbackDays: Math.max(0, daysBetweenISO(startDate, rdTodayISO) + 1),
+          cap: 400,
+        })) {
+          if (occ.date < startDate || occ.date > endDate) continue;
+          items.push({
+            id: `${ser.id}-${occ.date}`,
+            type: "event",
+            title: ser.title,
+            date: occ.date,
+            allDay: true,
+            color: ser.kind === "birthday" ? "#A78BFA" : ser.kind === "anniversary" ? "#F472B6" : "#E0803C",
+            category: ser.kind === "birthday" || ser.kind === "anniversary" ? "family" : "other",
+            linkedProfiles: ser.source.ownerIds?.length
+              ? ser.source.ownerIds
+              : (ser.source.profileId ? [ser.source.profileId] : []),
+            sourceId: ser.source.id,
+            meta: {
+              recurrence: ser.recurrence, source: ser.source.system,
+              kind: ser.kind, href: ser.source.href, ruleId: ser.id.replace(/^rule:/, ""),
+            },
+          } as any);
+        }
+      }
+    }
+
     // Sort by date then time
     items.sort((a, b) => {
       const cmp = a.date.localeCompare(b.date);
@@ -1507,7 +1628,9 @@ export class MemStorage implements IStorage {
       type: data.type || "other",
       mimeType: data.mimeType || "image/jpeg",
       fileData: data.fileData || "",
-      extractedData: data.extractedData || {},
+      extractedData: data.extractedData && typeof data.extractedData === "object"
+        ? normalizeEntityDateFields(data.extractedData as Record<string, any>, { contextKey: `${data.type ?? ""} ${data.name ?? ""}` }).fields
+        : {},
       linkedProfiles: data.linkedProfiles || [],
       tags: data.tags || [],
       createdAt: new Date().toISOString(),
@@ -1526,6 +1649,11 @@ export class MemStorage implements IStorage {
   async updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined> {
     const doc = this.documents.get(id);
     if (!doc) return undefined;
+    // Same guard as SupabaseStorage: a date reaches the row in one form
+    // because the storage layer will not take another. See shared/date-rules.
+    if (data.extractedData && typeof data.extractedData === "object") {
+      data = { ...data, extractedData: normalizeEntityDateFields(data.extractedData as Record<string, any>, { contextKey: `${data.type ?? doc.type ?? ""} ${data.name ?? doc.name ?? ""}` }).fields };
+    }
     // If linkedProfiles is being updated, sync profile.documents arrays
     if (data.linkedProfiles) {
       // Remove from profiles no longer linked
@@ -1996,33 +2124,44 @@ export class MemStorage implements IStorage {
 
     // Document expiration alerts — scan extractedData for date fields
     const documents = Array.from(this.documents.values()).filter(d => matchesFilter((d as any).linkedProfiles));
+    // Expirations, from the ONE Date Rule engine (shared/date-rules).
+    //
+    // This block used to carry its own list of twelve expiry key spellings and
+    // `new Date(val)` parsing — a sixth vocabulary, and one that read DOCUMENTS
+    // only. A passport expiration typed onto a person was therefore absent from
+    // the Executive tab while showing up in Upcoming. The rule engine reads both
+    // sources, every spelling, and non-ISO values, so this section now sees
+    // exactly what the calendar and the Important Dates screen see.
     const expiringDocs: any[] = [];
-    for (const doc of documents) {
-      const ed = doc.extractedData || {};
-      // Look for common expiration-related fields
-      const dateFields = ['expiration_date', 'expirationDate', 'expiry', 'expires', 'exp_date',
-        'expiration', 'valid_until', 'validUntil', 'end_date', 'endDate', 'renewal_date', 'renewalDate'];
-      for (const key of Object.keys(ed)) {
-        const lk = key.toLowerCase().replace(/[\s_-]+/g, '');
-        const isDateField = dateFields.some(df => lk.includes(df.toLowerCase().replace(/[\s_-]+/g, '')));
-        if (!isDateField) continue;
-        const val = ed[key];
-        if (!val || typeof val !== 'string') continue;
-        const parsed = new Date(val);
-        if (isNaN(parsed.getTime())) continue;
-        const daysUntil = Math.ceil((parsed.getTime() - now.getTime()) / 86400000);
+    {
+      // Profile AND parent, as the calendar block scopes — see the twin in
+      // supabase-storage.
+      const profilesForExp = Array.from(this.profiles.values()).filter(p =>
+        matchesFilter([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
+      for (const rule of rulesFromAll({ profiles: profilesForExp, documents })) {
+        // Only things that EXPIRE — see the twin in supabase-storage.
+        if (!EXPIRY_RULE_TYPES.has(rule.ruleType)) continue;
+        const daysUntil = daysBetweenISO(now.toLocaleDateString("en-CA"), rule.date);
         expiringDocs.push({
-          documentId: doc.id,
-          documentName: doc.name,
-          documentType: doc.type,
-          fieldName: key,
-          expirationDate: val,
+          documentId: rule.sourceEntityId,
+          documentName: rule.label,
+          documentType: rule.ruleSubtype || rule.sourceEntityType,
+          fieldName: rule.sourceField,
+          // The PATH, because the date may live in a nested group. "Renewed — set
+          // new date" writes this key back: given only the leaf it added a new
+          // top-level one and left the stale nested date in place, so the record
+          // then carried two expirations.
+          fieldPath: rule.sourcePath,
+          expirationDate: rule.date,
           daysUntil,
+          ruleId: rule.id,
+          sourceEntityType: rule.sourceEntityType,
+          href: rule.href,
+          relatedProfileId: rule.profileId,
           status: daysUntil < 0 ? 'expired' : daysUntil <= 30 ? 'expiring_soon' : daysUntil <= 90 ? 'upcoming' : 'ok',
         });
       }
     }
-    // Sort by urgency
     expiringDocs.sort((a, b) => a.daysUntil - b.daysUntil);
 
     // Health snapshot — aggregate recent tracker data from health-related trackers

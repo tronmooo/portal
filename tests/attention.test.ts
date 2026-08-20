@@ -360,3 +360,86 @@ describe("counts and the rest", () => {
     expect(DEFAULT_ATTENTION_CONFIG.minTier).toBe("upcoming");
   });
 });
+
+describe("one expiration, one row on Immediate Attention", () => {
+  const today = "2026-08-20";
+  const soon = "2026-08-25";
+
+  it("does not raise the alert as well as the date", () => {
+    // Rows are identified per DATE now — one record can carry a passport and a
+    // licence — but the notifications pass only knows entity ids. Claiming the
+    // row's own key alone left the record unclaimed, so notification-service's
+    // "Expiring soon" for the SAME licence came back as a second row.
+    const items = computeAttention({
+      now: new Date(`${today}T09:00:00`), today,
+      documents: [{
+        documentId: "doc-1", ruleId: "document:doc-1:expirationdate:expiration",
+        documentName: "Driver License", fieldName: "expiration_date",
+        expirationDate: soon, daysUntil: 5, href: "#/documents/doc-1",
+      }],
+      notifications: [{
+        id: "n-1", entityType: "document", entityId: "doc-1", severity: "warning",
+        title: "Driver License expiring soon", dueDate: soon,
+      }],
+    } as any).items;
+    expect(items.filter((i: any) => /driver license/i.test(i.title))).toHaveLength(1);
+  });
+
+  it("still shows two different dates on one record", () => {
+    const items = computeAttention({
+      now: new Date(`${today}T09:00:00`), today,
+      documents: [
+        { documentId: "p-1", ruleId: "profile:p-1:passportexpiration:expiration",
+          documentName: "Jane — Passport Expiration", fieldName: "passportExpiration",
+          expirationDate: soon, daysUntil: 5, href: "#/profiles/p-1" },
+        { documentId: "p-1", ruleId: "profile:p-1:driverslicenseexpiration:expiration",
+          documentName: "Jane — Driver's License Expiration", fieldName: "driversLicenseExpiration",
+          expirationDate: "2026-08-27", daysUntil: 7, href: "#/profiles/p-1" },
+      ],
+    } as any).items;
+    expect(items.filter((i: any) => i.kind === "document")).toHaveLength(2);
+    // …and each links to the record it actually lives on.
+    for (const i of items.filter((x: any) => x.kind === "document")) {
+      expect(i.href).toBe("/profiles/p-1");
+    }
+  });
+});
+
+describe("a profile-carried expiration is one alert, not two", () => {
+  const today = "2026-08-20";
+  const soon = "2026-08-25";
+
+  it("claims the DATE, so notification-service's twin is suppressed", () => {
+    const items = computeAttention({
+      now: new Date(`${today}T09:00:00`), today,
+      documents: [{
+        documentId: "p-1", ruleId: "profile:p-1:driverslicenseexpiration:expiration",
+        documentName: "Jane — Driver's License Expiration", fieldName: "driversLicenseExpiration",
+        expirationDate: soon, daysUntil: 5, href: "#/profiles/p-1", relatedProfileId: "p-1",
+      }],
+      notifications: [{
+        id: "profile-exp-p-1-driversLicenseExpiration", type: "document_expiring",
+        entityType: "profile", entityId: "p-1", severity: "warning",
+        title: "Expiring soon: Jane - driversLicenseExpiration", dueDate: soon,
+      }],
+    } as any).items;
+    expect(items.filter((i: any) => /driver/i.test(i.title))).toHaveLength(1);
+  });
+
+  it("does not silence an unrelated alert about the same person", () => {
+    // Claiming the person outright would have. The claim names the date.
+    const items = computeAttention({
+      now: new Date(`${today}T09:00:00`), today,
+      documents: [{
+        documentId: "p-1", ruleId: "profile:p-1:driverslicenseexpiration:expiration",
+        documentName: "Jane — Driver's License Expiration", fieldName: "driversLicenseExpiration",
+        expirationDate: soon, daysUntil: 5, href: "#/profiles/p-1", relatedProfileId: "p-1",
+      }],
+      notifications: [{
+        id: "n-critical", entityType: "profile", entityId: "p-1", severity: "critical",
+        title: "Jane's insurance lapsed", dueDate: today,
+      }],
+    } as any).items;
+    expect(items.some((i: any) => /insurance lapsed/.test(i.title))).toBe(true);
+  });
+});

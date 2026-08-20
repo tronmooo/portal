@@ -3,6 +3,11 @@
 // Upcoming Dates — cross-app reminder aggregator
 // =============================================================================
 import { parseRecurringMeta, nextOccurrence as rdNextOccurrence } from "./recurring-dates";
+import {
+  rulesFromAll,
+  type DateRule,
+  type DateRuleType,
+} from "./date-rules";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "./date-math";
 // Pulls every time-sensitive item across the app into a single normalized stream
 // so the dashboard can render one definitive "what's next" view.
@@ -458,69 +463,7 @@ function profileHref(p: any): string {
   return `#/profiles/${p.id}`;
 }
 
-/** Walk a fields record (flat or nested one-level) looking for date-like leaves. */
-function walkProfileFields(fields: any, profileType: string, profileId: string, profileName: string): UpcomingDate[] {
-  const out: UpcomingDate[] = [];
-  const today = todayISO();
-  if (!fields || typeof fields !== "object") return out;
-
-  const visit = (obj: any, parentKey = "") => {
-    if (!obj || typeof obj !== "object") return;
-    for (const [k, v] of Object.entries(obj)) {
-      if (v && typeof v === "object" && !Array.isArray(v)) {
-        visit(v, k);
-        continue;
-      }
-      if (typeof v !== "string") continue;
-      // Skip obviously non-date strings.
-      if (!/^\d{4}-\d{2}-\d{2}/.test(v) && !/\d{4}/.test(v)) continue;
-      const compositeKey = parentKey ? `${parentKey}.${k}` : k;
-      const category = inferCategoryFromKey(k, profileType) || (parentKey ? inferCategoryFromKey(parentKey, profileType) : null);
-      if (!category) continue;
-      const parsed = parseDate(v);
-      if (!parsed) continue;
-      const isAnnual = ANNUAL_RECURRING.has(category);
-      const nextDate = isAnnual ? rollAnnual(v, today) : (parsed.getTime() >= parseDate(today)!.getTime() ? isoFromDate(parsed) : null);
-      if (!nextDate) continue;
-      const daysUntil = daysBetween(today, nextDate);
-      out.push({
-        id: hashId([profileId, compositeKey, nextDate]),
-        sourceId: profileId,
-        category,
-        entityKind: classifyEntityKind({ type: profileType }),
-        title: `${profileName} — ${CATEGORY_LABELS[category]}`,
-        subtitle: prettyKey(compositeKey),
-        nextDate,
-        daysUntil,
-        urgency: classifyUrgency(daysUntil),
-        timeframe: classifyTimeframe(daysUntil),
-        recurring: isAnnual,
-        href: profileHref({ id: profileId }),
-        relatedProfileId: profileId,
-        needsActionSoon: daysUntil <= 14 && needsActionCategory(category),
-        icon: CATEGORY_ICONS[category],
-      });
-    }
-  };
-  visit(fields);
-  return out;
-}
-
-function prettyKey(k: string): string {
-  return k.replace(/[._]/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, c => c.toUpperCase());
-}
-
-function needsActionCategory(c: UpcomingCategory): boolean {
-  return c === "bill_due" || c === "loan_payment" || c === "credit_card_payment"
-    || c === "insurance_renewal" || c === "vehicle_registration" || c === "drivers_license_expiration"
-    || c === "passport_expiration" || c === "visa_expiration" || c === "tax_filing"
-    || c === "medication_refill" || c === "court_date" || c === "legal_filing"
-    || c === "document_expiration" || c === "warranty_expiration";
-}
-
-/** "9:00 AM" for a task with a clock time; "" for an all-day one. */
+/** "14:30" → "2:30 PM". Used by the task rows, which show the hour. */
 function clockLabel(hhmm: unknown): string {
   const v = String(hhmm || "");
   if (!/^\d{2}:\d{2}$/.test(v)) return "";
@@ -528,47 +471,134 @@ function clockLabel(hhmm: unknown): string {
   return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 }
 
-function extractProfiles(profiles: any[]): UpcomingDate[] {
-  const out: UpcomingDate[] = [];
-  for (const p of profiles || []) {
-    if (!p || p.deletedAt) continue;
-    out.push(...walkProfileFields(p.fields || {}, p.type, p.id, p.name || "Untitled"));
-  }
-  return out;
+// (Removed: `walkProfileFields`. It was this module's own idea of which profile
+// field is a meaningful date, and it disagreed with the calendar's — a licence
+// on a person reached here and nowhere else. Superseded by the Date Rule engine
+// below, and deleted rather than left dead so nothing calls it again.)
+
+// ── Profiles & documents: derived from the ONE Date Rule engine ─────────────
+//
+// These two used to be hand-written walkers with their own idea of which field
+// is a meaningful date — and that idea disagreed with the calendar's. A
+// document's `expiration_date` was invisible here (only `expirationDate` was
+// read) while a profile's `licenseExpiration` was invisible on the calendar.
+// Both now read the same rules, so Upcoming and the Calendar cannot disagree
+// about what dates exist; they differ only in how far ahead they look.
+
+/** A Date Rule's semantic type → this feed's display category. */
+const CATEGORY_FOR_SUBTYPE: Record<string, UpcomingCategory> = {
+  drivers_license: "drivers_license_expiration",
+  passport: "passport_expiration",
+  visa: "visa_expiration",
+  vehicle_registration: "vehicle_registration",
+  insurance: "insurance_renewal",
+  warranty: "warranty_expiration",
+  lease: "lease_renewal",
+  membership: "membership_renewal",
+  subscription: "subscription_renewal",
+  certification: "certification_renewal",
+  loan: "loan_payment",
+  medication: "prescription_expiration",
+  contract: "contract_renewal",
+  vaccination: "pet_vaccination",
+  court: "court_date",
+  travel: "travel_departure",
+  school: "school_enrollment",
+};
+
+/**
+ * The rule types whose SUBTYPE names the thing the date is about, and so should
+ * pick the category.
+ *
+ * For everything else the type is the better answer: an insurance policy's
+ * `paymentDueDate` is a bill due, not an insurance renewal, and letting the
+ * surrounding document's subtype win filed it under the wrong one.
+ */
+const SUBTYPE_NAMES_THE_CATEGORY = new Set<DateRuleType>([
+  "expiration", "renewal", "end", "cancellation", "appointment", "deadline",
+  // A travel date is only ever an "event" by type; its subtype is what says
+  // departure rather than an unnamed entry on the calendar.
+  "event",
+]);
+
+const CATEGORY_FOR_RULE_TYPE: Partial<Record<DateRuleType, UpcomingCategory>> = {
+  birthday: "birthday",
+  anniversary: "anniversary",
+  expiration: "document_expiration",
+  renewal: "contract_renewal",
+  payment: "bill_due",
+  income: "custom",
+  due: "bill_due",
+  appointment: "doctor_appointment",
+  deadline: "task_due",
+  reminder: "reminder",
+  event: "calendar_event",
+  maintenance: "maintenance",
+  start: "custom",
+  end: "contract_renewal",
+  cancellation: "contract_renewal",
+};
+
+function categoryForRule(r: DateRule): UpcomingCategory {
+  const bySub = r.ruleSubtype ? CATEGORY_FOR_SUBTYPE[r.ruleSubtype] : undefined;
+  if (bySub && SUBTYPE_NAMES_THE_CATEGORY.has(r.ruleType)) return bySub;
+  // A refill is modelled as a `due` date, but "Medication Refill" is what it
+  // is — the one place a subtype names the category outside the set above.
+  if (r.ruleType === "due" && r.ruleSubtype === "medication") return "medication_refill";
+  return CATEGORY_FOR_RULE_TYPE[r.ruleType] || "custom";
 }
 
-function extractDocuments(documents: any[], profiles: any[]): UpcomingDate[] {
+/**
+ * Roll a rule forward to its next occurrence.
+ *
+ * A yearly rule (a birthday) rolls to this year's or next year's date; a
+ * one-time rule (an expiration) stays put and simply drops out once past.
+ */
+function nextDateForRule(r: DateRule, today: string): string | null {
+  if (!r.recurrence || r.recurrence === "none") return r.date;
+  const rolled = rollRecurrence(r.date, r.recurrence, today, r.recurrenceEnd);
+  return rolled;
+}
+
+function upcomingFromRules(rules: readonly DateRule[], profiles: any[]): UpcomingDate[] {
   const out: UpcomingDate[] = [];
   const today = todayISO();
   const byId = new Map((profiles || []).map(p => [p.id, p]));
-  for (const d of documents || []) {
-    if (!d || d.deletedAt) continue;
-    const exp = d.expirationDate || d.extractedData?.expirationDate || d.fields?.expirationDate;
-    if (!exp) continue;
-    const parsed = parseDate(exp);
-    if (!parsed) continue;
-    const next = isoFromDate(parsed);
-    if (parseDate(next)!.getTime() < parseDate(today)!.getTime()) continue;
+  for (const r of rules) {
+    if (!r.active || !r.upcomingVisible) continue;
+    const next = nextDateForRule(r, today);
+    if (!next) continue;
     const daysUntil = daysBetween(today, next);
-    const linkedId = (d.linkedProfiles || [])[0];
-    const linked = linkedId ? byId.get(linkedId) : null;
+    const owner = r.profileId ? byId.get(r.profileId) : null;
+    const category = categoryForRule(r);
     out.push({
-      id: hashId(["doc", d.id, next]),
-      sourceId: d.id,
-      category: "document_expiration",
-      entityKind: linked ? classifyEntityKind(linked) : "document",
-      title: d.title || d.name || "Document",
-      subtitle: linked ? `Document on ${linked.name}` : "Document expiration",
+      // The rule id is already stable and duplicate-free, so the feed inherits
+      // that property instead of re-deriving an identity of its own.
+      id: hashId([r.id, next]),
+      sourceId: r.sourceEntityId,
+      category,
+      entityKind: r.sourceEntityType === "document"
+        ? "document"
+        : owner ? classifyEntityKind(owner) : "other",
+      title: r.label,
+      subtitle: r.sourceEntityType === "document"
+        ? (owner ? `Document on ${owner.name}` : "Document expiration")
+        : (owner?.name || r.subtitle),
       nextDate: next,
       daysUntil,
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
-      recurring: false,
-      href: linked ? `#/profiles/${linked.id}` : `#/documents`,
-      relatedDocumentId: d.id,
-      relatedProfileId: linkedId,
-      needsActionSoon: daysUntil <= 30,
-      icon: CATEGORY_ICONS.document_expiration,
+      recurring: r.occurrenceType === "recurring",
+      href: r.href || "#/calendar",
+      relatedProfileId: r.profileId,
+      relatedDocumentId: r.sourceEntityType === "document" ? r.sourceEntityId : undefined,
+      // Only dates you must DO something about. Flagging every rule within 30
+      // days put birthdays and anniversaries into the dashboard's "needs action
+      // soon" count, which is meant to be the short list of things that will go
+      // wrong if ignored. `countdownEnabled` is exactly that set — expirations,
+      // renewals, due dates, deadlines.
+      needsActionSoon: r.countdownEnabled && daysUntil <= 30,
+      icon: CATEGORY_ICONS[category],
     });
   }
   return out;
@@ -772,8 +802,11 @@ export function aggregateUpcomingDates(
   const windowDays = options.windowDays ?? DEFAULT_UPCOMING_WINDOW_DAYS;
 
   const all: UpcomingDate[] = [];
-  all.push(...extractProfiles(input.profiles || []));
-  all.push(...extractDocuments(input.documents || [], input.profiles || []));
+  // ONE rule engine feeds both the profile-carried and document-carried dates.
+  all.push(...upcomingFromRules(
+    rulesFromAll({ profiles: input.profiles || [], documents: input.documents || [] }),
+    input.profiles || [],
+  ));
   all.push(...extractTasks(input.tasks || []));
   all.push(...extractEvents(input.events || []));
   all.push(...extractObligations(input.obligations || []));
