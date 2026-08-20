@@ -175,6 +175,9 @@ export const ACTION_TYPE_DOMAINS: Record<string, Domain[]> = {
   add_liability_payment: ["liabilities", "obligations", "expenses"],
   journal_entry: ["journal"],
   create_artifact: ["artifacts"],
+  // A note is an artifact row, and it also hangs off a profile — the Info tab
+  // reads it from /api/notes, which the artifacts domain now covers.
+  create_note: ["artifacts", "profiles", "people"],
   save_memory: ["memories"],
   set_budget: ["budgets"],
   manage_document: ["documents"],

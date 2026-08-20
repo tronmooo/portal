@@ -207,6 +207,7 @@ export default defineConfig({
       'tests/entity-resolution-contract.test.ts',
       // Unified intent routing (Note / Journal / Task) + the temporal layer.
       'tests/content-routing.test.ts',
+      'tests/chat-routing-regressions.test.ts',
       'tests/temporal-rules.test.ts',
       'tests/unified-intent-routing.test.ts',
       'tests/domain-routing.test.ts',

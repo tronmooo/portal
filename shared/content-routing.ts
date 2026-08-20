@@ -678,6 +678,16 @@ export function checkContentRouting(toolName: string, message: string): ContentR
   // ("Journal this: … Remind me to call the landlord tomorrow." → create_task
   // serves the second clause). Only refuse when every clause was the named one.
   if (plan.actions.some((a) => !a.explicit && a.kind === toolKind)) return null;
+  // A clause we could not read is a clause this tool might be answering.
+  //
+  // This is the safety valve the 2026-08-20 report needed: the message named a
+  // TASK ("remind me to call him Friday") and also asked for a note, but the
+  // note clause did not survive splitting, so the gate saw one explicit kind
+  // for the whole message and refused create_note with "you asked for a task".
+  // The splitter is fixed (shared/ai-intent splitIntentClauses), and this makes
+  // the gate fail OPEN the next time a phrasing slips past it: silence about a
+  // clause is never evidence that the clause wasn't there.
+  if (plan.actions.some((a) => a.kind === "unknown")) return null;
 
   const right = requestedKind === "note" ? "create_note"
     : requestedKind === "journal" ? "journal_entry"

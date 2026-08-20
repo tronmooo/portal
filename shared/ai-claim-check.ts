@@ -27,6 +27,14 @@ export interface ExecutedOperation {
   entityId?: string;
   /** Human label for the record touched ("Dodge Ram 2025"). */
   raw?: string;
+  /**
+   * The noun for the row that was ACTUALLY written ("person", "asset", "pet",
+   * "note"), taken from the row's own type at execution time. Set it and the
+   * summary speaks about the record; omit it and the summary falls back to the
+   * intent table, where every profile tool reads as "asset" — the reason a
+   * person once came back as 'Updated asset "John Hancock"'.
+   */
+  entityLabel?: string;
 }
 
 export type ClaimMismatch =
@@ -269,6 +277,7 @@ const ENTITY_NOUN: Partial<Record<IntentEntity, string>> = {
   expense: "expense", income: "income", obligation: "bill",
   liability: "liability", goal: "goal", journal: "journal entry",
   memory: "memory", artifact: "artifact", document: "document",
+  note: "note",
 };
 
 /**
@@ -283,8 +292,19 @@ export function groundedSummary(operations: ExecutedOperation[]): string {
   const parts = ok.slice(0, 6).map((o) => {
     // A dedup is not a create: say what actually happened to the record.
     const verb = o.status === "deduped" ? "Updated the existing" : OP_VERB[toolOperation(o.tool)];
-    const noun = ENTITY_NOUN[TOOL_INTENT_ENTITY[o.tool]] ?? "record";
-    const label = o.raw && o.raw !== o.tool ? ` "${o.raw}"` : "";
+    // The row's own noun wins. The intent table maps every profile tool to
+    // `asset` on purpose (assets and profiles are one table for gating), so
+    // reading the noun from it names a person "asset".
+    const noun = o.entityLabel?.trim().toLowerCase()
+      || ENTITY_NOUN[TOOL_INTENT_ENTITY[o.tool]]
+      || "record";
+    // A named person or pet reads better as a possessive: "Updated John
+    // Hancock's profile", not 'Updated person "John Hancock"'.
+    const named = o.raw && o.raw !== o.tool ? o.raw : "";
+    if (named && (noun === "person" || noun === "pet")) {
+      return `${verb} ${named}${/s$/i.test(named) ? "'" : "'s"} profile`;
+    }
+    const label = named ? ` "${named}"` : "";
     return `${verb} ${noun}${label}`;
   });
   const more = ok.length > parts.length ? ` (+${ok.length - parts.length} more)` : "";

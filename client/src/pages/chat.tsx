@@ -73,6 +73,7 @@ import {
   Paperclip,
   FileText,
   FilePlus2,
+  StickyNote,
   X,
   Plus,
   Loader2,
@@ -373,6 +374,9 @@ function actionIcon(type: string) {
       return <DollarSign className="h-3 w-3" />;
     case "create_artifact":
       return <FileText className="h-3 w-3" />;
+    case "create_note":
+    case "update_note":
+      return <StickyNote className="h-3 w-3" />;
     default:
       return <Sparkles className="h-3 w-3" />;
   }
@@ -402,6 +406,10 @@ const ACTION_LABELS: Record<string, string> = {
   save_memory: "Remember",
   retrieve: "Retrieve",
   create_artifact: "Create Artifact",
+  // A note is a note. Calling it "Create Artifact" named the table it happens
+  // to be stored in (user report, 2026-08-20).
+  create_note: "Create Note",
+  update_note: "Update Note",
 };
 
 function actionLabel(type: string, data?: any) {
@@ -443,6 +451,11 @@ function actionRoute(type: string, data: any): string | null {
     case "create_obligation": case "pay_obligation": case "add_liability_payment": return "/obligations";
     case "create_habit": case "checkin_habit": case "uncomplete_habit": case "delete_habit": return "/habits";
     case "journal_entry": return "/journal";
+    // A note written for a person belongs on that person — that is where the
+    // user goes looking for it (Info tab). Only an unowned note opens the
+    // Artifacts page.
+    case "create_note": case "update_note":
+      return data?._ownerProfileId ? `/profiles/${data._ownerProfileId}` : "/artifacts";
     case "create_goal": return "/goals";
     case "save_memory": return null;
     default: return null;
@@ -2488,6 +2501,7 @@ const MessageRow = memo(function MessageRow({
                 create_profile: "profiles",
                 journal_entry: "journal",
                 create_artifact: "artifacts",
+                create_note: "notes",
                 create_tracker: "trackers",
                 log_entry: "tracker-entries",      // log_tracker_entry maps to log_entry
                 log_income: "incomes",             // DELETE /api/incomes/:id exists

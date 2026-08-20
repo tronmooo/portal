@@ -164,6 +164,58 @@ const COMPLETE_VERBS =
 const READ_VERBS =
   /\b(what|when|where|which|who|how\s+(?:much|many|long)|show|list|tell\s+me|do\s+i\s+have|did\s+i|summar|report on)\b/;
 
+// ── Corrections ─────────────────────────────────────────────────────────────
+//
+// "Actually make that $92." (user report, 2026-08-20). The bill was NOT
+// changed, and the user was asked whether they wanted a second bill instead.
+//
+// The cause was one word: `make` is a CREATE verb, so `detectOperation` read a
+// correction of the record created one message ago as a request to create a
+// new one — and the create-vs-update gate then blocked the model's perfectly
+// correct `update_obligation` as a silent downgrade.
+//
+// A correction is a distinct speech act: it does not name a record, it points
+// back at the last one and restates a value. It is ALWAYS an update.
+
+/** Discourse markers that open a correction of what was just said/done. */
+const CORRECTION_LEAD =
+  /^\s*(?:oh\s+)?(?:actually|actually,|no[,.\s]+(?!problem)|nope[,.\s]|scratch\s+that|wait[,.\s]|sorry[,.\s]|my\s+bad[,.\s]|i\s+meant|correction[,:.\s]|make\s+that\b|change\s+that\b)/;
+
+/** "make that $92", "change it to 15", "set that to March 3" — verb + anaphor + value. */
+const CORRECTION_RESTATEMENT =
+  /\b(?:make|change|set|update|correct|fix)\s+(?:it|that|those|them|the\s+(?:last|previous)\s+one)\s*(?:to\s+)?(?=[$\d]|\w)([^.!?]{1,60})/;
+
+export interface CorrectionRead {
+  /** True when the message is restating a value for something already written. */
+  isCorrection: boolean;
+  /** The restated value, when the phrasing exposed one ("$92", "March 3"). */
+  value?: string;
+}
+
+/**
+ * Is this message a correction of the immediately preceding write?
+ *
+ * Deliberately narrow. A bare "no" is not enough (it answers questions), and a
+ * sentence that names its own record ("change the Dodge Ram's mileage") is a
+ * normal update, not a correction — it needs no back-reference to resolve.
+ */
+export function detectCorrection(message: string): CorrectionRead {
+  const m = lc(message).trim();
+  if (!m) return { isCorrection: false };
+  const lead = CORRECTION_LEAD.test(m);
+  const restated = m.match(CORRECTION_RESTATEMENT);
+  if (!lead && !restated) return { isCorrection: false };
+  // A lead marker alone ("actually, add a task for Friday") is only a
+  // correction when it does not go on to ask for something new by name.
+  if (lead && !restated && !VALUE_RESTATEMENT.test(m)) return { isCorrection: false };
+  const raw = (restated?.[1] ?? m.match(VALUE_RESTATEMENT)?.[0] ?? "").trim();
+  return { isCorrection: true, ...(raw ? { value: raw.replace(/[,.;]+$/, "") } : {}) };
+}
+
+/** A bare value — the payload of "actually, $92" or "no, April 7". */
+const VALUE_RESTATEMENT =
+  /(?:\$\s?\d[\d,]*(?:\.\d+)?|\b\d{1,4}(?::\d{2})?\s*(?:am|pm)?\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b)/;
+
 /**
  * True when the user used explicit update/edit language, or pointed at a record
  * they say already exists. "Create an asset for my Dodge Ram" is false even
@@ -172,6 +224,8 @@ const READ_VERBS =
 export function hasExplicitUpdateIntent(message: string): boolean {
   const m = lc(message);
   if (!m) return false;
+  // A correction is an update by definition, whatever verb carries it.
+  if (detectCorrection(message).isCorrection) return true;
   return UPDATE_VERBS.test(m) || EXISTING_REFERENCE.test(m);
 }
 
@@ -182,6 +236,9 @@ export function detectOperation(message: string): IntentOperation {
   // log this week?"). Reads are never gated, so misreading one costs nothing;
   // misreading a question as a write would gate a tool on a guess.
   if (QUESTION_LEAD.test(m) || m.endsWith("?")) return "read";
+  // A correction outranks every verb in it: "Actually make that $92" restates
+  // a value on the record just written — `make` there is not a create.
+  if (detectCorrection(m).isCorrection) return "update";
   if (DELETE_VERBS.test(m)) return "delete";
   if (COMPLETE_VERBS.test(m)) return "complete";
   // Create wins over update when BOTH appear ("create an asset and set its
@@ -396,9 +453,25 @@ export function parseTurnIntent(message: string): ParsedIntent {
 export function splitIntentClauses(message: string): string[] {
   const raw = String(message ?? "").trim();
   if (!raw) return [];
-  const WRITE_VERB = String.raw`create|add|make|new|register|set\s+up|schedule|update|change|edit|modify|rename|delete|remove|log|track|remind\s+me|check\s+(?:in|off)|mark`;
+  // `note that …` / `note: …` / `jot down …` are write verbs: the user report
+  // of 2026-08-20 turned on exactly this. In
+  //   "…, remind me to call him Friday, note that he hates cilantro, and his
+  //    birthday is April 7"
+  // the note clause had no recognised verb, so the whole tail stayed glued to
+  // the reminder and the content gate refused create_note with "you asked for
+  // a task".
+  const WRITE_VERB = String.raw`create|add|make|new|register|set\s+up|schedule|update|change|edit|modify|rename|delete|remove|log|track|remind\s+me|check\s+(?:in|off)|mark|note\s+(?:that|down)|note:|jot\s+down|journal`;
+  // A FIELD STATEMENT IS ALSO A CLAUSE. "…, and his birthday is April 7" asks
+  // for a write without ever using a write verb; left unsplit, the birthday
+  // never reached the profile as its own request.
+  const FIELD_STATEMENT = String.raw`(?:his|her|their|its|my|our|your|the)\s+[\w-]+(?:\s+[\w-]+)?\s+(?:is|are|was|=)\s`;
   const connective = new RegExp(
-    String.raw`(?:[.;!?\n]+|,\s*(?:and\s+|then\s+|also\s+)?(?=(?:${WRITE_VERB})\b)|\s+(?:and|then|also|plus)\s+(?=(?:${WRITE_VERB})\b))`,
+    String.raw`(?:[.;!?\n]+` +
+      String.raw`|,\s*(?:and\s+|then\s+|also\s+)?(?=(?:${WRITE_VERB})\b)` +
+      String.raw`|,\s*(?:and\s+|then\s+|also\s+)?(?=${FIELD_STATEMENT})` +
+      String.raw`|\s+(?:and|then|also|plus)\s+(?=(?:${WRITE_VERB})\b)` +
+      String.raw`|\s+(?:and|then|also|plus)\s+(?=${FIELD_STATEMENT})` +
+      String.raw`)`,
     "i",
   );
   // A PERIOD IS NOT ALWAYS A SENTENCE END.
