@@ -142,3 +142,47 @@ describe("generateSchedule", () => {
     expect(periodsPerYear(bill({ frequency: "weekly" }))).toBe(52);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression: "why is there no bill for M4 finance that was due today".
+//
+// A BNPL row (MacBook Pro M4 Financing — $1,200 balance, $60/month, no dates)
+// produced a bill on the calendar that was due TODAY and had no recurring rule
+// anywhere. Three defects stacked:
+//   1. `bnpl` was unknown to liabilityFamily → "one_time" → a single date;
+//   2. with no date fields at all, deriveScheduleFields invented `dueDate =
+//      today`, so the phantom bill followed today down the calendar;
+//   3. "once" is not a recurrence, so Recurring Dates dropped it entirely.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("financing plans schedule like installments, and never invent a due date", () => {
+  it("does not fabricate a due-today occurrence when the liability has no date", () => {
+    const f = deriveScheduleFields(
+      { currentBalance: 1200, monthlyPayment: 60, originalBalance: 1200 }, "bnpl", TODAY);
+    expect(f.dueDate).toBeUndefined();
+    expect(f.nextDueDate).toBeUndefined();
+    expect(generateSchedule({ id: "m4", fields: f }, [], { todayISO: TODAY, months: 12 })).toEqual([]);
+  });
+
+  it("schedules a BNPL plan as a finite monthly series once it has a due day", () => {
+    const f = deriveScheduleFields(
+      { currentBalance: 1200, monthlyPayment: 60, dueDay: 19 }, "bnpl", TODAY);
+    expect(f.frequency).toBe("monthly");
+    expect(f.count).toBe(20); // $1,200 / $60
+    const s = generateSchedule({ id: "m4", fields: f }, [], { todayISO: TODAY, months: 12 });
+    expect(s.length).toBe(12);
+    expect(s.every((o) => /-19$/.test(o.date) && o.amount === 60)).toBe(true);
+  });
+
+  it("a monthly charge with no balance repeats instead of collapsing to one date", () => {
+    const f = deriveScheduleFields({ nextDueDate: "2026-08-03", monthlyPayment: 10 }, null, TODAY);
+    expect(f.frequency).toBe("monthly");
+    expect(f.count).toBeUndefined();
+  });
+
+  it("still treats a genuine one-shot debt as a single payment", () => {
+    const f = deriveScheduleFields(
+      { currentBalance: 1200, monthlyPayment: 1200, dueDate: "2026-09-01" }, "medical_debt", TODAY);
+    expect(f.frequency).toBe("once");
+    expect(f.count).toBe(1);
+  });
+});

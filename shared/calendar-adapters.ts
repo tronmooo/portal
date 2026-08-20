@@ -25,6 +25,7 @@ import { parseRecurringMeta, expandRecurrenceDates } from "./recurring-dates";
 import { addYearsISO } from "./date-math";
 import { canonicalObligationCategory } from "./category-canon";
 import { resolveBillingModel, resolveOccurrenceAmount } from "./liability-billing";
+import { deriveScheduleFields } from "./liability-schedule";
 import { groupMaterializedSeries } from "./series-detect";
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
@@ -369,12 +370,25 @@ export function kindForLiabilityProfile(p: any): OccurrenceKind {
  * auto loan) rather than an obligation row. `recurrenceEnd` comes from the
  * payoff date so the series genuinely ends instead of running forever.
  */
-export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarSeries[] {
+export function seriesFromLiabilityProfiles(
+  profiles: readonly any[],
+  opts: { todayISO?: string } = {},
+): CalendarSeries[] {
   const out: CalendarSeries[] = [];
+  const todayISO = ISO_RE.test(clip(opts.todayISO))
+    ? clip(opts.todayISO)
+    : new Date().toLocaleDateString("en-CA");
   for (const p of profiles || []) {
     if (!p?.id) continue;
     if (p.type !== "liability" && p.type !== "loan") continue;
-    const f = p.fields && typeof p.fields === "object" ? p.fields : {};
+    const raw = p.fields && typeof p.fields === "object" ? p.fields : {};
+    // Read the SAME normalized fields the calendar grid generates from
+    // (server getCalendarTimeline → deriveScheduleFields). Reading `p.fields`
+    // raw is what made a loan or financing plan appear on the grid — where the
+    // server derives `dueDate` from `dueDay` and a monthly cadence from the
+    // term — yet have no rule on Recurring Dates, because this adapter saw no
+    // date and skipped the row entirely. One normalization, both surfaces.
+    const f = deriveScheduleFields(raw, p.type_key ?? p.typeKey, todayISO);
     const due = f.nextDueDate ?? f.next_due_date ?? f.dueDate ?? f.due_date;
     if (!isISO(due)) continue;
     const amount = Number(f.monthlyPayment ?? f.monthly_payment ?? f.amount);
@@ -627,6 +641,8 @@ export interface CalendarInputs {
   obligations?: readonly any[];
   tasks?: readonly any[];
   documents?: readonly any[];
+  /** "Today" in the user's timezone; adapters that derive a schedule need it. */
+  todayISO?: string;
 }
 
 /**
@@ -645,7 +661,7 @@ export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
   );
   return [
     ...profileSeries,
-    ...seriesFromLiabilityProfiles(input.profiles || []),
+    ...seriesFromLiabilityProfiles(input.profiles || [], { todayISO: input.todayISO }),
     ...seriesFromEvents(input.events || [], { knownBirthdayProfiles, knownAnniversaryProfiles }),
     ...seriesFromObligations(input.obligations || []),
     ...seriesFromTasks(input.tasks || []),

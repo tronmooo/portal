@@ -113,6 +113,21 @@ export function deriveScheduleFields(
   if (fam === "recurring") return f;
 
   const amount = Number(f.monthlyPayment ?? f.minimumPayment ?? f.amount ?? f.monthlyAmount ?? 0) || 0;
+  // Does this "one-time" debt actually repeat? The family is inferred from a
+  // type_key that is often missing or generic, so the FIELDS get a vote before
+  // we collapse the record to a single date:
+  //   • the record states a frequency;
+  //   • a monthly payment far smaller than the balance is an installment plan;
+  //   • a monthly payment with no balance at all is a recurring charge, not a
+  //     debt (this is the "Lubi" case — $10/month, nothing owed).
+  // Without this, any of the three rendered as ONE lone date with no recurring
+  // rule behind it, which is exactly the class of bug being fixed here.
+  const explicitFreq = String(f.frequency ?? f.billingFrequency ?? "").toLowerCase().trim();
+  const statedRecurring = explicitFreq !== "" && explicitFreq !== "once" && explicitFreq !== "one-time";
+  const balance = Number(f.currentBalance ?? f.originalBalance ?? f.balance ?? 0) || 0;
+  const repeats = statedRecurring || (amount > 0 && (balance > amount + 0.01 || balance <= 0));
+  const oneShot = fam === "one_time" && !repeats;
+  const frequency = oneShot ? "once" : (statedRecurring ? explicitFreq : "monthly");
   // Next payment date: an explicit date, else the due day this/next month.
   let due = clip(f.nextPaymentDate ?? f.dueDate ?? f.nextDueDate ?? f.firstPaymentDate);
   if (!ISO_RE.test(due)) {
@@ -126,22 +141,29 @@ export function deriveScheduleFields(
       due = new Date(yr, mo, Math.min(day, last)).toLocaleDateString("en-CA");
     }
   }
-  if (!ISO_RE.test(due)) due = todayISO;
+  // NO DATE EVIDENCE → NO SCHEDULE. This used to fall back to `due = todayISO`,
+  // which fabricated a payment due TODAY for every liability that carried an
+  // amount but no date — and because the fallback is re-evaluated on every
+  // read, the phantom bill followed "today" down the calendar forever. A
+  // liability whose due date we simply do not know must produce no dated
+  // occurrence at all (`seriesAnchor` returns null → empty schedule) so the
+  // user is asked for the date instead of being shown an invented one.
+  if (!ISO_RE.test(due)) {
+    const { dueDate: _d, nextDueDate: _n, firstPaymentDate: _fp, ...rest } = f;
+    return { ...rest, frequency, monthlyAmount: amount, amount };
+  }
 
   let count: number | null = null;
-  if (fam === "one_time") count = 1;
-  else if (fam === "amortizing") {
-    const rt = parseInt(String(f.remainingTermMonths ?? f.termMonths ?? ""), 10);
+  if (oneShot) count = 1;
+  else if (fam === "amortizing" || fam === "one_time") {
+    const rt = parseInt(String(f.remainingTermMonths ?? f.termMonths ?? f.numberOfInstallments ?? ""), 10);
     if (rt > 0) count = rt;
-    else {
-      const bal = Number(f.currentBalance ?? f.originalBalance ?? 0);
-      if (amount > 0 && bal > 0) count = Math.min(600, Math.ceil(bal / amount));
-    }
+    else if (amount > 0 && balance > 0) count = Math.min(600, Math.ceil(balance / amount));
   }
   // revolving (credit card / line of credit) → open-ended monthly minimum.
   return {
     ...f,
-    frequency: fam === "one_time" ? "once" : "monthly",
+    frequency,
     monthlyAmount: amount, amount,
     dueDate: due, nextDueDate: due,
     firstPaymentDate: ISO_RE.test(clip(f.firstPaymentDate)) ? clip(f.firstPaymentDate) : due,

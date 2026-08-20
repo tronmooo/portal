@@ -10,9 +10,17 @@
 export type LiabilityFamily = "amortizing" | "revolving" | "one_time" | "recurring";
 
 // Long-term installment debt: fixed payment, APR, payoff schedule, linked asset.
+//
+// BNPL / financing plans belong here: "$60/month until the $1,200 is paid off"
+// is an installment schedule, not a one-off balance. They were missing, so
+// every Affirm/Klarna/store-financing row fell through to `one_time` and got a
+// SINGLE payment date instead of a monthly series — which is why a financing
+// plan showed up on the calendar as one lone bill with no recurring rule
+// behind it (`isRecurringRule` sees "once" and drops it from Recurring Dates).
 const AMORTIZING = new Set([
   "mortgage", "auto_loan", "car_loan", "heloc", "student_loan",
   "personal_loan", "business_loan", "boat_loan", "rv_loan", "loan",
+  "bnpl", "financing", "installment", "installment_plan", "installment_loan",
 ]);
 
 // Revolving credit: balance vs limit, utilization, minimum + statement.
@@ -23,7 +31,7 @@ const ONE_TIME = new Set(["medical_debt", "medical", "tax_debt", "collection", "
 
 // Recurring service bills — a monthly amount + a due date, no permanent balance.
 const RECURRING = new Set([
-  "utility", "phone_plan", "internet", "streaming", "software",
+  "utility", "utility_plan", "phone_plan", "internet", "streaming", "software",
   "gym_membership", "parking", "storage_unit", "cloud_storage", "meal_kit",
   "box_subscription", "professional_membership", "bill", "subscription",
 ]);
