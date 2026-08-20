@@ -17,6 +17,7 @@
 // score = urgency (shared curve) + impact. Higher surfaces sooner.
 
 import { dayLabel, urgencyScore } from "./now-rank";
+import { ruleClaimKey } from "./date-rules";
 import { isHabitDueOn, isHabitDoneOn, type HabitScheduleShape } from "./habit-schedule";
 import { habitDayProgress } from "./habit-progress";
 
@@ -320,7 +321,9 @@ export function computeAttention(
       const critical = CRITICAL_DOC.test(`${name} ${doc.documentType || ""} ${doc.fieldName || ""}`);
       claim({
         key: `doc:${groupKey}`,
-        sourceKey: `document:${groupKey}`,
+        // The SAME key `shared/executive-sections` uses, so the two surfaces
+        // agree that this row and its calendar-item twin are one thing.
+        sourceKey: doc?.ruleId ? ruleClaimKey(doc.ruleId) : `document:${groupKey}`,
         kind: "document",
         title: name,
         reason: du < 0

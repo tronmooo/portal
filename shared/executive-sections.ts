@@ -24,6 +24,7 @@
 // display.
 
 import { computeAttention, BIRTHDAY_RE, type AttentionItem, type AttentionInputs, type AttentionConfig } from "./attention";
+import { ruleClaimKey } from "./date-rules";
 import { dayLabel } from "./now-rank";
 import { isHabitDueOn, isHabitDoneOn } from "./habit-schedule";
 import { habitDayProgress } from "./habit-progress";
@@ -263,8 +264,9 @@ function relTime(iso: string | null | undefined): string {
  * claims two keys and renders in two sections instead of none.
  */
 function eventClaimKey(e: any): string {
-  return e?.meta?.ruleId ? `rule:${e.meta.ruleId}` : `event:${e?.sourceId || e?.id}`;
+  return e?.meta?.ruleId ? ruleClaimKey(e.meta.ruleId) : `event:${e?.sourceId || e?.id}`;
 }
+
 
 export function buildExecutiveSections(
   input: ExecSectionInputs,
@@ -530,7 +532,9 @@ export function buildExecutiveSections(
     for (const [groupKey, { doc, du }] of bestByDoc) {
       const id = doc?.documentId || doc?.id || groupKey;
       cand.documents.push({
-        key: `doc:${groupKey}`, sourceKey: `document:${groupKey}`, kind: "document",
+        key: `doc:${groupKey}`,
+        sourceKey: doc?.ruleId ? ruleClaimKey(doc.ruleId) : `document:${groupKey}`,
+        kind: "document",
         title: doc.documentName || doc.name || doc.fieldName || "Document",
         reason: du < 0 ? `Expired ${Math.abs(du)}d ago` : du === 0 ? "Expires today" : `Expires ${dayLabel(du)}`,
         tier: du <= 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",

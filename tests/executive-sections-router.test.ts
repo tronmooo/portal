@@ -581,3 +581,29 @@ describe("one date, one section", () => {
     expect(titles).toContain("Jane Doe — Passport Expiration");
   });
 });
+
+describe("an expiration reaches the tab twice and renders once", () => {
+  const today = "2026-08-20";
+  const soon = "2026-08-23";
+  // The same licence, as the calendar item AND as the expirations row.
+  const RULE_ID = "profile:p1:driverslicenseexpiration:expiration";
+
+  it("claims one key from both directions", () => {
+    const sections = buildExecutiveSections({
+      today, now: new Date(`${today}T09:00:00`),
+      events: [{
+        id: `rule:${RULE_ID}-${soon}`, type: "event", title: "Jane — Driver's License Expiration",
+        date: soon, allDay: true, linkedProfiles: ["p1"], sourceId: "p1",
+        meta: { kind: "expiration", ruleId: RULE_ID },
+      }],
+      documents: [{
+        documentId: "p1", ruleId: RULE_ID, documentName: "Jane — Driver's License Expiration",
+        fieldName: "driversLicenseExpiration", expirationDate: soon, daysUntil: 3,
+        href: "#/profiles/p1",
+      }],
+    } as any);
+    const holding = sections.filter((s: any) =>
+      s.items.some((i: any) => /Driver's License Expiration/.test(i.title)));
+    expect(holding.map((s: any) => s.id)).toHaveLength(1);
+  });
+});

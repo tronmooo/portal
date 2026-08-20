@@ -580,6 +580,19 @@ function uniq(ids: Array<string | null | undefined>): string[] {
   return out;
 }
 
+/**
+ * The key a Date Rule claims on a surface that shows each record ONCE.
+ *
+ * The same expiration reaches the Executive tab twice — as a calendar item and
+ * in the expirations list — and reaches Immediate Attention alongside both.
+ * They have to claim the same thing, or one date renders in two sections.
+ * Defined here so `shared/attention` and `shared/executive-sections` can share
+ * it without importing each other.
+ */
+export function ruleClaimKey(ruleId: string): string {
+  return `rule:${ruleId}`;
+}
+
 /** The deterministic rule id. Duplicate prevention lives here and nowhere else. */
 export function dateRuleId(
   sourceEntityType: DateRuleSourceType,

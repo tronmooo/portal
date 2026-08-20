@@ -34,7 +34,7 @@ import {
   EXPIRY_RULE_TYPES,
   bareDateOf,
 } from "../shared/date-rules";
-import { seriesFromAll } from "../shared/calendar-adapters";
+import { seriesFromAll, frequencyToRecurrence } from "../shared/calendar-adapters";
 import { resolveLiabilityDueDate, resolveLiabilityEndDate } from "../shared/liability-schedule";
 import {
   buildCalendarOccurrences,
@@ -1532,5 +1532,23 @@ describe("a dash is a separator, not a range", () => {
 describe("a professional licence names itself", () => {
   it("files under certification, not generic document expiry", () => {
     expect(classifyDateField("professionalLicenseExpiration").ruleSubtype).toBe("certification");
+  });
+});
+
+describe("a one-time income is not a monthly one", () => {
+  it("reads every spelling of once", () => {
+    for (const f of ["once", "one-time", "one_time", "One Time", "single"]) {
+      expect(frequencyToRecurrence(f), f).toBe("none");
+    }
+  });
+
+  it("puts a one-off bonus on its day and no other", () => {
+    // "one_time" is what the Finance income form writes; unknown values fall
+    // through to monthly, so a single bonus became a recurring series on the
+    // calendar, the Upcoming feed and the Recurring & Important Dates screen.
+    const series = seriesFromAll({
+      incomes: [{ id: "inc-1", description: "Bonus", amount: 5000, frequency: "one_time", date: "2026-09-04", linkedProfiles: ["p1"] }],
+    });
+    expect(buildCalendarOccurrences(series, { todayISO: TODAY }).map(o => o.date)).toEqual(["2026-09-04"]);
   });
 });

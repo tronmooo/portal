@@ -250,7 +250,10 @@ export function seriesFromEvents(
 
 /** Obligation `frequency` → the recurrence vocabulary the engine speaks. */
 export function frequencyToRecurrence(frequency: unknown): string {
-  switch (String(frequency ?? "").toLowerCase()) {
+  // Separators folded: the Finance income form writes "one_time" while this
+  // knew only "one-time" and "once", so a one-off bonus fell through to the
+  // default and became a MONTHLY series on every calendar surface.
+  switch (String(frequency ?? "").toLowerCase().replace(/[\s_]+/g, "-")) {
     case "daily": return "daily";
     case "weekly": return "weekly";
     case "biweekly": case "bi-weekly": return "biweekly";
@@ -260,7 +263,7 @@ export function frequencyToRecurrence(frequency: unknown): string {
     // monthly and thinned by the caller, so we keep it explicit rather than
     // silently mislabelling it as monthly here.
     case "quarterly": return "quarterly";
-    case "once": case "one-time": case "": return "none";
+    case "once": case "one-time": case "onetime": case "single": case "": return "none";
     default: return "monthly";
   }
 }
