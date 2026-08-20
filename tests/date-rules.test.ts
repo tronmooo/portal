@@ -32,6 +32,7 @@ import {
   parseBirthdayLabel,
   dedupeRules,
   EXPIRY_RULE_TYPES,
+  bareDateOf,
 } from "../shared/date-rules";
 import { seriesFromAll } from "../shared/calendar-adapters";
 import { resolveLiabilityDueDate, resolveLiabilityEndDate } from "../shared/liability-schedule";
@@ -1303,5 +1304,47 @@ describe("deleting one nested date leaves its neighbours alone", () => {
       ["expirationDate"],
     );
     expect(removed.sort()).toEqual(["insurance.expirationDate", "vehicle.expirationDate"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 24. Thirteenth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("an ISO-shaped string still has to be a real day", () => {
+  it("rejects an impossible date instead of ranking it first", () => {
+    // These were returned verbatim and became rules that sorted to the top of
+    // every expiring list as "Expired 740000 days ago".
+    for (const bad of ["0000-00-00", "2029-13-45", "2027-02-30", "1899-01-01"]) {
+      expect(bareDateOf(bad), bad).toBeNull();
+      expect(rulesFromDocuments([{
+        id: "d1", name: "X", type: "other", linkedProfiles: [], extractedData: { expirationDate: bad },
+      }]), bad).toEqual([]);
+    }
+  });
+
+  it("still accepts a leap day that exists", () => {
+    expect(bareDateOf("2028-02-29")).toBe("2028-02-29");
+    expect(bareDateOf("2027-02-29")).toBeNull();
+  });
+});
+
+describe("a copy is suppressed by ITS document, not by any document", () => {
+  it("keeps a profile date when an unrelated document shares its day", () => {
+    const person = {
+      ...bareProfile(),
+      fields: {
+        expirationDate: "2034-07-18",
+        _docFields: { "doc-gone": { expirationDate: "2034-07-18" } },
+      },
+    };
+    const unrelated = {
+      id: "doc-other", name: "Gym Card", type: "membership",
+      linkedProfiles: [], extractedData: { expiration_date: "2034-07-18" },
+    };
+    const rules = rulesFromAll({ profiles: [person], documents: [unrelated] });
+    // The document that wrote the copy is gone, so the copy is the record now.
+    expect(rules.some(r => r.sourceEntityType === "profile")).toBe(true);
+    expect(rules).toHaveLength(2);
   });
 });

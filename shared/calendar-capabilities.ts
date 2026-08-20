@@ -170,6 +170,9 @@ export function capabilitiesFor(series: CalendarSeries): ActionCapability[] {
         return cap(action, true);
 
       case "deleteFuture":
+        if (system === "income") {
+          return cap("deleteFuture", false, `Manage this on ${where}.`);
+        }
         if (!recurring) {
           return cap("deleteFuture", false, "This date happens once — there are no future occurrences.");
         }

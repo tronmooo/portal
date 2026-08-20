@@ -2711,9 +2711,19 @@ ${JSON.stringify(ctx, null, 2)}`;
             // classification alone left the date on no surface at all while
             // the response reported success.
             const key = normalizeFieldKey(event.field);
+            const cls = classifyDateField(event.field, docContextForDates);
+            // A document does not derive a BIRTHDAY — that belongs to the
+            // person, and only the profile write above can carry it. With no
+            // profile to route to, the field saved to the document and derived
+            // nowhere, so suppressing the event left the date on no surface
+            // while the response reported success.
+            const derivedByTheDocument = cls.ruleType !== "birthday" && cls.ruleType !== "anniversary";
+            const derivedByTheProfile = !!resolvedProfileId
+              && (cls.ruleType === "birthday" || cls.ruleType === "anniversary");
             const covered = persistedFieldValues.has(key)
               && !!bareDateOf(persistedFieldValues.get(key))
-              && classifyDateField(event.field, docContextForDates).actionable;
+              && cls.actionable
+              && (derivedByTheDocument || derivedByTheProfile);
             if (covered) {
               log.info(`[confirm-extraction] "${event.field}" is owned by its record — derived as a Date Rule, no standalone event`);
               continue;

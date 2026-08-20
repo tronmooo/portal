@@ -495,18 +495,28 @@ const MONTH_WORD = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
  * date, irreversibly) and the read path (which would otherwise derive a rule
  * on the wrong day) ask this same question, so they cannot disagree about it.
  */
+/** A day that exists: real month, real day-of-month, plausible year. */
+function isRealDay(iso: string): boolean {
+  const y = +iso.slice(0, 4), m = +iso.slice(5, 7), d = +iso.slice(8, 10);
+  if (y < 1900 || y > 2200 || m < 1 || m > 12 || d < 1) return false;
+  return d <= new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
 const DATEISH_TOKEN = /\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\.?,?\s+\d{4}/g;
 
 export function bareDateOf(value: unknown): string | null {
   const t = String(value ?? "").trim();
   if (!t) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  // ISO-SHAPED is not the same as valid. "2029-13-45" and "0000-00-00" were
+  // returned verbatim and became rules that sorted to the top of every
+  // expiring list as "Expired 740000 days ago".
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return isRealDay(t) ? t : null;
   // A full ISO timestamp IS a day — the day it names. Rejecting it outright
   // meant a date stored as "2027-01-01T00:00:00Z" produced no rule anywhere,
   // where the adapter this replaced read it fine. (The WRITE path still leaves
   // such a value alone: truncating it there would throw away the clock.)
   const stamp = t.match(/^(\d{4}-\d{2}-\d{2})T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?$/);
-  if (stamp) return stamp[1];
+  if (stamp) return isRealDay(stamp[1]) ? stamp[1] : null;
   if (/\d{1,2}:\d{2}/.test(t)) return null;                    // carries a time
   // A RANGE is not a date. "01/01/2026 - 12/31/2026" is a coverage period, and
   // collapsing it to one end destroyed the other — in every storage write path,
@@ -963,12 +973,13 @@ function suppressDocumentCopies(
 ): DateRule[] {
   const liveDocIds = new Set((documents || []).map((d) => d?.id).filter(Boolean));
   if (liveDocIds.size === 0) return [...profileRules];
-  const datesHeldByDocs = new Set(documentRules.map((r) => `${r.ruleType}:${r.date}`));
-  return (profileRules || []).filter((r) => {
-    if (!r.provenanceDocIds?.length) return true;
-    if (!r.provenanceDocIds.some((id) => liveDocIds.has(id))) return true;
-    return !datesHeldByDocs.has(`${r.ruleType}:${r.date}`);
-  });
+  // Keyed on the DOCUMENT as well as the date. Globally, any document expiring
+  // on the same day suppressed the copy — even one that had nothing to do with
+  // it, and even after the provenance document had stopped holding that date.
+  const heldByDoc = new Set(documentRules.map((r) => `${r.sourceEntityId}:${r.ruleType}:${r.date}`));
+  return (profileRules || []).filter((r) =>
+    !(r.provenanceDocIds || []).some((id) =>
+      liveDocIds.has(id) && heldByDoc.has(`${id}:${r.ruleType}:${r.date}`)));
 }
 
 /**

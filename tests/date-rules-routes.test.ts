@@ -465,3 +465,41 @@ describe("confirming a field the profile already holds is not a failure", () => 
     expect(r.data.saved.join(" ")).toMatch(/Saved 1 field to Jane Doe/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a birthday with no profile to route it to", () => {
+  it("still lands somewhere rather than nowhere", async () => {
+    // A document does not derive a birthday — that belongs to the person. With
+    // no profile resolved, the field saved to the document and derived nowhere,
+    // so suppressing the event left the date on no surface at all.
+    const { api, db } = await boot({
+      profiles: [],
+      documents: [{ id: "doc-1", name: "License", type: "drivers_license", extractedData: {}, linkedProfiles: [], tags: [] }],
+    });
+    await api("POST", "/api/chat/confirm-extraction", {
+      extractionId: "doc-1",
+      confirmedFields: [{ key: "dateOfBirth", value: "07/10/1994" }],
+      createCalendarEvents: [
+        { field: "dateOfBirth", date: "1994-07-10", title: "Date Of Birth", category: "other" },
+      ],
+    });
+    expect(db.events).toHaveLength(1);
+  });
+
+  it("suppresses it once there IS a profile that owns it", async () => {
+    const { api, db } = await boot({
+      documents: [{ id: "doc-1", name: "License", type: "drivers_license", extractedData: {}, linkedProfiles: ["jane-1"], tags: [] }],
+    });
+    await api("POST", "/api/chat/confirm-extraction", {
+      extractionId: "doc-1",
+      targetProfileId: "jane-1",
+      confirmedFields: [{ key: "dateOfBirth", value: "07/10/1994" }],
+      createCalendarEvents: [
+        { field: "dateOfBirth", date: "1994-07-10", title: "Date Of Birth", category: "other" },
+      ],
+    });
+    expect(db.events).toHaveLength(0);
+    expect(db.profiles[0].fields.dateOfBirth).toBe("1994-07-10");
+  });
+});
