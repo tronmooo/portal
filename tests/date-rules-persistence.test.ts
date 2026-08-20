@@ -169,3 +169,34 @@ describe("the two halves of the same account do not collide", () => {
     expect(birthday.linkedProfiles).not.toContain(bob.id);
   });
 });
+
+describe("no write path can save an actionable date in a form the rules cannot read", () => {
+  // The routes and the AI tools normalize before calling storage. This asks
+  // whether a caller that skipped all of them — a script, a migration, a tool
+  // added next month — could still get a raw date into the database.
+  it("normalizes a profile date even when the caller did not", async () => {
+    const p = await storage.createProfile({
+      name: "Raw Writer", type: "person", fields: { dateOfBirth: "07/10/1994" },
+    } as any);
+    expect((await storage.getProfile(p.id))!.fields.dateOfBirth).toBe("1994-07-10");
+
+    await storage.updateProfile(p.id, { fields: { passportExpiration: "3/2/2030" } } as any);
+    expect((await storage.getProfile(p.id))!.fields.passportExpiration).toBe("2030-03-02");
+  });
+
+  it("normalizes a document date even when the caller did not", async () => {
+    const d = await storage.createDocument({
+      name: "Passport", type: "passport", mimeType: "image/jpeg", fileData: "",
+      extractedData: { expiration_date: "March 2, 2030" }, linkedProfiles: [janeId], tags: [],
+    } as any);
+    expect((await storage.getDocument(d.id))!.extractedData.expiration_date).toBe("2030-03-02");
+
+    await storage.updateDocument(d.id, { extractedData: { expiration_date: "3/2/2032" } } as any);
+    expect((await storage.getDocument(d.id))!.extractedData.expiration_date).toBe("2032-03-02");
+  });
+
+  it("puts the raw-written dates on the calendar like any other", async () => {
+    await storage.createProfile({ name: "Raw Writer", type: "person", fields: { dateOfBirth: "07/10/1994" } } as any);
+    expect(await timelineTitles()).toContain("Raw Writer's Birthday");
+  });
+});

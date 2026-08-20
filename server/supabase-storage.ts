@@ -49,7 +49,7 @@ import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } fr
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents } from "../shared/calendar-adapters";
-import { rulesFromAll, seriesFromDateRules, daysBetweenISO } from "../shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields } from "../shared/date-rules";
 import { deleteProfileFields } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
@@ -1581,6 +1581,18 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createProfile(data: InsertProfile): Promise<Profile> {
+    // ── The last write path ────────────────────────────────────────────────
+    //
+    // Normalizing dates in the routes and the AI tools covers every caller
+    // that exists TODAY. Doing it here as well covers every caller, full stop
+    // — a script, a migration, a tool added next month. A date is stored in
+    // one form because the storage layer will not accept another, so the
+    // question "can an actionable date be saved without its rule following?"
+    // has a structural answer rather than an inventory of call sites.
+    // See shared/date-rules.
+    if (data.fields && typeof data.fields === "object") {
+      data = { ...data, fields: normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields };
+    }
     const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "liability", "investment", "property", "account", "insurance", "medical"]);
     if (data.type && !validProfileTypes.has(data.type)) data.type = "person";
     // NAME NORMALIZATION (BUG-20260709-double-profile): strip a leading
@@ -1880,7 +1892,19 @@ export class SupabaseStorage implements IStorage {
     // looked undeletable. `deleteProfileFields` sweeps the top level AND every
     // nested group, comparing normalized identities, so one spelling cannot
     // hide behind another.
-    const mergedFields = mergeAndApplyDeletes(existing.fields || {}, data.fields, null);
+    // ── The last write path ────────────────────────────────────────────────
+    //
+    // Normalizing dates in the routes and the AI tools covers every caller
+    // that exists TODAY. Doing it here as well covers every caller, full stop
+    // — a script, a migration, a tool added next month. A date is stored in
+    // one form because the storage layer will not accept another, so the
+    // question "can an actionable date be saved without its rule following?"
+    // has a structural answer rather than an inventory of call sites.
+    // See shared/date-rules.
+    const incomingFields = data.fields && typeof data.fields === "object"
+      ? normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? existing.type ?? "") }).fields
+      : data.fields;
+    const mergedFields = mergeAndApplyDeletes(existing.fields || {}, incomingFields, null);
     const deletion = deleteProfileFields(mergedFields as Record<string, any>, data.fieldsToDelete);
     const finalFields = deletion.fields;
     if (deletion.removed.length > 0) {
@@ -4287,6 +4311,18 @@ export class SupabaseStorage implements IStorage {
 
   async createDocument(data: any): Promise<Document> {
     if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
+    // ── The last write path ────────────────────────────────────────────────
+    //
+    // Normalizing dates in the routes and the AI tools covers every caller
+    // that exists TODAY. Doing it here as well covers every caller, full stop
+    // — a script, a migration, a tool added next month. A date is stored in
+    // one form because the storage layer will not accept another, so the
+    // question "can an actionable date be saved without its rule following?"
+    // has a structural answer rather than an inventory of call sites.
+    // See shared/date-rules.
+    if (data.extractedData && typeof data.extractedData === "object") {
+      data = { ...data, extractedData: normalizeEntityDateFields(data.extractedData as Record<string, any>, { contextKey: `${data.type ?? ""} ${data.name ?? ""}` }).fields };
+    }
     if (data.fileData && typeof data.fileData === 'string' && data.fileData.length > 12_000_000) {
       throw new Error('File too large (max ~9MB decoded)');
     }
@@ -4355,6 +4391,18 @@ export class SupabaseStorage implements IStorage {
     if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
     const existing = await this.getDocument(id);
     if (!existing) return undefined;
+    // ── The last write path ────────────────────────────────────────────────
+    //
+    // Normalizing dates in the routes and the AI tools covers every caller
+    // that exists TODAY. Doing it here as well covers every caller, full stop
+    // — a script, a migration, a tool added next month. A date is stored in
+    // one form because the storage layer will not accept another, so the
+    // question "can an actionable date be saved without its rule following?"
+    // has a structural answer rather than an inventory of call sites.
+    // See shared/date-rules.
+    if (data.extractedData && typeof data.extractedData === "object") {
+      data = { ...data, extractedData: normalizeEntityDateFields(data.extractedData as Record<string, any>, { contextKey: `${data.type ?? existing.type ?? ""} ${data.name ?? existing.name ?? ""}` }).fields };
+    }
     // [P0.2] documents has updated_at, but rowToDocument doesn't surface it —
     // read it directly (only when the caller actually sent expectedUpdatedAt).
     if ((data as any).expectedUpdatedAt !== undefined) {

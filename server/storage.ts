@@ -4,7 +4,7 @@ import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEF
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
-import { rulesFromAll, seriesFromDateRules, daysBetweenISO } from "@shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields } from "@shared/date-rules";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -912,6 +912,11 @@ export class MemStorage implements IStorage {
 
   async createProfile(data: InsertProfile): Promise<Profile> {
     const now = new Date().toISOString();
+    // Same guard as SupabaseStorage: a date reaches the row in one form
+    // because the storage layer will not take another. See shared/date-rules.
+    if (data.fields && typeof data.fields === "object") {
+      data = { ...data, fields: normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields };
+    }
     const profile: Profile = { id: randomUUID(), ...data, fields: data.fields || {}, tags: data.tags || [], notes: data.notes || "", documents: [], linkedTrackers: [], linkedExpenses: [], linkedTasks: [], linkedEvents: [], createdAt: now, updatedAt: now };
     this.profiles.set(profile.id, profile);
     this.logActivity("profile", `Created profile: ${profile.name}`);
@@ -921,6 +926,11 @@ export class MemStorage implements IStorage {
   async updateProfile(id: string, data: Partial<Profile>) {
     const p = this.profiles.get(id);
     if (!p) return undefined;
+    // Same guard as SupabaseStorage: a date reaches the row in one form
+    // because the storage layer will not take another. See shared/date-rules.
+    if (data.fields && typeof data.fields === "object") {
+      data = { ...data, fields: normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? p.type ?? "") }).fields };
+    }
     const updated = { ...p, ...data, updatedAt: new Date().toISOString() };
     this.profiles.set(id, updated);
     return updated;
@@ -1545,7 +1555,9 @@ export class MemStorage implements IStorage {
       type: data.type || "other",
       mimeType: data.mimeType || "image/jpeg",
       fileData: data.fileData || "",
-      extractedData: data.extractedData || {},
+      extractedData: data.extractedData && typeof data.extractedData === "object"
+        ? normalizeEntityDateFields(data.extractedData as Record<string, any>, { contextKey: `${data.type ?? ""} ${data.name ?? ""}` }).fields
+        : {},
       linkedProfiles: data.linkedProfiles || [],
       tags: data.tags || [],
       createdAt: new Date().toISOString(),
@@ -1564,6 +1576,11 @@ export class MemStorage implements IStorage {
   async updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined> {
     const doc = this.documents.get(id);
     if (!doc) return undefined;
+    // Same guard as SupabaseStorage: a date reaches the row in one form
+    // because the storage layer will not take another. See shared/date-rules.
+    if (data.extractedData && typeof data.extractedData === "object") {
+      data = { ...data, extractedData: normalizeEntityDateFields(data.extractedData as Record<string, any>, { contextKey: `${data.type ?? doc.type ?? ""} ${data.name ?? doc.name ?? ""}` }).fields };
+    }
     // If linkedProfiles is being updated, sync profile.documents arrays
     if (data.linkedProfiles) {
       // Remove from profiles no longer linked
