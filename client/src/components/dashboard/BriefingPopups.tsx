@@ -623,7 +623,20 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
   const renew = useMutation({
     mutationFn: async (vars: { row: any; newDate: string }) => {
       const full = docById.get(vars.row.documentId);
-      const extractedData = { ...(full?.extractedData || {}), [vars.row.fieldName]: vars.newDate };
+      // Write the date back WHERE IT LIVES. A document's dates can sit inside a
+      // nested group, and writing the leaf name at the top level left the stale
+      // nested one in place — so renewing a licence gave the record two
+      // expirations instead of moving the one it had.
+      const path = String(vars.row.fieldPath || vars.row.fieldName || "").split(".").filter(Boolean);
+      if (path.length === 0) throw new Error("This expiration has no field to write back to.");
+      const extractedData = { ...(full?.extractedData || {}) };
+      let cursor: any = extractedData;
+      for (let i = 0; i < path.length - 1; i++) {
+        const key = path[i];
+        cursor[key] = { ...(cursor[key] && typeof cursor[key] === "object" ? cursor[key] : {}) };
+        cursor = cursor[key];
+      }
+      cursor[path[path.length - 1]] = vars.newDate;
       await apiRequest("PATCH", `/api/documents/${vars.row.documentId}`, { extractedData });
     },
     onSuccess: () => {

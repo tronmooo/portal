@@ -233,6 +233,12 @@ export interface CalendarSeries {
    */
   shadow?: boolean;
   /**
+   * Whether this belongs on the Important Dates half of the recurring screen.
+   * Carried from the Date Rule that produced it, because the calendar KIND is
+   * too coarse to answer: a court date and an ordinary to-do are both `task`.
+   */
+  important?: boolean;
+  /**
    * Set when the series was INFERRED from several materialized rows rather than
    * read off a recurrence rule (shared/series-detect) — e.g. six monthly
    * "Refill … - August/September/…" tasks that carry no `recur:` tag. Carries
@@ -294,6 +300,12 @@ const IMPORTANT_ONE_TIME_KINDS = new Set<OccurrenceKind>([
 export function isImportantDate(series: CalendarSeries): boolean {
   if (!series) return false;
   if (isRecurringRule(series)) return false;
+  // A Date Rule says whether it is important; inferring it from the calendar
+  // KIND could not, because several important rule types share a kind with
+  // ordinary ones. A court date is a `deadline` rule and a `task` kind, so
+  // reading the kind alone put it on no screen at all — while an ordinary
+  // one-off task must stay off this one.
+  if (series.important !== undefined) return series.important;
   return IMPORTANT_ONE_TIME_KINDS.has(series.kind);
 }
 

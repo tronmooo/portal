@@ -1039,3 +1039,55 @@ describe("one liability, one due date, both surfaces", () => {
     expect(resolveLiabilityDueDate({})).toBeNull();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 18. Eighth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("an empty spelling does not hide a real one", () => {
+  it("takes the first date that parses, not the first key that exists", () => {
+    // `??` does not skip "", so an empty nextPayment short-circuited the chain
+    // and the liability emitted no series at all.
+    expect(resolveLiabilityDueDate({ nextPayment: "", nextDueDate: "2026-09-01" })).toBe("2026-09-01");
+    const series = seriesFromAll({
+      profiles: [{
+        id: "l1", name: "Car Loan", type: "liability", parentProfileId: "p1",
+        fields: { nextPayment: "", nextDueDate: "2026-09-01", monthlyPayment: 415 },
+      }],
+    });
+    expect(series.filter(s => s.source.system === "liability")).toHaveLength(1);
+  });
+});
+
+describe("a document has no birthday at any depth", () => {
+  it("drops a nested date of birth too", () => {
+    const rules = rulesFromDocuments([{
+      id: "d1", name: "Sample Driver License", type: "drivers_license", linkedProfiles: ["p1"],
+      extractedData: { personal: { dateOfBirth: "1994-07-10" }, expiration_date: "2034-07-18" },
+    }]);
+    expect(rules.map(r => r.ruleType)).toEqual(["expiration"]);
+    expect(rules.some(r => /birthday/i.test(r.label))).toBe(false);
+  });
+});
+
+describe("important dates that do not share a kind with expirations", () => {
+  it("puts a court date on the Recurring & Important screen", () => {
+    const [rule] = rulesFromProfiles([{
+      id: "p1", name: "Jane", type: "person", fields: { courtDate: "2027-03-04" },
+    }]);
+    expect(rule.ruleType).toBe("deadline");
+    expect(rule.importantVisible).toBe(true);
+    const [series] = seriesFromDateRules([rule]);
+    // Its calendar kind is `task`, which it shares with an ordinary to-do —
+    // so the kind alone could never have answered this.
+    expect(isImportantDate(series)).toBe(true);
+    expect(onlyRulesAndImportantDates([series])).toHaveLength(1);
+  });
+
+  it("still keeps an ordinary one-off task off it", () => {
+    const series = seriesFromAll({
+      tasks: [{ id: "t1", title: "Buy milk", dueDate: "2026-09-10", linkedProfiles: ["p1"] }],
+    });
+    expect(onlyRulesAndImportantDates(series)).toHaveLength(0);
+  });
+});

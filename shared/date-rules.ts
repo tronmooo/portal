@@ -346,13 +346,14 @@ function inferSubtype(key: string, ctx: string): string | undefined {
   if (/lease|tenanc/.test(both)) return "lease";
   if (/member/.test(both)) return "membership";
   if (/subscription/.test(both)) return "subscription";
-  // A bare "license" is deliberately left UNKNOWN. It could be a driver's
-  // licence, a professional one, or a software one, and guessing wrong splits
-  // one real date into two: `dedupeRules` treats an unknown subtype as
-  // compatible with any specific one, so `licenseExpiration` on a person merges
-  // with the uploaded licence that knows what it is. Only the words that
-  // genuinely mean a credential renewal claim the subtype.
-  if (/certification|certificate|professional licen[sc]e|permit/.test(both)) return "certification";
+  // A bare "license" is deliberately left UNKNOWN: it could be a driver's
+  // licence, a professional one, or a software one, and naming it wrongly is
+  // worse than not naming it. `dedupeRules` requires subtypes to AGREE, so an
+  // unnamed one stays its own rule rather than merging into — and possibly
+  // erasing — a named one. Only words that genuinely mean a credential claim
+  // the subtype. (`both` is a normalized key with separators stripped, so a
+  // pattern here must never contain a space.)
+  if (/certification|certificate|professionallicen[sc]e|permit/.test(both)) return "certification";
   if (/mortgage|loan|credit/.test(both)) return "loan";
   if (/prescription|medication|refill|rx\b/.test(both)) return "medication";
   if (/contract|agreement/.test(both)) return "contract";
@@ -547,7 +548,7 @@ export interface ScanContext {
 export function scanEntityDates(
   fields: unknown,
   ctx: ScanContext,
-  opts: { maxDepth?: number } = {},
+  opts: { maxDepth?: number; skipRuleTypes?: ReadonlySet<DateRuleType> } = {},
 ): DateRule[] {
   const out: DateRule[] = [];
   const seen = new Set<string>();
@@ -574,6 +575,7 @@ export function scanEntityDates(
 
       const cls = classifyDateField(key, `${ctx.contextKey ?? ""} ${path}`);
       if (!cls.actionable) continue;
+      if (opts.skipRuleTypes?.has(cls.ruleType)) continue;
 
       const id = dateRuleId(ctx.entityType, ctx.entityId, here, cls.ruleType);
       // Two spellings of ONE fact collapse; two different facts do not.
@@ -814,14 +816,14 @@ export function rulesFromDocuments(documents: readonly any[]): DateRule[] {
     // document as well would be the second system this whole module exists to
     // remove, so the document contributes only dates the document itself owns.
     //
-    // Classified, not listed: a list of four literal spellings let `birthDate`
-    // through, and a driver's licence then produced a yearly rule titled
-    // "Sample Driver License's Birthday".
-    for (const key of Object.keys(bag)) {
-      const t = classifyDateField(key, ctx.contextKey).ruleType;
-      if (t === "birthday" || t === "anniversary") delete bag[key];
-    }
-    out.push(...scanEntityDates(bag, ctx));
+    // Classified and at EVERY depth, not a list of literal top-level keys: four
+    // spellings let `birthDate` through, and stripping only the top level let a
+    // nested `personal.dateOfBirth` through — either way a driver's licence
+    // grew a yearly rule titled "Sample Driver License's Birthday", whose
+    // profileId then shadowed the person's real one.
+    out.push(...scanEntityDates(bag, ctx, {
+      skipRuleTypes: new Set<DateRuleType>(["birthday", "anniversary"]),
+    }));
   }
   return out;
 }
@@ -977,6 +979,9 @@ export function seriesFromDateRules(rules: readonly DateRule[]): CalendarSeries[
       baseDate: r.date,
       recurrence: r.recurrence || "none",
       recurrenceEnd: r.recurrenceEnd,
+      // The rule already decided this; the calendar kind cannot express it —
+      // a court date and an ordinary to-do are both `task`.
+      important: r.importantVisible,
     });
   }
   return out;

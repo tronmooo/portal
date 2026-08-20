@@ -118,12 +118,20 @@ import { addMonthsISO } from "./date-math";
  */
 export function resolveLiabilityDueDate(f: Record<string, any> | null | undefined): string | null {
   const fields = f || {};
-  return normalizeDateString(
-    fields.nextPaymentDate ?? fields.nextPayment ?? fields.next_payment
-    ?? fields.nextDueDate ?? fields.next_due_date
-    ?? fields.dueDate ?? fields.due_date
-    ?? fields.firstPaymentDate,
-  );
+  // The first spelling that PARSES, not the first that is merely present.
+  // Coalescing with `??` first meant an empty-string `nextPayment` — which `??`
+  // does not skip — short-circuited the chain and returned null, and the
+  // liability then emitted no series at all: it left the calendar entirely.
+  for (const v of [
+    fields.nextPaymentDate, fields.nextPayment, fields.next_payment,
+    fields.nextDueDate, fields.next_due_date,
+    fields.dueDate, fields.due_date,
+    fields.firstPaymentDate,
+  ]) {
+    const iso = normalizeDateString(v);
+    if (iso) return iso;
+  }
+  return null;
 }
 
 export function deriveScheduleFields(

@@ -29,7 +29,7 @@ import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
-import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
+import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
 import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from "@shared/profile-field-identity";
 
@@ -2424,7 +2424,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       // than re-fetched — that second `getDocument` downloaded the file binary
       // again just to read a type and a name.
       let docContextForDates = "";
-      const persistedFieldKeys = new Set<string>();
+      const persistedFieldValues = new Map<string, any>();
       if (confirmedFields && confirmedFields.length > 0) {
         try {
           const doc = await storage.getDocument(extractionId);
@@ -2441,7 +2441,12 @@ ${JSON.stringify(ctx, null, 2)}`;
             // could understand. See shared/date-rules.
             const normalizedDoc = normalizeEntityDateFields(updatedData, { contextKey: docContextForDates });
             await storage.updateDocument(extractionId, { extractedData: normalizedDoc.fields });
-            for (const field of confirmedFields) persistedFieldKeys.add(normalizeFieldKey(field.key));
+            // Record what LANDED, and under the value that landed — Step 2 has
+            // to know not just that the field saved but that a rule can be
+            // derived from it.
+            for (const field of confirmedFields) {
+              persistedFieldValues.set(normalizeFieldKey(field.key), normalizedDoc.fields[field.key]);
+            }
             saved.push(`Saved ${confirmedFields.length} fields to document`);
           }
         } catch (e: any) {
@@ -2683,7 +2688,14 @@ ${JSON.stringify(ctx, null, 2)}`;
         // still reports success, so the set below is the fields that landed.
         for (const event of createCalendarEvents) {
           try {
-            const covered = persistedFieldKeys.has(normalizeFieldKey(event.field))
+            // A rule must be DERIVABLE, not merely plausible. A value the date
+            // engine rejects — a range, a sentence, a timestamp — still
+            // classifies as actionable from its field NAME, so suppressing on
+            // classification alone left the date on no surface at all while
+            // the response reported success.
+            const key = normalizeFieldKey(event.field);
+            const covered = persistedFieldValues.has(key)
+              && !!bareDateOf(persistedFieldValues.get(key))
               && classifyDateField(event.field, docContextForDates).actionable;
             if (covered) {
               log.info(`[confirm-extraction] "${event.field}" is owned by its record — derived as a Date Rule, no standalone event`);

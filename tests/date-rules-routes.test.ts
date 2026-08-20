@@ -418,3 +418,27 @@ describe("browsing back to an older month", () => {
     expect(older.data.map((i: any) => i.date)).toContain(`${YEAR - 2}-07-10`);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a value the date engine cannot read is not silently dropped", () => {
+  it("creates the event when the saved value yields no rule", async () => {
+    const { api, db } = await boot({
+      documents: [{ id: "doc-1", name: "Policy", type: "insurance", extractedData: {}, linkedProfiles: ["jane-1"], tags: [] }],
+    });
+    await api("POST", "/api/chat/confirm-extraction", {
+      extractionId: "doc-1",
+      targetProfileId: "jane-1",
+      // A RANGE. It classifies as actionable from the field name, but the date
+      // engine rejects it — so no rule can be derived and suppressing the event
+      // would leave the date on no surface at all.
+      confirmedFields: [{ key: "coverageDates", value: "01/01/2026 - 12/31/2026" }],
+      createCalendarEvents: [
+        { field: "coverageDates", date: "2026-01-01", title: "Coverage starts", category: "finance" },
+      ],
+    });
+    expect(db.events.map((e: any) => e.title)).toEqual(["Coverage starts"]);
+    // …and the range itself survived unchanged on the document.
+    expect(db.documents[0].extractedData.coverageDates).toBe("01/01/2026 - 12/31/2026");
+  });
+});

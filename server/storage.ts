@@ -2106,6 +2106,11 @@ export class MemStorage implements IStorage {
           documentName: rule.label,
           documentType: rule.ruleSubtype || rule.sourceEntityType,
           fieldName: rule.sourceField,
+          // The PATH, because the date may live in a nested group. "Renewed — set
+          // new date" writes this key back: given only the leaf it added a new
+          // top-level one and left the stale nested date in place, so the record
+          // then carried two expirations.
+          fieldPath: rule.sourcePath,
           expirationDate: rule.date,
           daysUntil,
           ruleId: rule.id,
