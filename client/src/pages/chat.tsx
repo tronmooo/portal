@@ -95,6 +95,7 @@ import {
   FileBarChart,
   Search,
   Copy,
+  StickyNote,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
@@ -373,6 +374,8 @@ function actionIcon(type: string) {
       return <DollarSign className="h-3 w-3" />;
     case "create_artifact":
       return <FileText className="h-3 w-3" />;
+    case "create_note":
+      return <StickyNote className="h-3 w-3" />;
     default:
       return <Sparkles className="h-3 w-3" />;
   }
@@ -402,6 +405,9 @@ const ACTION_LABELS: Record<string, string> = {
   save_memory: "Remember",
   retrieve: "Retrieve",
   create_artifact: "Create Artifact",
+  // A note is NOT an artifact (user rule 2026-08-20). It saves as a note, the
+  // card says so, and it never shows up on the Artifacts tab.
+  create_note: "Create Note",
 };
 
 function actionLabel(type: string, data?: any) {
@@ -443,6 +449,7 @@ function actionRoute(type: string, data: any): string | null {
     case "create_obligation": case "pay_obligation": case "add_liability_payment": return "/obligations";
     case "create_habit": case "checkin_habit": case "uncomplete_habit": case "delete_habit": return "/habits";
     case "journal_entry": return "/journal";
+    case "create_note": return "/journal";
     case "create_goal": return "/goals";
     case "save_memory": return null;
     default: return null;
@@ -2461,7 +2468,7 @@ const MessageRow = memo(function MessageRow({
               'log_expense', 'create_task', 'create_event',
               'create_habit', 'checkin_habit', 'create_obligation',
               'create_goal', 'create_profile', 'update_profile',
-              'create_tracker', 'journal_entry', 'create_artifact',
+              'create_tracker', 'journal_entry', 'create_artifact', 'create_note',
               'complete_task', 'complete_event', 'pay_obligation',
               'delete_task', 'delete_habit', 'delete_tracker_entry',
               'update_tracker_entry', 'uncomplete_habit', 'save_memory',
@@ -2488,6 +2495,7 @@ const MessageRow = memo(function MessageRow({
                 create_profile: "profiles",
                 journal_entry: "journal",
                 create_artifact: "artifacts",
+                create_note: "notes",          // DELETE /api/notes/:id
                 create_tracker: "trackers",
                 log_entry: "tracker-entries",      // log_tracker_entry maps to log_entry
                 log_income: "incomes",             // DELETE /api/incomes/:id exists

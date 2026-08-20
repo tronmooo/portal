@@ -209,6 +209,8 @@ export default defineConfig({
       'tests/content-routing.test.ts',
       'tests/temporal-rules.test.ts',
       'tests/unified-intent-routing.test.ts',
+      // A note is never an artifact (user rule 2026-08-20).
+      'tests/note-not-artifact.test.ts',
       'tests/domain-routing.test.ts',
       // AI write → UI synchronization: the manifest that tells the client what
       // a chat turn changed, and the read-your-writes barrier that stops a

@@ -3885,13 +3885,13 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Artifacts ---
   {
     name: "create_artifact",
-    description: "Create a rich artifact — markdown doc, code snippet, chart, diagram, checklist, or note. Use this when the user asks for reports, analysis, code, visualizations, or structured content.",
+    description: "Create a rich ARTIFACT — a chart or graph, checklist, markdown report, code snippet, diagram, document or spreadsheet. Artifacts live on the Artifacts tab.\n\nNEVER USE THIS FOR A NOTE. 'Make me a note', 'note for Jane', 'jot this down', 'remember that …' is create_note — a note is not an artifact and must not appear on the Artifacts tab (user rule 2026-08-20). A CHECKLIST is an artifact and belongs here.\n\nCharts/graphs: only build one when the user actually asks to see their data drawn ('chart of my weight', 'graph my spending') or asks for an artifact outright — never turn a plain note, fact, or answer into a chart.",
     input_schema: {
       type: "object" as const,
       properties: {
         title: { type: "string", description: "Title of the artifact" },
         content: { type: "string", description: "The content. For markdown: full markdown text. For code: the code. For html: full HTML. For svg: SVG markup. For mermaid: mermaid diagram syntax. For chart: JSON array of data points. For checklist: one item per line." },
-        type: { type: "string", enum: ["checklist", "note", "markdown", "code", "html", "svg", "mermaid", "chart"], description: "Type of artifact to create" },
+        type: { type: "string", enum: ["checklist", "markdown", "code", "html", "svg", "mermaid", "chart"], description: "Type of artifact to create. There is no 'note' type here — notes are not artifacts; use create_note." },
         language: { type: "string", description: "Programming language for code artifacts (python, javascript, sql, typescript, etc.)" },
         dataBindings: { 
           type: "object", 
@@ -4209,7 +4209,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "delete_artifact",
-    description: "Delete an artifact (note, checklist, markdown, code, chart, diagram, etc.) by title.",
+    description: "Delete an artifact (checklist, markdown, code, chart, diagram, doc, sheet) by title. To delete a NOTE use delete_note — a note is not an artifact.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -5365,7 +5365,14 @@ If journal_entry succeeds, say "Journal entry saved for [name]." If create_note 
 NEVER substitute a create_task when the user explicitly asks for a journal entry.
 
 ━━━ ARTIFACT CRUD ━━━
-- create list/note/doc artifact: create_artifact; edit: update_artifact(title, changes)
+AN ARTIFACT IS A CHART/GRAPH, CHECKLIST, REPORT, CODE, DIAGRAM, DOC OR SHEET — the
+things that belong on the Artifacts tab. A NOTE IS NOT AN ARTIFACT (user rule
+2026-08-20). "Make me a note", "note for Jane", "jot this down" → create_note,
+which saves a NOTE and says "Note saved" — never create_artifact, never the
+Artifacts tab. A CHECKLIST ("make me a packing list") IS an artifact.
+Only build a chart/graph artifact when the user asks to SEE data drawn ("chart of
+my weight", "graph my spending") or asks for an artifact outright.
+- create checklist/chart/doc artifact: create_artifact; edit: update_artifact(title, changes)
 - "pin my grocery list" → update_artifact(title, changes:{pinned:true}); unpin → pinned:false
 - "make a copy of X" → duplicate_artifact(title, newTitle?)
 - "check off milk on my grocery list" / "uncheck X" → toggle_artifact_item(title, itemText)
@@ -10730,13 +10737,27 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_artifact": {
-      // P0.3a: validate with the shared insert schema before writing. Unknown
-      // artifact types fall back to "note" instead of failing the whole save.
-      const ARTIFACT_TYPES = ["checklist", "note", "markdown", "code", "html", "react", "svg", "mermaid", "chart", "doc", "sheet"];
+      // A NOTE IS NOT AN ARTIFACT (user report 2026-08-20: "a note should not
+      // be created as an artifact — a checklist should, but not a note"). A
+      // create_artifact call carrying type:"note" (or a type the schema does
+      // not know, which used to fall back to "note") is a note request that
+      // took the wrong door: write it through the note path so it dedups,
+      // links to the right profile, and never lands on the Artifacts tab.
+      // mapToolToActionType() types the chat card to match.
+      if (isNoteArtifactInput(input)) {
+        return executeTool("create_note", {
+          content: input.content || input.title || "",
+          title: input.title,
+          forProfile: input.forProfile,
+          tags: input.tags || [],
+        }, userId);
+      }
+      // P0.3a: validate with the shared insert schema before writing.
+      const ARTIFACT_TYPES = ["checklist", "markdown", "code", "html", "react", "svg", "mermaid", "chart", "doc", "sheet"];
       const artifactPayload = validateAiPayload(insertArtifactSchema, {
         title: input.title,
         content: input.content || "",
-        type: ARTIFACT_TYPES.includes(input.type) ? input.type : "note",
+        type: ARTIFACT_TYPES.includes(input.type) ? input.type : "markdown",
         tags: input.tags || [],
         pinned: false,
         items: input.items || [],
@@ -13781,7 +13802,7 @@ async function runBulkLogPath(
       const beforeRows = await captureBeforeRows(op.tool, turnVerifyCtx);
       const rawResult = await executeTool(op.tool, inputWithCtx, userId);
       invalidateContextCache(userId);
-      const actionType = mapToolToActionType(op.tool);
+      const actionType = mapToolToActionType(op.tool, inputWithCtx);
       const result = (rawResult && !rawResult.error)
         ? await finalizeToolResult(op.tool, actionType, inputWithCtx, rawResult, turnVerifyCtx)
         : rawResult;
@@ -15224,7 +15245,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           }
 
           // Map tool name to a ParsedAction type for backwards compat
-          const actionType = mapToolToActionType(toolUse.name);
+          const actionType = mapToolToActionType(toolUse.name, inputWithCtx);
 
           // Envelope + post-write verification for successful WRITE tools —
           // read-back, duplicate count, profile isolation (server/ai-envelope).
@@ -15996,9 +16017,12 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   append_journal_entry: "journal_entry",
   update_journal: "update_entity",
   delete_journal: "delete_entity",
-  // Notes. Stored as artifacts, so the undoable action card is the artifact
-  // one — the chat UI already knows how to undo that.
-  create_note: "create_artifact",
+  // Notes are their OWN action type (user report 2026-08-20: a saved note
+  // showed a "Create Artifact" card). The storage row is still an artifact of
+  // type "note" — that is an implementation detail the user never sees. The
+  // card says "Create Note", it undoes through DELETE /api/notes/:id, and it
+  // does not appear on the Artifacts tab.
+  create_note: "create_note",
   update_note: "update_entity",
   delete_note: "delete_entity",
   // Goals
@@ -16031,9 +16055,27 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
 
 // Map tool names to ParsedAction types (read-only tools + anything
 // unrecognized fall through to "retrieve").
-function mapToolToActionType(toolName: string): ParsedAction["type"] {
+//
+// A NOTE IS NEVER AN ARTIFACT ACTION. If the model reaches for create_artifact
+// with type "note" anyway, the executor writes a real note (see the
+// create_artifact case) and the card must agree with what was written — so the
+// action type follows the payload, not just the tool name.
+function mapToolToActionType(toolName: string, input?: any): ParsedAction["type"] {
+  if (toolName === "create_artifact" && isNoteArtifactInput(input)) return "create_note";
   return TOOL_ACTION_MAP[toolName] || "retrieve";
 }
+
+/** True when a create_artifact call is really a note: an explicit type:"note",
+ *  or a type the artifact schema doesn't know (which used to silently fall back
+ *  to "note"). Charts, checklists, code, docs and the rest stay artifacts. */
+export function isNoteArtifactInput(input: any): boolean {
+  const t = String(input?.type || "").toLowerCase();
+  if (!t) return true;
+  return t === "note" || !ARTIFACT_TYPE_NAMES.includes(t);
+}
+
+/** Artifact types the Artifacts tab owns. "note" is deliberately absent. */
+const ARTIFACT_TYPE_NAMES = ["checklist", "markdown", "code", "html", "react", "svg", "mermaid", "chart", "doc", "sheet"];
 
 // ── Owner attribution (2026-07-15 user report: "that's Jim's Honda CRV, not
 // mine") ── resolve the ROOT owner of the entity a write touched by walking

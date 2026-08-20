@@ -197,6 +197,12 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
   ],
+  notes: [
+    ["/api/notes"],
+    ["/api/artifacts"],
+    ["/api/dashboard-enhanced"],
+    ["/api/activity"],
+  ],
   artifacts: [
     ["/api/artifacts"],
     ["/api/chat-artifacts"],
@@ -276,6 +282,13 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/habits");
     case "artifacts":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/artifacts");
+    case "notes":
+      // Notes render on the Journal page AND inside a profile's Info tab
+      // (["/api/profiles", id, "detail"]), so both keys have to go stale.
+      return (q) => {
+        const k0 = String(q.queryKey?.[0] || "");
+        return k0.startsWith("/api/notes") || k0.startsWith("/api/artifacts") || k0.startsWith("/api/profiles");
+      };
     case "everything":
       // Invalidate every /api/* query the app has — used by AI chat
       // because Claude can mutate literally any domain in one turn.

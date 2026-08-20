@@ -180,7 +180,7 @@ export const PARITY_MATRIX: ParityRow[] = [
   { entity: "Memory", operation: "Delete", ui: "Info tab fact row menu", aiTools: ["delete_memory"], status: "covered" },
 
   // ── Artifacts ──────────────────────────────────────────────────────────────
-  { entity: "Artifact", operation: "Create (list/note/doc)", ui: "Artifacts tab → New", aiTools: ["create_artifact"], status: "covered" },
+  { entity: "Artifact", operation: "Create (checklist/chart/doc)", ui: "Artifacts tab → New", aiTools: ["create_artifact"], status: "covered" },
   { entity: "Artifact", operation: "Edit content", ui: "Artifact editor", aiTools: ["update_artifact"], status: "covered" },
   { entity: "Artifact", operation: "Delete", ui: "Artifact card menu", aiTools: ["delete_artifact"], status: "covered" },
   // Handler + storage already pass `pinned` through — only the tool's schema

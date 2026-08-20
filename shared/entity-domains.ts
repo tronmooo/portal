@@ -39,6 +39,7 @@ export type Domain =
   | "goals"
   | "events"
   | "journal"
+  | "notes"      // Notes — stored as artifact rows, but their own surface
   | "artifacts"
   | "memories"
   | "notifications"
@@ -175,6 +176,9 @@ export const ACTION_TYPE_DOMAINS: Record<string, Domain[]> = {
   add_liability_payment: ["liabilities", "obligations", "expenses"],
   journal_entry: ["journal"],
   create_artifact: ["artifacts"],
+  // A note writes an artifact ROW but is not an artifact to the user, so it
+  // refreshes the notes surfaces (and the artifacts cache the row lives in).
+  create_note: ["notes", "artifacts"],
   save_memory: ["memories"],
   set_budget: ["budgets"],
   manage_document: ["documents"],

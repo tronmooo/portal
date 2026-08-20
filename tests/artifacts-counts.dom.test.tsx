@@ -54,8 +54,15 @@ const DOCUMENTS = [
 ];
 const ARTIFACTS = [
   {
-    id: "a1", title: "Chat citation note", type: "note", content: "hello",
+    id: "a1", title: "Chat citation report", type: "markdown", content: "hello",
     createdAt: iso("2026-04-01"), linkedProfiles: ["p1"], tags: ["citation", "chat"],
+    pinned: false, items: [],
+  },
+  // A NOTE. Stored as an artifact row, but not an artifact to the user, so this
+  // page must ignore it entirely — it counts nowhere and renders nothing.
+  {
+    id: "a-note", title: "Gate code", type: "note", content: "4821",
+    createdAt: iso("2026-04-02"), linkedProfiles: ["p1"], tags: ["citation"],
     pinned: false, items: [],
   },
 ];
@@ -219,6 +226,19 @@ describe("Artifacts counts match the rendered data", () => {
     fireEvent.click(screen.getByTestId("tag-filter-drivers_license"));
     await waitFor(() => expect(showing()).toBe(1));
     sums();
+  });
+
+  // User rule 2026-08-20: "a note should not be created as an artifact — a
+  // checklist should, but not a note." A note row is invisible here.
+  it("notes are not artifacts: they never render and never count", async () => {
+    mount();
+    await ready();
+    expect(screen.queryByText("Gate code")).toBeNull();
+    // 9 documents/scans + 1 markdown report — the note is not among them.
+    expect(chipCount("all")).toBe(10);
+    fireEvent.click(screen.getByTestId("filter-ai_reports"));
+    await waitFor(() => expect(cards()).toBe(1));
+    expect(screen.queryByText("Gate code")).toBeNull();
   });
 });
 

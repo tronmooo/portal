@@ -15,7 +15,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BookHeart, BookOpen, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, Trash2, AlertCircle, MessageCircle, Pencil, Search, PenLine } from "lucide-react";
+import { BookHeart, BookOpen, Smile, Frown, Meh, Sparkles, Star, Zap, Plus, X, Trash2, AlertCircle, MessageCircle, Pencil, Search, PenLine, StickyNote } from "lucide-react";
 import { PageContainer, PageHeader } from "@/components/ui/page-shell";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 
@@ -170,6 +170,71 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ─── Notes ────────────────────────────────────────────────────────────────
+//
+// A NOTE IS NOT AN ARTIFACT (user rule 2026-08-20). Notes used to be listed on
+// the Artifacts tab because their storage row is an artifact of type "note";
+// they are reference information, not something the user asked to have built,
+// so they live here — where every note card in the app already pointed — and in
+// each profile's Info tab. Journal entries above are experiences; these are
+// facts worth keeping.
+function NotesSection({ profileIds }: { profileIds: string[] }) {
+  const { toast } = useToast();
+  const params = profileIds.length === 1 ? `?profileId=${encodeURIComponent(profileIds[0])}` : "";
+  const { data: notes = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/notes", ...profileIds],
+    queryFn: () => apiRequest("GET", `/api/notes${params}`).then(r => r.json()),
+  });
+
+  const deleteNote = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/notes/${id}`); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+      toast({ title: "Note deleted" });
+    },
+    onError: (e: any) => toast({ title: "Could not delete note", description: formatApiError(e), variant: "destructive" }),
+  });
+
+  if (isLoading) return <Skeleton className="h-20 w-full rounded-xl" />;
+  if (notes.length === 0) return null;
+
+  return (
+    <div className="space-y-2" data-testid="journal-notes-section">
+      <p className="micro-label text-muted-foreground flex items-center gap-1.5 pt-1">
+        <StickyNote className="h-3.5 w-3.5" /> Notes · {notes.length}
+      </p>
+      {notes.map((note: any) => (
+        <Card key={note.id} className="overflow-hidden" data-testid={`note-card-${note.id}`}>
+          <CardContent className="p-3 flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold truncate">{note.title}</p>
+              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-3 whitespace-pre-wrap">{note.content}</p>
+              {Array.isArray(note.tags) && note.tags.length > 0 && (
+                <div className="flex gap-1 flex-wrap mt-1.5">
+                  {note.tags.map((t: string) => (
+                    <Badge key={t} variant="secondary" className="text-[11px]">{t}</Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 shrink-0 text-muted-foreground hover:text-destructive"
+              aria-label={`Delete note ${note.title}`}
+              data-testid={`button-delete-note-${note.id}`}
+              onClick={() => deleteNote.mutate(note.id)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
   );
 }
 
@@ -475,6 +540,9 @@ export default function JournalPage() {
           );
         })}
       </div>
+
+      {/* Notes — reference information, kept beside (never inside) the journal. */}
+      <NotesSection profileIds={filterMode === "selected" ? filterIds : []} />
 
       {/* Create form — guided 5-minute template OR free-form editor */}
       {showCreate && (
