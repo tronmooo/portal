@@ -838,12 +838,12 @@ export default function ArtifactsPage() {
           tags: Array.isArray((d as any).tags) ? ((d as any).tags as string[]) : [],
           isArtifact: false,
         })),
-      // NOTES ARE NOT ARTIFACTS (user rule 2026-08-20: "a note should not be
-      // created as an artifact — a checklist should, but not a note"). They are
-      // stored as artifact rows of type "note", but this tab is for artifacts
-      // the user asked for: checklists, charts, reports, code, docs, sheets.
-      // Notes live on the Journal page and in each profile's Info tab.
-      ...artifacts.filter(a => a.type !== "note").map(a => ({
+      // NOTES ARE NOT ARTIFACTS (user rule 2026-08-20). They have their own
+      // table and their own surfaces — the Journal page and each profile's Info
+      // tab — so /api/artifacts no longer returns any. The defensive filter
+      // stays for one release: a deployment whose migration has not run yet can
+      // still serve legacy type:"note" rows, and they must not reappear here.
+      ...artifacts.filter(a => (a.type as string) !== "note").map(a => ({
         id: a.id,
         title: a.title,
         // Doc/Sheet behave more like documents than "AI Reports"; tag them so

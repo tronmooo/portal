@@ -181,6 +181,11 @@ export const PARITY_MATRIX: ParityRow[] = [
 
   // ── Artifacts ──────────────────────────────────────────────────────────────
   { entity: "Artifact", operation: "Create (checklist/chart/doc)", ui: "Artifacts tab → New", aiTools: ["create_artifact"], status: "covered" },
+  // Notes are their own entity since 20260820 — not artifacts, not journal.
+  { entity: "Note", operation: "Create", ui: "Journal page → Notes / profile Info tab", aiTools: ["create_note"], status: "covered" },
+  { entity: "Note", operation: "Edit", ui: "Journal page → Notes", aiTools: ["update_note"], status: "covered" },
+  { entity: "Note", operation: "Delete", ui: "Journal page → Notes", aiTools: ["delete_note"], status: "covered" },
+  { entity: "Note", operation: "Search", ui: "Global search", aiTools: ["search_notes"], status: "covered" },
   { entity: "Artifact", operation: "Edit content", ui: "Artifact editor", aiTools: ["update_artifact"], status: "covered" },
   { entity: "Artifact", operation: "Delete", ui: "Artifact card menu", aiTools: ["delete_artifact"], status: "covered" },
   // Handler + storage already pass `pinned` through — only the tool's schema

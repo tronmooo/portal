@@ -25,6 +25,7 @@ function stubStorage(overrides: Record<string, any> = {}): any {
     getJournalEntries: async () => [],
     getMemories: async () => [],
     getArtifacts: async () => [],
+    getNotes: async () => [],
     listReminders: async () => [],
     getDocuments: async () => [],
     getPaychecks: async () => [],

@@ -199,7 +199,6 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   ],
   notes: [
     ["/api/notes"],
-    ["/api/artifacts"],
     ["/api/dashboard-enhanced"],
     ["/api/activity"],
   ],
@@ -285,9 +284,11 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
     case "notes":
       // Notes render on the Journal page AND inside a profile's Info tab
       // (["/api/profiles", id, "detail"]), so both keys have to go stale.
+      // /api/artifacts is deliberately NOT here — a note is not an artifact and
+      // no longer lives in that table.
       return (q) => {
         const k0 = String(q.queryKey?.[0] || "");
-        return k0.startsWith("/api/notes") || k0.startsWith("/api/artifacts") || k0.startsWith("/api/profiles");
+        return k0.startsWith("/api/notes") || k0.startsWith("/api/profiles");
       };
     case "everything":
       // Invalidate every /api/* query the app has — used by AI chat

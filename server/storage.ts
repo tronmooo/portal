@@ -29,6 +29,7 @@ import {
   type Habit, type InsertHabit, type HabitCheckin,
   type Obligation, type InsertObligation, type ObligationPayment,
   type Artifact, type InsertArtifact, type ChecklistItem,
+  type Note, type InsertNote,
   type JournalEntry, type InsertJournalEntry,
   type MemoryItem, type InsertMemory,
   type Domain, type InsertDomain, type DomainEntry,
@@ -161,6 +162,13 @@ export interface IStorage {
   // Optional public-share helpers (only implemented by SupabaseStorage; in-memory falls back to updateArtifact).
   getArtifactByShareToken?(token: string): Promise<Artifact | undefined>;
   setArtifactShareToken?(id: string, token: string | null): Promise<Artifact | undefined>;
+
+  // Notes — their own table, NOT artifacts (user rule 2026-08-20).
+  getNotes(profileIds?: string[]): Promise<Note[]>;
+  getNote(id: string): Promise<Note | undefined>;
+  createNote(data: InsertNote): Promise<Note>;
+  updateNote(id: string, data: Partial<Note>): Promise<Note | undefined>;
+  deleteNote(id: string): Promise<boolean>;
 
   // Journal
   getJournalEntries(profileIds?: string[]): Promise<JournalEntry[]>;
@@ -816,6 +824,7 @@ export class MemStorage implements IStorage {
   private habits: Map<string, Habit> = new Map();
   private obligations: Map<string, Obligation> = new Map();
   private artifacts: Map<string, Artifact> = new Map();
+  private notes: Map<string, Note> = new Map();
   private journal: Map<string, JournalEntry> = new Map();
   private memories: Map<string, MemoryItem> = new Map();
   private goals: Map<string, Goal> = new Map();
@@ -1041,6 +1050,18 @@ export class MemStorage implements IStorage {
           this.artifacts.delete(aid);
         } else {
           art.linkedProfiles = (art.linkedProfiles || []).filter(pid => pid !== id);
+        }
+      }
+    }
+
+    // 8b. Notes — same rule as artifacts: sole-owner notes go, co-owned notes
+    // just lose this profile.
+    for (const [nid, note] of this.notes) {
+      if ((note.linkedProfiles || []).includes(id)) {
+        if ((note.linkedProfiles || []).length <= 1) {
+          this.notes.delete(nid);
+        } else {
+          note.linkedProfiles = (note.linkedProfiles || []).filter(pid => pid !== id);
         }
       }
     }
@@ -1815,7 +1836,9 @@ export class MemStorage implements IStorage {
   async deleteObligation(id: string) { return this.obligations.delete(id); }
 
   // ---- Artifacts ----
-  async getArtifacts() { return Array.from(this.artifacts.values()); }
+  // A note is never an artifact — the filter guards against a legacy row that
+  // predates the notes table (see 20260820_notes_table.sql).
+  async getArtifacts() { return Array.from(this.artifacts.values()).filter(a => (a.type as string) !== "note"); }
   async getArtifact(id: string) { return this.artifacts.get(id); }
   async createArtifact(data: InsertArtifact): Promise<Artifact> {
     const now = new Date().toISOString();
@@ -1851,6 +1874,41 @@ export class MemStorage implements IStorage {
     return a;
   }
   async deleteArtifact(id: string) { return this.artifacts.delete(id); }
+
+  // ---- Notes ----
+  // A note is reference information in its own right; it shares nothing with
+  // the artifacts map above beyond both being text the user owns.
+  async getNotes(profileIds?: string[]) {
+    const all = Array.from(this.notes.values())
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    if (!profileIds || profileIds.length === 0) return all;
+    return all.filter(n => (n.linkedProfiles || []).some(id => profileIds.includes(id)));
+  }
+  async getNote(id: string) { return this.notes.get(id); }
+  async createNote(data: InsertNote): Promise<Note> {
+    const now = new Date().toISOString();
+    const note: Note = {
+      id: randomUUID(),
+      title: data.title || "",
+      content: data.content,
+      tags: data.tags || [],
+      linkedProfiles: data.linkedProfiles || [],
+      pinned: data.pinned ?? false,
+      source: data.source || "manual",
+      createdAt: now, updatedAt: now,
+    };
+    this.notes.set(note.id, note);
+    this.logActivity("note", `Created note: ${note.title}`);
+    return note;
+  }
+  async updateNote(id: string, data: Partial<Note>) {
+    const n = this.notes.get(id);
+    if (!n) return undefined;
+    const updated = { ...n, ...data, id: n.id, updatedAt: new Date().toISOString() };
+    this.notes.set(id, updated);
+    return updated;
+  }
+  async deleteNote(id: string) { return this.notes.delete(id); }
 
   // ---- Journal ----
   async getJournalEntries() { return Array.from(this.journal.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()); }
@@ -2385,6 +2443,9 @@ export class MemStorage implements IStorage {
     }
     for (const a of this.artifacts.values()) {
       if (a.title.toLowerCase().includes(q) || a.content.toLowerCase().includes(q) || a.tags.some(t => t.includes(q))) results.push({ ...a, _type: "artifact" });
+    }
+    for (const n of this.notes.values()) {
+      if (n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q) || n.tags.some(t => t.includes(q))) results.push({ ...n, _type: "note" });
     }
     for (const j of this.journal.values()) {
       if (j.content.toLowerCase().includes(q) || j.tags.some(t => t.includes(q))) results.push({ ...j, _type: "journal" });

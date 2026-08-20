@@ -667,11 +667,17 @@ export const insertObligationSchema = z.object({
 export type InsertObligation = z.input<typeof insertObligationSchema>;
 
 // ============================================================
-// ARTIFACTS — checklists and notes
+// ARTIFACTS — checklists, charts, reports, code, docs, sheets
+//
+// NOT notes. A note is reference information, not something the user asked to
+// have built; it lives in its own table (see NOTES below).
 // ============================================================
 
+// NOTES ARE NOT ARTIFACTS (user rule 2026-08-20: "I don't want notes to be
+// stored as an artifact — they do not belong in the same category"). They have
+// their own table and their own type below; "note" is deliberately absent here.
 export type ArtifactType = 
-  | "checklist" | "note"
+  | "checklist"
   | "markdown" | "code" | "html" | "react" | "svg" | "mermaid" | "chart"
   | "doc" | "sheet"; // doc = rich-text Word-style; sheet = Excel-style grid
 
@@ -713,7 +719,7 @@ export interface Artifact {
   id: string;
   type: ArtifactType;
   title: string;
-  content: string; // For notes: body text. For code: the code. For chart: JSON. For doc: HTML.
+  content: string; // For markdown: the markdown. For code: the code. For chart: JSON. For doc: HTML.
   items: ChecklistItem[]; // For checklists
   tags: string[];
   linkedProfiles: string[];
@@ -740,7 +746,7 @@ export interface ChecklistItem {
 }
 
 export const insertArtifactSchema = z.object({
-  type: z.enum(["checklist", "note", "markdown", "code", "html", "react", "svg", "mermaid", "chart", "doc", "sheet"]),
+  type: z.enum(["checklist", "markdown", "code", "html", "react", "svg", "mermaid", "chart", "doc", "sheet"]),
   title: z.string().min(1),
   // Cap at ~2 MB of HTML/markdown/code to prevent runaway docs from filling the
   // artifacts table. Most legitimate docs are well under 200 KB.
@@ -774,6 +780,41 @@ export const insertArtifactSchema = z.object({
 });
 
 export type InsertArtifact = z.infer<typeof insertArtifactSchema>;
+
+// ============================================================
+// NOTES — reference information, its own category
+// ============================================================
+//
+// A note is something the user wants back later: a gate code, a preference, a
+// fact about a person, an idea. It is not a journal entry (that is an
+// experience) and it is not an artifact (that is something built). It owns no
+// dates — see NON_TEMPORAL_ENTITIES in shared/temporal-rules — so nothing a
+// note says ever reaches the calendar on its own.
+
+export interface Note {
+  id: string;
+  title: string;
+  content: string;
+  tags: string[];
+  linkedProfiles: string[];
+  pinned: boolean;
+  /** Which door wrote it. */
+  source?: "chat" | "manual" | "ai";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const insertNoteSchema = z.object({
+  title: z.string().default(""),
+  // Same 2 MB ceiling the artifact body uses; a note is prose, never a file.
+  content: z.string().min(1).max(2_000_000),
+  tags: z.array(z.string()).optional().default([]),
+  linkedProfiles: z.array(z.string()).optional().default([]),
+  pinned: z.boolean().optional().default(false),
+  source: z.enum(["chat", "manual", "ai"]).optional().default("manual"),
+});
+
+export type InsertNote = z.input<typeof insertNoteSchema>;
 
 // ============================================================
 // JOURNAL / MOOD

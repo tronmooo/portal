@@ -3797,10 +3797,10 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
 
   // --- Notes ---
-  // A NOTE IS ITS OWN CONTENT TYPE (user report 2026-08-20). Notes are stored
-  // as artifact rows of type "note" — the app's existing first-class,
-  // profile-linked, searchable content record — so this adds no parallel
-  // system. What it adds is the canonical VERB set the router can route to.
+  // A NOTE IS ITS OWN CONTENT TYPE (user report 2026-08-20), with its own
+  // `notes` table since migrations/20260820_notes_table.sql. It was briefly
+  // stored as an artifact row of type "note"; that made it an artifact
+  // everywhere it mattered, which is exactly what it is not.
   {
     name: "create_note",
     description: "Create a NOTE — information worth remembering or referencing later. Facts, reference information, ideas, observations, instructions, preferences, things to remember, information about a person. A note does NOT mean something needs to happen.\n\nUSE THIS whenever the user says 'note', 'make a note', 'note for <person>', 'note that …', '<name> note: …', 'jot this down', 'save a note', 'remember that <concrete fact about a person or thing>'.\n\nExamples: 'Remember that Robert's apartment gate code is 4821' · 'Make a note for Sarah that she prefers morning appointments' · 'Save a note that the Honda makes a clicking sound when turning left' · 'Note for Mike: his dog's food is in the garage'.\n\nDO NOT use journal_entry for these — a journal entry is an experience or reflection, a note is reference information. DO NOT use create_document — a note is not a file. If the note text also contains an actionable future date (an appointment, a deadline), still create the NOTE the user asked for, then additionally create the task/event; never replace the note.",
@@ -5019,7 +5019,8 @@ ARTIFACT TYPES — use the right one:
 - "svg" — for vector graphics, logos, icons
 - "html" — for interactive mini-pages (use sparingly, sandboxed)
 - "checklist" — for todo lists, action items (one item per line)
-- "note" — for simple plain text notes
+THERE IS NO "note" ARTIFACT TYPE. A note is not an artifact and has its own
+tool (create_note) and its own storage. Never file one here.
 When the user asks for a report or analysis, prefer "markdown" with rich formatting. When they ask for code, use "code" with the correct language. When they want a chart or visualization, use "chart" with dataBindings for live refresh.
 
 BEHAVIOR:
@@ -10737,12 +10738,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_artifact": {
-      // A NOTE IS NOT AN ARTIFACT (user report 2026-08-20: "a note should not
-      // be created as an artifact — a checklist should, but not a note"). A
-      // create_artifact call carrying type:"note" (or a type the schema does
-      // not know, which used to fall back to "note") is a note request that
-      // took the wrong door: write it through the note path so it dedups,
-      // links to the right profile, and never lands on the Artifacts tab.
+      // A NOTE IS NOT AN ARTIFACT (user rule 2026-08-20). A create_artifact
+      // call carrying type:"note" — or a type the schema does not know, which
+      // used to fall back to "note" — is a note request that took the wrong
+      // door: write it through the note path so it lands in the `notes` table,
+      // dedups, and links to the right profile. The artifacts table no longer
+      // accepts a note at all (its CHECK constraint would reject one).
       // mapToolToActionType() types the chat card to match.
       if (isNoteArtifactInput(input)) {
         return executeTool("create_note", {
@@ -16018,10 +16019,9 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   update_journal: "update_entity",
   delete_journal: "delete_entity",
   // Notes are their OWN action type (user report 2026-08-20: a saved note
-  // showed a "Create Artifact" card). The storage row is still an artifact of
-  // type "note" — that is an implementation detail the user never sees. The
-  // card says "Create Note", it undoes through DELETE /api/notes/:id, and it
-  // does not appear on the Artifacts tab.
+  // showed a "Create Artifact" card), backed by their own table. The card says
+  // "Create Note", it undoes through DELETE /api/notes/:id, and it does not
+  // appear on the Artifacts tab.
   create_note: "create_note",
   update_note: "update_entity",
   delete_note: "delete_entity",

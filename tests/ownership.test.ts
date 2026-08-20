@@ -98,10 +98,12 @@ describe("diffOwners", () => {
 });
 
 describe("OWNERSHIP_TABLES — the canonical schema map", () => {
-  it("lists exactly the 11 entity types that carry linked_profiles", () => {
+  it("lists exactly the 12 entity types that carry linked_profiles", () => {
+    // "note" joined the map on 2026-08-20, when notes moved out of the
+    // artifacts table into their own (migrations/20260820_notes_table.sql).
     expect(Object.keys(OWNERSHIP_TABLES).sort()).toEqual([
       "artifact", "document", "event", "expense", "goal",
-      "habit", "income", "journal_entry", "obligation", "task", "tracker",
+      "habit", "income", "journal_entry", "note", "obligation", "task", "tracker",
     ]);
   });
 

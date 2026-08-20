@@ -8,13 +8,16 @@
 // the id the client already has. There is no second implementation for either
 // door, so a fix to dedup, linking, or date-rule sync lands on both at once.
 //
-// STORAGE MODEL — no migration.
+// STORAGE MODEL.
 //
-//   Note          → an `artifact` row of type "note". Artifacts are already a
-//                   first-class, profile-linked, searchable, soft-shareable
-//                   content record with full CRUD in both storage backends and
-//                   a page of their own. Adding a `notes` table would have been
-//                   a fourth place for text to live.
+//   Note          → a `notes` row. Its OWN table since
+//                   migrations/20260820_notes_table.sql. Notes used to be
+//                   `artifacts` rows of type "note" — convenient, because
+//                   artifacts were already profile-linked and searchable, but
+//                   wrong: it made a note an artifact everywhere it mattered
+//                   (the Artifacts tab counted it, the AI's action cards called
+//                   it one). A note is reference information, not something the
+//                   user asked to have built, and it is now its own category.
 //   Journal Entry → the existing `journal_entries` row, now honouring
 //                   `entryDate` (the day the experience happened) instead of
 //                   always stamping today.
@@ -25,6 +28,7 @@
 // means re-derive and report, never write a second copy of the truth.
 
 import type { IStorage } from "./storage";
+import type { Note } from "@shared/schema";
 import { deriveDateRulesForRecord, ownsDateRules, type DateRule, type RuleSourceSystem } from "@shared/temporal-rules";
 import { findActionableTime } from "@shared/temporal-rules";
 
@@ -47,8 +51,6 @@ export interface NoteResult {
   actionableTime?: { dateText: string | null; cue: string | null };
 }
 
-const NOTE_TYPE = "note";
-
 /** Title from the first sentence/clause of the body, capped for the card UI. */
 export function deriveNoteTitle(content: string): string {
   const flat = String(content ?? "").replace(/\s+/g, " ").trim();
@@ -64,21 +66,20 @@ const normalizeText = (s: unknown): string =>
 export async function listNotes(
   storage: IStorage,
   opts: { profileId?: string | null; query?: string; limit?: number } = {},
-): Promise<any[]> {
-  const all = await storage.getArtifacts();
+): Promise<Note[]> {
+  const all = await storage.getNotes();
   const q = normalizeText(opts.query);
-  const out = (all || []).filter((a: any) => {
-    if (a?.type !== NOTE_TYPE) return false;
+  const out = (all || []).filter((n: Note) => {
     // PROFILE ISOLATION. A note belonging to Robert must never surface under
     // Sarah. An UNLINKED note is the user's own and is only returned when no
     // profile filter was asked for.
     if (opts.profileId) {
-      if (!Array.isArray(a.linkedProfiles) || !a.linkedProfiles.includes(opts.profileId)) return false;
+      if (!Array.isArray(n.linkedProfiles) || !n.linkedProfiles.includes(opts.profileId)) return false;
     }
     if (!q) return true;
-    return normalizeText(`${a.title} ${a.content}`).includes(q);
+    return normalizeText(`${n.title} ${n.content}`).includes(q);
   });
-  out.sort((a: any, b: any) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+  out.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
   return typeof opts.limit === "number" ? out.slice(0, Math.max(1, opts.limit)) : out;
 }
 
@@ -96,25 +97,24 @@ export async function createNote(storage: IStorage, input: NoteInput): Promise<N
 
   const existing = await listNotes(storage, { profileId });
   const incoming = normalizeText(content);
-  const dup = existing.find((n: any) => normalizeText(n.content) === incoming);
+  const dup = existing.find(n => normalizeText(n.content) === incoming);
   if (dup) {
     return { note: dup, deduped: true, ...actionableHint(content) };
   }
 
-  const note = await storage.createArtifact({
-    type: NOTE_TYPE,
+  const note = await storage.createNote({
     title: (input.title || "").trim() || deriveNoteTitle(content),
     content,
-    items: [],
     tags: input.tags || [],
     pinned: false,
     linkedProfiles: profileId ? [profileId] : [],
     source: input.source || "chat",
-  } as any);
+  });
 
   if (profileId) {
-    // The junction row is what makes the note appear on the profile page.
-    await storage.linkProfileTo(profileId, "artifact", note.id).catch(() => { /* non-fatal */ });
+    // Routes the ownership write through the single writer, same as every
+    // other owned entity.
+    await storage.linkProfileTo(profileId, "note", note.id).catch(() => { /* non-fatal */ });
   }
   return { note, deduped: false, ...actionableHint(content) };
 }
@@ -129,10 +129,10 @@ export async function updateNote(
   storage: IStorage,
   id: string,
   changes: { title?: string; content?: string; append?: string; tags?: string[] },
-): Promise<any | undefined> {
-  const current = await storage.getArtifact(id);
-  if (!current || current.type !== NOTE_TYPE) return undefined;
-  const patch: Record<string, any> = {};
+): Promise<Note | undefined> {
+  const current = await storage.getNote(id);
+  if (!current) return undefined;
+  const patch: Partial<Note> = {};
   if (changes.title !== undefined) patch.title = String(changes.title).trim();
   if (changes.content !== undefined) patch.content = String(changes.content);
   if (changes.append) {
@@ -141,14 +141,14 @@ export async function updateNote(
   }
   if (changes.tags !== undefined) patch.tags = changes.tags;
   if (Object.keys(patch).length === 0) return current;
-  return storage.updateArtifact(id, patch);
+  return storage.updateNote(id, patch);
 }
 
 /** Deleting a Note has NO temporal consequence — notes never owned a rule. */
 export async function deleteNote(storage: IStorage, id: string): Promise<boolean> {
-  const current = await storage.getArtifact(id);
-  if (!current || current.type !== NOTE_TYPE) return false;
-  return storage.deleteArtifact(id);
+  const current = await storage.getNote(id);
+  if (!current) return false;
+  return storage.deleteNote(id);
 }
 
 // ─── Journal entries ─────────────────────────────────────────────────────────

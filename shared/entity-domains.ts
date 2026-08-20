@@ -39,7 +39,7 @@ export type Domain =
   | "goals"
   | "events"
   | "journal"
-  | "notes"      // Notes — stored as artifact rows, but their own surface
+  | "notes"      // Notes — their own table, their own category
   | "artifacts"
   | "memories"
   | "notifications"
@@ -62,6 +62,7 @@ export type EntityType =
   | "journal"
   | "memory"
   | "artifact"
+  | "note"
   | "document"
   | "paycheck";
 
@@ -92,6 +93,7 @@ export const ENTITY_DOMAINS: Record<EntityType, Domain[]> = {
   journal: ["journal"],
   memory: ["memories"],
   artifact: ["artifacts"],
+  note: ["notes"],
   document: ["documents"],
   paycheck: ["incomes"],
 };
@@ -117,6 +119,7 @@ export const ENTITY_ENDPOINT: Record<EntityType, string | null> = {
   journal: "/api/journal",
   memory: "/api/memories",
   artifact: "/api/artifacts",
+  note: "/api/notes",
   document: "/api/documents",
   paycheck: "/api/paychecks",
 };
@@ -176,9 +179,9 @@ export const ACTION_TYPE_DOMAINS: Record<string, Domain[]> = {
   add_liability_payment: ["liabilities", "obligations", "expenses"],
   journal_entry: ["journal"],
   create_artifact: ["artifacts"],
-  // A note writes an artifact ROW but is not an artifact to the user, so it
-  // refreshes the notes surfaces (and the artifacts cache the row lives in).
-  create_note: ["notes", "artifacts"],
+  // Notes have their own table and their own surfaces — nothing about an
+  // artifact changes when one is written.
+  create_note: ["notes"],
   save_memory: ["memories"],
   set_budget: ["budgets"],
   manage_document: ["documents"],

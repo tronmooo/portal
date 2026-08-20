@@ -96,6 +96,7 @@ import {
   type Habit, type InsertHabit, type HabitCheckin,
   type Obligation, type InsertObligation, type ObligationPayment,
   type Artifact, type InsertArtifact, type ChecklistItem,
+  type Note, type InsertNote,
   type JournalEntry, type InsertJournalEntry,
   type Income, type InsertIncome,
   type MemoryItem, type InsertMemory,
@@ -1136,6 +1137,20 @@ export class SupabaseStorage implements IStorage {
     };
   }
 
+  private rowToNote(r: any): Note {
+    return {
+      id: r.id,
+      title: r.title || "",
+      content: r.content || "",
+      tags: r.tags || [],
+      linkedProfiles: r.linked_profiles || [],
+      pinned: r.pinned || false,
+      source: r.source || "manual",
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
   private rowToJournalEntry(r: any): JournalEntry {
     return {
       id: r.id, date: r.date, mood: r.mood as MoodLevel, content: r.content || "",
@@ -1925,7 +1940,7 @@ export class SupabaseStorage implements IStorage {
     const safeList = async <T>(tag: string, fn: () => Promise<T[]>): Promise<T[] | null> => {
       try { return await fn(); } catch { errors.push(tag); return null; }
     };
-    const [allTrackers, allExpenses, allTasks, allHabits, allEvents, allDocuments, allArtifacts, allGoals, allIncomes, journalRows] = await Promise.all([
+    const [allTrackers, allExpenses, allTasks, allHabits, allEvents, allDocuments, allArtifacts, allNotes, allGoals, allIncomes, journalRows] = await Promise.all([
       safeList("trackers", () => this.getTrackers()),
       safeList("expenses", () => this.getExpenses()),
       safeList("tasks", () => this.getTasks()),
@@ -1933,6 +1948,7 @@ export class SupabaseStorage implements IStorage {
       safeList("events", () => this.getEvents()),
       safeList("documents", () => this.getDocuments()),
       safeList("artifacts", () => this.getArtifacts()),
+      safeList("notes", () => this.getNotes()),
       safeList("goals", () => this.getGoals()),
       safeList("incomes", () => this.getIncomes()),
       safeList("journal", async () => {
@@ -2014,6 +2030,7 @@ export class SupabaseStorage implements IStorage {
       cascadeSharedTable("events", "events", allEvents),
       cascadeSharedTable("documents", "documents", allDocuments as any),
       cascadeSharedTable("artifacts", "artifacts", allArtifacts as any),
+      cascadeSharedTable("notes", "notes", allNotes as any),
       cascadeSharedTable("goals", "goals", allGoals as any),
       // Bug #8: incomes were once missing from the cascade entirely. Soft-
       // delete sole-owner incomes (deleted_at), strip co-owners.
@@ -5307,7 +5324,10 @@ export class SupabaseStorage implements IStorage {
       q = this._applyProfileFilter(q, profileIds);
       const { data, error } = await q;
       if (error) throw error;
-      return (data || []).map(r => this.rowToArtifact(r));
+      // A NOTE IS NOT AN ARTIFACT. 20260820_notes_table.sql moves every legacy
+      // type:'note' row into `notes`, but code can deploy ahead of a migration
+      // — so a leftover row is skipped here rather than counted as an artifact.
+      return (data || []).filter(r => r.type !== "note").map(r => this.rowToArtifact(r));
     });
   }
 
@@ -5450,6 +5470,75 @@ export class SupabaseStorage implements IStorage {
 
   async deleteArtifact(id: string): Promise<boolean> {
     const { error } = await this.supabase.from("artifacts").delete().eq("id", id).eq("user_id", this.userId);
+    return !error;
+  }
+
+  // ============================================================
+  // NOTES
+  // ============================================================
+  //
+  // Their own table since migrations/20260820_notes_table.sql. A note used to
+  // be an `artifacts` row of type 'note'; it is not an artifact and no longer
+  // shares that table, that page, or that CRUD surface.
+  async getNotes(profileIds?: string[]): Promise<Note[]> {
+    return this.memo(`getNotes${this._fk(profileIds)}`, async () => {
+      // DB pushdown via notes_linked_profiles_gin_idx (JSONB column — see
+      // _applyProfileFilter for why the literal must be JSON).
+      let q = this.supabase.from("notes").select("*").eq("user_id", this.userId);
+      q = this._applyProfileFilter(q, profileIds);
+      const { data, error } = await q.order("updated_at", { ascending: false });
+      if (error) throw error;
+      return (data || []).map(r => this.rowToNote(r));
+    });
+  }
+
+  async getNote(id: string): Promise<Note | undefined> {
+    const { data, error } = await this.supabase.from("notes").select("*").eq("id", id).eq("user_id", this.userId).single();
+    if (error || !data) return undefined;
+    return this.rowToNote(data);
+  }
+
+  async createNote(data: InsertNote): Promise<Note> {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    // Auto-link to the self profile when no owner was given — the same default
+    // every other create applies, so an unowned note still belongs to someone.
+    let linkedProfiles = data.linkedProfiles || [];
+    if (linkedProfiles.length === 0) {
+      const selfProfile = await this.getSelfProfile();
+      if (selfProfile) linkedProfiles = [selfProfile.id];
+    }
+    const { error } = await this.supabase.from("notes").insert({
+      id, user_id: this.userId,
+      title: data.title || "",
+      content: data.content || "",
+      tags: data.tags || [],
+      linked_profiles: linkedProfiles,
+      pinned: data.pinned || false,
+      source: data.source || "manual",
+      created_at: now, updated_at: now,
+    });
+    if (error) throw error;
+    this.logActivity("note", `Created note: ${data.title || "Note"}`);
+    return (await this.getNote(id))!;
+  }
+
+  async updateNote(id: string, data: Partial<Note>): Promise<Note | undefined> {
+    const existing = await this.getNote(id);
+    if (!existing) return undefined;
+    const patch: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (data.title !== undefined) patch.title = data.title;
+    if (data.content !== undefined) patch.content = data.content;
+    if (data.tags !== undefined) patch.tags = data.tags;
+    if (data.pinned !== undefined) patch.pinned = data.pinned;
+    if (data.linkedProfiles !== undefined) patch.linked_profiles = data.linkedProfiles;
+    const { error } = await this.supabase.from("notes").update(patch).eq("id", id).eq("user_id", this.userId);
+    if (error) throw error;
+    return this.getNote(id);
+  }
+
+  async deleteNote(id: string): Promise<boolean> {
+    const { error } = await this.supabase.from("notes").delete().eq("id", id).eq("user_id", this.userId);
     return !error;
   }
 
@@ -6842,7 +6931,7 @@ export class SupabaseStorage implements IStorage {
     // PERF: Fetch all top-level tables in parallel instead of 9 sequential awaits.
     // Previously this was ~9 round trips taking ~90–300ms each before any
     // filtering even started.
-    const [profiles, trackers, tasks, expenses, habits, obligations, artifacts, journal, memories] = await Promise.all([
+    const [profiles, trackers, tasks, expenses, habits, obligations, artifacts, notes, journal, memories] = await Promise.all([
       this.getProfiles(),
       this.getTrackers(),
       this.getTasks(),
@@ -6850,6 +6939,7 @@ export class SupabaseStorage implements IStorage {
       this.getHabits(),
       this.getObligations(),
       this.getArtifacts(),
+      this.getNotes(),
       this.getJournalEntries(),
       this.getMemories(),
     ]);
@@ -6874,6 +6964,9 @@ export class SupabaseStorage implements IStorage {
     }
     for (const a of artifacts) {
       if (has(a.title) || has(a.content) || tagsMatch(a.tags)) results.push({ ...a, _type: "artifact" });
+    }
+    for (const n of notes) {
+      if (has(n.title) || has(n.content) || tagsMatch(n.tags)) results.push({ ...n, _type: "note" });
     }
     for (const j of journal) {
       if (has(j.content) || tagsMatch(j.tags)) results.push({ ...j, _type: "journal" });

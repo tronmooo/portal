@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS obligation_payments (
 CREATE TABLE IF NOT EXISTS artifacts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('checklist','note')),
+  type TEXT NOT NULL CHECK (type IN ('checklist','note')), -- widened by migrations/002+; 'note' removed by 20260820
   title TEXT NOT NULL,
   content TEXT DEFAULT '',
   items JSONB DEFAULT '[]'::jsonb,
@@ -185,6 +185,25 @@ CREATE TABLE IF NOT EXISTS artifacts (
   pinned BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============================================================
+-- NOTES
+-- ============================================================
+-- A note is reference information the user wants back later. It is NOT an
+-- artifact (see migrations/20260820_notes_table.sql) — artifacts are the
+-- checklists, charts, reports and docs the user asked to have built.
+CREATE TABLE IF NOT EXISTS notes (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  linked_profiles JSONB NOT NULL DEFAULT '[]'::jsonb,
+  pinned BOOLEAN NOT NULL DEFAULT false,
+  source TEXT NOT NULL DEFAULT 'manual',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ============================================================

@@ -176,11 +176,10 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
 // ─── Notes ────────────────────────────────────────────────────────────────
 //
 // A NOTE IS NOT AN ARTIFACT (user rule 2026-08-20). Notes used to be listed on
-// the Artifacts tab because their storage row is an artifact of type "note";
-// they are reference information, not something the user asked to have built,
-// so they live here — where every note card in the app already pointed — and in
-// each profile's Info tab. Journal entries above are experiences; these are
-// facts worth keeping.
+// the Artifacts tab because they were stored as artifact rows; they now have
+// their own table and live here — where every note card in the app already
+// pointed — and in each profile's Info tab. Journal entries above are
+// experiences; these are facts worth keeping.
 function NotesSection({ profileIds }: { profileIds: string[] }) {
   const { toast } = useToast();
   const params = profileIds.length === 1 ? `?profileId=${encodeURIComponent(profileIds[0])}` : "";
@@ -193,7 +192,6 @@ function NotesSection({ profileIds }: { profileIds: string[] }) {
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/notes/${id}`); },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
       toast({ title: "Note deleted" });
     },
     onError: (e: any) => toast({ title: "Could not delete note", description: formatApiError(e), variant: "destructive" }),

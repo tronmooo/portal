@@ -20,12 +20,15 @@ const SELF = { id: "p-self", name: "Robert Sennabaum", type: "self", fields: {},
 const JANE = { id: "p-jane", name: "Jane Doe", type: "person", fields: {}, tags: [] };
 
 type Row = Record<string, any>;
-const db: { artifacts: Row[]; journal: Row[]; tasks: Row[]; links: string[] } = {
-  artifacts: [], journal: [], tasks: [], links: [],
+// Notes have their own table since 2026-08-20 — they are NOT artifact rows, so
+// this fake storage keeps them in their own list too.
+const db: { artifacts: Row[]; notes: Row[]; journal: Row[]; tasks: Row[]; links: string[] } = {
+  artifacts: [], notes: [], journal: [], tasks: [], links: [],
 };
 
 function reseed() {
   db.artifacts = [];
+  db.notes = [];
   db.journal = [];
   db.tasks = [];
   db.links = [];
@@ -61,6 +64,26 @@ vi.mock("../server/storage", () => ({
       const i = db.artifacts.findIndex(a => a.id === id);
       if (i === -1) return false;
       db.artifacts.splice(i, 1);
+      return true;
+    },
+
+    getNotes: async () => db.notes,
+    getNote: async (id: string) => db.notes.find(n => n.id === id),
+    createNote: async (data: Row) => {
+      const row = { id: nextId("n"), tags: [], linkedProfiles: [], pinned: false, ...data, createdAt: nowISO(), updatedAt: nowISO() };
+      db.notes.push(row);
+      return row;
+    },
+    updateNote: async (id: string, patch: Row) => {
+      const row = db.notes.find(n => n.id === id);
+      if (!row) return undefined;
+      Object.assign(row, patch, { updatedAt: nowISO() });
+      return row;
+    },
+    deleteNote: async (id: string) => {
+      const i = db.notes.findIndex(n => n.id === id);
+      if (i === -1) return false;
+      db.notes.splice(i, 1);
       return true;
     },
 
@@ -106,7 +129,7 @@ beforeEach(async () => {
   ({ executeTool } = await import("../server/ai-engine"));
 });
 
-const notes = () => db.artifacts.filter(a => a.type === "note");
+const notes = () => db.notes;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -133,7 +156,7 @@ describe("1. the reported bug: an explicit note never becomes a journal entry", 
     expect(notes()).toHaveLength(1);
     expect(notes()[0].content).toBe("I have the look that one gives somebody");
     expect(notes()[0].linkedProfiles).toEqual([JANE.id]);
-    expect(db.links).toContain(`${JANE.id}:artifact:${notes()[0].id}`);
+    expect(db.links).toContain(`${JANE.id}:note:${notes()[0].id}`);
     expect(db.journal).toHaveLength(0);
   });
 });

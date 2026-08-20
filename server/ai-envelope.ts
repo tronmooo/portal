@@ -109,6 +109,8 @@ const ENTITY_META: Record<string, EntityMeta> = {
   journal: { list: (s) => s.getJournalEntries(), name: (r) => String(r.content || "").slice(0, 40) },
   memory: { list: (s) => s.getMemories(), name: (r) => r.key },
   artifact: { list: (s) => s.getArtifacts(), name: (r) => r.title },
+  // Notes are their own table since 20260820 — verified by id like tasks.
+  note: { list: (s) => s.getNotes(), name: (r) => r.title, byId: (s, id) => (s as any).getNote(id), byIdMethod: "getNote" },
   document: { list: (s) => s.getDocuments(), name: (r) => r.name },
   paycheck: { list: (s) => s.getPaychecks(), name: (r) => r.source },
   // Tracker ENTRIES (the individual logged data points) verify by primary key.
@@ -152,6 +154,7 @@ const TOOL_ENTITY: Record<string, string> = {
   journal_entry: "journal", update_journal: "journal", delete_journal: "journal",
   save_memory: "memory", update_memory: "memory", delete_memory: "memory",
   create_artifact: "artifact", update_artifact: "artifact", delete_artifact: "artifact",
+  create_note: "note", update_note: "note", delete_note: "note",
   duplicate_artifact: "artifact", toggle_artifact_item: "artifact",
   // create_reminder / update_reminder / delete_reminder are gone (reminders
   // were retired 2026-08-09). The executor translates those legacy names into
@@ -372,6 +375,7 @@ const DELETE_FN: Record<string, (s: AnyStorage, id: string) => Promise<any>> = {
   obligation: (s, id) => s.deleteObligation(id),
   memory: (s, id) => s.deleteMemory(id),
   artifact: (s, id) => s.deleteArtifact(id),
+  note: (s, id) => s.deleteNote(id),
   goal: (s, id) => s.deleteGoal(id),
   tracker: (s, id) => s.deleteTracker(id),
   journal: (s, id) => s.deleteJournalEntry(id),
@@ -388,6 +392,7 @@ const UPDATE_FN: Record<string, (s: AnyStorage, id: string, data: any) => Promis
   profile: (s, id, d) => s.updateProfile(id, d),
   goal: (s, id, d) => s.updateGoal(id, d),
   artifact: (s, id, d) => s.updateArtifact(id, d),
+  note: (s, id, d) => s.updateNote(id, d),
   memory: (s, id, d) => s.updateMemory(id, d),
   journal: (s, id, d) => s.updateJournalEntry(id, d),
   tracker: (s, id, d) => s.updateTracker(id, d),
@@ -397,6 +402,7 @@ const RECREATE_FN: Record<string, (s: AnyStorage, snapshot: any) => Promise<any>
   goal: (s, snap) => s.createGoal(snap),
   memory: (s, snap) => s.saveMemory(snap),
   artifact: (s, snap) => s.createArtifact(snap),
+  note: (s, snap) => s.createNote(snap),
   journal: (s, snap) => s.createJournalEntry(snap),
   tracker: (s, snap) => s.createTracker(snap),
 };

@@ -29,6 +29,7 @@ const LIST_BY_TYPE: Record<OwnedEntityType, (s: IStorage) => Promise<any[]>> = {
   habit: (s) => s.getHabits(),
   goal: (s) => s.getGoals(),
   artifact: (s) => s.getArtifacts(),
+  note: (s) => s.getNotes(),
   document: (s) => s.getDocuments(),
   income: (s) => s.getIncomes(),
   journal_entry: (s) => s.getJournalEntries(),

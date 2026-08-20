@@ -5305,6 +5305,9 @@ Rules:
   // server/content-service, so dedup, profile linking and the "notes own no
   // Date Rule" rule behave identically whether a note came from the composer,
   // from chat, or from a future import.
+  //
+  // Notes have their own `notes` table (migrations/20260820_notes_table.sql).
+  // They are not artifacts and share nothing with /api/artifacts.
   app.get("/api/notes", asyncHandler(async (req, res) => {
     const profileId = typeof req.query.profileId === "string" ? req.query.profileId : undefined;
     const query = typeof req.query.q === "string" ? req.query.q : undefined;
@@ -5330,7 +5333,7 @@ Rules:
       source: "manual",
     });
     const uid_n1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_n1}`); bustCache(`stats:${uid_n1}`); bustCache(`enhanced:`);
+    bustCache(`notes:${uid_n1}`); bustCache(`stats:${uid_n1}`); bustCache(`enhanced:`);
     res.status(result.deduped ? 200 : 201).json({ ...result.note, deduped: result.deduped });
   }));
   app.patch("/api/notes/:id", asyncHandler(async (req, res) => {
@@ -5342,14 +5345,14 @@ Rules:
     const updated = await updateNote(storage, req.params.id, changes);
     if (!updated) return res.status(404).json({ error: "Note not found" });
     const uid_n2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_n2}`); bustCache(`stats:${uid_n2}`); bustCache(`enhanced:`);
+    bustCache(`notes:${uid_n2}`); bustCache(`stats:${uid_n2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.delete("/api/notes/:id", asyncHandler(async (req, res) => {
     const ok = await deleteNote(storage, req.params.id);
     if (!ok) return res.status(404).json({ error: "Note not found" });
     const uid_n3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_n3}`); bustCache(`stats:${uid_n3}`); bustCache(`enhanced:`);
+    bustCache(`notes:${uid_n3}`); bustCache(`stats:${uid_n3}`); bustCache(`enhanced:`);
     // Notes own no Date Rule, so nothing leaves the calendar with them.
     res.json({ success: true, dateRuleImpact: "none" });
   }));
@@ -7573,7 +7576,7 @@ Rules:
       // completes in O(1) round-trip time instead of O(n).
       let [
         profiles, trackers, tasks, expenses, events, documents,
-        habits, obligations, artifacts, journalEntries, memories, domains,
+        habits, obligations, artifacts, notes, journalEntries, memories, domains,
       ] = await Promise.all([
         storage.getProfiles(),
         storage.getTrackers(),
@@ -7584,6 +7587,9 @@ Rules:
         storage.getHabits(),
         storage.getObligations(),
         storage.getArtifacts(),
+        // Notes are their own table, so the backup has to name them; before
+        // 20260820 they rode along inside `artifacts`.
+        storage.getNotes(),
         storage.getJournalEntries(),
         storage.getMemories(),
         storage.getDomains(),
@@ -7596,7 +7602,7 @@ Rules:
       const exportFilterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : [];
       if (exportFilterIds.length > 0) {
         const uid_ex = cacheUserKey(req as AuthenticatedRequest);
-        [trackers, tasks, expenses, events, documents, habits, obligations, artifacts, journalEntries] =
+        [trackers, tasks, expenses, events, documents, habits, obligations, artifacts, notes, journalEntries] =
           await Promise.all([
             filterByProfileScope(trackers, exportFilterIds, uid_ex),
             filterByProfileScope(tasks, exportFilterIds, uid_ex),
@@ -7606,6 +7612,7 @@ Rules:
             filterByProfileScope(habits, exportFilterIds, uid_ex),
             filterByProfileScope(obligations, exportFilterIds, uid_ex),
             filterByProfileScope(artifacts, exportFilterIds, uid_ex),
+            filterByProfileScope(notes, exportFilterIds, uid_ex),
             filterByProfileScope(journalEntries, exportFilterIds, uid_ex),
           ]);
       }
@@ -7615,7 +7622,7 @@ Rules:
         scope: exportFilterIds.length > 0 ? "filtered" : "all",
         ...(exportFilterIds.length > 0 ? { filteredProfileIds: exportFilterIds } : {}),
         profiles, trackers, tasks, expenses, events, documents,
-        habits, obligations, artifacts, journalEntries, memories, domains,
+        habits, obligations, artifacts, notes, journalEntries, memories, domains,
       };
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${getUserToday(getTimezone(req))}.json"`);
@@ -7721,9 +7728,28 @@ Rules:
       }
       // Import artifacts
       if (data.artifacts && Array.isArray(data.artifacts)) {
-        for (const a of data.artifacts) {
+        // type:"note" rows from a pre-20260820 backup are imported as NOTES
+        // above, not as artifacts.
+        for (const a of data.artifacts.filter((x: any) => x?.type !== "note")) {
           await tryImport("artifacts", a.title || "unnamed", () => storage.createArtifact({ type: a.type, title: a.title, content: a.content, items: a.items?.map((i: any) => ({ text: i.text, checked: i.checked })) || [], tags: a.tags, pinned: a.pinned, linkedProfiles: a.linkedProfiles || [], language: a.language, dataBindings: a.dataBindings, chartData: a.chartData }));
         }
+      }
+      // Import notes. A backup taken before 20260820 has them inside
+      // `artifacts` as type:"note"; the artifact import below skips those (the
+      // table no longer accepts the type), so read them from there too.
+      const legacyNoteRows = Array.isArray(data.artifacts)
+        ? data.artifacts.filter((a: any) => a?.type === "note")
+        : [];
+      const noteRows = [...(Array.isArray(data.notes) ? data.notes : []), ...legacyNoteRows];
+      for (const n of noteRows) {
+        await tryImport("notes", n.title || "unnamed", () => storage.createNote({
+          title: n.title || "",
+          content: n.content || "",
+          tags: n.tags || [],
+          linkedProfiles: n.linkedProfiles || [],
+          pinned: !!n.pinned,
+          source: n.source === "chat" || n.source === "ai" ? n.source : "manual",
+        }));
       }
       // Import journal entries
       if (data.journalEntries && Array.isArray(data.journalEntries)) {

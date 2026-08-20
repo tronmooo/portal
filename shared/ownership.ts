@@ -30,6 +30,7 @@ export type OwnedEntityType =
   | "habit"
   | "goal"
   | "artifact"
+  | "note"
   | "document"
   | "income"
   | "journal_entry";
@@ -65,6 +66,7 @@ export const OWNERSHIP_TABLES: Record<OwnedEntityType, OwnershipTableSpec> = {
   habit: { entityTable: "habits", junctionTable: null, junctionEntityColumn: null },
   goal: { entityTable: "goals", junctionTable: null, junctionEntityColumn: null },
   artifact: { entityTable: "artifacts", junctionTable: null, junctionEntityColumn: null },
+  note: { entityTable: "notes", junctionTable: null, junctionEntityColumn: null },
   document: { entityTable: "documents", junctionTable: null, junctionEntityColumn: null },
   income: { entityTable: "incomes", junctionTable: null, junctionEntityColumn: null },
   journal_entry: { entityTable: "journal_entries", junctionTable: null, junctionEntityColumn: null },
