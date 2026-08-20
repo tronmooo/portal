@@ -2503,10 +2503,18 @@ ${JSON.stringify(ctx, null, 2)}`;
           // Skip document-metadata fields — they belong on the document, not the profile
           if (DOC_ONLY_FIELDS.has(key)) { skippedFields.push(key); continue; }
 
-          // Normalize keys: dateOfBirth/dob → save as both dateOfBirth AND birthday
+          // ONE spelling. This used to write `dateOfBirth` AND `birthday`, and
+          // the twin sweep below then nulled one of them anyway — so the pair
+          // bought nothing and cost plenty: the write verification counted the
+          // retired half as a lost field, and which spelling survived decided
+          // the Date Rule's id, so an extracted birthday and a typed one
+          // produced rules with different ids for the same fact.
+          //
+          // Every reader accepts either spelling (profile-detail reads
+          // `birthday || dateOfBirth || dob`), and the rule engine classifies
+          // all of them, so the canonical one is enough.
           if (key === 'dateOfBirth' || key === 'dob') {
             profileFields['dateOfBirth'] = coerceValue(key, val);
-            profileFields['birthday'] = coerceValue(key, val);
           } else if (key === 'patientName') {
             // patientName → save as 'name' only if profile doesn't already have one
             // (checked below when we have the profile object)

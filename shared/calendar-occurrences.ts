@@ -144,6 +144,15 @@ export interface OccurrenceSource {
   /** Record id inside that system. */
   id: string;
   /**
+   * The FIELD on that record that carries the date, dotted for a nested group.
+   *
+   * Set by Date Rule-derived series. Deleting such a date means clearing this
+   * field — and only this one: the delete path used to assume a profile-sourced
+   * date was always a birthday, so removing a licence expiration from the
+   * calendar wiped that person's date of birth and left the expiration.
+   */
+  field?: string;
+  /**
    * Where tapping this date NAVIGATES — the record the user edits. For a bill
    * backed by a liability that is the liability profile, not the person.
    */

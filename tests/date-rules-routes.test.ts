@@ -52,10 +52,8 @@ describe("POST /api/chat/confirm-extraction", () => {
     expect(db.documents[0].extractedData.expiration_date).toBe("2034-07-18");
     // Not a date, untouched.
     expect(db.documents[0].extractedData.licenseNumber).toBe("D1234567");
-    // On the person — the date the person owns. The routing writes both
-    // spellings and retires one so the profile does not show the date twice;
-    // the rule engine reads whichever survives.
-    expect(db.profiles[0].fields.birthday).toBe("1994-07-10");
+    // On the person — the date the person owns, under ONE spelling.
+    expect(db.profiles[0].fields.dateOfBirth).toBe("1994-07-10");
     // …and saying so is not reported as a failure (it used to be).
     expect(r.data.success).toBe(true);
     expect(r.data.failures).toEqual([]);

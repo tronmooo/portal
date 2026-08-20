@@ -561,6 +561,8 @@ export function scanEntityDates(
 ): DateRule[] {
   const out: DateRule[] = [];
   const seen = new Set<string>();
+  /** singleton key → the rule id currently holding it, so a later spelling wins. */
+  const singletonHolders = new Map<string, string>();
   const maxDepth = opts.maxDepth ?? 2;
 
   const visit = (obj: any, depth: number, path: string) => {
@@ -605,12 +607,25 @@ export function scanEntityDates(
       // `dateOfBirth` would put two birthdays on the calendar.
       const singletonKey = cls.ruleType === "birthday" || cls.ruleType === "anniversary"
         ? `singleton:${cls.ruleType}` : "";
-      if (seen.has(id) || seen.has(valueKey) || (singletonKey && seen.has(singletonKey))) continue;
+      if (seen.has(id) || seen.has(valueKey)) continue;
       seen.add(id);
       seen.add(valueKey);
-      if (singletonKey) seen.add(singletonKey);
+      // A singleton keeps the LAST spelling seen, not the first.
+      //
+      // A corrected `dateOfBirth` written beside a stale `birthday` lands after
+      // it in the merged object (`{...existing, ...incoming}` keeps existing
+      // keys in place), so keeping the first meant the correction was never
+      // derived and the calendar kept showing the old day.
+      if (singletonKey) {
+        const prior = singletonHolders.get(singletonKey);
+        if (prior !== undefined) {
+          const at = out.findIndex((r) => r.id === prior);
+          if (at >= 0) out.splice(at, 1);
+        }
+      }
 
       out.push(buildRule({ ...ctx, cls, id, field: key, path: here, raw, iso }));
+      if (singletonKey) singletonHolders.set(singletonKey, id);
     }
   };
 
@@ -625,7 +640,11 @@ export function scanEntityDates(
   // both stay — which is why this cannot be done by type alone.
   const byTypeAndDate = new Map<string, DateRule[]>();
   for (const r of out) {
-    const k = `${r.ruleType}:${r.date}`;
+    // The GROUP is part of the identity. Ignoring it collapsed
+    // `registration.expirationDate` into `insurance.policyExpiration` whenever
+    // they fell on the same day, and the registration then existed nowhere.
+    const group = r.sourcePath.includes(".") ? r.sourcePath.split(".")[0] : "";
+    const k = `${r.ruleType}:${group}:${r.date}`;
     const arr = byTypeAndDate.get(k);
     if (arr) arr.push(r); else byTypeAndDate.set(k, [r]);
   }
@@ -658,7 +677,8 @@ function buildRule(a: ScanContext & {
     rawValue: a.raw,
     profileId: a.profileId,
     ownerIds: uniq(a.ownerIds || []),
-    label: ruleLabel(a.namePrefix ?? a.entityLabel, cls, a.field),
+    label: ruleLabel(a.namePrefix ?? a.entityLabel, cls, a.field,
+      a.path.includes(".") ? a.path.split(".")[0] : undefined),
     subtitle: a.entityLabel,
     date: clip(a.iso),
     recurrence: cls.recurrence,
@@ -750,7 +770,7 @@ function fieldPhrase(fieldKey: unknown): string {
     .join(" ");
 }
 
-function ruleLabel(name: string, cls: FieldClassification, fieldKey?: unknown): string {
+function ruleLabel(name: string, cls: FieldClassification, fieldKey?: unknown, group?: string): string {
   const n = String(name || "").trim() || "Untitled";
   if (cls.ruleType === "birthday") return `${n}'s Birthday`;
   if (cls.ruleType === "anniversary") return `${n} — Anniversary`;
@@ -762,7 +782,11 @@ function ruleLabel(name: string, cls: FieldClassification, fieldKey?: unknown): 
   // carrying `homeInsuranceExpiration` and `floodInsuranceExpiration` infers
   // the same "insurance" subtype for both, and two identical titles collapsed
   // to one series downstream — the flood policy vanished from every surface.
-  const phrase = fieldPhrase(fieldKey);
+  // The nested group counts as part of the field's own words: `registration.
+  // expirationDate` is the registration's, and without the group both it and
+  // `insurance.expirationDate` read "Home — Expiration" — two identical titles,
+  // which collapse to one series downstream and lose a date.
+  const phrase = [fieldPhrase(group), fieldPhrase(fieldKey)].filter(Boolean).join(" ");
   const sub = SUBTYPE_LABEL[cls.ruleSubtype || ""];
   const already = SUBTYPE_KEYWORD[cls.ruleSubtype || ""];
   const namer = phrase && phrase.split(/\s+/).length > 1 ? phrase : (sub || phrase);
@@ -998,6 +1022,7 @@ export function seriesFromDateRules(rules: readonly DateRule[]): CalendarSeries[
       source: {
         system: r.sourceEntityType === "income" ? "event" : r.sourceEntityType,
         id: r.sourceEntityId,
+        field: r.sourcePath,
         profileId: r.profileId,
         ownerIds: r.ownerIds,
         label: r.subtitle,

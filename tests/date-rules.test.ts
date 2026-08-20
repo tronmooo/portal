@@ -157,8 +157,8 @@ describe("the input mechanism is irrelevant once the data is saved", () => {
   // What each write path leaves on the profile, as the server actually writes
   // it: extraction and chat both go through canonicalizeProfileFields; the
   // manual form goes through normalizeEntityDateFields in the profile route.
-  const viaExtraction = () => canonicalizeProfileFields(
-    { dateOfBirth: "07/10/1994", birthday: "07/10/1994" }).fields;
+  // Extraction writes ONE spelling — the same one the other two doors write.
+  const viaExtraction = () => canonicalizeProfileFields({ dateOfBirth: "07/10/1994" }).fields;
   const viaChat = () => canonicalizeProfileFields({ dateOfBirth: "July 10, 1994" }).fields;
   const viaManualForm = () => normalizeEntityDateFields({ dateOfBirth: "1994-07-10" }).fields;
 
@@ -1124,5 +1124,49 @@ describe("the countdown says what the date actually does", () => {
     expect(countdownLabel("2026-09-01", TODAY, "deadline")).toBe("Due in 12 days");
     expect(countdownLabel("2026-09-01", TODAY, "renewal")).toBe("Renews in 12 days");
     expect(countdownLabel("2026-09-01", TODAY, "expiration")).toBe("Expires in 12 days");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 20. Ninth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("nested groups are their own dates", () => {
+  it("keeps two nested expirations that fall on the same day", () => {
+    const rules = rulesFromProfiles([{
+      id: "home-1", name: "Home", type: "property",
+      fields: {
+        registration: { expirationDate: "2027-03-01" },
+        insurance: { policyExpiration: "2027-03-01" },
+      },
+    }]);
+    expect(rules).toHaveLength(2);
+    // …and they say which is which, so nothing downstream collapses them on
+    // an identical title.
+    expect(new Set(rules.map(r => r.label)).size).toBe(2);
+  });
+
+  it("carries the field back so deleting one clears the right thing", () => {
+    const [rule] = rulesFromProfiles([{
+      id: "p1", name: "Jane", type: "person", fields: { passportExpiration: "2030-03-02" },
+    }]);
+    const [series] = seriesFromDateRules([rule]);
+    // The delete path used to assume a profile-sourced date was a birthday, so
+    // removing this would have wiped Jane's date of birth and left it in place.
+    expect(series.source.field).toBe("passportExpiration");
+  });
+});
+
+describe("a corrected spelling wins over a stale one", () => {
+  it("derives the correction, not the date it replaced", () => {
+    // `{...existing, ...incoming}` keeps existing keys in position, so the
+    // stale spelling comes first — and keeping the first meant the correction
+    // was never derived.
+    const rules = rulesFromProfiles([{
+      id: "p1", name: "Jane", type: "person",
+      fields: { birthday: "1994-07-10", dateOfBirth: "1994-07-11" },
+    }]);
+    expect(rules.filter(r => r.ruleType === "birthday")).toHaveLength(1);
+    expect(rules[0].date).toBe("1994-07-11");
   });
 });

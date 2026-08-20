@@ -247,10 +247,25 @@ async function deleteSourceRecord(
       await apiRequest("DELETE", `/api/tasks/${id}`);
       return;
     case "profile": {
-      // Clear the date field, never the profile. Deleting Joe because you
+      // Clear THE date field, never the profile. Deleting Joe because you
       // wanted his birthday off the calendar would be catastrophic.
-      const key = series?.kind === "anniversary" ? "anniversary" : "birthday";
-      await apiRequest("PATCH", `/api/profiles/${id}`, { fields: { [key]: null } });
+      //
+      // And clear the RIGHT one. A profile-sourced series used to be a birthday
+      // or an anniversary and nothing else; it can now be any date a person
+      // carries — a licence, a passport, a warranty. Guessing "birthday" for
+      // all of them wiped the person's date of birth and left the expiration
+      // exactly where it was.
+      const field = series?.source?.field
+        || (series?.kind === "anniversary" ? "anniversary" : "birthday");
+      if (field.includes(".")) {
+        // A nested group: send the group with that one key cleared.
+        const [group, ...rest] = field.split(".");
+        await apiRequest("PATCH", `/api/profiles/${id}`, {
+          fieldsToDelete: [field], fields: { [group]: { [rest.join(".")]: null } },
+        });
+        return;
+      }
+      await apiRequest("PATCH", `/api/profiles/${id}`, { fields: { [field]: null } });
       return;
     }
     case "liability":
