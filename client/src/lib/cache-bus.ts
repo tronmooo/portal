@@ -75,6 +75,11 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/ai-digest"],
     ["/api/activity"],
     ["/api/goals"], // goals can auto-update from tracker entries
+    // Habit ↔ tracker link (2026-08-20): logging an entry to a tracker
+    // advances any habit linked to it (server/habit-tracker-sync.ts), so a
+    // manual log on the Trackers page must refresh the Habits ring too —
+    // otherwise the habit shows pre-log progress until an unrelated refetch.
+    ["/api/habits"],
   ],
   profiles: [
     ["/api/profiles"],

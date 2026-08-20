@@ -46,7 +46,8 @@ import {
 import { createHash, randomUUID } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
-import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
+import { trackerNamesMatch, trackerNameContains, trackerIdentityKey, findIdentityMatches } from "@shared/tracker-identity";
+import { detectHabitMetric, UMBRELLA_TRACKER_NAMES } from "@shared/habit-metric";
 import { matchHabitByName } from "@shared/habit-match";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
@@ -3627,7 +3628,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- CRUD: Habits ---
   {
     name: "create_habit",
-    description: "Create a new habit — ONLY when the user EXPLICITLY asks for a recurring habit/routine ('make this a habit', 'add a habit to meditate', 'remind me to stretch every day'). A past-tense activity report ('I took a shower', 'I smoked a blunt', 'I went to the bathroom') is NEVER a habit — log it with log_tracker_entry. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).\n\nHabits are COUNT-BASED, not binary: a habit that happens N times a day is ONE habit with dailyTarget:N, and each check-in counts toward that target. 'Walk the dog twice a day' → create_habit(name:'Walk the Dog', dailyTarget:2) — ONE call. NEVER create two habits for a twice-daily routine, and NEVER tell the user habits are limited to a single daily check-off; that limitation does not exist. Only split into separate habits when the user explicitly asks for separate ones (e.g. 'make a morning walk habit and an evening walk habit').",
+    description: "Create a new habit — ONLY when the user EXPLICITLY asks for a recurring habit/routine ('make this a habit', 'add a habit to meditate', 'remind me to stretch every day'). A past-tense activity report ('I took a shower', 'I smoked a blunt', 'I went to the bathroom') is NEVER a habit — log it with log_tracker_entry. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).\n\nHabits are COUNT-BASED, not binary: a habit that happens N times a day is ONE habit with dailyTarget:N, and each check-in counts toward that target. 'Walk the dog twice a day' → create_habit(name:'Walk the Dog', dailyTarget:2) — ONE call. NEVER create two habits for a twice-daily routine, and NEVER tell the user habits are limited to a single daily check-off; that limitation does not exist. Only split into separate habits when the user explicitly asks for separate ones (e.g. 'make a morning walk habit and an evening walk habit').\n\nNO CALENDAR, EVER: a habit's schedule ('daily', '3x/week', 'every morning') is INTERNAL habit recurrence — never also call create_event, create_task, or any calendar tool for it. The Habits page is where it lives. Only a SEPARATE, explicit request for a calendar item/reminder gets one.\n\nMEASURABLE HABITS LINK TO A TRACKER — the server handles this automatically: if the habit measures something ('drink 64 oz water', 'run 3 miles'), the server finds a compatible existing tracker (or creates one) and links it, so logging to that tracker advances the habit's progress. Set linkTracker to steer it; do NOT also call create_tracker yourself.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3642,6 +3643,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "bedtime", "anytime"], description: "When during the day the habit should occur. Infer from phrasing like 'in the morning', 'after lunch' (afternoon), 'this evening', 'before bed' (bedtime)." },
         scheduledTime: { type: "string", description: "Optional precise time in 24h HH:MM (e.g. '08:00', '21:30') when the user gives a specific time." },
         forProfile: { type: "string", description: "Name of the profile this habit belongs to. ALWAYS set when the user mentions a specific person or pet." },
+        linkTracker: { type: "string", description: "OPTIONAL: name of the TRACKER that measures this habit, when the habit is measurable ('Drink 64 oz water daily' → 'Hydration'; 'Run 3 miles 3x/week' → 'Running'). The server reuses/expands a compatible existing tracker (never a duplicate — 'Water' reconnects to an existing Hydration tracker; a running habit can expand an existing Exercise tracker) or creates one, then links habit ↔ tracker so tracker logs advance the habit's progress. Pass 'none' for a completion-only habit with nothing to measure ('make my bed', 'call mom') — do NOT manufacture a pointless tracker. Omit to let the server decide. NEVER call create_tracker yourself for a habit." },
       },
       required: ["name"],
     },
@@ -4641,7 +4643,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Query tools: calendar, expenses, tasks ---
   {
     name: "query_calendar",
-    description: "Query the unified calendar timeline for a date range. Returns events, tasks with due dates, habit schedules, and obligation due dates. Use when user asks 'am I free Friday?', 'what's on my calendar next week?', 'show my schedule for tomorrow', 'any appointments this week?'.",
+    description: "Query the unified calendar timeline for a date range. Returns events, tasks with due dates, and obligation due dates. Habits are NOT on the calendar — their schedules are internal to the Habits page (use get_summary type:'habits' for those). Use when user asks 'am I free Friday?', 'what's on my calendar next week?', 'show my schedule for tomorrow', 'any appointments this week?'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -5176,6 +5178,9 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 - update: update_habit(name, changes)
 - delete: delete_habit(name)
 - DUPLICATE FOR ANOTHER PROFILE: "give Luna the same water habit" / "duplicate this habit for Mike" → read the existing habit (its frequency/schedule), then create_habit with the SAME name+schedule and forProfile set to the target. Habits are profile-exclusive — never just add the second profile to the existing habit's links.
+- HABITS NEVER TOUCH THE CALENDAR. A habit's schedule/frequency ("daily", "3x/week", "every morning at 7") is internal habit recurrence and progress logic — NEVER interpret it as a calendar date, event, reminder, or recurring calendar rule. Never pair create_habit with create_event or create_task for the same routine. The single exception: the user separately and EXPLICITLY asks for a calendar item/reminder on top of the habit.
+- HABIT ↔ TRACKER LINK: a MEASURABLE habit gets a linked tracker automatically — create_habit's result may carry __linkedTracker; when it does, tell the user the habit is connected to that tracker (and whether the tracker was created or an existing one was reused). "Drink 64 oz water daily" → Water habit + Hydration tracker; logging water then advances BOTH. "Run 3 miles 3x/week" → Running habit + a Running (or existing Exercise) tracker — one activity record updates both. "Make my bed every morning" → habit ONLY: nothing to measure beyond completion, so no tracker is created. Steer with linkTracker (a tracker name, or 'none'); NEVER call create_tracker alongside create_habit — the server reuses or creates the tracker itself, and never duplicates one that exists.
+- TRACKING ≠ HABIT: a tracker never implies a habit. Users track weight, mood, expenses, sleep without any habit — never create a habit because a tracker exists or is being logged to, and never create a tracker "to go with" a non-measurable habit.
 
 ━━━ GOAL CRUD ━━━
 - PROJECTS ARE GOALS: "create a project called X" / "my kitchen remodel project" / "add X to my projects" → the Goals module IS the projects list. create_goal(title, type:"custom"), update_goal, delete_goal. Never create a tracker/artifact for a "project".
@@ -5334,8 +5339,14 @@ edited. Create an event only for something that has no other record.
 
 HABITS ARE THE ONE EXCEPTION, ON PURPOSE. A habit repeats but is NOT a calendar
 date — it is a practice with a streak, scheduled and checked off on the Habits
-page. Never create a calendar event or a recurring task to "put a habit on the
-calendar"; the habit record alone is correct and complete.
+page. Habit schedules ("daily", "3x/week", "every morning") are INTERNAL habit
+recurrence/progress logic and must NEVER be interpreted as calendar dates,
+events, reminders, or recurring calendar rules — a "daily" habit must not
+litter the calendar with an entry per day. Never create a calendar event or a
+recurring task to "put a habit on the calendar"; the habit record alone is
+correct and complete. The ONLY exception: the user separately and EXPLICITLY
+asks for a calendar item/reminder in addition to the habit ("and put a 7am
+reminder on my calendar") — then, and only then, create that one item.
 
 ONE MESSAGE CAN CREATE SEVERAL OBJECTS. "Journal this: I had a stressful day.
 Remind me to call my landlord tomorrow." is a journal entry AND a task. Never
@@ -5489,8 +5500,8 @@ Ownership decides which balance sheet an asset lands on, whose totals it counts 
 DATA CLASSIFICATION RULES (NEVER VIOLATE):
 - MEDICATION: When a user mentions a NEW/prescribed medication ("prescribed lisinopril", "Max is on Heartgard now"), update the PROFILE with medication info in their health fields (update_profile with fields: { medications: "..." }). Do NOT create a "Medication" tracker unless the user asks to track doses over time.
 - MEDICATION DOSES: "I took my Lisinopril" / "gave Max his pill" → log_medication_dose. "I skipped/forgot tonight's dose" → skip_medication_dose (missed:true when forgotten). "what doses did I miss this week" / "how's my adherence" → get_missed_doses. "show my dose history" / "when did I last take it" → get_dose_history. These need a medication TRACKER; if none exists, say so and offer to create one. If the user has several medications and didn't name one, the tool will ask — relay its question.
-- WATER INTAKE / HYDRATION: If a user says "drank 8 glasses of water" or "8oz water", log to the existing Hydration/Water tracker if one exists. If none exists, create a habit ("Drink water") rather than a tracker — daily water goals are habits, not measurements.
-- HABITS vs TRACKERS: Habits are recurring actions with a per-day COUNT (dailyTarget 1-10, multiple check-ins per day, optional scheduled time). Trackers are numeric measurements over time. "Take medication" = habit. "Blood pressure 120/80" = tracker. "Drank 8 glasses" = habit check-in. "Weight 180 lbs" = tracker. Habits are NOT binary — never describe them as a single yes/no check-off.
+- WATER INTAKE / HYDRATION: "drank 8 glasses of water" / "8oz water" is an ACTIVITY REPORT → log_tracker_entry to the Hydration/Water tracker (reuse it if it exists; it is auto-created otherwise). If a water habit is LINKED to that tracker, the log advances the habit's progress automatically — never also call checkin_habit for the same drink. A water HABIT ("drink 64 oz daily", "make drinking water a habit") is created only on explicit habit language, and gets its tracker linked by the server.
+- HABITS vs TRACKERS: a HABIT records consistency — a recurring behaviour with a per-day COUNT (dailyTarget 1-10, streaks, optional scheduled time). A TRACKER records the measurement — richer data over time (a running tracker holds distance, duration, pace, intensity; the habit only cares whether today's goal was satisfied). "Take medication" = habit. "Blood pressure 120/80" = tracker. "Weight 180 lbs" = tracker, and needs NO habit. Habits are NOT binary — never describe them as a single yes/no check-off. Measurable habits are LINKED to their tracker (server-managed); completion-only habits ("make my bed") have no tracker and must not get one.
 - LOANS/BILLS: When a user mentions rent, bills, or debts, use create_obligation. Do NOT create a "loan" profile for recurring bills. Loans are only for actual loan instruments (mortgage, car loan, student loan) with APR, term, and principal.
 
 LIABILITIES — FIRST-CLASS DEBT INSTRUMENTS (CRITICAL — read carefully):
@@ -8045,6 +8056,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, normalizedValues);
+        await annotateLinkedHabitProgress(entry, tracker.id);
         // Only warn about fields we genuinely could NOT make first-class (long
         // free-form text). Fields we just auto-added (sugar, fiber, sodium, …)
         // DO show on the card/chart, so they must not trigger the scary
@@ -8168,7 +8180,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }
         } catch { /* non-fatal */ }
         const { values: nv } = normalizeTrackerEntry(conflictTracker as any, entryValues);
-        return await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        const conflictEntry = await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        await annotateLinkedHabitProgress(conflictEntry, conflictTracker.id);
+        return conflictEntry;
       }
 
       // PER-PERSON TRACKERS: each tracker is owned by exactly ONE profile.
@@ -10069,7 +10083,86 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       // Also run general auto-link for text-based matching
       await autoLinkToProfiles("habit", habit.id, `${input.name || ""} ${input.forProfile || ""}`, input.forProfile);
-      return await storage.getHabit(habit.id) || habit;
+
+      // ─── HABIT ↔ TRACKER LINK (user directive 2026-08-20) ───────────────
+      // A habit records consistency; its tracker records the measurement.
+      // A MEASURABLE habit ("drink 64 oz water daily", "run 3 miles 3x/week")
+      // gets linked to the tracker that measures it — reusing/expanding an
+      // existing compatible tracker (never a duplicate: "Water" reconnects to
+      // an existing Hydration tracker; a Running habit expands an existing
+      // Exercise tracker) and creating one only when none exists. A
+      // completion-only habit ("make my bed") links to nothing. Logging to
+      // the linked tracker then advances the habit's day progress
+      // (server/habit-tracker-sync.ts). NO calendar coupling anywhere in this
+      // flow: the habit's schedule stays internal to the habit system.
+      let linkedTrackerNote: { id: string; name: string; created: boolean } | null = null;
+      try {
+        const hint = typeof (input as any).linkTracker === "string" ? (input as any).linkTracker.trim() : "";
+        const modelSaysNone = /^(none|no|skip)$/i.test(hint);
+        const metric = modelSaysNone ? null : detectHabitMetric(input.name || "", habitMsg);
+        const candidates: string[] = modelSaysNone ? [] : Array.from(new Set([
+          ...(hint ? [hint] : []),
+          ...(metric ? metric.candidates : []),
+        ]));
+        if (candidates.length > 0) {
+          const allTrackers = await storage.getTrackers();
+          const allProfs = await storage.getProfiles();
+          const selfId = allProfs.find(p => p.type === "self")?.id;
+          const ownerId = targetProfileId || selfId;
+          // Per-person trackers: only reuse a tracker the habit's owner can
+          // log to — theirs or an unowned orphan. Never adopt another
+          // profile's tracker (cross-contamination).
+          const compatible = (t: any) => {
+            const owners: string[] = t.linkedProfiles || [];
+            return owners.length === 0 || (!!ownerId && owners.includes(ownerId));
+          };
+          let linkTracker: any = null;
+          for (const cand of candidates) {
+            const matches = findIdentityMatches(allTrackers, cand).filter(compatible);
+            if (matches.length > 0) { linkTracker = matches[0]; break; }
+          }
+          // Umbrella reuse: an existing general tracker for the same domain
+          // (Exercise absorbing a Running habit) is expanded, not shadowed.
+          if (!linkTracker && metric) {
+            const umbrellas = UMBRELLA_TRACKER_NAMES[metric.category] || [];
+            for (const u of umbrellas) {
+              const matches = findIdentityMatches(allTrackers, u).filter(compatible);
+              if (matches.length > 0) { linkTracker = matches[0]; break; }
+            }
+          }
+          let createdTracker = false;
+          if (!linkTracker) {
+            const trackerName = candidates[0];
+            const resolved = resolveTrackerCategory(trackerName, { supplied: metric?.category });
+            const fields = (metric?.fields || [{ name: "amount", type: "number" as const, isPrimary: true }])
+              .map(f => ({ name: f.name, type: f.type, ...(f.unit ? { unit: f.unit } : {}), ...(f.isPrimary ? { isPrimary: true } : {}) }));
+            linkTracker = await storage.createTracker({
+              name: trackerName,
+              category: resolved.category,
+              fields,
+              ...(ownerId ? { linkedProfiles: [ownerId] } : {}),
+            } as any);
+            createdTracker = true;
+          }
+          if (linkTracker?.id) {
+            await storage.updateHabit(habit.id, { linkedTrackerId: linkTracker.id } as any);
+            linkedTrackerNote = { id: linkTracker.id, name: linkTracker.name, created: createdTracker };
+            logger.info("ai", `Habit "${habitName}" linked to ${createdTracker ? "NEW" : "existing"} tracker "${linkTracker.name}" (${linkTracker.id})`);
+          }
+        }
+      } catch (linkErr: any) {
+        // The habit itself is saved; a failed link must never fail the create.
+        logger.warn("ai", `Habit↔tracker link for "${habitName}" failed: ${linkErr?.message || linkErr}`);
+      }
+
+      const createdHabit = await storage.getHabit(habit.id) || habit;
+      if (linkedTrackerNote) {
+        (createdHabit as any).__linkedTracker = linkedTrackerNote;
+        (createdHabit as any).__linkedTrackerNote = linkedTrackerNote.created
+          ? `Created the "${linkedTrackerNote.name}" tracker and linked it to this habit — logging to that tracker will also advance the habit's daily progress. Mention BOTH to the user. No calendar events were created (habit schedules never go on the calendar).`
+          : `Linked this habit to the EXISTING "${linkedTrackerNote.name}" tracker (no duplicate created) — logging to that tracker will also advance the habit's daily progress. Mention the link to the user. No calendar events were created (habit schedules never go on the calendar).`;
+      }
+      return createdHabit;
     }
 
     case "checkin_habit": {
@@ -13138,6 +13231,32 @@ async function buildReportSpec(input: Record<string, any>): Promise<ReportSpec> 
 // ============================================================
 // AUTO-UPDATE GOAL PROGRESS when tracker entries are logged
 // ============================================================
+
+/**
+ * Habit ↔ tracker link: the storage layer already advanced any habit linked to
+ * this tracker when the entry landed (server/habit-tracker-sync.ts). This
+ * annotates the tool RESULT with the habits' post-entry day progress so the
+ * model's reply can say "that also puts your water habit at 2 of 4" instead of
+ * silently moving a streak the user never hears about.
+ */
+async function annotateLinkedHabitProgress(entry: any, trackerId: string): Promise<void> {
+  if (!entry || typeof entry !== "object" || (entry as any).error) return;
+  try {
+    const habits = await storage.getHabits();
+    const linked = habits.filter(h => (h as any).linkedTrackerId === trackerId);
+    if (linked.length === 0) return;
+    const tz = aiUserTimezone();
+    const when = entry.timestamp ? new Date(entry.timestamp) : new Date();
+    const dateStr = toLocalDateStr(isNaN(when.getTime()) ? new Date() : when, tz);
+    const lines = linked.map(h => {
+      const p = habitDayProgress(h as any, dateStr);
+      return `"${h.name}" habit: ${p.label}${p.isComplete ? " — day complete" : ""}`;
+    });
+    entry.habitProgressNote =
+      `This tracker is LINKED to a habit — the entry also advanced its progress for ${dateStr}: ${lines.join("; ")}. ` +
+      `Mention this to the user (e.g. "logged and your habit is now at ...").`;
+  } catch { /* annotation is best-effort */ }
+}
 
 async function autoUpdateGoalProgress(trackerId: string, values: Record<string, any>): Promise<void> {
   try {

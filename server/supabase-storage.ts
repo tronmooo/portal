@@ -83,6 +83,7 @@ import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { parseRecurringMeta } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
+import { autoCheckinLinkedHabits } from "./habit-tracker-sync";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
   type Profile, type InsertProfile,
@@ -1087,6 +1088,7 @@ export class SupabaseStorage implements IStorage {
       scheduledTime: r.scheduled_time || undefined,
       currentStreak: live.current, longestStreak: Math.max(live.longest, r.longest_streak || 0),
       linkedProfiles: r.linked_profiles || [],
+      linkedTrackerId: r.linked_tracker_id || undefined,
       checkins, createdAt: r.created_at,
     };
   }
@@ -2957,6 +2959,11 @@ export class SupabaseStorage implements IStorage {
     }
     bustInsightsCacheFor(this.userId); // [P0] new entry → recompute insights
     this.logActivity("tracker", `Logged ${tracker.name}`);
+    // Habit ↔ tracker link: one activity record updates both. Advances any
+    // habit linked to this tracker by one completion for the entry's day
+    // (best-effort — see server/habit-tracker-sync.ts). Skipped on the dedup
+    // early-return above: a retried HTTP request must not double-advance.
+    await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: ts, values, timezone: this._timezone });
     // Return the DATABASE's version of the row, not our intended one.
     return this.rowToTrackerEntry(inserted);
   }
@@ -4516,6 +4523,7 @@ export class SupabaseStorage implements IStorage {
       scheduled_time: (data as any).scheduledTime || null,
       current_streak: 0, longest_streak: 0,
       linked_profiles: linkedProfiles,
+      linked_tracker_id: (data as any).linkedTrackerId || null,
       created_at: now,
     });
     if (error) throw error;
@@ -4582,6 +4590,7 @@ export class SupabaseStorage implements IStorage {
       start_date: merged.startDate || null, end_date: merged.endDate || null,
       time_of_day: merged.timeOfDay || null,
       scheduled_time: merged.scheduledTime || null,
+      linked_tracker_id: merged.linkedTrackerId || null,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a

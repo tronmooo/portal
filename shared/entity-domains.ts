@@ -82,9 +82,13 @@ export const ENTITY_DOMAINS: Record<EntityType, Domain[]> = {
   expense: ["expenses"],
   income: ["incomes"],
   event: ["events"],
-  habit: ["habits"],
+  // habit ↔ tracker link (2026-08-20): create_habit can create AND link the
+  // tracker that measures the habit, and a tracker entry advances any habit
+  // linked to its tracker — so each side's writes ripple into the other's
+  // cache, or the Habits ring / Trackers list shows pre-write data.
+  habit: ["habits", "trackers"],
   tracker: ["trackers"],
-  trackerEntry: ["trackers"],
+  trackerEntry: ["trackers", "habits"],
   goal: ["goals"],
   profile: ["profiles", "assets", "liabilities", "people"],
   obligation: ["obligations", "liabilities"],
@@ -154,7 +158,8 @@ export const ACTION_TYPE_DOMAINS: Record<string, Domain[]> = {
   create_liability: ["liabilities", "profiles", "obligations"],
   revalue_asset: ENTITY_DOMAINS.profile,
   create_tracker: ["trackers"],
-  log_entry: ["trackers"],
+  // log_entry can advance a habit linked to the tracker (habit-tracker-sync).
+  log_entry: ["trackers", "habits"],
   update_tracker_entry: ["trackers"],
   delete_tracker_entry: ["trackers"],
   create_task: ["tasks"],
@@ -166,7 +171,7 @@ export const ACTION_TYPE_DOMAINS: Record<string, Domain[]> = {
   create_event: ["events"],
   complete_event: ["events"],
   create_goal: ["goals"],
-  create_habit: ["habits"],
+  create_habit: ["habits", "trackers"],
   checkin_habit: ["habits"],
   uncomplete_habit: ["habits"],
   delete_habit: ["habits"],

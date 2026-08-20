@@ -479,6 +479,17 @@ export interface Habit {
   endDate?: string;
   timeOfDay?: HabitTimeOfDay; // Scheduled slot; editable from the habit profile
   scheduledTime?: string; // "HH:MM" (24h) when timeOfDay is "custom" or a precise time is set
+  /**
+   * Optional link to the Tracker that MEASURES this habit. A habit records
+   * consistency (was the day's target met); its tracker records the richer
+   * data (ounces, miles, duration, intensity). Logging an entry to the linked
+   * tracker advances the habit's progress for that day (see
+   * server/habit-tracker-sync.ts). Absent for completion-only habits ("make my
+   * bed") — those measure nothing beyond the check-in itself. A habit's
+   * schedule lives entirely in the habit system: neither the habit nor its
+   * tracker ever creates calendar events or recurring calendar rules.
+   */
+  linkedTrackerId?: string | null;
   currentStreak: number;
   longestStreak: number;
   checkins: HabitCheckin[];
@@ -514,6 +525,8 @@ export const insertHabitSchema = z.object({
   // not just leave it unset (undefined).
   timeOfDay: z.enum(["morning", "afternoon", "evening", "bedtime", "anytime"]).nullable().optional(),
   scheduledTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM (24h)").nullable().optional(),
+  // Nullable so a PATCH can unlink a habit from its tracker (send null).
+  linkedTrackerId: z.string().nullable().optional(),
 });
 
 export type InsertHabit = z.input<typeof insertHabitSchema>;

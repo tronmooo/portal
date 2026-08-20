@@ -155,7 +155,10 @@ CREATE TABLE public.habits (
   status text DEFAULT 'active'::text,
   deleted_at timestamptz,
   time_of_day text,
-  scheduled_time text
+  scheduled_time text,
+  start_date text,
+  end_date text,
+  linked_tracker_id uuid
 );
 
 -- NOTE: linked_profiles here is text[], not jsonb.

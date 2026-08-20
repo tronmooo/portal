@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { autoCheckinLinkedHabits } from "./habit-tracker-sync";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
@@ -1179,6 +1180,10 @@ export class MemStorage implements IStorage {
         `tracker "${tracker.name}" (${data.trackerId}) after logging.`
       );
     }
+    // Habit ↔ tracker link: one activity record updates both. Advances any
+    // habit linked to this tracker by one completion for the entry's day
+    // (best-effort — see server/habit-tracker-sync.ts).
+    await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: stored.timestamp, values: stored.values });
     return stored;
   }
   async getTrackerEntry(entryId: string): Promise<TrackerEntry | undefined> {
