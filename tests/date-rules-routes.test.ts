@@ -503,3 +503,43 @@ describe("a birthday with no profile to route it to", () => {
     expect(db.profiles[0].fields.dateOfBirth).toBe("1994-07-10");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a birthday confirmed under an alias spelling", () => {
+  it("is still recognised as owned by the profile", async () => {
+    // `dob` routes to `dateOfBirth`, so comparing the raw key never matched —
+    // and a standalone event was written and tagged `date-rule-uncovered`,
+    // which exempts it from the shadow pass, leaving a permanent duplicate.
+    const { api, db } = await boot({
+      documents: [{ id: "doc-1", name: "License", type: "drivers_license", extractedData: {}, linkedProfiles: ["jane-1"], tags: [] }],
+    });
+    await api("POST", "/api/chat/confirm-extraction", {
+      extractionId: "doc-1",
+      targetProfileId: "jane-1",
+      confirmedFields: [{ key: "dob", value: "07/10/1994" }],
+      createCalendarEvents: [
+        { field: "dob", date: "1994-07-10", title: "Date Of Birth", category: "other" },
+      ],
+    });
+    expect(db.events).toHaveLength(0);
+    expect(db.profiles[0].fields.dateOfBirth).toBe("1994-07-10");
+  });
+});
+
+describe("one record, several dates, all of them visible", () => {
+  it("gives each its own rule id on the timeline", async () => {
+    const { api } = await boot({
+      profiles: [{
+        ...JANE,
+        fields: { dateOfBirth: "1994-07-10", passportExpiration: `${YEAR + 3}-03-02` },
+      }],
+    });
+    const cal = await api("GET", `/api/calendar/timeline?${RANGE}`);
+    const ruleIds = new Set(cal.data.map((i: any) => i.meta?.ruleId).filter(Boolean));
+    // Both dates share a sourceId (the person), so anything claiming rows on
+    // that alone kept only one of them.
+    expect(ruleIds.size).toBe(2);
+    expect(new Set(cal.data.map((i: any) => i.sourceId))).toEqual(new Set(["jane-1"]));
+  });
+});

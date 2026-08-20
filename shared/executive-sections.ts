@@ -456,8 +456,13 @@ export function buildExecutiveSections(
     // birthday has `sourceId` of `profile:<id>:birthday` — not an event id —
     // so offering Done on one would PATCH /api/events/profile:… and 404.
     const canMarkDone = parseRecurringMeta(e.meta?.tags).isRecurringDate;
+    // Claimed on the RULE when the item has one. Date-Rule timeline items all
+    // carry the source ENTITY as their sourceId, so a person with a birthday
+    // and a licence expiration emitted two items claiming `event:<profileId>`
+    // — and all but the first were dropped from every section.
+    const claimKey = e.meta?.ruleId ? `rule:${e.meta.ruleId}` : `event:${e.sourceId || e.id}`;
     cand.importantDates.push({
-      key: `event:${e.id}`, sourceKey: `event:${e.sourceId || e.id}`, kind: "event",
+      key: `event:${e.id}`, sourceKey: claimKey, kind: "event",
       title: e.title || "Occasion",
       reason: [kindLabel, du === 0 ? "Today" : dayLabel(du)].filter(Boolean).join(" · "),
       tier: du === 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",

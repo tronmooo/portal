@@ -2663,7 +2663,12 @@ ${JSON.stringify(ctx, null, 2)}`;
               // document does not derive a birthday, so suppressing that
               // event on "a profile id existed" alone lost the date whenever
               // the profile write failed.
-              for (const k of savedKeys) profileSavedKeys.add(normalizeFieldKey(k));
+              // By field IDENTITY, not by spelling: a field confirmed as `dob`
+              // is routed to `dateOfBirth`, so comparing the raw key never
+              // matched — and a standalone birthday event was written and
+              // tagged `date-rule-uncovered`, which exempts it from the shadow
+              // pass, leaving a permanent duplicate of the derived rule.
+              for (const k of savedKeys) profileSavedKeys.add(fieldIdentity(k));
               log.info(`[confirm-extraction] Routed ${savedKeys.length}/${confirmedKeys.length} fields to profile ${profile.name}${unsavedKeys.length > 0 ? ` (FAILED: ${unsavedKeys.join(", ")})` : ""}`);
 
               // Link the document to the profile
@@ -2724,7 +2729,7 @@ ${JSON.stringify(ctx, null, 2)}`;
             // nowhere, so suppressing the event left the date on no surface
             // while the response reported success.
             const derivedByTheDocument = cls.ruleType !== "birthday" && cls.ruleType !== "anniversary";
-            const derivedByTheProfile = profileSavedKeys.has(key)
+            const derivedByTheProfile = profileSavedKeys.has(fieldIdentity(event.field))
               && (cls.ruleType === "birthday" || cls.ruleType === "anniversary");
             const covered = persistedFieldValues.has(key)
               && !!bareDateOf(persistedFieldValues.get(key))

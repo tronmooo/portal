@@ -276,25 +276,39 @@ export function computeAttention(
   }
 
   // ── Expiring documents ─────────────────────────────────────────────────────
-  // One row per DOCUMENT, not per expiring field: a card with both an
-  // expiration_date and a valid_until is still one thing to go renew.
+  // One row per DATE RULE.
+  //
+  // It used to be one row per record — "a card with both an expiration_date and
+  // a valid_until is still one thing to go renew" — but two spellings of one
+  // date now collapse in the rule engine, and what reaches here instead is a
+  // record that can genuinely carry SEVERAL different dates: a person with a
+  // passport and a licence, a vehicle with insurance and registration. Keyed on
+  // the record they collapsed to whichever expired first.
+  //
+  // The key also has to match `shared/executive-sections`, which moved to the
+  // rule: with different sourceKeys the claim loop cannot tell they are the
+  // same row, and an expired licence rendered in Immediate Attention AND under
+  // Documents. And a snooze taken by rule id stopped suppressing this one.
   {
     const snoozed = new Set(input.snoozedDocumentIds || []);
     const bestByDoc = new Map<string, { doc: any; du: number }>();
     for (const d of input.documents || []) {
       const id = d?.documentId || d?.id;
-      if (!id || snoozed.has(id)) continue;
+      if (!id) continue;
+      if (snoozed.has(d?.ruleId) || snoozed.has(id)) continue;
       const du = typeof d.daysUntil === "number" ? d.daysUntil : daysBetween(today, d.expirationDate);
       if (du == null || du > cfg.docsWithinDays) continue;
-      const prev = bestByDoc.get(id);
-      if (!prev || du < prev.du) bestByDoc.set(id, { doc: d, du });
+      const groupKey = d?.ruleId || id;
+      const prev = bestByDoc.get(groupKey);
+      if (!prev || du < prev.du) bestByDoc.set(groupKey, { doc: d, du });
     }
-    for (const [id, { doc, du }] of bestByDoc) {
+    for (const [groupKey, { doc, du }] of bestByDoc) {
+      const id = doc?.documentId || doc?.id || groupKey;
       const name = doc.documentName || doc.name || doc.fieldName || "Document";
       const critical = CRITICAL_DOC.test(`${name} ${doc.documentType || ""} ${doc.fieldName || ""}`);
       claim({
-        key: `doc:${id}`,
-        sourceKey: `document:${id}`,
+        key: `doc:${groupKey}`,
+        sourceKey: `document:${groupKey}`,
         kind: "document",
         title: name,
         reason: du < 0
@@ -303,7 +317,9 @@ export function computeAttention(
         tier: tierOf(du),
         daysUntil: du,
         score: urgencyScore(du) + (critical ? 160 : 20),
-        href: `/documents/${id}`,
+        // An expiration can be carried by a PROFILE as well as by a document,
+        // and `/documents/<profileId>` leads nowhere. The row knows its record.
+        href: String(doc?.href || "").replace(/^#/, "") || `/documents/${id}`,
         action: { kind: "open", label: "Review" },
       });
     }
