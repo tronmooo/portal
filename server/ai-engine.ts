@@ -50,7 +50,7 @@ import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@sha
 import { matchHabitByName } from "@shared/habit-match";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
-import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
+import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, isContextualCompletionReport, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
 import { parseTurnIntent, parseTurnPlan, parseDailyTarget, parseDurationDays, isActionable, type ParsedIntent, type TurnIntentPlan } from "@shared/ai-intent";
 import {
   checkToolAgainstIntent,
@@ -5212,6 +5212,7 @@ When the user attaches a clock time or date to an action, pass it via the at par
 - ESTIMATE HONESTY: the tool result's estimateNote lists derived/estimated values. Reply like "Logged a 1-mile walk — about 2,150 steps and ~20 minutes based on your walking history." NEVER present an estimated number as something the user said, and NEVER invent numbers not in the tool result.
 - Explicit user values are never overwritten by estimates: "1 mile and 2,400 steps" saves BOTH exactly as given.
 - ACTIVITY ≠ HABIT: "I did / I took / I smoked / I went / I played" are ACTIVITY REPORTS → log_tracker_entry, ALWAYS — even when a habit with a similar name exists (on any profile). NEVER call checkin_habit or create_habit for them, never ask "did you mean the habit?", and never derail the rest of the message over a habit. Habits move ONLY on explicit language: "mark off X", "check in X", "completed my X habit", "make this a habit", "every day", "remind me".
+  - THE ONE EXCEPTION — A COMPLETION REPORT ABOUT A HABIT ALREADY ON THE TABLE: when the message has no activity to log because its object is a bare pronoun pointing at a habit THIS conversation just created or named ("She already took it today", "he did it this morning", "already done"), that is a CHECK-IN of that habit → checkin_habit(name: that habit, forProfile: that person). Do NOT call log_tracker_entry and do NOT ask what "it" was — you already know. This is only for a habit named in the immediately preceding turns; a pronoun with no such referent still gets a question, never a guess.
 - NEVER DROP DETAILS: every number, unit, duration, count, method, and timestamp the user states MUST appear in the entry ("for an hour" → duration:60; "once" → count:1; "a blunt" → method:"blunt"; "at 8:15 AM" → at:"8:15 AM"). Losing a stated detail is a logging failure.
 - PROFILE OWNERSHIP: entries belong to the user (self) unless THIS message explicitly names someone else ("Rex threw up", "log water for Mom"). NEVER pick a profile from conversation history, from the active dashboard filter chatter, or from which profile happens to own a similar tracker/habit name.
 
@@ -10080,10 +10081,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // bathroom at 8:15 AM") must be a tracker entry — previously it matched
       // ANOTHER PROFILE'S "Go to the bathroom 3x daily" habit and derailed
       // the whole message into a clarifying question.
+      //
+      // The exception is a completion report about something the CONVERSATION
+      // already named — "she already took it today" right after creating her
+      // Multivitamin habit (user report 2026-08-20). A bare pronoun object has
+      // no activity to log to a tracker; it can only mean the habit just
+      // discussed, so it IS a check-in (shared/habit-intent).
       const checkinMsg = String((input as any).__userMessage || "");
-      if (checkinMsg && !hasExplicitHabitCheckinIntent(checkinMsg)) {
+      if (checkinMsg
+        && !hasExplicitHabitCheckinIntent(checkinMsg)
+        && !isContextualCompletionReport(checkinMsg)) {
         return {
-          error: `The user reported an activity, not a habit check-in — do NOT touch habits. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
+          error: `NOTHING WAS RECORDED — the habit was NOT checked in. The user reported an activity, not a habit check-in, so do NOT touch habits and do NOT tell them anything was marked done. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
           code: "NOT_A_HABIT_CHECKIN",
         };
       }

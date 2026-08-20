@@ -59,6 +59,38 @@ export function hasExplicitHabitCheckinIntent(message: string): boolean {
   );
 }
 
+/**
+ * True when the message reports finishing something the CONVERSATION already
+ * named, rather than reporting a new activity — "she already took it today",
+ * "he did it this morning", "already done".
+ *
+ * THE GAP THIS CLOSES (user report 2026-08-20): right after creating a daily
+ * Multivitamin habit for Sarah, the user wrote "She already took it today."
+ * `hasExplicitHabitCheckinIntent` saw no habit word and no "mark", so
+ * checkin_habit bailed with NOT_A_HABIT_CHECKIN and the habit stayed
+ * unchecked — while the model still replied "Marked Sarah's Multivitamin
+ * habit done for today" and then asked what "she" had taken.
+ *
+ * The distinguishing signal is the OBJECT. An activity report names the thing
+ * ("I took a shower", "I went to the bathroom at 8:15") and so has something
+ * to log to a tracker. A bare pronoun ("took IT", "did THAT", "already done")
+ * names nothing — it can only refer to what was just discussed, which is the
+ * habit the model resolved by name. So this is a check-in, not a tracker log.
+ */
+export function isContextualCompletionReport(message: string): boolean {
+  const m = String(message || "").toLowerCase();
+  if (!m) return false;
+  return (
+    // "she already took it today", "he did that this morning", "I had mine"
+    /\b(?:took|take|taken|had|did|does|done|drank|ate|finished|complet(?:e|ed)|got)\s+(?:it|that|this|them|those|one|mine|hers|his|theirs)\b/.test(m) ||
+    // "already done", "it's already complete", "that's taken care of already"
+    /\balready\s+(?:done|complete|completed|taken|finished)\b/.test(m) ||
+    /\b(?:it'?s|that'?s|thats)\s+(?:already\s+)?(?:done|complete|completed|finished)\b/.test(m) ||
+    // "she already did", "they already have" — verb with the object left off
+    /\b(?:i|he|she|they|we)\s+already\s+(?:did|do|took|take|has|have|had)\b/.test(m)
+  );
+}
+
 // ── How many completions did they just report? ──────────────────────────────
 //
 // A habit can require several completions a day, each its own check-in row

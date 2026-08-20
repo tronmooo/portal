@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import {
   hasExplicitHabitCreateIntent,
   hasExplicitHabitCheckinIntent,
+  isContextualCompletionReport,
 } from "@shared/habit-intent";
 
 const EXACT_USER_COMMAND =
@@ -41,6 +42,39 @@ describe("hasExplicitHabitCheckinIntent", () => {
       "keep my streak going for journaling",
     ]) {
       expect(hasExplicitHabitCheckinIntent(msg), msg).toBe(true);
+    }
+  });
+});
+
+// Regression source (user report 2026-08-20, screenshot): right after
+// "Daily morning Multivitamin habit created for Sarah Miller", the user wrote
+// "She already took it today." checkin_habit refused it as an activity report,
+// so the habit stayed unchecked while the reply claimed it was marked done.
+describe("isContextualCompletionReport", () => {
+  it("accepts completion reports whose object is a bare pronoun", () => {
+    for (const msg of [
+      "She already took it today.",
+      "He did it this morning",
+      "I had mine already",
+      "They already did",
+      "already done",
+      "it's already complete",
+      "I took it today",
+    ]) {
+      expect(isContextualCompletionReport(msg), msg).toBe(true);
+    }
+  });
+
+  it("still rejects activity reports that name the activity", () => {
+    for (const msg of [
+      EXACT_USER_COMMAND,
+      "I went to the bathroom at 8:15 AM",
+      "I took a shower once",
+      "I smoked a blunt",
+      "Sarah drank 32 ounces of water today",
+      "I played soccer for an hour",
+    ]) {
+      expect(isContextualCompletionReport(msg), msg).toBe(false);
     }
   });
 });
