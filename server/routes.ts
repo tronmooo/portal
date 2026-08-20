@@ -5715,8 +5715,14 @@ Rules:
       // dedicated column (events, obligations, liabilities, tasks, income).
       // Both halves are presented as rules so callers see one list.
       const fieldRules = rulesFromAll({ profiles, documents });
+      // `documents` must be passed here even though the field-carried rules
+      // above already cover them: `seriesFromAll` uses the documents to work
+      // out which legacy `document-extraction` events are shadows of a date the
+      // record now owns. Passing an empty list left that set empty, so one real
+      // expiration came back as two rules — the derived one and its copy.
+      // The `rule:` series are dropped afterwards, so nothing is counted twice.
       const schedRules = rulesFromSeries(seriesFromAll({
-        profiles, events, obligations, tasks, incomes, documents: [],
+        profiles, events, obligations, tasks, incomes, documents,
       }).filter((s) => !s.id.startsWith("rule:")));
       let rules: DateRule[] = dedupeRules([...fieldRules, ...schedRules]);
       if (profileIds && profileIds.length > 0) {

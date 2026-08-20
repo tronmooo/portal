@@ -477,13 +477,25 @@ export function scanEntityDates(
       if (!cls.actionable) continue;
 
       const id = dateRuleId(ctx.entityType, ctx.entityId, key, cls.ruleType);
-      // One rule per (entity, field, type). A profile carrying both
-      // `dateOfBirth` and `birthday` (extraction writes both) yields ONE
-      // birthday rule, because the first spelling claims the type.
-      const typeKey = `${cls.ruleType}:${cls.ruleSubtype ?? ""}`;
-      if (seen.has(id) || seen.has(typeKey)) continue;
+      // Two spellings of ONE fact collapse; two different facts do not.
+      //
+      // A profile carrying both `dateOfBirth` and `birthday` (extraction writes
+      // both) is one birthday — same type, same VALUE. A vehicle carrying
+      // `autoInsuranceExpiration` and `registrationExpiration` is two dates,
+      // and an earlier version of this key dropped the second because it
+      // compared type alone: with the first present, the second produced no
+      // rule at all.
+      const valueKey = `${cls.ruleType}:${cls.ruleSubtype ?? ""}:${clip(iso)}`;
+      // A person has ONE birthday and ONE anniversary however many spellings
+      // carry it, so those two still collapse on type even when the values
+      // disagree — otherwise a stale `birthday` beside a corrected
+      // `dateOfBirth` would put two birthdays on the calendar.
+      const singletonKey = cls.ruleType === "birthday" || cls.ruleType === "anniversary"
+        ? `singleton:${cls.ruleType}` : "";
+      if (seen.has(id) || seen.has(valueKey) || (singletonKey && seen.has(singletonKey))) continue;
       seen.add(id);
-      seen.add(typeKey);
+      seen.add(valueKey);
+      if (singletonKey) seen.add(singletonKey);
 
       out.push(buildRule({ ...ctx, cls, id, field: key, path: here, raw, iso }));
     }
@@ -717,7 +729,12 @@ export function dedupeRules(rules: readonly DateRule[]): DateRule[] {
   const groups = new Map<string, DateRule[]>();
   for (const r of rules || []) {
     if (!r) continue;
-    const owner = r.profileId || (r.ownerIds || [])[0] || "";
+    // An UNOWNED rule groups under its own record, not under a shared empty
+    // key. Grouping every ownerless rule together made an unlinked "Gym Card"
+    // and an unlinked "Passport" expiring on the same day collide — and since
+    // an absent subtype is treated as compatible with any subtype below, one
+    // of them vanished entirely.
+    const owner = r.profileId || (r.ownerIds || [])[0] || `@${r.sourceEntityType}:${r.sourceEntityId}`;
     const key = `${owner}:${r.ruleType}:${r.date}`;
     const arr = groups.get(key);
     if (arr) arr.push(r); else groups.set(key, [r]);
@@ -909,6 +926,35 @@ const RULE_TYPE_FOR_KIND: Partial<Record<OccurrenceKind, DateRuleType>> = {
  */
 const EXPIRY_STATEMENT = /\bexpir\w*\b|\bvalid (?:un)?til\b|\bgood thru\b/i;
 const AN_ACTION = /\b(renew|call|email|visit|go|going|book|schedule|apply|submit|file|pick ?up|drop ?off|bring|take|mail|send|meet|appointment|appt|reminder|remind|order|replace|update|check|review|pay)\b/i;
+
+/**
+ * True when an event title is nothing but a LABEL for someone's birthday or
+ * anniversary — the shape an auto-generated row has, not the shape a party has.
+ *
+ *   "Joe's Birthday"        → { name: "Joe",  kind: "birthday" }
+ *   "Anniversary"           → { name: "",     kind: "anniversary" }
+ *   "Birthday party at Chuck E Cheese" → null
+ *   "Joe's 40th Birthday Bash"         → null
+ *
+ * The strictness is the point. Redirecting one of these onto a profile
+ * OVERWRITES that person's date of birth, so a false positive is not a
+ * cosmetic miss — it destroys data and swallows the event the user asked for.
+ */
+export function parseBirthdayLabel(
+  title: unknown,
+): { name: string; kind: "birthday" | "anniversary" } | null {
+  const t = String(title ?? "").trim().replace(/\s+/g, " ");
+  if (!t) return null;
+  const m = t.match(/^(?:(.+?)(?:['\u2019]s)?\s+)?(birthday|b-?day|anniversary)$/i);
+  if (!m) return null;
+  const kind = /anniversar/i.test(m[2]) ? "anniversary" : "birthday";
+  const name = (m[1] || "").trim();
+  // "40th Birthday", "Happy Birthday", "My Birthday" are not a person's name.
+  if (name && /^(happy|my|the|a|an|his|her|their|our|your|\d+(st|nd|rd|th)?)$/i.test(name)) {
+    return { name: "", kind };
+  }
+  return { name, kind };
+}
 
 export function isBareExpiryStatement(title: unknown): boolean {
   const t = String(title ?? "").trim();

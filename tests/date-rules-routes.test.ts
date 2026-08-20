@@ -254,3 +254,51 @@ describe("DELETE /api/documents/:id", () => {
     expect(db.events.map((e: any) => e.id)).toEqual(["ev-mine"]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("dates already past are still on the calendar", () => {
+  it("shows an expiration that has already come and gone", async () => {
+    // Generating from today with no lookback returned nothing for these, so an
+    // expired licence and a lease that ended left a month the user was looking
+    // at — the pass this replaced rendered anything inside the range.
+    const { api } = await boot({
+      documents: [{
+        id: "doc-old", name: "Old License", type: "drivers_license",
+        extractedData: { expiration_date: `${YEAR - 1}-02-02` }, linkedProfiles: ["jane-1"], tags: [],
+      }],
+    });
+    const cal = await api("GET", `/api/calendar/timeline?start=${YEAR - 2}-01-01&end=${YEAR + 5}-12-31`);
+    const hit = cal.data.find((i: any) => i.title === "Old License — Expiration");
+    expect(hit).toBeTruthy();
+    expect(hit.date).toBe(`${YEAR - 1}-02-02`);
+  });
+
+  it("shows a birthday earlier in the current year", async () => {
+    const { api } = await boot({
+      profiles: [{ ...JANE, fields: { dateOfBirth: "1994-01-05" } }],
+    });
+    const cal = await api("GET", `/api/calendar/timeline?start=${YEAR}-01-01&end=${YEAR}-12-31`);
+    expect(cal.data.map((i: any) => i.date)).toContain(`${YEAR}-01-05`);
+  });
+});
+
+describe("GET /api/date-rules does not double-count a legacy copy", () => {
+  it("returns one rule for a date that also has an extraction event beside it", async () => {
+    const { api } = await boot({
+      documents: [{
+        id: "doc-1", name: "Sample Driver License", type: "drivers_license",
+        extractedData: { expiration_date: "2034-07-18" }, linkedProfiles: ["jane-1"], tags: [],
+      }],
+      events: [{
+        id: "ev-legacy", title: "⚠️ Expiration Date", date: "2034-07-18",
+        recurrence: "none", linkedProfiles: ["jane-1"], linkedDocuments: ["doc-1"],
+        tags: ["document-extraction"],
+      }],
+    });
+    const r = await api("GET", "/api/date-rules");
+    const onThatDay = r.data.filter((x: any) => x.date === "2034-07-18");
+    expect(onThatDay).toHaveLength(1);
+    expect(onThatDay[0].sourceEntityType).toBe("document");
+  });
+});

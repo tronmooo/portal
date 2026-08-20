@@ -29,6 +29,8 @@ import {
   calendarDelta,
   seriesFromDateRules,
   isBareExpiryStatement,
+  parseBirthdayLabel,
+  dedupeRules,
 } from "../shared/date-rules";
 import { seriesFromAll } from "../shared/calendar-adapters";
 import {
@@ -516,5 +518,107 @@ describe("telling the chat a date vs asking it for an event", () => {
     for (const t of ["House Viewing", "Soccer Game", "Joe's Birthday", ""]) {
       expect(isBareExpiryStatement(t), t).toBe(false);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. Review findings, pinned
+//
+// Each of these was a live defect found by reviewing the change, and every one
+// of them silently DESTROYED or DROPPED a date rather than showing a wrong one.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a birthday label is not a birthday party", () => {
+  it("reads the bare label, and only the bare label", () => {
+    expect(parseBirthdayLabel("Joe's Birthday")).toEqual({ name: "Joe", kind: "birthday" });
+    expect(parseBirthdayLabel("Anniversary")).toEqual({ name: "", kind: "anniversary" });
+    expect(parseBirthdayLabel("Mary Anne's bday")).toEqual({ name: "Mary Anne", kind: "birthday" });
+  });
+
+  it("refuses anything that is an event in its own right", () => {
+    // Redirecting one of these OVERWRITES a person's date of birth and
+    // swallows the event — a false positive here destroys data.
+    for (const t of [
+      "Birthday party at Chuck E Cheese",
+      "Joe's 40th Birthday Bash",
+      "Anniversary dinner at Luigi's",
+      "Buy a birthday present",
+      "Birthday",           // no owner named
+    ]) {
+      const parsed = parseBirthdayLabel(t);
+      expect(parsed?.name || "", t).toBe("");
+    }
+    expect(parseBirthdayLabel("Birthday party at Chuck E Cheese")).toBeNull();
+    expect(parseBirthdayLabel("Joe's 40th Birthday Bash")).toBeNull();
+  });
+
+  it("does not mistake a determiner or an ordinal for a person", () => {
+    for (const t of ["Happy Birthday", "My Birthday", "40th Birthday", "Our Anniversary"]) {
+      expect(parseBirthdayLabel(t)?.name, t).toBe("");
+    }
+  });
+});
+
+describe("two different dates of the same kind are two dates", () => {
+  it("keeps both insurance expirations on one vehicle", () => {
+    // With only a type-level key, the second of these produced NO rule at all.
+    const rules = rulesFromProfiles([{
+      id: "car-1", name: "Honda", type: "vehicle",
+      fields: { autoInsuranceExpiration: "2027-03-01", registrationExpiration: "2028-06-01" },
+    }]);
+    expect(rules.map(r => r.date).sort()).toEqual(["2027-03-01", "2028-06-01"]);
+  });
+
+  it("still collapses two spellings of one birthday", () => {
+    const rules = rulesFromProfiles([{
+      id: "p1", name: "Jane", type: "person",
+      fields: { dateOfBirth: "1994-07-10", birthday: "1994-07-10" },
+    }]);
+    expect(rules.filter(r => r.ruleType === "birthday")).toHaveLength(1);
+  });
+
+  it("keeps ONE birthday even when a stale spelling disagrees", () => {
+    // A corrected `dateOfBirth` beside an un-updated `birthday` is one person's
+    // one birthday, not two.
+    const rules = rulesFromProfiles([{
+      id: "p1", name: "Jane", type: "person",
+      fields: { dateOfBirth: "1994-07-11", birthday: "1994-07-10" },
+    }]);
+    expect(rules.filter(r => r.ruleType === "birthday")).toHaveLength(1);
+  });
+});
+
+describe("unowned records do not eat each other", () => {
+  it("keeps two unlinked documents expiring on the same day", () => {
+    const rules = rulesFromDocuments([
+      { id: "d1", name: "Gym Card", type: "membership", linkedProfiles: [], extractedData: { expiration_date: "2027-05-01" } },
+      { id: "d2", name: "Passport", type: "passport", linkedProfiles: [], extractedData: { expiration_date: "2027-05-01" } },
+    ]);
+    expect(dedupeRules(rules).map(r => r.sourceEntityId).sort()).toEqual(["d1", "d2"]);
+  });
+});
+
+describe("dates in the past are still dates", () => {
+  it("generates an expiration that has already passed, given a lookback", () => {
+    const [rule] = rulesFromDocuments([{
+      id: "d1", name: "License", type: "drivers_license",
+      linkedProfiles: [], extractedData: { expiration_date: "2025-02-02" },
+    }]);
+    const [series] = seriesFromDateRules([rule]);
+    // Future-only generation returned nothing for this, so an expired licence
+    // vanished from a month the user was actually looking at.
+    expect(generateSeriesOccurrences(series, { todayISO: TODAY, horizonDays: 366 })).toHaveLength(0);
+    expect(generateSeriesOccurrences(series, {
+      todayISO: TODAY, horizonDays: 366, lookbackDays: 1000,
+    }).map(o => o.date)).toEqual(["2025-02-02"]);
+  });
+
+  it("generates a birthday earlier in the current year", () => {
+    const [rule] = rulesFromProfiles([{ id: "p1", name: "Jane", type: "person", fields: { dateOfBirth: "1994-02-11" } }]);
+    const [series] = seriesFromDateRules([rule]);
+    const dates = generateSeriesOccurrences(series, {
+      todayISO: TODAY, horizonDays: 366, lookbackDays: 400,
+    }).map(o => o.date);
+    expect(dates).toContain("2026-02-11");
   });
 });

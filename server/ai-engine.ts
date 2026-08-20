@@ -65,8 +65,7 @@ import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollo
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
-import { inferKindFromText } from "@shared/calendar-adapters";
-import { classifyDateField, isBareExpiryStatement } from "@shared/date-rules";
+import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel } from "@shared/date-rules";
 import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
@@ -2510,7 +2509,13 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         // screenshot was exactly that copy. What remains is the genuinely
         // uncovered case: a date the classifier does not recognise, which has
         // no source field to be derived from and so does need an event.
-        if (hasDate && !classifyDateField(key, docType).actionable) {
+        // `/valid|issued|administered/` stays suppressed explicitly. Those keys
+        // classify as informational, so the actionable test alone would let
+        // them through — and "add `dateAdministered` to the calendar?" is the
+        // clutter this branch has always been careful to avoid.
+        if (hasDate
+          && !classifyDateField(key, docType).actionable
+          && !/valid|issued|administered/i.test(key)) {
           suggestedEvent = `📅 ${label}`;
         }
 
@@ -9503,8 +9508,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           const subject = evtTitle
             .replace(/\b(expir\w*|renew\w*|valid until|good thru|date|on)\b/gi, " ")
             .replace(/\s+/g, " ").trim();
-          const target = (input.forProfile && matchProfileByName(profs, input.forProfile))
-            || profs.find((p: any) => p.type === "self");
+          // No self-fallback. Guessing the owner of an expiration writes a
+          // field onto whoever happens to be the primary person AND swallows
+          // the event the user asked for; with no named target, an event is
+          // the honest answer.
+          const target = input.forProfile ? matchProfileByName(profs, input.forProfile) : null;
           if (target) {
             // Name the field for what it holds, so the rule engine can classify
             // it and the profile reads sensibly: "Driver's License Expiration".
@@ -9515,8 +9523,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             const field = prefix ? `${prefix}Expiration` : "expirationDate";
             const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
             const existing: Record<string, any> = (target as any).fields || {};
+            // Merge onto the profile's existing fields, as every other
+            // updateProfile caller does. Passing the single canonicalized field
+            // alone replaces `fields` wholesale in the in-memory storage.
             await storage.updateProfile(target.id, {
-              fields: canonicalizeProfileFields({ [field]: iso }, existing).fields,
+              fields: { ...existing, ...canonicalizeProfileFields({ [field]: iso }, existing).fields },
             } as any);
             const updatedProfile = await storage.getProfile(target.id);
             logger.info("ai", `"${evtTitle}" is an expiration — saved to ${target.name}.${field}; the important date is derived from it`);
@@ -9532,22 +9543,31 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
       {
-        const evtKind = inferKindFromText(input.title, input.category);
-        if (evtKind === "birthday" || evtKind === "anniversary") {
+        // THREE conditions, all required, because the write here OVERWRITES a
+        // person's date of birth:
+        //
+        //   1. the title is a bare LABEL ("Joe's Birthday"), not a party
+        //      ("Birthday party at Chuck E Cheese", "Joe's 40th Birthday Bash");
+        //   2. a specific profile is named — never a fallback to whoever is the
+        //      primary person;
+        //   3. the year is in the PAST, so the date is a birth year rather than
+        //      an occurrence. "Joe's Birthday on 2027-02-11" is Joe's birthday
+        //      NEXT YEAR; storing it as his DOB would replace 1990 with 2027
+        //      and break every age the app computes.
+        //
+        // Anything that fails one of them stays an ordinary calendar event.
+        const label = parseBirthdayLabel(input.title);
+        const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
+        const yearIsPast = /^\d{4}-/.test(iso) && Number(iso.slice(0, 4)) < new Date().getFullYear();
+        if (label && yearIsPast) {
           const profs = await storage.getProfiles();
-          // Either the explicit target, or the person named in the title
-          // ("Joe's Birthday" → Joe).
-          const nameFromTitle = String(input.title).replace(/['’]s\b/gi, "")
-            .replace(/\b(birthday|b-?day|anniversary)\b/gi, "").trim();
           const target = (input.forProfile && matchProfileByName(profs, input.forProfile))
-            || (nameFromTitle.length >= 2 ? matchProfileByName(profs, nameFromTitle) : null)
-            || (evtKind === "birthday" ? profs.find((p: any) => p.type === "self") : null);
+            || (label.name.length >= 2 ? matchProfileByName(profs, label.name) : null);
           if (target) {
-            const field = evtKind === "birthday" ? "dateOfBirth" : "anniversary";
-            const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
+            const field = label.kind === "birthday" ? "dateOfBirth" : "anniversary";
             const existing: Record<string, any> = (target as any).fields || {};
             await storage.updateProfile(target.id, {
-              fields: canonicalizeProfileFields({ [field]: iso }, existing).fields,
+              fields: { ...existing, ...canonicalizeProfileFields({ [field]: iso }, existing).fields },
             } as any);
             const updatedProfile = await storage.getProfile(target.id);
             logger.info("ai", `"${input.title}" is ${target.name}'s ${field} — saved to the profile; the yearly occurrence is derived from it`);

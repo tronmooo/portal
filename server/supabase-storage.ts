@@ -3665,7 +3665,16 @@ export class SupabaseStorage implements IStorage {
         // A one-time expiration can be years out (a 2034 licence), so the
         // horizon has to reach it. The window filter below still bounds what
         // the response carries to the month the caller asked for.
-        todayISO: rdTodayISO0, horizonDays: 366 * 12, cap: 24,
+          // The window the CALLER asked for, not "from today forward".
+          // Generating from `todayISO` with no lookback meant any date before
+          // today produced nothing: a lease that ended in January, a licence
+          // that expired last year, and every birthday earlier in the current
+          // year simply left the grid, where the per-type pass this replaced
+          // rendered anything inside the requested range.
+        todayISO: rdTodayISO0,
+        horizonDays: Math.max(366 * 12, daysBetweenISO(rdTodayISO0, endDate) + 1),
+        lookbackDays: Math.max(0, daysBetweenISO(startDate, rdTodayISO0) + 1),
+        cap: 400,
       })) {
         if (occ.date < startDate || occ.date > endDate) continue;
         items.push({

@@ -240,7 +240,13 @@ export function makeFakeStorage(db: FakeDb) {
       }
       const rules = rulesFromAll({ profiles: db.profiles, documents: db.documents });
       for (const ser of seriesFromDateRules(rules)) {
-        for (const occ of generateSeriesOccurrences(ser, { todayISO, horizonDays: 366 * 12, cap: 24 })) {
+        const { daysBetweenISO } = await import("../../shared/date-rules");
+        for (const occ of generateSeriesOccurrences(ser, {
+          todayISO,
+          horizonDays: Math.max(366 * 12, daysBetweenISO(todayISO, endDate) + 1),
+          lookbackDays: Math.max(0, daysBetweenISO(startDate, todayISO) + 1),
+          cap: 400,
+        })) {
           if (occ.date < startDate || occ.date > endDate) continue;
           items.push({ id: `${ser.id}-${occ.date}`, type: "event", title: ser.title, date: occ.date,
             linkedProfiles: ser.source.ownerIds || [], sourceId: ser.source.id,

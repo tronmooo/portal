@@ -1466,7 +1466,16 @@ export class MemStorage implements IStorage {
       }));
       for (const ser of ruleSeries) {
         for (const occ of generateSeriesOccurrences(ser, {
-          todayISO: rdTodayISO, horizonDays: 366 * 12, cap: 24,
+          // The window the CALLER asked for, not "from today forward".
+          // Generating from `todayISO` with no lookback meant any date before
+          // today produced nothing: a lease that ended in January, a licence
+          // that expired last year, and every birthday earlier in the current
+          // year simply left the grid, where the per-type pass this replaced
+          // rendered anything inside the requested range.
+          todayISO: rdTodayISO,
+          horizonDays: Math.max(366 * 12, daysBetweenISO(rdTodayISO, endDate) + 1),
+          lookbackDays: Math.max(0, daysBetweenISO(startDate, rdTodayISO) + 1),
+          cap: 400,
         })) {
           if (occ.date < startDate || occ.date > endDate) continue;
           items.push({
