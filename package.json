@@ -116,6 +116,7 @@
     "recharts": "^2.15.2",
     "regexparam": "^3.0.0",
     "remark-gfm": "^4.0.1",
+    "sharp": "^0.34.5",
     "stripe": "^22.4.0",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
