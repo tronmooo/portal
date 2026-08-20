@@ -117,10 +117,6 @@ export function inferKindFromText(title: unknown, category?: unknown): Occurrenc
   return "custom";
 }
 
-/** The profile-field keys that carry a person's or pet's birthday. */
-const BIRTHDAY_KEYS = /^(birthday|birthdate|birth_date|dob|dateofbirth|date_of_birth)$/i;
-const ANNIVERSARY_KEYS = /anniversary/i;
-
 // ─── Profiles: birthdays & anniversaries ─────────────────────────────────────
 
 // (Removed: `seriesFromProfiles`. It knew about birthdays and anniversaries and

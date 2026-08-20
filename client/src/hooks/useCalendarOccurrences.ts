@@ -100,7 +100,11 @@ export function useCalendarOccurrences(
   });
   const documents = useQuery<any[]>({
     queryKey: [...scopedKey("/api/documents", mode, kIds)],
-    queryFn: () => get(`/api/documents${profileParam}`),
+    // `limit` explicitly: the route defaults to 100 newest, so on a large
+    // account the oldest documents derived no rules — their expirations never
+    // reached this screen and their legacy extraction events stopped being
+    // recognised as copies.
+    queryFn: () => get(`/api/documents${profileParam}${profileParam ? "&" : "?"}limit=1000`),
   });
   // Recurring income. Without this the paycheck adapter existed and ran
   // nowhere: "I get paid every other Friday" was in the finance tables and on

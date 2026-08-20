@@ -3417,12 +3417,14 @@ export class SupabaseStorage implements IStorage {
     const items: CalendarTimelineItem[] = [];
     // Fetch all data in parallel for speed
     // (Habits are intentionally excluded — they don't belong on the calendar.)
-    const [allEvents, allTasks, allObligations, profiles, allIncomes] = await Promise.all([
+    const [allEvents, allTasks, allObligations, profiles, allIncomes, allDocsForDates] = await Promise.all([
       this.getEvents(), this.getTasks(), this.getObligations(), this.getProfiles(),
       // Recurring income. Without this a paycheck showed on the Recurring &
       // Important screen (which builds its own series client-side) and never on
       // the Calendar tab, which reads this method.
       this.getIncomes().catch(() => [] as any[]),
+      // Documents, in the same fan-out rather than a serial round-trip after it.
+      this.getDocuments(),
     ]);
     // Profile filtering (calendar isolation):
     // When a profile filter is active, an item shows if it is linked to one of
@@ -3480,7 +3482,6 @@ export class SupabaseStorage implements IStorage {
     // document expirations from `doc.expirationDate` — a property
     // `rowToDocument` never sets, so it was dead code and a driver's licence
     // expiration never reached this grid at all. One engine, no dead branch.
-    const allDocsForDates = await this.getDocuments();
     const scopedDocs = (allDocsForDates as any[]).filter(d => matchesProfile(d.linkedProfiles));
     const profileDateSeries = seriesFromDateRules(
       rulesFromAll({ profiles: scopedProfiles as any[], documents: scopedDocs }),

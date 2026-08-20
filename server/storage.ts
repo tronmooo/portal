@@ -5,6 +5,7 @@ import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "@shared/date-rules";
+import { deleteProfileFields } from "@shared/profile-field-identity";
 import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
@@ -932,7 +933,20 @@ export class MemStorage implements IStorage {
     if (data.fields && typeof data.fields === "object") {
       data = { ...data, fields: normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? p.type ?? "") }).fields };
     }
+    // Honour the delete hints, as SupabaseStorage does. Without this the
+    // calendar's "remove this date" was a no-op here AND the hint arrays were
+    // spread onto the stored profile as if they were data — parity this
+    // storage exists to provide.
+    const { fieldsToDelete, fieldPathsToDelete, ...rest } = data as any;
+    data = rest;
     const updated = { ...p, ...data, updatedAt: new Date().toISOString() };
+    if ((fieldsToDelete?.length || 0) + (fieldPathsToDelete?.length || 0) > 0) {
+      updated.fields = deleteProfileFields(
+        { ...(p.fields || {}), ...(data.fields || {}) },
+        fieldsToDelete,
+        fieldPathsToDelete,
+      ).fields;
+    }
     this.profiles.set(id, updated);
     return updated;
   }

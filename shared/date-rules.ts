@@ -978,9 +978,12 @@ export function rulesFromDocuments(documents: readonly any[]): DateRule[] {
       ownerIds: uniq(Array.isArray(d.linkedProfiles) ? d.linkedProfiles : []),
       href: sourceHref("document", d.id, profileId),
     };
+    // `extractedData` is where a document's dates live — the column both
+    // storages actually populate. (`fields` is declared on the type and set by
+    // nothing, so reading it only created a branch the delete path could not
+    // write back to: a "removed" that changed nothing.)
     const bag: Record<string, any> = {
       ...(d.extractedData && typeof d.extractedData === "object" ? d.extractedData : {}),
-      ...(d.fields && typeof d.fields === "object" ? d.fields : {}),
       ...(d.expirationDate ? { expirationDate: d.expirationDate } : {}),
     };
     // A document's DOB is the PERSON's birthday, and the person's own profile

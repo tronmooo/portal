@@ -259,3 +259,21 @@ describe("a typed-in birthday does not render beside the profile's", () => {
     expect(titles).toContain("Jane Doe's Birthday");
   });
 });
+
+describe("removing one date leaves the record whole", () => {
+  it("clears exactly that field, in this storage as in the other", async () => {
+    // MemStorage ignored the delete hints entirely, so the calendar's "remove
+    // this date" was a no-op here AND the hint arrays were spread onto the
+    // profile as if they were data.
+    await storage.updateProfile(janeId, {
+      fields: { dateOfBirth: "1994-07-10", passportExpiration: "2030-03-02" },
+    } as any);
+    await storage.updateProfile(janeId, { fieldPathsToDelete: ["passportExpiration"] } as any);
+
+    const after = (await storage.getProfile(janeId))!.fields as any;
+    expect(after.passportExpiration).toBeUndefined();
+    expect(after.dateOfBirth).toBe("1994-07-10");
+    expect(after.fieldPathsToDelete).toBeUndefined();
+    expect(await timelineTitles()).toContain("Jane Doe's Birthday");
+  });
+});

@@ -311,14 +311,12 @@ async function deleteSourceRecord(
         delete cursor[leaf];
         return copy;
       };
-      // A document's dates are read from `extractedData`, from `fields`, and
-      // from the `expirationDate` column — clearing only the first left the
-      // date behind while the UI said "Updated".
+      // A document's dates are read from `extractedData` and from the
+      // `expirationDate` column — clearing only the first left the date behind
+      // while the UI said "Updated".
       const patch: Record<string, any> = {};
       const nextExtracted = without(doc?.extractedData);
       if (nextExtracted) patch.extractedData = nextExtracted;
-      const nextFields = without(doc?.fields);
-      if (nextFields) patch.fields = nextFields;
       if (path.length === 1 && doc?.expirationDate
         && /^expirationdate$/i.test(path[0].replace(/[^a-z]/gi, ""))) {
         patch.expirationDate = null;
