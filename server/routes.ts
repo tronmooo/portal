@@ -29,7 +29,7 @@ import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
-import { normalizeEntityDateFields, classifyDateField, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
+import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
 import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from "@shared/profile-field-identity";
 
@@ -2667,9 +2667,17 @@ ${JSON.stringify(ctx, null, 2)}`;
       if (createCalendarEvents && createCalendarEvents.length > 0) {
         const docForCtx = await storage.getDocument(extractionId).catch(() => null);
         const docCtx = `${(docForCtx as any)?.type ?? ""} ${(docForCtx as any)?.name ?? ""}`;
+        // A date is only DERIVED if its field was actually saved. `createCalendarEvents`
+        // arrives independently of `confirmedFields`, so a date the user ticked
+        // for the calendar alone has no field behind it — skipping it there
+        // dropped the date entirely while the response still said success.
+        const savedFieldKeys = new Set(
+          (confirmedFields || []).map((f: any) => normalizeFieldKey(f?.key)).filter(Boolean),
+        );
         for (const event of createCalendarEvents) {
           try {
-            const covered = classifyDateField(event.field, docCtx).actionable;
+            const covered = savedFieldKeys.has(normalizeFieldKey(event.field))
+              && classifyDateField(event.field, docCtx).actionable;
             if (covered) {
               log.info(`[confirm-extraction] "${event.field}" is owned by its record — derived as a Date Rule, no standalone event`);
               continue;

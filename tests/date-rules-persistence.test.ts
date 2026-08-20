@@ -243,3 +243,19 @@ describe("a liability whose payment date is spelled nextPayment", () => {
     expect(payment!.baseDate).toBe(soon);
   });
 });
+
+describe("a typed-in birthday does not render beside the profile's", () => {
+  it("suppresses the event copy, in this storage as in the other", async () => {
+    await storage.updateProfile(janeId, { fields: { dateOfBirth: "1994-07-10" } } as any);
+    await storage.createEvent({
+      title: "Jane Doe's Birthday", date: "2026-07-10", recurrence: "yearly",
+      linkedProfiles: [janeId], category: "family", tags: ["rdate", "rd:kind:birthday"],
+    } as any);
+    const titles = await timelineTitles();
+    // One birthday per year, from the profile — not two.
+    const inThisYear = (await storage.getCalendarTimeline(`${YEAR}-01-01`, `${YEAR}-12-31`))
+      .filter((i: any) => /birthday/i.test(i.title));
+    expect(inThisYear).toHaveLength(1);
+    expect(titles).toContain("Jane Doe's Birthday");
+  });
+});

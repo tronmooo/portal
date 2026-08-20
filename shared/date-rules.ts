@@ -238,7 +238,12 @@ const FIELD_MATCHERS: FieldMatcher[] = [
     match: /(nextpayment|nextbilling|nextcharge|billingdate|paymentdate|chargedate|nextduedate|paymentdue|billdue|autopay)/,
     recurrence: "monthly",
   },
-  { ruleType: "income", match: /(payday|paydate|paycheck|payschedule|nextpaycheck|depositdate)/, recurrence: "biweekly" },
+  // Anchored, and with NO cadence. Unanchored, `depositdate` matched inside
+  // `securityDepositDate` on a lease, and the biweekly default then repeated
+  // that one-off forever as a paycheck. A field holding a date says WHEN, never
+  // how often; a genuinely recurring paycheck is an Income record with its own
+  // frequency (seriesFromIncomes), not a date scraped off a document.
+  { ruleType: "income", match: /^(payday|paydate|paycheck|payschedule|nextpayday|nextpaycheck|paymentreceived)$/ },
   { ruleType: "due", match: /(duedate|due$|maturity|payoff|balancedue)/ },
 
   // ── Calendar-shaped ──
@@ -826,19 +831,26 @@ export function dedupeRules(rules: readonly DateRule[]): DateRule[] {
   for (const group of groups.values()) {
     const kept: DateRule[] = [];
     for (const r of group) {
-      // Subtypes must be COMPATIBLE, not identical: the person's profile says
-      // "expiration" with no subtype while the uploaded licence says
-      // "drivers_license", and those are one date. A passport and a licence
-      // expiring on the same day carry different subtypes and stay two.
-      // …and only ACROSS systems. Two rules from the SAME kind of record are
-      // two records: "Rent" and "Car Payment" are both payments owned by the
-      // same person, and merging them on a shared due date made one of them
-      // disappear. What this pass exists for is one real-world date described
-      // by two DIFFERENT systems — a licence expiration held on the person and
-      // on the uploaded licence.
+      // Two conditions, and both are about not losing a date.
+      //
+      // ACROSS SYSTEMS only. Two rules from the same kind of record are two
+      // records: "Rent" and "Car Payment" are both payments owned by the same
+      // person, and merging them on a shared due date made one disappear. What
+      // this pass exists for is one real-world date described by two DIFFERENT
+      // systems — a licence expiration held on the person and on the uploaded
+      // licence.
+      //
+      // SUBTYPES MUST AGREE, both naming the same thing or both silent.
+      // Treating an absent subtype as compatible with any subtype was too
+      // eager: a person carrying a bare `expirationDate` and a passport
+      // document expiring the same day collapsed to one and the other was gone.
+      // Showing two dates the user can reconcile is recoverable; silently
+      // dropping one is not. The motivating case still merges, because a
+      // licence expiration on a person is named for the licence
+      // (`driversLicenseExpiration`) and carries the subtype the document does.
       const i = kept.findIndex((k) =>
         k.sourceEntityType !== r.sourceEntityType &&
-        (!k.ruleSubtype || !r.ruleSubtype || k.ruleSubtype === r.ruleSubtype));
+        (k.ruleSubtype ?? "") === (r.ruleSubtype ?? ""));
       if (i < 0) { kept.push(r); continue; }
       if (rulePriority(r) > rulePriority(kept[i])) {
         // The survivor keeps whichever side actually knew what the thing was.
@@ -1115,7 +1127,14 @@ export function normalizeEntityDateFields<T extends Record<string, any>>(
       // Only rewrite fields whose NAME says they hold a date. A free-text note
       // that happens to contain "6/4/2029" keeps its wording.
       const cls = classifyDateField(key, ctx.contextKey);
-      const looksDated = cls.ruleType !== "informational" || /date|dob|birth|expir|due|renew|valid|start|end/i.test(key);
+      // WORDS, not substrings. `/end/` matched `endorsements`, so a licence's
+      // endorsement code that happened to parse as a date was rewritten — in
+      // every storage write path, irreversibly.
+      const words = String(key).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/);
+      const looksDated = cls.ruleType !== "informational"
+        || words.some((w) =>
+          /^(date|dates|dob|birth|birthday|birthdate|due|valid|start|starts|end|ends|until|thru|through)$/i.test(w)
+          || /^(expir|renew)/i.test(w));
       if (!looksDated) continue;
       if (bare === trimmed) continue;
       const iso = bare;

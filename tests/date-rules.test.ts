@@ -224,8 +224,10 @@ describe("a rule is the same rule every time", () => {
   });
 
   it("one real-world date reaching the app twice is one rule", () => {
-    // The same expiration held on the person AND on the uploaded licence.
-    const profile = { ...bareProfile(), fields: { licenseExpiration: "2034-07-18" } };
+    // The same expiration held on the person AND on the uploaded licence. The
+    // person's field names what it is, so both sides agree on the subtype —
+    // which is what lets them merge without risking an unrelated collapse.
+    const profile = { ...bareProfile(), fields: { driversLicenseExpiration: "2034-07-18" } };
     const rules = rulesFromAll({ profiles: [profile], documents: [doc("2034-07-18")] });
     expect(rules.filter(r => r.ruleType === "expiration")).toHaveLength(1);
     // The document wins: it is the record that actually carries the licence,
@@ -677,11 +679,22 @@ describe("two payments on one person on one day are two payments", () => {
 
   it("still merges one licence held on the person AND on the document", () => {
     const rules = dedupeRules([
-      { ...RULE_STUB, id: "a", sourceEntityType: "profile", sourceEntityId: "p1", label: "Jane — Expiration", ruleType: "expiration", date: "2034-07-18", profileId: "p1" },
+      { ...RULE_STUB, id: "a", sourceEntityType: "profile", sourceEntityId: "p1", label: "Jane — Driver's License Expiration", ruleType: "expiration", ruleSubtype: "drivers_license", date: "2034-07-18", profileId: "p1" },
       { ...RULE_STUB, id: "b", sourceEntityType: "document", sourceEntityId: "d1", label: "License — Expiration", ruleType: "expiration", ruleSubtype: "drivers_license", date: "2034-07-18", profileId: "p1" },
     ] as any);
     expect(rules).toHaveLength(1);
     expect(rules[0].sourceEntityType).toBe("document");
+  });
+
+  it("does not let an unnamed date swallow a named one on the same day", () => {
+    // A bare `expirationDate` on a person and a passport expiring that day are
+    // not obviously the same fact. Showing two the user can reconcile is
+    // recoverable; dropping one is not.
+    const rules = dedupeRules([
+      { ...RULE_STUB, id: "a", sourceEntityType: "profile", sourceEntityId: "p1", label: "Jane — Expiration", ruleType: "expiration", date: "2030-03-02", profileId: "p1" },
+      { ...RULE_STUB, id: "b", sourceEntityType: "document", sourceEntityId: "d1", label: "Passport — Expiration", ruleType: "expiration", ruleSubtype: "passport", date: "2030-03-02", profileId: "p1" },
+    ] as any);
+    expect(rules).toHaveLength(2);
   });
 });
 
@@ -806,5 +819,64 @@ describe("a recurring renewal does not become twelve renewals", () => {
     // Carries the expiration kind, and with it the horizon a distant date needs.
     expect(series.kind).toBe("expiration");
     expect(buildCalendarOccurrences([series], { todayISO: TODAY }).map(o => o.date)).toEqual(["2031-10-10"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 14. Fourth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a deposit date is not a paycheck", () => {
+  it("does not read a lease's security deposit as recurring income", () => {
+    const rules = rulesFromDocuments([{
+      id: "d1", name: "Lease", type: "lease", linkedProfiles: [],
+      extractedData: { securityDepositDate: "2026-09-01" },
+    }]);
+    // Unanchored, `depositdate` matched inside this key and a biweekly default
+    // then repeated a one-off forever.
+    expect(rules.map(r => r.ruleType)).not.toContain("income");
+  });
+
+  it("does not invent a cadence for a pay date it finds on a document", () => {
+    const rules = rulesFromDocuments([{
+      id: "d1", name: "Payslip", type: "payslip", linkedProfiles: [],
+      extractedData: { payDate: "2026-09-04" },
+    }]);
+    for (const r of rules) expect(r.recurrence).toBe("none");
+  });
+});
+
+describe("a field name is read as words, not as substrings", () => {
+  it("leaves an endorsement code that happens to parse as a date alone", () => {
+    // `/end/` matched `endorsements`, and the rewrite ran in every storage
+    // write path — so the code was gone with no way back.
+    const { fields } = normalizeEntityDateFields({ endorsements: "6/4/2029" });
+    expect(fields.endorsements).toBe("6/4/2029");
+  });
+
+  it("still rewrites the fields that really are dates", () => {
+    const { fields } = normalizeEntityDateFields({ leaseEndDate: "6/4/2029", startDate: "1/2/2026" });
+    expect([fields.leaseEndDate, fields.startDate]).toEqual(["2029-06-04", "2026-01-02"]);
+  });
+});
+
+describe("a generic date is only dropped when a name restates the record", () => {
+  it("collapses expirationDate into licenseExpiration on a licence", () => {
+    const rules = rulesFromDocuments([{
+      id: "d1", name: "Driver License", type: "drivers_license", linkedProfiles: [],
+      extractedData: { expirationDate: "2034-07-18", driversLicenseExpiration: "2034-07-18" },
+    }]);
+    expect(rules).toHaveLength(1);
+  });
+
+  it("keeps a lease end that merely falls on the same day", () => {
+    // Two different dates that coincide. Dropping the generic one for the
+    // qualified one would lose a real date.
+    const rules = rulesFromDocuments([{
+      id: "d1", name: "Rental Agreement", type: "lease", linkedProfiles: [],
+      extractedData: { expirationDate: "2029-06-04", leaseEndDate: "2029-06-04" },
+    }]);
+    expect(rules.length).toBeGreaterThanOrEqual(1);
+    expect(rules.map(r => r.sourceField)).toContain("leaseEndDate");
   });
 });

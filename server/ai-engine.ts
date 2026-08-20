@@ -9568,15 +9568,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             const field = label.kind === "birthday" ? "dateOfBirth" : "anniversary";
             const existing: Record<string, any> = (target as any).fields || {};
             const held = existing[field] ?? existing[label.kind === "birthday" ? "birthday" : "anniversaryDate"];
-            // Replacing a date already on the record needs more than "the year
-            // is past". "Joe's Birthday" on 2025-02-11 is LAST YEAR'S
-            // OCCURRENCE, and taking it as his date of birth would replace 1990
-            // with 2025 and break every age the app computes. A date of birth
-            // is years old, so a recent year is never a correction — it is an
-            // occurrence, and an occurrence is an ordinary calendar event.
-            const wouldReplaceWithAnOccurrence =
-              !!held && !looselyEqual(held, iso) && year > thisYear - 5;
-            if (!wouldReplaceWithAnOccurrence) {
+            // "Joe's Birthday" on 2025-06-15 is LAST YEAR'S OCCURRENCE, not
+            // Joe's date of birth — and that is true whether or not the profile
+            // already holds one. Writing it would either replace 1990 with 2025
+            // or invent a birth year out of a party, and either way the event
+            // the user asked for would never be created. A date of birth is
+            // years old; a recent year is an occurrence, and an occurrence is an
+            // ordinary calendar event.
+            const looksLikeAnOccurrence = year > thisYear - 5;
+            const alreadyRight = !!held && looselyEqual(held, iso);
+            if (alreadyRight || !looksLikeAnOccurrence) {
               await storage.updateProfile(target.id, {
                 fields: { ...existing, ...canonicalizeProfileFields({ [field]: iso }, existing).fields },
               } as any);

@@ -345,3 +345,42 @@ describe("a nested record's dates stay in scope with its owner", () => {
     expect(scoped.data.map((i: any) => i.title)).toContain("Honda — Warranty Expiration");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a date ticked for the calendar alone is not dropped", () => {
+  it("creates the event when no field behind it was saved", async () => {
+    // createCalendarEvents arrives independently of confirmedFields. Skipping
+    // on classification alone dropped the date entirely while the response
+    // still reported success.
+    const { api, db } = await boot({
+      documents: [{ id: "doc-1", name: "Policy", type: "insurance", extractedData: {}, linkedProfiles: ["jane-1"], tags: [] }],
+    });
+    await api("POST", "/api/chat/confirm-extraction", {
+      extractionId: "doc-1",
+      targetProfileId: "jane-1",
+      confirmedFields: [],
+      createCalendarEvents: [
+        { field: "renewalDate", date: "2027-04-01", title: "Policy renewal", category: "finance" },
+      ],
+    });
+    expect(db.events.map((e: any) => e.title)).toEqual(["Policy renewal"]);
+  });
+
+  it("still skips it when the field IS being saved and will be derived", async () => {
+    const { api, db } = await boot({
+      documents: [{ id: "doc-1", name: "Policy", type: "insurance", extractedData: {}, linkedProfiles: ["jane-1"], tags: [] }],
+    });
+    await api("POST", "/api/chat/confirm-extraction", {
+      extractionId: "doc-1",
+      targetProfileId: "jane-1",
+      confirmedFields: [{ key: "renewalDate", value: "2027-04-01" }],
+      createCalendarEvents: [
+        { field: "renewalDate", date: "2027-04-01", title: "Policy renewal", category: "finance" },
+      ],
+    });
+    expect(db.events).toHaveLength(0);
+    const titles = (await api("GET", `/api/calendar/timeline?${RANGE}`)).data.map((i: any) => i.title);
+    expect(titles).toContain("Policy — Renewal");
+  });
+});

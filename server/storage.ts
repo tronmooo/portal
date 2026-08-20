@@ -1323,6 +1323,15 @@ export class MemStorage implements IStorage {
     });
     const shadowEventIds = new Set(
       seriesFromEvents(Array.from(this.events.values()) as any[], {
+        // Birthdays and anniversaries too, not just document copies: a typed-in
+        // "Jane's Birthday" event is a shadow of the profile field the rule is
+        // derived from, and without these two sets this storage rendered both.
+        knownBirthdayProfiles: new Set(
+          rulesForShadowing.filter(r => r.ruleType === "birthday").map(r => r.profileId!).filter(Boolean),
+        ),
+        knownAnniversaryProfiles: new Set(
+          rulesForShadowing.filter(r => r.ruleType === "anniversary").map(r => r.profileId!).filter(Boolean),
+        ),
         ruledDocumentDates: new Set(
           rulesForShadowing.filter(r => r.sourceEntityType === "document")
             .map(r => `${r.sourceEntityId}@${r.date}`),
